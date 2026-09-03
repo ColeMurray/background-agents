@@ -634,6 +634,7 @@ describe("handleCreateSession D1 ordering", () => {
         }),
       }),
       testEnv as never,
+      {},
       {
         request_id: "test-request",
         trace_id: "test-trace",

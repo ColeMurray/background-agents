@@ -55,7 +55,7 @@ export async function forwardBrowserAuthRequest(
 async function handleBrowserAuth(
   request: Request,
   _env: Env,
-  _params: Record<string, never>,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   try {

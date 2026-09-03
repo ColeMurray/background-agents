@@ -54,7 +54,6 @@ export async function handleSessionPrompt(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required");
 
   let rawBody: unknown;
   try {

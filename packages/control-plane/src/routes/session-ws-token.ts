@@ -15,7 +15,6 @@ export async function handleSessionWsToken(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required");
 
   const rawBody = await parseJsonBody<unknown>(request);
   if (rawBody instanceof Response) return rawBody;

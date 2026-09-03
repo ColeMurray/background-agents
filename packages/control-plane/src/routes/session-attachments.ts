@@ -84,7 +84,6 @@ export async function handleAttachmentPost(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required");
   if (sessionAttachmentRequestExceedsLimit(request)) {
     return error("Attachment request is too large", 413);
   }

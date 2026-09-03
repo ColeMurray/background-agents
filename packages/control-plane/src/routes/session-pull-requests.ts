@@ -3,7 +3,7 @@ import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
-import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 /**
@@ -19,7 +19,6 @@ export async function handleRefreshPullRequests(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required");
 
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.pullRequestsRefresh, {
     method: "POST",

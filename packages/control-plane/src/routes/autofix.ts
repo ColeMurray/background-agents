@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import type { Env } from "../types";
 import { PrAutofixFeedbackStore } from "../db/pr-autofix-feedback-store";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   error,
@@ -26,7 +27,12 @@ const activityQuerySchema = z.object({
   cursor: z.string().optional(),
 });
 
-async function handleActivity(request: Request, ctx: RequestContext): Promise<Response> {
+async function handleActivity(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   const query = parseQuery(request, activityQuerySchema);
   if (query instanceof Response) return query;
 
@@ -50,5 +56,5 @@ export const autofixRoutes = new Hono<ControlPlaneHonoEnv>();
 autofixRoutes.get(
   "/autofix/activity",
   admit({ ...SCM_AGNOSTIC_WEB_SERVICE_ROUTE, authorization: NO_AUTHORIZATION }),
-  (c) => handleActivity(c.var.admitted.request, c.var.admitted.ctx)
+  (c) => dispatch(c, handleActivity)
 );

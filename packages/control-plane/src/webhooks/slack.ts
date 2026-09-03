@@ -10,7 +10,7 @@
  */
 
 import { Hono } from "hono";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { RequestContext } from "../routes/shared";
 import { error, GITHUB_SERVICE_ROUTE, serviceAuthorized } from "../routes/shared";
@@ -24,6 +24,7 @@ import {
 async function handleSlackAutomationEvent(
   request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   let body: unknown;
@@ -48,5 +49,5 @@ export const slackAutomationEventRoutes = new Hono<ControlPlaneHonoEnv>();
 slackAutomationEventRoutes.post(
   "/internal/slack-event",
   admit({ ...GITHUB_SERVICE_ROUTE, authorization: serviceAuthorized("slack-bot") }),
-  (c) => handleSlackAutomationEvent(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  (c) => dispatch(c, handleSlackAutomationEvent)
 );

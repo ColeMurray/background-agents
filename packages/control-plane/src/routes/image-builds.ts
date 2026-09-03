@@ -178,6 +178,7 @@ function parseCallbackBody<Schema extends z.ZodType>(
 async function handleBuildComplete(
   request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const body = await readCallbackBody(request);
@@ -213,6 +214,7 @@ async function handleBuildComplete(
 async function handleBuildFailed(
   request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const body = await readCallbackBody(request);
@@ -280,7 +282,6 @@ async function handleTriggerEnvironmentBuild(
   if (providerError) return providerError;
 
   const environmentId = params.id;
-  if (!environmentId) return error("Environment ID required", 400);
 
   return triggerBuildForScope(env, { kind: "environment", id: environmentId }, ctx);
 }
@@ -416,7 +417,12 @@ async function readStatusRows(
  * `ImageBuildRecordView`, so no storage encoding, callback token, or provider
  * id reaches a client.
  */
-async function handleGetStatus(request: Request, env: Env, ctx: RequestContext): Promise<Response> {
+async function handleGetStatus(
+  request: Request,
+  env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
@@ -444,6 +450,7 @@ async function handleGetStatus(request: Request, env: Env, ctx: RequestContext):
 async function handleGetEnabledUnits(
   _request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
@@ -477,6 +484,7 @@ async function handleGetEnabledUnits(
 async function handleGetEnabledRepos(
   _request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
@@ -510,10 +518,10 @@ const IMAGE_BUILDS_READ = admit({
 export const imageBuildRoutes = new Hono<ControlPlaneHonoEnv>();
 
 imageBuildRoutes.post("/image-builds/build-complete", BUILD_CALLBACK, (c) =>
-  handleBuildComplete(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  dispatch(c, handleBuildComplete)
 );
 imageBuildRoutes.post("/image-builds/build-failed", BUILD_CALLBACK, (c) =>
-  handleBuildFailed(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  dispatch(c, handleBuildFailed)
 );
 imageBuildRoutes.post(
   "/image-builds/trigger/environment/:id",
@@ -530,11 +538,11 @@ imageBuildRoutes.put("/image-builds/toggle/repo/:owner/:name", REPO_IMAGES_MANAG
   dispatch(c, handleToggleRepoImageBuilds)
 );
 imageBuildRoutes.get("/image-builds/status", IMAGE_BUILDS_READ, (c) =>
-  handleGetStatus(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  dispatch(c, handleGetStatus)
 );
 imageBuildRoutes.get("/image-builds/enabled", IMAGE_BUILDS_READ, (c) =>
-  handleGetEnabledUnits(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  dispatch(c, handleGetEnabledUnits)
 );
 imageBuildRoutes.get("/image-builds/enabled-repos", IMAGE_BUILDS_READ, (c) =>
-  handleGetEnabledRepos(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  dispatch(c, handleGetEnabledRepos)
 );

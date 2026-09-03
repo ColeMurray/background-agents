@@ -1,9 +1,48 @@
 import { Hono } from "hono";
 import { keyboardShortcutPreferencesPayloadSchema } from "@open-inspect/shared/types/keyboard-shortcuts";
 import { KeyboardShortcutPreferencesStore } from "../db/keyboard-shortcut-preferences";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
-import { ACTIVE_SELF, activeSelf, error, json, SCM_AGNOSTIC_HUMAN_USER_ROUTE } from "./shared";
+import {
+  ACTIVE_SELF,
+  activeSelf,
+  error,
+  json,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  type UserRouteContext,
+} from "./shared";
+import type { Env } from "../types";
+
+async function handleGetKeyboardShortcuts(
+  _request: Request,
+  _env: Env,
+  _params: object,
+  ctx: UserRouteContext
+): Promise<Response> {
+  const shortcuts = await new KeyboardShortcutPreferencesStore(ctx.db).get(ctx.principal.userId);
+  return json({ shortcuts });
+}
+
+async function handleSetKeyboardShortcuts(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: UserRouteContext
+): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
+  const parsed = keyboardShortcutPreferencesPayloadSchema.safeParse(body);
+  if (!parsed.success) return error("Invalid keyboard shortcuts", 400);
+  const shortcuts = await new KeyboardShortcutPreferencesStore(ctx.db).set(
+    ctx.principal.userId,
+    parsed.data.shortcuts
+  );
+  return json({ shortcuts });
+}
 
 export const keyboardShortcutRoutes = new Hono<ControlPlaneHonoEnv>();
 
@@ -14,30 +53,11 @@ keyboardShortcutRoutes.get(
     authorization: ACTIVE_SELF,
     cacheControl: "private, no-store",
   }),
-  async (c) => {
-    const { ctx } = c.var.admitted;
-    const shortcuts = await new KeyboardShortcutPreferencesStore(ctx.db).get(ctx.principal.userId);
-    return json({ shortcuts });
-  }
+  (c) => dispatch(c, handleGetKeyboardShortcuts)
 );
 
 keyboardShortcutRoutes.put(
   "/keyboard-shortcuts",
   admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: activeSelf({ auditAllowed: true }) }),
-  async (c) => {
-    const { request, ctx } = c.var.admitted;
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return error("Invalid JSON body", 400);
-    }
-    const parsed = keyboardShortcutPreferencesPayloadSchema.safeParse(body);
-    if (!parsed.success) return error("Invalid keyboard shortcuts", 400);
-    const shortcuts = await new KeyboardShortcutPreferencesStore(ctx.db).set(
-      ctx.principal.userId,
-      parsed.data.shortcuts
-    );
-    return json({ shortcuts });
-  }
+  (c) => dispatch(c, handleSetKeyboardShortcuts)
 );

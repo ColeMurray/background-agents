@@ -138,7 +138,12 @@ async function refreshReposCache(
  * This prevents slow API pagination from blocking the Worker
  * isolate and causing head-of-line blocking for other requests.
  */
-async function handleListRepos(request: Request, env: Env, ctx: RequestContext): Promise<Response> {
+async function handleListRepos(
+  request: Request,
+  env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   const cacheStore = createKvCacheStore(env.REPOS_CACHE);
 
   // Read from KV cache
@@ -336,7 +341,7 @@ reposRoutes.get(
       actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
     }),
   }),
-  (c) => handleListRepos(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  (c) => dispatch(c, handleListRepos)
 );
 reposRoutes.put(
   "/repos/:owner/:name/metadata",

@@ -86,7 +86,6 @@ async function handleListEnvironmentSecrets(
   if (config instanceof Response) return config;
 
   const id = params.id;
-  if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
   if (!(await store.getById(id))) return error("Environment not found", 404);
@@ -126,7 +125,6 @@ async function handleSetEnvironmentSecrets(
   if (config instanceof Response) return config;
 
   const id = params.id;
-  if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
   const environment = await store.getById(id);
@@ -234,7 +232,6 @@ async function handleImportEnvironmentSecrets(
   if (config instanceof Response) return config;
 
   const id = params.id;
-  if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
   const environment = await store.getById(id);

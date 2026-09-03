@@ -236,6 +236,7 @@ async function handleDeleteRepoSecret(
 async function handleSetGlobalSecrets(
   request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
@@ -290,6 +291,7 @@ async function handleSetGlobalSecrets(
 async function handleListGlobalSecrets(
   _request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
@@ -395,12 +397,8 @@ secretsRoutes.get("/repos/:owner/:name/secrets", REPO_SECRETS_MANAGE, (c) =>
 secretsRoutes.delete("/repos/:owner/:name/secrets/:key", REPO_SECRETS_MANAGE, (c) =>
   dispatch(c, handleDeleteRepoSecret)
 );
-secretsRoutes.put("/secrets", GLOBAL_SECRETS_MANAGE, (c) =>
-  handleSetGlobalSecrets(c.var.admitted.request, c.env, c.var.admitted.ctx)
-);
-secretsRoutes.get("/secrets", GLOBAL_SECRETS_MANAGE, (c) =>
-  handleListGlobalSecrets(c.var.admitted.request, c.env, c.var.admitted.ctx)
-);
+secretsRoutes.put("/secrets", GLOBAL_SECRETS_MANAGE, (c) => dispatch(c, handleSetGlobalSecrets));
+secretsRoutes.get("/secrets", GLOBAL_SECRETS_MANAGE, (c) => dispatch(c, handleListGlobalSecrets));
 secretsRoutes.delete("/secrets/:key", GLOBAL_SECRETS_MANAGE, (c) =>
   dispatch(c, handleDeleteGlobalSecret)
 );

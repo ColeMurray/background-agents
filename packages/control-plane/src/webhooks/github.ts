@@ -14,7 +14,7 @@ import { SessionInternalPaths } from "../session/contracts";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import { Hono } from "hono";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { RequestContext } from "../routes/shared";
 import { error, GITHUB_SERVICE_ROUTE, serviceAuthorized } from "../routes/shared";
@@ -99,6 +99,7 @@ async function trackPullRequestLifecycle(
 async function handleGitHubAutomationEvent(
   request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   let body: unknown;
@@ -127,5 +128,5 @@ export const githubAutomationEventRoutes = new Hono<ControlPlaneHonoEnv>();
 githubAutomationEventRoutes.post(
   "/internal/github-event",
   admit({ ...GITHUB_SERVICE_ROUTE, authorization: serviceAuthorized("github-bot") }),
-  (c) => handleGitHubAutomationEvent(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  (c) => dispatch(c, handleGitHubAutomationEvent)
 );

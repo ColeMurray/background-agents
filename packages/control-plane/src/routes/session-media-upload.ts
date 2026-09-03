@@ -48,7 +48,6 @@ export async function handleMediaUpload(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required");
   const storage = createMediaObjectStorage(env);
 
   let formData: FormData;

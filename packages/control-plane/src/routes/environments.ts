@@ -83,6 +83,7 @@ export async function resolveEnvironmentRepositories(
 async function handleListEnvironments(
   _request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const store = new EnvironmentStore(ctx.db);
@@ -100,6 +101,7 @@ async function handleListEnvironments(
 async function handleCreateEnvironment(
   request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const body = await parseJsonBody<unknown>(request);
@@ -156,7 +158,6 @@ async function handleGetEnvironment(
   ctx: RequestContext
 ): Promise<Response> {
   const id = params.id;
-  if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
   const row = await store.getById(id);
@@ -172,7 +173,6 @@ async function handleUpdateEnvironment(
   ctx: RequestContext
 ): Promise<Response> {
   const id = params.id;
-  if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
   const existing = await store.getById(id);
@@ -233,7 +233,6 @@ async function handleDeleteEnvironment(
   ctx: RequestContext
 ): Promise<Response> {
   const id = params.id;
-  if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
   const deleted = await store.delete(id);
@@ -264,10 +263,10 @@ environmentRoutes.get(
       actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
     }),
   }),
-  (c) => handleListEnvironments(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  (c) => dispatch(c, handleListEnvironments)
 );
 environmentRoutes.post("/environments", ENVIRONMENTS_MANAGE, (c) =>
-  handleCreateEnvironment(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  dispatch(c, handleCreateEnvironment)
 );
 environmentRoutes.get(
   "/environments/:id",

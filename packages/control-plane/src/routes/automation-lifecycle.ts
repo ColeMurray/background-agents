@@ -38,7 +38,6 @@ async function handlePauseAutomation(
   const id = params.id;
 
   const store = new AutomationStore(ctx.db);
-  admittedAutomation(ctx);
   const result = await ctx.db.batch([store.bindPause(id)]);
   const paused = result[0]?.meta.changes === 1;
   if (!paused) return error("Automation not found", 404);
@@ -105,7 +104,6 @@ async function handleTriggerAutomation(
 ): Promise<Response> {
   const id = params.id;
 
-  admittedAutomation(ctx);
   const requesterUserId = ctx.authorization?.userId;
   if (!requesterUserId) return error("Authorization unavailable", 503);
 

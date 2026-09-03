@@ -34,7 +34,6 @@ export async function handleListChildren(
   ctx: RequestContext
 ): Promise<Response> {
   const parentId = params.id;
-  if (!parentId) return error("Parent session ID required");
 
   const sessionStore = new SessionIndexStore(ctx.db);
   const children = await sessionStore.listByParent(parentId);

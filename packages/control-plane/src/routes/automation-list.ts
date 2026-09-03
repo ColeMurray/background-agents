@@ -3,6 +3,7 @@
  */
 
 import { AutomationStore, toAutomation } from "../db/automation-store";
+import { dispatch } from "../routing/admit";
 import {
   encodeAutomationListCursor,
   parseAutomationListCursor,
@@ -54,6 +55,7 @@ const automationListQuerySchema = z.object({
 async function handleListAutomations(
   request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const query = parseQuery(request, automationListQuerySchema);
@@ -100,5 +102,5 @@ async function handleListAutomations(
 export const automationListRoutes = new Hono<ControlPlaneHonoEnv>();
 
 automationListRoutes.get("/automations", AUTOMATIONS_READ, (c) =>
-  handleListAutomations(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  dispatch(c, handleListAutomations)
 );

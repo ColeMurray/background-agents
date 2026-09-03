@@ -55,7 +55,6 @@ export async function handleSpawnChild(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const parentId = params.id;
-  if (!parentId) return error("Parent session ID required");
 
   const parsedBody = spawnChildSessionRequestSchema.safeParse(await request.json());
   if (!parsedBody.success) {
