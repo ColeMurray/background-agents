@@ -1,6 +1,6 @@
 /** Hono application for ordinary control-plane HTTP requests. */
 
-import { Hono, type Handler } from "hono";
+import { Hono } from "hono";
 import type { RouterRoute } from "hono/types";
 import { TrieRouter } from "hono/router/trie-router";
 import {
@@ -13,15 +13,12 @@ import type { RequestContext } from "../http/request-context";
 import { error, HttpError } from "../http/responses";
 import { createLogger } from "../logger";
 import { catalog } from "../routes/catalog";
-import type { Route, RouteParams } from "../routes/shared";
 import type { Env } from "../types";
-import { admit } from "./admit";
-import { rawRouteParams } from "./route-params";
 import type {
   ControlPlaneHonoEnv,
   ControlPlaneHost,
   PlatformExecutionContext,
-  RouteCatalogEntry,
+  RouteModule,
 } from "./hono-env";
 import { finalizeRouteResponse, logRequest, withCorsAndTraceHeaders } from "./request-lifecycle";
 
@@ -29,7 +26,6 @@ export type {
   ControlPlaneHonoEnv,
   ControlPlaneHost,
   PlatformExecutionContext,
-  RouteCatalogEntry,
   RouteModule,
 } from "./hono-env";
 
@@ -43,9 +39,9 @@ export type ControlPlaneHttpHandler = (
 const logger = createLogger("router");
 
 /**
- * Hono gives `*`, `?`, `{...}` and `.` routing meaning, and raw parameter
- * segments are read back from the pathname by position, so a path may hold
- * only literal and `:param` segments.
+ * Hono gives `*`, `?`, `{...}` and `.` routing meaning, and admission reads
+ * raw parameter segments back from the pathname by position, so a path may
+ * hold only literal and `:param` segments.
  */
 const ROUTE_PATH_GRAMMAR = /^(\/([A-Za-z0-9_-]+|:\w+))+$/;
 
@@ -86,15 +82,10 @@ function assertModuleAdmits(module: Hono<ControlPlaneHonoEnv>): void {
   }
 }
 
-/** Mount a module or register a legacy route, refusing either before it can serve a request. */
-function register(app: Hono<ControlPlaneHonoEnv>, entry: RouteCatalogEntry): void {
-  if (entry instanceof Hono) {
-    assertModuleAdmits(entry);
-    app.route("/", entry);
-    return;
-  }
-  assertRoutePath(entry.method, entry.path);
-  app.on(entry.method, entry.path, admit(entry), legacy(entry));
+/** Mount a module, refusing it before it can serve a request. */
+function mount(app: Hono<ControlPlaneHonoEnv>, module: RouteModule): void {
+  assertModuleAdmits(module);
+  app.route("/", module);
 }
 
 /** The execution context the platform passed to `app.fetch`, if any. */
@@ -106,31 +97,6 @@ function executionContextOf(c: {
   } catch {
     return undefined;
   }
-}
-
-/** Rebuild the legacy `RegExpMatchArray` handlers still read from raw parameters. */
-function legacyMatch(pathname: string, params: RouteParams): RegExpMatchArray {
-  const match = [pathname, ...Object.values(params)] as unknown as RegExpMatchArray;
-  match.index = 0;
-  match.input = pathname;
-  match.groups = { ...params };
-  return match;
-}
-
-/** Run a catalog handler with the request and context admission produced. */
-function legacy(route: Route): Handler<ControlPlaneHonoEnv> {
-  return (c) => {
-    const admission = c.get("admission");
-    if (admission?.result.kind !== "admitted") {
-      throw new Error(`Handler reached without admission: ${route.method} ${route.path}`);
-    }
-    return route.handler(
-      admission.result.handlerRequest,
-      c.env,
-      legacyMatch(c.req.path, rawRouteParams(c.req.routePath, c.req.path)),
-      c.get("requestContext")
-    );
-  };
 }
 
 /**
@@ -147,7 +113,7 @@ function replaceResponse(
 }
 
 /**
- * Build the Hono application over a route catalog.
+ * Build the Hono application over route modules, mounted in precedence order.
  *
  * The lifecycle middleware owns everything around a route: the DB and HEAD
  * guards, the request context, the request log, authorization audit, and
@@ -155,7 +121,7 @@ function replaceResponse(
  * handler that answers without admission having run is refused.
  */
 export function createControlPlaneApp(
-  entries: readonly RouteCatalogEntry[],
+  modules: readonly RouteModule[],
   host: ControlPlaneHost
 ): Hono<ControlPlaneHonoEnv> {
   const app = new Hono<ControlPlaneHonoEnv>({
@@ -265,7 +231,7 @@ export function createControlPlaneApp(
     });
   });
 
-  for (const entry of entries) register(app, entry);
+  for (const module of modules) mount(app, module);
 
   app.notFound((c) => {
     c.set("admissionExempt", true);
@@ -312,11 +278,11 @@ export const cloudflareHost: ControlPlaneHost = {
   },
 };
 
-/** Build the Worker's ordinary HTTP entrypoint over a route catalog. */
+/** Build the Worker's ordinary HTTP entrypoint over route modules. */
 export function createControlPlaneHttpHandler(
-  entries: readonly RouteCatalogEntry[]
+  modules: readonly RouteModule[]
 ): ControlPlaneHttpHandler {
-  const app = createControlPlaneApp(entries, cloudflareHost);
+  const app = createControlPlaneApp(modules, cloudflareHost);
   return (request, env, executionCtx) => Promise.resolve(app.fetch(request, env, executionCtx));
 }
 

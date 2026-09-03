@@ -5,7 +5,7 @@
  * and parameterized paths.
  */
 
-import type { RouteCatalogEntry } from "../routing/hono-env";
+import type { RouteModule } from "../routing/hono-env";
 import { webhookRoutes } from "../webhooks";
 import { analyticsRoutes } from "./analytics";
 import { auditEventRoutes } from "./audit-events";
@@ -31,11 +31,8 @@ import { slackNotifyRoutes } from "./slack-notify";
 import { signInProviderRoutes } from "./sign-in-providers";
 import { skillRoutes } from "./skills";
 
-/**
- * Registration order is the precedence order. A Hono sub-app is mounted where
- * it appears; a legacy route is registered through the catalog adapter.
- */
-export const catalog: RouteCatalogEntry[] = [
+/** Registration order is the precedence order: each module is mounted where it appears. */
+export const catalog: readonly RouteModule[] = [
   healthRoutes,
 
   browserAuthRoutes,

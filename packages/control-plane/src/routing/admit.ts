@@ -10,7 +10,6 @@ import type {
   RouteAdmissionPolicy,
   RouteAuthentication,
   RouteContext,
-  RouteDefinition,
   RouteParams,
 } from "../routes/shared";
 import type { Env } from "../types";
@@ -19,7 +18,9 @@ import { admitRoute, type RouteAdmissionResult } from "./route-admission";
 import { rawRouteParams } from "./route-params";
 
 /** Everything admission and response policy need to know about a route. */
-export type AdmissionPolicy = RouteAdmissionPolicy & Pick<RouteDefinition, "cacheControl">;
+export type AdmissionPolicy = RouteAdmissionPolicy & {
+  cacheControl?: "no-store" | "private, no-store";
+};
 
 /** The evaluated policy for the current request, read by the lifecycle. */
 export interface RouteAdmission {

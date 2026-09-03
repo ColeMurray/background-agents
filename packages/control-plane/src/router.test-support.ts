@@ -9,13 +9,12 @@
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import type { BackgroundTasks } from "./platform-ports";
 import { createTestBackgroundTasks } from "./background-tasks.test-support";
-import { Hono } from "hono";
 import { BUILT_IN_ROLE_REGISTRY, type PermissionId } from "@open-inspect/shared/rbac";
 import type { SqlDatabase, SqlStatement } from "./db/sql-database";
-import { cloudflareHost, createControlPlaneApp, type RouteCatalogEntry } from "./routing/hono-app";
+import { cloudflareHost, createControlPlaneApp, type RouteModule } from "./routing/hono-app";
 import { listRouteContracts, type RouteContract } from "./routing/route-contracts";
 import { catalog } from "./routes/catalog";
-import type { Route, RouteParams } from "./routes/shared";
+import type { RouteParams } from "./routes/shared";
 import type { Env } from "./types";
 
 // The single contract-faithful double lives in background-tasks.test-support;
@@ -40,15 +39,13 @@ function executionContextFromBackgroundTasks(tasks: BackgroundTasks): ExecutionC
 }
 
 /**
- * Test-only adapter over an explicit catalog, through the production host.
+ * Test-only adapter over explicit route modules, through the production host.
  * Hono registers routes when the app is built, so fixtures that need
- * synthetic routes construct their own handler instead of mutating the
+ * synthetic routes build their own module instead of mutating the
  * production catalog.
  */
-export function createTestRequestHandler(
-  entries: readonly RouteCatalogEntry[]
-): TestRequestHandler {
-  const app = createControlPlaneApp(entries, cloudflareHost);
+export function createTestRequestHandler(modules: readonly RouteModule[]): TestRequestHandler {
+  const app = createControlPlaneApp(modules, cloudflareHost);
   return (request, env, backgroundTasks) =>
     Promise.resolve(app.fetch(request, env, executionContextFromBackgroundTasks(backgroundTasks)));
 }
@@ -60,11 +57,6 @@ export const handleRequest: TestRequestHandler = createTestRequestHandler(catalo
 export const routeContracts: readonly RouteContract[] = listRouteContracts(
   createControlPlaneApp(catalog, cloudflareHost)
 );
-
-/** The catalog entries still registered through the legacy adapter. */
-export function legacyRoutes(entries: readonly RouteCatalogEntry[] = catalog): Route[] {
-  return entries.filter((entry): entry is Route => !(entry instanceof Hono));
-}
 
 /** The production contract selected for a concrete method and path. */
 export function contractFor(method: string, path: string): RouteContract | undefined {
@@ -143,21 +135,21 @@ export function ownerAuthorizationDatabase(userId = TEST_USER_ID): SqlDatabase {
   return authorizationDatabase({ userId });
 }
 
-/** Compile a catalog path into the legacy raw-path matcher, for handler-level fixtures. */
+/** Compile a route path into a matcher over a concrete pathname, for handler-level fixtures. */
 export function routePathPattern(path: string): RegExp {
   return new RegExp(`^${path.replace(/:(\w+)/g, "(?<$1>[^/]+)")}$`);
 }
 
-/** Select the catalog route for a concrete path and rebuild what the adapter hands its handler. */
+/** Select the first contract for a concrete method and path, with the raw parameters it binds. */
 export function matchRoute<Entry extends { method: string; path: string }>(
   entries: readonly Entry[],
   method: string,
   path: string
-): { route: Entry; match: RegExpMatchArray; params: RouteParams } | undefined {
+): { route: Entry; params: RouteParams } | undefined {
   for (const route of entries) {
     if (route.method !== method) continue;
     const match = path.match(routePathPattern(route.path));
-    if (match) return { route, match, params: { ...match.groups } };
+    if (match) return { route, params: { ...match.groups } };
   }
   return undefined;
 }

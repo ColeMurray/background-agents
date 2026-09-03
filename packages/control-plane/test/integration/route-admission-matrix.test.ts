@@ -21,7 +21,9 @@ import { listRouteContracts, type RouteContract } from "../../src/routing/route-
 import type { Env } from "../../src/types";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { catalog } from "../../src/routes/catalog";
-import type { Route } from "../../src/routes/shared";
+import { Hono } from "hono";
+import { admit } from "../../src/routing/admit";
+import type { ControlPlaneHonoEnv } from "../../src/routing/hono-env";
 import { cleanD1Tables } from "./cleanup";
 import {
   initSession,
@@ -385,11 +387,15 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     sandboxSessionId: "",
     automationId: "",
   };
-  const shadow: Route[] = routes.map((route) => ({
-    ...route,
-    handler: async () => Response.json({ sentinel: `${route.method} ${route.path}` }),
-  }));
-  const handle = createControlPlaneHttpHandler(shadow);
+  // Every production contract, admitted by its own policy, in front of a
+  // sentinel handler.
+  const shadow = new Hono<ControlPlaneHonoEnv>();
+  for (const route of routes) {
+    shadow.on(route.method, route.path, admit(route), () =>
+      Response.json({ sentinel: `${route.method} ${route.path}` })
+    );
+  }
+  const handle = createControlPlaneHttpHandler([shadow]);
 
   beforeAll(async () => {
     await cleanD1Tables();
@@ -514,27 +520,31 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     }
   });
 
-  it("delivers raw path segments to handlers", async () => {
-    const echo: Route[] = routes.map((route) => ({
-      ...route,
-      handler: async (_request, _env, match) => Response.json({ groups: { ...match.groups } }),
-    }));
-    const handleEcho = createControlPlaneHttpHandler(echo);
+  it("delivers path segments to handlers decoded exactly once", async () => {
+    // Every production contract, admitted by its own policy, in front of a
+    // handler that echoes the parameters Hono decoded.
+    const echo = new Hono<ControlPlaneHonoEnv>();
+    for (const route of routes) {
+      echo.on(route.method, route.path, admit(route), (c) =>
+        Response.json({ groups: c.req.param() })
+      );
+    }
+    const handleEcho = createControlPlaneHttpHandler([echo]);
     const cases: Array<{ method: string; url: string; groups: Record<string, string> }> = [
       {
         method: "GET",
         url: `${BASE}/sessions/abc%2Fdef`,
-        groups: { id: "abc%2Fdef" },
+        groups: { id: "abc/def" },
       },
       {
         method: "GET",
         url: `${BASE}/repos/group%2Fsubgroup/web%252Fapp/secrets`,
-        groups: { owner: "group%2Fsubgroup", name: "web%252Fapp" },
+        groups: { owner: "group/subgroup", name: "web%2Fapp" },
       },
       {
         method: "PUT",
         url: `${BASE}/members/${"1".repeat(31)}%2531/role`,
-        groups: { id: `${"1".repeat(31)}%2531` },
+        groups: { id: `${"1".repeat(31)}%31` },
       },
     ];
 

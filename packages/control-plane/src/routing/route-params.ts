@@ -3,11 +3,12 @@ import type { RouteParams } from "../routes/shared";
 /**
  * Path parameters as the raw, undecoded segments of the request pathname.
  *
- * Hono decodes `c.req.param()`, but handlers decode repository and member
- * segments themselves, so the segments are read back from the pathname by
- * position. The route is already selected, so the parameter and pathname
- * segments line up as long as the path grammar admits only literal and
- * `:param` segments; a mismatch is an invariant violation, not data.
+ * Hono decodes `c.req.param()` and leaves a segment it cannot decode as it
+ * arrived, so admission reads the raw segments back from the pathname by
+ * position to refuse malformed encoding. The route is already selected, so
+ * the parameter and pathname segments line up as long as the path grammar
+ * admits only literal and `:param` segments; a mismatch is an invariant
+ * violation, not data.
  */
 export function rawRouteParams(routePath: string, pathname: string): RouteParams {
   const names = routePath.split("/");

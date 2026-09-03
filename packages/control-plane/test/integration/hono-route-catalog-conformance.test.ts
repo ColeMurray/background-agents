@@ -1,7 +1,11 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { catalog } from "../../src/routes/catalog";
-import { NO_AUTHORIZATION, type Route } from "../../src/routes/shared";
+import { Hono } from "hono";
+import { NO_AUTHORIZATION } from "../../src/routes/shared";
+import { admit } from "../../src/routing/admit";
+import type { ControlPlaneHonoEnv } from "../../src/routing/hono-env";
+import { rawRouteParams } from "../../src/routing/route-params";
 import {
   cloudflareHost,
   createControlPlaneApp,
@@ -49,19 +53,24 @@ describe("Hono route catalog conformance", () => {
     // without thousands of snapshot-only formatting lines.
     expect(manifest.map((entry) => JSON.stringify(entry))).toMatchSnapshot();
 
-    // A shadow catalog keeps the production method/path/order and replaces
-    // each policy with a public echo handler, so selection and raw captures
-    // are observed without mutating the production route objects.
-    const shadow: Route[] = routes.map((route, routeIndex) => ({
-      ...route,
+    // A shadow module keeps the production method/path/order and replaces
+    // each policy with a public echo handler, so selection and the raw
+    // parameter read-back are observed without the production policies.
+    const shadow = new Hono<ControlPlaneHonoEnv>();
+    const ECHO = admit({
       authentication: { kind: "public" },
-      authorization: NO_AUTHORIZATION,
-      serviceActorClaims: undefined,
       supportedScmProviders: "all",
-      handler: async (_request, _env, match) =>
-        Response.json({ identity: manifest[routeIndex].identity, groups: match.groups ?? {} }),
-    }));
-    const handle = createControlPlaneHttpHandler(shadow);
+      authorization: NO_AUTHORIZATION,
+    });
+    for (const [routeIndex, route] of routes.entries()) {
+      shadow.on(route.method, route.path, ECHO, (c) =>
+        Response.json({
+          identity: manifest[routeIndex].identity,
+          groups: rawRouteParams(c.req.routePath, c.req.path),
+        })
+      );
+    }
+    const handle = createControlPlaneHttpHandler([shadow]);
 
     for (const [routeIndex, route] of routes.entries()) {
       const { identity: expectedIdentity, pathname, groups } = manifest[routeIndex];

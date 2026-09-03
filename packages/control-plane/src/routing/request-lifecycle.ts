@@ -1,7 +1,7 @@
 import type { Principal } from "../auth/principal";
 import type { RequestContext } from "../http/request-context";
 import { createLogger } from "../logger";
-import type { Route } from "../routes/shared";
+import type { AdmissionPolicy } from "./admit";
 
 const logger = createLogger("router");
 
@@ -31,7 +31,7 @@ export function withCorsAndTraceHeaders(response: Response, ctx: RequestContext)
 /** Apply all matched-route response policy in one body-preserving reconstruction. */
 export function finalizeRouteResponse(
   response: Response,
-  route: Pick<Route, "cacheControl">,
+  route: Pick<AdmissionPolicy, "cacheControl">,
   ctx: RequestContext
 ): Response {
   return withCommonHeaders(

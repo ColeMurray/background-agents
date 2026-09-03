@@ -2,7 +2,6 @@
  * Shared route primitives used by all route modules.
  */
 
-import { decodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
 import type { Principal } from "../auth/principal";
 import type { RequestContext } from "../http/request-context";
 import { error, HttpError } from "../http/responses";
@@ -36,23 +35,6 @@ export interface ServiceActorProfileClaims {
 export type ServiceActorClaimsResult =
   | { kind: "claims"; claims: ServiceActorProfileClaims }
   | { kind: "rejected"; response: Response };
-
-/** Route matching, authorization, and handler configuration. */
-export interface RouteDefinition<Context extends RequestContext = RequestContext> {
-  method: string;
-  path: string;
-  /** Authorization policy enforced before the handler runs. */
-  authorization: RouteAuthorization;
-  /**
-   * Extract profile claims asserted by the trusted service that owns this
-   * route. Authentication has already verified the exact request body before
-   * this hook runs. Invalid route input returns the route's own rejection so
-   * admission stops before any identity is written.
-   */
-  serviceActorClaims?: (request: Request, ctx: RequestContext) => Promise<ServiceActorClaimsResult>;
-  cacheControl?: "no-store" | "private, no-store";
-  handler: (request: Request, env: Env, match: RegExpMatchArray, ctx: Context) => Promise<Response>;
-}
 
 /** One permission or resource-admission requirement for an active user. */
 export type RouteAuthorizationRequirement =
@@ -286,14 +268,18 @@ export interface RoutePolicy {
   supportedScmProviders: "all" | readonly SourceControlProviderName[];
 }
 
-/** Fully resolved route: a definition combined with the policy it was declared under. */
-export interface Route extends RouteDefinition, RoutePolicy {}
-
 /** Framework-neutral policy consumed by request admission. */
-export type RouteAdmissionPolicy = Pick<
-  Route,
-  "authentication" | "authorization" | "serviceActorClaims" | "supportedScmProviders"
->;
+export interface RouteAdmissionPolicy extends RoutePolicy {
+  /** Authorization policy enforced before the handler runs. */
+  authorization: RouteAuthorization;
+  /**
+   * Extract profile claims asserted by the trusted service that owns this
+   * route. Authentication has already verified the exact request body before
+   * this hook runs. Invalid route input returns the route's own rejection so
+   * admission stops before any identity is written.
+   */
+  serviceActorClaims?: (request: Request, ctx: RequestContext) => Promise<ServiceActorClaimsResult>;
+}
 
 const SESSION_ID_BINDING: SandboxSessionBinding = {
   getSessionId: (params) => params.id ?? null,
@@ -349,26 +335,6 @@ export const SCM_AGNOSTIC_SANDBOX_ROUTE = {
   supportedScmProviders: "all",
 } as const satisfies RoutePolicy;
 
-export function defineRoutes<const Policy extends RoutePolicy>(
-  policy: Policy,
-  routes: RouteDefinition<RouteContext<Policy["authentication"]>>[]
-): Route[] {
-  return routes.map((route) => defineRoute(policy, route));
-}
-
-export function defineRoute<const Policy extends RoutePolicy>(
-  policy: Policy,
-  route: RouteDefinition<RouteContext<Policy["authentication"]>>
-): Route {
-  const handler: Route["handler"] = (request, env, match, ctx) =>
-    route.handler(request, env, match, ctx as RouteContext<Policy["authentication"]>);
-  return {
-    ...route,
-    ...policy,
-    handler,
-  };
-}
-
 /**
  * Create a SourceControlProvider for use in Worker-level route handlers.
  * Cheap to construct (no I/O), so creating per-request is fine.
@@ -401,25 +367,6 @@ export async function parseJsonBody<T>(request: Request): Promise<T | Response> 
   } catch {
     return error("Invalid JSON body", 400);
   }
-}
-
-/**
- * Extract `owner` and `name` named groups from a route match, returning
- * the pair or an error Response when either is missing.
- */
-export function extractRepoParams(
-  match: RegExpMatchArray
-): { owner: string; name: string } | Response {
-  const encodedOwner = match.groups?.owner;
-  const encodedName = match.groups?.name;
-  if (!encodedOwner || !encodedName) {
-    return error("Owner and name are required", 400);
-  }
-  const repository = decodeRepositoryPathSegments(encodedOwner, encodedName);
-  if (!repository) {
-    return error("Owner and name must be valid repository path segments", 400);
-  }
-  return { owner: repository.repoOwner, name: repository.repoName };
 }
 
 /**

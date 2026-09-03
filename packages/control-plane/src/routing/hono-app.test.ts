@@ -2,17 +2,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpError, json } from "../http/responses";
 import { TEST_SERVICE_SECRETS } from "../router.test-support";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
-import { defineRoute, NO_AUTHORIZATION, type Route } from "../routes/shared";
+import { NO_AUTHORIZATION } from "../routes/shared";
 import type { RequestContext } from "../http/request-context";
 import type { Env } from "../types";
 import { Hono } from "hono";
-import { admit, dispatch } from "./admit";
-import { createControlPlaneApp, type ControlPlaneHonoEnv, type ControlPlaneHost } from "./hono-app";
+import { admit, type AdmissionPolicy, dispatch } from "./admit";
+import {
+  createControlPlaneApp,
+  type ControlPlaneHonoEnv,
+  type ControlPlaneHost,
+  type RouteModule,
+} from "./hono-app";
 
 const PUBLIC = { authentication: { kind: "public" }, supportedScmProviders: "all" } as const;
 
-function publicRoute(path: string, handler: Route["handler"]): Route {
-  return defineRoute(PUBLIC, { method: "GET", path, authorization: NO_AUTHORIZATION, handler });
+/** A module with one public GET route, for lifecycle tests. */
+function publicRoute(path: string, handler: () => Promise<Response>): RouteModule {
+  const module = new Hono<ControlPlaneHonoEnv>();
+  module.get(path, admit({ ...PUBLIC, authorization: NO_AUTHORIZATION }), handler);
+  return module;
 }
 
 const tasks = createTestBackgroundTasks();
@@ -111,17 +119,23 @@ describe("control-plane Hono app lifecycle", () => {
 
   it("finalizes a failure inside admission with the route's response policy", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const route: Route = {
-      ...publicRoute("/sessions/:id/tunnel-urls", async () => json({ ok: true })),
-      authentication: {
-        kind: "sandbox",
-        getSessionId: () => {
-          throw new Error("identity lookup failed");
+    const module = new Hono<ControlPlaneHonoEnv>();
+    module.get(
+      "/sessions/:id/tunnel-urls",
+      admit({
+        authentication: {
+          kind: "sandbox",
+          getSessionId: () => {
+            throw new Error("identity lookup failed");
+          },
         },
-      },
-      cacheControl: "no-store",
-    };
-    const app = createControlPlaneApp([route], host);
+        supportedScmProviders: "all",
+        authorization: NO_AUTHORIZATION,
+        cacheControl: "no-store",
+      }),
+      () => json({ ok: true })
+    );
+    const app = createControlPlaneApp([module], host);
 
     const response = await app.fetch(new Request("https://cp.test/sessions/s-1/tunnel-urls"), env);
     expect(response.status).toBe(500);
@@ -243,11 +257,11 @@ describe("control-plane Hono app lifecycle", () => {
   });
 
   it("refuses to build a principal-less route that requires authorization", () => {
-    const route = {
-      ...publicRoute("/broken", async () => json({})),
+    const policy = {
+      ...PUBLIC,
       authorization: { kind: "authenticated", auditAllowed: false },
-    } as Route;
-    expect(() => createControlPlaneApp([route], host)).toThrow(
+    } as AdmissionPolicy;
+    expect(() => admit(policy)).toThrow(
       "Route without a verified principal cannot require authorization"
     );
   });

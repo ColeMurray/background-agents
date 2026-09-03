@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal";
 import type { RequestContext } from "../http/request-context";
-import type { Route } from "../routes/shared";
+import type { AdmissionPolicy } from "./admit";
 import {
   logPrincipal,
   logRequest,
@@ -22,8 +22,10 @@ function requestContext(metrics: Record<string, unknown> = {}): RequestContext {
   } as unknown as RequestContext;
 }
 
-function route(cacheControl?: Route["cacheControl"]): Route {
-  return { cacheControl } as Route;
+function route(
+  cacheControl?: AdmissionPolicy["cacheControl"]
+): Pick<AdmissionPolicy, "cacheControl"> {
+  return { cacheControl };
 }
 
 function loggedEvents(spy: ReturnType<typeof vi.spyOn>): Array<Record<string, unknown>> {

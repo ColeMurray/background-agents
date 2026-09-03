@@ -3,7 +3,6 @@
 import type { Hono } from "hono";
 import type { RequestContext } from "../http/request-context";
 import type { BackgroundTasks } from "../platform-ports";
-import type { Route } from "../routes/shared";
 import type { Env } from "../types";
 import type { AdmissionPolicy, RouteAdmission } from "./admit";
 
@@ -34,6 +33,3 @@ export interface ControlPlaneHost {
 
 /** A route module: a Hono sub-app whose every route is registered behind `admit()`. */
 export type RouteModule = Hono<ControlPlaneHonoEnv>;
-
-/** What the catalog lists, in precedence order: converted modules and, until they convert, legacy routes. */
-export type RouteCatalogEntry = Route | RouteModule;
