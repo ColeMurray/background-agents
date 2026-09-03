@@ -8,15 +8,15 @@
  * dependency to install or rebuild. better-sqlite3 exposes the same
  * prepare/run/all shape and is the fallback if a gap appears here.
  *
- * No SQL text is interpreted here. Whether a call is one statement or a script
- * comes from the prepared statement's own extent, rows come from stepping it,
- * and the write count comes from SQLite's change counter. Foreign keys are
+ * No SQL text is interpreted here. Statement boundaries come from the prepared
+ * statements' own extents, rows come from stepping the last one, and the write
+ * count comes from SQLite's change counter. Foreign keys are
  * enforced, as they are in Durable Object storage. The conformance suite
  * (test/conformance) pins every semantic the core relies on to what the
  * Durable Object does, including nested transactions as savepoints.
  */
 
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import type { SessionStorage } from "../session/platform";
 import type { SqlResult, SqlStorage, TransactionSync } from "../session/sql-storage";
 
@@ -27,21 +27,23 @@ export function createNodeSqlStorage(db: DatabaseSync): SessionStorage {
 
   const sql: SqlStorage = {
     exec(query: string, ...params: unknown[]): SqlResult {
-      const statement = db.prepare(query);
-      const before = Number((totalChanges.get() as { n: number | bigint }).n);
-      // sourceSQL is the text SQLite consumed for this one statement; anything
-      // after it is a further statement, which makes the call a script.
-      const remainder = query.slice(statement.sourceSQL.length).trim();
-      if (remainder.length > 0) {
-        if (params.length > 0) {
-          throw new Error("Parameters cannot be bound to a multi-statement script");
+      const statements = prepareAll(db, query);
+      // A script's result is its last statement's: the earlier ones run
+      // first, unbound, and neither their rows nor their writes are
+      // reported, exactly as a Durable Object cursor reports them.
+      const last = statements.pop()!;
+      for (const statement of statements) {
+        if (statement.expandedSQL !== statement.sourceSQL) {
+          throw new Error(
+            "When executing multiple SQL statements in a single call, only the last statement can have parameters."
+          );
         }
-        db.exec(query);
-        return { toArray: () => [], one: () => exactlyOne([]), rowsWritten: changesSince(before) };
+        statement.run();
       }
+      const before = Number((totalChanges.get() as { n: number | bigint }).n);
       // Stepping to completion returns the rows of a read or a RETURNING
       // clause and an empty list for any other write.
-      const rows = statement.all(...(params as SQLInputValue[]));
+      const rows = last.all(...(params as SQLInputValue[]));
       return {
         toArray: () => rows,
         one: () => exactlyOne(rows),
@@ -72,6 +74,43 @@ export function createNodeSqlStorage(db: DatabaseSync): SessionStorage {
   };
 
   return { sql, transactionSync };
+}
+
+/**
+ * Every statement in `query`, in order, each prepared from its own extent of
+ * the text. SQLite decides where one statement ends, so no SQL is parsed
+ * here. Text after the last statement that is more than whitespace yet holds
+ * no statement (a comment, a bare semicolon) is rejected the way a Durable
+ * Object rejects it, so SQL that would fail on Cloudflare fails here too.
+ */
+function prepareAll(db: DatabaseSync, query: string): StatementSync[] {
+  const statements: StatementSync[] = [];
+  let rest = query;
+  while (rest.length > 0) {
+    const statement = db.prepare(rest);
+    const extent = sourceOf(statement);
+    if (extent === null) break;
+    statements.push(statement);
+    rest = rest.slice(extent.length);
+  }
+  if (statements.length === 0 || rest.trim().length > 0) {
+    throw new Error("SQL code did not contain a statement.");
+  }
+  return statements;
+}
+
+/**
+ * The text SQLite consumed for `statement`, or null when the text held no
+ * statement (comments or whitespace only): node:sqlite hands back a
+ * finalized statement for such text, and reading its source throws.
+ */
+function sourceOf(statement: StatementSync): string | null {
+  try {
+    return statement.sourceSQL;
+  } catch (error) {
+    if ((error as { code?: string }).code === "ERR_INVALID_STATE") return null;
+    throw error;
+  }
 }
 
 /** Durable Object cursors throw from `one()` unless the result is a single row. */

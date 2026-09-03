@@ -103,6 +103,31 @@ export const STORAGE_CONTRACTS: Record<
           expect(
             sql.exec("INSERT INTO conformance_rows (a) VALUES (?) RETURNING id", "w").toArray()
           ).toEqual([{ id: 3 }]);
+
+          // A script: the earlier statements run unbound, the result and the
+          // write count belong to the last one.
+          const script = sql.exec(
+            "INSERT INTO conformance_rows (a) VALUES ('s'); SELECT a FROM conformance_rows WHERE a = ?",
+            "s"
+          );
+          expect(script.one()).toEqual({ a: "s" });
+          expect(script.rowsWritten).toBe(0);
+          expect(() =>
+            sql.exec("INSERT INTO conformance_rows (a) VALUES (?); SELECT 1", "p")
+          ).toThrow();
+          // After the last statement only whitespace may follow; a comment or
+          // an empty statement there is an error. Comments elsewhere are fine.
+          expect(sql.exec("SELECT a FROM conformance_rows WHERE a = 's';\n \n").toArray()).toEqual([
+            { a: "s" },
+          ]);
+          expect(
+            sql
+              .exec("SELECT 1; -- between\nSELECT a FROM conformance_rows WHERE a = 's' -- end")
+              .one()
+          ).toEqual({ a: "s" });
+          expect(() => sql.exec("SELECT a FROM conformance_rows; -- note")).toThrow();
+          expect(() => sql.exec("SELECT a FROM conformance_rows;;")).toThrow();
+          expect(() => sql.exec("-- nothing")).toThrow();
         });
       });
     }),

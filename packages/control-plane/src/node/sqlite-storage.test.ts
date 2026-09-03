@@ -81,20 +81,62 @@ describe("createNodeSqlStorage", () => {
     ]);
   });
 
-  it("runs every statement of a parameterless script and counts its writes", () => {
+  it("runs every statement of a script and reports only the last one's rows and writes", () => {
     const result = storage.sql.exec(
-      "INSERT INTO t (a) VALUES ('x'); INSERT INTO t (a) VALUES ('y'); CREATE TABLE u (b TEXT);"
+      "INSERT INTO t (a) VALUES ('x'); INSERT INTO t (a) VALUES ('y'); CREATE TABLE u (b TEXT); SELECT a FROM t ORDER BY id"
     );
-    expect(result.rowsWritten).toBe(2);
-    expect(storage.sql.exec("SELECT count(*) AS n FROM t").one()).toEqual({ n: 2 });
+    expect(result.toArray()).toEqual([{ a: "x" }, { a: "y" }]);
+    // The earlier inserts are not in the count: a Durable Object cursor
+    // reports the last statement only.
+    expect(result.rowsWritten).toBe(0);
     expect(storage.sql.exec("SELECT count(*) AS n FROM u").one()).toEqual({ n: 0 });
+    const returning = storage.sql.exec(
+      "DELETE FROM t WHERE a = 'x'; INSERT INTO t (a) VALUES ('z') RETURNING a"
+    );
+    expect(returning.one()).toEqual({ a: "z" });
+    expect(returning.rowsWritten).toBe(1);
   });
 
-  it("refuses to bind parameters to a script rather than run only its first statement", () => {
+  it("binds parameters to the last statement of a script only, as a Durable Object does", () => {
+    const result = storage.sql.exec(
+      "INSERT INTO t (a) VALUES ('x'); SELECT a FROM t WHERE a = ?",
+      "x"
+    );
+    expect(result.one()).toEqual({ a: "x" });
     expect(() =>
-      storage.sql.exec("INSERT INTO t (a) VALUES (?); INSERT INTO t (a) VALUES (?)", "x", "y")
-    ).toThrow("multi-statement script");
-    expect(storage.sql.exec("SELECT count(*) AS n FROM t").one()).toEqual({ n: 0 });
+      storage.sql.exec("INSERT INTO t (a) VALUES (?); SELECT count(*) AS n FROM t", "y")
+    ).toThrow("only the last statement can have parameters");
+    expect(() => storage.sql.exec("INSERT INTO t (a) VALUES (?); SELECT 1")).toThrow(
+      "only the last statement can have parameters"
+    );
+    expect(storage.sql.exec("SELECT count(*) AS n FROM t").one()).toEqual({ n: 1 });
+  });
+
+  it("rejects a trailing comment or empty statement after a statement, as a Durable Object does", () => {
+    storage.sql.exec("INSERT INTO t (a) VALUES (?);", "x");
+    for (const query of [
+      "SELECT a FROM t; -- trailing line comment",
+      "SELECT a FROM t; /* trailing block */",
+      "SELECT a FROM t;;",
+      "UPDATE t SET a = 'y'; -- done",
+    ]) {
+      expect(() => storage.sql.exec(query)).toThrow("did not contain a statement");
+    }
+    expect(() => storage.sql.exec("SELECT a FROM t WHERE a = ?; -- note", "x")).toThrow(
+      "did not contain a statement"
+    );
+    // Whitespace after the last statement, and comments before or between
+    // statements, are fine on both hosts.
+    expect(storage.sql.exec("SELECT a FROM t;\n  \n").toArray()).toEqual([{ a: "x" }]);
+    expect(storage.sql.exec("SELECT 1; -- between\nSELECT a FROM t -- end").toArray()).toEqual([
+      { a: "x" },
+    ]);
+  });
+
+  it("rejects text that holds no statement", () => {
+    expect(() => storage.sql.exec("-- nothing here")).toThrow("did not contain a statement");
+    expect(() => storage.sql.exec("   ")).toThrow("did not contain a statement");
+    expect(() => storage.sql.exec("")).toThrow("did not contain a statement");
   });
 
   it("enforces foreign keys, as Durable Object storage does", () => {

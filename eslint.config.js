@@ -193,8 +193,10 @@ export default tseslint.config(
                 "Only the worker entrypoint (src/index.ts) may import the platform adapter. Depend on the session collaborators, not the Durable Object.",
             },
             {
-              // Directory match on the specifier: `../node/<file>` from any depth.
-              regex: "(?:^|/)node/[^/]+$",
+              // The directory and anything under it, by relative path or the
+              // `@/` alias, at any depth: `../node`, `../node/x`, `@/node/y/z`.
+              // Package subpaths such as `better-auth/node` are not ours.
+              regex: "^(?:\\.\\.?/(?:.*/)?|@/)node(?:/|$)",
               message:
                 "Only the Node host (src/node/**) may import its adapters; the worker bundle must not reach node:* modules.",
             },
@@ -246,8 +248,10 @@ export default tseslint.config(
                 "Only the platform adapter (session/durable-object.ts) may import the composition root. Take dependencies as constructor inputs instead.",
             },
             {
-              // Directory match on the specifier: `../node/<file>` from any depth.
-              regex: "(?:^|/)node/[^/]+$",
+              // The directory and anything under it, by relative path or the
+              // `@/` alias, at any depth: `../node`, `../node/x`, `@/node/y/z`.
+              // Package subpaths such as `better-auth/node` are not ours.
+              regex: "^(?:\\.\\.?/(?:.*/)?|@/)node(?:/|$)",
               message:
                 "Only the Node host (src/node/**) may import its adapters; the worker bundle must not reach node:* modules.",
             },
