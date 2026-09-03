@@ -6,7 +6,7 @@ import { SESSION_WEBSOCKET_CONNECT_PERMISSION } from "@open-inspect/shared/rbac"
 import { SessionInternalPaths, sessionScmDisplayFieldsSchema } from "../session/contracts";
 import type { Env } from "../types";
 import { error, GITHUB_USER_OR_SERVICE_ROUTE, parseJsonBody, requirePermission } from "./shared";
-import { withSessionRuntime, type SessionRouteContext } from "./session-route";
+import { dispatchSession, type SessionRouteContext } from "./session-route";
 
 export async function handleSessionWsToken(
   request: Request,
@@ -58,11 +58,5 @@ sessionWsTokenRoutes.post(
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission(SESSION_WEBSOCKET_CONNECT_PERMISSION),
   }),
-  (c) =>
-    handleSessionWsToken(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleSessionWsToken)
 );

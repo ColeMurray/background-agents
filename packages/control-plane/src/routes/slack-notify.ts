@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 /**
  * Intentionally emits no transcript events: the agent's own tool_call event
@@ -321,5 +321,5 @@ slackNotifyRoutes.post(
     ...GITHUB_SANDBOX_FALLBACK_ROUTE,
     authorization: requirePermission("sessions.collaborate"),
   }),
-  (c) => handleSlackNotify(c.var.admitted.request, c.env, c.req.param(), c.var.admitted.ctx)
+  (c) => dispatch(c, handleSlackNotify)
 );

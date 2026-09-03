@@ -37,7 +37,7 @@ import {
   permissionRequirement,
   requireAll,
 } from "./shared";
-import { withSessionRuntime, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 import { authorizeSessionTarget } from "./session-target-authorization";
 
@@ -362,11 +362,5 @@ sessionChildSpawnRoutes.post(
       permissionRequirement("sessions.collaborate")
     ),
   }),
-  (c) =>
-    handleSpawnChild(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleSpawnChild)
 );

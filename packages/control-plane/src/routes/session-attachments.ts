@@ -54,7 +54,7 @@ import {
   json,
   requirePermission,
 } from "./shared";
-import { withSessionRuntime, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const logger = createLogger("router:session-attachments");
 
@@ -246,23 +246,11 @@ sessionAttachmentRoutes.post(
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("sessions.collaborate"),
   }),
-  (c) =>
-    handleAttachmentPost(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleAttachmentPost)
 );
 
 sessionAttachmentRoutes.get(
   "/sessions/:id/attachments/:attachmentId",
   admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requirePermission("sessions.read") }),
-  (c) =>
-    handleAttachmentGet(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleAttachmentGet)
 );

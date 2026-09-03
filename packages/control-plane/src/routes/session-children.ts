@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   cancelChildSessionRequestSchema,
@@ -23,7 +23,7 @@ import {
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   type RequestContext,
 } from "./shared";
-import { withSessionRuntime, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const logger = createLogger("router:session-children");
 
@@ -266,18 +266,12 @@ export const sessionChildRoutes = new Hono<ControlPlaneHonoEnv>();
 sessionChildRoutes.get(
   "/sessions/:id/children",
   admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requirePermission("sessions.read") }),
-  (c) => handleListChildren(c.var.admitted.request, c.env, c.req.param(), c.var.admitted.ctx)
+  (c) => dispatch(c, handleListChildren)
 );
 sessionChildRoutes.get(
   "/sessions/:id/children/:childId",
   admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requirePermission("sessions.read") }),
-  (c) =>
-    handleGetChild(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleGetChild)
 );
 sessionChildRoutes.post(
   "/sessions/:id/children/:childId/cancel",
@@ -285,22 +279,10 @@ sessionChildRoutes.post(
     ...GITHUB_SANDBOX_FALLBACK_ROUTE,
     authorization: requirePermission("sessions.lifecycle"),
   }),
-  (c) =>
-    handleCancelChild(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleCancelChild)
 );
 sessionChildRoutes.post(
   "/sessions/:id/children/:childId/prompt",
   admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, authorization: NO_AUTHORIZATION }),
-  (c) =>
-    handlePromptChild(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handlePromptChild)
 );

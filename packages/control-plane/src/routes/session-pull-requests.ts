@@ -4,7 +4,7 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
 import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
-import { withSessionRuntime, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 /**
  * Manual PR sync (design §5.3): forwards to the session DO's internal
@@ -34,11 +34,5 @@ sessionPullRequestRoutes.post(
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("sessions.lifecycle"),
   }),
-  (c) =>
-    handleRefreshPullRequests(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleRefreshPullRequests)
 );

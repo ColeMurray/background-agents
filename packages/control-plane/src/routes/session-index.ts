@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   parseSessionListQuery,
@@ -252,10 +252,10 @@ sessionIndexRoutes.get(
 sessionIndexRoutes.patch(
   "/sessions/:id/read-state",
   admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requirePermission("sessions.read") }),
-  (c) => handlePatchReadState(c.var.admitted.request, c.env, c.req.param(), c.var.admitted.ctx)
+  (c) => dispatch(c, handlePatchReadState)
 );
 sessionIndexRoutes.delete(
   "/sessions/:id",
   admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.delete") }),
-  (c) => handleDeleteSession(c.var.admitted.request, c.env, c.req.param(), c.var.admitted.ctx)
+  (c) => dispatch(c, handleDeleteSession)
 );

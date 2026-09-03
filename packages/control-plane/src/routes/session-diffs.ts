@@ -15,7 +15,7 @@ import {
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   requirePermission,
 } from "./shared";
-import { withSessionRuntime, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 import type { Env } from "../types";
 
 export const SESSION_DIFF_UPLOAD_BODY_MAX_BYTES = SESSION_DIFF_MAX_BUNDLE_BYTES;
@@ -199,37 +199,15 @@ const DIFF_WRITE = admit({
   authorization: requirePermission("sessions.collaborate"),
 });
 
-sessionDiffRoutes.get("/sessions/:id/diff", DIFF_READ, (c) =>
-  handleDiffState(
-    c.var.admitted.request,
-    c.env,
-    c.req.param(),
-    withSessionRuntime(c.env, c.var.admitted.ctx)
-  )
-);
+sessionDiffRoutes.get("/sessions/:id/diff", DIFF_READ, (c) => dispatchSession(c, handleDiffState));
 sessionDiffRoutes.put("/sessions/:id/diff", DIFF_WRITE, (c) =>
-  handleDiffUpload(
-    c.var.admitted.request,
-    c.env,
-    c.req.param(),
-    withSessionRuntime(c.env, c.var.admitted.ctx)
-  )
+  dispatchSession(c, handleDiffUpload)
 );
 sessionDiffRoutes.post("/sessions/:id/diff/failure", DIFF_WRITE, (c) =>
-  handleDiffFailure(
-    c.var.admitted.request,
-    c.env,
-    c.req.param(),
-    withSessionRuntime(c.env, c.var.admitted.ctx)
-  )
+  dispatchSession(c, handleDiffFailure)
 );
 sessionDiffRoutes.get("/sessions/:id/diff/:revisionId/files/:fileId", DIFF_READ, (c) =>
-  handleDiffFile(
-    c.var.admitted.request,
-    c.env,
-    c.req.param(),
-    withSessionRuntime(c.env, c.var.admitted.ctx)
-  )
+  dispatchSession(c, handleDiffFile)
 );
 sessionDiffRoutes.post(
   "/sessions/:id/diff/retry",
@@ -237,11 +215,5 @@ sessionDiffRoutes.post(
     ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("sessions.lifecycle"),
   }),
-  (c) =>
-    handleDiffRetry(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleDiffRetry)
 );

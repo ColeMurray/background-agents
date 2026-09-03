@@ -83,10 +83,11 @@ describe("Worker routing compatibility", () => {
     }
   );
 
-  it("passes a malformed percent escape through raw dynamic matching", async () => {
+  it("rejects a malformed percent escape before the route runs", async () => {
     const response = await serviceFetch("https://test.local/sessions/%E0%A4%A");
 
-    await expectJsonNotFound(response, "Session not found");
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid path encoding" });
   });
 
   it("returns the universal preflight response for an unknown path", async () => {

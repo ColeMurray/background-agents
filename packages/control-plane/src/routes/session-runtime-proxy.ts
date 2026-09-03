@@ -30,7 +30,7 @@ import {
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   SCM_CREDENTIALS_ROUTE,
 } from "./shared";
-import { withSessionRuntime, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const participantsResponseSchema = z.object({
   participants: z.array(
@@ -274,30 +274,6 @@ function lifecycleProxy(internalPath: SessionInternalPath): ProxyHandler {
 }
 
 /** Every proxied session operation, by the name its route is known by. */
-export const sessionRuntimeProxyHandlers = {
-  sandboxAccess: simpleProxy({ internalPath: SessionInternalPaths.sandboxAccess }),
-  snapshot: handleSessionSnapshot,
-  stop: simpleProxy({ internalPath: SessionInternalPaths.stop, runtimeMethod: "POST" }),
-  sandboxError: handleSandboxError,
-  events: simpleProxy({ internalPath: SessionInternalPaths.events, forwardSearch: true }),
-  artifacts: simpleProxy({ internalPath: SessionInternalPaths.artifacts }),
-  participants: simpleProxy({ internalPath: SessionInternalPaths.participants }),
-  participantProfiles: handleParticipantProfiles,
-  messages: simpleProxy({ internalPath: SessionInternalPaths.messages, forwardSearch: true }),
-  createPr: handleCreatePR,
-  openaiTokenRefresh: legacyTokenRefresh("openai", SessionInternalPaths.openaiTokenRefresh),
-  xaiTokenRefresh: legacyTokenRefresh("xai", SessionInternalPaths.xaiTokenRefresh),
-  scmCredentials: simpleProxy({
-    internalPath: SessionInternalPaths.scmCredentials,
-    runtimeMethod: "POST",
-  }),
-  tunnelUrls: simpleProxy({ internalPath: SessionInternalPaths.tunnelUrls, runtimeMethod: "GET" }),
-  updateTitle: lifecycleProxy(SessionInternalPaths.updateTitle),
-  archive: lifecycleProxy(SessionInternalPaths.archive),
-  unarchive: lifecycleProxy(SessionInternalPaths.unarchive),
-} satisfies Record<string, ProxyHandler>;
-
-const proxy = sessionRuntimeProxyHandlers;
 const LIFECYCLE = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
   authorization: requirePermission("sessions.lifecycle"),
@@ -311,24 +287,12 @@ sessionRuntimeProxyRoutes.get(
     ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     authorization: requirePermission("sessions.sandbox_access"),
   }),
-  (c) =>
-    proxy.sandboxAccess(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, simpleProxy({ internalPath: SessionInternalPaths.sandboxAccess }))
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id",
   admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requirePermission("sessions.read") }),
-  (c) =>
-    proxy.snapshot(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleSessionSnapshot)
 );
 sessionRuntimeProxyRoutes.post(
   "/sessions/:id/stop",
@@ -339,23 +303,15 @@ sessionRuntimeProxyRoutes.post(
     }),
   }),
   (c) =>
-    proxy.stop(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
+    dispatchSession(
+      c,
+      simpleProxy({ internalPath: SessionInternalPaths.stop, runtimeMethod: "POST" })
     )
 );
 sessionRuntimeProxyRoutes.post(
   "/sessions/:id/sandbox-error",
   admit({ ...SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, authorization: NO_AUTHORIZATION }),
-  (c) =>
-    proxy.sandboxError(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleSandboxError)
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/events",
@@ -366,11 +322,9 @@ sessionRuntimeProxyRoutes.get(
     }),
   }),
   (c) =>
-    proxy.events(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
+    dispatchSession(
+      c,
+      simpleProxy({ internalPath: SessionInternalPaths.events, forwardSearch: true })
     )
 );
 sessionRuntimeProxyRoutes.get(
@@ -381,24 +335,12 @@ sessionRuntimeProxyRoutes.get(
       actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
     }),
   }),
-  (c) =>
-    proxy.artifacts(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, simpleProxy({ internalPath: SessionInternalPaths.artifacts }))
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/participants",
   admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.read") }),
-  (c) =>
-    proxy.participants(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, simpleProxy({ internalPath: SessionInternalPaths.participants }))
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/participant-profiles",
@@ -406,23 +348,15 @@ sessionRuntimeProxyRoutes.get(
     ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("sessions.read"),
   }),
-  (c) =>
-    proxy.participantProfiles(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleParticipantProfiles)
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/messages",
   admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.read") }),
   (c) =>
-    proxy.messages(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
+    dispatchSession(
+      c,
+      simpleProxy({ internalPath: SessionInternalPaths.messages, forwardSearch: true })
     )
 );
 sessionRuntimeProxyRoutes.post(
@@ -431,45 +365,25 @@ sessionRuntimeProxyRoutes.post(
     ...GITHUB_SANDBOX_FALLBACK_ROUTE,
     authorization: requirePermission("sessions.collaborate"),
   }),
-  (c) =>
-    proxy.createPr(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleCreatePR)
 );
 sessionRuntimeProxyRoutes.post(
   "/sessions/:id/openai-token-refresh",
   admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, authorization: NO_AUTHORIZATION }),
-  (c) =>
-    proxy.openaiTokenRefresh(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, legacyTokenRefresh("openai", SessionInternalPaths.openaiTokenRefresh))
 );
 sessionRuntimeProxyRoutes.post(
   "/sessions/:id/xai-token-refresh",
   admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, authorization: NO_AUTHORIZATION }),
-  (c) =>
-    proxy.xaiTokenRefresh(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, legacyTokenRefresh("xai", SessionInternalPaths.xaiTokenRefresh))
 );
 sessionRuntimeProxyRoutes.post(
   "/sessions/:id/scm-credentials",
   admit({ ...SCM_CREDENTIALS_ROUTE, authorization: NO_AUTHORIZATION }),
   (c) =>
-    proxy.scmCredentials(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
+    dispatchSession(
+      c,
+      simpleProxy({ internalPath: SessionInternalPaths.scmCredentials, runtimeMethod: "POST" })
     )
 );
 sessionRuntimeProxyRoutes.get(
@@ -479,34 +393,17 @@ sessionRuntimeProxyRoutes.get(
     authorization: requirePermission("sessions.sandbox_access"),
   }),
   (c) =>
-    proxy.tunnelUrls(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
+    dispatchSession(
+      c,
+      simpleProxy({ internalPath: SessionInternalPaths.tunnelUrls, runtimeMethod: "GET" })
     )
 );
 sessionRuntimeProxyRoutes.patch("/sessions/:id/title", LIFECYCLE, (c) =>
-  proxy.updateTitle(
-    c.var.admitted.request,
-    c.env,
-    c.req.param(),
-    withSessionRuntime(c.env, c.var.admitted.ctx)
-  )
+  dispatchSession(c, lifecycleProxy(SessionInternalPaths.updateTitle))
 );
 sessionRuntimeProxyRoutes.post("/sessions/:id/archive", LIFECYCLE, (c) =>
-  proxy.archive(
-    c.var.admitted.request,
-    c.env,
-    c.req.param(),
-    withSessionRuntime(c.env, c.var.admitted.ctx)
-  )
+  dispatchSession(c, lifecycleProxy(SessionInternalPaths.archive))
 );
 sessionRuntimeProxyRoutes.post("/sessions/:id/unarchive", LIFECYCLE, (c) =>
-  proxy.unarchive(
-    c.var.admitted.request,
-    c.env,
-    c.req.param(),
-    withSessionRuntime(c.env, c.var.admitted.ctx)
-  )
+  dispatchSession(c, lifecycleProxy(SessionInternalPaths.unarchive))
 );

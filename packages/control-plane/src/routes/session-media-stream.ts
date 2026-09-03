@@ -14,7 +14,7 @@ import {
 } from "./responses/stored-object-response";
 import { getSessionArtifactFromRuntime } from "./session-media-artifacts";
 import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
-import { withSessionRuntime, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 const logger = createLogger("router:session-media");
 
 function getMediaMimeType(
@@ -148,11 +148,5 @@ sessionMediaStreamRoutes.get(
       actorlessGrants: [{ service: "slack-bot" }],
     }),
   }),
-  (c) =>
-    handleMediaGet(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleMediaGet)
 );

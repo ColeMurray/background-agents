@@ -28,7 +28,7 @@ import {
 } from "../session/identity";
 import type { Env } from "../types";
 import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
-import { withSessionRuntime, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
 
@@ -185,11 +185,5 @@ sessionPromptRoutes.post(
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("sessions.collaborate"),
   }),
-  (c) =>
-    handleSessionPrompt(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleSessionPrompt)
 );

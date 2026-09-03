@@ -305,6 +305,23 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     expect(observed).toMatchSnapshot();
   });
 
+  it("rejects a parameter Hono could not decode, on every route, before admission", async () => {
+    // Hono leaves an undecodable segment as it arrived; admission refuses it
+    // uniformly rather than letting each handler discover it as data.
+    const malformed = [
+      `${BASE}/sessions/%E0%A4%A`,
+      `${BASE}/sessions/%E0%A4%A/events`,
+      `${BASE}/automations/%E0%A4%A`,
+      `${BASE}/roles/%E0%A4%A`,
+      `${BASE}/repos/acme/%E0%A4%A/secrets`,
+    ];
+    for (const url of malformed) {
+      const response = await serviceFetch(url);
+      expect(response.status, url).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid path encoding" });
+    }
+  });
+
   it("decodes percent-encoded path segments exactly once", async () => {
     // Session ids are decoded exactly once, by Hono, before the lookup and
     // before the sandbox binding, so an encoded letter still names the session.

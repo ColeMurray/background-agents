@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { MAX_SANDBOX_SKILL_PAGE_SIZE } from "@open-inspect/shared/types/skills";
 import { SessionSkillStore } from "../db/session-skills";
@@ -76,11 +76,11 @@ export const sessionSkillRoutes = new Hono<ControlPlaneHonoEnv>();
 sessionSkillRoutes.get(
   "/sessions/:id/skills",
   admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requirePermission("sessions.read") }),
-  (c) => handleSessionSkillsView(c.var.admitted.request, c.env, c.req.param(), c.var.admitted.ctx)
+  (c) => dispatch(c, handleSessionSkillsView)
 );
 
 sessionSkillRoutes.get(
   "/sessions/:id/sandbox-skills",
   admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, authorization: NO_AUTHORIZATION }),
-  (c) => handleSandboxInstallation(c.var.admitted.request, c.env, c.req.param(), c.var.admitted.ctx)
+  (c) => dispatch(c, handleSandboxInstallation)
 );

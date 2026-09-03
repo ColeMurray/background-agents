@@ -25,7 +25,7 @@ import { createMediaObjectStorage, type ObjectStorage } from "../storage/object-
 import type { Env } from "../types";
 import { listSessionArtifactsFromRuntime, persistMediaArtifact } from "./session-media-artifacts";
 import { error, GITHUB_SANDBOX_FALLBACK_ROUTE, json, requirePermission } from "./shared";
-import { withSessionRuntime, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 function getRequiredFormString(value: MultipartFieldValue | null, name: string): string | Response {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -250,11 +250,5 @@ sessionMediaUploadRoutes.post(
     ...GITHUB_SANDBOX_FALLBACK_ROUTE,
     authorization: requirePermission("sessions.collaborate"),
   }),
-  (c) =>
-    handleMediaUpload(
-      c.var.admitted.request,
-      c.env,
-      c.req.param(),
-      withSessionRuntime(c.env, c.var.admitted.ctx)
-    )
+  (c) => dispatchSession(c, handleMediaUpload)
 );
