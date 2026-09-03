@@ -54,6 +54,7 @@ export {
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
   parseRepositoryFullName,
+  validateRepositoryPathSegments,
   normalizeOptionalRepositoryPair,
 } from "./repositories";
 export type {
