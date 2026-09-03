@@ -12,18 +12,19 @@ import {
   type ScmGlobalConfig,
   type ScmRepoSettings,
 } from "@open-inspect/shared/types/integrations";
+import { Hono } from "hono";
 import { ScmSettingsStore, ScmSettingsValidationError } from "../db/scm-settings";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { repositoryParams } from "./repository-params";
 import {
-  type Route,
   type RequestContext,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   json,
   error,
   parseJsonBody,
-  extractRepoParams,
   requirePermission,
 } from "./shared";
 
@@ -52,7 +53,7 @@ function parseScmRepoSettingsBody(body: unknown): ScmRepoSettings | Response {
 async function handleGetGlobal(
   _request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const store = new ScmSettingsStore(ctx.db);
@@ -72,7 +73,7 @@ async function handleGetGlobal(
 async function handleSetGlobal(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const body = await parseJsonBody<unknown>(request);
@@ -106,7 +107,7 @@ async function handleSetGlobal(
 async function handleDeleteGlobal(
   _request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const store = new ScmSettingsStore(ctx.db);
@@ -132,7 +133,7 @@ async function handleDeleteGlobal(
 async function handleListRepoSettings(
   _request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const store = new ScmSettingsStore(ctx.db);
@@ -152,12 +153,12 @@ async function handleListRepoSettings(
 async function handleSetRepoSettings(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
+  const { owner, name } = repository;
   const repo = `${owner}/${name}`;
 
   const body = await parseJsonBody<unknown>(request);
@@ -192,12 +193,12 @@ async function handleSetRepoSettings(
 async function handleDeleteRepoSettings(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
+  const { owner, name } = repository;
   const repo = `${owner}/${name}`;
 
   const store = new ScmSettingsStore(ctx.db);
@@ -221,41 +222,28 @@ async function handleDeleteRepoSettings(
   }
 }
 
-export const scmSettingsRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    path: "/scm-settings",
-    authorization: requirePermission("integrations.read"),
-    handler: handleGetGlobal,
-  },
-  {
-    method: "PUT",
-    path: "/scm-settings",
-    authorization: requirePermission("scm_settings.manage"),
-    handler: handleSetGlobal,
-  },
-  {
-    method: "DELETE",
-    path: "/scm-settings",
-    authorization: requirePermission("scm_settings.manage"),
-    handler: handleDeleteGlobal,
-  },
-  {
-    method: "GET",
-    path: "/scm-settings/repos",
-    authorization: requirePermission("integrations.read"),
-    handler: handleListRepoSettings,
-  },
-  {
-    method: "PUT",
-    path: "/scm-settings/repos/:owner/:name",
-    authorization: requirePermission("scm_settings.manage"),
-    handler: handleSetRepoSettings,
-  },
-  {
-    method: "DELETE",
-    path: "/scm-settings/repos/:owner/:name",
-    authorization: requirePermission("scm_settings.manage"),
-    handler: handleDeleteRepoSettings,
-  },
-]);
+const SCM_SETTINGS_READ = admit({
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("integrations.read"),
+});
+const SCM_SETTINGS_MANAGE = admit({
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("scm_settings.manage"),
+});
+
+export const scmSettingsRoutes = new Hono<ControlPlaneHonoEnv>();
+
+scmSettingsRoutes.get("/scm-settings", SCM_SETTINGS_READ, (c) => dispatch(c, handleGetGlobal));
+scmSettingsRoutes.put("/scm-settings", SCM_SETTINGS_MANAGE, (c) => dispatch(c, handleSetGlobal));
+scmSettingsRoutes.delete("/scm-settings", SCM_SETTINGS_MANAGE, (c) =>
+  dispatch(c, handleDeleteGlobal)
+);
+scmSettingsRoutes.get("/scm-settings/repos", SCM_SETTINGS_READ, (c) =>
+  dispatch(c, handleListRepoSettings)
+);
+scmSettingsRoutes.put("/scm-settings/repos/:owner/:name", SCM_SETTINGS_MANAGE, (c) =>
+  dispatch(c, handleSetRepoSettings)
+);
+scmSettingsRoutes.delete("/scm-settings/repos/:owner/:name", SCM_SETTINGS_MANAGE, (c) =>
+  dispatch(c, handleDeleteRepoSettings)
+);

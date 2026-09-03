@@ -7,13 +7,14 @@ import {
   McpServerStore,
   McpServerValidationError,
 } from "../db/mcp-servers";
+import { Hono } from "hono";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { requireRepoSecretsEncryptionKey } from "../env-validation";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
-  type Route,
   GITHUB_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   type RequestContext,
   json,
   error,
@@ -26,7 +27,7 @@ const logger = createLogger("router:mcp-servers");
 async function handleListMcpServers(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) return error("Database not configured", 503);
@@ -48,11 +49,10 @@ async function handleListMcpServers(
 async function handleGetMcpServer(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
-  if (!id) return error("Missing server ID", 400);
+  const { id } = params;
   if (!ctx.db) return error("Database not configured", 503);
 
   const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
@@ -70,7 +70,7 @@ async function handleGetMcpServer(
 async function handleCreateMcpServer(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) return error("Database not configured", 503);
@@ -103,11 +103,10 @@ async function handleCreateMcpServer(
 async function handleUpdateMcpServer(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
-  if (!id) return error("Missing server ID", 400);
+  const { id } = params;
   if (!ctx.db) return error("Database not configured", 503);
 
   const body = await parseJsonBody<unknown>(request);
@@ -143,11 +142,10 @@ async function handleUpdateMcpServer(
 async function handleDeleteMcpServer(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
-  if (!id) return error("Missing server ID", 400);
+  const { id } = params;
   if (!ctx.db) return error("Database not configured", 503);
 
   const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
@@ -163,35 +161,19 @@ async function handleDeleteMcpServer(
   return json({ ok: true });
 }
 
-export const mcpServerRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    path: "/mcp-servers",
-    authorization: requirePermission("mcp_servers.read"),
-    handler: handleListMcpServers,
-  },
-  {
-    method: "POST",
-    path: "/mcp-servers",
-    authorization: requirePermission("mcp_servers.manage"),
-    handler: handleCreateMcpServer,
-  },
-  {
-    method: "GET",
-    path: "/mcp-servers/:id",
-    authorization: requirePermission("mcp_servers.read"),
-    handler: handleGetMcpServer,
-  },
-  {
-    method: "PUT",
-    path: "/mcp-servers/:id",
-    authorization: requirePermission("mcp_servers.manage"),
-    handler: handleUpdateMcpServer,
-  },
-  {
-    method: "DELETE",
-    path: "/mcp-servers/:id",
-    authorization: requirePermission("mcp_servers.manage"),
-    handler: handleDeleteMcpServer,
-  },
-]);
+const MCP_READ = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("mcp_servers.read"),
+});
+const MCP_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("mcp_servers.manage"),
+});
+
+export const mcpServerRoutes = new Hono<ControlPlaneHonoEnv>();
+
+mcpServerRoutes.get("/mcp-servers", MCP_READ, (c) => dispatch(c, handleListMcpServers));
+mcpServerRoutes.post("/mcp-servers", MCP_MANAGE, (c) => dispatch(c, handleCreateMcpServer));
+mcpServerRoutes.get("/mcp-servers/:id", MCP_READ, (c) => dispatch(c, handleGetMcpServer));
+mcpServerRoutes.put("/mcp-servers/:id", MCP_MANAGE, (c) => dispatch(c, handleUpdateMcpServer));
+mcpServerRoutes.delete("/mcp-servers/:id", MCP_MANAGE, (c) => dispatch(c, handleDeleteMcpServer));

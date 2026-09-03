@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { enforceRoutePrincipal } from "./routing/route-admission";
 import {
   handleRequest,
-  legacyRoutes,
   matchRoute,
   routeContracts as routes,
   TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
 } from "./router.test-support";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
 import { SCOPED_PERMISSION_PAIRS } from "@open-inspect/shared/rbac";
@@ -244,23 +244,20 @@ describe("route policy table", () => {
     });
   });
 
-  it("returns 400 for a malformed percent-encoded role ID before querying D1", async () => {
-    const path = "/roles/%E0%A4%A";
-    const { route, match } = matchRoute(legacyRoutes(), "GET", path)!;
+  it("refuses a malformed percent-encoded role ID before authentication or D1", async () => {
+    // Hono leaves the segment undecoded; admission refuses it before the
+    // principal is resolved, so neither authentication nor the role lookup
+    // touches D1.
     const prepare = vi.fn();
 
-    const response = await route.handler(
-      new Request(`https://test.local${path}`),
-      {} as never,
-      match,
-      {
-        principal: { kind: "user", userId: "user-1" },
-        db: { prepare },
-      } as never
+    const response = await handleRequest(
+      new Request("https://test.local/roles/%E0%A4%A"),
+      { ...TEST_SERVICE_SECRETS, DB: { prepare } } as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid role ID" });
+    await expect(response.json()).resolves.toEqual({ error: "Invalid path encoding" });
     expect(prepare).not.toHaveBeenCalled();
   });
 

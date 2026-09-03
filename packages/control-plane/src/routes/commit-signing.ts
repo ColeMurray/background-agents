@@ -1,4 +1,5 @@
 import { commitSigningWriteRequestSchema } from "@open-inspect/shared/types/commit-signing";
+import { Hono } from "hono";
 
 import {
   OpenSshKeyValidationError,
@@ -7,6 +8,8 @@ import {
 } from "../auth/openssh-ed25519";
 import { CommitSigningStore } from "../db/commit-signing";
 import type { SqlDatabase } from "../db/sql-database";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
 import {
@@ -14,8 +17,6 @@ import {
   json,
   parseJsonBody,
   type RequestContext,
-  type Route,
-  defineRoute,
   GITHUB_USER_OR_SERVICE_ROUTE,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   NO_AUTHORIZATION,
@@ -70,7 +71,7 @@ async function readSigningPayload(request: Request): Promise<Uint8Array | null> 
 async function handleGetCommitSigning(
   _request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const store = createStore(env, ctx.db);
@@ -87,7 +88,7 @@ async function handleGetCommitSigning(
 async function handlePutCommitSigning(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const store = createStore(env, ctx.db);
@@ -120,7 +121,7 @@ async function handlePutCommitSigning(
 async function handleDeleteCommitSigning(
   _request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const store = createStore(env, ctx.db);
@@ -137,12 +138,9 @@ async function handleDeleteCommitSigning(
 async function handleGetSandboxCommitSigning(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  _params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return noStore(error("Session ID required", 400));
-
   // The bridge runs on every supported SCM deployment. Signing is GitHub-only,
   // so other providers receive the explicit disabled state required for safe
   // unsigned execution instead of failing the session at the provider gate.
@@ -164,11 +162,9 @@ async function handleGetSandboxCommitSigning(
 async function handlePostSandboxCommitSigning(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  _params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return noStore(error("Session ID required", 400));
   if (resolveScmProviderFromEnv(env.SCM_PROVIDER) !== "github") {
     return noStore(error("Commit signing is disabled", 409));
   }
@@ -212,35 +208,28 @@ async function handlePostSandboxCommitSigning(
   }
 }
 
-export const commitSigningRoutes: Route[] = [
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "GET",
-    path: "/commit-signing",
-    authorization: requirePermission("integrations.read"),
-    handler: handleGetCommitSigning,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "PUT",
-    path: "/commit-signing",
-    authorization: requirePermission("commit_signing.manage"),
-    handler: handlePutCommitSigning,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "DELETE",
-    path: "/commit-signing",
-    authorization: requirePermission("commit_signing.manage"),
-    handler: handleDeleteCommitSigning,
-  }),
-  defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {
-    method: "GET",
-    path: "/sessions/:id/commit-signing",
-    authorization: NO_AUTHORIZATION,
-    handler: handleGetSandboxCommitSigning,
-  }),
-  defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {
-    method: "POST",
-    path: "/sessions/:id/commit-signing",
-    authorization: NO_AUTHORIZATION,
-    handler: handlePostSandboxCommitSigning,
-  }),
-];
+const COMMIT_SIGNING_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("commit_signing.manage"),
+});
+const SANDBOX = admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, authorization: NO_AUTHORIZATION });
+
+export const commitSigningRoutes = new Hono<ControlPlaneHonoEnv>();
+
+commitSigningRoutes.get(
+  "/commit-signing",
+  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("integrations.read") }),
+  (c) => dispatch(c, handleGetCommitSigning)
+);
+commitSigningRoutes.put("/commit-signing", COMMIT_SIGNING_MANAGE, (c) =>
+  dispatch(c, handlePutCommitSigning)
+);
+commitSigningRoutes.delete("/commit-signing", COMMIT_SIGNING_MANAGE, (c) =>
+  dispatch(c, handleDeleteCommitSigning)
+);
+commitSigningRoutes.get("/sessions/:id/commit-signing", SANDBOX, (c) =>
+  dispatch(c, handleGetSandboxCommitSigning)
+);
+commitSigningRoutes.post("/sessions/:id/commit-signing", SANDBOX, (c) =>
+  dispatch(c, handlePostSandboxCommitSigning)
+);

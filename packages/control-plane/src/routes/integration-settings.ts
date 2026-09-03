@@ -20,28 +20,27 @@ import {
   isValidIntegrationId,
   supportsEnvironmentSettings,
 } from "../db/integration-settings";
+import { Hono } from "hono";
 import { EnvironmentStore } from "../db/environments";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { createLogger } from "../logger";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { repositoryParams } from "./repository-params";
 import {
-  type Route,
   type RequestContext,
   GITHUB_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   json,
   error,
   parseJsonBody,
-  extractRepoParams,
   requirePermission,
 } from "./shared";
 
 const logger = createLogger("router:integration-settings");
 
-function extractIntegrationId(match: RegExpMatchArray): IntegrationId | null {
-  const id = match.groups?.id;
-  if (!id || !isValidIntegrationId(id)) return null;
-  return id;
+function integrationId(id: string): IntegrationId | null {
+  return isValidIntegrationId(id) ? id : null;
 }
 
 /**
@@ -50,9 +49,9 @@ function extractIntegrationId(match: RegExpMatchArray): IntegrationId | null {
  * environment id, and — because the settings table is an owned child of
  * `environments` — an environment that actually exists.
  */
-async function extractEnvironmentSettingsParams(
+async function environmentSettingsParams(
   db: SqlDatabase,
-  match: RegExpMatchArray
+  params: { id: string; environmentId: string }
 ): Promise<
   | {
       integrationId: EnvironmentSettingsIntegrationId;
@@ -61,14 +60,13 @@ async function extractEnvironmentSettingsParams(
     }
   | Response
 > {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  const id = integrationId(params.id);
+  if (!id) return error(`Unknown integration: ${params.id}`, 404);
   if (!supportsEnvironmentSettings(id)) {
     return error(`Integration ${id} does not support environment-level settings`, 400);
   }
 
-  const environmentId = match.groups?.environmentId;
-  if (!environmentId) return error("Environment ID required", 400);
+  const { environmentId } = params;
 
   const environmentStore = new EnvironmentStore(db);
   if (!(await environmentStore.getById(environmentId))) {
@@ -81,11 +79,11 @@ async function extractEnvironmentSettingsParams(
 async function handleGetIntegrationSettings(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  const id = integrationId(params.id);
+  if (!id) return error(`Unknown integration: ${params.id}`, 404);
 
   const store = new IntegrationSettingsStore(ctx.db);
   const settings = await store.getGlobal(id);
@@ -95,11 +93,11 @@ async function handleGetIntegrationSettings(
 async function handleSetIntegrationSettings(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  const id = integrationId(params.id);
+  if (!id) return error(`Unknown integration: ${params.id}`, 404);
 
   const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
   if (body instanceof Response) return body;
@@ -137,11 +135,11 @@ async function handleSetIntegrationSettings(
 async function handleDeleteIntegrationSettings(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  const id = integrationId(params.id);
+  if (!id) return error(`Unknown integration: ${params.id}`, 404);
 
   const store = new IntegrationSettingsStore(ctx.db);
 
@@ -169,11 +167,11 @@ async function handleDeleteIntegrationSettings(
 async function handleListRepoSettings(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  const id = integrationId(params.id);
+  if (!id) return error(`Unknown integration: ${params.id}`, 404);
 
   const store = new IntegrationSettingsStore(ctx.db);
   const repos = await store.listRepoSettings(id);
@@ -183,15 +181,15 @@ async function handleListRepoSettings(
 async function handleGetRepoSettings(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  const id = integrationId(params.id);
+  if (!id) return error(`Unknown integration: ${params.id}`, 404);
 
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
+  const { owner, name } = repository;
 
   const repo = `${owner}/${name}`;
 
@@ -203,15 +201,15 @@ async function handleGetRepoSettings(
 async function handleSetRepoSettings(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  const id = integrationId(params.id);
+  if (!id) return error(`Unknown integration: ${params.id}`, 404);
 
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
+  const { owner, name } = repository;
 
   const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
   if (body instanceof Response) return body;
@@ -251,15 +249,15 @@ async function handleSetRepoSettings(
 async function handleDeleteRepoSettings(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  const id = integrationId(params.id);
+  if (!id) return error(`Unknown integration: ${params.id}`, 404);
 
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
+  const { owner, name } = repository;
 
   const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;
@@ -289,12 +287,12 @@ async function handleDeleteRepoSettings(
 async function handleGetEnvironmentSettings(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; environmentId: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const params = await extractEnvironmentSettingsParams(ctx.db, match);
-  if (params instanceof Response) return params;
-  const { integrationId, environmentId, store } = params;
+  const settingsParams = await environmentSettingsParams(ctx.db, params);
+  if (settingsParams instanceof Response) return settingsParams;
+  const { integrationId, environmentId, store } = settingsParams;
 
   const settings = await store.getEnvironmentSettings(integrationId, environmentId);
   return json({ integrationId, environmentId, settings });
@@ -303,12 +301,12 @@ async function handleGetEnvironmentSettings(
 async function handleSetEnvironmentSettings(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; environmentId: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const params = await extractEnvironmentSettingsParams(ctx.db, match);
-  if (params instanceof Response) return params;
-  const { integrationId, environmentId, store } = params;
+  const settingsParams = await environmentSettingsParams(ctx.db, params);
+  if (settingsParams instanceof Response) return settingsParams;
+  const { integrationId, environmentId, store } = settingsParams;
 
   const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
   if (body instanceof Response) return body;
@@ -345,12 +343,12 @@ async function handleSetEnvironmentSettings(
 async function handleDeleteEnvironmentSettings(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; environmentId: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const params = await extractEnvironmentSettingsParams(ctx.db, match);
-  if (params instanceof Response) return params;
-  const { integrationId, environmentId, store } = params;
+  const settingsParams = await environmentSettingsParams(ctx.db, params);
+  if (settingsParams instanceof Response) return settingsParams;
+  const { integrationId, environmentId, store } = settingsParams;
 
   try {
     await store.deleteEnvironmentSettings(integrationId, environmentId);
@@ -377,15 +375,15 @@ async function handleDeleteEnvironmentSettings(
 async function handleGetResolvedConfig(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  const id = integrationId(params.id);
+  if (!id) return error(`Unknown integration: ${params.id}`, 404);
 
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
+  const { owner, name } = repository;
 
   const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;
@@ -487,83 +485,89 @@ async function handleGetResolvedConfig(
   return error(`Unsupported integration: ${id}`, 400);
 }
 
-export const integrationSettingsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  // Integration settings — global
-  {
-    method: "GET",
-    path: "/integration-settings/:id",
+const INTEGRATIONS_READ = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("integrations.read"),
+});
+const INTEGRATIONS_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("integrations.manage"),
+});
+const REPO_SETTINGS_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("repositories.settings.manage"),
+});
+const ENVIRONMENT_SETTINGS_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("environments.settings.manage"),
+});
+
+export const integrationSettingsRoutes = new Hono<ControlPlaneHonoEnv>();
+
+// Integration settings — global
+integrationSettingsRoutes.get(
+  "/integration-settings/:id",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("integrations.read", {
       actorlessGrants: [{ service: "slack-bot", pathParams: { id: "slack" } }],
     }),
-    handler: handleGetIntegrationSettings,
-  },
-  {
-    method: "PUT",
-    path: "/integration-settings/:id",
-    authorization: requirePermission("integrations.manage"),
-    handler: handleSetIntegrationSettings,
-  },
-  {
-    method: "DELETE",
-    path: "/integration-settings/:id",
-    authorization: requirePermission("integrations.manage"),
-    handler: handleDeleteIntegrationSettings,
-  },
-  // Integration settings — per-repo
-  {
-    method: "GET",
-    path: "/integration-settings/:id/repos",
-    authorization: requirePermission("integrations.read"),
-    handler: handleListRepoSettings,
-  },
-  {
-    method: "GET",
-    path: "/integration-settings/:id/repos/:owner/:name",
-    authorization: requirePermission("integrations.read"),
-    handler: handleGetRepoSettings,
-  },
-  {
-    method: "PUT",
-    path: "/integration-settings/:id/repos/:owner/:name",
-    authorization: requirePermission("repositories.settings.manage"),
-    handler: handleSetRepoSettings,
-  },
-  {
-    method: "DELETE",
-    path: "/integration-settings/:id/repos/:owner/:name",
-    authorization: requirePermission("repositories.settings.manage"),
-    handler: handleDeleteRepoSettings,
-  },
-  // Integration settings — per-environment (design §13.5; sandbox and
-  // code-server, and VNC only)
-  {
-    method: "GET",
-    path: "/integration-settings/:id/environments/:environmentId",
-    authorization: requirePermission("integrations.read"),
-    handler: handleGetEnvironmentSettings,
-  },
-  {
-    method: "PUT",
-    path: "/integration-settings/:id/environments/:environmentId",
-    authorization: requirePermission("environments.settings.manage"),
-    handler: handleSetEnvironmentSettings,
-  },
-  {
-    method: "DELETE",
-    path: "/integration-settings/:id/environments/:environmentId",
-    authorization: requirePermission("environments.settings.manage"),
-    handler: handleDeleteEnvironmentSettings,
-  },
-  // Resolved config — used by bots at runtime
-  {
-    method: "GET",
-    path: "/integration-settings/:id/resolved/:owner/:name",
+  }),
+  (c) => dispatch(c, handleGetIntegrationSettings)
+);
+integrationSettingsRoutes.put("/integration-settings/:id", INTEGRATIONS_MANAGE, (c) =>
+  dispatch(c, handleSetIntegrationSettings)
+);
+integrationSettingsRoutes.delete("/integration-settings/:id", INTEGRATIONS_MANAGE, (c) =>
+  dispatch(c, handleDeleteIntegrationSettings)
+);
+// Integration settings — per-repo
+integrationSettingsRoutes.get("/integration-settings/:id/repos", INTEGRATIONS_READ, (c) =>
+  dispatch(c, handleListRepoSettings)
+);
+integrationSettingsRoutes.get(
+  "/integration-settings/:id/repos/:owner/:name",
+  INTEGRATIONS_READ,
+  (c) => dispatch(c, handleGetRepoSettings)
+);
+integrationSettingsRoutes.put(
+  "/integration-settings/:id/repos/:owner/:name",
+  REPO_SETTINGS_MANAGE,
+  (c) => dispatch(c, handleSetRepoSettings)
+);
+integrationSettingsRoutes.delete(
+  "/integration-settings/:id/repos/:owner/:name",
+  REPO_SETTINGS_MANAGE,
+  (c) => dispatch(c, handleDeleteRepoSettings)
+);
+// Integration settings — per-environment (design §13.5; sandbox and
+// code-server, and VNC only)
+integrationSettingsRoutes.get(
+  "/integration-settings/:id/environments/:environmentId",
+  INTEGRATIONS_READ,
+  (c) => dispatch(c, handleGetEnvironmentSettings)
+);
+integrationSettingsRoutes.put(
+  "/integration-settings/:id/environments/:environmentId",
+  ENVIRONMENT_SETTINGS_MANAGE,
+  (c) => dispatch(c, handleSetEnvironmentSettings)
+);
+integrationSettingsRoutes.delete(
+  "/integration-settings/:id/environments/:environmentId",
+  ENVIRONMENT_SETTINGS_MANAGE,
+  (c) => dispatch(c, handleDeleteEnvironmentSettings)
+);
+// Resolved config — used by bots at runtime
+integrationSettingsRoutes.get(
+  "/integration-settings/:id/resolved/:owner/:name",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("integrations.read", {
       actorlessGrants: [
         { service: "github-bot", pathParams: { id: "github" } },
         { service: "linear-bot", pathParams: { id: "linear" } },
       ],
     }),
-    handler: handleGetResolvedConfig,
-  },
-]);
+  }),
+  (c) => dispatch(c, handleGetResolvedConfig)
+);

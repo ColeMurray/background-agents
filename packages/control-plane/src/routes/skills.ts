@@ -1,3 +1,4 @@
+import { Hono } from "hono";
 import {
   createSkillInputSchema,
   createSkillProfileInputSchema,
@@ -30,15 +31,15 @@ import {
   SkillRevisionValidationError,
 } from "../skills/content-addressing";
 import { fetchSkillImport, SkillImportError, type SkillImportResult } from "../skills/git-import";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   createRouteSourceControlProvider,
   error,
   json,
   type RequestContext,
-  type Route,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   requirePermission,
 } from "./shared";
 
@@ -92,14 +93,10 @@ async function parsedBody(request: Request): Promise<unknown | Response> {
   }
 }
 
-function resourceId(match: RegExpMatchArray): string | Response {
-  return match.groups?.id ?? error("Resource ID required", 400);
-}
-
 async function handleListSkills(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -125,11 +122,10 @@ async function handleListSkills(
 async function handleGetSkill(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = resourceId(match);
-  if (id instanceof Response) return id;
+  const { id } = params;
   const skill = await new SkillStore(ctx.db).get(id);
   return skill ? json({ skill }) : error("Skill not found", 404);
 }
@@ -137,7 +133,7 @@ async function handleGetSkill(
 async function handleCreateSkill(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const userId = canonicalUserId(ctx);
@@ -162,7 +158,7 @@ async function handleCreateSkill(
 async function handlePreviewSkill(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   _ctx: RequestContext
 ): Promise<Response> {
   const body = await parsedBody(request);
@@ -241,7 +237,7 @@ function confirmedImport(
 async function handlePreviewSkillImport(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const body = await parsedBody(request);
@@ -263,7 +259,7 @@ async function handlePreviewSkillImport(
 async function handleImportSkill(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const userId = canonicalUserId(ctx);
@@ -329,11 +325,10 @@ function recordedImportSource(
 async function handlePreviewSkillReimport(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = resourceId(match);
-  if (id instanceof Response) return id;
+  const { id } = params;
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
   const parsed = reimportSkillPreviewInputSchema.safeParse(body);
@@ -354,11 +349,10 @@ async function handlePreviewSkillReimport(
 async function handleReimportSkill(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = resourceId(match);
-  if (id instanceof Response) return id;
+  const { id } = params;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
   const ifMatch = request.headers.get("If-Match")?.replace(/^"|"$/g, "");
@@ -415,11 +409,10 @@ function sourceAuditFields(source: SkillImportResult["source"]) {
 async function handleSetSkillEnabled(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = resourceId(match);
-  if (id instanceof Response) return id;
+  const { id } = params;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
   const body = await parsedBody(request);
@@ -438,11 +431,10 @@ async function handleSetSkillEnabled(
 async function handleReplaceSkillContentAndAssignments(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = resourceId(match);
-  if (id instanceof Response) return id;
+  const { id } = params;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
   const ifMatch = request.headers.get("If-Match")?.replace(/^"|"$/g, "");
@@ -473,11 +465,10 @@ async function handleReplaceSkillContentAndAssignments(
 async function handleDeleteSkill(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = resourceId(match);
-  if (id instanceof Response) return id;
+  const { id } = params;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
   const deleted = await new SkillStore(ctx.db).delete(id, userId);
@@ -488,7 +479,7 @@ async function handleDeleteSkill(
 async function handleListProfiles(
   _request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const userId = canonicalUserId(ctx);
@@ -499,7 +490,7 @@ async function handleListProfiles(
 async function handleCreateProfile(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const userId = canonicalUserId(ctx);
@@ -525,11 +516,10 @@ async function handleCreateProfile(
 async function handleUpdateProfile(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = resourceId(match);
-  if (id instanceof Response) return id;
+  const { id } = params;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
   const body = await parsedBody(request);
@@ -548,11 +538,10 @@ async function handleUpdateProfile(
 async function handleDeleteProfile(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = resourceId(match);
-  if (id instanceof Response) return id;
+  const { id } = params;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
   const deleted = await new SkillProfileStore(ctx.db).delete(id, userId);
@@ -563,7 +552,7 @@ async function handleDeleteProfile(
 async function handleResolvePreview(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const body = await parsedBody(request);
@@ -624,106 +613,47 @@ function profileWriteError(value: unknown): Response {
   throw value;
 }
 
-const skillReadRoutes = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    path: "/skills",
-    authorization: requirePermission("skills.read"),
-    handler: handleListSkills,
-  },
-  {
-    method: "POST",
-    path: "/skills/preview",
-    authorization: requirePermission("skills.read"),
-    handler: handlePreviewSkill,
-  },
-  {
-    method: "POST",
-    path: "/skills/resolve-preview",
-    authorization: requirePermission("skills.read"),
-    handler: handleResolvePreview,
-  },
-  {
-    method: "GET",
-    path: "/skills/:id",
-    authorization: requirePermission("skills.read"),
-    handler: handleGetSkill,
-  },
-]);
+const SKILLS_READ = admit({
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("skills.read"),
+});
+const SKILLS_MANAGE = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  authorization: requirePermission("skills.manage"),
+});
+const PROFILES_MANAGE_OWN = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  authorization: requirePermission("skill_profiles.manage_own"),
+});
 
-const skillAdministrationRoutes = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
-  {
-    method: "POST",
-    path: "/skills",
-    authorization: requirePermission("skills.manage"),
-    handler: handleCreateSkill,
-  },
-  {
-    method: "POST",
-    path: "/skills/import/preview",
-    authorization: requirePermission("skills.manage"),
-    handler: handlePreviewSkillImport,
-  },
-  {
-    method: "POST",
-    path: "/skills/import",
-    authorization: requirePermission("skills.manage"),
-    handler: handleImportSkill,
-  },
-  {
-    method: "POST",
-    path: "/skills/:id/reimport/preview",
-    authorization: requirePermission("skills.manage"),
-    handler: handlePreviewSkillReimport,
-  },
-  {
-    method: "POST",
-    path: "/skills/:id/reimport",
-    authorization: requirePermission("skills.manage"),
-    handler: handleReimportSkill,
-  },
-  {
-    method: "PATCH",
-    path: "/skills/:id",
-    authorization: requirePermission("skills.manage"),
-    handler: handleSetSkillEnabled,
-  },
-  {
-    method: "PUT",
-    path: "/skills/:id",
-    authorization: requirePermission("skills.manage"),
-    handler: handleReplaceSkillContentAndAssignments,
-  },
-  {
-    method: "DELETE",
-    path: "/skills/:id",
-    authorization: requirePermission("skills.manage"),
-    handler: handleDeleteSkill,
-  },
-  {
-    method: "GET",
-    path: "/skill-profiles",
-    authorization: requirePermission("skill_profiles.manage_own"),
-    handler: handleListProfiles,
-  },
-  {
-    method: "POST",
-    path: "/skill-profiles",
-    authorization: requirePermission("skill_profiles.manage_own"),
-    handler: handleCreateProfile,
-  },
-  {
-    method: "PATCH",
-    path: "/skill-profiles/:id",
-    authorization: requirePermission("skill_profiles.manage_own"),
-    handler: handleUpdateProfile,
-  },
-  {
-    method: "DELETE",
-    path: "/skill-profiles/:id",
-    authorization: requirePermission("skill_profiles.manage_own"),
-    handler: handleDeleteProfile,
-  },
-]);
+export const skillRoutes = new Hono<ControlPlaneHonoEnv>();
 
-export const skillRoutes: Route[] = [...skillReadRoutes, ...skillAdministrationRoutes];
+// Read routes register ahead of administration so `/skills/preview` and
+// `/skills/resolve-preview` take precedence over the parameterized paths.
+skillRoutes.get("/skills", SKILLS_READ, (c) => dispatch(c, handleListSkills));
+skillRoutes.post("/skills/preview", SKILLS_READ, (c) => dispatch(c, handlePreviewSkill));
+skillRoutes.post("/skills/resolve-preview", SKILLS_READ, (c) => dispatch(c, handleResolvePreview));
+skillRoutes.get("/skills/:id", SKILLS_READ, (c) => dispatch(c, handleGetSkill));
+
+skillRoutes.post("/skills", SKILLS_MANAGE, (c) => dispatch(c, handleCreateSkill));
+skillRoutes.post("/skills/import/preview", SKILLS_MANAGE, (c) =>
+  dispatch(c, handlePreviewSkillImport)
+);
+skillRoutes.post("/skills/import", SKILLS_MANAGE, (c) => dispatch(c, handleImportSkill));
+skillRoutes.post("/skills/:id/reimport/preview", SKILLS_MANAGE, (c) =>
+  dispatch(c, handlePreviewSkillReimport)
+);
+skillRoutes.post("/skills/:id/reimport", SKILLS_MANAGE, (c) => dispatch(c, handleReimportSkill));
+skillRoutes.patch("/skills/:id", SKILLS_MANAGE, (c) => dispatch(c, handleSetSkillEnabled));
+skillRoutes.put("/skills/:id", SKILLS_MANAGE, (c) =>
+  dispatch(c, handleReplaceSkillContentAndAssignments)
+);
+skillRoutes.delete("/skills/:id", SKILLS_MANAGE, (c) => dispatch(c, handleDeleteSkill));
+skillRoutes.get("/skill-profiles", PROFILES_MANAGE_OWN, (c) => dispatch(c, handleListProfiles));
+skillRoutes.post("/skill-profiles", PROFILES_MANAGE_OWN, (c) => dispatch(c, handleCreateProfile));
+skillRoutes.patch("/skill-profiles/:id", PROFILES_MANAGE_OWN, (c) =>
+  dispatch(c, handleUpdateProfile)
+);
+skillRoutes.delete("/skill-profiles/:id", PROFILES_MANAGE_OWN, (c) =>
+  dispatch(c, handleDeleteProfile)
+);

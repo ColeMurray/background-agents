@@ -62,22 +62,22 @@ export const catalog: RouteCatalogEntry[] = [
   modelPreferencesRoutes,
 
   // Subscription provider account management and sandbox access broker
-  ...modelProviderAccountRoutes,
+  modelProviderAccountRoutes,
 
   // Integration settings
-  ...integrationSettingsRoutes,
+  integrationSettingsRoutes,
 
   // Deployment-wide commit signing identity
-  ...commitSigningRoutes,
+  commitSigningRoutes,
 
   // SCM (source-control) settings
-  ...scmSettingsRoutes,
+  scmSettingsRoutes,
 
   // Automations
   ...automationRoutes,
 
   // MCP servers
-  ...mcpServerRoutes,
+  mcpServerRoutes,
 
   // Analytics
   analyticsRoutes,
@@ -89,13 +89,13 @@ export const catalog: RouteCatalogEntry[] = [
   ...autofixRoutes,
 
   // Installation-wide managed skills and personal profiles
-  ...skillRoutes,
+  skillRoutes,
 
   // Personal keyboard shortcuts
   keyboardShortcutRoutes,
 
   // Workspace roles, members, and current-user authorization
-  ...rbacRoutes,
+  rbacRoutes,
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,

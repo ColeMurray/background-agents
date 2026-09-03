@@ -3,18 +3,19 @@ import {
   replaceMemberRoleInputSchema,
   replaceMemberStatusInputSchema,
 } from "@open-inspect/shared/rbac";
+import { Hono } from "hono";
 import { ZodError } from "zod";
 import {
   AuthorizationError,
   AuthorizationService,
   RbacConflictError,
 } from "../authorization/service";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
-import type { Route } from "./shared";
 import {
   AUTHENTICATED_USER,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
-  defineRoutes,
   error,
   json,
   parseJsonBody,
@@ -40,18 +41,10 @@ function rbacErrorResponse(cause: unknown): Response {
   return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
 }
 
-function decodePathSegment(value: string): string | null {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return null;
-  }
-}
-
 async function handleGetCurrentAuthorization(
   _request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const service = new AuthorizationService(ctx.db);
@@ -65,7 +58,7 @@ async function handleGetCurrentAuthorization(
 async function handleListRoles(
   _request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const service = new AuthorizationService(ctx.db);
@@ -79,14 +72,12 @@ async function handleListRoles(
 async function handleGetRole(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
   const service = new AuthorizationService(ctx.db);
   try {
-    const roleId = decodePathSegment(match.groups!.id);
-    if (roleId === null) return error("Invalid role ID", 400);
-    const role = await service.getRole(roleId);
+    const role = await service.getRole(params.id);
     return role ? json(role) : error("Role not found", 404);
   } catch (cause) {
     return rbacErrorResponse(cause);
@@ -96,7 +87,7 @@ async function handleGetRole(
 async function handleListMembers(
   _request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const service = new AuthorizationService(ctx.db);
@@ -110,13 +101,11 @@ async function handleListMembers(
 async function handleReplaceMemberRole(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
-  const targetUserId = decodePathSegment(match.groups!.id);
-  if (targetUserId === null || !isCanonicalUserId(targetUserId)) {
-    return error("Invalid user ID", 400);
-  }
+  const targetUserId = params.id;
+  if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
   const body = await parseJsonBody<unknown>(request);
   if (body instanceof Response) return body;
   const service = new AuthorizationService(ctx.db);
@@ -137,13 +126,11 @@ async function handleReplaceMemberRole(
 async function handleReplaceMemberStatus(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
-  const targetUserId = decodePathSegment(match.groups!.id);
-  if (targetUserId === null || !isCanonicalUserId(targetUserId)) {
-    return error("Invalid user ID", 400);
-  }
+  const targetUserId = params.id;
+  if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
   const body = await parseJsonBody<unknown>(request);
   if (body instanceof Response) return body;
   const service = new AuthorizationService(ctx.db);
@@ -161,47 +148,52 @@ async function handleReplaceMemberStatus(
   }
 }
 
-export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
-  {
-    method: "GET",
-    path: "/me/authorization",
+const PRIVATE_NO_STORE = { cacheControl: "private, no-store" } as const;
+
+export const rbacRoutes = new Hono<ControlPlaneHonoEnv>();
+
+rbacRoutes.get(
+  "/me/authorization",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    ...PRIVATE_NO_STORE,
     authorization: AUTHENTICATED_USER,
-    cacheControl: "private, no-store",
-    handler: handleGetCurrentAuthorization,
-  },
-  {
-    method: "GET",
-    path: "/roles",
+  }),
+  (c) => dispatch(c, handleGetCurrentAuthorization)
+);
+rbacRoutes.get(
+  "/roles",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    ...PRIVATE_NO_STORE,
     authorization: requirePermission("workspace.roles.read"),
-    cacheControl: "private, no-store",
-    handler: handleListRoles,
-  },
-  {
-    method: "GET",
-    path: "/roles/:id",
+  }),
+  (c) => dispatch(c, handleListRoles)
+);
+rbacRoutes.get(
+  "/roles/:id",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    ...PRIVATE_NO_STORE,
     authorization: requirePermission("workspace.roles.read"),
-    cacheControl: "private, no-store",
-    handler: handleGetRole,
-  },
-  {
-    method: "GET",
-    path: "/members",
+  }),
+  (c) => dispatch(c, handleGetRole)
+);
+rbacRoutes.get(
+  "/members",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    ...PRIVATE_NO_STORE,
     authorization: requirePermission("workspace.members.read"),
-    cacheControl: "private, no-store",
-    handler: handleListMembers,
-  },
-  {
-    method: "PUT",
-    path: "/members/:id/role",
-    authorization: requirePermission("workspace.members.manage"),
-    cacheControl: "private, no-store",
-    handler: handleReplaceMemberRole,
-  },
-  {
-    method: "PUT",
-    path: "/members/:id/status",
-    authorization: requirePermission("workspace.members.manage"),
-    cacheControl: "private, no-store",
-    handler: handleReplaceMemberStatus,
-  },
-]);
+  }),
+  (c) => dispatch(c, handleListMembers)
+);
+const MEMBERS_MANAGE = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  ...PRIVATE_NO_STORE,
+  authorization: requirePermission("workspace.members.manage"),
+});
+rbacRoutes.put("/members/:id/role", MEMBERS_MANAGE, (c) => dispatch(c, handleReplaceMemberRole));
+rbacRoutes.put("/members/:id/status", MEMBERS_MANAGE, (c) =>
+  dispatch(c, handleReplaceMemberStatus)
+);
