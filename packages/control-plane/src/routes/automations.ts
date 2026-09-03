@@ -59,11 +59,12 @@ import {
 } from "../scheduler/scheduler";
 import { hydrateAutomation } from "../automation/hydrate";
 import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
-  type Route,
   type RequestContext,
   GITHUB_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   json,
   error,
   parseJsonBody,
@@ -496,7 +497,6 @@ function parseAutomationListParams(request: Request): ParseAutomationListParamsR
 async function handleListAutomations(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   const parsed = parseAutomationListParams(request);
@@ -537,7 +537,6 @@ async function handleListAutomations(
 async function handleCreateAutomation(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   const rawBody = await parseJsonBody<unknown>(request);
@@ -791,11 +790,10 @@ async function handleCreateAutomation(
 async function handleGetAutomation(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
-  if (!id) return error("Automation ID required", 400);
+  const id = params.id;
 
   const store = new AutomationStore(ctx.db);
   const row = await store.getById(id);
@@ -807,11 +805,10 @@ async function handleGetAutomation(
 async function handleUpdateAutomation(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
-  if (!id) return error("Automation ID required", 400);
+  const id = params.id;
 
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
@@ -1108,11 +1105,10 @@ async function handleUpdateAutomation(
 async function handleDeleteAutomation(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
-  if (!id) return error("Automation ID required", 400);
+  const id = params.id;
 
   const store = new AutomationStore(ctx.db);
   admittedAutomation(ctx);
@@ -1133,11 +1129,10 @@ async function handleDeleteAutomation(
 async function handlePauseAutomation(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
-  if (!id) return error("Automation ID required", 400);
+  const id = params.id;
 
   const store = new AutomationStore(ctx.db);
   admittedAutomation(ctx);
@@ -1161,11 +1156,10 @@ async function handlePauseAutomation(
 async function handleResumeAutomation(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
-  if (!id) return error("Automation ID required", 400);
+  const id = params.id;
 
   const store = new AutomationStore(ctx.db);
   const { automation: existing } = admittedAutomation(ctx);
@@ -1203,11 +1197,10 @@ async function handleResumeAutomation(
 async function handleTriggerAutomation(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
-  if (!id) return error("Automation ID required", 400);
+  const id = params.id;
 
   admittedAutomation(ctx);
   const requesterUserId = ctx.authorization?.userId;
@@ -1278,11 +1271,10 @@ function parseRunListParams(request: Request): { limit: number; offset: number }
 async function handleListInvocations(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const automationId = match.groups?.id;
-  if (!automationId) return error("Automation ID required", 400);
+  const automationId = params.id;
 
   const store = new AutomationStore(ctx.db);
   const automation = await store.getById(automationId);
@@ -1300,12 +1292,10 @@ async function handleListInvocations(
 async function handleGetRun(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; runId: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const automationId = match.groups?.id;
-  const runId = match.groups?.runId;
-  if (!automationId || !runId) return error("Automation ID and Run ID required", 400);
+  const { id: automationId, runId } = params;
 
   const store = new AutomationStore(ctx.db);
   const run = await store.getRunById(automationId, runId);
@@ -1317,11 +1307,10 @@ async function handleGetRun(
 async function handleRegenerateKey(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
-  if (!id) return error("Automation ID required", 400);
+  const id = params.id;
 
   const store = new AutomationStore(ctx.db);
   const { automation } = admittedAutomation(ctx);
@@ -1405,7 +1394,6 @@ async function handleRegenerateKey(
 async function handleGetWatchedSlackChannels(
   _request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   const channels = await new SlackChannelStore(ctx.db).getWatchedSlackChannels();
@@ -1427,7 +1415,6 @@ async function handleGetWatchedSlackChannels(
 async function handleGetSlackChannels(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   _ctx: RequestContext
 ): Promise<Response> {
   if (!env.SLACK_BOT_TOKEN) {
@@ -1443,85 +1430,65 @@ async function handleGetSlackChannels(
 
 // ─── Route exports ───────────────────────────────────────────────────────────
 
-export const automationRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    path: "/integration-settings/slack/watched-channels",
+const AUTOMATIONS_READ = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("automations.read"),
+});
+const AUTOMATION_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requireAutomation("manage"),
+});
+
+export const automationRoutes = new Hono<ControlPlaneHonoEnv>();
+
+automationRoutes.get(
+  "/integration-settings/slack/watched-channels",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("automations.read", {
       actorlessGrants: [{ service: "slack-bot" }],
     }),
-    handler: handleGetWatchedSlackChannels,
-  },
-  {
-    method: "GET",
-    path: "/integration-settings/slack/channels",
-    authorization: requirePermission("automations.read"),
-    handler: handleGetSlackChannels,
-  },
-  {
-    method: "GET",
-    path: "/automations",
-    authorization: requirePermission("automations.read"),
-    handler: handleListAutomations,
-  },
-  {
-    method: "POST",
-    path: "/automations",
+  }),
+  (c) => handleGetWatchedSlackChannels(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+automationRoutes.get("/integration-settings/slack/channels", AUTOMATIONS_READ, (c) =>
+  handleGetSlackChannels(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+automationRoutes.get("/automations", AUTOMATIONS_READ, (c) =>
+  handleListAutomations(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+automationRoutes.post(
+  "/automations",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("automations.create"),
-    handler: handleCreateAutomation,
-  },
-  {
-    method: "GET",
-    path: "/automations/:id",
-    authorization: requirePermission("automations.read"),
-    handler: handleGetAutomation,
-  },
-  {
-    method: "PUT",
-    path: "/automations/:id",
-    authorization: requireAutomation("manage"),
-    handler: handleUpdateAutomation,
-  },
-  {
-    method: "DELETE",
-    path: "/automations/:id",
-    authorization: requireAutomation("manage"),
-    handler: handleDeleteAutomation,
-  },
-  {
-    method: "POST",
-    path: "/automations/:id/pause",
-    authorization: requireAutomation("manage"),
-    handler: handlePauseAutomation,
-  },
-  {
-    method: "POST",
-    path: "/automations/:id/resume",
-    authorization: requireAutomation("manage"),
-    handler: handleResumeAutomation,
-  },
-  {
-    method: "POST",
-    path: "/automations/:id/trigger",
-    authorization: requireAutomation("trigger"),
-    handler: handleTriggerAutomation,
-  },
-  {
-    method: "GET",
-    path: "/automations/:id/invocations",
-    authorization: requirePermission("automations.read"),
-    handler: handleListInvocations,
-  },
-  {
-    method: "GET",
-    path: "/automations/:id/runs/:runId",
-    authorization: requirePermission("automations.read"),
-    handler: handleGetRun,
-  },
-  {
-    method: "POST",
-    path: "/automations/:id/regenerate-key",
-    authorization: requireAutomation("manage"),
-    handler: handleRegenerateKey,
-  },
-]);
+  }),
+  (c) => handleCreateAutomation(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+automationRoutes.get("/automations/:id", AUTOMATIONS_READ, (c) => dispatch(c, handleGetAutomation));
+automationRoutes.put("/automations/:id", AUTOMATION_MANAGE, (c) =>
+  dispatch(c, handleUpdateAutomation)
+);
+automationRoutes.delete("/automations/:id", AUTOMATION_MANAGE, (c) =>
+  dispatch(c, handleDeleteAutomation)
+);
+automationRoutes.post("/automations/:id/pause", AUTOMATION_MANAGE, (c) =>
+  dispatch(c, handlePauseAutomation)
+);
+automationRoutes.post("/automations/:id/resume", AUTOMATION_MANAGE, (c) =>
+  dispatch(c, handleResumeAutomation)
+);
+automationRoutes.post(
+  "/automations/:id/trigger",
+  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requireAutomation("trigger") }),
+  (c) => dispatch(c, handleTriggerAutomation)
+);
+automationRoutes.get("/automations/:id/invocations", AUTOMATIONS_READ, (c) =>
+  dispatch(c, handleListInvocations)
+);
+automationRoutes.get("/automations/:id/runs/:runId", AUTOMATIONS_READ, (c) =>
+  dispatch(c, handleGetRun)
+);
+automationRoutes.post("/automations/:id/regenerate-key", AUTOMATION_MANAGE, (c) =>
+  dispatch(c, handleRegenerateKey)
+);

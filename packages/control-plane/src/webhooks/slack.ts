@@ -9,9 +9,9 @@
  * selection, condition evaluation, and dedup all happen in the scheduler.
  */
 
-import { createAutomationEventRoute } from "./automation-event";
+import { createAutomationEventRoutes } from "./automation-event";
 
-export const slackAutomationEventRoute = createAutomationEventRoute({
+export const slackAutomationEventRoutes = createAutomationEventRoutes({
   path: "/internal/slack-event",
   source: "slack",
 });

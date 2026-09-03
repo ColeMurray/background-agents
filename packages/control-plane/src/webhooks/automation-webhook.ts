@@ -5,9 +5,11 @@
 import { normalizeWebhookEvent } from "@open-inspect/shared/triggers";
 import { AutomationStore } from "../db/automation-store";
 import { verifyWebhookApiKey } from "../auth/webhook-key";
-import type { Route, RequestContext } from "../routes/shared";
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { RequestContext } from "../routes/shared";
 import {
-  defineRoute,
   error,
   json,
   NO_AUTHORIZATION,
@@ -30,11 +32,10 @@ export function parseWebhookIdempotencyKey(body: unknown): string | undefined {
 async function handleAutomationWebhook(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const automationId = match.groups?.id;
-  if (!automationId) return error("Automation ID required", 400);
+  const automationId = params.id;
 
   // 1. Validate content type
   const contentType = request.headers.get("content-type");
@@ -87,9 +88,10 @@ async function handleAutomationWebhook(
   return json({ ok: true, ...result });
 }
 
-export const automationWebhookRoute: Route = defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
-  method: "POST",
-  path: "/webhooks/automation/:id",
-  authorization: NO_AUTHORIZATION,
-  handler: handleAutomationWebhook,
-});
+export const automationWebhookRoutes = new Hono<ControlPlaneHonoEnv>();
+
+automationWebhookRoutes.post(
+  "/webhooks/automation/:id",
+  admit({ ...SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, authorization: NO_AUTHORIZATION }),
+  (c) => dispatch(c, handleAutomationWebhook)
+);

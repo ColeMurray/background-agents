@@ -74,7 +74,7 @@ export const catalog: RouteCatalogEntry[] = [
   ...scmSettingsRoutes,
 
   // Automations
-  ...automationRoutes,
+  automationRoutes,
 
   // MCP servers
   ...mcpServerRoutes,
@@ -86,7 +86,7 @@ export const catalog: RouteCatalogEntry[] = [
   auditEventRoutes,
 
   // Pull request feedback Autofix activity
-  ...autofixRoutes,
+  autofixRoutes,
 
   // Installation-wide managed skills and personal profiles
   ...skillRoutes,
@@ -98,5 +98,5 @@ export const catalog: RouteCatalogEntry[] = [
   ...rbacRoutes,
 
   // Webhooks (public routes — auth handled per-route)
-  ...webhookRoutes,
+  webhookRoutes,
 ];

@@ -1,16 +1,20 @@
 /**
- * Webhook route exports.
+ * Webhook route modules, mounted in precedence order.
  */
 
-import type { Route } from "../routes/shared";
-import { sentryWebhookRoute } from "./sentry";
-import { automationWebhookRoute } from "./automation-webhook";
-import { githubAutomationEventRoute } from "./github";
-import { slackAutomationEventRoute } from "./slack";
+import { Hono } from "hono";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { sentryWebhookRoutes } from "./sentry";
+import { automationWebhookRoutes } from "./automation-webhook";
+import { githubAutomationEventRoutes } from "./github";
+import { slackAutomationEventRoutes } from "./slack";
 
-export const webhookRoutes: Route[] = [
-  sentryWebhookRoute,
-  automationWebhookRoute,
-  githubAutomationEventRoute,
-  slackAutomationEventRoute,
-];
+export const webhookRoutes = new Hono<ControlPlaneHonoEnv>();
+for (const module of [
+  sentryWebhookRoutes,
+  automationWebhookRoutes,
+  githubAutomationEventRoutes,
+  slackAutomationEventRoutes,
+]) {
+  webhookRoutes.route("/", module);
+}

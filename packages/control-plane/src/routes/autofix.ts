@@ -1,14 +1,16 @@
+import { Hono } from "hono";
 import { PrAutofixFeedbackStore } from "../db/pr-autofix-feedback-store";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
-  defineRoutes,
   error,
   json,
   NO_AUTHORIZATION,
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
-  type Route,
+  type RequestContext,
 } from "./shared";
 
-const handleActivity: Route["handler"] = async (request, _env, _match, ctx) => {
+async function handleActivity(request: Request, ctx: RequestContext): Promise<Response> {
   const url = new URL(request.url);
   const rawLimit = url.searchParams.get("limit") ?? "50";
   const limit = Number(rawLimit);
@@ -29,13 +31,12 @@ const handleActivity: Route["handler"] = async (request, _env, _match, ctx) => {
     }
     throw caught;
   }
-};
+}
 
-export const autofixRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_WEB_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    path: "/autofix/activity",
-    authorization: NO_AUTHORIZATION,
-    handler: handleActivity,
-  },
-]);
+export const autofixRoutes = new Hono<ControlPlaneHonoEnv>();
+
+autofixRoutes.get(
+  "/autofix/activity",
+  admit({ ...SCM_AGNOSTIC_WEB_SERVICE_ROUTE, authorization: NO_AUTHORIZATION }),
+  (c) => handleActivity(c.var.admitted.request, c.var.admitted.ctx)
+);

@@ -4,7 +4,7 @@
  * pre-normalizes its source's events and POSTs them here; this layer
  * authenticates, validates the event envelope, and invokes the scheduler for
  * matching and dispatch. Sources with no extra behavior use
- * `createAutomationEventRoute`; sources that piggyback additional processing
+ * `createAutomationEventRoutes`; sources that piggyback additional processing
  * (github's PR lifecycle tracking) compose the exported steps in their own
  * named handler.
  */
@@ -14,15 +14,12 @@ import {
   type AutomationEvent,
   type AutomationEventSource,
 } from "@open-inspect/shared/triggers";
+import { Hono } from "hono";
 import { createLogger } from "../logger";
-import type { Route, RequestContext } from "../routes/shared";
-import {
-  defineRoute,
-  error,
-  GITHUB_SERVICE_ROUTE,
-  json,
-  serviceAuthorized,
-} from "../routes/shared";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { RequestContext } from "../routes/shared";
+import { error, GITHUB_SERVICE_ROUTE, json, serviceAuthorized } from "../routes/shared";
 import type { Env } from "../types";
 import { Scheduler } from "../scheduler/scheduler";
 
@@ -123,17 +120,12 @@ export async function forwardAutomationEventToScheduler(
   return json({ ok: true, ...result });
 }
 
-/** Create an authenticated route for a normalized automation event source. */
-export function createAutomationEventRoute(opts: {
+/** Create the authenticated route module for a normalized automation event source. */
+export function createAutomationEventRoutes(opts: {
   path: string;
   source: AutomationEventSource;
-}): Route {
-  async function handler(
-    request: Request,
-    env: Env,
-    _match: RegExpMatchArray,
-    ctx: RequestContext
-  ): Promise<Response> {
+}): Hono<ControlPlaneHonoEnv> {
+  async function handler(request: Request, env: Env, ctx: RequestContext): Promise<Response> {
     let body: unknown;
     try {
       body = await request.json();
@@ -151,10 +143,11 @@ export function createAutomationEventRoute(opts: {
     return forwardAutomationEventToScheduler(env, validated.event, ctx);
   }
 
-  return defineRoute(GITHUB_SERVICE_ROUTE, {
-    method: "POST",
-    path: opts.path,
-    authorization: serviceAuthorized("slack-bot"),
-    handler,
-  });
+  const routes = new Hono<ControlPlaneHonoEnv>();
+  routes.post(
+    opts.path,
+    admit({ ...GITHUB_SERVICE_ROUTE, authorization: serviceAuthorized("slack-bot") }),
+    (c) => handler(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  );
+  return routes;
 }
