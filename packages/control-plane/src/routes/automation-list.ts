@@ -25,10 +25,10 @@ const MAX_AUTOMATION_LIST_PAGE_SIZE = 100;
 
 const automationListLimitSchema = z
   .string()
-  .regex(/^\d+$/, { message: "Invalid limit" })
+  .regex(/^\d+$/, { error: "Invalid limit" })
   .transform(Number)
   .refine((limit) => limit >= 1 && limit <= MAX_AUTOMATION_LIST_PAGE_SIZE, {
-    message: "Invalid limit",
+    error: "Invalid limit",
   });
 
 const automationListQuerySchema = z.object({
@@ -46,7 +46,7 @@ const automationListQuerySchema = z.object({
       }
       return parsed.cursor;
     }),
-  search: z.string().trim().max(MAX_NAME_LENGTH, { message: "Search is too long" }).optional(),
+  search: z.string().trim().max(MAX_NAME_LENGTH, { error: "Search is too long" }).optional(),
   repoOwner: z.string().optional(),
   repoName: z.string().optional(),
 });

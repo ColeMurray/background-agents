@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { MAX_SANDBOX_SKILL_PAGE_SIZE } from "@open-inspect/shared/types/skills";
@@ -14,6 +15,7 @@ import {
   type SandboxRouteContext,
   type UserRouteContext,
 } from "./shared";
+import { parseQuery } from "./query";
 
 export async function handleSessionSkillsView(
   _request: Request,
@@ -34,19 +36,29 @@ export async function handleSessionSkillsView(
  * installation in one response, which is how sandbox runtimes predating paging
  * call this endpoint.
  */
+const PAGE_LIMIT_ERROR = `limit must be an integer between 1 and ${MAX_SANDBOX_SKILL_PAGE_SIZE}`;
+
+const installationPageQuerySchema = z.object({
+  limit: z
+    .string()
+    .regex(/^[1-9]\d*$/, { error: PAGE_LIMIT_ERROR })
+    .optional()
+    .transform((raw) => (raw === undefined ? undefined : Number(raw)))
+    .refine((limit) => limit === undefined || limit <= MAX_SANDBOX_SKILL_PAGE_SIZE, {
+      error: PAGE_LIMIT_ERROR,
+    }),
+  cursor: z
+    .string()
+    .regex(/^\d+$/, { error: "cursor is not a valid position" })
+    .optional()
+    .transform((raw) => (raw === undefined ? -1 : Number(raw))),
+});
+
 function installationPage(request: Request): { after: number; limit: number } | Response | null {
-  const params = new URL(request.url).searchParams;
-  const rawLimit = params.get("limit");
-  if (rawLimit === null) return null;
-  const limit = Number(rawLimit);
-  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SANDBOX_SKILL_PAGE_SIZE) {
-    return error(`limit must be an integer between 1 and ${MAX_SANDBOX_SKILL_PAGE_SIZE}`, 400);
-  }
-  const rawCursor = params.get("cursor");
-  if (rawCursor === null) return { after: -1, limit };
-  const after = Number(rawCursor);
-  if (!Number.isInteger(after) || after < 0) return error("cursor is not a valid position", 400);
-  return { after, limit };
+  const query = parseQuery(request, installationPageQuerySchema);
+  if (query instanceof Response) return query;
+  if (query.limit === undefined) return null;
+  return { after: query.cursor, limit: query.limit };
 }
 
 export async function handleSandboxInstallation(

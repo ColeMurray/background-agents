@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
@@ -27,6 +28,24 @@ import {
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
+import { parseQuery } from "./query";
+
+const sessionInboxQuerySchema = z.object({
+  category: z
+    .string()
+    .optional()
+    .transform((raw, context) => {
+      if (raw === undefined) return null;
+      const parsed = sessionInboxCategorySchema.safeParse(raw);
+      if (!parsed.success) {
+        context.addIssue({ code: "custom", message: "Invalid category" });
+        return z.NEVER;
+      }
+      return parsed.data;
+    }),
+  cursor: z.string().min(1, { error: "Invalid cursor" }).optional(),
+  mine: z.literal("true", { error: "Invalid mine" }).optional(),
+});
 
 const log = createLogger("session-read-state");
 const SESSION_INBOX_LIMIT = 20;
@@ -113,17 +132,13 @@ export async function handleListSessionInbox(
   _env: Env,
   ctx: UserRouteContext
 ): Promise<Response> {
-  const searchParams = new URL(request.url).searchParams;
-  const categoryValue = searchParams.get("category");
-  const category =
-    categoryValue === null ? null : sessionInboxCategorySchema.safeParse(categoryValue);
-  if (category && !category.success) return error("Invalid category", 400);
-  const cursor = searchParams.get("cursor");
-  if (cursor === "") return error("Invalid cursor", 400);
-  if (cursor !== null && category === null) return error("Category required for pagination", 400);
-  const mine = searchParams.get("mine");
-  if (mine !== null && mine !== "true") return error("Invalid mine", 400);
-  const parsedCursor = parseSessionInboxCursor(cursor);
+  const query = parseQuery(request, sessionInboxQuerySchema);
+  if (query instanceof Response) return query;
+  const { category, mine } = query;
+  if (query.cursor !== undefined && category === null) {
+    return error("Category required for pagination", 400);
+  }
+  const parsedCursor = parseSessionInboxCursor(query.cursor);
   if (!parsedCursor.ok) return error(parsedCursor.error, 400);
 
   const startedAt = Date.now();
@@ -151,7 +166,7 @@ export async function handleListSessionInbox(
 
   const result = await store.listInbox({
     ...commonOptions,
-    category: category.data,
+    category,
     cursor: parsedCursor.cursor,
   });
   const nextCursor = result.nextCursor ? encodeSessionInboxCursor(result.nextCursor) : null;
@@ -163,7 +178,7 @@ export async function handleListSessionInbox(
   response.headers.set("Cache-Control", "private, no-store");
   log.info("session_inbox.listed", {
     event: "session_inbox.listed",
-    category: category.data,
+    category,
     hierarchy_count: result.items.length,
     session_count: result.items.reduce(
       (count, item) => count + 1 + item.descendantSessions.length,

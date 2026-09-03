@@ -383,6 +383,25 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
   });
 });
 
+describe("GET /image-builds/status", () => {
+  it.each([
+    ["?scope_kind=environment", "scope_id is required with scope_kind"],
+    ["?scope_kind=repo&scope_id=", "scope_id is required with scope_kind"],
+    ["?scope_id=env_x", "scope_kind must be 'repo' or 'environment'"],
+    ["?scope_kind=bogus&scope_id=x", "scope_kind must be 'repo' or 'environment'"],
+    ["?scope_kind=repo&scope_kind=repo&scope_id=x", "Invalid scope_kind"],
+  ])("rejects the half-pair or malformed scope %s", async (query, error) => {
+    const response = await handleRequest(
+      new Request(`https://test.local/image-builds/status${query}`),
+      createModalEnv(),
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error });
+  });
+});
+
 describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
   it("writes the flag and triggers a stale-checked build on toggle-on", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);

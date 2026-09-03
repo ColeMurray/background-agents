@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { handleListSessions, handlePatchReadState } from "./session-index";
+import { handleListSessionInbox, handleListSessions, handlePatchReadState } from "./session-index";
 import type { RequestContext, UserRouteContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
@@ -8,6 +8,8 @@ import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const mockSessionIndexStore = {
   list: vi.fn(),
+  listInbox: vi.fn(),
+  listInboxSnapshot: vi.fn(),
   delete: vi.fn(),
   updateReadState: vi.fn(),
 };
@@ -66,6 +68,16 @@ async function listSessions(query = "", principal?: Principal): Promise<Response
     new Request(`https://test.local/sessions${query}`),
     createEnv(),
     createCtx(principal)
+  );
+}
+
+const USER_PRINCIPAL: Principal = { kind: "user", userId: "user-1" };
+
+async function listInbox(query = ""): Promise<Response> {
+  return handleListSessionInbox(
+    new Request(`https://test.local/sessions/inbox${query}`),
+    createEnv(),
+    createCtx(USER_PRINCIPAL) as UserRouteContext
   );
 }
 
@@ -274,6 +286,23 @@ describe("session index routes", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid createdBy" });
     expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["?category=bogus", "Invalid category"],
+    ["?category=finished&category=in_progress", "Invalid category"],
+    ["?category=finished&cursor=", "Invalid cursor"],
+    ["?cursor=1:abc", "Category required for pagination"],
+    ["?category=finished&cursor=not-a-cursor", "Invalid cursor"],
+    ["?category=finished&mine=false", "Invalid mine"],
+    ["?category=finished&mine=true&mine=true", "Invalid mine"],
+  ])("rejects the inbox query %s before reading the store", async (query, error) => {
+    const response = await listInbox(query);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error });
+    expect(mockSessionIndexStore.listInbox).not.toHaveBeenCalled();
+    expect(mockSessionIndexStore.listInboxSnapshot).not.toHaveBeenCalled();
   });
 
   it("requires a session ID for read-state mutations", async () => {

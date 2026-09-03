@@ -33,6 +33,8 @@ import {
 import { fetchSkillImport, SkillImportError, type SkillImportResult } from "../skills/git-import";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { z } from "zod";
+import { parseQuery } from "./query";
 import {
   createRouteSourceControlProvider,
   error,
@@ -93,30 +95,36 @@ async function parsedBody(request: Request): Promise<unknown | Response> {
   }
 }
 
+const skillListQuerySchema = z.object({
+  limit: z
+    .string()
+    .regex(/^[1-9]\d*$/, { error: "Invalid limit" })
+    .optional()
+    .transform((raw) => (raw === undefined ? SKILL_LIST_PAGE_SIZE : Number(raw)))
+    .refine((limit) => limit <= SKILL_LIST_PAGE_SIZE, { error: "Invalid limit" }),
+  cursor: z
+    .string()
+    .optional()
+    .transform((raw, context) => {
+      if (raw === undefined) return null;
+      const parsed = skillNameSchema.safeParse(raw);
+      if (!parsed.success) {
+        context.addIssue({ code: "custom", message: "Invalid cursor" });
+        return z.NEVER;
+      }
+      return parsed.data;
+    }),
+});
+
 async function handleListSkills(
   request: Request,
   _env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const limitValue = url.searchParams.get("limit");
-  const cursorValue = url.searchParams.get("cursor");
-  if (url.searchParams.getAll("limit").length > 1 || url.searchParams.getAll("cursor").length > 1) {
-    return error("Invalid skill list query", 400);
-  }
-  const limit = limitValue === null ? SKILL_LIST_PAGE_SIZE : Number(limitValue);
-  if (!Number.isInteger(limit) || limit < 1 || limit > SKILL_LIST_PAGE_SIZE) {
-    return error("Invalid limit", 400);
-  }
-  const parsedCursor = cursorValue === null ? null : skillNameSchema.safeParse(cursorValue);
-  if (parsedCursor !== null && !parsedCursor.success) return error("Invalid cursor", 400);
-  return json(
-    await new SkillStore(ctx.db).list({
-      limit,
-      cursor: parsedCursor === null ? null : parsedCursor.data,
-    })
-  );
+  const query = parseQuery(request, skillListQuerySchema);
+  if (query instanceof Response) return query;
+  return json(await new SkillStore(ctx.db).list(query));
 }
 
 async function handleGetSkill(

@@ -20,18 +20,18 @@ export const MAX_INVOCATION_LIST_OFFSET = 10_000;
 const invocationListQuerySchema = z.object({
   limit: z
     .string()
-    .regex(/^[1-9]\d*$/, { message: "Invalid limit" })
+    .regex(/^[1-9]\d*$/, { error: "Invalid limit" })
     .optional()
     .transform((raw) => (raw === undefined ? DEFAULT_INVOCATION_LIST_LIMIT : Number(raw)))
     .refine((limit) => limit <= MAX_AUTOMATION_INVOCATION_LIST_LIMIT, {
-      message: "Invalid limit",
+      error: "Invalid limit",
     }),
   offset: z
     .string()
-    .regex(/^\d+$/, { message: "Invalid offset" })
+    .regex(/^\d+$/, { error: "Invalid offset" })
     .optional()
     .transform((raw) => (raw === undefined ? 0 : Number(raw)))
-    .refine((offset) => offset <= MAX_INVOCATION_LIST_OFFSET, { message: "Invalid offset" }),
+    .refine((offset) => offset <= MAX_INVOCATION_LIST_OFFSET, { error: "Invalid offset" }),
 });
 
 /** GET /automations/:id/invocations — one row per firing; `total` counts invocations. */

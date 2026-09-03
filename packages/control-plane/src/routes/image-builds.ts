@@ -52,6 +52,7 @@ import {
   NO_AUTHORIZATION,
   requirePermission,
 } from "./shared";
+import { parseQuery } from "./query";
 
 const logger = createLogger("router:image-builds");
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
@@ -69,7 +70,7 @@ const buildCompleteBodySchema = z.object({
   provider_session_id: z.string().min(1),
   repository_shas: z.array(repositoryShaEntrySchema).min(1),
   runtime_version: z.string().refine((value) => parseRuntimeVersionNumber(value) !== null, {
-    message: "must start with v<number>",
+    error: "must start with v<number>",
   }),
   // Must stay finite: Infinity would be canonicalized to null by
   // JSON.stringify inside the completion hash and the persisted row. Capped
@@ -373,18 +374,28 @@ async function handleToggleRepoImageBuilds(
   return json({ ok: true, enabled: body.enabled });
 }
 
+const SCOPE_KIND_ERROR = "scope_kind must be 'repo' or 'environment'";
+
+/** A scope is either wholly absent or a `scope_kind` with a non-empty `scope_id`. */
+const scopeQuerySchema = z
+  .object({
+    scope_kind: z.enum(["repo", "environment"], { error: SCOPE_KIND_ERROR }).optional(),
+    scope_id: z.string().optional(),
+  })
+  .superRefine((query, context) => {
+    if (query.scope_kind === undefined && query.scope_id === undefined) return;
+    if (query.scope_kind === undefined) {
+      context.addIssue({ code: "custom", message: SCOPE_KIND_ERROR });
+    } else if (!query.scope_id) {
+      context.addIssue({ code: "custom", message: "scope_id is required with scope_kind" });
+    }
+  });
+
 function parseScopeParams(request: Request): ImageBuildScope | null | Response {
-  const params = new URL(request.url).searchParams;
-  const scopeKind = params.get("scope_kind");
-  const scopeId = params.get("scope_id");
-  if (scopeKind === null && scopeId === null) return null;
-  if (scopeKind !== "repo" && scopeKind !== "environment") {
-    return error("scope_kind must be 'repo' or 'environment'", 400);
-  }
-  if (!scopeId) {
-    return error("scope_id is required with scope_kind", 400);
-  }
-  return { kind: scopeKind, id: scopeId };
+  const query = parseQuery(request, scopeQuerySchema);
+  if (query instanceof Response) return query;
+  if (query.scope_kind === undefined || query.scope_id === undefined) return null;
+  return { kind: query.scope_kind, id: query.scope_id };
 }
 
 async function readStatusRows(

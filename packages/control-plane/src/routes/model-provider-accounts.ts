@@ -58,6 +58,7 @@ import {
   NO_AUTHORIZATION,
   requirePermission,
 } from "./shared";
+import { parseQuery } from "./query";
 
 const PRIVATE_NO_STORE = "private, no-store" as const;
 const NO_STORE = "no-store" as const;
@@ -108,6 +109,38 @@ function provider(value: string): SubscriptionProviderId | Response {
   const parsed = subscriptionProviderIdSchema.safeParse(value);
   return parsed.success ? parsed.data : error("Unsupported model provider", 400);
 }
+
+const accountListQuerySchema = z.object({
+  // An empty `provider` means no filter, as it always has.
+  provider: z
+    .string()
+    .optional()
+    .transform((raw, context) => {
+      if (!raw) return undefined;
+      const parsed = subscriptionProviderIdSchema.safeParse(raw);
+      if (!parsed.success) {
+        context.addIssue({ code: "custom", message: "Unsupported model provider" });
+        return z.NEVER;
+      }
+      return parsed.data;
+    }),
+  archived: z
+    .string()
+    .optional()
+    .transform((raw) => raw === "true"),
+  status: z
+    .string()
+    .optional()
+    .transform((raw, context) => {
+      if (raw === undefined) return undefined;
+      const parsed = modelProviderAccountStatusSchema.safeParse(raw);
+      if (!parsed.success) {
+        context.addIssue({ code: "custom", message: "Unsupported provider account status" });
+        return z.NEVER;
+      }
+      return parsed.data;
+    }),
+});
 
 function accountId(id: string): string | Response {
   return MODEL_PROVIDER_ACCOUNT_ID_PATTERN.test(id)
@@ -186,23 +219,11 @@ modelProviderAccountRoutes.get("/model-provider-accounts/legacy-credentials", AC
 );
 modelProviderAccountRoutes.get("/model-provider-accounts", ACCOUNTS_READ, (c) =>
   dispatch(c, async (request, env, _params, ctx) => {
-    const accounts = service(env, ctx);
-    const url = new URL(request.url);
-    const providerFilter = url.searchParams.get("provider");
-    let parsedProvider: SubscriptionProviderId | undefined;
-    if (providerFilter) {
-      const result = provider(providerFilter);
-      if (result instanceof Response) return result;
-      parsedProvider = result;
-    }
-    const includeArchived = url.searchParams.get("archived") === "true";
-    const status = url.searchParams.get("status");
-    if (status !== null && !modelProviderAccountStatusSchema.safeParse(status).success) {
-      return error("Unsupported provider account status", 400);
-    }
-    const listed = await accounts.list(parsedProvider, includeArchived);
+    const query = parseQuery(request, accountListQuerySchema);
+    if (query instanceof Response) return query;
+    const listed = await service(env, ctx).list(query.provider, query.archived);
     return json({
-      accounts: status ? listed.filter((account) => account.status === status) : listed,
+      accounts: query.status ? listed.filter((account) => account.status === query.status) : listed,
     });
   })
 );
