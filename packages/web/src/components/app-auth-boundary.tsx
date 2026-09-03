@@ -12,7 +12,7 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
  */
 export function AppAuthBoundary({ children }: { children: React.ReactNode }) {
   const { status } = useAuthSession();
-  const { authorization, loading: authorizationLoading, error } = useCurrentUserAuthorization();
+  const { authorization, loading: authorizationLoading } = useCurrentUserAuthorization();
 
   if (status === "loading") {
     return (
@@ -63,7 +63,11 @@ export function AppAuthBoundary({ children }: { children: React.ReactNode }) {
         </div>
       );
     }
-    if (error || !authorization) {
+    // Cached authorization keeps the app mounted through a failed revalidation:
+    // SWR retains the last good value and only reports the error, and remounting
+    // this subtree would discard unsaved work (an in-progress prompt). Access is
+    // denied only when no authorization has ever resolved.
+    if (!authorization) {
       return (
         <div className="min-h-screen flex items-center justify-center px-6">
           <ErrorBanner role="alert">Authorization is temporarily unavailable.</ErrorBanner>
