@@ -1,12 +1,11 @@
 /**
- * Session storage over `node:sqlite`: the same `SqlStorage` + `TransactionSync`
- * surface a Durable Object supplies, backed by an in-process database. Today it
- * runs the session-core conformance suite and the schema tests; the Node host
- * builds its per-session store on it.
+ * Test storage over `node:sqlite`: the same `SqlStorage` + `TransactionSync`
+ * surface a Durable Object supplies, backed by an in-process database, so the
+ * repository suites and the schema tests can run without a Workers runtime.
  */
 
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import type { SqlResult, SqlStorage, TransactionSync } from "../session/sql-storage";
+import type { SqlResult, SqlStorage, TransactionSync } from "../../src/session/sql-storage";
 
 export interface NodeSqlStorage {
   sql: SqlStorage;

@@ -4,7 +4,7 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
-import { createNodeSqlStorage } from "../../src/node/sqlite-storage";
+import { createNodeSqlStorage } from "./node-sqlite-storage";
 import { initSchema } from "../../src/session/schema";
 import {
   registerSessionCoreConformanceSuite,

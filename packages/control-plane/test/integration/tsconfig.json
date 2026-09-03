@@ -14,7 +14,5 @@
     "paths": { "@/*": ["../../src/*"] }
   },
   "include": ["**/*.ts", "../../src/**/*.ts"],
-  // src/node imports node: modules; it belongs to the Node-typed program
-  // (tsconfig.test.json), not this workerd-typed one.
-  "exclude": ["../../src/**/*.test.ts", "../../src/node/**"]
+  "exclude": ["../../src/**/*.test.ts"]
 }

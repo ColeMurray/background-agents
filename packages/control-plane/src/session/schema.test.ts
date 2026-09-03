@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyMigrations, initSchema, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
-import { createNodeSqlStorage } from "../node/sqlite-storage";
+import { createNodeSqlStorage } from "../../test/conformance/node-sqlite-storage";
 
 /**
  * Create a mock SqlStorage that tracks calls and supports per-query data.

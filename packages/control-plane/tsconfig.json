@@ -21,8 +21,5 @@
     }
   },
   "include": ["src/**/*.ts"],
-  // src/node holds the Node host's adapters; they import node: modules and are
-  // typechecked by tsconfig.test.json (Node types) until the Node build target
-  // gets its own program.
-  "exclude": ["node_modules", "src/**/*.test.ts", "src/node/**"]
+  "exclude": ["node_modules", "src/**/*.test.ts"]
 }
