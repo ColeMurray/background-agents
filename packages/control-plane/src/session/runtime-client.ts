@@ -42,3 +42,21 @@ export function createSessionRuntimeClient(
 ): SessionRuntimeClient {
   return new CloudflareSessionRuntimeClient(env, ctx);
 }
+
+/**
+ * A client for a caller that has no request of its own, such as a runtime
+ * notifying another runtime. Every call is one hop: it carries `traceId` and
+ * a fresh request id, so unrelated calls never share a request identity.
+ */
+export function createSessionRuntimeClientForTrace(
+  env: Env,
+  traceId: string
+): SessionRuntimeClient {
+  return {
+    fetch: (sessionId, path, init, search) =>
+      createSessionRuntimeClient(env, {
+        trace_id: traceId,
+        request_id: crypto.randomUUID(),
+      }).fetch(sessionId, path, init, search),
+  };
+}

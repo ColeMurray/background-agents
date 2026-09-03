@@ -1586,7 +1586,12 @@ export class Scheduler {
           source: "slack",
           callbackContext,
         },
-        { trace_id: `automation:${automation.id}`, request_id: run.id }
+        // A steerable run takes many follow-ups; each inbound message is its
+        // own hop, so the request id is the message's, not the run's.
+        {
+          trace_id: `automation:${automation.id}`,
+          request_id: `slack:${event.channelId}:${event.ts}`,
+        }
       );
       this.log.info("Steered thread session with slack follow-up", {
         event: "scheduler.slack_steer",
