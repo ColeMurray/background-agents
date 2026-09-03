@@ -76,7 +76,6 @@ function createHarness() {
         handler: vi.fn(async () => new Response("state", { status: 200 })),
       },
     ],
-    handleWebSocketUpgrade: vi.fn(async () => new Response(null, { status: 200 })),
     clock,
   };
   const messageDeps: SessionMessageRouterDeps<string, TestClient> = {

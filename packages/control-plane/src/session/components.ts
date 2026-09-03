@@ -113,11 +113,15 @@ import {
 } from "./alarm/scheduler";
 import { createSessionInternalRoutes } from "./http/routes";
 import { SessionServer } from "./server";
+import { requestLogger } from "./request-logger";
 import { SessionHttpDispatcher } from "./http/dispatcher";
 import { SessionMessageRouter } from "./message-router";
 import { SessionDisconnectHandler } from "./disconnect-handler";
 import type { Clock, SandboxDisconnectMonitor, SessionBroadcaster, SocketRegistry } from "./ports";
-import { SessionConnectionAuthenticator } from "./connection-authenticator";
+import {
+  SessionConnectionAuthenticator,
+  type SessionUpgradeAdmission,
+} from "./connection-authenticator";
 import { SessionSnapshotReader } from "./snapshot-reader";
 import { SessionAccessReader } from "./sandbox-access-reader";
 import { createSessionScopedLogger } from "./session-logger";
@@ -147,6 +151,10 @@ const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
 export interface SessionRuntime {
   readonly log: Logger;
   readonly server: SessionServer<WebSocket, ClientInfo>;
+  /** Admission of WebSocket upgrades; the host completes the handshake between its two calls. */
+  readonly upgrades: SessionUpgradeAdmission;
+  /** The request-scoped logger for entry points the host serves outside `server`. */
+  requestLogger(request: Request): Logger;
   readonly alarms: {
     /** Expire stale authorization leases and re-arm persisted deadlines after a cold start. */
     rehydrate(): void;
@@ -790,13 +798,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   };
 
   const server = new SessionServer<WebSocket, ClientInfo>({
-    http: new SessionHttpDispatcher({
-      log,
-      routes,
-      handleWebSocketUpgrade: (request, url, requestLog) =>
-        connectionAuthenticator.handleWebSocketUpgrade(request, url, requestLog),
-      clock,
-    }),
+    http: new SessionHttpDispatcher({ log, routes, clock }),
     messages: new SessionMessageRouter({
       log,
       sockets,
@@ -843,6 +845,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   return {
     log,
     server,
+    upgrades: connectionAuthenticator,
+    requestLogger: (request) => requestLogger(log, request),
     alarms: {
       rehydrate: () =>
         backgroundTasks.submit(

@@ -11,6 +11,7 @@ import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import type { Env } from "../types";
 import { createDurableObjectSessionPlatform } from "../cloudflare/session-platform";
+import { upgradeWebSocket } from "../cloudflare/websocket-upgrade";
 import type { SessionPlatform } from "./platform";
 import { createSessionRuntime, type SessionRuntime } from "./components";
 
@@ -66,10 +67,16 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Handle incoming HTTP requests.
+   * Handle incoming HTTP requests. WebSocket upgrades are completed here,
+   * on the Cloudflare side of the session, because only the host can turn
+   * an admitted upgrade into a socket.
    */
   async fetch(request: Request): Promise<Response> {
-    return this.runtime.server.onRequest(request);
+    const runtime = this.runtime;
+    if (request.headers.get("Upgrade") === "websocket") {
+      return upgradeWebSocket(runtime.upgrades, request, runtime.requestLogger(request));
+    }
+    return runtime.server.onRequest(request);
   }
 
   /**
