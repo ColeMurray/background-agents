@@ -3,10 +3,8 @@
  * (e.g. `/internal/github-event`, `/internal/slack-event`). Each bot
  * pre-normalizes its source's events and POSTs them here; this layer
  * authenticates, validates the event envelope, and invokes the scheduler for
- * matching and dispatch. Sources with no extra behavior use
- * `createAutomationEventRoutes`; sources that piggyback additional processing
- * (github's PR lifecycle tracking) compose the exported steps in their own
- * named handler.
+ * matching and dispatch. Each source registers its own route with its own
+ * service policy and composes the exported steps in its handler.
  */
 
 import {
@@ -14,12 +12,9 @@ import {
   type AutomationEvent,
   type AutomationEventSource,
 } from "@open-inspect/shared/triggers";
-import { Hono } from "hono";
 import { createLogger } from "../logger";
-import { admit } from "../routing/admit";
-import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { RequestContext } from "../routes/shared";
-import { error, GITHUB_SERVICE_ROUTE, json, serviceAuthorized } from "../routes/shared";
+import { error, json } from "../routes/shared";
 import type { Env } from "../types";
 import { Scheduler } from "../scheduler/scheduler";
 
@@ -118,36 +113,4 @@ export async function forwardAutomationEventToScheduler(
   }
 
   return json({ ok: true, ...result });
-}
-
-/** Create the authenticated route module for a normalized automation event source. */
-export function createAutomationEventRoutes(opts: {
-  path: string;
-  source: AutomationEventSource;
-}): Hono<ControlPlaneHonoEnv> {
-  async function handler(request: Request, env: Env, ctx: RequestContext): Promise<Response> {
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      logAutomationEventRejection(undefined, opts.source, ["body"], ctx);
-      return error("Invalid JSON", 400);
-    }
-
-    const validated = validateAutomationEventEnvelope(body, opts.source);
-    if (validated.response) {
-      logAutomationEventRejection(body, opts.source, validated.issuePaths, ctx);
-      return validated.response;
-    }
-
-    return forwardAutomationEventToScheduler(env, validated.event, ctx);
-  }
-
-  const routes = new Hono<ControlPlaneHonoEnv>();
-  routes.post(
-    opts.path,
-    admit({ ...GITHUB_SERVICE_ROUTE, authorization: serviceAuthorized("slack-bot") }),
-    (c) => handler(c.var.admitted.request, c.env, c.var.admitted.ctx)
-  );
-  return routes;
 }

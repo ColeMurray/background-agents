@@ -15,6 +15,7 @@ import type { Principal } from "../auth/principal";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import type { Env } from "../types";
 import {
+  authorizationDatabase,
   createTestRequestHandler,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
@@ -23,11 +24,7 @@ import {
   AutomationExecutionUnauthorizedError,
   AutomationTriggerBlockedError,
 } from "../scheduler/scheduler";
-import {
-  BUILT_IN_ROLE_REGISTRY,
-  PERMISSION_IDS,
-  type PermissionId,
-} from "@open-inspect/shared/rbac";
+import { PERMISSION_IDS, type PermissionId } from "@open-inspect/shared/rbac";
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
 
@@ -189,42 +186,20 @@ vi.mock("./shared", async (importOriginal) => {
 
 /**
  * The workspace database as admission and the handlers see it: admission's
- * role lookups are answered here, every other statement goes to a statement
- * spy, and `batch` is the shared spy.
+ * lookups are answered by test support, every other statement goes to a
+ * statement spy, and `batch` is the shared spy.
  */
 function createDatabase(permissions: readonly PermissionId[]): SqlDatabase {
-  const custom = permissions.length !== PERMISSION_IDS.length;
-  const role = custom
-    ? { role_id: "role-1", role_key: null, role_name: "Custom" }
-    : { role_id: BUILT_IN_ROLE_REGISTRY.owner.id, role_key: "owner", role_name: "Owner" };
   const statement = {
     bind: vi.fn(() => statement),
     first: vi.fn(async () => ({ satisfied: 1 })),
     all: vi.fn(async () => ({ results: [] })),
   };
-  return {
-    prepare(sql: string) {
-      if (sql.includes("FROM users u") || sql.includes("FROM role_permissions")) {
-        const admission: SqlStatement = {
-          bind: () => admission,
-          first: async <T>() =>
-            (sql.includes("FROM users u")
-              ? { user_id: "user-1", suspended_at: null, ...role }
-              : null) as T | null,
-          all: async <T>() => ({
-            results: (sql.includes("FROM role_permissions")
-              ? permissions.map((permission_id) => ({ permission_id }))
-              : []) as T[],
-            meta: { changes: 0 },
-          }),
-          run: async <T>() => ({ results: [] as T[], meta: { changes: 0 } }),
-        };
-        return admission;
-      }
-      return statement as unknown as SqlStatement;
-    },
+  return authorizationDatabase({
+    permissions: permissions.length === PERMISSION_IDS.length ? undefined : permissions,
+    statement: () => statement as unknown as SqlStatement,
     batch: mockBatch,
-  } as unknown as SqlDatabase;
+  });
 }
 
 function createEnv(permissions: readonly PermissionId[] = PERMISSION_IDS): Env {
