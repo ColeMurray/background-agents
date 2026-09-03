@@ -11,6 +11,7 @@ expect.extend(matchers);
 
 const mocks = vi.hoisted(() => ({
   allowedPermissions: new Set<string>(),
+  renameOptions: undefined as Record<string, unknown> | undefined,
 }));
 
 vi.mock("next/link", () => ({
@@ -18,7 +19,10 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("@/hooks/use-session-rename", () => ({
-  useSessionRename: () => ({ optimisticTitle: null, renameSession: vi.fn() }),
+  useSessionRename: (options: Record<string, unknown>) => {
+    mocks.renameOptions = options;
+    return { optimisticTitle: null, renameSession: vi.fn() };
+  },
 }));
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
@@ -61,6 +65,18 @@ function renderItem(unread = false) {
     />
   );
 }
+
+it("keeps a confirmed rename until the row's fetched title catches up", () => {
+  renderItem();
+
+  // Rows from loaded pages never refetch, so the rename overlay must wait for
+  // this row's own title rather than clear on request success.
+  expect(mocks.renameOptions).toMatchObject({
+    sessionId: "session-1",
+    authoritativeTitle: "Session one",
+    awaitAuthoritativeTitle: true,
+  });
+});
 
 it("fails closed when sessions.lifecycle is denied", () => {
   renderItem();
