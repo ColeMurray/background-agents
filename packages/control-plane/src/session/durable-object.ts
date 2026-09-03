@@ -74,7 +74,7 @@ export class SessionDO extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const runtime = this.runtime;
     if (request.headers.get("Upgrade") === "websocket") {
-      return upgradeWebSocket(runtime.upgrades, request, runtime.requestLogger(request));
+      return upgradeWebSocket(runtime.upgrades, request, runtime.log);
     }
     return runtime.server.onRequest(request);
   }

@@ -17,6 +17,7 @@ import type { SourceControlProviderName } from "../source-control";
 import type { BackgroundTasks } from "../platform-ports";
 import type { ClientInfo } from "../types";
 import { isValidSandboxToken } from "./sandbox-access";
+import { requestLogger } from "./request-logger";
 import { resolveParticipantName } from "./participant-name";
 import { getAvatarUrl, type ParticipantService } from "./participant-service";
 import type { PresenceService } from "./presence-service";
@@ -61,28 +62,25 @@ type AuthorizationResolution =
 
 export type ClientCommandAuthorization = "allowed" | "denied" | "unavailable";
 
-/** An upgrade the session admits; the host completes it and hands back the socket. */
-export type AcceptedUpgrade =
-  | { kind: "accept"; role: "sandbox"; sandboxId: string | null }
-  | { kind: "accept"; role: "client"; wsId: string };
-
 /**
  * The outcome of authenticating a WebSocket upgrade. The session decides;
- * the host completes the handshake because only it can produce a socket, and
- * then attaches the result.
+ * the host completes the handshake because only it can produce a socket,
+ * then hands the server-side socket to `attach`. An accepted decision is the
+ * only way to attach, and it attaches exactly once: the guards were evaluated
+ * against the state at decision time, so attach directly after authorizing.
  */
-export type UpgradeDecision = AcceptedUpgrade | { kind: "reject"; response: Response };
+export type UpgradeDecision =
+  | {
+      kind: "accept";
+      role: "sandbox" | "client";
+      /** Adopt the host's socket for this upgrade and run the connection's side effects. */
+      attach(ws: WebSocket): Promise<void>;
+    }
+  | { kind: "reject"; response: Response };
 
-/**
- * Admission of WebSocket upgrades, as the host drives it: `authorize` runs
- * every guard and decides; on accept the host completes the handshake its
- * own way and passes the server-side socket to `attach`, which adopts it and
- * runs the connection's side effects. Attach directly after authorizing —
- * the guards were evaluated against the state at decision time.
- */
+/** Admission of WebSocket upgrades, as the host drives it. */
 export interface SessionUpgradeAdmission {
-  authorize(request: Request, log: Logger): Promise<UpgradeDecision>;
-  attach(ws: WebSocket, accepted: AcceptedUpgrade, log: Logger): Promise<void>;
+  authorize(request: Request): Promise<UpgradeDecision>;
 }
 
 /**
@@ -95,17 +93,18 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
   constructor(private readonly deps: SessionConnectionAuthenticatorDeps) {}
 
   /**
-   * Decide a WebSocket upgrade. `log` is the request-scoped logger. Every
-   * guard runs here; a rejection carries the response the host returns.
+   * Decide a WebSocket upgrade. Every guard runs here; a rejection carries
+   * the response the host returns, an acceptance carries the attachment.
    */
-  async authorize(request: Request, log: Logger): Promise<UpgradeDecision> {
+  async authorize(request: Request): Promise<UpgradeDecision> {
     const { sessionCoreRepository, sandboxRepository } = this.deps;
+    const log = requestLogger(this.deps.log, request);
     log.debug("WebSocket upgrade requested");
     const url = new URL(request.url);
     const isSandbox = url.searchParams.get("type") === "sandbox";
     if (!isSandbox) {
       const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      return { kind: "accept", role: "client", wsId };
+      return accept("client", (ws) => this.attachClient(ws, wsId));
     }
 
     const wsStartTime = Date.now();
@@ -190,11 +189,25 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     }
 
     // The success ws.connect event is emitted once the socket is attached.
-    return { kind: "accept", role: "sandbox", sandboxId };
+    return accept("sandbox", (ws) => this.attachSandbox(ws, sandboxId, log));
   }
 
-  /** Adopt the host's server-side socket for an accepted upgrade and run its side effects. */
-  async attach(ws: WebSocket, accepted: AcceptedUpgrade, log: Logger): Promise<void> {
+  private attachClient(ws: WebSocket, wsId: string): void {
+    const { wsManager, backgroundTasks } = this.deps;
+    wsManager.acceptClientSocket(ws, wsId);
+    backgroundTasks.submit(() => wsManager.enforceAuthTimeout(ws, wsId), {
+      name: "websocket.enforce_auth_timeout",
+      context: { ws_id: wsId },
+    });
+  }
+
+  /**
+   * Prepare, then commit. The inactivity alarm is the one fallible step, so
+   * it runs first: a failure leaves the previous bridge in place and nothing
+   * published. Everything after the await is synchronous, so the new socket,
+   * the ready status, and the broadcasts land together.
+   */
+  private async attachSandbox(ws: WebSocket, sandboxId: string | null, log: Logger): Promise<void> {
     const {
       wsManager,
       sandboxRepository,
@@ -204,17 +217,11 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       messageQueue,
     } = this.deps;
 
-    if (accepted.role === "client") {
-      const { wsId } = accepted;
-      wsManager.acceptClientSocket(ws, wsId);
-      backgroundTasks.submit(() => wsManager.enforceAuthTimeout(ws, wsId), {
-        name: "websocket.enforce_auth_timeout",
-        context: { ws_id: wsId },
-      });
-      return;
-    }
+    const now = Date.now();
+    lifecycleManager.updateLastActivity(now);
+    sandboxRepository.updateSandboxHeartbeat(now);
+    await lifecycleManager.scheduleInactivityCheck();
 
-    const { sandboxId } = accepted;
     // The lifecycle manager publishes access after any pending provider
     // startup has persisted its URLs and credentials.
     const accessIsPersisted = !lifecycleManager.isProviderStartupPending();
@@ -226,13 +233,6 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     if (accessIsPersisted) {
       messenger.broadcast({ type: "sandbox_access_changed" });
     }
-
-    // Set initial activity timestamp and schedule inactivity check
-    // IMPORTANT: Must await to ensure alarm is scheduled before returning
-    const now = Date.now();
-    lifecycleManager.updateLastActivity(now);
-    sandboxRepository.updateSandboxHeartbeat(now);
-    await lifecycleManager.scheduleInactivityCheck();
 
     log.info("ws.connect", {
       event: "ws.connect",
@@ -474,4 +474,21 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
 
 function reject(body: string, status: number): UpgradeDecision {
   return { kind: "reject", response: new Response(body, { status }) };
+}
+
+/** An accepted decision whose attachment can run once. */
+function accept(
+  role: "sandbox" | "client",
+  attach: (ws: WebSocket) => void | Promise<void>
+): UpgradeDecision {
+  let attached = false;
+  return {
+    kind: "accept",
+    role,
+    attach: async (ws) => {
+      if (attached) throw new Error("WebSocket upgrade already attached");
+      attached = true;
+      await attach(ws);
+    },
+  };
 }

@@ -113,7 +113,6 @@ import {
 } from "./alarm/scheduler";
 import { createSessionInternalRoutes } from "./http/routes";
 import { SessionServer } from "./server";
-import { requestLogger } from "./request-logger";
 import { SessionHttpDispatcher } from "./http/dispatcher";
 import { SessionMessageRouter } from "./message-router";
 import { SessionDisconnectHandler } from "./disconnect-handler";
@@ -151,10 +150,8 @@ const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
 export interface SessionRuntime {
   readonly log: Logger;
   readonly server: SessionServer<WebSocket, ClientInfo>;
-  /** Admission of WebSocket upgrades; the host completes the handshake between its two calls. */
+  /** Admission of WebSocket upgrades; the host completes the handshake and attaches its socket. */
   readonly upgrades: SessionUpgradeAdmission;
-  /** The request-scoped logger for entry points the host serves outside `server`. */
-  requestLogger(request: Request): Logger;
   readonly alarms: {
     /** Expire stale authorization leases and re-arm persisted deadlines after a cold start. */
     rehydrate(): void;
@@ -846,7 +843,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     log,
     server,
     upgrades: connectionAuthenticator,
-    requestLogger: (request) => requestLogger(log, request),
     alarms: {
       rehydrate: () =>
         backgroundTasks.submit(

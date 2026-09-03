@@ -150,10 +150,9 @@ describe("SessionConnectionAuthenticator.authorize", () => {
   it("accepts a client upgrade with a fresh ws id and no guards", async () => {
     const h = createHarness({ sandbox: null });
 
-    const decision = await h.authenticator.authorize(upgradeRequest({}), h.log);
+    const decision = await h.authenticator.authorize(upgradeRequest({}));
 
     expect(decision).toMatchObject({ kind: "accept", role: "client" });
-    expect((decision as { wsId: string }).wsId).toMatch(/^ws-\d+-[a-z0-9]+$/);
     expect(h.sandboxRepository.getSandbox).not.toHaveBeenCalled();
   });
 
@@ -161,19 +160,17 @@ describe("SessionConnectionAuthenticator.authorize", () => {
     const h = createHarness({ sandbox: await sandboxRow() });
 
     const decision = await h.authenticator.authorize(
-      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID }),
-      h.log
+      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID })
     );
 
-    expect(decision).toEqual({ kind: "accept", role: "sandbox", sandboxId: SANDBOX_ID });
+    expect(decision).toMatchObject({ kind: "accept", role: "sandbox" });
   });
 
   it("rejects a wrong sandbox id with 403 before checking the token", async () => {
     const h = createHarness({ sandbox: await sandboxRow() });
 
     const decision = await h.authenticator.authorize(
-      upgradeRequest({ sandbox: true, token: "not-even-checked", sandboxId: "stale" }),
-      h.log
+      upgradeRequest({ sandbox: true, token: "not-even-checked", sandboxId: "stale" })
     );
 
     expect(await rejection(decision)).toEqual({ status: 403, body: "Forbidden: Wrong sandbox ID" });
@@ -187,8 +184,7 @@ describe("SessionConnectionAuthenticator.authorize", () => {
     const h = createHarness({ sandbox: await sandboxRow() });
 
     const decision = await h.authenticator.authorize(
-      upgradeRequest({ sandbox: true, token: "wrong", sandboxId: SANDBOX_ID }),
-      h.log
+      upgradeRequest({ sandbox: true, token: "wrong", sandboxId: SANDBOX_ID })
     );
 
     expect(await rejection(decision)).toEqual({
@@ -201,8 +197,7 @@ describe("SessionConnectionAuthenticator.authorize", () => {
     const h = createHarness({ sandbox: await sandboxRow({ status: "stopped" }) });
 
     const decision = await h.authenticator.authorize(
-      upgradeRequest({ sandbox: true, token: "wrong", sandboxId: SANDBOX_ID }),
-      h.log
+      upgradeRequest({ sandbox: true, token: "wrong", sandboxId: SANDBOX_ID })
     );
 
     expect((await rejection(decision)).status).toBe(401);
@@ -212,8 +207,7 @@ describe("SessionConnectionAuthenticator.authorize", () => {
     const h = createHarness({ sandbox: await sandboxRow(), session: sessionRow("cancelled") });
 
     const decision = await h.authenticator.authorize(
-      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID }),
-      h.log
+      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID })
     );
 
     expect(await rejection(decision)).toEqual({ status: 410, body: "Session is terminal" });
@@ -227,8 +221,7 @@ describe("SessionConnectionAuthenticator.authorize", () => {
     });
 
     const decision = await h.authenticator.authorize(
-      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID }),
-      h.log
+      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID })
     );
 
     expect(await rejection(decision)).toEqual({ status: 410, body: "Sandbox is stopped" });
@@ -242,8 +235,7 @@ describe("SessionConnectionAuthenticator.authorize", () => {
     });
 
     const decision = await h.authenticator.authorize(
-      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID }),
-      h.log
+      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID })
     );
 
     expect(await rejection(decision)).toEqual({
@@ -260,8 +252,7 @@ describe("SessionConnectionAuthenticator.authorize", () => {
     });
 
     const decision = await h.authenticator.authorize(
-      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID }),
-      h.log
+      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID })
     );
 
     expect((await rejection(decision)).status).toBe(403);
@@ -271,36 +262,41 @@ describe("SessionConnectionAuthenticator.authorize", () => {
     const h = createHarness({ sandbox: await sandboxRow({ modal_sandbox_id: null }) });
 
     const decision = await h.authenticator.authorize(
-      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: "anything" }),
-      h.log
+      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: "anything" })
     );
 
-    expect(decision).toEqual({ kind: "accept", role: "sandbox", sandboxId: "anything" });
+    expect(decision).toMatchObject({ kind: "accept", role: "sandbox" });
   });
 });
 
-describe("SessionConnectionAuthenticator.attach", () => {
+async function accepted(h: Harness, request: Request) {
+  const decision = await h.authenticator.authorize(request);
+  if (decision.kind !== "accept") throw new Error("expected an acceptance");
+  return decision;
+}
+
+const sandboxUpgrade = () => upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID });
+
+describe("UpgradeDecision.attach", () => {
   const socket = {} as WebSocket;
 
-  it("registers a client socket and arms the authentication timeout", async () => {
+  it("registers a client socket under its ws id and arms the authentication timeout", async () => {
     const h = createHarness({ sandbox: null });
 
-    await h.authenticator.attach(socket, { kind: "accept", role: "client", wsId: "ws-1" }, h.log);
+    await (await accepted(h, upgradeRequest({}))).attach(socket);
 
-    expect(h.wsManager.acceptClientSocket).toHaveBeenCalledWith(socket, "ws-1");
+    expect(h.wsManager.acceptClientSocket).toHaveBeenCalledOnce();
+    const [, wsId] = h.wsManager.acceptClientSocket.mock.calls[0] as [WebSocket, string];
+    expect(wsId).toMatch(/^ws-\d+-[a-z0-9]+$/);
     expect(h.submitted).toEqual(["websocket.enforce_auth_timeout"]);
-    expect(h.wsManager.enforceAuthTimeout).toHaveBeenCalledWith(socket, "ws-1");
+    expect(h.wsManager.enforceAuthTimeout).toHaveBeenCalledWith(socket, wsId);
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
   it("marks the sandbox ready, publishes access, arms the inactivity check, and drains the queue", async () => {
     const h = createHarness({ sandbox: await sandboxRow() });
 
-    await h.authenticator.attach(
-      socket,
-      { kind: "accept", role: "sandbox", sandboxId: SANDBOX_ID },
-      h.log
-    );
+    await (await accepted(h, sandboxUpgrade())).attach(socket);
 
     expect(h.wsManager.acceptAndSetSandboxSocket).toHaveBeenCalledWith(socket, SANDBOX_ID);
     expect(h.lifecycleManager.onSandboxConnected).toHaveBeenCalledOnce();
@@ -318,28 +314,63 @@ describe("SessionConnectionAuthenticator.attach", () => {
     );
   });
 
+  it("arms the inactivity check before adopting the socket", async () => {
+    const h = createHarness({ sandbox: await sandboxRow() });
+    const order: string[] = [];
+    h.lifecycleManager.scheduleInactivityCheck.mockImplementation(async () => {
+      order.push("schedule");
+    });
+    h.wsManager.acceptAndSetSandboxSocket.mockImplementation(() => {
+      order.push("accept");
+      return { replaced: false };
+    });
+
+    await (await accepted(h, sandboxUpgrade())).attach(socket);
+
+    expect(order).toEqual(["schedule", "accept"]);
+  });
+
+  it("commits nothing when the inactivity check cannot be armed", async () => {
+    const h = createHarness({ sandbox: await sandboxRow() });
+    h.lifecycleManager.scheduleInactivityCheck.mockRejectedValue(new Error("alarm unavailable"));
+
+    await expect((await accepted(h, sandboxUpgrade())).attach(socket)).rejects.toThrow(
+      "alarm unavailable"
+    );
+
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+    expect(h.lifecycleManager.onSandboxConnected).not.toHaveBeenCalled();
+    expect(h.sandboxRepository.updateSandboxStatus).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.submitted).toEqual([]);
+  });
+
   it("withholds the access broadcast while provider startup is still persisting", async () => {
     const h = createHarness({ sandbox: await sandboxRow() });
     h.lifecycleManager.isProviderStartupPending.mockReturnValue(true);
 
-    await h.authenticator.attach(
-      socket,
-      { kind: "accept", role: "sandbox", sandboxId: SANDBOX_ID },
-      h.log
-    );
+    await (await accepted(h, sandboxUpgrade())).attach(socket);
 
     expect(h.broadcast.mock.calls.map(([message]) => message.type)).toEqual(["sandbox_status"]);
   });
 
-  it("passes an absent sandbox id through as undefined", async () => {
-    const h = createHarness({ sandbox: await sandboxRow() });
+  it("passes the presented sandbox id through, or undefined when the bridge sent none", async () => {
+    const h = createHarness({ sandbox: await sandboxRow({ modal_sandbox_id: null }) });
 
-    await h.authenticator.attach(
-      socket,
-      { kind: "accept", role: "sandbox", sandboxId: null },
-      h.log
-    );
+    await (
+      await accepted(h, upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: null }))
+    ).attach(socket);
 
     expect(h.wsManager.acceptAndSetSandboxSocket).toHaveBeenCalledWith(socket, undefined);
+  });
+
+  it("attaches exactly once", async () => {
+    const h = createHarness({ sandbox: await sandboxRow() });
+    const decision = await accepted(h, sandboxUpgrade());
+
+    await decision.attach(socket);
+
+    await expect(decision.attach({} as WebSocket)).rejects.toThrow("already attached");
+    expect(h.wsManager.acceptAndSetSandboxSocket).toHaveBeenCalledOnce();
   });
 });
