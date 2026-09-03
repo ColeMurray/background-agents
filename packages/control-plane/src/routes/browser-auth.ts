@@ -1,12 +1,15 @@
 import { BROWSER_AUTH_PROXY_ROUTES } from "@open-inspect/shared/browser-auth-routes";
+import { Hono } from "hono";
 import { type BetterAuthRuntime, UserAuthConfigurationError } from "../auth/user/runtime";
 import { createLogger } from "../logger";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { Env } from "../types";
 import {
-  defineRoutes,
   error,
   NO_AUTHORIZATION,
+  type RequestContext,
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
-  type Route,
 } from "./shared";
 
 const logger = createLogger("browser-auth");
@@ -49,7 +52,12 @@ export async function forwardBrowserAuthRequest(
   return auth.handler(request);
 }
 
-const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) => {
+async function handleBrowserAuth(
+  request: Request,
+  _env: Env,
+  _params: Record<string, never>,
+  ctx: RequestContext
+): Promise<Response> {
   try {
     if (!ctx.getUserAuth) {
       throw new UserAuthConfigurationError("User authentication runtime is unavailable");
@@ -76,18 +84,16 @@ const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) =
     }
     throw cause;
   }
-};
+}
 
 /**
  * The browser can reach only this positive Better Auth allowlist, and only
  * through a freshly signed service:web proxy request.
  */
-export const browserAuthRoutes: Route[] = defineRoutes(
-  SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
-  BROWSER_AUTH_PROXY_ROUTES.map(([method, path]) => ({
-    method,
-    path: path,
-    authorization: NO_AUTHORIZATION,
-    handler: handleBrowserAuth,
-  }))
-);
+export const browserAuthRoutes = new Hono<ControlPlaneHonoEnv>();
+
+const BROWSER_AUTH = admit({ ...SCM_AGNOSTIC_WEB_SERVICE_ROUTE, authorization: NO_AUTHORIZATION });
+
+for (const [method, path] of BROWSER_AUTH_PROXY_ROUTES) {
+  browserAuthRoutes.on(method, path, BROWSER_AUTH, (c) => dispatch(c, handleBrowserAuth));
+}

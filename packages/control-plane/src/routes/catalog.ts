@@ -38,7 +38,7 @@ import { skillRoutes } from "./skills";
 export const catalog: RouteCatalogEntry[] = [
   healthRoutes,
 
-  ...browserAuthRoutes,
+  browserAuthRoutes,
   signInProviderRoutes,
 
   // Session management, then the agent-initiated Slack notification
