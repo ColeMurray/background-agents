@@ -40,13 +40,15 @@ import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
 
+const EMPTY_PROMPT_QUEUE: PromptQueueItem[] = [];
+
 export function SessionTimeline({
   events,
   sessionId,
   currentParticipantId,
   participantProfiles,
   isProcessing,
-  promptQueue = [],
+  promptQueue = EMPTY_PROMPT_QUEUE,
   loadingHistory,
   showSkeleton,
   onLoadOlder,
