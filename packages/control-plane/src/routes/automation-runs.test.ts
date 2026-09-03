@@ -12,6 +12,11 @@ import type * as AuthenticateModule from "../auth/authenticate";
 import { createTestRequestHandler } from "../router.test-support";
 import { automationRoutes } from "./automations";
 import {
+  DEFAULT_INVOCATION_LIST_LIMIT,
+  MAX_INVOCATION_LIST_LIMIT,
+  MAX_INVOCATION_LIST_OFFSET,
+} from "./automation-runs";
+import {
   mocks,
   mockStore,
   mockProviderAuthStore,
@@ -111,6 +116,56 @@ describe("automation run routes", () => {
         limit: 5,
         offset: 10,
       });
+    });
+
+    it("lists the first default-sized page when the query names no page", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.listInvocations.mockResolvedValue({ invocations: [], total: 0 });
+
+      await callRoute("GET", "/automations/auto-1/invocations");
+
+      expect(mockStore.listInvocations).toHaveBeenCalledWith("auto-1", {
+        limit: DEFAULT_INVOCATION_LIST_LIMIT,
+        offset: 0,
+      });
+    });
+
+    it("serves the deepest page and the largest page size", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.listInvocations.mockResolvedValue({ invocations: [], total: 0 });
+
+      const res = await callRoute("GET", "/automations/auto-1/invocations", {
+        query: {
+          limit: String(MAX_INVOCATION_LIST_LIMIT),
+          offset: String(MAX_INVOCATION_LIST_OFFSET),
+        },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.listInvocations).toHaveBeenCalledWith("auto-1", {
+        limit: MAX_INVOCATION_LIST_LIMIT,
+        offset: MAX_INVOCATION_LIST_OFFSET,
+      });
+    });
+
+    it.each<{ query: Record<string, string | string[]>; error: string }>([
+      { query: { limit: "0" }, error: "Invalid limit" },
+      { query: { limit: "abc" }, error: "Invalid limit" },
+      { query: { limit: String(MAX_INVOCATION_LIST_LIMIT + 1) }, error: "Invalid limit" },
+      { query: { limit: ["5", "6"] }, error: "Invalid limit" },
+      { query: { offset: "-1" }, error: "Invalid offset" },
+      { query: { offset: "abc" }, error: "Invalid offset" },
+      { query: { offset: "1.5" }, error: "Invalid offset" },
+      { query: { offset: String(MAX_INVOCATION_LIST_OFFSET + 1) }, error: "Invalid offset" },
+      { query: { offset: ["0", "20"] }, error: "Invalid offset" },
+    ])("rejects invocation query $query without listing", async ({ query, error }) => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("GET", "/automations/auto-1/invocations", { query });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error });
+      expect(mockStore.listInvocations).not.toHaveBeenCalled();
     });
   });
 

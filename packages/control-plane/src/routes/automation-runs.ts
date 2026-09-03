@@ -8,14 +8,29 @@ import { dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { type RequestContext, json, error } from "./shared";
 import type { Env } from "../types";
+import { z } from "zod";
 import { AUTOMATIONS_READ } from "./automation-shared";
+import { parseQuery } from "./query";
 
-function parseRunListParams(request: Request): { limit: number; offset: number } {
-  const url = new URL(request.url);
-  const limit = Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "20") || 20, 100));
-  const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0") || 0);
-  return { limit, offset };
-}
+export const DEFAULT_INVOCATION_LIST_LIMIT = 20;
+export const MAX_INVOCATION_LIST_LIMIT = 100;
+/** Deepest page the list serves; beyond it an OFFSET scan is unbounded work for no reader. */
+export const MAX_INVOCATION_LIST_OFFSET = 10_000;
+
+const invocationListQuerySchema = z.object({
+  limit: z
+    .string()
+    .regex(/^[1-9]\d*$/, { message: "Invalid limit" })
+    .optional()
+    .transform((raw) => (raw === undefined ? DEFAULT_INVOCATION_LIST_LIMIT : Number(raw)))
+    .refine((limit) => limit <= MAX_INVOCATION_LIST_LIMIT, { message: "Invalid limit" }),
+  offset: z
+    .string()
+    .regex(/^\d+$/, { message: "Invalid offset" })
+    .optional()
+    .transform((raw) => (raw === undefined ? 0 : Number(raw)))
+    .refine((offset) => offset <= MAX_INVOCATION_LIST_OFFSET, { message: "Invalid offset" }),
+});
 
 /** GET /automations/:id/invocations — one row per firing; `total` counts invocations. */
 async function handleListInvocations(
@@ -25,13 +40,14 @@ async function handleListInvocations(
   ctx: RequestContext
 ): Promise<Response> {
   const automationId = params.id;
+  const query = parseQuery(request, invocationListQuerySchema);
+  if (query instanceof Response) return query;
 
   const store = new AutomationStore(ctx.db);
   const automation = await store.getById(automationId);
   if (!automation) return error("Automation not found", 404);
 
-  const { limit, offset } = parseRunListParams(request);
-  const result = await store.listInvocations(automationId, { limit, offset });
+  const result = await store.listInvocations(automationId, query);
 
   return json({
     invocations: result.invocations,

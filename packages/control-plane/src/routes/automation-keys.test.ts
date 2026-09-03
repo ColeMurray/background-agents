@@ -93,6 +93,21 @@ describe("automation key regeneration route", () => {
       }
     );
 
+    it("mints a webhook key the response forbids caches to keep", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "webhook" });
+
+      const res = await callRoute("POST", "/automations/auto-1/regenerate-key");
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Cache-Control")).toBe("no-store");
+      const body = await res.json<{ webhookApiKey: string; webhookUrl: string }>();
+      expect(body.webhookApiKey).toMatch(/\S/);
+      expect(body.webhookUrl).toBe("/webhooks/automation/auto-1");
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith("auto-1", {
+        trigger_auth_data: expect.not.stringContaining(body.webhookApiKey),
+      });
+    });
+
     it("returns 404 when the key update affects no current automation", async () => {
       mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "webhook" });
       mockBatch.mockResolvedValue([{ meta: { changes: 0 }, results: [] }]);

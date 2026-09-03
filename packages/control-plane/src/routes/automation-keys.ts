@@ -6,13 +6,13 @@ import { sentryClientSecretSchema } from "@open-inspect/shared/types/automations
 import { AutomationStore } from "../db/automation-store";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { Hono } from "hono";
-import { dispatch } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { type RequestContext, json, error, parseJsonBody } from "./shared";
 import type { Env } from "../types";
 import { z } from "zod";
 import { createLogger } from "../logger";
-import { AUTOMATION_MANAGE, admittedAutomation } from "./automation-shared";
+import { AUTOMATION_MANAGE_POLICY, admittedAutomation } from "./automation-shared";
 
 const logger = createLogger("router:automations");
 
@@ -97,6 +97,9 @@ async function handleRegenerateKey(
 
 export const automationKeyRoutes = new Hono<ControlPlaneHonoEnv>();
 
-automationKeyRoutes.post("/automations/:id/regenerate-key", AUTOMATION_MANAGE, (c) =>
-  dispatch(c, handleRegenerateKey)
+// The response carries the only copy of a freshly minted webhook key.
+automationKeyRoutes.post(
+  "/automations/:id/regenerate-key",
+  admit({ ...AUTOMATION_MANAGE_POLICY, cacheControl: "no-store" }),
+  (c) => dispatch(c, handleRegenerateKey)
 );

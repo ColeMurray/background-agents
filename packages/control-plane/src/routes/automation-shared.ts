@@ -21,7 +21,10 @@ export const AUTOMATIONS_READ = admit({
   authorization: requirePermission("automations.read"),
 });
 
-export const AUTOMATION_MANAGE = admit({
+/** Admission for routes that change one automation; extend it for per-route response policy. */
+export const AUTOMATION_MANAGE_POLICY = {
   ...GITHUB_USER_OR_SERVICE_ROUTE,
   authorization: requireAutomation("manage"),
-});
+} as const;
+
+export const AUTOMATION_MANAGE = admit(AUTOMATION_MANAGE_POLICY);
