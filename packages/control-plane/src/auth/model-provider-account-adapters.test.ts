@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { AnthropicModelProviderAccountAdapter } from "./model-provider-account-anthropic-adapter";
 import { OpenAIModelProviderAccountAdapter } from "./model-provider-account-openai-adapter";
 import { XaiModelProviderAccountAdapter } from "./model-provider-account-xai-adapter";
 import { modelProviderAccountAdapterRegistry } from "./model-provider-account-default-adapters";
@@ -7,7 +8,10 @@ import type { ModelProviderAccountAdapterRegistry } from "./model-provider-accou
 import { OpenAITokenRefreshError } from "./openai";
 
 describe("model provider account adapters", () => {
-  it("registers OpenAI and xAI", () => {
+  it("registers Anthropic, OpenAI, and xAI", () => {
+    expect(modelProviderAccountAdapterRegistry.get("anthropic")).toBeInstanceOf(
+      AnthropicModelProviderAccountAdapter
+    );
     expect(modelProviderAccountAdapterRegistry.get("openai")).toBeInstanceOf(
       OpenAIModelProviderAccountAdapter
     );

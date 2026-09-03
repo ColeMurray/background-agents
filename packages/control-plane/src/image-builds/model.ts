@@ -81,11 +81,11 @@ export interface ImageBuildCallbackBuild {
  * Compatibility floor for prebuilt-image runtimes.
  *
  * Bumped ONLY on breaking runtime changes, never on routine CACHE_BUSTER
- * bumps. v60 is the first runtime whose managed-provider plugins use the
- * generic token broker, so no image baked by an earlier runtime may be selected.
+ * bumps. v62 is the first upstream runtime whose Anthropic managed-account plugin
+ * reports claude-cli 2.1.251; the subscription API refuses Claude Fable 5.1 on
+ * anything older, and the plugin ships inside the image.
  */
 export const MIN_COMPATIBLE_RUNTIME_VERSION = MIN_COMPATIBLE_RUNTIME_GENERATION;
-
 /**
  * Parse the numeric prefix of a SANDBOX_VERSION ("v53-list-native-runtime"
  * → 53). Returns null when unparseable — callers fail closed: registration

@@ -49,6 +49,7 @@ ANTHROPIC_THINKING_BUDGETS: Final[dict[str, int]] = {
 ANTHROPIC_ADAPTIVE_THINKING_MODELS: Final[frozenset[str]] = frozenset(
     {
         "claude-fable-5",
+        "claude-fable-5-1",
         "claude-opus-4-6",
         "claude-opus-4-7",
         "claude-opus-4-8",

@@ -1,6 +1,6 @@
 {
-  "runtimeVersion": "v61-sandbox-sbin-path",
-  "generation": 61,
-  "minimumCompatibleGeneration": 60,
-  "minimumRebuildGeneration": 60
+  "runtimeVersion": "v62-claude-cli-2-1-251",
+  "generation": 62,
+  "minimumCompatibleGeneration": 62,
+  "minimumRebuildGeneration": 62
 }

@@ -1,8 +1,9 @@
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
-import { GrokIcon, OpenAIIcon } from "@/components/ui/icons";
+import { AnthropicIcon, GrokIcon, OpenAIIcon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
 const SUBSCRIPTION_PROVIDER_ICONS = {
+  anthropic: AnthropicIcon,
   openai: OpenAIIcon,
   xai: GrokIcon,
 } as const;

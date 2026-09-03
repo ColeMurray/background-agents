@@ -17,7 +17,7 @@ describe("package root compatibility", () => {
   });
 
   it("exports provider account contracts from the package root", () => {
-    expect(shared.SUBSCRIPTION_PROVIDER_IDS).toEqual(["openai", "xai"]);
+    expect(shared.SUBSCRIPTION_PROVIDER_IDS).toEqual(["anthropic", "openai", "xai"]);
     expect(
       shared.modelProviderSelectionsSchema.safeParse({ xai: { mode: "api_key" } }).success
     ).toBe(true);

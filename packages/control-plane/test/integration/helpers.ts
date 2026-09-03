@@ -55,6 +55,7 @@ const TEST_NAMED_SESSION_DEFAULTS = {
   userId: "user-1",
 } as const;
 export const TEST_SESSION_PROVIDER_AUTH: SessionModelProviderAuthInput[] = [
+  { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
   { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
   { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
 ];

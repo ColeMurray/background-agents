@@ -254,6 +254,22 @@ export function GrokIcon({ className, ...props }: IconProps) {
   );
 }
 
+export function AnthropicIcon({ className, ...props }: IconProps) {
+  return (
+    <svg
+      role="img"
+      className={className}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="currentColor"
+      {...props}
+    >
+      <title>Anthropic</title>
+      <path d="M13.827 3.52h3.603L24 20h-3.603l-1.343-3.47H12.17L10.827 20H7.224l6.603-16.48Zm4.082 10.044L15.612 7.63l-2.297 5.934h4.594ZM6.417 3.52 13.04 20H9.312L2.69 3.52h3.727ZM0 3.52h3.727L10.35 20H6.623L0 3.52Z" />
+    </svg>
+  );
+}
+
 export function SlackIcon({ className }: IconProps) {
   return (
     <svg

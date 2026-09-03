@@ -25,8 +25,9 @@ const TRANSACTION_ID = "01".repeat(32);
 
 describe("subscription provider registry", () => {
   it("exposes stable provider IDs and display metadata", () => {
-    expect(SUBSCRIPTION_PROVIDER_IDS).toEqual(["openai", "xai"]);
+    expect(SUBSCRIPTION_PROVIDER_IDS).toEqual(["anthropic", "openai", "xai"]);
     expect(SUBSCRIPTION_PROVIDER_DISPLAY_METADATA).toEqual({
+      anthropic: { displayName: "Anthropic", subscriptionName: "Claude" },
       openai: { displayName: "OpenAI", subscriptionName: "ChatGPT" },
       xai: { displayName: "xAI", subscriptionName: "SuperGrok" },
     });
@@ -51,16 +52,18 @@ describe("modelProviderSelectionsSchema", () => {
       modelProviderSelectionsSchema.parse({
         openai: { mode: "provider_account", accountId: ACCOUNT_ID },
         xai: { mode: "api_key" },
+        anthropic: { mode: "api_key" },
       })
     ).toEqual({
       openai: { mode: "provider_account", accountId: ACCOUNT_ID },
       xai: { mode: "api_key" },
+      anthropic: { mode: "api_key" },
     });
   });
 
   it("rejects unknown provider keys and fields forbidden by each mode", () => {
     for (const selections of [
-      { anthropic: { mode: "api_key" } },
+      { claude: { mode: "api_key" } },
       { OpenAI: { mode: "api_key" } },
       { openai: { mode: "api_key", accountId: ACCOUNT_ID } },
       { xai: { mode: "provider_account" } },
@@ -101,6 +104,18 @@ describe("provider account write requests", () => {
   });
 
   it("accepts only the provider-specific connect fields", () => {
+    const anthropicCompletion = {
+      authorizationCode: "authorization-code",
+      codeVerifier: "v".repeat(43),
+      state: "oauth-state",
+    };
+    expect(
+      connectModelProviderAccountRequestSchema.safeParse({
+        provider: "anthropic",
+        displayName: "Team Claude",
+        ...anthropicCompletion,
+      }).success
+    ).toBe(true);
     expect(
       connectModelProviderAccountRequestSchema.safeParse({
         provider: "openai",
@@ -124,9 +139,33 @@ describe("provider account write requests", () => {
         accountId: "not-an-xai-field",
       }).success
     ).toBe(false);
+    expect(
+      connectModelProviderAccountRequestSchema.safeParse({
+        provider: "anthropic",
+        displayName: "Team Claude",
+        ...anthropicCompletion,
+        refreshToken: "must-not-be-accepted",
+      }).success
+    ).toBe(false);
   });
 
   it("requires OpenAI account identity when reconnecting and rejects display updates", () => {
+    expect(
+      reconnectModelProviderAccountRequestSchema.safeParse({
+        provider: "anthropic",
+        authorizationCode: "authorization-code",
+        codeVerifier: "v".repeat(43),
+        state: "oauth-state",
+      }).success
+    ).toBe(true);
+    expect(
+      reconnectModelProviderAccountRequestSchema.safeParse({
+        provider: "anthropic",
+        authorizationCode: "authorization-code",
+        codeVerifier: "too-short",
+        state: "oauth-state",
+      }).success
+    ).toBe(false);
     expect(
       reconnectModelProviderAccountRequestSchema.safeParse({
         provider: "openai",
@@ -147,6 +186,25 @@ describe("provider account write requests", () => {
         displayName: "rename through reconnect",
       }).success
     ).toBe(false);
+  });
+
+  it("rejects malformed Anthropic PKCE completion values", () => {
+    const valid = {
+      provider: "anthropic",
+      displayName: "Claude",
+      authorizationCode: "authorization-code",
+      codeVerifier: "v".repeat(43),
+      state: "state",
+    };
+    expect(connectModelProviderAccountRequestSchema.safeParse(valid).success).toBe(true);
+    for (const invalid of [
+      { ...valid, authorizationCode: "code with spaces" },
+      { ...valid, codeVerifier: "v".repeat(42) },
+      { ...valid, codeVerifier: `${"v".repeat(42)}!` },
+      { ...valid, state: "state\nvalue" },
+    ]) {
+      expect(connectModelProviderAccountRequestSchema.safeParse(invalid).success).toBe(false);
+    }
   });
 });
 
@@ -276,6 +334,12 @@ describe("provider account response schemas", () => {
 
   it("centralizes the legacy reconnect capability", () => {
     expect(modelProviderAccountReconnectMethod(account)).toBe("device_authorization");
+    expect(
+      modelProviderAccountReconnectMethod({
+        provider: "anthropic",
+        externalAccountId: null,
+      })
+    ).toBe("authorization_code");
     expect(
       modelProviderAccountReconnectMethod({
         provider: "xai",

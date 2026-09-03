@@ -43,6 +43,7 @@ describe("initializeSession", () => {
       skills: [],
     },
     providerAuth: [
+      { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
       {
         provider: "openai",
         authMode: "provider_account",

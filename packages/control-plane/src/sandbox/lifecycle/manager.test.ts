@@ -22,6 +22,7 @@ import {
 import type { ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
+import { MIN_COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/model";
 import {
   SandboxProviderError,
   type SandboxProvider,
@@ -3249,6 +3250,37 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.resumeSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ timeoutSeconds: 14_400 })
       );
+    });
+
+    it("spawns fresh instead of resuming a stopped sandbox below the runtime floor", async () => {
+      // A provider-managed resume wakes the stored filesystem, so a retired
+      // runtime survives it exactly as it survives a snapshot restore.
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        modal_object_id: "provider-obj",
+        runtime_version: `v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-retired`,
+        snapshot_image_id: null,
+      });
+      const provider = createMockProvider({
+        capabilities: { supportsPersistentResume: true },
+        resumeSandbox: vi.fn(async () => ({ success: true })),
+      });
+      const mockStorage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        provider,
+        mockStorage,
+        mockStorage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.resumeSandbox).not.toHaveBeenCalled();
+      expect(provider.createSandbox).toHaveBeenCalled();
     });
 
     it("uses the configured sandbox timeout for child sessions", async () => {

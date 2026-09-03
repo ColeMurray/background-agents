@@ -422,6 +422,9 @@ async function handleLegacyProviderAccess(
   sessionId: string,
   providerId: SubscriptionProviderId
 ): Promise<Response> {
+  if (providerId === "anthropic") {
+    return error("Legacy scoped OAuth is unavailable for Anthropic", 409);
+  }
   const response = await createSessionRuntimeClient(env, ctx).fetch(
     sessionId,
     LEGACY_REFRESH_PATH[providerId],

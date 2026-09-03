@@ -20,7 +20,7 @@ OPENCODE_VERSION = "1.18.18"
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
 # Bump when changing image contents to invalidate the Daytona snapshot.
-SANDBOX_VERSION = "daytona-v6-vnc-opencode-1-18-18"
+SANDBOX_VERSION = "daytona-v7-claude-cli-2-1-251-opencode-1-18-18"
 
 
 def build_base_image(repo_root: Path) -> Image:

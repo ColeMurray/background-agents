@@ -72,6 +72,11 @@ describe("session provider auth persistence", () => {
     await expect(new SessionIndexStore(env.DB).getCompleteProviderAuth(sessionId)).resolves.toEqual(
       [
         {
+          provider: "anthropic",
+          authMode: "api_key",
+          selectionSource: "api_key_fallback",
+        },
+        {
           provider: "openai",
           authMode: "provider_account",
           providerAccountId: FIRST_ACCOUNT_ID,

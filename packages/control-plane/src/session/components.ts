@@ -310,6 +310,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     durableObjectId,
     repoSecretsEncryptionKey,
     secretsCapEnforcement: env.SECRETS_CAP_ENFORCEMENT,
+    platformProvidesAnthropicApiKey: (env.SANDBOX_PROVIDER ?? "modal") === "modal",
     log,
   });
 

@@ -94,6 +94,30 @@ export class ProviderCredentialStore {
     }
   }
 
+  async listDueRefreshAccountIds(
+    provider: ModelProviderId,
+    dueBefore: number,
+    limit: number
+  ): Promise<string[]> {
+    assertModelProviderId(provider);
+    const result = await this.db
+      .prepare(
+        `SELECT accounts.id
+         FROM model_provider_accounts accounts
+         JOIN model_provider_account_credentials credentials
+           ON credentials.provider_account_id = accounts.id
+         WHERE accounts.provider = ? AND accounts.status = 'active'
+           AND accounts.archived_at IS NULL
+           AND credentials.access_token_expires_at IS NOT NULL
+           AND credentials.access_token_expires_at <= ?
+         ORDER BY credentials.access_token_expires_at, accounts.id
+         LIMIT ?`
+      )
+      .bind(provider, dueBefore, limit)
+      .all<{ id: string }>();
+    return result.results.map((row) => row.id);
+  }
+
   async bindCreateForAccountBatch(input: CredentialPayloadInput): Promise<SqlStatement> {
     assertModelProviderId(input.provider);
     const encrypted = await this.encrypt(input);

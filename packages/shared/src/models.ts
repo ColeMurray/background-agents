@@ -124,6 +124,15 @@ export const MODEL_CATALOG = [
           default: "high",
         },
       },
+      {
+        id: "anthropic/claude-fable-5-1",
+        name: "Claude Fable 5.1",
+        description: "Latest Fable, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
     ],
   },
   {

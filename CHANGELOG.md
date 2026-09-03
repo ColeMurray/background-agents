@@ -2,6 +2,19 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 2, 2026
+
+**Claude Fable 5.1 runs on subscription accounts.** Selecting it previously failed with "Claude Code
+2.1.87 does not support this model": the Anthropic subscription API gates newer models on the client
+version, and the sandbox reported 2.1.87. It now reports 2.1.251. Because that version ships inside
+the sandbox image, existing prebuilt images and snapshots are retired — the first session after this
+release cold-boots and repository images rebuild once.
+
+**Claude Fable 5.1.** Adds `claude-fable-5-1` to the model catalog, with adaptive thinking and
+reasoning efforts from low through max. Linear issues can select it with the `model:fable-5-1`
+label. Deployments that have already saved model preferences keep their saved set, so enable it in
+**Settings > Models** for it to appear in the session and automation pickers.
+
 ## September 1, 2026
 
 **Workspace audit log.** Owners, Administrators, and authorized custom roles can review paginated

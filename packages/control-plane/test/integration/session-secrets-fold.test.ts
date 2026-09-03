@@ -12,15 +12,20 @@ const KEY = () => env.REPO_SECRETS_ENCRYPTION_KEY as string;
 
 async function initSessionWithProviderAuth(
   overrides: Parameters<typeof initNamedSession>[1] = {},
-  modes: Record<"openai" | "xai", SessionProviderAuthMode> = {
+  modes: Record<"anthropic" | "openai" | "xai", SessionProviderAuthMode> = {
+    anthropic: "api_key",
     openai: "legacy_scoped_oauth",
     xai: "legacy_scoped_oauth",
   }
 ) {
   const sessionName = `provider-auth-env-${Date.now()}-${crypto.randomUUID()}`;
-  const accountIds = { openai: "1".repeat(32), xai: "2".repeat(32) } as const;
+  const accountIds = {
+    anthropic: "3".repeat(32),
+    openai: "1".repeat(32),
+    xai: "2".repeat(32),
+  } as const;
   const accounts = new ModelProviderAccountStore(env.DB);
-  for (const provider of ["openai", "xai"] as const) {
+  for (const provider of ["anthropic", "openai", "xai"] as const) {
     if (modes[provider] === "provider_account") {
       await accounts.create({
         id: accountIds[provider],
@@ -29,7 +34,7 @@ async function initSessionWithProviderAuth(
       });
     }
   }
-  const providerAuth = (["openai", "xai"] as const).map((provider) =>
+  const providerAuth = (["anthropic", "openai", "xai"] as const).map((provider) =>
     modes[provider] === "provider_account"
       ? {
           provider,
@@ -97,11 +102,14 @@ describe("getUserEnvVars session-target fold", () => {
 
   it("advertises provider accounts even when there are no ordinary secrets", async () => {
     const { stub } = await initSessionWithProviderAuth(undefined, {
+      anthropic: "provider_account",
       openai: "provider_account",
       xai: "provider_account",
     });
 
     await expect(getUserEnvVars(stub)).resolves.toEqual({
+      ANTHROPIC_API_KEY: "opencode-oauth-dummy-key",
+      ANTHROPIC_OAUTH_MANAGED: "1",
       OPENAI_OAUTH_MANAGED: "1",
       XAI_OAUTH_MANAGED: "1",
     });
@@ -109,11 +117,11 @@ describe("getUserEnvVars session-target fold", () => {
 
   it.each([
     {
-      modes: { openai: "provider_account", xai: "api_key" } as const,
+      modes: { anthropic: "api_key", openai: "provider_account", xai: "api_key" } as const,
       expected: { OPENAI_OAUTH_MANAGED: "1", XAI_API_KEY: "xai-key" },
     },
     {
-      modes: { openai: "api_key", xai: "provider_account" } as const,
+      modes: { anthropic: "api_key", openai: "api_key", xai: "provider_account" } as const,
       expected: { OPENAI_API_KEY: "openai-key", XAI_OAUTH_MANAGED: "1" },
     },
   ])("uses authoritative D1 provider auth modes for $modes", async ({ modes, expected }) => {

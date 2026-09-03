@@ -911,6 +911,18 @@ describe("SessionMessageQueue", () => {
     );
   });
 
+  it("does not load provider authentication before spawning for unrelated models", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(
+      createMessage({ model: "opencode/kimi-k2.5" })
+    );
+
+    await h.queue.processMessageQueue();
+
+    expect(h.getProviderAuthenticationError).not.toHaveBeenCalled();
+    expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalled();
+  });
+
   it("uses the canonical profile userId instead of a bot transport identity", async () => {
     const h = buildQueue();
     const participant = createParticipant({

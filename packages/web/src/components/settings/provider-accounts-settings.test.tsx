@@ -13,7 +13,10 @@ import { ProviderAccountsSettings } from "./provider-accounts-settings";
 import { CHATGPT_DEVICE_AUTHORIZATION_SETTINGS_URL } from "./provider-device-authorization-dialog";
 
 expect.extend(matchers);
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const refresh = vi.fn();
 const runAction = vi.fn();
@@ -21,9 +24,11 @@ const setDefault = vi.fn();
 const startAuthorization = vi.fn();
 const pollAuthorization = vi.fn();
 const cancelAuthorization = vi.fn();
+const connectAccount = vi.fn();
 const reconnectAccount = vi.fn();
 let legacyCredentialsResult: Record<string, unknown>;
 const providers = [
+  { provider: "anthropic" as const, displayName: "Anthropic", subscriptionName: "Claude" },
   { provider: "openai" as const, displayName: "OpenAI", subscriptionName: "ChatGPT" },
   { provider: "xai" as const, displayName: "xAI", subscriptionName: "SuperGrok" },
 ];
@@ -64,7 +69,7 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
   useLegacyProviderCredentials: () => legacyCredentialsResult,
   runProviderAccountAction: (...args: unknown[]) => runAction(...args),
   archiveProviderAccount: vi.fn(),
-  connectProviderAccount: vi.fn(),
+  connectProviderAccount: (...args: unknown[]) => connectAccount(...args),
   reconnectProviderAccount: (...args: unknown[]) => reconnectAccount(...args),
   renameProviderAccount: vi.fn(),
   setProviderAccountDefault: (...args: unknown[]) => setDefault(...args),
@@ -77,6 +82,10 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 describe("ProviderAccountsSettings", () => {
   beforeEach(() => {
+    vi.stubGlobal("crypto", {
+      getRandomValues: (bytes: Uint8Array) => bytes.fill(1),
+      subtle: { digest: async () => new Uint8Array(32).buffer },
+    });
     vi.clearAllMocks();
     refresh.mockResolvedValue(undefined);
     runAction.mockResolvedValue(undefined);
@@ -93,6 +102,7 @@ describe("ProviderAccountsSettings", () => {
     });
     pollAuthorization.mockImplementation(() => new Promise(() => undefined));
     cancelAuthorization.mockResolvedValue(undefined);
+    connectAccount.mockResolvedValue(undefined);
     reconnectAccount.mockResolvedValue(undefined);
     accountsResult = [account];
     defaultsResult = [];
@@ -301,6 +311,101 @@ describe("ProviderAccountsSettings", () => {
     expect(screen.getByText("Continue in xAI to finish approval.")).toBeInTheDocument();
   });
 
+  it("connects Claude with a browser-generated PKCE response", async () => {
+    render(<ProviderAccountsSettings />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Claude" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Connect your Claude account" })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/not officially supported by Anthropic/)).toBeInTheDocument();
+    const authorizationLink = await screen.findByRole("link", {
+      name: "Open Claude Authorization",
+    });
+    const authorizationUrl = new URL(authorizationLink.getAttribute("href")!);
+    expect(authorizationUrl.origin + authorizationUrl.pathname).toBe(
+      "https://claude.com/cai/oauth/authorize"
+    );
+    expect(authorizationUrl.searchParams.get("code_challenge_method")).toBe("S256");
+    const state = authorizationUrl.searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Authorization response"), {
+      target: { value: `authorization-code#${state}` },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() =>
+      expect(connectAccount).toHaveBeenCalledWith({
+        provider: "anthropic",
+        displayName: "Claude account",
+        authorizationCode: "authorization-code",
+        codeVerifier: expect.any(String),
+        state,
+      })
+    );
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(toast.success).toHaveBeenCalledWith("Claude account connected");
+    expect(startAuthorization).not.toHaveBeenCalledWith("anthropic", expect.anything());
+  });
+
+  it("rejects a mismatched Claude state before calling the account API", async () => {
+    render(<ProviderAccountsSettings />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Claude" }));
+    await screen.findByRole("link", { name: "Open Claude Authorization" });
+
+    fireEvent.change(screen.getByLabelText("Authorization response"), {
+      target: { value: "authorization-code#wrong-state" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(await screen.findByText(/Authorization state does not match/)).toBeInTheDocument();
+    expect(connectAccount).not.toHaveBeenCalled();
+  });
+
+  it("reconnects the selected Claude account with authorization code credentials", async () => {
+    const claudeAccount = {
+      ...account,
+      id: "f".repeat(32),
+      provider: "anthropic",
+      displayName: "Work Claude",
+      status: "reconnect_required" as const,
+    } as unknown as ModelProviderAccount;
+    accountsResult = [claudeAccount];
+    render(<ProviderAccountsSettings />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    const authorizationLink = await screen.findByRole("link", {
+      name: "Open Claude Authorization",
+    });
+    const state = new URL(authorizationLink.getAttribute("href")!).searchParams.get("state");
+    fireEvent.change(screen.getByLabelText("Authorization response"), {
+      target: {
+        value: `https://platform.claude.com/oauth/code/callback?code=reconnect-code&state=${state}`,
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() =>
+      expect(reconnectAccount).toHaveBeenCalledWith(claudeAccount.id, {
+        provider: "anthropic",
+        authorizationCode: "reconnect-code",
+        codeVerifier: expect.any(String),
+        state,
+      })
+    );
+    expect(toast.success).toHaveBeenCalledWith("Account reconnected");
+    expect(startAuthorization).not.toHaveBeenCalledWith("anthropic", expect.anything());
+  });
+
   it("keeps manual reconnect available for legacy xAI accounts without an identity", async () => {
     const legacyAccount = {
       ...account,
@@ -356,8 +461,9 @@ describe("ProviderAccountsSettings", () => {
       )
     ).toBeInTheDocument();
     expect(screen.queryByLabelText("Automated authentication")).not.toBeInTheDocument();
-    expect(screen.getAllByText("No default account selected")).toHaveLength(2);
-    expect(screen.getAllByText("Choose Make default from an account above.")).toHaveLength(2);
+    expect(screen.getAllByText("No default account selected")).toHaveLength(3);
+    expect(screen.getAllByText("Choose Make default from an account above.")).toHaveLength(3);
+    expect(screen.getAllByTitle("Anthropic")).not.toHaveLength(0);
     expect(screen.getAllByTitle("OpenAI")).not.toHaveLength(0);
     expect(screen.getAllByTitle("Grok")).not.toHaveLength(0);
   });

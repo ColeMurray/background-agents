@@ -321,9 +321,10 @@ class OpenCodeServer:
 
     def _setup_managed_oauth(self) -> None:
         """Write OpenCode OAuth sentinels for control-plane-managed providers."""
+        anthropic_managed = os.environ.get("ANTHROPIC_OAUTH_MANAGED")
         openai_managed = os.environ.get("OPENAI_OAUTH_MANAGED")
         xai_managed = os.environ.get("XAI_OAUTH_MANAGED")
-        if not openai_managed and not xai_managed:
+        if not anthropic_managed and not openai_managed and not xai_managed:
             return
 
         try:
@@ -337,6 +338,8 @@ class OpenCodeServer:
                 "expires": 0,
             }
             entries = {}
+            if anthropic_managed:
+                entries["anthropic"] = {**oauth_entry}
             if openai_managed:
                 entries["openai"] = {**oauth_entry}
             if xai_managed:
@@ -505,6 +508,11 @@ class OpenCodeServer:
         managed_plugins = (
             ("OPENAI_OAUTH_MANAGED", "codex-auth-plugin.js", "openai_oauth.plugin_deployed"),
             ("XAI_OAUTH_MANAGED", "xai-auth-plugin.js", "xai_oauth.plugin_deployed"),
+            (
+                "ANTHROPIC_OAUTH_MANAGED",
+                "anthropic-auth-plugin.js",
+                "anthropic_oauth.plugin_deployed",
+            ),
         )
         broker_client_deployed = False
         for marker, filename, log_event in managed_plugins:

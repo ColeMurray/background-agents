@@ -5,8 +5,8 @@ import type { EnabledScopeUnit } from "./scope";
 import { MIN_REBUILD_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
 
 // Runtime generations are one sequence shared by every image-build provider.
-// The minimum compatible generation carries the generic provider-account token
-// broker plugin; older managed-provider plugins call legacy routes.
+// The minimum compatible generation carries the claude-cli version the Anthropic
+// subscription API requires; older images do not contain the managed Claude plugin.
 export const MIN_REBUILD_RUNTIME_VERSION = MIN_REBUILD_RUNTIME_GENERATION;
 
 export type ImageBuildRebuildDecision =

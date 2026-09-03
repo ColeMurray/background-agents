@@ -370,15 +370,15 @@ describe("provider account sandbox broker route", () => {
     expect(absentBinding.status).toBe(404);
     expect(absentBinding.headers.get("Cache-Control")).toBe("no-store");
 
-    const unsupportedProvider = await SELF.fetch(
+    const apiKeyProvider = await SELF.fetch(
       `https://test.local/sessions/${sessionName}/provider-auth/anthropic/access-token`,
       {
         method: "POST",
         headers: { Authorization: `Bearer ${sandboxToken}` },
       }
     );
-    expect(unsupportedProvider.status).toBe(400);
-    expect(unsupportedProvider.headers.get("Cache-Control")).toBe("no-store");
+    expect(apiKeyProvider.status).toBe(409);
+    expect(apiKeyProvider.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("adapts legacy scoped OAuth to the generic provider access contract", async () => {
@@ -404,6 +404,25 @@ describe("provider account sandbox broker route", () => {
       accessToken: "integration-openai-access-token",
       expiresIn: 3600,
       providerMetadata: { accountId: "acct-integration" },
+    });
+
+    await env.DB.prepare(
+      `UPDATE session_model_provider_auth
+       SET auth_mode = 'legacy_scoped_oauth'
+       WHERE session_id = ? AND provider = 'anthropic'`
+    )
+      .bind(sessionName)
+      .run();
+    const defensiveAnthropicLegacy = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/provider-auth/anthropic/access-token`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${sandboxToken}` },
+      }
+    );
+    expect(defensiveAnthropicLegacy.status).toBe(409);
+    await expect(defensiveAnthropicLegacy.json()).resolves.toMatchObject({
+      error: "Legacy scoped OAuth is unavailable for Anthropic",
     });
   });
 
@@ -432,6 +451,7 @@ describe("provider account sandbox broker route", () => {
     });
     const { stub } = await initNamedSession(sessionName, {
       providerAuth: [
+        { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
         {
           provider: "openai",
           authMode: "provider_account",

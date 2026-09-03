@@ -54,7 +54,9 @@ async function resolveProvider(
   }
 
   const providerDefault = await stores.defaults.get(provider);
-  if (!providerDefault) return legacy(provider);
+  if (!providerDefault) {
+    return provider === "anthropic" ? apiKey(provider, "api_key_fallback") : legacy(provider);
+  }
   if (input.unattended && providerDefault.unattendedMode === "api_key") {
     return apiKey(provider, "unattended_policy");
   }

@@ -137,6 +137,7 @@ describe("useProviderAccounts", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.providers).toEqual([
+      { provider: "anthropic", displayName: "Anthropic", subscriptionName: "Claude" },
       { provider: "openai", displayName: "OpenAI", subscriptionName: "ChatGPT" },
       { provider: "xai", displayName: "xAI", subscriptionName: "SuperGrok" },
     ]);

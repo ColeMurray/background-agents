@@ -416,7 +416,11 @@ describe("provider account migration and stores", () => {
         "SELECT auth_mode FROM session_model_provider_auth WHERE session_id = 'session-1' ORDER BY provider"
       ).all()
     ).resolves.toMatchObject({
-      results: [{ auth_mode: "legacy_scoped_oauth" }, { auth_mode: "legacy_scoped_oauth" }],
+      results: [
+        { auth_mode: "api_key" },
+        { auth_mode: "legacy_scoped_oauth" },
+        { auth_mode: "legacy_scoped_oauth" },
+      ],
     });
   });
 

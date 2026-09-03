@@ -23,6 +23,13 @@ import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
 import { Scheduler } from "./scheduler/scheduler";
 import { isAutofixQueue } from "./queue-routing";
+import { ProviderCredentialStore } from "./db/provider-account-credentials";
+import { D1ModelProviderAccountAtomicWriter } from "./db/model-provider-account-atomic-writer";
+import { ModelProviderAccountStore } from "./db/model-provider-accounts";
+import { ModelProviderAccountBroker } from "./auth/model-provider-account-broker";
+import { modelProviderAccountAdapterRegistry } from "./auth/model-provider-account-default-adapters";
+import { ModelProviderAccountRefreshMaintenance } from "./auth/model-provider-account-refresh-maintenance";
+import { generateId } from "./auth/crypto";
 
 const logger = createLogger("worker");
 
@@ -74,6 +81,32 @@ export default {
       return;
     }
     ctx.waitUntil(checkAutofixQueueHealth(env, logger));
+    // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: inject D1 into provider account maintenance
+    const db: SqlDatabase = env.DB;
+    const credentials = new ProviderCredentialStore(db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY);
+    const broker = new ModelProviderAccountBroker(
+      {
+        accounts: new ModelProviderAccountStore(db),
+        credentials,
+        atomicWriter: new D1ModelProviderAccountAtomicWriter(
+          db,
+          env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY
+        ),
+      },
+      modelProviderAccountAdapterRegistry,
+      { now: Date.now, createOwner: generateId }
+    );
+    ctx.waitUntil(
+      new ModelProviderAccountRefreshMaintenance(credentials, broker, logger, Date.now)
+        .run()
+        .catch((error) => {
+          logger.error("provider_account.proactive_refresh_maintenance_failed", {
+            event: "provider_account.proactive_refresh_maintenance_failed",
+            provider: "anthropic",
+            error_name: error instanceof Error ? error.name : "UnknownError",
+          });
+        })
+    );
     // The tick runs both the recovery sweep (orphaned/timed-out runs) and
     // processes overdue automations.
     // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: construct the scheduler's database dependency

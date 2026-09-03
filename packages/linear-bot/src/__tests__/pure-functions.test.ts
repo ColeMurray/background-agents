@@ -120,6 +120,12 @@ describe("extractModelFromLabels", () => {
     expect(extractModelFromLabels([{ name: "model:sonnet-5" }])).toBe("anthropic/claude-sonnet-5");
   });
 
+  it("returns Fable 5.1 for model:fable-5-1 label", () => {
+    expect(extractModelFromLabels([{ name: "model:fable-5-1" }])).toBe(
+      "anthropic/claude-fable-5-1"
+    );
+  });
+
   it("returns null for unknown model label", () => {
     expect(extractModelFromLabels([{ name: "model:unknown-model" }])).toBeNull();
   });

@@ -55,7 +55,9 @@ describe("Scheduler (integration)", () => {
   });
 
   describe("automation provider auth resolution", () => {
+    const providers = ["anthropic", "openai", "xai"] as const;
     const accountIds = {
+      anthropic: "00000000000000000000000000000003",
       openai: "00000000000000000000000000000001",
       xai: "00000000000000000000000000000002",
     } as const;
@@ -63,7 +65,7 @@ describe("Scheduler (integration)", () => {
     async function seedProviderAccounts(): Promise<void> {
       const accounts = new ModelProviderAccountStore(env.DB);
       const defaults = new ProviderDefaultStore(env.DB);
-      for (const provider of ["openai", "xai"] as const) {
+      for (const provider of providers) {
         await accounts.create({
           id: accountIds[provider],
           provider,
@@ -73,7 +75,7 @@ describe("Scheduler (integration)", () => {
       }
     }
 
-    it.each(["openai", "xai"] as const)("uses an account pin for %s", async (provider) => {
+    it.each(providers)("uses an account pin for %s", async (provider) => {
       await seedProviderAccounts();
       const automation = makeAutomation({ id: `auto-account-${provider}` });
       await new AutomationStore(env.DB).create(automation);
@@ -98,7 +100,7 @@ describe("Scheduler (integration)", () => {
       });
     });
 
-    it.each(["openai", "xai"] as const)("uses an API-key pin for %s", async (provider) => {
+    it.each(providers)("uses an API-key pin for %s", async (provider) => {
       await seedProviderAccounts();
       const automation = makeAutomation({ id: `auto-api-key-${provider}` });
       await new AutomationStore(env.DB).create(automation);
@@ -120,7 +122,7 @@ describe("Scheduler (integration)", () => {
       );
     });
 
-    it.each(["openai", "xai"] as const)(
+    it.each(providers)(
       "resolves the unattended policy on every unpinned %s run",
       async (provider) => {
         await seedProviderAccounts();

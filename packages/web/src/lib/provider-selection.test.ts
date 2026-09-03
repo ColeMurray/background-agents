@@ -107,6 +107,7 @@ describe("provider selection state", () => {
         [account]
       )
     ).toEqual({
+      anthropic: { mode: "api_key" },
       openai: { mode: "api_key" },
       xai: { mode: "legacy_scoped_oauth" },
     });
@@ -124,6 +125,7 @@ describe("provider selection state", () => {
     };
 
     expect(buildInteractiveProviderRoutingIdentity({}, [providerDefault], [account])).toEqual({
+      anthropic: { mode: "api_key" },
       openai: {
         mode: "provider_account",
         accountId: account.id,

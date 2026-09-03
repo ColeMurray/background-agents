@@ -58,11 +58,12 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     ).toMatchObject({ type: "rebuild", reason: "missing_image" });
   });
 
-  it("rebuilds each provider's pre-wraparound image and keeps the shared new generation", () => {
+  it("rebuilds each provider's pre-Claude image and keeps the shared new generation", () => {
     const superseded: Array<[ImageBuildProvider, string]> = [
-      ["modal", "v58-image-build-stdin-launch-vnc"],
-      ["opencomputer", "v57-vnc-opencode-1-18-11"],
-      ["vercel", "v57-vnc-opencode-1-18-11"],
+      ["modal", "v61-sandbox-sbin-path"],
+      ["opencomputer", "v61-sandbox-sbin-path"],
+      ["vercel", "v61-sandbox-sbin-path"],
+      ["e2b", "v61-sandbox-sbin-path"],
     ];
     for (const [provider, runtimeVersion] of superseded) {
       expect(
@@ -74,6 +75,7 @@ describe("evaluateImageBuildRebuildPolicy", () => {
       ["modal", COMPATIBLE_RUNTIME_VERSION],
       ["opencomputer", COMPATIBLE_RUNTIME_VERSION],
       ["vercel", COMPATIBLE_RUNTIME_VERSION],
+      ["e2b", COMPATIBLE_RUNTIME_VERSION],
     ];
     for (const [provider, runtimeVersion] of current) {
       expect(

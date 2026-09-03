@@ -304,6 +304,23 @@ class TestBuildPromptRequestBody:
             },
         }
 
+    def test_with_fable_5_1_adaptive_thinking(self, bridge: AgentBridge):
+        """Fable 5.1 should use adaptive thinking instead of manual budgets."""
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
+            "Hello",
+            "anthropic/claude-fable-5-1",
+            reasoning_effort="xhigh",
+        )
+
+        assert body["model"] == {
+            "providerID": "anthropic",
+            "modelID": "claude-fable-5-1",
+            "options": {
+                "thinking": {"type": "adaptive"},
+                "outputConfig": {"effort": "xhigh"},
+            },
+        }
+
     def test_with_xai_reasoning_effort(self, bridge: AgentBridge):
         body = bridge._ensure_prompt_stream()._build_prompt_request_body(
             "Hello",

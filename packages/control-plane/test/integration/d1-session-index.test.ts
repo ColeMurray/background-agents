@@ -40,6 +40,11 @@ describe("D1 SessionIndexStore", () => {
     const now = Date.now();
     const providerAuth = [
       {
+        provider: "anthropic" as const,
+        authMode: "api_key" as const,
+        selectionSource: "api_key_fallback",
+      },
+      {
         provider: "openai" as const,
         authMode: "api_key" as const,
         selectionSource: "fallback_api_key",
@@ -73,6 +78,15 @@ describe("D1 SessionIndexStore", () => {
     expect(authRows.results).toEqual([
       {
         session_id: "session-provider-auth",
+        provider: "anthropic",
+        auth_mode: "api_key",
+        provider_account_id: null,
+        selection_source: "api_key_fallback",
+        inherited_from_session_id: null,
+        created_at: now,
+      },
+      {
+        session_id: "session-provider-auth",
         provider: "openai",
         auth_mode: "api_key",
         provider_account_id: null,
@@ -94,11 +108,11 @@ describe("D1 SessionIndexStore", () => {
       providerAuth
     );
     await expect(store.getProviderAuthForProvider("session-provider-auth", "xai")).resolves.toEqual(
-      providerAuth[1]
+      providerAuth[2]
     );
     await expect(
       store.getProviderAuthForProvider("session-provider-auth", "openai")
-    ).resolves.toEqual(providerAuth[0]);
+    ).resolves.toEqual(providerAuth[1]);
     await expect(store.getCompleteProviderAuth("missing-session")).rejects.toThrow(/incomplete/);
   });
 

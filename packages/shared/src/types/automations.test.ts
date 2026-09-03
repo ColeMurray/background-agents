@@ -146,7 +146,7 @@ describe("automation provider selection contracts", () => {
   });
 
   it("rejects unknown providers in create, update, and response records", () => {
-    const providerSelections = { anthropic: { mode: "api_key" } };
+    const providerSelections = { unsupported: { mode: "api_key" } };
     expect(
       createAutomationRequestSchema.safeParse({
         name: "Daily sync",

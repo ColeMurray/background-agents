@@ -70,6 +70,7 @@ describe("prepareManagedProviderEnv", () => {
           XAI_OAUTH_REFRESH_TOKEN: "legacy-xai",
         },
         providerAuthModes: {
+          anthropic: "api_key",
           openai: "provider_account",
           xai: "api_key",
         },
@@ -97,6 +98,7 @@ describe("prepareManagedProviderEnv", () => {
           XAI_OAUTH_REFRESH_TOKEN: "legacy-xai",
         },
         providerAuthModes: {
+          anthropic: "api_key",
           openai: "api_key",
           xai: "api_key",
         },
@@ -110,11 +112,29 @@ describe("prepareManagedProviderEnv", () => {
         exposedSecrets: { OPENAI_API_KEY: "sk-openai", XAI_API_KEY: "xai-key" },
         brokerSecrets: { OPENAI_OAUTH_REFRESH_TOKEN: "legacy-openai" },
         providerAuthModes: {
+          anthropic: "api_key",
           openai: "legacy_scoped_oauth",
           xai: "legacy_scoped_oauth",
         },
       })
     ).toEqual({ OPENAI_OAUTH_MANAGED: "1", XAI_API_KEY: "xai-key" });
+  });
+
+  it("overrides provider-level Anthropic API keys in managed account mode", () => {
+    expect(
+      prepareManagedProviderEnv({
+        exposedSecrets: { ANTHROPIC_API_KEY: "sk-api", ANTHROPIC_OAUTH_REFRESH_TOKEN: "blocked" },
+        brokerSecrets: {},
+        providerAuthModes: {
+          anthropic: "provider_account",
+          openai: "api_key",
+          xai: "api_key",
+        },
+      })
+    ).toEqual({
+      ANTHROPIC_API_KEY: "opencode-oauth-dummy-key",
+      ANTHROPIC_OAUTH_MANAGED: "1",
+    });
   });
 });
 
@@ -125,6 +145,7 @@ describe("getProviderAuthenticationError", () => {
         "xai/grok-4.5",
         {},
         {
+          anthropic: "api_key",
           openai: "legacy_scoped_oauth",
           xai: "legacy_scoped_oauth",
         }
@@ -143,6 +164,7 @@ describe("getProviderAuthenticationError", () => {
   ] as const)("accepts xAI %s authentication", (_label, sandboxEnv, authMode) => {
     expect(
       getProviderAuthenticationError("xai/grok-4.5", sandboxEnv, {
+        anthropic: "api_key",
         openai: "legacy_scoped_oauth",
         xai: authMode,
       })
@@ -155,6 +177,7 @@ describe("getProviderAuthenticationError", () => {
         "openai/gpt-5.4",
         {},
         {
+          anthropic: "api_key",
           openai: "api_key",
           xai: "legacy_scoped_oauth",
         }
@@ -162,16 +185,33 @@ describe("getProviderAuthenticationError", () => {
     ).toContain("OPENAI_API_KEY");
   });
 
-  it("does not validate providers outside subscription account routing", () => {
+  it("accepts Anthropic API-key mode supplied by the sandbox platform", () => {
     expect(
       getProviderAuthenticationError(
         "anthropic/claude-opus-4-6",
         {},
         {
+          anthropic: "api_key",
           openai: "legacy_scoped_oauth",
           xai: "legacy_scoped_oauth",
-        }
+        },
+        true
       )
     ).toBeNull();
+  });
+
+  it("rejects Anthropic API-key mode without a platform or folded secret", () => {
+    expect(
+      getProviderAuthenticationError(
+        "anthropic/claude-opus-4-6",
+        {},
+        {
+          anthropic: "api_key",
+          openai: "api_key",
+          xai: "api_key",
+        },
+        false
+      )?.message
+    ).toContain("ANTHROPIC_API_KEY");
   });
 });

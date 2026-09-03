@@ -3,13 +3,14 @@ import type { ModelProviderAccount } from "../db/model-provider-accounts";
 import type { ProviderDefault } from "../db/provider-account-defaults";
 import { resolveProviderAccountSelections } from "./provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
+import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 
 const OPENAI_ACCOUNT_ID = "1".repeat(32);
 const XAI_ACCOUNT_ID = "2".repeat(32);
 
 function account(
   id: string,
-  provider: "openai" | "xai",
+  provider: SubscriptionProviderId,
   overrides: Partial<ModelProviderAccount> = {}
 ): ModelProviderAccount {
   return {
@@ -30,7 +31,7 @@ function account(
 }
 
 function providerDefault(
-  provider: "openai" | "xai",
+  provider: SubscriptionProviderId,
   providerAccountId: string,
   unattendedMode: "provider_account" | "api_key" = "provider_account"
 ): ProviderDefault {
@@ -54,7 +55,9 @@ function stores(
   const defaults = new Map((options.defaults ?? []).map((item) => [item.provider, item]));
   const accounts = new Map((options.accounts ?? []).map((item) => [item.id, item]));
   return {
-    defaults: { get: vi.fn(async (provider: "openai" | "xai") => defaults.get(provider) ?? null) },
+    defaults: {
+      get: vi.fn(async (provider: SubscriptionProviderId) => defaults.get(provider) ?? null),
+    },
     accounts: { getById: vi.fn(async (id: string) => accounts.get(id) ?? null) },
     adapters: { get: vi.fn(() => ({})) },
   };
@@ -65,6 +68,7 @@ describe("resolveProviderAccountSelections", () => {
     await expect(
       resolveProviderAccountSelections({ unattended: false }, stores())
     ).resolves.toEqual([
+      { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
       { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
       { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
     ]);
@@ -74,6 +78,7 @@ describe("resolveProviderAccountSelections", () => {
     const result = await resolveProviderAccountSelections(
       {
         explicit: {
+          anthropic: { mode: "api_key" },
           openai: { mode: "provider_account", accountId: OPENAI_ACCOUNT_ID },
           xai: { mode: "api_key" },
         },
@@ -89,6 +94,7 @@ describe("resolveProviderAccountSelections", () => {
     );
 
     expect(result).toEqual([
+      { provider: "anthropic", authMode: "api_key", selectionSource: "explicit" },
       {
         provider: "openai",
         authMode: "provider_account",
@@ -109,11 +115,16 @@ describe("resolveProviderAccountSelections", () => {
     );
 
     expect(result[0]).toEqual({
+      provider: "anthropic",
+      authMode: "api_key",
+      selectionSource: "api_key_fallback",
+    });
+    expect(result[1]).toEqual({
       provider: "openai",
       authMode: "api_key",
       selectionSource: "unattended_policy",
     });
-    expect(result[1]).toEqual({
+    expect(result[2]).toEqual({
       provider: "xai",
       authMode: "legacy_scoped_oauth",
       selectionSource: "legacy_fallback",
@@ -127,7 +138,7 @@ describe("resolveProviderAccountSelections", () => {
 
     defaults[0] = providerDefault("openai", XAI_ACCOUNT_ID);
 
-    expect(result[0]).toEqual({
+    expect(result[1]).toEqual({
       provider: "openai",
       authMode: "provider_account",
       providerAccountId: OPENAI_ACCOUNT_ID,

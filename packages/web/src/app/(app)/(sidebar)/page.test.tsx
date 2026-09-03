@@ -51,7 +51,7 @@ const mocks = vi.hoisted(() => ({
   }>,
   providerAccountsValue: [] as Array<{
     id: string;
-    provider: "openai" | "xai";
+    provider: "anthropic" | "openai" | "xai";
     displayName: string;
     externalAccountId: string | null;
     status: "active";

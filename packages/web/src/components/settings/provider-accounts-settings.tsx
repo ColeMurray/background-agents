@@ -22,6 +22,10 @@ import {
   ProviderDeviceAuthorizationDialog,
   type ProviderDeviceAuthorizationTarget,
 } from "@/components/settings/provider-device-authorization-dialog";
+import {
+  ClaudeAuthorizationDialog,
+  type ClaudeAuthorizationTarget,
+} from "@/components/settings/claude-authorization-dialog";
 import { formatRelativeTime } from "@/lib/time";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,6 +63,7 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 type Confirm = { account: ModelProviderAccount; action: "disable" | "archive" } | null;
 type Connection =
   | { kind: "device"; target: ProviderDeviceAuthorizationTarget }
+  | { kind: "anthropic"; target: ClaudeAuthorizationTarget }
   | { kind: "legacy-xai"; account: ModelProviderAccount };
 
 type ConnectionStrategy = {
@@ -67,6 +72,17 @@ type ConnectionStrategy = {
 };
 
 const CONNECTION_STRATEGIES: Record<SubscriptionProviderId, ConnectionStrategy> = {
+  anthropic: {
+    add: () => ({ kind: "anthropic", target: { operation: "create" } }),
+    reconnect: (account) => ({
+      kind: "anthropic",
+      target: {
+        operation: "reconnect",
+        providerAccountId: account.id,
+        displayName: account.displayName,
+      },
+    }),
+  },
   openai: {
     add: () => ({ kind: "device", target: { provider: "openai", operation: "create" } }),
     reconnect: (account) => ({
@@ -125,12 +141,13 @@ function connectionToastMessage(
   reconnectedExisting: boolean,
   operation: ProviderDeviceAuthorizationTarget["operation"]
 ): string {
+  const subscriptionName = SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName;
   if (!reconnectedExisting) {
-    return `${SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName} account connected`;
+    return `${subscriptionName} account connected`;
   }
   return operation === "reconnect"
     ? "Account reconnected"
-    : `Existing ${SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName} account reconnected`;
+    : `Existing ${subscriptionName} account reconnected`;
 }
 
 function LegacyReconnectForm({
@@ -613,6 +630,25 @@ export function ProviderAccountsSettings() {
             void refresh();
             toast.success(
               connectionToastMessage(target.provider, result.reconnectedExisting, target.operation)
+            );
+          }}
+        />
+      )}
+
+      {canManage && connection?.kind === "anthropic" && (
+        <ClaudeAuthorizationDialog
+          key={
+            connection.target.operation === "create"
+              ? "anthropic:create"
+              : `anthropic:reconnect:${connection.target.providerAccountId}`
+          }
+          target={connection.target}
+          onClose={() => setConnection(null)}
+          onConnected={(operation) => {
+            setConnection(null);
+            void refresh();
+            toast.success(
+              operation === "create" ? "Claude account connected" : "Account reconnected"
             );
           }}
         />

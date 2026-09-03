@@ -147,10 +147,11 @@ async function secretRows(secrets: Record<string, string>): Promise<D1Row[]> {
 }
 
 function providerAuthRows(modes: {
+  anthropic: SessionProviderAuthMode;
   openai: SessionProviderAuthMode;
   xai: SessionProviderAuthMode;
 }): D1Row[] {
-  return (["openai", "xai"] as const).map((provider) => ({
+  return (["anthropic", "openai", "xai"] as const).map((provider) => ({
     provider,
     auth_mode: modes[provider],
     provider_account_id: modes[provider] === "provider_account" ? "1".repeat(32) : null,
@@ -159,7 +160,7 @@ function providerAuthRows(modes: {
   }));
 }
 
-const API_KEY_MODES = { openai: "api_key", xai: "api_key" } as const;
+const API_KEY_MODES = { anthropic: "api_key", openai: "api_key", xai: "api_key" } as const;
 
 function sessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -249,6 +250,7 @@ function makeHarness(
     durableObjectId: "do-id-fallback",
     repoSecretsEncryptionKey: options.encryptionKey ?? ENCRYPTION_KEY,
     secretsCapEnforcement: options.capEnforcement,
+    platformProvidesAnthropicApiKey: false,
     log,
   });
 
@@ -313,7 +315,11 @@ describe("UserEnvResolver", () => {
         memberRows: [memberRow(0, "acme", "web", 90101), memberRow(1, "acme", "backend", 90102)],
         encryptionKey: ENCRYPTION_KEY,
       });
-      h.db.providerAuthRows = providerAuthRows({ openai: "api_key", xai: "legacy_scoped_oauth" });
+      h.db.providerAuthRows = providerAuthRows({
+        anthropic: "api_key",
+        openai: "api_key",
+        xai: "legacy_scoped_oauth",
+      });
       h.db.globalSecretRows = await secretRows({ SHARED: "global", ONLY_GLOBAL: "g" });
       h.db.repoSecretRowsByRepoId.set(90101, await secretRows(primarySecrets));
       h.db.repoSecretRowsByRepoId.set(90102, await secretRows(secondarySecrets));
@@ -363,7 +369,11 @@ describe("UserEnvResolver", () => {
         session: sessionRow({ environment_id: "env-1" }),
         encryptionKey: ENCRYPTION_KEY,
       });
-      h.db.providerAuthRows = providerAuthRows({ openai: "api_key", xai: "legacy_scoped_oauth" });
+      h.db.providerAuthRows = providerAuthRows({
+        anthropic: "api_key",
+        openai: "api_key",
+        xai: "legacy_scoped_oauth",
+      });
       h.db.globalSecretRows = await secretRows({ SHARED: "global", ONLY_GLOBAL: "g" });
       h.db.environmentSecretRowsById.set(
         "env-1",
@@ -502,7 +512,11 @@ describe("UserEnvResolver", () => {
 
     it("returns null when the provider is authenticated", async () => {
       const h = makeHarness();
-      h.db.providerAuthRows = providerAuthRows({ openai: "provider_account", xai: "api_key" });
+      h.db.providerAuthRows = providerAuthRows({
+        anthropic: "api_key",
+        openai: "provider_account",
+        xai: "api_key",
+      });
 
       await expect(h.resolver.getProviderAuthenticationError("openai/gpt-5")).resolves.toBeNull();
     });
@@ -512,7 +526,7 @@ describe("UserEnvResolver", () => {
       h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
 
       await expect(
-        h.resolver.getProviderAuthenticationError("anthropic/claude-sonnet-4-5")
+        h.resolver.getProviderAuthenticationError("deepseek/deepseek-v4-pro")
       ).resolves.toBeNull();
     });
   });

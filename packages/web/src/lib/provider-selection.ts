@@ -37,7 +37,9 @@ export function buildInteractiveProviderRoutingIdentity(
           ? explicit.accountId
           : defaults.find((providerDefault) => providerDefault.provider === provider)
               ?.providerAccountId;
-      if (!accountId) return [provider, { mode: "legacy_scoped_oauth" }];
+      if (!accountId) {
+        return [provider, { mode: provider === "anthropic" ? "api_key" : "legacy_scoped_oauth" }];
+      }
 
       const account = accounts.find(
         (candidate) => candidate.id === accountId && candidate.provider === provider

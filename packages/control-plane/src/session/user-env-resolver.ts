@@ -48,6 +48,8 @@ export interface UserEnvResolverDeps {
   durableObjectId: string;
   repoSecretsEncryptionKey: string;
   secretsCapEnforcement: string | undefined;
+  /** Whether the sandbox platform injects Anthropic API auth outside the D1 secret fold. */
+  platformProvidesAnthropicApiKey: boolean;
   /** The session-scoped logger; the composition root creates it before this class. */
   log: Logger;
 }
@@ -64,6 +66,7 @@ export class UserEnvResolver {
   private readonly durableObjectId: string;
   private readonly repoSecretsEncryptionKey: string;
   private readonly secretsCapEnforcement: string | undefined;
+  private readonly platformProvidesAnthropicApiKey: boolean;
   private readonly log: Logger;
 
   constructor(deps: UserEnvResolverDeps) {
@@ -73,6 +76,7 @@ export class UserEnvResolver {
     this.durableObjectId = deps.durableObjectId;
     this.repoSecretsEncryptionKey = deps.repoSecretsEncryptionKey;
     this.secretsCapEnforcement = deps.secretsCapEnforcement;
+    this.platformProvidesAnthropicApiKey = deps.platformProvidesAnthropicApiKey;
     this.log = deps.log;
   }
 
@@ -96,7 +100,8 @@ export class UserEnvResolver {
     const issue = resolveProviderAuthenticationError(
       model,
       context.sandboxEnv,
-      context.providerAuthModes
+      context.providerAuthModes,
+      this.platformProvidesAnthropicApiKey
     );
     if (!issue) return null;
     this.log.error("provider_auth.unavailable", {

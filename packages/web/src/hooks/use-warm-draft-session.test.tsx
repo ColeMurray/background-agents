@@ -29,6 +29,7 @@ const request = (model = "openai/gpt-5.4"): WarmDraftSessionRequest => ({
 const routing = (
   xai: InteractiveProviderRoutingIdentity["xai"] = { mode: "legacy_scoped_oauth" }
 ): InteractiveProviderRoutingIdentity => ({
+  anthropic: { mode: "api_key" },
   openai: { mode: "legacy_scoped_oauth" },
   xai,
 });

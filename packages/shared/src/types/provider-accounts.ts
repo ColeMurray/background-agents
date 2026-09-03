@@ -1,9 +1,10 @@
 import { z } from "zod";
 
-export const SUBSCRIPTION_PROVIDER_IDS = ["openai", "xai"] as const;
+export const SUBSCRIPTION_PROVIDER_IDS = ["anthropic", "openai", "xai"] as const;
 export type SubscriptionProviderId = (typeof SUBSCRIPTION_PROVIDER_IDS)[number];
 
 export const SUBSCRIPTION_PROVIDER_DISPLAY_METADATA = {
+  anthropic: { displayName: "Anthropic", subscriptionName: "Claude" },
   openai: { displayName: "OpenAI", subscriptionName: "ChatGPT" },
   xai: { displayName: "xAI", subscriptionName: "SuperGrok" },
 } as const satisfies Readonly<
@@ -38,6 +39,7 @@ export type SessionProviderAuthMode = ProviderAuthMode | "legacy_scoped_oauth";
 
 /** Closed, bounded map: one optional selection for each supported subscription provider. */
 export const modelProviderSelectionsSchema = z.strictObject({
+  anthropic: providerAuthSelectionSchema.optional(),
   openai: providerAuthSelectionSchema.optional(),
   xai: providerAuthSelectionSchema.optional(),
 });
@@ -66,7 +68,10 @@ export const modelProviderAccountSchema = z.strictObject({
 });
 export type ModelProviderAccount = z.infer<typeof modelProviderAccountSchema>;
 
-export type ModelProviderAccountReconnectMethod = "device_authorization" | "refresh_token";
+export type ModelProviderAccountReconnectMethod =
+  | "authorization_code"
+  | "device_authorization"
+  | "refresh_token";
 
 /**
  * Canonical reconnect capability for provider accounts.
@@ -78,6 +83,7 @@ export type ModelProviderAccountReconnectMethod = "device_authorization" | "refr
 export function modelProviderAccountReconnectMethod(
   account: Pick<ModelProviderAccount, "provider" | "externalAccountId">
 ): ModelProviderAccountReconnectMethod {
+  if (account.provider === "anthropic") return "authorization_code";
   return account.provider === "xai" && account.externalAccountId === null
     ? "refresh_token"
     : "device_authorization";
@@ -184,6 +190,28 @@ export type LegacyProviderCredentialsResponse = z.infer<
 export const modelProviderAccountDisplayNameSchema = z.string().trim().min(1).max(100);
 const credentialStringSchema = z.string().min(1).max(65_536);
 const externalAccountIdSchema = z.string().trim().min(1).max(512);
+const oauthCompletionValueSchema = z
+  .string()
+  .min(1)
+  .max(4096)
+  .regex(/^\S+$/)
+  .refine((value) =>
+    [...value].every((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint > 31 && codePoint !== 127;
+    })
+  );
+const authorizationCodeSchema = oauthCompletionValueSchema;
+const pkceCodeVerifierSchema = z.string().regex(/^[A-Za-z0-9._~-]{43,128}$/);
+const oauthStateSchema = oauthCompletionValueSchema;
+
+export const connectAnthropicModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("anthropic"),
+  displayName: modelProviderAccountDisplayNameSchema,
+  authorizationCode: authorizationCodeSchema,
+  codeVerifier: pkceCodeVerifierSchema,
+  state: oauthStateSchema,
+});
 
 export const connectOpenAIModelProviderAccountRequestSchema = z.strictObject({
   provider: z.literal("openai"),
@@ -197,6 +225,7 @@ export const connectXaiModelProviderAccountRequestSchema = z.strictObject({
   refreshToken: credentialStringSchema,
 });
 export const connectModelProviderAccountRequestSchema = z.discriminatedUnion("provider", [
+  connectAnthropicModelProviderAccountRequestSchema,
   connectOpenAIModelProviderAccountRequestSchema,
   connectXaiModelProviderAccountRequestSchema,
 ]);
@@ -209,11 +238,18 @@ export const reconnectOpenAIModelProviderAccountRequestSchema = z.strictObject({
   refreshToken: credentialStringSchema,
   accountId: externalAccountIdSchema,
 });
+export const reconnectAnthropicModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("anthropic"),
+  authorizationCode: authorizationCodeSchema,
+  codeVerifier: pkceCodeVerifierSchema,
+  state: oauthStateSchema,
+});
 export const reconnectXaiModelProviderAccountRequestSchema = z.strictObject({
   provider: z.literal("xai"),
   refreshToken: credentialStringSchema,
 });
 export const reconnectModelProviderAccountRequestSchema = z.discriminatedUnion("provider", [
+  reconnectAnthropicModelProviderAccountRequestSchema,
   reconnectOpenAIModelProviderAccountRequestSchema,
   reconnectXaiModelProviderAccountRequestSchema,
 ]);

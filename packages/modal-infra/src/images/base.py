@@ -51,6 +51,7 @@ TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 # v59: OpenCode past the message-ID wraparound (see OPENCODE_VERSION)
 # v60: generic provider-account token broker plugin
 # v61: account/init helpers and /usr/sbin on PATH
+# v62: Anthropic managed-account plugin reporting claude-cli 2.1.251
 CACHE_BUSTER = RUNTIME_VERSION
 
 # Base image with all development tools
