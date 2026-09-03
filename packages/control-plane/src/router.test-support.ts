@@ -73,6 +73,9 @@ export function contractFor(method: string, path: string): RouteContract | undef
   );
 }
 
+/** The user every authorization fixture answers for unless a test names another. */
+export const TEST_USER_ID = "user-1";
+
 /** How admission's authorization lookups are answered, and where every other statement goes. */
 export interface AuthorizationDatabaseOptions {
   userId?: string;
@@ -101,7 +104,7 @@ export function emptyStatement(): SqlStatement {
  * grants) are recognized here so no suite has to know their shape.
  */
 export function authorizationDatabase(options: AuthorizationDatabaseOptions = {}): SqlDatabase {
-  const { userId = "user-1", permissions, statement = emptyStatement, batch } = options;
+  const { userId = TEST_USER_ID, permissions, statement = emptyStatement, batch } = options;
   const role = permissions
     ? { role_id: "role-1", role_key: null, role_name: "Custom" }
     : { role_id: BUILT_IN_ROLE_REGISTRY.owner.id, role_key: "owner", role_name: "Owner" };
@@ -128,12 +131,15 @@ export function authorizationDatabase(options: AuthorizationDatabaseOptions = {}
       }
       return statement(sql);
     },
-    batch: batch ?? (async () => []),
+    batch:
+      batch ??
+      (async <T>(statements: SqlStatement[]) =>
+        statements.map(() => ({ results: [] as T[], meta: { changes: 0 } }))),
   };
 }
 
 /** An owner's database: every permission, data access mocked at the store. */
-export function ownerAuthorizationDatabase(userId = "user-1"): SqlDatabase {
+export function ownerAuthorizationDatabase(userId = TEST_USER_ID): SqlDatabase {
   return authorizationDatabase({ userId });
 }
 
