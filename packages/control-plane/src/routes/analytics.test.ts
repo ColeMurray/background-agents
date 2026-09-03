@@ -8,7 +8,7 @@ import {
   TEST_SERVICE_SECRETS,
 } from "../router.test-support";
 import type { Env } from "../types";
-import { analyticsRoutes } from "./analytics";
+import { analyticsRoutes, DEFAULT_ANALYTICS_DAYS } from "./analytics";
 
 const FIXED_NOW = 1_700_000_000_000;
 
@@ -114,7 +114,7 @@ describe("analytics route handlers", () => {
       const response = await callRoute("GET", "/analytics/summary");
       expect(response.status).toBe(200);
       expect(mockStore.getSummary).toHaveBeenCalledWith({
-        startAt: FIXED_NOW - 30 * 24 * 60 * 60 * 1000,
+        startAt: FIXED_NOW - DEFAULT_ANALYTICS_DAYS * 24 * 60 * 60 * 1000,
         endAt: FIXED_NOW,
         spawnSources: HUMAN_SPAWN_SOURCES,
       });

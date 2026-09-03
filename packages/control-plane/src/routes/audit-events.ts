@@ -7,7 +7,7 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { parseQuery } from "./query";
 import { json, requirePermission, SCM_AGNOSTIC_HUMAN_USER_ROUTE } from "./shared";
 
-const DEFAULT_AUDIT_EVENT_LIMIT = 25;
+export const DEFAULT_AUDIT_EVENT_LIMIT = 25;
 const MAX_AUDIT_EVENT_LIMIT = 100;
 
 const auditEventQuery = z.object({

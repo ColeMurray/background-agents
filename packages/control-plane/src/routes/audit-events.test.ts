@@ -8,7 +8,7 @@ import {
   TEST_SERVICE_SECRETS,
 } from "../router.test-support";
 import type { Env } from "../types";
-import { auditEventRoutes } from "./audit-events";
+import { auditEventRoutes, DEFAULT_AUDIT_EVENT_LIMIT } from "./audit-events";
 
 const mockStore = { list: vi.fn() };
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
@@ -49,11 +49,11 @@ describe("audit events route", () => {
     mockStore.list.mockResolvedValue({ rows: [], hasMore: false, nextCursor: null });
   });
 
-  it("defaults the limit to 25 with no cursor", async () => {
+  it("defaults the limit with no cursor", async () => {
     const response = await list();
 
     expect(response.status).toBe(200);
-    expect(mockStore.list).toHaveBeenCalledWith({ limit: 25, cursor: null });
+    expect(mockStore.list).toHaveBeenCalledWith({ limit: DEFAULT_AUDIT_EVENT_LIMIT, cursor: null });
     await expect(response.json()).resolves.toEqual({
       events: [],
       hasMore: false,

@@ -21,7 +21,7 @@ import {
   requirePermission,
 } from "./shared";
 
-const DEFAULT_ANALYTICS_DAYS: AnalyticsDays = 30;
+export const DEFAULT_ANALYTICS_DAYS: AnalyticsDays = 30;
 
 /** The reporting window; absent, the default. The value is read the way `Number()` reads it. */
 const daysQuery = z.object({
