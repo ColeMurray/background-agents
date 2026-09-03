@@ -44,8 +44,6 @@ async function trackPullRequestLifecycle(
     parseLogLevel(env.LOG_LEVEL)
   );
   try {
-    if (!env.SESSION) return;
-
     if (!event.pullRequest) return;
 
     const sessionRuntime = createSessionRuntimeClient(env, ctx);

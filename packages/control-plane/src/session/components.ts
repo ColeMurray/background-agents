@@ -129,6 +129,7 @@ import { SessionDiffService } from "./diffs/service";
 import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
 import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
+import { createSessionRuntimeClient } from "./runtime-client";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
@@ -363,7 +364,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     artifactRepository,
     messenger,
     sessionIndexStore,
-    env.SESSION ?? null
+    // Correlate the parent's request log to this child: the notification has
+    // no request of its own.
+    createSessionRuntimeClient(env, { trace_id: durableObjectId, request_id: durableObjectId })
   );
 
   const titleService = new SessionTitleService({

@@ -7,6 +7,8 @@ import {
   type DraftSweepOutcome,
 } from "./abandoned-draft-sweep";
 import type { Logger } from "../logger";
+import { SessionInternalPaths } from "./contracts";
+import type { SessionRuntimeClient } from "./runtime-client";
 
 const NOW = 1_000_000_000;
 const TTL_MS = 8 * 60 * 60 * 1000;
@@ -250,19 +252,16 @@ describe("AbandonedDraftSweep", () => {
 });
 
 describe("SessionDraftExpiryClient", () => {
-  const fetches: Array<{ url: string; init: RequestInit }> = [];
+  const fetches: Array<{ sessionId: string; path: string; init?: RequestInit }> = [];
 
-  function createSessions(response: Response): DurableObjectNamespace {
+  function createSessions(response: Response): SessionRuntimeClient {
     fetches.length = 0;
     return {
-      idFromName: vi.fn(() => "do-id"),
-      get: vi.fn(() => ({
-        fetch: vi.fn(async (url: string, init: RequestInit) => {
-          fetches.push({ url, init });
-          return response;
-        }),
-      })),
-    } as unknown as DurableObjectNamespace;
+      fetch: vi.fn(async (sessionId: string, path: string, init?: RequestInit) => {
+        fetches.push({ sessionId, path, init });
+        return response;
+      }),
+    };
   }
 
   it("bounds each request so one stalled session cannot hold up the sweep", async () => {
@@ -272,9 +271,10 @@ describe("SessionDraftExpiryClient", () => {
 
     await client.expireDraft("session-1");
 
-    expect(fetches[0].init).toMatchObject({
-      method: "POST",
-      signal: expect.any(AbortSignal),
+    expect(fetches[0]).toMatchObject({
+      sessionId: "session-1",
+      path: SessionInternalPaths.expireDraft,
+      init: { method: "POST", signal: expect.any(AbortSignal) },
     });
   });
 

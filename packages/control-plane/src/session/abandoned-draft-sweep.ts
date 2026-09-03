@@ -10,8 +10,9 @@
  */
 
 import { z } from "zod";
-import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
+import { SessionInternalPaths } from "./contracts";
 import type { Logger } from "../logger";
+import type { SessionRuntimeClient } from "./runtime-client";
 
 /**
  * How long a warm session may sit unprompted before the sweep archives it.
@@ -91,13 +92,12 @@ export interface AbandonedDraftSweepResult {
   truncated: boolean;
 }
 
-/** Calls a session Durable Object's expiry route and validates its reply. */
+/** Calls a session runtime's expiry route and validates its reply. */
 export class SessionDraftExpiryClient implements DraftExpiryClient {
-  constructor(private readonly sessions: DurableObjectNamespace) {}
+  constructor(private readonly sessions: SessionRuntimeClient) {}
 
   async expireDraft(sessionId: string): Promise<DraftSweepOutcome> {
-    const stub = this.sessions.get(this.sessions.idFromName(sessionId));
-    const response = await stub.fetch(buildSessionInternalUrl(SessionInternalPaths.expireDraft), {
+    const response = await this.sessions.fetch(sessionId, SessionInternalPaths.expireDraft, {
       method: "POST",
       signal: AbortSignal.timeout(ABANDONED_DRAFT_EXPIRY_TIMEOUT_MS),
     });

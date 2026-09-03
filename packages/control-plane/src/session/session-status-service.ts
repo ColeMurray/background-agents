@@ -8,7 +8,8 @@
  * a transition on that one noun.
  */
 
-import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
+import { SessionInternalPaths } from "./contracts";
+import type { SessionRuntimeClient } from "./runtime-client";
 import type { Logger } from "../logger";
 import type { SessionIndexStore } from "../db/session-index";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
@@ -29,7 +30,8 @@ export class SessionStatusService {
     private readonly artifactRepository: ArtifactRepository,
     private readonly messenger: SessionMessenger,
     private readonly sessionIndex: SessionIndexStore | null,
-    private readonly parentSessions: DurableObjectNamespace | null
+    /** Reaches the parent session's runtime for the child rollup. */
+    private readonly sessions: SessionRuntimeClient
   ) {}
 
   /**
@@ -184,24 +186,19 @@ export class SessionStatusService {
     update: { status: SessionStatus; title: string | null }
   ): void {
     const parentId = session.parent_session_id;
-    if (!parentId || !this.parentSessions) return;
-
-    const parentDoId = this.parentSessions.idFromName(parentId);
-    const parentStub = this.parentSessions.get(parentDoId);
+    if (!parentId) return;
 
     this.backgroundTasks.submit(
       () =>
-        parentStub.fetch(
-          new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              childSessionId,
-              status: update.status,
-              title: update.title,
-            }),
-          })
-        ),
+        this.sessions.fetch(parentId, SessionInternalPaths.childSessionUpdate, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            childSessionId,
+            status: update.status,
+            title: update.title,
+          }),
+        }),
       {
         name: "session.notify_parent",
         context: {

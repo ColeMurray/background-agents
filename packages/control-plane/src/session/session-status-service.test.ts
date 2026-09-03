@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import { SessionStatusService } from "./session-status-service";
-import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
+import { SessionInternalPaths } from "./contracts";
+import type { SessionRuntimeClient } from "./runtime-client";
 import type { Logger } from "../logger";
 import type { SessionIndexStore } from "../db/session-index";
 import type { SessionRow, ArtifactRow, MessageRow } from "./types";
@@ -70,12 +71,11 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
           updateMetrics: vi.fn(async () => true),
         };
 
-  const parentFetch = vi.fn(async (_request: Request) => new Response(null, { status: 200 }));
-  const parentStub = { fetch: parentFetch };
-  const parentSessions = {
-    idFromName: vi.fn(() => "parent-do-id"),
-    get: vi.fn(() => parentStub),
-  };
+  const parentFetch = vi.fn(
+    async (_sessionId: string, _path: string, _init?: RequestInit) =>
+      new Response(null, { status: 200 })
+  );
+  const parentSessions: SessionRuntimeClient = { fetch: parentFetch };
 
   const log = {
     debug: vi.fn(),
@@ -94,7 +94,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
     artifactRepository,
     messenger,
     sessionIndex as unknown as SessionIndexStore | null,
-    parentSessions as unknown as DurableObjectNamespace
+    parentSessions
   );
 
   return {
@@ -219,12 +219,12 @@ describe("SessionStatusService.transition", () => {
 
     await h.service.transition("completed");
 
-    expect(h.parentSessions.idFromName).toHaveBeenCalledWith("parent-1");
     expect(h.parentFetch).toHaveBeenCalledTimes(1);
-    const request = h.parentFetch.mock.calls[0][0];
-    expect(request.url).toBe(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate));
-    expect(request.method).toBe("POST");
-    expect(await request.json()).toEqual({
+    const [parentId, path, init] = h.parentFetch.mock.calls[0];
+    expect(parentId).toBe("parent-1");
+    expect(path).toBe(SessionInternalPaths.childSessionUpdate);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
       childSessionId: "public-session-1",
       status: "completed",
       title: "Session title",
@@ -398,9 +398,10 @@ describe("SessionStatusService.notifyParentOfChildUpdate", () => {
       { status: "active", title: "New title" }
     );
 
-    expect(h.parentSessions.idFromName).toHaveBeenCalledWith("parent-1");
-    const request = h.parentFetch.mock.calls[0][0];
-    expect(await request.json()).toEqual({
+    const [parentId, path, init] = h.parentFetch.mock.calls[0];
+    expect(parentId).toBe("parent-1");
+    expect(path).toBe(SessionInternalPaths.childSessionUpdate);
+    expect(JSON.parse(String(init?.body))).toEqual({
       childSessionId: "public-session-1",
       status: "active",
       title: "New title",
@@ -433,7 +434,7 @@ describe("SessionStatusService.notifyParentOfChildUpdate", () => {
       title: null,
     });
 
-    expect(h.parentSessions.idFromName).not.toHaveBeenCalled();
+    expect(h.parentFetch).not.toHaveBeenCalled();
     expect(h.backgroundTasks.submissions).toHaveLength(0);
   });
 });
