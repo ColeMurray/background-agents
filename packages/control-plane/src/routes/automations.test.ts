@@ -9,7 +9,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
-import { automationRoutes } from "./automations";
+import { automationRoutes, MAX_NAME_LENGTH } from "./automations";
 import { HttpError, resolveRepoOrError } from "./shared";
 import type { Principal } from "../auth/principal";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
@@ -358,6 +358,21 @@ describe("automation route handlers", () => {
       expect(mockStore.list).toHaveBeenCalledWith({ limit: 25, cursor: null });
       expect(mockStore.listRecentExecutionsForAutomationIds).toHaveBeenCalledWith(["auto-1"], 10);
       expect(body.automations[0]).toMatchObject({ recentExecutions: [] });
+    });
+
+    it.each<{ query: Record<string, string | string[]>; error: string }>([
+      { query: { limit: "0" }, error: "Invalid limit" },
+      { query: { limit: "abc" }, error: "Invalid limit" },
+      { query: { limit: "101" }, error: "Invalid limit" },
+      { query: { limit: ["5", "6"] }, error: "Invalid limit" },
+      { query: { cursor: "not-a-cursor" }, error: "Invalid cursor" },
+      { query: { search: "x".repeat(MAX_NAME_LENGTH + 1) }, error: "Search is too long" },
+    ])("rejects list query $query without listing", async ({ query, error }) => {
+      const res = await callRoute("GET", "/automations", { query });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error });
+      expect(mockStore.list).not.toHaveBeenCalled();
     });
 
     it("passes name search and pagination params to the store", async () => {

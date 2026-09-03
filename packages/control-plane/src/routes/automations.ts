@@ -35,7 +35,6 @@ import {
 import {
   encodeAutomationListCursor,
   parseAutomationListCursor,
-  type AutomationListCursor,
 } from "../db/automation-list-cursor";
 import { EnvironmentStore } from "../db/environments";
 import { SlackChannelStore } from "../db/slack-channel-store";
@@ -73,6 +72,7 @@ import {
   requirePermission,
   type AutomationRouteAdmission,
 } from "./shared";
+import { parseQuery } from "./query";
 import type { Env } from "../types";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import { z } from "zod";
@@ -109,7 +109,7 @@ function admittedAutomation(ctx: RequestContext): AutomationRouteAdmission {
 const MIN_CRON_INTERVAL_MINUTES = 15;
 
 /** Maximum name length. */
-const MAX_NAME_LENGTH = 200;
+export const MAX_NAME_LENGTH = 200;
 
 /** Maximum instructions length. Keep in sync with INSTRUCTIONS_MAX_LENGTH in packages/web/src/components/automations/automation-form.tsx. */
 const MAX_INSTRUCTIONS_LENGTH = 15_000;
@@ -424,87 +424,42 @@ const automationListLimitSchema = z
   });
 
 const automationListQuerySchema = z.object({
-  limit: automationListLimitSchema.optional(),
-  cursor: z.string().optional(),
+  limit: automationListLimitSchema
+    .optional()
+    .transform((limit) => limit ?? DEFAULT_AUTOMATION_LIST_PAGE_SIZE),
+  cursor: z
+    .string()
+    .optional()
+    .transform((raw, context) => {
+      const parsed = parseAutomationListCursor(raw ?? null);
+      if (!parsed.ok) {
+        context.addIssue({ code: "custom", message: parsed.error });
+        return z.NEVER;
+      }
+      return parsed.cursor;
+    }),
   search: z.string().trim().max(MAX_NAME_LENGTH, { message: "Search is too long" }).optional(),
   repoOwner: z.string().optional(),
   repoName: z.string().optional(),
 });
-
-type AutomationListQueryParamName = keyof z.input<typeof automationListQuerySchema>;
-
-const AUTOMATION_LIST_QUERY_PARAM_NAMES = Object.keys(
-  automationListQuerySchema.shape
-) as AutomationListQueryParamName[];
-
-type ReadAutomationListQueryResult =
-  | { ok: true; query: Partial<Record<AutomationListQueryParamName, string>> }
-  | { ok: false; error: string };
-
-function readAutomationListQuery(searchParams: URLSearchParams): ReadAutomationListQueryResult {
-  const query: Partial<Record<AutomationListQueryParamName, string>> = {};
-  for (const name of AUTOMATION_LIST_QUERY_PARAM_NAMES) {
-    const values = searchParams.getAll(name);
-    if (values.length > 1) return { ok: false, error: `Invalid ${name}` };
-    if (values.length === 1) query[name] = values[0];
-  }
-  return { ok: true, query };
-}
-
-type ParseAutomationListParamsResult =
-  | {
-      ok: true;
-      options: {
-        limit: number;
-        cursor: AutomationListCursor | null;
-        nameSearch?: string;
-        repoOwner?: string;
-        repoName?: string;
-      };
-    }
-  | { ok: false; error: string };
-
-function parseAutomationListParams(request: Request): ParseAutomationListParamsResult {
-  const url = new URL(request.url);
-  const rawQuery = readAutomationListQuery(url.searchParams);
-  if (!rawQuery.ok) return rawQuery;
-
-  const parsedQuery = automationListQuerySchema.safeParse(rawQuery.query);
-  if (!parsedQuery.success) {
-    return {
-      ok: false,
-      error: parsedQuery.error.issues[0]?.message ?? "Invalid automation list query",
-    };
-  }
-  const parsedCursor = parseAutomationListCursor(parsedQuery.data.cursor ?? null);
-  if (!parsedCursor.ok) return parsedCursor;
-
-  const { repoOwner, repoName } = parsedQuery.data;
-  const nameSearch = parsedQuery.data.search;
-
-  return {
-    ok: true,
-    options: {
-      limit: parsedQuery.data.limit ?? DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
-      cursor: parsedCursor.cursor,
-      ...(nameSearch ? { nameSearch } : {}),
-      ...(repoOwner ? { repoOwner } : {}),
-      ...(repoName ? { repoName } : {}),
-    },
-  };
-}
 
 async function handleListAutomations(
   request: Request,
   env: Env,
   ctx: RequestContext
 ): Promise<Response> {
-  const parsed = parseAutomationListParams(request);
-  if (!parsed.ok) return error(parsed.error, 400);
+  const query = parseQuery(request, automationListQuerySchema);
+  if (query instanceof Response) return query;
 
   const store = new AutomationStore(ctx.db);
   const providerAuthStore = new AutomationModelProviderAuthStore(ctx.db);
-  const result = await store.list(parsed.options);
+  const result = await store.list({
+    limit: query.limit,
+    cursor: query.cursor,
+    ...(query.search ? { nameSearch: query.search } : {}),
+    ...(query.repoOwner ? { repoOwner: query.repoOwner } : {}),
+    ...(query.repoName ? { repoName: query.repoName } : {}),
+  });
   const automationIds = result.automations.map((row) => row.id);
   const [
     repositoriesByAutomation,
