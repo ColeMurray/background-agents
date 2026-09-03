@@ -2,10 +2,11 @@
  * Unit tests for schema migration tracking.
  */
 
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyMigrations, initSchema, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import { createNodeSqlStorage } from "../node/sqlite-storage";
 
 /**
  * Create a mock SqlStorage that tracks calls and supports per-query data.
@@ -39,21 +40,7 @@ function createMockSql() {
 }
 
 function createDatabaseSql(db: DatabaseSync): SqlStorage {
-  return {
-    exec(query: string, ...params: unknown[]): SqlResult {
-      const sqliteParams = params as SQLInputValue[];
-      if (/^\s*(?:PRAGMA|SELECT)\b/i.test(query)) {
-        const rows = db.prepare(query).all(...sqliteParams);
-        return { toArray: () => rows, one: () => rows[0] ?? null };
-      }
-      if (params.length > 0) {
-        db.prepare(query).run(...sqliteParams);
-      } else {
-        db.exec(query);
-      }
-      return { toArray: () => [], one: () => null };
-    },
-  };
+  return createNodeSqlStorage(db).sql;
 }
 
 function expectClientRequestIdIndex(db: DatabaseSync): void {

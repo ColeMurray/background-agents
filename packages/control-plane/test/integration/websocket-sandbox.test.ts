@@ -9,6 +9,7 @@ import {
   openClientWs,
   openSandboxWs,
   seedSandboxAuth,
+  seedMessage,
   queryDO,
   waitForSandboxStatus,
 } from "./helpers";
@@ -61,14 +62,14 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(ws).toBeNull();
   });
 
-  it("upgrade for stopped sandbox returns 410", async () => {
-    const name = `ws-sandbox-stopped-${Date.now()}`;
+  it.each(["stopped", "stale"] as const)("upgrade for %s sandbox returns 410", async (status) => {
+    const name = `ws-sandbox-${status}-${Date.now()}`;
     const { stub } = await initNamedSession(name);
 
     await seedSandboxAuth(stub, {
       authToken: SANDBOX_TOKEN,
       sandboxId: SANDBOX_ID,
-      status: "stopped",
+      status,
     });
 
     const { ws, response } = await openSandboxWs(name, {
@@ -266,6 +267,54 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(response.status).toBe(401);
     expect(await response.text()).toBe("Unauthorized: Invalid auth token");
     expect(ws).toBeNull();
+  });
+
+  it("keeps exactly one sandbox socket and tags it with the persisted sandbox ID", async () => {
+    const name = `ws-sandbox-replacement-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "ready",
+    });
+
+    const rejected = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: "stale-sandbox-id",
+    });
+    expect(rejected.response.status).toBe(403);
+    expect(rejected.ws).toBeNull();
+
+    const { ws: firstWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(firstWs).not.toBeNull();
+    firstWs!.accept();
+    const firstClosed = new Promise<CloseEvent>((resolve) => {
+      firstWs!.addEventListener("close", resolve, { once: true });
+    });
+
+    const { ws: replacementWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(replacementWs).not.toBeNull();
+    replacementWs!.accept();
+
+    await expect(firstClosed).resolves.toMatchObject({
+      code: 1000,
+      reason: "New sandbox connecting",
+    });
+    await runInSessionDO(stub, (instance, state) => {
+      const liveSandboxSockets = state
+        .getWebSockets("sandbox")
+        .filter((socket) => socket.readyState === WebSocket.OPEN);
+      expect(liveSandboxSockets).toHaveLength(1);
+      expect(state.getTags(liveSandboxSockets[0])).toContain(`sid:${SANDBOX_ID}`);
+    });
+
+    replacementWs!.close();
   });
 
   it("sandbox connect sets status to ready", async () => {
@@ -541,6 +590,64 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       return data.callId === "call-ws-1";
     });
     expect(matching.length).toBeGreaterThanOrEqual(1);
+
+    ws!.close();
+  });
+
+  it("acknowledges a re-flushed completion without duplicating durable effects", async () => {
+    const name = `ws-sandbox-ack-redelivery-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
+    const [{ id: authorId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    await seedMessage(stub, {
+      id: "message-ack-redelivery",
+      authorId,
+      content: "Finish once",
+      source: "web",
+      status: "processing",
+      createdAt: 100,
+      startedAt: 200,
+    });
+    const { ws } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(ws).not.toBeNull();
+    ws!.accept();
+
+    const event = {
+      type: "execution_complete",
+      messageId: "message-ack-redelivery",
+      success: true,
+      sandboxId: SANDBOX_ID,
+      timestamp: Date.now() / 1000,
+      ackId: "ack-redelivery-1",
+    };
+    for (let delivery = 0; delivery < 2; delivery += 1) {
+      const ack = collectMessages(ws!, {
+        until: (message) => message.type === "ack" && message.ackId === event.ackId,
+      });
+      ws!.send(JSON.stringify(event));
+      expect(await ack).toContainEqual({ type: "ack", ackId: event.ackId });
+    }
+
+    expect(
+      await queryDO<{ status: string; completed_at: number }>(
+        stub,
+        "SELECT status, completed_at FROM messages WHERE id = ?",
+        event.messageId
+      )
+    ).toMatchObject([{ status: "completed" }]);
+    expect(
+      await queryDO<{ count: number }>(
+        stub,
+        "SELECT COUNT(*) AS count FROM events WHERE id = ?",
+        `execution_complete:${event.messageId}`
+      )
+    ).toEqual([{ count: 1 }]);
 
     ws!.close();
   });
