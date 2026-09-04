@@ -165,9 +165,9 @@ export const NODE_HOST_VARIABLE_NAMES = [
 
 /** What the process itself needs: where to listen and where its files live. */
 export interface NodeHostSettings {
-  /** Interface to listen on; `0.0.0.0` unless `HOST` says otherwise. */
+  /** Interface to listen on; `HOST`, else DEFAULT_HOST. */
   host: string;
-  /** `PORT`; 8787 unless set, the port the Worker's local dev server uses. */
+  /** `PORT`, else DEFAULT_PORT, the port the Worker's local dev server uses. */
   port: number;
   /** `DATA_DIR`: the global store, the session files, and the host alarm index live here. */
   dataDir: string;
@@ -177,6 +177,7 @@ export interface NodeHostSettings {
   shutdownTimeoutMs: number;
 }
 
+const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 8787;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 
@@ -198,7 +199,7 @@ export function readNodeHostSettings(source: ConfigSource): NodeHostSettings {
     throw new Error("DATA_DIR is required: the directory that holds the host's databases");
   }
   return {
-    host: present(variables.HOST) ?? "0.0.0.0",
+    host: present(variables.HOST) ?? DEFAULT_HOST,
     port: integer("PORT", variables.PORT, DEFAULT_PORT),
     dataDir: resolve(dataDir),
     migrationsDir: resolve(present(variables.MIGRATIONS_DIR) ?? DEFAULT_MIGRATIONS_DIR),
