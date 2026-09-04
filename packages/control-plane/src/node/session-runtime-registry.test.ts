@@ -13,10 +13,10 @@ import type { SessionPlatform, SessionStorage } from "../session/platform";
 import type { BackgroundTasks } from "../platform-ports";
 import {
   SERVICE_RESTART_CLOSE_CODE,
-  SessionRegistry,
-  type RegisteredSessionRuntime,
-  type SessionRegistryOptions,
-} from "./session-registry";
+  SessionRuntimeRegistry,
+  type ManagedSessionRuntime,
+  type SessionRuntimeRegistryOptions,
+} from "./session-runtime-registry";
 import { createFileSessionStoreProvider, type SessionStoreProvider } from "./session-store";
 
 const GC_CHILD = "SESSION_REGISTRY_GC_CHILD";
@@ -47,7 +47,7 @@ function spyLogger() {
 }
 
 /** A runtime double exposing what the registry handed it and what it received. */
-interface FakeRuntime extends RegisteredSessionRuntime {
+interface FakeRuntime extends ManagedSessionRuntime {
   platform: SessionPlatform;
   rehydrated: number;
   tasks: BackgroundTasks | null;
@@ -128,7 +128,7 @@ function fakeAlarms() {
 const IDLE_AFTER_MS = 120_000;
 const HORIZON_MS = 60_000;
 
-describe("SessionRegistry", () => {
+describe("SessionRuntimeRegistry", () => {
   let now: number;
   const clock = { now: () => now, advance: (ms: number) => (now += ms) };
   let stores: ReturnType<typeof fakeStores>;
@@ -136,18 +136,18 @@ describe("SessionRegistry", () => {
   let log: ReturnType<typeof spyLogger>;
   let built: FakeRuntime[];
   let buildRuntime: ReturnType<typeof vi.fn<(platform: SessionPlatform) => FakeRuntime>>;
-  let registries: SessionRegistry<FakeRuntime>[];
+  let registries: SessionRuntimeRegistry<FakeRuntime>[];
 
   const makeRegistry = (
-    overrides: Partial<SessionRegistryOptions<FakeRuntime>> = {}
-  ): SessionRegistry<FakeRuntime> => {
-    const registry = new SessionRegistry<FakeRuntime>({
+    overrides: Partial<SessionRuntimeRegistryOptions<FakeRuntime>> = {}
+  ): SessionRuntimeRegistry<FakeRuntime> => {
+    const registry = new SessionRuntimeRegistry<FakeRuntime>({
       db: {} as SqlDatabase,
-      stores: stores.provider,
+      storeProvider: stores.provider,
       alarmStoreFor: alarms.alarmStoreFor,
       buildRuntime,
       log: log as never,
-      now: clock.now,
+      nowMs: clock.now,
       idleAfterMs: IDLE_AFTER_MS,
       deadlineHorizonMs: HORIZON_MS,
       ...overrides,
@@ -171,11 +171,11 @@ describe("SessionRegistry", () => {
   });
 
   afterEach(async () => {
-    for (const registry of registries) await registry.close();
+    for (const registry of registries) await registry.shutdown({ timeoutMs: 1_000 });
   });
 
   it("is driven by what SessionRuntime exposes", () => {
-    expectTypeOf<SessionRuntime>().toExtend<RegisteredSessionRuntime>();
+    expectTypeOf<SessionRuntime>().toExtend<ManagedSessionRuntime>();
   });
 
   it("opens a session on first touch, rehydrates it once, and reuses it after", async () => {
@@ -260,14 +260,14 @@ describe("SessionRegistry", () => {
 
     expect(stores.opened).toMatchObject([{ id: "s1", closes: 1 }]);
     expect(registry.residentSessionIds()).toEqual([]);
-    await registry.close();
+    await registry.shutdown();
     expect(stores.opened[0]!.closes).toBe(1);
   });
 
   it("reopens a retired session from its file with its state intact", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "session-registry-"));
     try {
-      const registry = makeRegistry({ stores: createFileSessionStoreProvider(dataDir) });
+      const registry = makeRegistry({ storeProvider: createFileSessionStoreProvider(dataDir) });
       const rows = (runtime: FakeRuntime): number =>
         (
           runtime.platform.storage.sql.exec("SELECT count(*) AS n FROM marker").one() as {
@@ -284,7 +284,7 @@ describe("SessionRegistry", () => {
 
       expect(await registry.withRuntime("s1", async (runtime) => rows(runtime))).toBe(1);
       expect(buildRuntime).toHaveBeenCalledTimes(2);
-      await registry.close();
+      await registry.shutdown();
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -404,7 +404,7 @@ describe("SessionRegistry", () => {
     expect(registry.residentSessionIds()).toEqual(["s1", "s2"]);
     expect(log.warn).toHaveBeenCalledWith("session_registry.resident_cap_exceeded", {
       max_resident: 1,
-      resident: 1,
+      resident: 2,
     });
     inFlight.resolve();
     await pending;
@@ -460,50 +460,186 @@ describe("SessionRegistry", () => {
       expect(await registry.sweep()).toEqual(["s1"]);
     });
 
-    it("close retires every runtime, closes adopted sockets with 1012, and refuses later opens", async () => {
+    it("shutdown closes adopted sockets with 1012 and delivers their close before closing the store", async () => {
       const registry = makeRegistry();
       const { server, client } = await connect();
       const closed = new Promise<{ code: number; reason: string }>((done) =>
         client.once("close", (code, reason) => done({ code, reason: reason.toString() }))
       );
-      await registry.withRuntime("s1", async (runtime) => {
+      const runtime = await registry.withRuntime("s1", async (runtime) => {
         runtime.platform.sockets.adopt(server, ["wsid:c1"]);
+        return runtime;
+      });
+      let storeClosesAtDelivery = -1;
+      runtime.server.onClose.mockImplementation(async () => {
+        storeClosesAtDelivery = stores.opened[0]!.closes;
       });
       await registry.withRuntime("s2", async () => {});
 
-      await registry.close();
+      await registry.shutdown();
 
       expect(await closed).toEqual({ code: SERVICE_RESTART_CLOSE_CODE, reason: "Service restart" });
+      expect(runtime.server.onClose).toHaveBeenCalledWith(server, 1012, "Service restart", true);
+      expect(storeClosesAtDelivery).toBe(0);
       expect(registry.residentSessionIds()).toEqual([]);
       expect(stores.opened.map((s) => s.closes)).toEqual([1, 1]);
-      expect(log.warn).toHaveBeenCalledWith(
-        "session_registry.retired_busy",
-        expect.objectContaining({ session_id: "s1", open_sockets: 1 })
-      );
+      expect(log.warn).not.toHaveBeenCalled();
       await expect(registry.withRuntime("s3", async () => {})).rejects.toThrow(
-        "SessionRegistry is closed"
+        "SessionRuntimeRegistry is shutting down"
       );
     });
   });
 
-  it("close waits for an open in progress and retires what it built", async () => {
+  it("shutdown refuses new leases on resident runtimes and waits for held ones", async () => {
+    const registry = makeRegistry();
+    const held = deferred();
+    const pending = registry.withRuntime("s1", () => held.promise);
+    await flush();
+
+    const shutdown = registry.shutdown();
+    await flush();
+    await expect(registry.withRuntime("s1", async () => {})).rejects.toThrow(
+      "SessionRuntimeRegistry is shutting down"
+    );
+    expect(stores.opened[0]!.closes).toBe(0);
+
+    held.resolve();
+    await pending;
+    await shutdown;
+    expect(stores.opened[0]!.closes).toBe(1);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("shutdown forces a runtime still busy at the budget", async () => {
+    const registry = makeRegistry();
+    const never = deferred();
+    const pending = registry.withRuntime("s1", () => never.promise);
+    await flush();
+
+    await registry.shutdown({ timeoutMs: 20 });
+
+    expect(stores.opened[0]!.closes).toBe(1);
+    expect(log.warn).toHaveBeenCalledWith("session_registry.retired_busy", {
+      session_id: "s1",
+      active_leases: 1,
+      open_sockets: 0,
+      background_tasks: 0,
+    });
+    never.resolve();
+    await pending;
+  });
+
+  it("shutdown waits for a runtime's background tasks", async () => {
+    const registry = makeRegistry();
+    buildRuntime.mockImplementationOnce((platform) => {
+      const runtime = fakeRuntime(platform, { tasks: true });
+      built.push(runtime);
+      return runtime;
+    });
+    const work = deferred();
+    await registry.withRuntime("s1", async (runtime) => {
+      runtime.tasks!.submit(() => work.promise, { name: "test.task" });
+    });
+
+    const shutdown = registry.shutdown();
+    await flush();
+    expect(stores.opened[0]!.closes).toBe(0);
+    work.resolve();
+    await shutdown;
+    expect(stores.opened[0]!.closes).toBe(1);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("shutdown waits for an open in progress and retires what it built", async () => {
     const registry = makeRegistry();
     stores.state.gate = deferred();
     const pending = registry.withRuntime("s1", async () => "ran");
     await flush();
 
-    const closing = registry.close();
+    const shutdown = registry.shutdown();
     stores.state.gate.resolve();
-    await closing;
+    await shutdown;
 
-    // The event that opened the runtime ran against it before the close
-    // retired it; the store is closed once and reopening is refused.
-    expect(await pending).toBe("ran");
+    // The build published and was retired; the event that started it is
+    // refused its lease rather than handed a retired runtime.
     expect(stores.opened).toMatchObject([{ id: "s1", closes: 1 }]);
     expect(registry.residentSessionIds()).toEqual([]);
-    await expect(registry.withRuntime("s1", async () => {})).rejects.toThrow(
-      "SessionRegistry is closed"
+    await expect(pending).rejects.toThrow("SessionRuntimeRegistry is shutting down");
+  });
+
+  it("takes the lease in the continuation that saw the runtime resident", async () => {
+    const registry = makeRegistry();
+    await registry.withRuntime("s1", async () => {});
+    clock.advance(IDLE_AFTER_MS);
+    alarms.reads.gate = deferred();
+    const sweep = registry.sweep();
+    await flush();
+
+    // No turn of the event loop between this call and the gate: the sweep's
+    // re-check runs in the microtasks right after the lease is taken.
+    const inFlight = deferred();
+    const pending = registry.withRuntime("s1", () => inFlight.promise);
+    alarms.reads.gate.resolve();
+
+    expect(await sweep).toEqual([]);
+    expect(stores.opened[0]!.closes).toBe(0);
+    inFlight.resolve();
+    await pending;
+  });
+
+  it("does not rehydrate an activation an alarm delivery joined", async () => {
+    const registry = makeRegistry();
+    stores.state.gate = deferred();
+    const request = registry.withRuntime("s1", async () => {});
+    const delivery = registry.deliverScheduledDeadline("s1");
+    await flush();
+    stores.state.gate.resolve();
+    await Promise.all([request, delivery]);
+
+    expect(buildRuntime).toHaveBeenCalledTimes(1);
+    expect(built[0]!.rehydrated).toBe(0);
+    expect(built[0]!.server.onScheduledDeadline).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits concurrent cold opens at publish, exceeding the cap only for busy runtimes", async () => {
+    const registry = makeRegistry({ maxResident: 1 });
+    stores.state.gate = deferred();
+    const first = deferred();
+    const second = deferred();
+    const a = registry.withRuntime("s1", () => first.promise);
+    const b = registry.withRuntime("s2", () => second.promise);
+    await flush();
+    stores.state.gate.resolve();
+    await flush();
+
+    expect(registry.residentSessionIds().sort()).toEqual(["s1", "s2"]);
+    expect(log.warn).toHaveBeenCalledWith("session_registry.resident_cap_exceeded", {
+      max_resident: 1,
+      resident: 2,
+    });
+    first.resolve();
+    second.resolve();
+    await Promise.all([a, b]);
+
+    // Once both are quiescent, the next open brings residency back under the cap.
+    await registry.withRuntime("s3", async () => {});
+    expect(registry.residentSessionIds()).toEqual(["s3"]);
+    expect(stores.opened.map((s) => `${s.id}:${s.closes}`)).toEqual(["s1:1", "s2:1", "s3:0"]);
+  });
+
+  it("does not retire a resident to make room for a build that fails", async () => {
+    const registry = makeRegistry({ maxResident: 1 });
+    await registry.withRuntime("s1", async () => {});
+    buildRuntime.mockImplementationOnce(() => {
+      throw new Error("provider misconfigured");
+    });
+
+    await expect(registry.withRuntime("s2", async () => {})).rejects.toThrow(
+      "provider misconfigured"
     );
+
+    expect(registry.residentSessionIds()).toEqual(["s1"]);
+    expect(stores.opened.map((s) => s.closes)).toEqual([0, 1]);
   });
 
   it("survives late garbage collection of a retired session's store", () => {
@@ -533,9 +669,9 @@ if (isGcChild) {
     it("opens, reads, retires, and lets the collector run afterwards", async () => {
       const dataDir = mkdtempSync(join(tmpdir(), "session-registry-gc-"));
       const alarms = fakeAlarms();
-      const registry = new SessionRegistry<FakeRuntime>({
+      const registry = new SessionRuntimeRegistry<FakeRuntime>({
         db: {} as SqlDatabase,
-        stores: createFileSessionStoreProvider(dataDir),
+        storeProvider: createFileSessionStoreProvider(dataDir),
         alarmStoreFor: alarms.alarmStoreFor,
         buildRuntime: (platform) => fakeRuntime(platform),
         log: spyLogger() as never,
@@ -555,7 +691,7 @@ if (isGcChild) {
           await new Promise<void>((done) => setImmediate(done));
         }
       } finally {
-        await registry.close();
+        await registry.shutdown();
         rmSync(dataDir, { recursive: true, force: true });
       }
     });
