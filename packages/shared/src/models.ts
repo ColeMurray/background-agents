@@ -176,6 +176,15 @@ export const MODEL_CATALOG = [
         },
       },
       {
+        id: "openai/gpt-6-astra",
+        name: "GPT-6 Astra",
+        description: "Most capable model for complex, demanding work",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
+      {
         id: "openai/gpt-5.3-codex",
         name: "GPT 5.3 Codex",
         description: "Latest codex",
