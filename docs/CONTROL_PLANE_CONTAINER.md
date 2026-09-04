@@ -137,6 +137,31 @@ On AWS the container reads the same `.env` variables from its environment. The d
 materializes them from SSM Parameter Store; nothing is baked into the image. With an instance role,
 leave `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` empty and the SDK uses the role.
 
+## The smoke test
+
+CI boots this stack on every pull request and round-trips one session through it:
+
+```bash
+scripts/compose-smoke.sh
+```
+
+It writes its own throwaway `.env` (and refuses to run if one already exists), builds the image,
+brings the stack up with a stand-in for the Modal data plane, creates a session, sends a prompt, and
+waits for the stand-in sandbox's reply to arrive on a subscribed client socket. Then it checks what
+only a booted container shows: migrations applied, the cron loop ticking, Litestream replicating, a
+clean drain on SIGTERM, and a readable failure when a required key is blank.
+
+The stand-in lives in `packages/control-plane/test/smoke/`. It answers the control plane's sandbox
+endpoints, verifying the same HMAC token Modal verifies, then connects back over the compose network
+and plays the bridge. Nothing reaches a cloud, so the smoke needs no credentials.
+
+To run it beside a stack already holding the default ports, move its published ones:
+
+```bash
+SMOKE_APP_PORT=8798 SMOKE_MINIO_PORT=9010 SMOKE_MINIO_CONSOLE_PORT=9011 \
+  SMOKE_FAKE_MODAL_PORT=9910 scripts/compose-smoke.sh
+```
+
 ## Not yet available on the container
 
 - Repository image builds: the finalization step needs the jobs queue, which has no container

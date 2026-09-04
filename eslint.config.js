@@ -41,6 +41,20 @@ export default tseslint.config(
     },
   },
 
+  // Plain Node scripts that run outside a bundler: the compose smoke's driver
+  // and its stand-in sandbox host.
+  {
+    files: ["**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        ...globals.node,
+        ...globals.es2022,
+      },
+    },
+  },
+
   // TypeScript files configuration
   {
     files: ["packages/**/*.{ts,tsx}"],
