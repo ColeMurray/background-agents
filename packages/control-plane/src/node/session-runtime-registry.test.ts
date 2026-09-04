@@ -20,6 +20,7 @@ import {
 import { createFileSessionStoreProvider, type SessionStoreProvider } from "./session-store";
 
 const GC_CHILD = "SESSION_REGISTRY_GC_CHILD";
+const GC_CHILD_TIMEOUT_MS = 60_000;
 const isGcChild = process.env[GC_CHILD] === "1";
 
 interface Deferred<T = void> {
@@ -482,33 +483,50 @@ describe("SessionRuntimeRegistry", () => {
       expect(await registry.sweep()).toEqual(["s1"]);
     });
 
-    it("shutdown closes adopted sockets with 1012 and delivers their close before closing the store", async () => {
-      const registry = makeRegistry();
-      const { server, client } = await connect();
-      const closed = new Promise<{ code: number; reason: string }>((done) =>
-        client.once("close", (code, reason) => done({ code, reason: reason.toString() }))
-      );
-      const runtime = await registry.withRuntime("s1", async (runtime) => {
-        runtime.platform.sockets.adopt(server, ["wsid:c1"]);
-        return runtime;
-      });
-      let storeClosesAtDelivery = -1;
-      runtime.server.onClose.mockImplementation(async () => {
-        storeClosesAtDelivery = stores.opened[0]!.closes;
-      });
-      await registry.withRuntime("s2", async () => {});
+    it("shutdown closes adopted sockets with 1012 and delivers their close against an open store", async () => {
+      const dataDir = mkdtempSync(join(tmpdir(), "session-registry-shutdown-"));
+      try {
+        const registry = makeRegistry({ storeProvider: createFileSessionStoreProvider(dataDir) });
+        const { server, client } = await connect();
+        const closed = new Promise<{ code: number; reason: string }>((done) =>
+          client.once("close", (code, reason) => done({ code, reason: reason.toString() }))
+        );
+        const runtime = await registry.withRuntime("s1", async (runtime) => {
+          runtime.platform.sockets.adopt(server, ["wsid:c1"]);
+          return runtime;
+        });
+        // The production disconnect path persists cleanup; a closed store
+        // would throw here and the host would log a failed delivery.
+        let deliveredAgainstOpenStore = false;
+        runtime.server.onClose.mockImplementation(async () => {
+          runtime.platform.storage.sql.exec("SELECT count(*) AS n FROM session").one();
+          deliveredAgainstOpenStore = true;
+        });
+        await registry.withRuntime("s2", async () => {});
 
-      await registry.shutdown();
+        await registry.shutdown();
 
-      expect(await closed).toEqual({ code: SERVICE_RESTART_CLOSE_CODE, reason: "Service restart" });
-      expect(runtime.server.onClose).toHaveBeenCalledWith(server, 1012, "Service restart", true);
-      expect(storeClosesAtDelivery).toBe(0);
-      expect(registry.residentSessionIds()).toEqual([]);
-      expect(stores.opened.map((s) => s.closes)).toEqual([1, 1]);
-      expect(log.warn).not.toHaveBeenCalled();
-      await expect(registry.withRuntime("s3", async () => {})).rejects.toThrow(
-        "SessionRuntimeRegistry is shutting down"
-      );
+        expect(await closed).toEqual({
+          code: SERVICE_RESTART_CLOSE_CODE,
+          reason: "Service restart",
+        });
+        expect(runtime.server.onClose).toHaveBeenCalledWith(server, 1012, "Service restart", true);
+        expect(deliveredAgainstOpenStore).toBe(true);
+        expect(registry.residentSessionIds()).toEqual([]);
+        for (const id of ["s1", "s2"]) {
+          expect(log.info).toHaveBeenCalledWith(
+            "session_registry.retired",
+            expect.objectContaining({ session_id: id, reason: "shutdown" })
+          );
+        }
+        expect(log.warn).not.toHaveBeenCalled();
+        expect(log.error).not.toHaveBeenCalled();
+        await expect(registry.withRuntime("s3", async () => {})).rejects.toThrow(
+          "SessionRuntimeRegistry is shutting down"
+        );
+      } finally {
+        rmSync(dataDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -623,6 +641,20 @@ describe("SessionRuntimeRegistry", () => {
     expect(built[0]!.server.onScheduledDeadline).toHaveBeenCalledTimes(1);
   });
 
+  it("does not rehydrate an activation a request joined after an alarm delivery started it", async () => {
+    const registry = makeRegistry();
+    stores.state.gate = deferred();
+    const delivery = registry.deliverScheduledDeadline("s1");
+    const request = registry.withRuntime("s1", async () => {});
+    await flush();
+    stores.state.gate.resolve();
+    await Promise.all([delivery, request]);
+
+    expect(buildRuntime).toHaveBeenCalledTimes(1);
+    expect(built[0]!.rehydrated).toBe(0);
+    expect(built[0]!.server.onScheduledDeadline).toHaveBeenCalledTimes(1);
+  });
+
   it("admits concurrent cold opens at publish, exceeding the cap only for busy runtimes", async () => {
     const registry = makeRegistry({ maxResident: 1 });
     stores.state.gate = deferred();
@@ -675,7 +707,7 @@ describe("SessionRuntimeRegistry", () => {
         cwd: packageRoot,
         encoding: "utf8",
         env: { ...process.env, [GC_CHILD]: "1" },
-        timeout: 60_000,
+        timeout: GC_CHILD_TIMEOUT_MS,
       }
     );
 
