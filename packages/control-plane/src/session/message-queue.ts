@@ -399,7 +399,11 @@ export class SessionMessageQueue {
       // path re-validates through the processing claim; this path has no
       // claim, so it re-reads what it acts on: a cancel or archive that
       // landed meanwhile has closed the session and terminalized the prompt,
-      // and must not get a sandbox spawned for it.
+      // and must not get a sandbox spawned for it. The queue is then pumped
+      // again over the state that moved: a prompt cancelled on its own
+      // leaves the next one pending with nobody else to dispatch it, and the
+      // pump stops by itself for a closed session, a processing owner, a
+      // stop fence, or an empty queue.
       if (!this.isPromptStillDispatchable(message.id)) {
         this.log.info("prompt.dispatch", {
           event: "prompt.dispatch",
@@ -407,6 +411,7 @@ export class SessionMessageQueue {
           outcome: "deferred",
           reason: "superseded_during_auth",
         });
+        await this.processMessageQueue();
         return;
       }
       this.log.info("prompt.dispatch", {

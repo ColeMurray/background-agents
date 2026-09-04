@@ -150,7 +150,7 @@ function buildQueue() {
       messageId: "msg-autofix",
     })),
     getAutofixMessageId: vi.fn(() => null as string | null),
-    getMessageStatus: vi.fn((): MessageStatus | null => "pending"),
+    getMessageStatus: vi.fn((_messageId: string): MessageStatus | null => "pending"),
     cancelPendingMessage: vi.fn(() => false),
     getUnfinishedMessagePosition: vi.fn((): number | null => 1),
     listUnfinishedMessages: vi.fn((): MessageRow[] => []),
@@ -517,6 +517,37 @@ describe("SessionMessageQueue", () => {
       "prompt.dispatch",
       expect.objectContaining({ outcome: "deferred", reason: "superseded_during_auth" })
     );
+  });
+
+  it("dispatches the next prompt when only the head was cancelled during the provider-auth lookup", async () => {
+    const h = buildQueue();
+    const session = createSession();
+    h.repository.getSession.mockImplementation(() => session);
+    h.repository.getNextPendingMessage
+      .mockReturnValueOnce(createMessage({ id: "msg-a" }))
+      .mockReturnValueOnce(createMessage({ id: "msg-b" }))
+      .mockReturnValue(null);
+    h.wsManager.getSandboxSocket.mockReturnValue(null);
+    h.getProviderAuthenticationError.mockImplementationOnce(async () => {
+      // The cancel of the head alone lands at this await: the session stays
+      // open and msg-b stays pending, with nothing else to dispatch it.
+      h.repository.getMessageStatus.mockImplementation((id) => (id === "msg-a" ? null : "pending"));
+      return null;
+    });
+
+    await h.queue.processMessageQueue();
+    await h.backgroundTasks.settle();
+
+    expect(h.log.info).toHaveBeenCalledWith(
+      "prompt.dispatch",
+      expect.objectContaining({ message_id: "msg-a", reason: "superseded_during_auth" })
+    );
+    expect(h.log.info).toHaveBeenCalledWith(
+      "prompt.dispatch",
+      expect.objectContaining({ message_id: "msg-b", reason: "no_sandbox" })
+    );
+    expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledTimes(1);
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_spawning" });
   });
 
   it("does not block queue processing on the sandbox spawn", async () => {
