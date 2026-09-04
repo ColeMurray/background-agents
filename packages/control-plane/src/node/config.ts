@@ -90,6 +90,11 @@ const ENV_CONFIG_KEYS = {
   LOG_LEVEL: true,
 } as const satisfies Record<keyof EnvConfig, true>;
 
+/** The `EnvConfig` field names, for checking documentation against the type. */
+export const ENV_CONFIG_KEY_NAMES: readonly (keyof EnvConfig)[] = Object.keys(
+  ENV_CONFIG_KEYS
+) as (keyof EnvConfig)[];
+
 /** The `EnvConfig` fields the type does not mark optional. */
 type RequiredEnvConfigKey = {
   [K in keyof EnvConfig]-?: undefined extends EnvConfig[K] ? never : K;
