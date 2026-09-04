@@ -88,6 +88,7 @@ function fakeStores() {
   const opened: Array<{ id: string; storage: SessionStorage; closes: number }> = [];
   const state = { gate: null as Deferred | null, failNext: null as Error | null };
   const provider: SessionStoreProvider = {
+    exists: async (id) => opened.some((record) => record.id === id),
     open: async (id) => {
       if (state.gate) await state.gate.promise;
       if (state.failNext) {

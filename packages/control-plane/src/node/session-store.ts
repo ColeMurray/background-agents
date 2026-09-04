@@ -5,6 +5,7 @@
  * live on the host's persistent volume, so there is no snapshot cycle.
  */
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionStorage } from "../session/platform";
 import { initSchema } from "../session/schema";
@@ -39,12 +40,16 @@ export type OwnedSessionStore = Pick<NodeSessionStore, "storage" | "close">;
  */
 export interface SessionStoreProvider {
   open(sessionId: string): Promise<OwnedSessionStore>;
+  /** Whether the session already has a store, without creating one. */
+  exists(sessionId: string): Promise<boolean>;
 }
 
 /** The provider over `<dataDir>/sessions/<id>.db` files. */
 export function createFileSessionStoreProvider(dataDir: string): SessionStoreProvider {
   return {
     open: async (sessionId) => openSessionStore({ dataDir, sessionId }),
+    exists: async (sessionId) =>
+      SESSION_FILE_ID.test(sessionId) && existsSync(join(dataDir, "sessions", `${sessionId}.db`)),
   };
 }
 
