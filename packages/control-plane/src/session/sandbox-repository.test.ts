@@ -111,19 +111,22 @@ describe("SandboxRepository", () => {
   });
 
   describe("transitionSandboxStatus", () => {
-    const query = `UPDATE sandbox SET status = ? WHERE id = (SELECT id FROM sandbox LIMIT 1) AND status = ?`;
+    const query = `UPDATE sandbox SET status = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ? AND status = ?`;
+    const generation = { sandboxId: "modal-sb-1", createdAt: 5000 };
 
-    it("moves the row only while it is still in the expected status", () => {
+    it("moves the row only while it is still the generation's and in the expected status", () => {
       mock.setRowsWritten(query, 1);
 
-      expect(repository.transitionSandboxStatus("snapshotting", "ready")).toBe(true);
+      expect(repository.transitionSandboxStatus(generation, "snapshotting", "ready")).toBe(true);
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toBe(query);
-      expect(mock.calls[0].params).toEqual(["ready", "snapshotting"]);
+      expect(mock.calls[0].params).toEqual(["ready", "modal-sb-1", 5000, "snapshotting"]);
     });
 
-    it("reports a row that another event moved instead of overwriting it", () => {
-      expect(repository.transitionSandboxStatus("spawning", "connecting")).toBe(false);
+    it("reports a row that another event or attempt moved instead of overwriting it", () => {
+      expect(repository.transitionSandboxStatus(generation, "spawning", "connecting")).toBe(false);
     });
   });
 

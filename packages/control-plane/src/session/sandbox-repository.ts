@@ -117,14 +117,25 @@ export class SandboxRepository {
   }
 
   /**
-   * Move the sandbox from `from` to `to` only while it is still in `from`;
-   * reports whether it was. The conditional form of `updateSandboxStatus` for
-   * writes that follow an await, where another event may have moved the row.
+   * Move the sandbox from `from` to `to` only while the row still carries the
+   * sandbox `generation` names (its logical id and the `created_at` its
+   * reservation or resume stamped) and is still in `from`; reports whether it
+   * was. The conditional form of `updateSandboxStatus` for writes that follow
+   * an await: another event may have moved the row, and a newer attempt may
+   * have brought it back to the same status.
    */
-  transitionSandboxStatus(from: SandboxStatus, to: SandboxStatus): boolean {
+  transitionSandboxStatus(
+    generation: { sandboxId: string | null; createdAt: number },
+    from: SandboxStatus,
+    to: SandboxStatus
+  ): boolean {
     const result = this.sql.exec(
-      `UPDATE sandbox SET status = ? WHERE id = (SELECT id FROM sandbox LIMIT 1) AND status = ?`,
+      `UPDATE sandbox SET status = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ? AND status = ?`,
       to,
+      generation.sandboxId,
+      generation.createdAt,
       from
     );
     // Consume the result before reading rowsWritten so the count is final.
