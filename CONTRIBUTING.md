@@ -80,9 +80,10 @@ Use clear, descriptive commit messages:
 5. Provide a clear description of your changes
 6. For a change under `packages/control-plane/src/session/*` or `src/sandbox/lifecycle/*` that adds
    or moves an `await`: every repository read that a later write depends on either happens after the
-   await, in the write's continuation, or the write is a conditional statement whose result the
-   caller checks. See [docs/CONCURRENCY.md](docs/CONCURRENCY.md) for the model and the audit table
-   to extend.
+   await, in the write's continuation; or the write is a conditional statement whose result the
+   caller checks; or the write commutes with every update another event could make meanwhile, and a
+   comment at the site says why. See [docs/CONCURRENCY.md](docs/CONCURRENCY.md) for the model and
+   the audit table to extend.
 
 ### Source Control Provider Contributions
 
