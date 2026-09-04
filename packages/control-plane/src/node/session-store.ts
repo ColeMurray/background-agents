@@ -5,11 +5,11 @@
  * live on the host's persistent volume, so there is no snapshot cycle.
  */
 
-import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { SessionStorage } from "../session/platform";
 import { initSchema } from "../session/schema";
+import { ensurePrivateDirectory, makeFilePrivate } from "./private-paths";
 import { createNodeSqlStorage } from "./sqlite-storage";
 
 /** How long a writer waits on another connection's lock before failing. */
@@ -18,9 +18,6 @@ const BUSY_TIMEOUT_MS = 5_000;
 /** How often the WAL switch is retried while another connection holds the file. */
 const BUSY_RETRY_MS = 10;
 const SQLITE_BUSY = 5;
-
-const PRIVATE_DIRECTORY = 0o700;
-const PRIVATE_FILE = 0o600;
 
 /** A session id must be a single path segment: it names the file directly. */
 const SESSION_FILE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -69,17 +66,13 @@ export function openSessionStore(options: OpenSessionStoreOptions): NodeSessionS
   if (!SESSION_FILE_ID.test(sessionId)) {
     throw new Error(`Session id ${JSON.stringify(sessionId)} cannot name a session file`);
   }
-  // Session files hold tokens and sandbox credentials: the directory and
-  // every file in it are private to the host user. chmod runs after the
-  // fact so an existing directory or file, and a permissive umask, cannot
-  // widen them; SQLite gives the -wal and -shm files the main file's mode.
+  // SQLite gives the -wal and -shm files the main file's mode.
   const directory = join(dataDir, "sessions");
-  mkdirSync(directory, { recursive: true, mode: PRIVATE_DIRECTORY });
-  chmodSync(directory, PRIVATE_DIRECTORY);
+  ensurePrivateDirectory(directory);
   const path = join(directory, `${sessionId}.db`);
   const db = new DatabaseSync(path);
   try {
-    chmodSync(path, PRIVATE_FILE);
+    makeFilePrivate(path);
     db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
     enableWriteAheadLog(db);
     const storage = createNodeSqlStorage(db);
