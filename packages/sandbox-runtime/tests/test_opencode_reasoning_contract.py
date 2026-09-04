@@ -2,6 +2,12 @@
 
 Uses real OpenCode 1.18.18, an isolated catalog/config, and fake localhost providers.
 Only reasoning settings are retained from requests; no real provider keys are used.
+
+Fixture: public subset of https://models.opencode.ai/api.json, retrieved 2026-09-04.
+Source SHA-256: ef112420273b7e572ef9c87db13a2f30fe1a562c29ea30d365b911889f9ff46c
+Subset SHA-256: 18e7e0ca29f785f273d50776d9d96f6dd2be6e754d62d14d73b23325d7eac6da
+Reconcile this frozen fixture with shared model/effort definitions when changing
+models or the binary. Mocks verify serialization, not live provider acceptance.
 """
 
 import json
