@@ -76,7 +76,7 @@ export async function generateMetadata({ params }: DocumentationPageProps): Prom
     },
     openGraph: {
       type: "article",
-      siteName: "Background Agents",
+      siteName: "OpenInspect",
       title: page.data.title,
       description: page.data.description,
       url,

@@ -4,7 +4,7 @@ export function Logo() {
       <span className="flex size-7 items-center justify-center bg-[#1a1a1a] text-[10px] font-bold tracking-tight text-white">
         BA
       </span>
-      <span>Background Agents</span>
+      <span>OpenInspect</span>
     </span>
   );
 }

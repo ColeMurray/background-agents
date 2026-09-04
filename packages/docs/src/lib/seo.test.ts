@@ -17,7 +17,7 @@ describe("documentation structured data", () => {
       headline: "Run your first task",
       dateModified: "2026-09-04",
       mainEntityOfPage: "https://docs.backgroundagents.dev/getting-started/first-task",
-      publisher: { "@type": "Organization", name: "Background Agents" },
+      publisher: { "@type": "Organization", name: "OpenInspect" },
     });
   });
 });

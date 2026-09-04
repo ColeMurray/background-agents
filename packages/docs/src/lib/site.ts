@@ -1,6 +1,6 @@
 export const site = {
-  name: "Background Agents Docs",
-  titleTemplate: "%s | Background Agents Docs",
+  name: "OpenInspect Docs",
+  titleTemplate: "%s | OpenInspect Docs",
   description: "Learn how to delegate, monitor, review, and operate background coding agents.",
   url: "https://docs.backgroundagents.dev",
   productUrl: "https://backgroundagents.dev",

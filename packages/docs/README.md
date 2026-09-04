@@ -1,4 +1,4 @@
-# Background Agents documentation site
+# OpenInspect documentation site
 
 User-facing documentation for [docs.backgroundagents.dev](https://docs.backgroundagents.dev), built
 with Next.js and Fumadocs.

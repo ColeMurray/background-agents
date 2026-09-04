@@ -11,14 +11,14 @@ relatedCode:
   - docs/HOW_IT_WORKS.md
 ---
 
-Background Agents is designed for a **single trusted organization**. A deployment is one workspace,
+OpenInspect is designed for a **single trusted organization**. A deployment is one workspace,
 and its source-control application installation defines which repositories are available to that
 workspace.
 
 ## Identity and admission
 
 Signing in establishes identity through a configured provider such as GitHub or Google. Workspace
-admission and role checks then decide which Background Agents operations that identity may perform.
+admission and role checks then decide which OpenInspect operations that identity may perform.
 Authentication alone does not grant access to the workspace.
 
 Suspending a user blocks new interactive access. Operators should review automation and service
@@ -30,7 +30,7 @@ Sessions are workspace resources. Creator and participant labels provide attribu
 collaboration context; they are not private-session access-control lists. Do not put data in a
 session that other admitted workspace members must not see.
 
-Roles control Background Agents capabilities at the workspace level. They do not reproduce each
+Roles control OpenInspect capabilities at the workspace level. They do not reproduce each
 person's source-control permissions repository by repository.
 
 ## Repository boundary

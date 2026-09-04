@@ -29,7 +29,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    siteName: "Background Agents",
+    siteName: "OpenInspect",
     title: site.name,
     description: site.description,
     url: "/",

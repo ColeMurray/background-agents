@@ -17,7 +17,7 @@ export function createTechArticleJsonLd(input: TechArticleInput) {
     mainEntityOfPage: canonicalUrl(input.path),
     publisher: {
       "@type": "Organization",
-      name: "Background Agents",
+      name: "OpenInspect",
       url: "https://backgroundagents.dev",
     },
   } as const;

@@ -28,7 +28,7 @@ describe("public documentation inventory", () => {
       [
         "/",
         "/concepts/how-a-session-works",
-        "/concepts/what-is-background-agents",
+        "/concepts/what-is-openinspect",
         "/configure/models-providers-and-secrets",
         "/configure/repositories-and-environments",
         "/getting-started/first-task",

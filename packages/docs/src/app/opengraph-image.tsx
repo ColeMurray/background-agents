@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 
-export const alt = "Background Agents documentation";
+export const alt = "OpenInspect documentation";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -44,7 +44,7 @@ export default function OpenGraphImage() {
           >
             BA
           </div>
-          Background Agents
+          OpenInspect
         </div>
         <div style={{ display: "flex", fontSize: 72, fontWeight: 600, letterSpacing: "-3px" }}>
           Documentation
