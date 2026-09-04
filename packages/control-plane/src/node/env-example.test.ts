@@ -15,6 +15,17 @@ const ENV_EXAMPLE_PATH = resolve(
   "../../../../.env.example"
 );
 
+/** Variables docker-compose.yml and its sidecars read; the host never sees them. */
+const COMPOSE_VARIABLES = [
+  "MINIO_ROOT_USER",
+  "MINIO_ROOT_PASSWORD",
+  "LITESTREAM_BUCKET",
+  "LITESTREAM_ENDPOINT",
+  "LITESTREAM_ACCESS_KEY_ID",
+  "LITESTREAM_SECRET_ACCESS_KEY",
+  "CADDY_DOMAIN",
+];
+
 /** A key's comment block opens with this when a boot cannot do without the key. */
 const REQUIRED_MARKER = "# Required.";
 
@@ -61,13 +72,14 @@ describe(".env.example", () => {
     expect(example.malformed).toEqual([]);
   });
 
-  it("names every variable the host reads, and nothing else, each once", () => {
+  it("names every variable the host or the compose stack reads, and nothing else, each once", () => {
     const documented = example.variables.map((variable) => variable.name);
     const expected = [
       ...ENV_CONFIG_KEY_NAMES,
       ...NODE_HOST_VARIABLE_NAMES,
       ...OBJECT_STORAGE_VARIABLE_NAMES,
       ...AWS_CREDENTIAL_VARIABLE_NAMES,
+      ...COMPOSE_VARIABLES,
     ];
     expect([...documented].sort()).toEqual([...expected].sort());
   });

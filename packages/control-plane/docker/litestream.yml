@@ -1,0 +1,20 @@
+# Litestream configuration for the control plane's global store.
+#
+# Used twice: by the litestream sidecar in docker-compose.yml, which
+# replicates continuously, and by the app image's entrypoint, which restores
+# from the replica when the data volume is empty. The LITESTREAM_* variables
+# come from .env; an empty LITESTREAM_ENDPOINT means AWS S3.
+#
+# The per-session files under /data/sessions are not replicated here.
+
+dbs:
+  - path: /data/global.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: control-plane/global.db
+        endpoint: ${LITESTREAM_ENDPOINT}
+        force-path-style: true
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        sync-interval: 1s

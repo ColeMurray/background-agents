@@ -273,8 +273,15 @@ npm install
 
 ```bash
 npm run build
-# Outputs to dist/index.js
+# Outputs the Worker bundle to dist/index.js and the Node host to dist/node/main.js
 ```
+
+### Run as a container
+
+The control plane also runs as a Node process on a container, with SQLite on a volume and an
+S3-compatible bucket for media. See
+[docs/CONTROL_PLANE_CONTAINER.md](../../docs/CONTROL_PLANE_CONTAINER.md) for `docker compose up` and
+the image build.
 
 ### Deploy
 
