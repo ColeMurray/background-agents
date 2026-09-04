@@ -308,7 +308,7 @@ describe("github-app utilities", () => {
           installationId: "installation-escaped-key",
         },
         undefined,
-        { cacheStore: new FakeCacheStore() }
+        { forceRefresh: true }
       );
 
       expect(result.token).toBe("escaped-key-token");

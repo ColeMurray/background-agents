@@ -100,13 +100,39 @@ type RequiredEnvConfigKey = {
   [K in keyof EnvConfig]-?: undefined extends EnvConfig[K] ? never : K;
 }[keyof EnvConfig];
 
-/** The required fields, checked against the type like the table above. */
+/**
+ * Fields the type leaves optional that the Node host nevertheless needs at
+ * boot: `startNodeHost` validates the repo-secrets key before listening.
+ */
+type NodeRequiredEnvConfigKey = "REPO_SECRETS_ENCRYPTION_KEY";
+
+/** The fields a boot must have, checked against the type like the table above. */
 const REQUIRED_ENV_CONFIG_KEYS = {
   DEPLOYMENT_NAME: true,
   GITHUB_BOT_USERNAME: true,
   TOKEN_ENCRYPTION_KEY: true,
   PROVIDER_ACCOUNTS_ENCRYPTION_KEY: true,
-} as const satisfies Record<RequiredEnvConfigKey, true>;
+  REPO_SECRETS_ENCRYPTION_KEY: true,
+} as const satisfies Record<RequiredEnvConfigKey | NodeRequiredEnvConfigKey, true>;
+
+/** The names a boot must have, for checking documentation against the table. */
+export const REQUIRED_ENV_CONFIG_KEY_NAMES: readonly (keyof EnvConfig)[] = Object.keys(
+  REQUIRED_ENV_CONFIG_KEYS
+) as (keyof EnvConfig)[];
+
+/**
+ * The variables in `source` named by `names`, and no other: a reader that
+ * takes its input through here cannot read a variable its table omits, so
+ * the table stays the one list of what the reader depends on.
+ */
+export function pickVariables<Name extends string>(
+  source: ConfigSource,
+  names: readonly Name[]
+): Record<Name, string | undefined> {
+  const picked = {} as Record<Name, string | undefined>;
+  for (const name of names) picked[name] = source[name];
+  return picked;
+}
 
 /**
  * The deployment's configuration from `source`. Fails naming every required
@@ -127,6 +153,15 @@ export function readEnvConfig(source: ConfigSource): EnvConfig {
   }
   return config as EnvConfig;
 }
+
+/** The host's own variables; `readNodeHostSettings` reads through this table only. */
+export const NODE_HOST_VARIABLE_NAMES = [
+  "HOST",
+  "PORT",
+  "DATA_DIR",
+  "MIGRATIONS_DIR",
+  "SHUTDOWN_TIMEOUT_MS",
+] as const;
 
 /** What the process itself needs: where to listen and where its files live. */
 export interface NodeHostSettings {
@@ -157,18 +192,19 @@ export const DEFAULT_MIGRATIONS_DIR = resolve(
 
 /** The host's settings from `source`; `DATA_DIR` is the one with no default. */
 export function readNodeHostSettings(source: ConfigSource): NodeHostSettings {
-  const dataDir = present(source.DATA_DIR);
+  const variables = pickVariables(source, NODE_HOST_VARIABLE_NAMES);
+  const dataDir = present(variables.DATA_DIR);
   if (dataDir === undefined) {
     throw new Error("DATA_DIR is required: the directory that holds the host's databases");
   }
   return {
-    host: present(source.HOST) ?? "0.0.0.0",
-    port: integer("PORT", source.PORT, DEFAULT_PORT),
+    host: present(variables.HOST) ?? "0.0.0.0",
+    port: integer("PORT", variables.PORT, DEFAULT_PORT),
     dataDir: resolve(dataDir),
-    migrationsDir: resolve(present(source.MIGRATIONS_DIR) ?? DEFAULT_MIGRATIONS_DIR),
+    migrationsDir: resolve(present(variables.MIGRATIONS_DIR) ?? DEFAULT_MIGRATIONS_DIR),
     shutdownTimeoutMs: integer(
       "SHUTDOWN_TIMEOUT_MS",
-      source.SHUTDOWN_TIMEOUT_MS,
+      variables.SHUTDOWN_TIMEOUT_MS,
       DEFAULT_SHUTDOWN_TIMEOUT_MS
     ),
   };

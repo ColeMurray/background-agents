@@ -6,6 +6,7 @@ const REQUIRED = {
   GITHUB_BOT_USERNAME: "bot[bot]",
   TOKEN_ENCRYPTION_KEY: "k1",
   PROVIDER_ACCOUNTS_ENCRYPTION_KEY: "k2",
+  REPO_SECRETS_ENCRYPTION_KEY: "k3",
 };
 
 describe("readEnvConfig", () => {
@@ -27,7 +28,7 @@ describe("readEnvConfig", () => {
 
   it("names every missing required variable at once", () => {
     expect(() => readEnvConfig({ DEPLOYMENT_NAME: "test", TOKEN_ENCRYPTION_KEY: "" })).toThrow(
-      "Missing required configuration: GITHUB_BOT_USERNAME, TOKEN_ENCRYPTION_KEY, PROVIDER_ACCOUNTS_ENCRYPTION_KEY"
+      "Missing required configuration: GITHUB_BOT_USERNAME, TOKEN_ENCRYPTION_KEY, PROVIDER_ACCOUNTS_ENCRYPTION_KEY, REPO_SECRETS_ENCRYPTION_KEY"
     );
   });
 });

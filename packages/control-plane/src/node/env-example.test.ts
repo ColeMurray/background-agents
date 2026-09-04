@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ENV_CONFIG_KEY_NAMES } from "./config";
+import {
+  ENV_CONFIG_KEY_NAMES,
+  NODE_HOST_VARIABLE_NAMES,
+  REQUIRED_ENV_CONFIG_KEY_NAMES,
+} from "./config";
+import { AWS_CREDENTIAL_VARIABLE_NAMES, OBJECT_STORAGE_VARIABLE_NAMES } from "./s3-object-storage";
 
 /** The repository's `.env.example`, the documented configuration of a Node host. */
 const ENV_EXAMPLE_PATH = resolve(
@@ -10,36 +15,67 @@ const ENV_EXAMPLE_PATH = resolve(
   "../../../../.env.example"
 );
 
-/** Variables the Node host reads that are not `EnvConfig` fields. */
-const NODE_HOST_VARIABLES = [
-  "HOST",
-  "PORT",
-  "DATA_DIR",
-  "MIGRATIONS_DIR",
-  "SHUTDOWN_TIMEOUT_MS",
-  "OBJECT_STORE_BUCKET",
-  "OBJECT_STORE_REGION",
-  "OBJECT_STORE_ENDPOINT",
-  "OBJECT_STORE_ALLOW_HTTP",
-  "OBJECT_STORE_FORCE_PATH_STYLE",
-  // Read by the AWS SDK's default credential chain, not by the host itself.
-  "AWS_ACCESS_KEY_ID",
-  "AWS_SECRET_ACCESS_KEY",
-];
+/** A key's comment block opens with this when a boot cannot do without the key. */
+const REQUIRED_MARKER = "# Required.";
 
-function documentedVariables(): string[] {
-  const names: string[] = [];
+interface DocumentedVariable {
+  name: string;
+  /** The comment lines directly above the assignment, up to the previous blank line. */
+  comment: string[];
+}
+
+interface EnvExample {
+  variables: DocumentedVariable[];
+  /** Lines that are neither blank, a comment, nor a `NAME=value` assignment. */
+  malformed: string[];
+}
+
+function parseEnvExample(): EnvExample {
+  const variables: DocumentedVariable[] = [];
+  const malformed: string[] = [];
+  let comment: string[] = [];
   for (const line of readFileSync(ENV_EXAMPLE_PATH, "utf8").split("\n")) {
-    const match = /^([A-Z][A-Z0-9_]*)=/.exec(line);
-    if (match) names.push(match[1]);
+    if (line.trim() === "") {
+      comment = [];
+      continue;
+    }
+    if (line.startsWith("#")) {
+      comment.push(line);
+      continue;
+    }
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line);
+    if (match) {
+      variables.push({ name: match[1], comment });
+      comment = [];
+    } else {
+      malformed.push(line);
+    }
   }
-  return names;
+  return { variables, malformed };
 }
 
 describe(".env.example", () => {
-  it("names every EnvConfig field and every Node host variable, each once", () => {
-    const documented = documentedVariables();
-    const expected = [...ENV_CONFIG_KEY_NAMES, ...NODE_HOST_VARIABLES];
+  const example = parseEnvExample();
+
+  it("holds only comments, blank lines and NAME=value assignments", () => {
+    expect(example.malformed).toEqual([]);
+  });
+
+  it("names every variable the host reads, and nothing else, each once", () => {
+    const documented = example.variables.map((variable) => variable.name);
+    const expected = [
+      ...ENV_CONFIG_KEY_NAMES,
+      ...NODE_HOST_VARIABLE_NAMES,
+      ...OBJECT_STORAGE_VARIABLE_NAMES,
+      ...AWS_CREDENTIAL_VARIABLE_NAMES,
+    ];
     expect([...documented].sort()).toEqual([...expected].sort());
+  });
+
+  it("marks exactly the keys a boot requires as Required.", () => {
+    const marked = example.variables
+      .filter((variable) => variable.comment[0]?.startsWith(REQUIRED_MARKER))
+      .map((variable) => variable.name);
+    expect(marked.sort()).toEqual([...REQUIRED_ENV_CONFIG_KEY_NAMES].sort());
   });
 });

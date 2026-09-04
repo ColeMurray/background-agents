@@ -24,6 +24,7 @@ import {
   type HeadObjectCommandOutput,
 } from "@aws-sdk/client-s3";
 import { VIDEO_MAX_BYTES } from "../media";
+import { pickVariables, type ConfigSource } from "./config";
 import type { ObjectStorage, ObjectStorageMetadata } from "../storage/object-storage";
 
 export interface S3ObjectStorageConfig {
@@ -51,25 +52,44 @@ export interface S3ObjectStorageConfig {
   maxObjectBytes?: number;
 }
 
+/** The object-store variables; `readS3ObjectStorageConfig` reads through this table only. */
+export const OBJECT_STORAGE_VARIABLE_NAMES = [
+  "OBJECT_STORE_BUCKET",
+  "OBJECT_STORE_REGION",
+  "OBJECT_STORE_ENDPOINT",
+  "OBJECT_STORE_ALLOW_HTTP",
+  "OBJECT_STORE_FORCE_PATH_STYLE",
+] as const;
+
+/**
+ * The static-credential variables of the SDK's default provider chain that
+ * a deployment may set. The chain's other sources (an instance role, a
+ * shared credentials file) take nothing from the environment we document.
+ */
+export const AWS_CREDENTIAL_VARIABLE_NAMES = [
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+] as const;
+
 /**
  * The configuration from the `OBJECT_STORE_*` variables. `OBJECT_STORE_BUCKET`
  * is required; `OBJECT_STORE_REGION` defaults to `us-east-1`, the region
  * MinIO and most S3-compatible services answer to; `OBJECT_STORE_ALLOW_HTTP`
  * is the opt-in for a plaintext endpoint.
  */
-export function readS3ObjectStorageConfig(
-  env: Record<string, string | undefined>
-): S3ObjectStorageConfig {
-  const bucket = env.OBJECT_STORE_BUCKET;
+export function readS3ObjectStorageConfig(env: ConfigSource): S3ObjectStorageConfig {
+  const variables = pickVariables(env, OBJECT_STORAGE_VARIABLE_NAMES);
+  const bucket = variables.OBJECT_STORE_BUCKET;
   if (!bucket) {
     throw new Error("OBJECT_STORE_BUCKET is required to use S3 object storage");
   }
   return {
     bucket,
-    region: env.OBJECT_STORE_REGION || "us-east-1",
-    endpoint: env.OBJECT_STORE_ENDPOINT || undefined,
-    allowHttpEndpoint: env.OBJECT_STORE_ALLOW_HTTP === "true",
-    forcePathStyle: env.OBJECT_STORE_FORCE_PATH_STYLE === "true",
+    region: variables.OBJECT_STORE_REGION || "us-east-1",
+    endpoint: variables.OBJECT_STORE_ENDPOINT || undefined,
+    allowHttpEndpoint: variables.OBJECT_STORE_ALLOW_HTTP === "true",
+    forcePathStyle: variables.OBJECT_STORE_FORCE_PATH_STYLE === "true",
   };
 }
 
