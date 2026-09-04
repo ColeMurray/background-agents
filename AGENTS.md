@@ -164,6 +164,8 @@ CI runs lint, typecheck, and tests for all TypeScript and Python packages on eve
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — deploy your own instance
 - [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) — detailed architecture and session lifecycle
 - [CONTRIBUTING.md](CONTRIBUTING.md) — contribution guidelines
+- [docs/CONCURRENCY.md](docs/CONCURRENCY.md) — session concurrency model: why there is no
+  per-session mutex, and the guard every read → `await` → write sequence needs
 - [packages/control-plane/README.md](packages/control-plane/README.md) — API reference, WebSocket
   protocol, D1 schema, security model
 - [packages/modal-infra/README.md](packages/modal-infra/README.md) — sandbox internals, Modal
