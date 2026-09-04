@@ -233,11 +233,11 @@ export class SandboxRepository {
 
   /**
    * Record `imageId` as the snapshot of the sandbox identified by
-   * `modalSandboxId`, with the runtime version that produced it. Applies
+   * `sandboxId`, with the runtime version that produced it. Applies
    * only while that is still the row's sandbox; reports whether it was.
    */
   recordSandboxSnapshot(
-    modalSandboxId: string | null,
+    sandboxId: string | null,
     imageId: string,
     runtimeVersion: string | null
   ): boolean {
@@ -246,7 +246,7 @@ export class SandboxRepository {
        WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ?`,
       imageId,
       runtimeVersion,
-      modalSandboxId
+      sandboxId
     );
     // Consume the result before reading rowsWritten so the count is final.
     result.toArray();
