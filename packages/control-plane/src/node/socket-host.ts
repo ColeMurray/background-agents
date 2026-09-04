@@ -5,9 +5,16 @@
  * this host adopts it under the runtime's tags, enumerates it, answers the
  * platform-level keepalive without waking the runtime, and forwards message,
  * close, and error events to the session server with the signatures the
- * Durable Object adapter uses. Events from one socket are delivered one at a
- * time in arrival order. Ordering across sockets, requests, and alarms is the
- * session executor's concern; it is whatever `bind` receives.
+ * Durable Object adapter uses.
+ *
+ * Unlike the Durable Object runtime, this host owns inbound flow control.
+ * Events from one socket are delivered one at a time in arrival order; while
+ * a delivery is in flight the socket is paused so the peer's bytes wait in
+ * the kernel rather than on the heap, and the frames `ws` had already parsed
+ * queue behind it up to `maxPendingDeliveries`. A peer that exceeds that
+ * bound is closed with 1013. A handler that never settles holds only its own
+ * socket; bounding handler time is the session executor's concern, which is
+ * whatever `bind` receives.
  */
 
 import { WebSocket as NodeWebSocket, type RawData } from "ws";
@@ -22,18 +29,45 @@ export interface SocketEvents {
   onError(ws: SessionSocket, error: Error): void;
 }
 
-/** RFC 6455 close code for a connection lost without a close frame. */
-const ABNORMAL_CLOSURE = 1006;
+export interface NodeSocketHostOptions {
+  /**
+   * Frames a socket may hold parsed but undelivered while an earlier
+   * delivery is in flight. Pausing stops the next read, so this backlog is
+   * whatever `ws` decodes from one read that was already in progress: its
+   * bytes are bounded by that read, and its count by how small the peer
+   * makes its frames. The default is well above what realistically sized
+   * frames fit in one read; a peer that fills a read with thousands of
+   * near-empty frames is closed. Payload size per frame is the upgrade
+   * server's `maxPayload`, not this host's concern.
+   */
+  maxPendingDeliveries?: number;
+}
+
+const DEFAULT_MAX_PENDING_DELIVERIES = 4096;
+
+/** RFC 6455 "try again later": the server cannot keep up with this peer. */
+export const BACKLOG_EXCEEDED_CLOSE_CODE = 1013;
+
+interface Deliveries {
+  queue: Array<() => Promise<void>>;
+  draining: boolean;
+}
 
 export class NodeSocketHost implements SocketHost {
   /** Tags outlive the socket's presence in `sockets()`: a closing socket still classifies. */
   private readonly tagsOf = new WeakMap<SessionSocket, readonly string[]>();
   private readonly open = new Set<NodeWebSocket>();
-  private readonly deliveries = new WeakMap<SessionSocket, Promise<void>>();
+  private readonly deliveries = new WeakMap<NodeWebSocket, Deliveries>();
+  private readonly maxPendingDeliveries: number;
   private autoResponse: { request: string; response: string } | null = null;
   private events: SocketEvents | null = null;
 
-  constructor(private readonly log: Logger) {}
+  constructor(
+    private readonly log: Logger,
+    options: NodeSocketHostOptions = {}
+  ) {
+    this.maxPendingDeliveries = options.maxPendingDeliveries ?? DEFAULT_MAX_PENDING_DELIVERIES;
+  }
 
   /**
    * Route every accepted socket's events to `events`. Binding precedes the
@@ -57,6 +91,10 @@ export class NodeSocketHost implements SocketHost {
     this.open.add(socket);
 
     socket.on("message", (data, isBinary) => {
+      // Frames still arriving after this side began closing are dropped: the
+      // Durable Object runtime delivers nothing after close() either, and a
+      // peer closed for backlog must not refill the queue.
+      if (socket.readyState !== NodeWebSocket.OPEN) return;
       if (isBinary) {
         this.deliver(socket, () => events.onMessage(socket, toArrayBuffer(data)));
         return;
@@ -72,11 +110,11 @@ export class NodeSocketHost implements SocketHost {
     socket.on("error", (error) => {
       this.deliver(socket, async () => events.onError(socket, error));
     });
-    socket.on("close", (code, reason) => {
+    // The standards-style event carries `wasClean` as `ws` computes it (a
+    // close frame both received and sent); the emitter-style event does not.
+    socket.addEventListener("close", (event) => {
       this.open.delete(socket);
-      this.deliver(socket, () =>
-        events.onClose(socket, code, reason.toString(), code !== ABNORMAL_CLOSURE)
-      );
+      this.deliver(socket, () => events.onClose(socket, event.code, event.reason, event.wasClean));
     });
   }
 
@@ -94,17 +132,54 @@ export class NodeSocketHost implements SocketHost {
     this.autoResponse = { request, response };
   }
 
-  /** Run `handle` after this socket's earlier events settle; a failure is logged and never stalls the socket. */
+  /** Queue `handle` behind this socket's earlier events, pausing the socket while any are in flight. */
   private deliver(socket: NodeWebSocket, handle: () => Promise<void>): void {
-    const previous = this.deliveries.get(socket) ?? Promise.resolve();
-    const next = previous.then(handle).catch((error: unknown) => {
-      this.log.error("socket.delivery_failed", {
-        event: "socket.delivery_failed",
+    let deliveries = this.deliveries.get(socket);
+    if (!deliveries) {
+      deliveries = { queue: [], draining: false };
+      this.deliveries.set(socket, deliveries);
+    }
+    if (deliveries.queue.length >= this.maxPendingDeliveries) {
+      this.log.warn("socket.backlog_exceeded", {
+        event: "socket.backlog_exceeded",
         tags: this.tags(socket),
-        error: error instanceof Error ? error : String(error),
+        pending: deliveries.queue.length,
       });
-    });
-    this.deliveries.set(socket, next);
+      deliveries.queue.length = 0;
+      socket.close(BACKLOG_EXCEEDED_CLOSE_CODE, "Message backlog exceeded");
+      // The socket was paused for the in-flight delivery, which may never
+      // settle; the closing handshake still has to read the peer's frame.
+      socket.resume();
+      return;
+    }
+    deliveries.queue.push(handle);
+    if (deliveries.draining) {
+      socket.pause();
+      return;
+    }
+    void this.drain(socket, deliveries);
+  }
+
+  private async drain(socket: NodeWebSocket, deliveries: Deliveries): Promise<void> {
+    deliveries.draining = true;
+    try {
+      let handle = deliveries.queue.shift();
+      while (handle) {
+        try {
+          await handle();
+        } catch (error: unknown) {
+          this.log.error("socket.delivery_failed", {
+            event: "socket.delivery_failed",
+            tags: this.tags(socket),
+            error: error instanceof Error ? error : String(error),
+          });
+        }
+        handle = deliveries.queue.shift();
+      }
+    } finally {
+      deliveries.draining = false;
+      socket.resume();
+    }
   }
 }
 

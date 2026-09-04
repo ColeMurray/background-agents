@@ -3,7 +3,6 @@
  */
 
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
-import type { SessionSocket } from "./platform-ports";
 
 // Environment bindings
 export interface Env {
@@ -123,6 +122,5 @@ export interface ClientInfo {
   clientId: string;
   /** Wall-clock time when this connection's authorization lease expires. */
   authorizationExpiresAt: number;
-  ws: SessionSocket;
   lastFetchHistoryAtMs?: number;
 }

@@ -29,6 +29,14 @@ export interface SessionSocket {
   close(code?: number, reason?: string): void;
 }
 
+/** The RFC 6455 OPEN ready state; every platform's socket reports this value. */
+const SOCKET_OPEN = 1;
+
+/** Whether `socket` can currently send and receive. */
+export function isSocketOpen(socket: SessionSocket): boolean {
+  return socket.readyState === SOCKET_OPEN;
+}
+
 /** Access the runtime's single scheduled wake-up. */
 export interface AlarmScheduler {
   schedule(at: number): Promise<void>;

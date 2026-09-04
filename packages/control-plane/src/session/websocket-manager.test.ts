@@ -173,7 +173,6 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
     lastSeen: Date.now(),
     clientId: "client-1",
     authorizationExpiresAt: Date.now() + 300_000,
-    ws: createFakeWebSocket(),
     ...overrides,
   };
 }
@@ -756,7 +755,7 @@ describe("SessionWebSocketManagerImpl", () => {
     it("returns a cached live client", () => {
       const { manager } = createManager();
       const ws = createFakeWebSocket();
-      const info = createClientInfo({ ws });
+      const info = createClientInfo();
 
       manager.setClient(ws, info);
 
@@ -774,7 +773,7 @@ describe("SessionWebSocketManagerImpl", () => {
       const { manager, sockets } = createManager();
       const ws = createFakeWebSocket();
       sockets.set(ws, ["wsid:ws-expired"]);
-      manager.setClient(ws, createClientInfo({ ws, authorizationExpiresAt: Date.now() - 1 }));
+      manager.setClient(ws, createClientInfo({ authorizationExpiresAt: Date.now() - 1 }));
 
       expect(manager.lookupClient(ws)).toEqual({ kind: "authorization_rejected" });
       expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
@@ -783,7 +782,7 @@ describe("SessionWebSocketManagerImpl", () => {
     it("removeClient returns the client and removes every identity representation", () => {
       const { manager, sockets, mockRepo } = createManager();
       const ws = createFakeWebSocket();
-      const info = createClientInfo({ ws });
+      const info = createClientInfo();
       sockets.set(ws, ["wsid:ws-1"]);
       mockRepo.addMapping("ws-1", {
         participant_id: info.participantId,
@@ -880,7 +879,7 @@ describe("SessionWebSocketManagerImpl", () => {
       const { manager, sockets } = createManager();
       const ws = createFakeWebSocket();
       sockets.set(ws, ["wsid:ws-expired"]);
-      manager.setClient(ws, createClientInfo({ ws, authorizationExpiresAt: Date.now() - 1 }));
+      manager.setClient(ws, createClientInfo({ authorizationExpiresAt: Date.now() - 1 }));
 
       expect(manager.lookupClient(ws)).toEqual({ kind: "authorization_rejected" });
       expect(ws.close).toHaveBeenCalledTimes(1);
@@ -893,7 +892,7 @@ describe("SessionWebSocketManagerImpl", () => {
       const { manager, alarmScheduler, mockRepo, sockets } = createManager();
       const ws = createFakeWebSocket();
       sockets.set(ws, ["wsid:ws-1"]);
-      const info = createClientInfo({ ws, authorizationExpiresAt: 301_000 });
+      const info = createClientInfo({ authorizationExpiresAt: 301_000 });
 
       const synchronize = vi.fn(() => true);
       await expect(manager.activateClient(ws, info, synchronize)).resolves.toBe(true);
@@ -917,9 +916,9 @@ describe("SessionWebSocketManagerImpl", () => {
       alarmScheduler.schedule.mockRejectedValueOnce(new Error("alarm unavailable"));
 
       const synchronize = vi.fn(() => true);
-      await expect(
-        manager.activateClient(ws, createClientInfo({ ws }), synchronize)
-      ).rejects.toThrow("alarm unavailable");
+      await expect(manager.activateClient(ws, createClientInfo(), synchronize)).rejects.toThrow(
+        "alarm unavailable"
+      );
       expect(synchronize).not.toHaveBeenCalled();
       expect(mockRepo.upsertCalls).toHaveLength(0);
       expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
@@ -930,7 +929,7 @@ describe("SessionWebSocketManagerImpl", () => {
       const ws = createFakeWebSocket();
       sockets.set(ws, ["wsid:ws-1"]);
 
-      await expect(manager.activateClient(ws, createClientInfo({ ws }), () => false)).resolves.toBe(
+      await expect(manager.activateClient(ws, createClientInfo(), () => false)).resolves.toBe(
         false
       );
       expect(mockRepo.upsertCalls).toHaveLength(0);
@@ -1048,7 +1047,7 @@ describe("SessionWebSocketManagerImpl", () => {
       sockets.set(authedWs, ["wsid:ws-1"]);
       sockets.set(unauthedWs, ["wsid:ws-2"]);
 
-      manager.setClient(authedWs, createClientInfo({ ws: authedWs }));
+      manager.setClient(authedWs, createClientInfo());
 
       const called: SessionSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => called.push(ws));
@@ -1095,7 +1094,7 @@ describe("SessionWebSocketManagerImpl", () => {
       const { manager, sockets } = createManager();
       const ws = createFakeWebSocket();
       sockets.set(ws, ["wsid:ws-expired"]);
-      manager.setClient(ws, createClientInfo({ ws, authorizationExpiresAt: Date.now() - 1 }));
+      manager.setClient(ws, createClientInfo({ authorizationExpiresAt: Date.now() - 1 }));
 
       const called: SessionSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (client) => called.push(client));
@@ -1130,7 +1129,7 @@ describe("SessionWebSocketManagerImpl", () => {
       // Authenticated client (in-memory)
       const authedWs = createFakeWebSocket();
       sockets.set(authedWs, ["wsid:ws-authed"]);
-      manager.setClient(authedWs, createClientInfo({ ws: authedWs }));
+      manager.setClient(authedWs, createClientInfo());
 
       // Post-hibernation client (persisted mapping only, no in-memory ClientInfo)
       const hibernatedWs = createFakeWebSocket();
@@ -1215,7 +1214,7 @@ describe("SessionWebSocketManagerImpl", () => {
       const ws = createFakeWebSocket();
       sockets.set(ws, ["wsid:ws-1"]);
 
-      manager.setClient(ws, createClientInfo({ ws }));
+      manager.setClient(ws, createClientInfo());
 
       await manager.enforceAuthTimeout(ws, "ws-1");
 
@@ -1267,8 +1266,8 @@ describe("SessionWebSocketManagerImpl", () => {
       const { manager } = createManager();
       const ws1 = createFakeWebSocket();
       const ws2 = createFakeWebSocket();
-      const info1 = createClientInfo({ ws: ws1, userId: "user-1" });
-      const info2 = createClientInfo({ ws: ws2, userId: "user-2" });
+      const info1 = createClientInfo({ userId: "user-1" });
+      const info2 = createClientInfo({ userId: "user-2" });
 
       manager.setClient(ws1, info1);
       manager.setClient(ws2, info2);
@@ -1289,7 +1288,7 @@ describe("SessionWebSocketManagerImpl", () => {
       const { manager, sockets, mockRepo } = createManager();
       const ws = createFakeWebSocket();
       sockets.set(ws, ["wsid:ws-expired"]);
-      manager.setClient(ws, createClientInfo({ ws, authorizationExpiresAt: Date.now() - 1 }));
+      manager.setClient(ws, createClientInfo({ authorizationExpiresAt: Date.now() - 1 }));
       mockRepo.addMapping("ws-expired", {
         participant_id: "part-1",
         client_id: "client-1",

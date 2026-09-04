@@ -356,7 +356,6 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
         lastSeen: Date.now(),
         clientId: data.clientId,
         authorizationExpiresAt,
-        ws,
       };
 
       try {
@@ -468,7 +467,6 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
       authorizationExpiresAt: mapping.authorization_expires_at,
-      ws,
     };
 
     wsManager.setClient(ws, clientInfo);

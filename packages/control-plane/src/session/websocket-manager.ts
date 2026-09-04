@@ -14,7 +14,7 @@
  */
 
 import type { Logger } from "../logger";
-import type { AlarmScheduler, SessionSocket } from "../platform-ports";
+import { isSocketOpen, type AlarmScheduler, type SessionSocket } from "../platform-ports";
 import type { ClientInfo } from "../types";
 import type { SocketHost } from "./platform";
 import type { ConnectionClassification } from "./ports";
@@ -164,7 +164,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     const existingSockets = new Set(this.host.sockets("sandbox"));
     if (this.sandboxWs) existingSockets.add(this.sandboxWs);
     for (const existing of existingSockets) {
-      if (existing === ws || existing.readyState !== WebSocket.OPEN) continue;
+      if (existing === ws || !isSocketOpen(existing)) continue;
       try {
         existing.close(1000, "New sandbox connecting");
         replaced = true;
@@ -239,7 +239,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       return null;
     }
 
-    if (this.sandboxWs?.readyState === WebSocket.OPEN) {
+    if (this.sandboxWs && isSocketOpen(this.sandboxWs)) {
       if (this.isAuthoritative(this.classify(this.sandboxWs), sandbox)) {
         return this.sandboxWs;
       }
@@ -253,7 +253,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     // open while its close completes, and must not win for coming first.
     for (const ws of this.host.sockets()) {
       const parsed = this.classify(ws);
-      if (parsed.kind !== "sandbox" || ws.readyState !== WebSocket.OPEN) continue;
+      if (parsed.kind !== "sandbox" || !isSocketOpen(ws)) continue;
 
       if (expectedSandboxId && parsed.sandboxId !== expectedSandboxId) {
         this.log.debug("Skipping WS with wrong sandbox ID", {
@@ -345,7 +345,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       throw new Error("Cannot activate a client without a WebSocket ID");
     }
     await this.alarmScheduler.schedule(info.authorizationExpiresAt);
-    if (ws.readyState !== WebSocket.OPEN || info.authorizationExpiresAt <= Date.now()) {
+    if (!isSocketOpen(ws) || info.authorizationExpiresAt <= Date.now()) {
       throw new Error("Cannot activate a closed client or an expired authorization lease");
     }
     // No await is allowed from snapshot send through both identity writes: a
@@ -406,7 +406,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   send(ws: SessionSocket, message: string | object): boolean {
     try {
-      if (ws.readyState !== WebSocket.OPEN) {
+      if (!isSocketOpen(ws)) {
         this.log.debug("Cannot send: WebSocket not open", { ready_state: ws.readyState });
         return false;
       }
@@ -491,7 +491,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   async enforceAuthTimeout(ws: SessionSocket, wsId: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, this.config.authTimeoutMs));
 
-    if (ws.readyState !== WebSocket.OPEN) return;
+    if (!isSocketOpen(ws)) return;
     if (this.clients.has(ws)) return;
     if (this.synchronizingClients.has(ws)) return;
     if (this.hasPersistedMapping(wsId)) return;
@@ -520,7 +520,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     let count = 0;
     for (const ws of this.host.sockets()) {
       const parsed = this.classify(ws);
-      if (parsed.kind !== "sandbox" && ws.readyState === WebSocket.OPEN) {
+      if (parsed.kind !== "sandbox" && isSocketOpen(ws)) {
         count++;
       }
     }
