@@ -5,7 +5,7 @@
  * live on the host's persistent volume, so there is no snapshot cycle.
  */
 
-import { existsSync } from "node:fs";
+import { access } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionStorage } from "../session/platform";
 import { initSchema } from "../session/schema";
@@ -48,9 +48,22 @@ export interface SessionStoreProvider {
 export function createFileSessionStoreProvider(dataDir: string): SessionStoreProvider {
   return {
     open: async (sessionId) => openSessionStore({ dataDir, sessionId }),
-    exists: async (sessionId) =>
-      SESSION_FILE_ID.test(sessionId) && existsSync(join(dataDir, "sessions", `${sessionId}.db`)),
+    exists: (sessionId) =>
+      SESSION_FILE_ID.test(sessionId)
+        ? fileExists(join(dataDir, "sessions", `${sessionId}.db`))
+        : Promise.resolve(false),
   };
+}
+
+/** Whether `path` exists, asked without blocking the event loop. */
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 /** Open (creating if needed) the session's database and apply the schema. */
