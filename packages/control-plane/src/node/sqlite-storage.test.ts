@@ -3,10 +3,18 @@
  * the rows and write counts Durable Object storage would.
  */
 
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionStorage } from "../session/platform";
 import { createNodeSqlStorage } from "./sqlite-storage";
+
+const GC_REGRESSION_CHILD = "OPEN_INSPECT_NODE_SQLITE_GC_REGRESSION";
+const isGcRegressionChild = process.env[GC_REGRESSION_CHILD] === "1";
 
 describe("createNodeSqlStorage", () => {
   let db: DatabaseSync;
@@ -109,7 +117,33 @@ describe("createNodeSqlStorage", () => {
     expect(() => storage.sql.exec("INSERT INTO t (a) VALUES (?); SELECT 1")).toThrow(
       "only the last statement can have parameters"
     );
+    expect(() =>
+      storage.sql.exec(
+        "INSERT INTO t (a) VALUES ('must not persist'); INSERT INTO t (a) VALUES (?); SELECT 1"
+      )
+    ).toThrow("only the last statement can have parameters");
     expect(storage.sql.exec("SELECT count(*) AS n FROM t").one()).toEqual({ n: 1 });
+  });
+
+  it("survives garbage collection and close after statement-less SQL tails", () => {
+    if (isGcRegressionChild) return;
+    const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const vitestRoot = dirname(dirname(fileURLToPath(import.meta.resolve("vitest"))));
+    const child = spawnSync(
+      process.execPath,
+      ["--expose-gc", "--no-warnings", join(vitestRoot, "vitest.mjs"), "run", import.meta.filename],
+      {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env: { ...process.env, [GC_REGRESSION_CHILD]: "1" },
+        timeout: 30_000,
+      }
+    );
+
+    expect(
+      { status: child.status, signal: child.signal, stdout: child.stdout, stderr: child.stderr },
+      "the isolated node:sqlite lifecycle probe must exit normally"
+    ).toMatchObject({ status: 0, signal: null });
   });
 
   it("rejects a trailing comment or empty statement after a statement, as a Durable Object does", () => {
@@ -117,7 +151,9 @@ describe("createNodeSqlStorage", () => {
     for (const query of [
       "SELECT a FROM t; -- trailing line comment",
       "SELECT a FROM t; /* trailing block */",
+      "SELECT a FROM t; /* unterminated block comment",
       "SELECT a FROM t;;",
+      "SELECT a FROM t;\0SELECT 1",
       "UPDATE t SET a = 'y'; -- done",
     ]) {
       expect(() => storage.sql.exec(query)).toThrow("did not contain a statement");
@@ -127,7 +163,7 @@ describe("createNodeSqlStorage", () => {
     );
     // Whitespace after the last statement, and comments before or between
     // statements, are fine on both hosts.
-    expect(storage.sql.exec("SELECT a FROM t;\n  \n").toArray()).toEqual([{ a: "x" }]);
+    expect(storage.sql.exec("SELECT a FROM t;\t\f\r\n\ufeff").toArray()).toEqual([{ a: "x" }]);
     expect(storage.sql.exec("SELECT 1; -- between\nSELECT a FROM t -- end").toArray()).toEqual([
       { a: "x" },
     ]);
@@ -135,6 +171,10 @@ describe("createNodeSqlStorage", () => {
 
   it("rejects text that holds no statement", () => {
     expect(() => storage.sql.exec("-- nothing here")).toThrow("did not contain a statement");
+    expect(() => storage.sql.exec("\ufeff")).toThrow("did not contain a statement");
+    expect(() => storage.sql.exec("; -- still nothing\n /* nothing */ ;")).toThrow(
+      "did not contain a statement"
+    );
     expect(() => storage.sql.exec("   ")).toThrow("did not contain a statement");
     expect(() => storage.sql.exec("")).toThrow("did not contain a statement");
   });
@@ -189,3 +229,38 @@ describe("createNodeSqlStorage", () => {
     expect(sql.exec("SELECT count(*) AS n FROM t").one()).toEqual({ n: 2 });
   });
 });
+
+if (isGcRegressionChild) {
+  describe("node:sqlite statement finalization regression", () => {
+    it("does not retain dangling statements after statement-less tails", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "node-sqlite-gc-"));
+      const db = new DatabaseSync(join(directory, "probe.db"));
+      const storage = createNodeSqlStorage(db);
+
+      try {
+        for (let index = 0; index < 50; index += 1) {
+          storage.sql.exec("SELECT 1;\n");
+          expect(() => storage.sql.exec("SELECT 1; -- trailing comment")).toThrow(
+            "did not contain a statement"
+          );
+          expect(() => storage.sql.exec("SELECT 1;;")).toThrow("did not contain a statement");
+          expect(() => storage.sql.exec("SELECT 1;\0SELECT 2")).toThrow(
+            "did not contain a statement"
+          );
+        }
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          (globalThis as { gc?: () => void }).gc?.();
+          await new Promise<void>((resolveNow) => setImmediate(resolveNow));
+        }
+        db.close();
+      } finally {
+        try {
+          db.close();
+        } catch {
+          // already closed
+        }
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  });
+}
