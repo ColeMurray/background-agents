@@ -31,6 +31,16 @@ export function registerSqlDatabaseConformanceSuite(factory: SqlDatabaseFactory)
       }
     });
 
+  /** A stored binary value as bytes, however the engine returns it. */
+  const bytesOf = (value: unknown): number[] => {
+    if (Array.isArray(value)) return value as number[];
+    if (value instanceof ArrayBuffer) return [...new Uint8Array(value)];
+    if (ArrayBuffer.isView(value)) {
+      return [...new Uint8Array(value.buffer, value.byteOffset, value.byteLength)];
+    }
+    throw new Error(`Not a binary value: ${String(value)}`);
+  };
+
   const count = async (db: SqlDatabase): Promise<number> => {
     const row = await db.prepare(`SELECT count(*) AS n FROM ${TABLE}`).first<{ n: number }>();
     return row!.n;
@@ -90,6 +100,21 @@ export function registerSqlDatabaseConformanceSuite(factory: SqlDatabaseFactory)
       });
     });
 
+    it("snapshots a bound binary value at bind time", async () => {
+      await withTable(async (db) => {
+        const bytes = new Uint8Array([1, 2, 3]);
+        const insert = db
+          .prepare(`INSERT INTO ${TABLE} (k, v) VALUES (?, ?)`)
+          .bind("blob", bytes.buffer);
+        bytes[0] = 9;
+        await insert.run();
+        const row = await db
+          .prepare(`SELECT v FROM ${TABLE} WHERE k = 'blob'`)
+          .first<{ v: unknown }>();
+        expect(bytesOf(row!.v)).toEqual([1, 2, 3]);
+      });
+    });
+
     it("batch() applies every statement or none", async () => {
       await withTable(async (db) => {
         await expect(
@@ -101,6 +126,22 @@ export function registerSqlDatabaseConformanceSuite(factory: SqlDatabaseFactory)
           ])
         ).rejects.toThrow();
         expect(await count(db)).toBe(0);
+      });
+    });
+
+    it("keeps a write issued while a batch is in flight outside the batch", async () => {
+      await withTable(async (db) => {
+        // Not awaited before the unrelated write: the batch must not leave
+        // its transaction open across a turn for the write to land inside.
+        const failing = db.batch([
+          db.prepare(`INSERT INTO ${TABLE} (k, v) VALUES ('a', 1)`),
+          db.prepare(`INSERT INTO ${TABLE} (k, v) VALUES ('a', 2)`),
+        ]);
+        const unrelated = db.prepare(`INSERT INTO ${TABLE} (k, v) VALUES ('z', 26)`).run();
+        await expect(failing).rejects.toThrow();
+        await unrelated;
+        const rows = await db.prepare(`SELECT k FROM ${TABLE}`).all<{ k: string }>();
+        expect(rows.results).toEqual([{ k: "z" }]);
       });
     });
 

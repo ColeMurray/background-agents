@@ -29,7 +29,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { SqlDatabase, SqlResult, SqlStatement } from "../db/sql-database";
 import { applyMigrations } from "./migrate";
 import { openPrivateSqliteFile } from "./sqlite-file";
-import { isStatementlessSql } from "./sqlite-storage";
+import { isStatementlessSql } from "./sqlite-sql";
 
 export interface NodeSqlDatabase extends SqlDatabase {
   /** Close the connection. Every later statement throws. */
@@ -38,7 +38,6 @@ export interface NodeSqlDatabase extends SqlDatabase {
 
 /** The port over an open connection the caller owns. */
 export function createNodeSqlDatabase(db: DatabaseSync): NodeSqlDatabase {
-  const own = new WeakSet<SqlStatement>();
   const totalChanges = db.prepare("SELECT total_changes() AS n");
   const changesNow = (): number => Number((totalChanges.get() as { n: number | bigint }).n);
 
@@ -56,35 +55,42 @@ export function createNodeSqlDatabase(db: DatabaseSync): NodeSqlDatabase {
     };
   };
 
+  // Each statement's synchronous work, keyed by the statement it belongs
+  // to: the brand that admits it to batch(), and what batch() runs without
+  // yielding.
+  const executors = new WeakMap<SqlStatement, StatementExecutor>();
+
   const statementFor = (query: string, params: SQLInputValue[]): SqlStatement => {
+    const executor: StatementExecutor = {
+      all: <T>() => execute<T>(query, params),
+      first: <T>() => (prepareOne(db, query).get(...params) as T | undefined) ?? null,
+    };
     const statement: SqlStatement = {
       bind: (...values) => statementFor(query, values.map(toBoundValue)),
-      first: async <T>() => {
-        const row = prepareOne(db, query).get(...params) as T | undefined;
-        return row ?? null;
-      },
-      run: async <T>() => execute<T>(query, params),
-      all: async <T>() => execute<T>(query, params),
+      first: async <T>() => executor.first<T>(),
+      run: async <T>() => executor.all<T>(),
+      all: async <T>() => executor.all<T>(),
     };
-    own.add(statement);
+    executors.set(statement, executor);
     return statement;
   };
 
   return {
     prepare: (query) => statementFor(query, []),
     async batch<T>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
-      for (const statement of statements) {
-        if (!own.has(statement)) {
+      const work = statements.map((statement) => {
+        const executor = executors.get(statement);
+        if (!executor) {
           throw new TypeError("batch() accepts only statements prepared by this database");
         }
-      }
+        return executor;
+      });
+      // Nothing yields between BEGIN and COMMIT: the transaction opens and
+      // closes within this call, so no other caller's statement can land
+      // inside it.
       db.exec("BEGIN IMMEDIATE");
       try {
-        const results: SqlResult<T>[] = [];
-        for (const statement of statements) {
-          // Resolves in this turn: the statement's work is synchronous.
-          results.push(await statement.all<T>());
-        }
+        const results = work.map((executor) => executor.all<T>());
         db.exec("COMMIT");
         return results;
       } catch (error) {
@@ -94,6 +100,11 @@ export function createNodeSqlDatabase(db: DatabaseSync): NodeSqlDatabase {
     },
     close: () => db.close(),
   };
+}
+
+interface StatementExecutor {
+  all<T>(): SqlResult<T>;
+  first<T>(): T | null;
 }
 
 export interface OpenNodeSqlDatabaseOptions {
@@ -148,7 +159,9 @@ function toBoundValue(value: unknown): SQLInputValue {
     default:
       break;
   }
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  // Copied at bind time, as D1 snapshots binary values: a later mutation of
+  // the caller's buffer does not change what runs.
+  if (value instanceof ArrayBuffer) return new Uint8Array(value).slice();
   if (ArrayBuffer.isView(value)) {
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice();
   }
