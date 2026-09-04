@@ -170,7 +170,10 @@ export interface SandboxRow {
   tunnel_urls: string | null; // JSON mapping of port -> tunnel URL
   ttyd_url: string | null;
   ttyd_token: string | null;
-  /** The `socket:<id>` tag of the bridge socket the session dispatches to. */
+  /**
+   * The `socket:<id>` tag of the bridge socket the session dispatches to;
+   * `''` once revoked, NULL only on rows that predate persisted identities.
+   */
   active_socket_id: string | null;
   created_at: number;
 }

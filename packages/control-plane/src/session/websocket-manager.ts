@@ -19,6 +19,7 @@ import type { ClientInfo } from "../types";
 import type { SocketHost } from "./platform";
 import type { ConnectionClassification } from "./ports";
 import type { SandboxRepository } from "./sandbox-repository";
+import type { SandboxRow } from "./types";
 import type {
   WsClientMappingRepository,
   WsClientMappingResult,
@@ -63,7 +64,11 @@ export interface SessionWebSocketManager {
   /** Clear the in-memory sandbox socket reference. */
   clearSandboxSocket(): void;
 
-  /** Clear and close all active sandbox sockets without consulting persisted dispatch status. */
+  /**
+   * Revoke the persisted dispatch authority, then close every sandbox socket
+   * without consulting the sandbox status. Nothing dispatches from, or is
+   * recovered as, the bridge until the next accept.
+   */
   detachSandboxSocket(code: number, reason: string): void;
 
   /**
@@ -192,17 +197,30 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // -------------------------------------------------------------------------
 
   isActiveSandboxSocket(ws: WebSocket): boolean {
-    const parsed = this.classify(ws);
-    if (parsed.kind !== "sandbox") return false;
-    // A socket accepted before identities were persisted (no tag, no row
-    // value) stays authoritative until the next bridge connects.
-    return (parsed.socketId ?? null) === this.sandboxRepository.getActiveSocketId();
+    return this.isAuthoritative(this.classify(ws), this.sandboxRepository.getSandbox());
+  }
+
+  /**
+   * Whether a sandbox socket is the one the row names. The row's
+   * `active_socket_id` is three-valued: a tag id matches exactly that socket;
+   * `''` (revoked by detach or a spawn reservation) matches nothing; NULL
+   * means the row predates persisted identities, and then an untagged socket
+   * for the row's sandbox stays authoritative until the next accept.
+   */
+  private isAuthoritative(parsed: ConnectionClassification, sandbox: SandboxRow | null): boolean {
+    if (parsed.kind !== "sandbox" || !sandbox) return false;
+    if (sandbox.active_socket_id === null) {
+      return (
+        parsed.socketId === undefined &&
+        (!sandbox.modal_sandbox_id || parsed.sandboxId === sandbox.modal_sandbox_id)
+      );
+    }
+    return parsed.socketId !== undefined && parsed.socketId === sandbox.active_socket_id;
   }
 
   getSandboxSocket(): WebSocket | null {
     const sandbox = this.sandboxRepository.getSandbox();
     const expectedSandboxId = sandbox?.modal_sandbox_id;
-    const activeSocketId = sandbox?.active_socket_id ?? null;
 
     // If the sandbox is in a terminal state, don't re-adopt stale WebSockets.
     // After inactivity timeout or heartbeat stale, the DO closes the WS and sets
@@ -222,12 +240,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     }
 
     if (this.sandboxWs?.readyState === WebSocket.OPEN) {
-      const cached = this.classify(this.sandboxWs);
-      if (
-        cached.kind === "sandbox" &&
-        (!expectedSandboxId || cached.sandboxId === expectedSandboxId) &&
-        (cached.socketId ?? null) === activeSocketId
-      ) {
+      if (this.isAuthoritative(this.classify(this.sandboxWs), sandbox)) {
         return this.sandboxWs;
       }
       this.close(this.sandboxWs, 1000, "Sandbox identity changed");
@@ -250,7 +263,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
         this.close(ws, 1000, "Sandbox identity changed");
         continue;
       }
-      if ((parsed.socketId ?? null) !== activeSocketId) continue;
+      if (!this.isAuthoritative(parsed, sandbox)) continue;
 
       this.log.info("Recovered sandbox WebSocket from hibernation");
       this.sandboxWs = ws;
@@ -270,6 +283,9 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     for (const ws of this.host.sockets()) {
       if (this.classify(ws).kind === "sandbox") sockets.add(ws);
     }
+    // Revoke before closing: a trailing frame from a detached socket, or a
+    // restart that still finds it open, must not find the row naming it.
+    this.sandboxRepository.revokeActiveSocketId();
     this.sandboxWs = null;
     for (const ws of sockets) this.close(ws, code, reason);
   }

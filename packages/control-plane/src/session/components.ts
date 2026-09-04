@@ -169,6 +169,7 @@ export interface SessionRuntime {
  */
 export interface SessionComponents {
   sandboxRepository: SandboxRepository;
+  wsManager: SessionWebSocketManager;
   /**
    * Assignable — the setter swaps the underlying cell for tests. Substitution
    * swaps operations only: the provider NAME was captured at construction and
@@ -826,6 +827,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   const components: SessionComponents = {
     sandboxRepository,
+    wsManager,
     // Accessor pair over the local cell: production reads never go through
     // this property; the setter is the live-DO integration seam.
     get sourceControlProvider() {

@@ -108,10 +108,12 @@ function createMockRepository() {
 
   const repo = {
     getSandbox: () => sandboxRow,
-    getActiveSocketId: () => sandboxRow?.active_socket_id ?? null,
     setActiveSocketId: (socketId: string) => {
       // Like the UPDATE it stands in for: nothing to write without a row.
       if (sandboxRow) sandboxRow.active_socket_id = socketId;
+    },
+    revokeActiveSocketId: () => {
+      if (sandboxRow) sandboxRow.active_socket_id = "";
     },
     getWsClientMapping: (wsId: string) => mappings.get(wsId) ?? null,
     hasWsClientMapping: (wsId: string) => mappings.has(wsId),
@@ -315,18 +317,19 @@ describe("SessionWebSocketManagerImpl", () => {
 
     it("persists the new socket's identity before closing the socket it replaces", () => {
       const { manager, mockRepo } = createManager();
-      mockRepo.setSandbox(createSandboxRow("sb-1"));
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
       const order: string[] = [];
       const oldWs = createFakeWebSocket();
       vi.mocked(oldWs.close).mockImplementation(() => {
-        order.push(`close:${mockRepo.repo.getActiveSocketId()}`);
+        order.push(`close:${row.active_socket_id}`);
       });
       const newWs = createFakeWebSocket();
 
       manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
-      const oldId = mockRepo.repo.getActiveSocketId();
+      const oldId = row.active_socket_id;
       manager.acceptAndSetSandboxSocket(newWs, "sb-1");
-      const newId = mockRepo.repo.getActiveSocketId();
+      const newId = row.active_socket_id;
 
       expect(oldId).toMatch(/^sbws-/);
       expect(newId).toMatch(/^sbws-/);
@@ -414,17 +417,54 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(manager.isActiveSandboxSocket(ws)).toBe(false);
     });
 
-    it("is false once a spawn reservation has cleared the persisted identity", () => {
+    it("is false once a spawn reservation has revoked the persisted identity", () => {
       const { manager, mockRepo } = createManager();
       const row = createSandboxRow("sb-1");
       mockRepo.setSandbox(row);
       const ws = createFakeWebSocket();
       manager.acceptAndSetSandboxSocket(ws, "sb-1");
 
-      row.active_socket_id = null;
+      // What updateSandboxForSpawn writes.
+      row.active_socket_id = "";
       row.modal_sandbox_id = "sb-2";
 
       expect(manager.isActiveSandboxSocket(ws)).toBe(false);
+    });
+
+    it("is false for every socket once detach has revoked authority", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+
+      manager.detachSandboxSocket(1000, "Heartbeat stale");
+
+      expect(row.active_socket_id).toBe("");
+      expect(ws.close).toHaveBeenCalledWith(1000, "Heartbeat stale");
+      // The close is cleanup; the row is the fence, so a trailing frame from
+      // the still-tagged socket is refused whether or not the close landed.
+      expect(manager.isActiveSandboxSocket(ws)).toBe(false);
+      expect(manager.clearSandboxSocketIfMatch(ws)).toBe(false);
+      // Nor does a restart re-adopt it, even after an in-place resume.
+      row.status = "connecting";
+      expect(sockets.get(ws)).toBeDefined();
+      expect(manager.getSandboxSocket()).toBeNull();
+    });
+
+    it("revokes authority before closing on detach", () => {
+      const { manager, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
+      const ws = createFakeWebSocket();
+      vi.mocked(ws.close).mockImplementation(() => {
+        expect(row.active_socket_id).toBe("");
+      });
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+
+      manager.detachSandboxSocket(1011, "Fatal sandbox runtime error");
+
+      expect(ws.close).toHaveBeenCalledOnce();
     });
 
     it("keeps a socket accepted before identities were persisted authoritative", () => {
@@ -438,6 +478,34 @@ describe("SessionWebSocketManagerImpl", () => {
       const newWs = createFakeWebSocket();
       manager.acceptAndSetSandboxSocket(newWs, "sb-1");
       expect(manager.isActiveSandboxSocket(legacyWs)).toBe(false);
+    });
+
+    it("requires a pre-identity socket to belong to the row's sandbox", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-2"));
+      const staleWs = createFakeWebSocket();
+      sockets.set(staleWs, ["sandbox", "sid:sb-1"]);
+
+      expect(manager.isActiveSandboxSocket(staleWs)).toBe(false);
+    });
+
+    it("refuses a pre-identity socket once a spawn reservation has revoked authority", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
+      const legacyWs = createFakeWebSocket();
+      sockets.set(legacyWs, ["sandbox", "sid:sb-1"]);
+      expect(manager.isActiveSandboxSocket(legacyWs)).toBe(true);
+
+      // The reservation revokes rather than clears, so the migration
+      // compatibility branch never reopens for a displaced sandbox.
+      row.active_socket_id = "";
+      row.modal_sandbox_id = "sb-2";
+
+      expect(manager.isActiveSandboxSocket(legacyWs)).toBe(false);
+      expect(manager.clearSandboxSocketIfMatch(legacyWs)).toBe(false);
+      expect(manager.getSandboxSocket()).toBeNull();
+      expect(legacyWs.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
     });
   });
 
@@ -673,7 +741,7 @@ describe("SessionWebSocketManagerImpl", () => {
       mockRepo.setSandbox(row);
       const ws = createFakeWebSocket();
       manager.acceptAndSetSandboxSocket(ws, "sb-1");
-      row.active_socket_id = null;
+      row.active_socket_id = "";
       row.modal_sandbox_id = "sb-2";
 
       expect(manager.clearSandboxSocketIfMatch(ws)).toBe(false);

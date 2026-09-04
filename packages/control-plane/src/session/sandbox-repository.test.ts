@@ -131,8 +131,9 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("vnc_password = NULL");
       // A replacement sandbox must not inherit the predecessor's runtime.
       expect(mock.calls[0].query).toContain("runtime_version = NULL");
-      // ...nor its bridge: the predecessor's socket loses dispatch authority here.
-      expect(mock.calls[0].query).toContain("active_socket_id = NULL");
+      // ...nor its bridge: the predecessor's socket loses dispatch authority
+      // here. Revoked is '' — NULL is reserved for rows that predate identities.
+      expect(mock.calls[0].query).toContain("active_socket_id = ''");
       expect(mock.calls[0].params).toEqual(["spawning", 1000, "modal-sb-1"]);
     });
 
@@ -149,28 +150,20 @@ describe("SandboxRepository", () => {
   });
 
   describe("active socket id", () => {
-    const query = `SELECT active_socket_id FROM sandbox LIMIT 1`;
-
-    it("reads null before any bridge has connected", () => {
-      mock.setData(query, [{ active_socket_id: null }]);
-      expect(repository.getActiveSocketId()).toBeNull();
-    });
-
-    it("reads null without a sandbox row", () => {
-      expect(repository.getActiveSocketId()).toBeNull();
-    });
-
-    it("reads the persisted identity", () => {
-      mock.setData(query, [{ active_socket_id: "sbws-1" }]);
-      expect(repository.getActiveSocketId()).toBe("sbws-1");
-    });
-
     it("writes the identity to the session's one sandbox row", () => {
       repository.setActiveSocketId("sbws-2");
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET active_socket_id = ?");
       expect(mock.calls[0].params).toEqual(["sbws-2"]);
+    });
+
+    it("revokes with the empty sentinel rather than NULL", () => {
+      repository.revokeActiveSocketId();
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE sandbox SET active_socket_id = ''");
+      expect(mock.calls[0].params).toEqual([]);
     });
   });
 
