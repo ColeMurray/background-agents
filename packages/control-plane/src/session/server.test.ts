@@ -44,6 +44,7 @@ function createHarness() {
     send: vi.fn(() => true),
     getClient: vi.fn(() => currentClient),
     close: vi.fn(),
+    isActiveSandbox: vi.fn(() => true),
     clearSandboxIfMatch: vi.fn(() => true),
     removeClient: vi.fn(() => client),
     hasParticipant: vi.fn(() => false),
@@ -318,6 +319,29 @@ describe("SessionServer", () => {
       timestamp: 1000,
       status: "ready",
     });
+  });
+
+  it("refuses frames from a replaced sandbox socket and closes it again", async () => {
+    const { server, messageDeps, sockets, log, setConnectionKind } = createHarness();
+    setConnectionKind("sandbox");
+    vi.mocked(sockets.isActiveSandbox).mockReturnValue(false);
+
+    await server.onMessage(
+      "sandbox",
+      JSON.stringify({
+        type: "heartbeat",
+        sandboxId: "sandbox-1",
+        timestamp: 1000,
+        status: "ready",
+      })
+    );
+
+    expect(messageDeps.processSandboxEvent).not.toHaveBeenCalled();
+    expect(sockets.close).toHaveBeenCalledWith("sandbox", 1000, "Sandbox socket replaced");
+    expect(log.debug).toHaveBeenCalledWith(
+      "Ignoring frame from a replaced sandbox socket",
+      expect.objectContaining({ sandbox_id: "sandbox-1" })
+    );
   });
 
   it("schedules sandbox reconnect checks and always reciprocates close", async () => {

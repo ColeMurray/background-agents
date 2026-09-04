@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   tunnel_urls TEXT,                                 -- JSON mapping of port -> tunnel URL for extra ports
   ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
+  active_socket_id TEXT,                            -- Bridge socket the session dispatches to (socket:<id> tag)
   created_at INTEGER NOT NULL
 );
 
@@ -647,6 +648,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 47,
     description: "Persist terminal message projections awaiting retry",
     run: TERMINAL_MESSAGE_PROJECTION_TABLE_SQL,
+  },
+  {
+    id: 48,
+    description: "Add active_socket_id to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN active_socket_id TEXT`,
   },
 ];
 

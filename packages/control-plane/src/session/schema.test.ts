@@ -273,6 +273,13 @@ describe("applyMigrations", () => {
     ]);
   });
 
+  it("adds sandbox.active_socket_id for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("active_socket_id TEXT");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 48);
+    expect(migration?.run).toBe("ALTER TABLE sandbox ADD COLUMN active_socket_id TEXT");
+  });
+
   it("keeps repository context consistent at the session table boundary", () => {
     expect(SCHEMA_SQL).toContain("(repo_owner IS NULL) = (repo_name IS NULL)");
     expect(SCHEMA_SQL).toContain("repo_owner IS NOT NULL");

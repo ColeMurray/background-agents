@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env, runDurableObjectAlarm } from "cloudflare:test";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/session/durable-object";
 import { cleanD1Tables } from "./cleanup";
@@ -7,8 +8,10 @@ import {
   INTEGRATION_WEBSOCKET_TIMEOUT_MS,
   initNamedSession,
   openClientWs,
+  openSandboxWs,
   queryDO,
   seedMessage,
+  seedSandboxAuth,
   waitForSandboxStatus,
 } from "./helpers";
 
@@ -16,10 +19,17 @@ const INSTANCE_MARKER = "pre-eviction-instance";
 
 type MarkedSessionDO = SessionDO & { __evictionMarker?: string };
 
-/** Tear down the running instance and return a stub bound to its replacement. */
-async function evictSessionDO(sessionName: string): Promise<DurableObjectStub> {
+/**
+ * Tear down the running instance and return a stub bound to its replacement.
+ * Waits for the sandbox to settle in `settledStatus` first so no in-flight
+ * status write from the (always-failing) test spawn lands on the replacement.
+ */
+async function evictSessionDO(
+  sessionName: string,
+  settledStatus: SandboxStatus = "failed"
+): Promise<DurableObjectStub> {
   const stub = env.SESSION.get(env.SESSION.idFromName(sessionName));
-  await waitForSandboxStatus(stub, "failed");
+  await waitForSandboxStatus(stub, settledStatus);
   await expect(
     runInSessionDO(stub, (instance: MarkedSessionDO) => {
       instance.__evictionMarker = INSTANCE_MARKER;
@@ -154,6 +164,58 @@ describe("SessionDO eviction and hibernation restore", () => {
     );
     expect(messages).toEqual([
       { status: "failed", error_message: "Execution timed out (stuck processing)" },
+    ]);
+  });
+
+  it("dispatches sandbox frames by the persisted socket identity after a restore", async () => {
+    const sessionName = `do-evict-sandbox-${Date.now()}`;
+    const sandboxId = "sb-evict";
+    const { stub } = await initNamedSession(sessionName);
+    await seedSandboxAuth(stub, { authToken: "sandbox-token-evict", sandboxId });
+    const { ws } = await openSandboxWs(sessionName, {
+      authToken: "sandbox-token-evict",
+      sandboxId,
+    });
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    await waitForSandboxStatus(stub, "ready");
+    const [{ active_socket_id: activeSocketId }] = await queryDO<{
+      active_socket_id: string | null;
+    }>(stub, "SELECT active_socket_id FROM sandbox");
+    expect(activeSocketId).toMatch(/^sbws-/);
+
+    const restored = await evictSessionDO(sessionName, "ready");
+    const toolCall = (callId: string) =>
+      JSON.stringify({
+        type: "tool_call",
+        tool: "read_file",
+        args: { path: "/src/main.ts" },
+        callId,
+        messageId: "msg-evict",
+        sandboxId,
+        timestamp: Date.now() / 1000,
+      });
+    // Two same-sandbox sockets survive only as their tags: the one the row
+    // names is dispatched from, the one it replaced is not.
+    await runInSessionDO(restored, async (instance: SessionDO, state) => {
+      const replaced = new WebSocketPair();
+      state.acceptWebSocket(replaced[1], ["sandbox", `sid:${sandboxId}`, "socket:sbws-replaced"]);
+      replaced[0].accept();
+      const active = new WebSocketPair();
+      state.acceptWebSocket(active[1], ["sandbox", `sid:${sandboxId}`, `socket:${activeSocketId}`]);
+      active[0].accept();
+
+      await instance.webSocketMessage(replaced[1], toolCall("call-replaced"));
+      await instance.webSocketMessage(active[1], toolCall("call-active"));
+    });
+
+    const events = await queryDO<{ data: string }>(
+      restored,
+      "SELECT data FROM events WHERE type = ?",
+      "tool_call"
+    );
+    expect(events.map((event) => (JSON.parse(event.data) as { callId: string }).callId)).toEqual([
+      "call-active",
     ]);
   });
 

@@ -5,6 +5,12 @@
  * The manager owns socket identity, persistence, and authorization leases.
  * The connection authenticator builds ClientInfo and stores it here after
  * snapshot synchronization.
+ *
+ * Exactly one sandbox socket is authoritative at a time. Accepting a bridge
+ * tags its socket with a fresh `socket:<id>` and persists that id on the
+ * sandbox row before the socket is published; dispatch, recovery after a
+ * restart, and close handling all compare a socket's tag against the row.
+ * Closing a replaced socket is cleanup — the persisted identity is the fence.
  */
 
 import type { Logger } from "../logger";
@@ -37,10 +43,13 @@ export interface SessionWebSocketManager {
   acceptClientSocket(ws: WebSocket, wsId: string): void;
 
   /**
-   * Accept a sandbox WebSocket, close any existing sandbox socket, and set
-   * as the active sandbox connection.
+   * Accept a sandbox WebSocket as the session's active bridge: persist its
+   * identity, then close every other sandbox socket.
    */
   acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean };
+
+  /** Whether `ws` is the sandbox socket the session currently dispatches to. */
+  isActiveSandboxSocket(ws: WebSocket): boolean;
 
   /** Parse a WebSocket's tags to determine its kind and identity. */
   classify(ws: WebSocket): ConnectionClassification;
@@ -57,7 +66,11 @@ export interface SessionWebSocketManager {
   /** Clear and close all active sandbox sockets without consulting persisted dispatch status. */
   detachSandboxSocket(code: number, reason: string): void;
 
-  /** Clear sandbox socket only if ws matches current reference. Returns true if it was the active socket. */
+  /**
+   * Drop the in-memory pointer for a closing sandbox socket. Returns whether
+   * it was the active socket — whether its close is the loss of the session's
+   * bridge rather than the tail of a replacement.
+   */
   clearSandboxSocketIfMatch(ws: WebSocket): boolean;
 
   setClient(ws: WebSocket, info: ClientInfo): void;
@@ -130,8 +143,14 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   }
 
   acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean } {
-    const tags = ["sandbox", ...(sandboxId ? [`sid:${sandboxId}`] : [])];
+    const socketId = `sbws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const tags = ["sandbox", ...(sandboxId ? [`sid:${sandboxId}`] : []), `socket:${socketId}`];
     this.host.accept(ws, tags);
+    // Advance the persisted identity before anything else observes the new
+    // socket: from here on every earlier bridge socket is refused at dispatch
+    // whether or not its close below completes, and recovery after a restart
+    // re-selects this socket by its tag.
+    this.sandboxRepository.setActiveSocketId(socketId);
 
     let replaced = false;
     // Close every other live sandbox socket, not only the cached one: after
@@ -161,7 +180,8 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     const tags = this.host.tags(ws);
     if (tags.includes("sandbox")) {
       const sidTag = tags.find((t) => t.startsWith("sid:"));
-      return { kind: "sandbox", sandboxId: sidTag?.slice(4) };
+      const socketTag = tags.find((t) => t.startsWith("socket:"));
+      return { kind: "sandbox", sandboxId: sidTag?.slice(4), socketId: socketTag?.slice(7) };
     }
     const wsIdTag = tags.find((t) => t.startsWith("wsid:"));
     return { kind: "client", wsId: wsIdTag?.slice(5) };
@@ -171,9 +191,18 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Sandbox socket
   // -------------------------------------------------------------------------
 
+  isActiveSandboxSocket(ws: WebSocket): boolean {
+    const parsed = this.classify(ws);
+    if (parsed.kind !== "sandbox") return false;
+    // A socket accepted before identities were persisted (no tag, no row
+    // value) stays authoritative until the next bridge connects.
+    return (parsed.socketId ?? null) === this.sandboxRepository.getActiveSocketId();
+  }
+
   getSandboxSocket(): WebSocket | null {
     const sandbox = this.sandboxRepository.getSandbox();
     const expectedSandboxId = sandbox?.modal_sandbox_id;
+    const activeSocketId = sandbox?.active_socket_id ?? null;
 
     // If the sandbox is in a terminal state, don't re-adopt stale WebSockets.
     // After inactivity timeout or heartbeat stale, the DO closes the WS and sets
@@ -195,8 +224,9 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     if (this.sandboxWs?.readyState === WebSocket.OPEN) {
       const cached = this.classify(this.sandboxWs);
       if (
-        !expectedSandboxId ||
-        (cached.kind === "sandbox" && cached.sandboxId === expectedSandboxId)
+        cached.kind === "sandbox" &&
+        (!expectedSandboxId || cached.sandboxId === expectedSandboxId) &&
+        (cached.socketId ?? null) === activeSocketId
       ) {
         return this.sandboxWs;
       }
@@ -204,8 +234,10 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       this.sandboxWs = null;
     }
 
-    // Hibernation recovery: scan all WebSockets, validate sandbox identity
-
+    // Recovery after a restart: the pointer is gone but the accepted sockets
+    // and their tags survive. Only the socket carrying the persisted active
+    // identity is re-adopted — a same-sandbox socket it replaced may still be
+    // open while its close completes, and must not win for coming first.
     for (const ws of this.host.sockets()) {
       const parsed = this.classify(ws);
       if (parsed.kind !== "sandbox" || ws.readyState !== WebSocket.OPEN) continue;
@@ -218,6 +250,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
         this.close(ws, 1000, "Sandbox identity changed");
         continue;
       }
+      if ((parsed.socketId ?? null) !== activeSocketId) continue;
 
       this.log.info("Recovered sandbox WebSocket from hibernation");
       this.sandboxWs = ws;
@@ -242,13 +275,9 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   }
 
   clearSandboxSocketIfMatch(ws: WebSocket): boolean {
-    if (this.sandboxWs === ws) {
-      this.sandboxWs = null;
-      return true;
-    }
-    // sandboxWs is null (post-hibernation or already cleared) — treat as active.
-    // The only definitive "replaced" signal is sandboxWs pointing to a different socket.
-    return this.sandboxWs === null;
+    const active = this.isActiveSandboxSocket(ws);
+    if (active || this.sandboxWs === ws) this.sandboxWs = null;
+    return active;
   }
 
   // -------------------------------------------------------------------------

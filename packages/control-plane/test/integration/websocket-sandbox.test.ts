@@ -317,6 +317,66 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     replacementWs!.close();
   });
 
+  it("dispatches only from the sandbox socket whose identity the session persisted", async () => {
+    const name = `ws-sandbox-authority-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
+
+    const { ws: activeWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(activeWs).not.toBeNull();
+    activeWs!.accept();
+
+    const [{ active_socket_id: activeSocketId }] = await queryDO<{
+      active_socket_id: string | null;
+    }>(stub, "SELECT active_socket_id FROM sandbox");
+    expect(activeSocketId).toMatch(/^sbws-/);
+
+    const toolCall = (callId: string) =>
+      JSON.stringify({
+        type: "tool_call",
+        tool: "read_file",
+        args: { path: "/src/main.ts" },
+        callId,
+        messageId: "msg-authority",
+        sandboxId: SANDBOX_ID,
+        timestamp: Date.now() / 1000,
+      });
+
+    // A bridge the active one replaced, in the shape a restart leaves it:
+    // still accepted at the platform level under the same sandbox id, still
+    // open, carrying an identity the row no longer names.
+    await runInSessionDO(stub, async (instance: SessionDO, state) => {
+      const pair = new WebSocketPair();
+      state.acceptWebSocket(pair[1], ["sandbox", `sid:${SANDBOX_ID}`, "socket:sbws-replaced"]);
+      pair[0].accept();
+      expect(openSandboxSockets(state)).toHaveLength(2);
+
+      await instance.webSocketMessage(pair[1], toolCall("call-replaced"));
+
+      // Refused, and closed again rather than left open.
+      const live = openSandboxSockets(state);
+      expect(live).toHaveLength(1);
+      expect(state.getTags(live[0])).toContain(`socket:${activeSocketId}`);
+    });
+
+    activeWs!.send(toolCall("call-active"));
+    await new Promise((r) => setTimeout(r, 200));
+
+    const events = await queryDO<{ data: string }>(
+      stub,
+      "SELECT data FROM events WHERE type = ?",
+      "tool_call"
+    );
+    const callIds = events.map((event) => (JSON.parse(event.data) as { callId: string }).callId);
+    expect(callIds).toContain("call-active");
+    expect(callIds).not.toContain("call-replaced");
+
+    activeWs!.close();
+  });
+
   it("sandbox connect sets status to ready", async () => {
     const name = `ws-sandbox-ready-${Date.now()}`;
     const { stub } = await initNamedSession(name);

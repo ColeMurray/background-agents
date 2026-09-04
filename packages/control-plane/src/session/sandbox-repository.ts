@@ -137,11 +137,30 @@ export class SandboxRepository {
          tunnel_urls = NULL,
          ttyd_url = NULL,
          ttyd_token = NULL,
-         runtime_version = NULL
+         runtime_version = NULL,
+         active_socket_id = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
       data.modalSandboxId
+    );
+  }
+
+  /**
+   * The bridge socket the session dispatches to, by its `socket:<id>` tag.
+   * Null once a spawn reserves a new identity or before any bridge connects.
+   */
+  getActiveSocketId(): string | null {
+    const result = this.sql.exec(`SELECT active_socket_id FROM sandbox LIMIT 1`);
+    const rows = this.rows<{ active_socket_id: string | null }>(result);
+    return rows[0]?.active_socket_id ?? null;
+  }
+
+  /** Make `socketId` the socket the session dispatches to; every earlier socket loses authority. */
+  setActiveSocketId(socketId: string): void {
+    this.sql.exec(
+      `UPDATE sandbox SET active_socket_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      socketId
     );
   }
 

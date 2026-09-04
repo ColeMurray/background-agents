@@ -121,6 +121,7 @@ function createMockSandbox(
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,
+    active_socket_id: null,
     created_at: Date.now() - 60000,
     spawn_failure_count: 0,
     last_spawn_failure: 0,

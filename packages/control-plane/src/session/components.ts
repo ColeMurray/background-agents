@@ -775,6 +775,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     send: (ws, message) => wsManager.send(ws, message),
     getClient: (ws) => connectionAuthenticator.getClientInfo(ws),
     close: (ws, code, reason) => wsManager.close(ws, code, reason),
+    isActiveSandbox: (ws) => wsManager.isActiveSandboxSocket(ws),
     clearSandboxIfMatch: (ws) => wsManager.clearSandboxSocketIfMatch(ws),
     removeClient: (ws) => wsManager.removeClient(ws),
     hasParticipant: (participantId) =>

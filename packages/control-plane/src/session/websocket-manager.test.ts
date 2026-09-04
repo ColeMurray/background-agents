@@ -108,6 +108,11 @@ function createMockRepository() {
 
   const repo = {
     getSandbox: () => sandboxRow,
+    getActiveSocketId: () => sandboxRow?.active_socket_id ?? null,
+    setActiveSocketId: (socketId: string) => {
+      // Like the UPDATE it stands in for: nothing to write without a row.
+      if (sandboxRow) sandboxRow.active_socket_id = socketId;
+    },
     getWsClientMapping: (wsId: string) => mappings.get(wsId) ?? null,
     hasWsClientMapping: (wsId: string) => mappings.has(wsId),
     upsertWsClientMapping: (data: {
@@ -195,6 +200,7 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,
+    active_socket_id: null,
     created_at: Date.now(),
   };
 }
@@ -304,7 +310,34 @@ describe("SessionWebSocketManagerImpl", () => {
 
       manager.acceptAndSetSandboxSocket(ws);
 
-      expect(sockets.get(ws)).toEqual(["sandbox"]);
+      expect(sockets.get(ws)).toEqual(["sandbox", expect.stringMatching(/^socket:sbws-/)]);
+    });
+
+    it("persists the new socket's identity before closing the socket it replaces", () => {
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
+      const order: string[] = [];
+      const oldWs = createFakeWebSocket();
+      vi.mocked(oldWs.close).mockImplementation(() => {
+        order.push(`close:${mockRepo.repo.getActiveSocketId()}`);
+      });
+      const newWs = createFakeWebSocket();
+
+      manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
+      const oldId = mockRepo.repo.getActiveSocketId();
+      manager.acceptAndSetSandboxSocket(newWs, "sb-1");
+      const newId = mockRepo.repo.getActiveSocketId();
+
+      expect(oldId).toMatch(/^sbws-/);
+      expect(newId).toMatch(/^sbws-/);
+      expect(newId).not.toBe(oldId);
+      // The row already named the replacement when the old socket was closed.
+      expect(order).toEqual([`close:${newId}`]);
+      expect(manager.classify(newWs)).toEqual({
+        kind: "sandbox",
+        sandboxId: "sb-1",
+        socketId: newId,
+      });
     });
 
     it("closes existing sandbox socket and returns replaced=true", () => {
@@ -345,7 +378,8 @@ describe("SessionWebSocketManagerImpl", () => {
     });
 
     it("sets new socket as active sandbox", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
       const ws = createFakeWebSocket();
 
       manager.acceptAndSetSandboxSocket(ws, "sb-1");
@@ -354,14 +388,96 @@ describe("SessionWebSocketManagerImpl", () => {
     });
   });
 
+  describe("isActiveSandboxSocket", () => {
+    it("is true only for the most recently accepted sandbox socket", () => {
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
+      const oldWs = createFakeWebSocket();
+      const newWs = createFakeWebSocket();
+
+      manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
+      expect(manager.isActiveSandboxSocket(oldWs)).toBe(true);
+
+      // Same sandbox reconnecting: the replaced socket is still OPEN while
+      // its close completes, and still tagged, but no longer authoritative.
+      manager.acceptAndSetSandboxSocket(newWs, "sb-1");
+      expect(manager.isActiveSandboxSocket(oldWs)).toBe(false);
+      expect(manager.isActiveSandboxSocket(newWs)).toBe(true);
+    });
+
+    it("is false for client sockets", () => {
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
+      const ws = createFakeWebSocket();
+      manager.acceptClientSocket(ws, "ws-1");
+
+      expect(manager.isActiveSandboxSocket(ws)).toBe(false);
+    });
+
+    it("is false once a spawn reservation has cleared the persisted identity", () => {
+      const { manager, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+
+      row.active_socket_id = null;
+      row.modal_sandbox_id = "sb-2";
+
+      expect(manager.isActiveSandboxSocket(ws)).toBe(false);
+    });
+
+    it("keeps a socket accepted before identities were persisted authoritative", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
+      const legacyWs = createFakeWebSocket();
+      sockets.set(legacyWs, ["sandbox", "sid:sb-1"]);
+
+      expect(manager.isActiveSandboxSocket(legacyWs)).toBe(true);
+
+      const newWs = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(newWs, "sb-1");
+      expect(manager.isActiveSandboxSocket(legacyWs)).toBe(false);
+    });
+  });
+
   describe("getSandboxSocket", () => {
     it("returns cached socket if open", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
       const ws = createFakeWebSocket();
 
       manager.acceptAndSetSandboxSocket(ws, "sb-1");
 
       expect(manager.getSandboxSocket()).toBe(ws);
+    });
+
+    it("recovers the socket whose identity the row names, not the first open one", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      row.active_socket_id = "sbws-active";
+      mockRepo.setSandbox(row);
+      const replacedWs = createFakeWebSocket();
+      const activeWs = createFakeWebSocket();
+
+      // Both sockets belong to the same sandbox and both still look OPEN
+      // after a restart; the replaced one is enumerated first.
+      sockets.set(replacedWs, ["sandbox", "sid:sb-1", "socket:sbws-replaced"]);
+      sockets.set(activeWs, ["sandbox", "sid:sb-1", "socket:sbws-active"]);
+
+      expect(manager.getSandboxSocket()).toBe(activeWs);
+      expect(replacedWs.close).not.toHaveBeenCalled();
+    });
+
+    it("returns null when only replaced sockets survive a restart", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      row.active_socket_id = "sbws-active";
+      mockRepo.setSandbox(row);
+      const replacedWs = createFakeWebSocket();
+      sockets.set(replacedWs, ["sandbox", "sid:sb-1", "socket:sbws-replaced"]);
+
+      expect(manager.getSandboxSocket()).toBeNull();
     });
 
     it("returns null when no sandbox socket exists", () => {
@@ -508,7 +624,8 @@ describe("SessionWebSocketManagerImpl", () => {
 
   describe("clearSandboxSocketIfMatch", () => {
     it("clears and returns true when ws matches", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
       const ws = createFakeWebSocket();
 
       manager.acceptAndSetSandboxSocket(ws, "sb-1");
@@ -521,12 +638,13 @@ describe("SessionWebSocketManagerImpl", () => {
     });
 
     it("returns false and does not clear when ws does not match", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
       const oldWs = createFakeWebSocket();
       const newWs = createFakeWebSocket();
 
       manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
-      manager.acceptAndSetSandboxSocket(newWs, "sb-2");
+      manager.acceptAndSetSandboxSocket(newWs, "sb-1");
 
       // Try to clear with old socket — should not affect new socket
       const result = manager.clearSandboxSocketIfMatch(oldWs);
@@ -535,13 +653,33 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(manager.getSandboxSocket()).toBe(newWs);
     });
 
-    it("returns true when no sandbox socket is set (post-hibernation)", () => {
-      const { manager } = createManager();
-      const ws = createFakeWebSocket();
+    it("recognizes the active socket after a restart by its persisted identity", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      row.active_socket_id = "sbws-active";
+      mockRepo.setSandbox(row);
+      const activeWs = createFakeWebSocket();
+      const replacedWs = createFakeWebSocket();
+      sockets.set(activeWs, ["sandbox", "sid:sb-1", "socket:sbws-active"]);
+      sockets.set(replacedWs, ["sandbox", "sid:sb-1", "socket:sbws-replaced"]);
 
-      // When sandboxWs is null (e.g., post-hibernation), the closing socket
-      // is treated as active since there's no replacement to compare against.
-      expect(manager.clearSandboxSocketIfMatch(ws)).toBe(true);
+      expect(manager.clearSandboxSocketIfMatch(replacedWs)).toBe(false);
+      expect(manager.clearSandboxSocketIfMatch(activeWs)).toBe(true);
+    });
+
+    it("treats the close of a socket a spawn reservation displaced as a replacement", () => {
+      const { manager, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+      row.active_socket_id = null;
+      row.modal_sandbox_id = "sb-2";
+
+      expect(manager.clearSandboxSocketIfMatch(ws)).toBe(false);
+      // The pointer is still dropped: nothing may keep sending into it.
+      Object.defineProperty(ws, "readyState", { value: WebSocket.CLOSED });
+      expect(manager.getSandboxSocket()).toBeNull();
     });
   });
 
