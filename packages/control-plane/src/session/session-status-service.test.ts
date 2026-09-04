@@ -294,9 +294,38 @@ describe("SessionStatusService.reconcileAfterExecution", () => {
 
     expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "failed" });
   });
+
+  it("leaves a session archived while its terminal projection was in flight", async () => {
+    // Archive is admissible once the completion is recorded (no unfinished
+    // message remains), and the reconcile runs after the D1 projection await.
+    const h = harness({ session: createSession({ status: "archived" }) });
+
+    await h.service.reconcileAfterExecution(true);
+
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("leaves a session cancelled while its terminal projection was in flight", async () => {
+    const h = harness({ session: createSession({ status: "cancelled" }) });
+
+    await h.service.reconcileAfterExecution(false);
+
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
 });
 
 describe("SessionStatusService.reconcileAfterQueueRemoval", () => {
+  it("leaves a cancelled session cancelled", async () => {
+    const h = harness({ session: createSession({ status: "cancelled" }) });
+
+    await h.service.reconcileAfterQueueRemoval();
+
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
   it("preserves the latest failed execution outcome", async () => {
     const h = harness({ session: createSession({ status: "active" }) });
     h.repository.getLatestTerminalMessage.mockReturnValue({ status: "failed" } as MessageRow);
