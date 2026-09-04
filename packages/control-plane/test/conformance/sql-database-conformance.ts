@@ -100,6 +100,22 @@ export function registerSqlDatabaseConformanceSuite(factory: SqlDatabaseFactory)
       });
     });
 
+    it("refuses a bigint, which not every engine can bind", async () => {
+      await withTable(async (db) => {
+        // Refused at bind or at execution, whichever the engine does; the
+        // portable rule is that it never runs.
+        await expect(
+          Promise.resolve().then(() =>
+            db
+              .prepare(`INSERT INTO ${TABLE} (k, v) VALUES (?, ?)`)
+              .bind("big", 2n ** 40n)
+              .run()
+          )
+        ).rejects.toThrow();
+        expect(await count(db)).toBe(0);
+      });
+    });
+
     it("snapshots a bound binary value at bind time", async () => {
       await withTable(async (db) => {
         const bytes = new Uint8Array([1, 2, 3]);

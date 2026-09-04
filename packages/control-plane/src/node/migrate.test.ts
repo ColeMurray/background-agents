@@ -1,8 +1,10 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { buildSync } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyMigrations, containsTransactionControl, listMigrations } from "./migrate";
 
@@ -155,4 +157,58 @@ describe("applyMigrations", () => {
       true
     );
   });
+
+  it("lets several processes open and migrate one fresh file at once, applying each migration once", async () => {
+    const migrations = join(dir, "migrations");
+    mkdirMigrations(migrations, {
+      "0001_first.sql": "CREATE TABLE first (id INTEGER);",
+      "0002_second.sql": "CREATE TABLE second (id INTEGER);",
+    });
+    // The opener is bundled once so plain `node` can run it in each process.
+    const entry = join(dir, "open.ts");
+    const adapter = resolve(dirname(fileURLToPath(import.meta.url)), "sqlite-database.ts");
+    writeFileSync(
+      entry,
+      `import { openNodeSqlDatabase } from ${JSON.stringify(adapter)};
+       openNodeSqlDatabase(process.argv[2], { migrationsDir: process.argv[3] }).close();`
+    );
+    const script = join(dir, "open.mjs");
+    buildSync({
+      entryPoints: [entry],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      target: "node22",
+      outfile: script,
+      logLevel: "silent",
+    });
+    const path = join(dir, "global.db");
+
+    const children = Array.from(
+      { length: 4 },
+      () =>
+        new Promise<{ code: number | null; stderr: string }>((done) => {
+          const child = spawn(process.execPath, ["--no-warnings", script, path, migrations], {
+            stdio: ["ignore", "ignore", "pipe"],
+          });
+          let stderr = "";
+          child.stderr.on("data", (chunk) => (stderr += String(chunk)));
+          child.on("exit", (code) => done({ code, stderr }));
+        })
+    );
+    const results = await Promise.all(children);
+
+    expect(results.map((r) => [r.code, r.stderr])).toEqual(results.map(() => [0, ""]));
+    const file = new DatabaseSync(path);
+    try {
+      expect(ledger(file).map((row) => row.name)).toEqual(["0001_first.sql", "0002_second.sql"]);
+    } finally {
+      file.close();
+    }
+  });
 });
+
+function mkdirMigrations(directory: string, files: Record<string, string>): void {
+  mkdirSync(directory);
+  for (const [name, sql] of Object.entries(files)) writeFileSync(join(directory, name), sql);
+}

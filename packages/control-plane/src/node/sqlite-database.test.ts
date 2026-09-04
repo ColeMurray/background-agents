@@ -9,6 +9,7 @@ import {
   openNodeSqlDatabase,
   type NodeSqlDatabase,
 } from "./sqlite-database";
+import { BUSY_TIMEOUT_MS } from "./sqlite-file";
 
 const MIGRATIONS_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -40,11 +41,11 @@ describe("createNodeSqlDatabase", () => {
     expect(await db.prepare("SELECT 1 AS one; -- done\n").first()).toEqual({ one: 1 });
   });
 
-  it("binds bigints and buffers, converts booleans, and names what it cannot bind", async () => {
+  it("binds buffers and views as blobs, converts booleans, and names what it cannot bind", async () => {
     const bytes = new Uint8Array([1, 2, 3]);
     await db
       .prepare("INSERT INTO t (a, b, n) VALUES (?, ?, ?)")
-      .bind("big", bytes.buffer, 2n ** 40n)
+      .bind("buffer", bytes.buffer, 1)
       .run();
     await db.prepare("INSERT INTO t (a, b, n) VALUES (?, ?, ?)").bind("view", bytes, false).run();
     const rows = await db.prepare("SELECT a, b, n FROM t ORDER BY id").all<{
@@ -53,13 +54,16 @@ describe("createNodeSqlDatabase", () => {
       n: number;
     }>();
     expect(rows.results.map((r) => [r.a, [...r.b], r.n])).toEqual([
-      ["big", [1, 2, 3], 2 ** 40],
+      ["buffer", [1, 2, 3], 1],
       ["view", [1, 2, 3], 0],
     ]);
     expect(() => db.prepare("SELECT ?").bind(new Date())).toThrow(
       "Cannot bind a value of type Date"
     );
     expect(() => db.prepare("SELECT ?").bind({})).toThrow("Cannot bind a value of type Object");
+    expect(() => db.prepare("SELECT ?").bind(2n ** 40n)).toThrow(
+      "Cannot bind a value of type bigint"
+    );
   });
 
   it("rolls a batch back and leaves the connection usable", async () => {
@@ -100,7 +104,7 @@ describe("openNodeSqlDatabase", () => {
     try {
       expect(statSync(path).mode & 0o777).toBe(0o600);
       expect(await db.prepare("PRAGMA journal_mode").first()).toEqual({ journal_mode: "wal" });
-      expect(await db.prepare("PRAGMA busy_timeout").first()).toEqual({ timeout: 5000 });
+      expect(await db.prepare("PRAGMA busy_timeout").first()).toEqual({ timeout: BUSY_TIMEOUT_MS });
       expect(await db.prepare("PRAGMA foreign_keys").first()).toEqual({ foreign_keys: 1 });
     } finally {
       db.close();

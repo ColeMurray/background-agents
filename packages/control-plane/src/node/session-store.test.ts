@@ -8,6 +8,7 @@ import {
   openSessionStore,
   type NodeSessionStore,
 } from "./session-store";
+import { BUSY_TIMEOUT_MS } from "./sqlite-file";
 
 describe("openSessionStore", () => {
   let dataDir: string;
@@ -38,7 +39,9 @@ describe("openSessionStore", () => {
     expect(store.path).toBe(join(dataDir, "sessions", "session-1.db"));
     expect(existsSync(store.path)).toBe(true);
     expect(store.storage.sql.exec("PRAGMA journal_mode").one()).toEqual({ journal_mode: "wal" });
-    expect(store.storage.sql.exec("PRAGMA busy_timeout").one()).toEqual({ timeout: 5000 });
+    expect(store.storage.sql.exec("PRAGMA busy_timeout").one()).toEqual({
+      timeout: BUSY_TIMEOUT_MS,
+    });
     expect(store.storage.sql.exec("PRAGMA foreign_keys").one()).toEqual({ foreign_keys: 1 });
     expect(
       store.storage.sql.exec("SELECT count(*) AS n FROM sqlite_master WHERE name = 'session'").one()

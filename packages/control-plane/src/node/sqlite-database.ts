@@ -11,7 +11,7 @@
  *   SQL is rejected here instead.
  * - `bind(...)` returns a new statement and validates the values the way
  *   D1 does: booleans become integers, buffers are bound as blobs, and
- *   `undefined` or any other object is a type error at bind time.
+ *   `undefined`, `bigint`, or any other object is a type error at bind time.
  * - `first()` is `null` when no row matches; `all()` and `run()` return the
  *   rows with `meta.changes` from SQLite's change counter, which the stores
  *   gate CAS and upsert correctness on.
@@ -146,12 +146,16 @@ function prepareOne(db: DatabaseSync, query: string) {
   return statement;
 }
 
-/** The value as SQLite binds it, with D1's conversions and rejections. */
+/**
+ * The value as SQLite binds it, with D1's conversions and rejections. The
+ * accepted set is what both engines take: `node:sqlite` would also bind a
+ * `bigint`, but D1 rejects one, so store code that bound it would pass on
+ * Node and fail on Workers.
+ */
 function toBoundValue(value: unknown): SQLInputValue {
   if (value === null) return null;
   switch (typeof value) {
     case "number":
-    case "bigint":
     case "string":
       return value;
     case "boolean":

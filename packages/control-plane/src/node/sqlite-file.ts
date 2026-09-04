@@ -9,7 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { makeFilePrivate } from "./private-paths";
 
 /** How long a writer waits on another connection's lock before failing. */
-const BUSY_TIMEOUT_MS = 5_000;
+export const BUSY_TIMEOUT_MS = 5_000;
 
 /** How often the WAL switch is retried while another connection holds the file. */
 const BUSY_RETRY_MS = 10;
