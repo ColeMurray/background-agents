@@ -71,7 +71,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --prefer-offline
 
       - name: Run ESLint
         run: npm run lint
@@ -106,7 +106,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --prefer-offline
 
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
@@ -129,7 +129,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --prefer-offline
 
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
@@ -154,7 +154,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --prefer-offline
 
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
@@ -184,7 +184,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --prefer-offline
 
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
@@ -207,7 +207,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --prefer-offline
 
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
@@ -230,7 +230,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --prefer-offline
 
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
