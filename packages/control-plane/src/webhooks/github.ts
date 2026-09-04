@@ -55,7 +55,7 @@ async function trackPullRequestLifecycle(
           method: "GET",
         });
         if (!response.ok) return [];
-        const body = await response.json<{ artifacts?: SessionArtifactSummary[] }>();
+        const body = (await response.json()) as { artifacts?: SessionArtifactSummary[] };
         return body.artifacts ?? [];
       },
       pushSnapshotToSession: async (sessionId, artifactId, snapshot) => {

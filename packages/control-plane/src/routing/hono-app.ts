@@ -7,12 +7,10 @@ import {
   auditRouteAuthorizationDecision,
   shouldAuditAllowedDecision,
 } from "../authorization/request-audit";
-import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import { createRequestContext } from "../http/create-request-context";
 import type { RequestContext } from "../http/request-context";
 import { error, HttpError } from "../http/responses";
 import { createLogger } from "../logger";
-import { catalog } from "../routes/catalog";
 import type { Env } from "../types";
 import type {
   ControlPlaneHonoEnv,
@@ -22,19 +20,7 @@ import type {
 } from "./hono-env";
 import { finalizeRouteResponse, logRequest, withCorsAndTraceHeaders } from "./request-lifecycle";
 
-export type {
-  ControlPlaneHonoEnv,
-  ControlPlaneHost,
-  PlatformExecutionContext,
-  RouteModule,
-} from "./hono-env";
-
-/** Ordinary HTTP entrypoint signature shared by the Worker and test adapters. */
-export type ControlPlaneHttpHandler = (
-  request: Request,
-  env: Env,
-  executionCtx: ExecutionContext
-) => Promise<Response>;
+export type { ControlPlaneHonoEnv, ControlPlaneHost, RouteModule } from "./hono-env";
 
 const logger = createLogger("router");
 
@@ -269,23 +255,3 @@ function internalError(
   });
   return error("Internal server error", 500);
 }
-
-/** The Cloudflare Worker host: background tasks ride the event's `waitUntil`. */
-export const cloudflareHost: ControlPlaneHost = {
-  backgroundTasks: (executionCtx) => {
-    if (!executionCtx) throw new Error("The Cloudflare host requires an execution context");
-    return createCloudflareBackgroundTasks(executionCtx);
-  },
-};
-
-/** Build the Worker's ordinary HTTP entrypoint over route modules. */
-export function createControlPlaneHttpHandler(
-  modules: readonly RouteModule[]
-): ControlPlaneHttpHandler {
-  const app = createControlPlaneApp(modules, cloudflareHost);
-  return (request, env, executionCtx) => Promise.resolve(app.fetch(request, env, executionCtx));
-}
-
-/** Production entrypoint over the canonical route catalog. */
-export const handleControlPlaneHttp: ControlPlaneHttpHandler =
-  createControlPlaneHttpHandler(catalog);

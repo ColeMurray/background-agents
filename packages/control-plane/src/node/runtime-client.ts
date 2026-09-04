@@ -29,7 +29,7 @@ export interface RequestServingRuntime {
 }
 
 /** Leased access to an existing session's runtime; `SessionRuntimeRegistry` satisfies it. */
-export interface SessionRuntimeLookup<Runtime extends RequestServingRuntime> {
+export interface SessionRuntimeLookup<Runtime> {
   withRuntimeIfPresent<T>(
     sessionId: string,
     use: (runtime: Runtime) => Promise<T>

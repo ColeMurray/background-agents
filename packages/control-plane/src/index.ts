@@ -4,7 +4,7 @@
  * Cloudflare Workers entry point with Durable Objects for session management.
  */
 
-import { handleControlPlaneHttp } from "./routing/hono-app";
+import { handleControlPlaneHttp } from "./cloudflare/http-host";
 import { createLogger } from "./logger";
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 import { handleAutofixQueue } from "./autofix/handler";

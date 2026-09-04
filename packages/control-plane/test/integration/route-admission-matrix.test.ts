@@ -12,11 +12,8 @@ import { SELF, env } from "cloudflare:test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { createExecutionContext } from "cloudflare:test";
-import {
-  cloudflareHost,
-  createControlPlaneApp,
-  createControlPlaneHttpHandler,
-} from "../../src/routing/hono-app";
+import { cloudflareHost, createControlPlaneHttpHandler } from "../../src/cloudflare/http-host";
+import { createControlPlaneApp } from "../../src/routing/hono-app";
 import { listRouteContracts, type RouteContract } from "../../src/routing/route-contracts";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";

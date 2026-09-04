@@ -13,7 +13,8 @@ import { BUILT_IN_ROLE_REGISTRY, type PermissionId } from "@open-inspect/shared/
 import type { CacheStore } from "@open-inspect/shared/cache-store";
 import type { SqlDatabase, SqlStatement } from "./db/sql-database";
 import type { SessionRuntimeDispatch } from "./session/runtime-client";
-import { cloudflareHost, createControlPlaneApp, type RouteModule } from "./routing/hono-app";
+import { cloudflareHost } from "./cloudflare/http-host";
+import { createControlPlaneApp, type RouteModule } from "./routing/hono-app";
 import { listRouteContracts, type RouteContract } from "./routing/route-contracts";
 import { catalog } from "./routes/catalog";
 import type { RouteParams } from "./routes/shared";

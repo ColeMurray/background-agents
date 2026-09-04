@@ -218,7 +218,7 @@ export default tseslint.config(
               // this package, so anchoring on it is precise.
               regex: "(?:^|/)components(?:\\.[cm]?[jt]sx?)?$",
               message:
-                "Only the platform adapter (cloudflare/durable-object.ts) may import the composition root. Take dependencies as constructor inputs instead.",
+                "Only the platform adapters (cloudflare/durable-object.ts, node/host.ts) may import the composition root. Take dependencies as constructor inputs instead.",
             },
             {
               regex: "(?:^|/)durable-object(?:\\.[cm]?[jt]sx?)?$",
@@ -239,10 +239,12 @@ export default tseslint.config(
     },
   },
   // The Node host's adapters may import each other but not the Cloudflare
-  // edge or the composition root.
+  // edge or the composition root. The Node host itself (src/node/host.ts)
+  // is the Node counterpart of the Durable Object adapter: it builds the
+  // session runtime, so it may import the composition root, and it alone.
   {
     files: ["packages/control-plane/src/node/**/*.ts"],
-    ignores: ["packages/control-plane/src/**/*.test.ts"],
+    ignores: ["packages/control-plane/src/**/*.test.ts", "packages/control-plane/src/node/host.ts"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -251,8 +253,25 @@ export default tseslint.config(
             {
               regex: "(?:^|/)components(?:\\.[cm]?[jt]sx?)?$",
               message:
-                "Only the platform adapter (cloudflare/durable-object.ts) may import the composition root. Take dependencies as constructor inputs instead.",
+                "Only the platform adapters (cloudflare/durable-object.ts, node/host.ts) may import the composition root. Take dependencies as constructor inputs instead.",
             },
+            {
+              regex: "(?:^|/)durable-object(?:\\.[cm]?[jt]sx?)?$",
+              message:
+                "Only the worker entrypoint (src/index.ts) may import the platform adapter. Depend on the session collaborators, not the Durable Object.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["packages/control-plane/src/node/host.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
             {
               regex: "(?:^|/)durable-object(?:\\.[cm]?[jt]sx?)?$",
               message:
@@ -278,7 +297,7 @@ export default tseslint.config(
               // this package, so anchoring on it is precise.
               regex: "(?:^|/)components(?:\\.[cm]?[jt]sx?)?$",
               message:
-                "Only the platform adapter (cloudflare/durable-object.ts) may import the composition root. Take dependencies as constructor inputs instead.",
+                "Only the platform adapters (cloudflare/durable-object.ts, node/host.ts) may import the composition root. Take dependencies as constructor inputs instead.",
             },
             {
               // The directory and anything under it, by relative path or the

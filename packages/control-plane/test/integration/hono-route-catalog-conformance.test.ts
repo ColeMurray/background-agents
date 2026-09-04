@@ -6,11 +6,8 @@ import { NO_AUTHORIZATION } from "../../src/routes/shared";
 import { admit } from "../../src/routing/admit";
 import type { ControlPlaneHonoEnv } from "../../src/routing/hono-env";
 import { rawRouteParams } from "../../src/routing/route-params";
-import {
-  cloudflareHost,
-  createControlPlaneApp,
-  createControlPlaneHttpHandler,
-} from "../../src/routing/hono-app";
+import { cloudflareHost, createControlPlaneHttpHandler } from "../../src/cloudflare/http-host";
+import { createControlPlaneApp } from "../../src/routing/hono-app";
 import { listRouteContracts } from "../../src/routing/route-contracts";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 

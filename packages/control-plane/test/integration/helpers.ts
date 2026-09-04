@@ -1,6 +1,6 @@
 import { SELF, env } from "cloudflare:test";
 import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
-import { handleControlPlaneHttp } from "../../src/routing/hono-app";
+import { handleControlPlaneHttp } from "../../src/cloudflare/http-host";
 import { runInSessionDO } from "./session-do-access";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
