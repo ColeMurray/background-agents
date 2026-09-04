@@ -1,0 +1,67 @@
+---
+title: Monitor and steer a session
+description: Follow progress, provide new context, and decide when to stop, resume, or take over.
+audience: user
+owner: control-plane
+status: published
+lastReviewed: "2026-09-04"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - packages/web/src/components/session-prompt-composer.tsx
+  - packages/shared/src/types/session-activity.ts
+---
+
+Use the shared timeline to understand the direction of work and intervene when the task changes—not
+to supervise every command.
+
+## Read the timeline
+
+The session can show agent output, tool activity, status changes, artifacts, and prompts from other
+participants. Activity is shared with admitted workspace members who open the session.
+
+Look for:
+
+- whether the agent found the intended repository and files;
+- assumptions that conflict with product or security constraints;
+- validation that is missing, failing, or running in the wrong package;
+- a request for clarification;
+- a result that is ready for review.
+
+## Send a follow-up
+
+Use a follow-up when you have new information or need a concrete correction:
+
+```text
+The API must remain compatible with clients that omit this field. Add that case
+to the integration test before changing the handler.
+```
+
+Follow-ups can be queued while the current prompt is processing. They are not guaranteed to
+interrupt the command that is running at that moment.
+
+## Stop current work
+
+Stop when the agent is operating on the wrong repository, crossing an important boundary, spending
+time on an obsolete approach, or about to perform an action that requires human authority.
+
+Stopping the current prompt and cancelling the whole session are different operations. Queued
+follow-ups may still continue after the current prompt stops. Confirm the resulting session state
+before assuming all work has ended.
+
+## Resume after completion or failure
+
+Completed and failed sessions can accept a follow-up when their persisted context remains useful.
+Use the same session when the target, environment, and investigation are still correct. Start clean
+when the environment is corrupted, the target changed materially, or prior assumptions would make
+the remaining context misleading.
+
+Archived and cancelled sessions are not promptable in the same way. Restore or create a new session
+as the interface permits.
+
+## Take over
+
+Take over manually when the remaining work requires credentials or judgment that should not enter
+the sandbox, when repeated corrections do not converge, or when time-sensitive production response
+needs direct control. Preserve the session link and branch so later reviewers can trace the handoff.
+
+Next, [review the evidence and changes](/guides/review-evidence-and-changes).

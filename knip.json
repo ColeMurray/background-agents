@@ -57,6 +57,14 @@
         "src/**/*.test.tsx"
       ],
       "project": ["src/**/*.{ts,tsx,css}"]
+    },
+    "packages/docs": {
+      "next": true,
+      "entry": ["src/**/*.test.ts"],
+      "project": ["src/**/*.{ts,tsx,css}"],
+      "ignoreIssues": {
+        "src/components/mdx.tsx": ["exports", "duplicates"]
+      }
     }
   }
 }

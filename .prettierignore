@@ -25,6 +25,7 @@ pnpm-lock.yaml
 yarn.lock
 
 # Generated files
+packages/docs/.source/
 *.d.ts
 *.min.js
 *.min.css

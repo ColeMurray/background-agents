@@ -23,6 +23,8 @@ on:
       - "terraform/d1/migrations/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      # Re-include docs content and its package README after the Markdown exclusion.
+      - "packages/docs/**"
   pull_request:
     branches: [main]
     paths:
@@ -45,6 +47,8 @@ on:
       - "terraform/d1/migrations/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      # Re-include docs content and its package README after the Markdown exclusion.
+      - "packages/docs/**"
 
 permissions:
   contents: read
@@ -137,6 +141,26 @@ jobs:
       - name: Build web package
         run: npm run build -w @open-inspect/web
 
+  build-docs:
+    name: Build (Docs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build docs package
+        run: npm run build -w @open-inspect/docs
+
   test-cp-unit:
     name: Test (control-plane unit)
     runs-on: ubuntu-latest
@@ -214,6 +238,26 @@ jobs:
 
       - name: Run web tests
         run: npm test -w @open-inspect/web
+
+  test-docs:
+    name: Test (docs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run docs tests
+        run: npm test -w @open-inspect/docs
 
   test-bots:
     name: Test (bots)

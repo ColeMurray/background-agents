@@ -1,0 +1,65 @@
+---
+title: How a session works
+description: Follow a session from target selection through sandbox execution, evidence, follow-up, and review.
+audience: user
+owner: control-plane
+status: published
+lastReviewed: "2026-09-04"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - packages/shared/src/types/sessions.ts
+  - packages/shared/src/types/session-activity.ts
+---
+
+A **session** is the durable unit of collaboration and agent work. It is distinct from the sandbox
+process that performs the work: a session can persist across browser connections and, depending on
+provider behavior, sandbox lifecycle changes.
+
+## 1. Choose a target
+
+From the web application, a session can target:
+
+- one repository and branch;
+- an ordered set of up to ten repositories;
+- a saved environment containing reusable repositories and configuration;
+- no repository, for scratch work.
+
+For multi-repository targets, the first repository is primary. It supplies defaults when settings
+collide, while each repository retains its own branch and pull-request output.
+
+## 2. Send the initial request
+
+Your request should identify the desired result, relevant context, constraints, and how the agent
+should validate its work. The control plane records the request and prepares the session's sandbox.
+
+## 3. Work runs in the sandbox
+
+The configured sandbox provider creates an isolated runtime, checks out the target repositories,
+applies environment setup, and starts the coding agent. The agent reads, edits, and runs commands in
+that environment. Closing the browser does not cancel the session.
+
+## 4. Activity becomes a shared timeline
+
+Connected clients receive session activity such as agent output, tool activity, status changes, and
+artifacts. The exact evidence depends on the task and enabled tools; a structured test report or
+video is not guaranteed for every run.
+
+## 5. Follow up or stop current work
+
+While work is processing, you can queue follow-up context. Stopping the current prompt does not
+necessarily discard already queued follow-ups. Completed and failed sessions can accept another
+prompt; archived and cancelled sessions cannot until their state permits it.
+
+## 6. Review and hand off
+
+Review the session timeline and file changes. If the task produced a branch or pull request, review
+that repository artifact under the repository's normal policy. You can ask for another iteration,
+continue the session, or take over manually.
+
+## Session status is not sandbox status
+
+The user-visible session status can be `created`, `active`, `completed`, `failed`, `archived`, or
+`cancelled`. Sandbox startup, readiness, pausing, restoration, or termination are separate runtime
+states. Do not infer that a sandbox still exists merely because the session record is available.
+
+Next, [choose work that can succeed](/guides/choose-and-specify-work) or learn how to [monitor and steer](/guides/monitor-and-steer).
