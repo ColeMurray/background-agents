@@ -1,4 +1,4 @@
-import { buildSessionInternalUrl } from "../session/contracts";
+import { buildSessionInternalRequest } from "../session/contracts";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 
 /**
@@ -12,6 +12,6 @@ export function createDurableObjectSessionRuntimeClient(
     fetch: (sessionId, path, init, search) =>
       namespace
         .get(namespace.idFromName(sessionId))
-        .fetch(new Request(buildSessionInternalUrl(path, search), init)),
+        .fetch(buildSessionInternalRequest(path, init, search)),
   };
 }

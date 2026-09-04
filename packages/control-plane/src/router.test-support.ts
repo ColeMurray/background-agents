@@ -12,7 +12,7 @@ import { createTestBackgroundTasks } from "./background-tasks.test-support";
 import { BUILT_IN_ROLE_REGISTRY, type PermissionId } from "@open-inspect/shared/rbac";
 import type { CacheStore } from "@open-inspect/shared/cache-store";
 import type { SqlDatabase, SqlStatement } from "./db/sql-database";
-import { buildSessionInternalUrl } from "./session/contracts";
+import { buildSessionInternalRequest } from "./session/contracts";
 import type { SessionRuntimeClient } from "./session/runtime-client";
 import { cloudflareHost, createControlPlaneApp, type RouteModule } from "./routing/hono-app";
 import { listRouteContracts, type RouteContract } from "./routing/route-contracts";
@@ -139,16 +139,16 @@ export function ownerAuthorizationDatabase(userId = TEST_USER_ID): SqlDatabase {
 }
 
 /**
- * A session runtime that answers with `fetch`, handed the same internal
- * `Request` the Cloudflare adapter builds, so a fixture asserts on the
- * request a real runtime would receive.
+ * A session runtime that answers with `fetch`, handed the request a runtime
+ * receives on any host (`buildSessionInternalRequest`), so a fixture asserts
+ * on what the runtime's server would see rather than on how it was addressed.
  */
 export function fakeSessionRuntimeClient(
   fetch: (request: Request, sessionId: string) => Promise<Response>
 ): SessionRuntimeClient {
   return {
     fetch: (sessionId, path, init, search) =>
-      fetch(new Request(buildSessionInternalUrl(path, search), init), sessionId),
+      fetch(buildSessionInternalRequest(path, init, search), sessionId),
   };
 }
 

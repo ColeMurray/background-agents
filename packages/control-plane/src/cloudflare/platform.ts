@@ -25,26 +25,43 @@ export interface WorkerBindings extends EnvConfig {
   MEDIA_BUCKET: R2Bucket;
 }
 
-/** The platform ports over the Worker's bindings. */
-function createCloudflarePlatform(bindings: WorkerBindings): Platform {
-  return {
-    // eslint-disable-next-line no-restricted-syntax -- platform composition root: the binding becomes the port here
-    DB: bindings.DB,
-    SESSION: createDurableObjectSessionRuntimeClient(bindings.SESSION),
-    REPOS_CACHE: createKvCacheStore(bindings.REPOS_CACHE),
-    MEDIA_BUCKET: new R2ObjectStorage(bindings.MEDIA_BUCKET),
-    SLACK_BOT: bindings.SLACK_BOT,
-    LINEAR_BOT: bindings.LINEAR_BOT,
-    AUTOFIX_QUEUE: bindings.AUTOFIX_QUEUE,
-    AUTOFIX_DLQ: bindings.AUTOFIX_DLQ,
-    IMAGE_BUILD_FINALIZATION_QUEUE: bindings.IMAGE_BUILD_FINALIZATION_QUEUE,
-  };
-}
-
 /**
- * The application environment over the Worker's bindings: the configuration
- * as given, each binding behind its port.
+ * The application environment over the Worker's bindings: every binding
+ * taken off the record and put behind its port, the configuration passed
+ * through as given. A binding this function does not name is refused at
+ * compile time (below), so adding one is an explicit composition decision.
  */
 export function createCloudflareEnv(bindings: WorkerBindings): Env {
-  return { ...bindings, ...createCloudflarePlatform(bindings) };
+  const {
+    DB,
+    SESSION,
+    REPOS_CACHE,
+    MEDIA_BUCKET,
+    SLACK_BOT,
+    LINEAR_BOT,
+    AUTOFIX_QUEUE,
+    AUTOFIX_DLQ,
+    IMAGE_BUILD_FINALIZATION_QUEUE,
+    ...config
+  } = bindings;
+  const platform: Platform = {
+    DB,
+    SESSION: createDurableObjectSessionRuntimeClient(SESSION),
+    REPOS_CACHE: createKvCacheStore(REPOS_CACHE),
+    MEDIA_BUCKET: new R2ObjectStorage(MEDIA_BUCKET),
+    SLACK_BOT,
+    LINEAR_BOT,
+    AUTOFIX_QUEUE,
+    AUTOFIX_DLQ,
+    IMAGE_BUILD_FINALIZATION_QUEUE,
+  };
+  return { ...config, ...platform };
 }
+
+// Every field of WorkerBindings is either a platform port (adapted above) or
+// configuration: a new binding that is neither fails to compile here.
+type _AssertExtends<A extends B, B> = A;
+type _BindingsAreConfigOrPlatform = _AssertExtends<
+  Exclude<keyof WorkerBindings, keyof Platform>,
+  keyof EnvConfig
+>;
