@@ -8,7 +8,7 @@ import {
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
   createTestRequestHandler,
-  fakeSessionRuntimeClient,
+  fakeSessionRuntimeDispatch,
 } from "../router.test-support";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
@@ -86,7 +86,7 @@ function createEnv(
     ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "github",
     DB: createDatabase(database),
-    SESSION: fakeSessionRuntimeClient(fetch),
+    SESSION: fakeSessionRuntimeDispatch(fetch),
   } as unknown as Env;
 }
 

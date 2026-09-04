@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  fakeSessionRuntimeClient,
+  fakeSessionRuntimeDispatch,
   handleRequest,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
@@ -208,7 +208,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
         ...TEST_SERVICE_SECRETS,
         SCM_PROVIDER: "github",
         DB: authorizedDb(permissions),
-        SESSION: fakeSessionRuntimeClient((request, sessionId) =>
+        SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
           (sessionId === parentId ? parentStub : childStub).fetch(request)
         ),
       },
@@ -387,7 +387,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request, sessionId) =>
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
         (sessionId === parentId ? parentStub : childStub).fetch(request)
       ),
     };
@@ -480,7 +480,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request, sessionId) =>
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
         (sessionId === parentId ? parentStub : childStub).fetch(request)
       ),
     };
@@ -527,7 +527,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request, sessionId) =>
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
         (sessionId === parentId ? parentStub : childStub).fetch(request)
       ),
     };
@@ -558,7 +558,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request) => parentStub.fetch(request)),
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await handleRequest(
@@ -596,7 +596,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request) => parentStub.fetch(request)),
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -616,7 +616,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient(vi.fn()),
+      SESSION: fakeSessionRuntimeDispatch(vi.fn()),
     };
 
     const response = await handleRequest(
@@ -645,7 +645,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient(vi.fn()),
+      SESSION: fakeSessionRuntimeDispatch(vi.fn()),
     };
 
     const response = await handleRequest(
@@ -678,7 +678,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request) => parentStub.fetch(request)),
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -703,7 +703,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request) => parentStub.fetch(request)),
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -726,7 +726,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request) => parentStub.fetch(request)),
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -756,7 +756,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request) => parentStub.fetch(request)),
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -794,7 +794,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request) => parentStub.fetch(request)),
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -819,7 +819,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request) => parentStub.fetch(request)),
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await handleRequest(
@@ -858,7 +858,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request) => parentStub.fetch(request)),
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -895,7 +895,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: fakeSessionRuntimeClient((request, sessionId) =>
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
         (sessionId === parentId ? parentStub : childStub).fetch(request)
       ),
     };

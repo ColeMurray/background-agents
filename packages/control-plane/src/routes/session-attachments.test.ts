@@ -4,7 +4,7 @@ import type { Env } from "../types";
 import { handleAttachmentPost } from "./session-attachments";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
-import { TEST_BACKGROUND_TASK_CONTEXT, fakeSessionRuntimeClient } from "../router.test-support";
+import { TEST_BACKGROUND_TASK_CONTEXT, fakeSessionRuntimeDispatch } from "../router.test-support";
 import { withSessionRuntime } from "./session-route";
 
 const PNG_BYTES = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -28,7 +28,7 @@ function createEnv(fetch: (request: Request) => Promise<Response>) {
   const put = vi.fn(async () => null);
   const remove = vi.fn(async () => undefined);
   const env = {
-    SESSION: fakeSessionRuntimeClient(fetch),
+    SESSION: fakeSessionRuntimeDispatch(fetch),
     MEDIA_BUCKET: {
       put,
       delete: remove,

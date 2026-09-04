@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  fakeSessionRuntimeClient,
+  fakeSessionRuntimeDispatch,
   handleRequest,
   matchRoute,
   routeContracts as routes,
@@ -35,7 +35,7 @@ function createEnv(verifyStatus: number) {
       exec: vi.fn(),
       dump: vi.fn(),
     },
-    SESSION: fakeSessionRuntimeClient(fetch),
+    SESSION: fakeSessionRuntimeDispatch(fetch),
   };
   return { env, doFetch: fetch };
 }

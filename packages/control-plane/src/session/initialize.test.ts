@@ -3,7 +3,7 @@ import { initializeSession, type SessionInitInput } from "./initialize";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "./contracts";
 import type { SqlDatabase } from "../db/sql-database";
-import { fakeSessionRuntimeClient } from "../router.test-support";
+import { fakeSessionRuntimeDispatch } from "../router.test-support";
 
 vi.mock("../db/session-index", () => ({
   SessionIndexStore: vi.fn(),
@@ -68,7 +68,7 @@ describe("initializeSession", () => {
   function createEnv() {
     return {
       DB: {} as SqlDatabase,
-      SESSION: fakeSessionRuntimeClient((request) => stubFetchMock(request)),
+      SESSION: fakeSessionRuntimeDispatch((request) => stubFetchMock(request)),
     } as never;
   }
 

@@ -10,7 +10,7 @@ import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import type { ImageBuildFinalizationJob } from "../image-builds/finalization-job";
 import type { Env, EnvConfig, Platform } from "../types";
 import { R2ObjectStorage } from "./object-storage";
-import { createDurableObjectSessionRuntimeClient } from "./session-runtime-client";
+import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dispatch";
 
 /** The bindings Cloudflare hands the Worker and its Durable Objects, with the deployment's configuration. */
 export interface WorkerBindings extends EnvConfig {
@@ -46,7 +46,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
   } = bindings;
   const platform: Platform = {
     DB,
-    SESSION: createDurableObjectSessionRuntimeClient(SESSION),
+    SESSION: createDurableObjectSessionRuntimeDispatch(SESSION),
     REPOS_CACHE: createKvCacheStore(REPOS_CACHE),
     MEDIA_BUCKET: new R2ObjectStorage(MEDIA_BUCKET),
     SLACK_BOT,

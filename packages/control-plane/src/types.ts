@@ -6,7 +6,7 @@ import type { CacheStore } from "@open-inspect/shared/cache-store";
 import type { SqlDatabase } from "./db/sql-database";
 import type { ImageBuildFinalizationQueue } from "./image-builds/finalization-job";
 import type { FetchClient, QueueMetricsSource } from "./platform-ports";
-import type { SessionRuntimeClient } from "./session/runtime-client";
+import type { SessionRuntimeDispatch } from "./session/runtime-client";
 import type { ObjectStorage } from "./storage/object-storage";
 
 /**
@@ -105,8 +105,8 @@ export interface EnvConfig {
 export interface Platform {
   /** The global store. Request paths take it injected and instrumented (`ctx.db`), never from here. */
   DB: SqlDatabase;
-  /** Session runtimes, addressed by session id. */
-  SESSION: SessionRuntimeClient;
+  /** Delivery to session runtimes, addressed by session id. */
+  SESSION: SessionRuntimeDispatch;
   /** Short-lived cache for the /repos listing. */
   REPOS_CACHE: CacheStore;
   /** Media artifacts: screenshots, uploads, session media. */

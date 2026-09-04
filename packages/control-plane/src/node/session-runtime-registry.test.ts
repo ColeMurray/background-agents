@@ -88,6 +88,7 @@ function fakeStores() {
   const opened: Array<{ id: string; storage: SessionStorage; closes: number }> = [];
   const state = { gate: null as Deferred | null, failNext: null as Error | null };
   const provider: SessionStoreProvider = {
+    exists: async (id) => opened.some((record) => record.id === id),
     open: async (id) => {
       if (state.gate) await state.gate.promise;
       if (state.failNext) {
@@ -133,6 +134,10 @@ describe("SessionRuntimeRegistry", () => {
   let now: number;
   const clock = { now: () => now, advance: (ms: number) => (now += ms) };
   let stores: ReturnType<typeof fakeStores>;
+  let index: {
+    known: Set<string>;
+    exists: ReturnType<typeof vi.fn<(id: string) => Promise<boolean>>>;
+  };
   let alarms: ReturnType<typeof fakeAlarms>;
   let log: ReturnType<typeof spyLogger>;
   let built: FakeRuntime[];
@@ -145,6 +150,7 @@ describe("SessionRuntimeRegistry", () => {
     const registry = new SessionRuntimeRegistry<FakeRuntime>({
       db: {} as SqlDatabase,
       storeProvider: stores.provider,
+      sessionIndex: index,
       alarmStoreFor: alarms.alarmStoreFor,
       buildRuntime,
       log: log as never,
@@ -160,6 +166,8 @@ describe("SessionRuntimeRegistry", () => {
   beforeEach(() => {
     now = 1_000_000;
     stores = fakeStores();
+    const known = new Set<string>();
+    index = { known, exists: vi.fn(async (id: string) => known.has(id)) };
     alarms = fakeAlarms();
     log = spyLogger();
     built = [];
@@ -207,6 +215,75 @@ describe("SessionRuntimeRegistry", () => {
     expect(await a).toBe(await b);
     expect(buildRuntime).toHaveBeenCalledTimes(1);
     expect(stores.opened).toHaveLength(1);
+  });
+
+  describe("withRuntimeIfPresent", () => {
+    it("opens nothing for an id with neither a store nor an index row", async () => {
+      const registry = makeRegistry();
+
+      const outcome = await registry.withRuntimeIfPresent("ghost", async () => "used");
+
+      expect(outcome).toBeUndefined();
+      expect(buildRuntime).not.toHaveBeenCalled();
+      expect(stores.opened).toEqual([]);
+      expect(registry.residentSessionIds()).toEqual([]);
+    });
+
+    it("opens a session known to the index but without a store yet: the one being created", async () => {
+      const registry = makeRegistry();
+      index.known.add("s1");
+
+      const outcome = await registry.withRuntimeIfPresent("s1", async (runtime) => runtime);
+
+      expect(outcome).toBeDefined();
+      expect(stores.opened.map((s) => s.id)).toEqual(["s1"]);
+      expect(registry.residentSessionIds()).toEqual(["s1"]);
+    });
+
+    it("opens a session whose store exists after its index row is gone, without asking the index", async () => {
+      const registry = makeRegistry();
+      await registry.withRuntime("s1", async () => {});
+      clock.advance(IDLE_AFTER_MS);
+      expect(await registry.sweep()).toEqual(["s1"]);
+      index.exists.mockClear();
+
+      const outcome = await registry.withRuntimeIfPresent("s1", async (runtime) => runtime);
+
+      expect(outcome).toBeDefined();
+      expect(index.exists).not.toHaveBeenCalled();
+      expect(buildRuntime).toHaveBeenCalledTimes(2);
+    });
+
+    it("shares one presence check and one build between concurrent conditional opens", async () => {
+      const registry = makeRegistry();
+      index.known.add("s1");
+      stores.state.gate = deferred();
+
+      const a = registry.withRuntimeIfPresent("s1", async (runtime) => runtime);
+      const b = registry.withRuntimeIfPresent("s1", async (runtime) => runtime);
+      await flush();
+      stores.state.gate.resolve();
+
+      expect(await a).toBe(await b);
+      expect(index.exists).toHaveBeenCalledTimes(1);
+      expect(buildRuntime).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets an unconditional open that joined an absent outcome build on its own turn", async () => {
+      const registry = makeRegistry();
+      const lookup = deferred<boolean>();
+      index.exists.mockImplementationOnce(() => lookup.promise);
+
+      const conditional = registry.withRuntimeIfPresent("s1", async (runtime) => runtime);
+      await flush();
+      const unconditional = registry.withRuntime("s1", async (runtime) => runtime);
+      lookup.resolve(false);
+
+      expect(await conditional).toBeUndefined();
+      expect(await unconditional).toBeDefined();
+      expect(buildRuntime).toHaveBeenCalledTimes(1);
+      expect(registry.residentSessionIds()).toEqual(["s1"]);
+    });
   });
 
   it("does not cache a failed build: the store is closed and the next event retries", async () => {
@@ -726,6 +803,7 @@ if (isGcChild) {
       const registry = new SessionRuntimeRegistry<FakeRuntime>({
         db: {} as SqlDatabase,
         storeProvider: createFileSessionStoreProvider(dataDir),
+        sessionIndex: { exists: async () => false },
         alarmStoreFor: alarms.alarmStoreFor,
         buildRuntime: (platform) => fakeRuntime(platform),
         log: spyLogger() as never,

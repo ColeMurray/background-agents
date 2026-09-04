@@ -3,7 +3,7 @@ import { generateEncryptionKey } from "./auth/crypto";
 import { SessionIndexStore } from "./db/session-index";
 import { UserStore } from "./db/user-store";
 import {
-  fakeSessionRuntimeClient,
+  fakeSessionRuntimeDispatch,
   handleRequest,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
@@ -196,7 +196,7 @@ describe("handleCreateSession D1 ordering", () => {
         exec: vi.fn(),
         dump: vi.fn(),
       },
-      SESSION: fakeSessionRuntimeClient(initFetch),
+      SESSION: fakeSessionRuntimeDispatch(initFetch),
     };
   }
 

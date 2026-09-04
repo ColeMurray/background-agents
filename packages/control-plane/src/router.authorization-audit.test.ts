@@ -17,7 +17,7 @@ import { admit } from "./routing/admit";
 import type { ControlPlaneHonoEnv } from "./routing/hono-env";
 import {
   createTestRequestHandler,
-  fakeSessionRuntimeClient,
+  fakeSessionRuntimeDispatch,
   TEST_BACKGROUND_TASK_CONTEXT,
 } from "./router.test-support";
 
@@ -192,7 +192,7 @@ function createEnv(options?: {
     env: {
       DB: db,
       SCM_PROVIDER: "github",
-      SESSION: fakeSessionRuntimeClient(async () => new Response(null, { status: 204 })),
+      SESSION: fakeSessionRuntimeDispatch(async () => new Response(null, { status: 204 })),
     } as never,
     auditWrites,
   };

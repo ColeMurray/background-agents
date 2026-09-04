@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   TEST_BACKGROUND_TASK_CONTEXT,
-  fakeSessionRuntimeClient,
+  fakeSessionRuntimeDispatch,
   routePathPattern,
 } from "../router.test-support";
 import { handleSessionWsToken } from "./session-ws-token";
@@ -53,7 +53,7 @@ function createContext(db: SqlDatabase = accessDatabase().db): RequestContext {
 
 function createEnv(fetch: (request: Request) => Promise<Response>): Env {
   return {
-    SESSION: fakeSessionRuntimeClient(fetch),
+    SESSION: fakeSessionRuntimeDispatch(fetch),
   } as unknown as Env;
 }
 

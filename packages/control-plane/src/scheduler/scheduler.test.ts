@@ -11,7 +11,7 @@ import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { FetchClient } from "../platform-ports";
-import { fakeSessionRuntimeClient } from "../router.test-support";
+import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
@@ -342,7 +342,7 @@ function createEnv(
     DEPLOYMENT_NAME: "test",
     TOKEN_ENCRYPTION_KEY: "test-key",
     ...overrides,
-    SESSION: fakeSessionRuntimeClient((request) => sessionStub.fetch(request)),
+    SESSION: fakeSessionRuntimeDispatch((request) => sessionStub.fetch(request)),
   } as Env;
 }
 

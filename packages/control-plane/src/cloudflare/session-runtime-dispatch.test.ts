@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { SessionInternalPaths } from "../session/contracts";
-import { createDurableObjectSessionRuntimeClient } from "./session-runtime-client";
+import { SessionInternalPaths, buildSessionInternalRequest } from "../session/contracts";
+import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dispatch";
 
-describe("createDurableObjectSessionRuntimeClient", () => {
-  it("sends the internal request to the Durable Object named by the session id", async () => {
+describe("createDurableObjectSessionRuntimeDispatch", () => {
+  it("sends the request to the Durable Object named by the session id", async () => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {
       requests.push(request);
@@ -11,16 +11,18 @@ describe("createDurableObjectSessionRuntimeClient", () => {
     });
     const idFromName = vi.fn((name: string) => `do-${name}`);
     const get = vi.fn(() => ({ fetch }));
-    const client = createDurableObjectSessionRuntimeClient({
+    const dispatch = createDurableObjectSessionRuntimeDispatch({
       idFromName,
       get,
     } as unknown as DurableObjectNamespace);
 
-    const response = await client.fetch(
+    const response = await dispatch(
       "session-1",
-      SessionInternalPaths.events,
-      { method: "POST", headers: { "x-trace-id": "trace-1" }, body: "{}" },
-      "?limit=10"
+      buildSessionInternalRequest(
+        SessionInternalPaths.events,
+        { method: "POST", headers: { "x-trace-id": "trace-1" }, body: "{}" },
+        "?limit=10"
+      )
     );
 
     await expect(response.json()).resolves.toEqual({ ok: true });

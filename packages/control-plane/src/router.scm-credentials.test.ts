@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  fakeSessionRuntimeClient,
+  fakeSessionRuntimeDispatch,
   handleRequest,
   matchRoute,
   routeContracts as routes,
@@ -78,7 +78,7 @@ function createEnv(options?: { actorAuthorized?: boolean }) {
         exec: vi.fn(),
         dump: vi.fn(),
       },
-      SESSION: fakeSessionRuntimeClient((request, sessionId) => {
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) => {
         addressed(sessionId);
         return fetch(request);
       }),

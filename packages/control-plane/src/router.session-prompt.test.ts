@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UserStore } from "./db/user-store";
 import { resolveGitHubEnrichmentForRequest } from "./session/identity";
 import {
-  fakeSessionRuntimeClient,
+  fakeSessionRuntimeDispatch,
   handleRequest,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
@@ -81,7 +81,7 @@ function createEnv(sessionFetch: (request: Request) => Promise<Response>): Recor
       exec: vi.fn(),
       dump: vi.fn(),
     },
-    SESSION: fakeSessionRuntimeClient(sessionFetch),
+    SESSION: fakeSessionRuntimeDispatch(sessionFetch),
   };
 }
 
