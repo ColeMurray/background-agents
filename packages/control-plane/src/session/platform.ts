@@ -7,19 +7,25 @@
  */
 
 import type { Logger } from "../logger";
-import type { BackgroundTasks, SessionSocket } from "../platform-ports";
+import type { BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { SqlDatabase } from "../db/sql-database";
 import type { AlarmScheduleStore } from "./alarm/scheduler";
 import type { SqlStorage, TransactionSync } from "./sql-storage";
 
-/** The host that owns the session's accepted sockets. */
-export interface SocketHost {
-  /** Adopt `ws` into the runtime, tagged so its identity survives a restart. */
-  accept(ws: SessionSocket, tags: string[]): void;
-  /** The tags `ws` was accepted with. */
-  tags(ws: SessionSocket): string[];
-  /** Every accepted socket, or only those carrying `tag`. */
-  sockets(tag?: string): SessionSocket[];
+/** The host that owns the session's adopted WebSockets. */
+export interface SessionWebSocketHost {
+  /**
+   * Adopt `ws` into the runtime under `tags`. The tags are the socket's
+   * identity for the whole life of the connection; a host that rehydrates
+   * a runtime under live connections (the Durable Object) preserves them
+   * across that too, while a host that cannot (a Node process restart)
+   * loses the connection and the peer reconnects.
+   */
+  adopt(ws: SessionWebSocket, tags: string[]): void;
+  /** The tags `ws` was adopted with. */
+  tags(ws: SessionWebSocket): string[];
+  /** Every adopted socket, or only those carrying `tag`. */
+  sockets(tag?: string): SessionWebSocket[];
   /**
    * Answer `request` frames with `response` at the platform level, without
    * waking the runtime.
@@ -47,7 +53,7 @@ export interface SessionPlatform {
   db: SqlDatabase;
   /** The runtime's single scheduled wake-up. */
   alarmStore: AlarmScheduleStore;
-  sockets: SocketHost;
+  sockets: SessionWebSocketHost;
   /**
    * Build the deferred-work port for this runtime. Takes the session-scoped
    * logger so failures of background work are attributed to the session.

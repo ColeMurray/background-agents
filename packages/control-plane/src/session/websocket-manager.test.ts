@@ -1,7 +1,7 @@
 /**
  * Unit tests for SessionWebSocketManagerImpl.
  *
- * Uses a fake SocketHost and mock repositories to test
+ * Uses a fake SessionWebSocketHost and mock repositories to test
  * all WebSocket mechanics in isolation from the host.
  */
 
@@ -9,8 +9,8 @@ import { describe, it, expect, vi } from "vitest";
 import { SessionWebSocketManagerImpl } from "./websocket-manager";
 import type { WebSocketManagerConfig } from "./websocket-manager";
 import type { Logger } from "../logger";
-import type { SessionSocket } from "../platform-ports";
-import type { SocketHost } from "./platform";
+import type { SessionWebSocket } from "../platform-ports";
+import type { SessionWebSocketHost } from "./platform";
 import type { ClientInfo } from "../types";
 import type { SandboxRepository } from "./sandbox-repository";
 import type {
@@ -55,18 +55,18 @@ function createFakeWebSocket(readyState = WebSocket.OPEN): WebSocket {
 
 /** Type for the fake DurableObjectState with test helpers. */
 interface FakeSocketHost {
-  sockets: Map<SessionSocket, string[]>;
-  host: SocketHost;
+  sockets: Map<SessionWebSocket, string[]>;
+  host: SessionWebSocketHost;
 }
 
 /**
- * Fake SocketHost that tracks accepted WebSockets and their tags.
+ * Fake SessionWebSocketHost that tracks accepted WebSockets and their tags.
  */
 function createFakeSocketHost(): FakeSocketHost {
-  const sockets = new Map<SessionSocket, string[]>();
+  const sockets = new Map<SessionWebSocket, string[]>();
 
-  const host: SocketHost = {
-    accept(ws, tags) {
+  const host: SessionWebSocketHost = {
+    adopt(ws, tags) {
       sockets.set(ws, tags);
     },
     tags(ws) {
@@ -1030,7 +1030,7 @@ describe("SessionWebSocketManagerImpl", () => {
       sockets.set(clientWs2, ["wsid:ws-2"]);
       sockets.set(sandboxWs, ["sandbox"]);
 
-      const called: SessionSocket[] = [];
+      const called: SessionWebSocket[] = [];
       manager.forEachClientSocket("all_clients", (ws) => called.push(ws));
 
       expect(called).toHaveLength(2);
@@ -1049,7 +1049,7 @@ describe("SessionWebSocketManagerImpl", () => {
 
       manager.setClient(authedWs, createClientInfo());
 
-      const called: SessionSocket[] = [];
+      const called: SessionWebSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => called.push(ws));
 
       expect(called).toEqual([authedWs]);
@@ -1072,7 +1072,7 @@ describe("SessionWebSocketManagerImpl", () => {
         authorization_expires_at: Date.now() + 300_000,
       });
 
-      const called: SessionSocket[] = [];
+      const called: SessionWebSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => called.push(ws));
 
       expect(called).toEqual([ws]);
@@ -1084,7 +1084,7 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(ws, ["wsid:ws-unknown"]);
 
-      const called: SessionSocket[] = [];
+      const called: SessionWebSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => called.push(ws));
 
       expect(called).toHaveLength(0);
@@ -1096,7 +1096,7 @@ describe("SessionWebSocketManagerImpl", () => {
       sockets.set(ws, ["wsid:ws-expired"]);
       manager.setClient(ws, createClientInfo({ authorizationExpiresAt: Date.now() - 1 }));
 
-      const called: SessionSocket[] = [];
+      const called: SessionWebSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (client) => called.push(client));
 
       expect(called).toEqual([]);
@@ -1116,7 +1116,7 @@ describe("SessionWebSocketManagerImpl", () => {
         authorization_expires_at: Date.now() - 1,
       });
 
-      const called: SessionSocket[] = [];
+      const called: SessionWebSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (client) => called.push(client));
 
       expect(called).toEqual([]);
@@ -1170,11 +1170,11 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(sandboxWs, ["sandbox"]);
 
-      const allClientsCalled: SessionSocket[] = [];
+      const allClientsCalled: SessionWebSocket[] = [];
       manager.forEachClientSocket("all_clients", (ws) => allClientsCalled.push(ws));
       expect(allClientsCalled).toHaveLength(0);
 
-      const authOnlyCalled: SessionSocket[] = [];
+      const authOnlyCalled: SessionWebSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => authOnlyCalled.push(ws));
       expect(authOnlyCalled).toHaveLength(0);
     });

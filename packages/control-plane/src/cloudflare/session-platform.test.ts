@@ -58,7 +58,7 @@ describe("createDurableObjectSessionPlatform", () => {
     const ws = Object.create(WebSocket.prototype) as WebSocket;
 
     const { sockets: host } = createDurableObjectSessionPlatform(state, db);
-    host.accept(ws, ["sandbox", "sid:sb-1"]);
+    host.adopt(ws, ["sandbox", "sid:sb-1"]);
     host.sockets();
     host.sockets("sandbox");
 
@@ -72,7 +72,7 @@ describe("createDurableObjectSessionPlatform", () => {
     const { state, calls, db } = createFakeState();
     const { sockets: host } = createDurableObjectSessionPlatform(state, db);
 
-    expect(() => host.accept({ readyState: 1, send() {}, close() {} }, [])).toThrow(TypeError);
+    expect(() => host.adopt({ readyState: 1, send() {}, close() {} }, [])).toThrow(TypeError);
     expect(calls.acceptWebSocket).not.toHaveBeenCalled();
   });
 

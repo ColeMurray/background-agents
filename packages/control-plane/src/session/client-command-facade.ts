@@ -21,10 +21,10 @@ import type { SessionConnectionAuthenticator } from "./connection-authenticator"
 import type { SessionMessageQueue } from "./message-queue";
 import type { PresenceService } from "./presence-service";
 import type { PermissionId } from "@open-inspect/shared/rbac";
-import type { SessionSocket } from "../platform-ports";
+import type { SessionWebSocket } from "../platform-ports";
 
 export class SessionClientCommandFacade implements SessionClientCommands<
-  SessionSocket,
+  SessionWebSocket,
   ClientInfo
 > {
   constructor(
@@ -34,19 +34,19 @@ export class SessionClientCommandFacade implements SessionClientCommands<
     private readonly events: SessionEventStream
   ) {}
 
-  subscribe(connection: SessionSocket, message: ClientSubscribe): Promise<void> {
+  subscribe(connection: SessionWebSocket, message: ClientSubscribe): Promise<void> {
     return this.authenticator.handleSubscribe(connection, message);
   }
 
   submitPrompt(
-    connection: SessionSocket,
+    connection: SessionWebSocket,
     client: ClientInfo,
     message: ClientPrompt
   ): Promise<void> {
     return this.prompts.handlePromptMessage(connection, client, message);
   }
 
-  cancelPrompt(connection: SessionSocket, message: ClientCancelPrompt): Promise<void> {
+  cancelPrompt(connection: SessionWebSocket, message: ClientCancelPrompt): Promise<void> {
     return this.prompts.cancelQueuedPrompt(connection, message);
   }
 

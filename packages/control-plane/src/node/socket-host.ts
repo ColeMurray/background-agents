@@ -1,5 +1,5 @@
 /**
- * NodeSocketHost — the session's `SocketHost` over `ws` sockets.
+ * NodeWebSocketHost — the session's `SessionWebSocketHost` over `ws` sockets.
  *
  * The HTTP host upgrades a connection and hands the runtime the `ws` socket;
  * this host adopts it under the runtime's tags, enumerates it, answers the
@@ -8,25 +8,30 @@
  * Durable Object adapter uses.
  *
  * Unlike the Durable Object runtime, this host owns inbound flow control.
- * Events from one socket are delivered one at a time in arrival order; while
- * a delivery is in flight the socket is paused so the peer's bytes wait in
- * the kernel rather than on the heap, and the frames `ws` had already parsed
- * queue behind it up to `maxPendingDeliveries`. A peer that exceeds that
- * bound is closed with 1013. A handler that never settles holds only its own
- * socket; bounding handler time is the session executor's concern, which is
- * whatever `bind` receives.
+ * Events from one socket are delivered one at a time in arrival order. The
+ * socket is paused before each delivery starts and resumed when its queue
+ * empties, so the peer's bytes wait in the kernel rather than on the heap;
+ * only the frames `ws` had already decoded from the read in progress queue
+ * behind an in-flight delivery, up to `maxPendingDeliveries`. A peer that
+ * exceeds that bound is closed with 1013. A handler that never settles holds
+ * only its own socket; bounding handler time is the session executor's
+ * concern, which is whatever `bindEventSink` receives.
+ *
+ * A host and the runtime it is bound to share one lifetime: the registry
+ * builds them together and retires them together, and a runtime with open
+ * sockets is never retired underneath them. There is no re-binding.
  */
 
 import { WebSocket as NodeWebSocket, type RawData } from "ws";
 import type { Logger } from "../logger";
-import type { SessionSocket } from "../platform-ports";
-import type { SocketHost } from "../session/platform";
+import type { SessionWebSocket } from "../platform-ports";
+import type { SessionWebSocketHost } from "../session/platform";
 
 /** The session server's socket entry points, as the host delivers them. */
-export interface SocketEvents {
-  onMessage(ws: SessionSocket, message: string | ArrayBuffer): Promise<void>;
-  onClose(ws: SessionSocket, code: number, reason: string, wasClean: boolean): Promise<void>;
-  onError(ws: SessionSocket, error: Error): void;
+export interface SessionWebSocketEventSink {
+  onMessage(ws: SessionWebSocket, message: string | ArrayBuffer): Promise<void>;
+  onClose(ws: SessionWebSocket, code: number, reason: string, wasClean: boolean): Promise<void>;
+  onError(ws: SessionWebSocket, error: Error): void;
 }
 
 export interface NodeSocketHostOptions {
@@ -53,14 +58,14 @@ interface Deliveries {
   draining: boolean;
 }
 
-export class NodeSocketHost implements SocketHost {
+export class NodeWebSocketHost implements SessionWebSocketHost {
   /** Tags outlive the socket's presence in `sockets()`: a closing socket still classifies. */
-  private readonly tagsOf = new WeakMap<SessionSocket, readonly string[]>();
+  private readonly tagsOf = new WeakMap<SessionWebSocket, readonly string[]>();
   private readonly open = new Set<NodeWebSocket>();
   private readonly deliveries = new WeakMap<NodeWebSocket, Deliveries>();
   private readonly maxPendingDeliveries: number;
   private autoResponse: { request: string; response: string } | null = null;
-  private events: SocketEvents | null = null;
+  private events: SessionWebSocketEventSink | null = null;
 
   constructor(
     private readonly log: Logger,
@@ -70,22 +75,22 @@ export class NodeSocketHost implements SocketHost {
   }
 
   /**
-   * Route every accepted socket's events to `events`. Binding precedes the
-   * first accept by construction: sockets are accepted through the runtime,
-   * and the runtime is what gets bound.
+   * Route every adopted socket's events to `sink`, once. Binding precedes
+   * the first adoption by construction: sockets are adopted through the
+   * runtime, and the runtime is what gets bound.
    */
-  bind(events: SocketEvents): void {
-    if (this.events) throw new Error("NodeSocketHost is already bound");
-    this.events = events;
+  bindEventSink(sink: SessionWebSocketEventSink): void {
+    if (this.events) throw new Error("NodeWebSocketHost is already bound");
+    this.events = sink;
   }
 
-  accept(ws: SessionSocket, tags: string[]): void {
+  adopt(ws: SessionWebSocket, tags: string[]): void {
     const events = this.events;
-    if (!events) throw new Error("NodeSocketHost.accept called before bind");
-    const socket = upgradedSocket(ws);
-    if (this.tagsOf.has(socket)) throw new Error("Socket was already accepted");
+    if (!events) throw new Error("NodeWebSocketHost.adopt called before bindEventSink");
+    const socket = requireNodeWebSocket(ws);
+    if (this.tagsOf.has(socket)) throw new Error("Socket was already adopted");
     if (socket.readyState !== NodeWebSocket.OPEN) {
-      throw new Error("Cannot accept a socket that is not open");
+      throw new Error("Cannot adopt a socket that is not open");
     }
     this.tagsOf.set(socket, [...tags]);
     this.open.add(socket);
@@ -118,11 +123,11 @@ export class NodeSocketHost implements SocketHost {
     });
   }
 
-  tags(ws: SessionSocket): string[] {
+  tags(ws: SessionWebSocket): string[] {
     return [...(this.tagsOf.get(ws) ?? [])];
   }
 
-  sockets(tag?: string): SessionSocket[] {
+  sockets(tag?: string): SessionWebSocket[] {
     const accepted = [...this.open];
     if (tag === undefined) return accepted;
     return accepted.filter((socket) => this.tagsOf.get(socket)?.includes(tag));
@@ -132,7 +137,7 @@ export class NodeSocketHost implements SocketHost {
     this.autoResponse = { request, response };
   }
 
-  /** Queue `handle` behind this socket's earlier events, pausing the socket while any are in flight. */
+  /** Queue `handle` behind this socket's earlier events; the socket stays paused until the queue empties. */
   private deliver(socket: NodeWebSocket, handle: () => Promise<void>): void {
     let deliveries = this.deliveries.get(socket);
     if (!deliveries) {
@@ -153,15 +158,16 @@ export class NodeSocketHost implements SocketHost {
       return;
     }
     deliveries.queue.push(handle);
-    if (deliveries.draining) {
-      socket.pause();
-      return;
-    }
+    if (deliveries.draining) return;
     void this.drain(socket, deliveries);
   }
 
   private async drain(socket: NodeWebSocket, deliveries: Deliveries): Promise<void> {
     deliveries.draining = true;
+    // Pause before the first delivery, not the second: otherwise `ws` keeps
+    // reading and assembles the next message (up to maxPayload) on the heap
+    // while the runtime is busy.
+    socket.pause();
     try {
       let handle = deliveries.queue.shift();
       while (handle) {
@@ -188,9 +194,9 @@ export class NodeSocketHost implements SocketHost {
  * upgraded ever reach it, so anything else is a wiring error rather than a
  * socket to adopt.
  */
-function upgradedSocket(ws: SessionSocket): NodeWebSocket {
+function requireNodeWebSocket(ws: SessionWebSocket): NodeWebSocket {
   if (!(ws instanceof NodeWebSocket)) {
-    throw new TypeError("NodeSocketHost received a socket it did not upgrade");
+    throw new TypeError("NodeWebSocketHost received a socket it did not upgrade");
   }
   return ws;
 }

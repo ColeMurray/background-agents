@@ -39,7 +39,7 @@ import type { SessionStatusService } from "./session-status-service";
 import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
-import type { AlarmScheduler, BackgroundTasks, SessionSocket } from "../platform-ports";
+import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -239,7 +239,7 @@ export class SessionMessageQueue {
   }
 
   async handlePromptMessage(
-    ws: SessionSocket,
+    ws: SessionWebSocket,
     client: ClientInfo,
     data: PromptMessageData
   ): Promise<void> {
@@ -325,7 +325,7 @@ export class SessionMessageQueue {
   }
 
   async cancelQueuedPrompt(
-    ws: SessionSocket,
+    ws: SessionWebSocket,
     data: { messageId: string; clientRequestId: string }
   ): Promise<void> {
     if (!this.messageRepository.cancelPendingMessage(data.messageId)) {

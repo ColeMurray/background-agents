@@ -23,7 +23,7 @@ export interface BackgroundTasks {
  * naming a member only one platform has. `readyState` uses the standard
  * CONNECTING/OPEN/CLOSING/CLOSED values on both.
  */
-export interface SessionSocket {
+export interface SessionWebSocket {
   readonly readyState: number;
   send(message: string | ArrayBuffer | ArrayBufferView): void;
   close(code?: number, reason?: string): void;
@@ -33,7 +33,7 @@ export interface SessionSocket {
 const SOCKET_OPEN = 1;
 
 /** Whether `socket` can currently send and receive. */
-export function isSocketOpen(socket: SessionSocket): boolean {
+export function isSocketOpen(socket: SessionWebSocket): boolean {
   return socket.readyState === SOCKET_OPEN;
 }
 

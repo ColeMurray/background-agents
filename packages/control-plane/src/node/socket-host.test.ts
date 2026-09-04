@@ -3,12 +3,12 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import type { Logger } from "../logger";
-import { isSocketOpen, type SessionSocket } from "../platform-ports";
+import { isSocketOpen, type SessionWebSocket } from "../platform-ports";
 import {
   BACKLOG_EXCEEDED_CLOSE_CODE,
-  NodeSocketHost,
+  NodeWebSocketHost,
   type NodeSocketHostOptions,
-  type SocketEvents,
+  type SessionWebSocketEventSink,
 } from "./socket-host";
 
 function createLogger(): Logger {
@@ -24,12 +24,12 @@ function createLogger(): Logger {
 
 function createEvents() {
   return {
-    onMessage: vi.fn(async (_ws: SessionSocket, _message: string | ArrayBuffer) => {}),
+    onMessage: vi.fn(async (_ws: SessionWebSocket, _message: string | ArrayBuffer) => {}),
     onClose: vi.fn(
-      async (_ws: SessionSocket, _code: number, _reason: string, _wasClean: boolean) => {}
+      async (_ws: SessionWebSocket, _code: number, _reason: string, _wasClean: boolean) => {}
     ),
-    onError: vi.fn((_ws: SessionSocket, _error: Error) => {}),
-  } satisfies SocketEvents;
+    onError: vi.fn((_ws: SessionWebSocket, _error: Error) => {}),
+  } satisfies SessionWebSocketEventSink;
 }
 
 /** A real `ws` server on an ephemeral port whose connections the test accepts into `host`. */
@@ -39,8 +39,8 @@ async function createHarness(options: NodeSocketHostOptions = {}) {
   const { port } = server.address() as AddressInfo;
   const log = createLogger();
   const events = createEvents();
-  const host = new NodeSocketHost(log, options);
-  host.bind(events);
+  const host = new NodeWebSocketHost(log, options);
+  host.bindEventSink(events);
   const clients: NodeWebSocket[] = [];
 
   /** Open one connection; resolves once the server side is accepted under `tags`. */
@@ -49,7 +49,7 @@ async function createHarness(options: NodeSocketHostOptions = {}) {
   ): Promise<{ client: NodeWebSocket; socket: NodeWebSocket }> {
     const accepted = new Promise<NodeWebSocket>((resolve) => {
       server.once("connection", (socket) => {
-        host.accept(socket, tags);
+        host.adopt(socket, tags);
         resolve(socket);
       });
     });
@@ -76,7 +76,7 @@ async function createHarness(options: NodeSocketHostOptions = {}) {
 
 type Harness = Awaited<ReturnType<typeof createHarness>>;
 
-describe("NodeSocketHost", () => {
+describe("NodeWebSocketHost", () => {
   let harness: Harness | null = null;
   afterEach(async () => {
     await harness?.close();
@@ -101,16 +101,18 @@ describe("NodeSocketHost", () => {
     expect(harness.host.tags({ readyState: 1, send() {}, close() {} })).toEqual([]);
   });
 
-  it("refuses sockets it did not upgrade, double accepts, and accepts before bind", async () => {
+  it("refuses sockets it did not upgrade, double adoptions, and adoptions before bindEventSink", async () => {
     harness = await createHarness();
     const { socket } = await harness.connect(["wsid:ws-1"]);
 
-    expect(() => harness!.host.accept({ readyState: 1, send() {}, close() {} }, [])).toThrow(
+    expect(() => harness!.host.adopt({ readyState: 1, send() {}, close() {} }, [])).toThrow(
       TypeError
     );
-    expect(() => harness!.host.accept(socket, ["wsid:again"])).toThrow(/already accepted/);
-    expect(() => new NodeSocketHost(createLogger()).accept(socket, [])).toThrow(/before bind/);
-    expect(() => harness!.host.bind(harness!.events)).toThrow(/already bound/);
+    expect(() => harness!.host.adopt(socket, ["wsid:again"])).toThrow(/already adopted/);
+    expect(() => new NodeWebSocketHost(createLogger()).adopt(socket, [])).toThrow(
+      /before bindEventSink/
+    );
+    expect(() => harness!.host.bindEventSink(harness!.events)).toThrow(/already bound/);
   });
 
   it("forwards text frames as strings and binary frames as ArrayBuffers", async () => {
@@ -275,6 +277,9 @@ describe("NodeSocketHost", () => {
 
     client.send("0");
     await firstStarted;
+    // Paused before the first delivery starts, not once a second frame shows
+    // up: otherwise the next message is assembled on the heap meanwhile.
+    expect(socket.isPaused).toBe(true);
     // Frames large enough that the flood spans several socket reads, so
     // pausing has reads left to hold back.
     const flood = Array.from({ length: 1_000 }, (_, i) => `frame-${i + 1}`.padEnd(256, "."));
@@ -311,7 +316,8 @@ describe("NodeSocketHost", () => {
       "socket.backlog_exceeded",
       expect.objectContaining({ tags: ["wsid:ws-1"], pending: 3 })
     );
-    expect(harness.host.sockets()).toEqual([]);
+    // The peer observing the close does not order the server-side listener.
+    await vi.waitFor(() => expect(harness!.host.sockets()).toEqual([]));
     // The blocked handler still holds this socket's queue, close included:
     // bounding handler time is the executor's job, not the host's.
     expect(harness.events.onMessage).toHaveBeenCalledOnce();
