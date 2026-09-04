@@ -18,11 +18,13 @@
     "@open-inspect/shared": "file:../shared",
     "better-auth": "1.6.25",
     "hono": "^4.13.5",
+    "ws": "^8.21.3",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.18",
+    "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.1.0",
     "esbuild": "^0.28.1",
     "typescript": "^5.7.2",
