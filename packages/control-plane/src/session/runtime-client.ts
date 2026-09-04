@@ -11,9 +11,16 @@ export interface SessionRuntimeClient {
   ): Promise<Response>;
 }
 
-class CloudflareSessionRuntimeClient implements SessionRuntimeClient {
+/**
+ * Delivers one internal request to the session's runtime, however the host
+ * reaches it: a Durable Object stub on Cloudflare, the runtime registry on
+ * Node. The request's signal aborts the delivery as it aborts a fetch.
+ */
+export type SessionRuntimeDispatch = (sessionId: string, request: Request) => Promise<Response>;
+
+class DispatchingSessionRuntimeClient implements SessionRuntimeClient {
   constructor(
-    private readonly env: Env,
+    private readonly dispatch: SessionRuntimeDispatch,
     private readonly ctx: CorrelationContext
   ) {}
 
@@ -23,9 +30,10 @@ class CloudflareSessionRuntimeClient implements SessionRuntimeClient {
     init?: RequestInit,
     search?: string
   ): Promise<Response> {
-    const doId = this.env.SESSION.idFromName(sessionId);
-    const stub = this.env.SESSION.get(doId);
-    return stub.fetch(this.internalRequest(buildSessionInternalUrl(path, search), init));
+    return this.dispatch(
+      sessionId,
+      this.internalRequest(buildSessionInternalUrl(path, search), init)
+    );
   }
 
   private internalRequest(url: string, init?: RequestInit): Request {
@@ -36,11 +44,12 @@ class CloudflareSessionRuntimeClient implements SessionRuntimeClient {
   }
 }
 
-export function createSessionRuntimeClient(
-  env: Env,
+/** A client for the caller's own request, correlated with `ctx`, over `dispatch`. */
+export function createSessionRuntimeClientOver(
+  dispatch: SessionRuntimeDispatch,
   ctx: CorrelationContext
 ): SessionRuntimeClient {
-  return new CloudflareSessionRuntimeClient(env, ctx);
+  return new DispatchingSessionRuntimeClient(dispatch, ctx);
 }
 
 /**
@@ -48,15 +57,34 @@ export function createSessionRuntimeClient(
  * notifying another runtime. Every call is one hop: it carries `traceId` and
  * a fresh request id, so unrelated calls never share a request identity.
  */
-export function createSessionRuntimeClientForTrace(
-  env: Env,
+export function createSessionRuntimeClientForTraceOver(
+  dispatch: SessionRuntimeDispatch,
   traceId: string
 ): SessionRuntimeClient {
   return {
     fetch: (sessionId, path, init, search) =>
-      createSessionRuntimeClient(env, {
+      createSessionRuntimeClientOver(dispatch, {
         trace_id: traceId,
         request_id: crypto.randomUUID(),
       }).fetch(sessionId, path, init, search),
   };
+}
+
+/** The Cloudflare dispatch: the session's Durable Object stub. */
+function durableObjectDispatch(env: Env): SessionRuntimeDispatch {
+  return (sessionId, request) => env.SESSION.get(env.SESSION.idFromName(sessionId)).fetch(request);
+}
+
+export function createSessionRuntimeClient(
+  env: Env,
+  ctx: CorrelationContext
+): SessionRuntimeClient {
+  return createSessionRuntimeClientOver(durableObjectDispatch(env), ctx);
+}
+
+export function createSessionRuntimeClientForTrace(
+  env: Env,
+  traceId: string
+): SessionRuntimeClient {
+  return createSessionRuntimeClientForTraceOver(durableObjectDispatch(env), traceId);
 }
