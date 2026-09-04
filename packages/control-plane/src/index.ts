@@ -9,20 +9,13 @@ import { createLogger } from "./logger";
 import type { Env } from "./types";
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 import { handleAutofixQueue } from "./autofix/handler";
-import { checkAutofixQueueHealth } from "./autofix/queue-health";
 import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
-import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
-import {
-  ABANDONED_DRAFT_SWEEP_CRON,
-  AbandonedDraftSweep,
-  SessionDraftExpiryClient,
-} from "./session/abandoned-draft-sweep";
 import { createSessionRuntimeClient } from "./session/runtime-client";
 import { createRequestMetrics, instrumentD1, type RequestMetrics } from "./db/instrumented-d1";
 import { SessionIndexStore } from "./db/session-index";
 import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
-import { Scheduler } from "./scheduler/scheduler";
+import { findScheduledJob } from "./scheduled-jobs";
 import { isAutofixQueue } from "./queue-routing";
 
 const logger = createLogger("worker");
@@ -49,38 +42,28 @@ export default {
   },
 
   /**
-   * Cron trigger handler — processes overdue automations.
+   * Cron trigger handler: runs the job bound to the trigger's expression.
    */
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    if (event.cron === IMAGE_BUILD_SCHEDULER_CRON) {
-      const requestId = crypto.randomUUID();
-      // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
-      await runImageBuildScheduler(env, env.DB, {
-        request_id: requestId,
-        trace_id: requestId,
-      });
-      return;
-    }
-    if (event.cron === ABANDONED_DRAFT_SWEEP_CRON) {
-      const sweepId = crypto.randomUUID();
-      const sweepContext = { trace_id: sweepId, request_id: sweepId };
-      await new AbandonedDraftSweep(
-        // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
-        new SessionIndexStore(env.DB),
-        new SessionDraftExpiryClient(createSessionRuntimeClient(env, sweepContext)),
-        logger
-      ).run(Date.now());
-      return;
-    }
-    if (event.cron !== "* * * * *") {
+    const job = findScheduledJob(event.cron);
+    if (!job) {
       logger.warn("Unknown scheduled trigger", { cron: event.cron });
       return;
     }
-    ctx.waitUntil(checkAutofixQueueHealth(env, logger));
-    // The tick runs both the recovery sweep (orphaned/timed-out runs) and
-    // processes overdue automations.
-    // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: construct the scheduler's database dependency
-    await new Scheduler(env.DB, env, createCloudflareBackgroundTasks(ctx)).tick();
+    const runId = crypto.randomUUID();
+    const correlation = { trace_id: runId, request_id: runId };
+    await job.run(
+      {
+        env,
+        // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
+        db: env.DB,
+        sessions: createSessionRuntimeClient(env, correlation),
+        backgroundTasks: createCloudflareBackgroundTasks(ctx),
+        log: logger,
+        correlation,
+      },
+      Date.now()
+    );
   },
 
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {

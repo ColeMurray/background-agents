@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionContext, env } from "cloudflare:test";
 import worker from "../../src/index";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { SCHEDULER_TICK_CRON } from "../../src/scheduled-jobs";
 import { ABANDONED_DRAFT_SWEEP_CRON } from "../../src/session/abandoned-draft-sweep";
 import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
@@ -60,7 +61,7 @@ describe("abandoned draft sweep cron routing", () => {
     );
 
     await worker.scheduled(
-      { cron: "* * * * *" } as ScheduledEvent,
+      { cron: SCHEDULER_TICK_CRON } as ScheduledEvent,
       {
         DB: env.DB,
         SESSION: sessionNamespace,
