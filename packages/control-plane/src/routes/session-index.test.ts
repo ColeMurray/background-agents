@@ -38,7 +38,7 @@ function createCtx(principal?: Principal): RequestContext {
     db: { prepare: vi.fn(() => statement) } as unknown as SqlDatabase,
     executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
-      d1Queries: [],
+      sqlQueries: [],
       spans: {},
       time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
       summarize: () => ({}),

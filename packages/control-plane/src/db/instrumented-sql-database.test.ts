@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createRequestMetrics, instrumentD1 } from "./instrumented-d1";
-import type { RequestMetrics } from "./instrumented-d1";
+import { createRequestMetrics, instrumentSqlDatabase } from "./instrumented-sql-database";
+import type { RequestMetrics } from "./instrumented-sql-database";
 import type { SqlDatabase } from "./sql-database";
 
 // ---------------------------------------------------------------------------
@@ -91,18 +91,18 @@ describe("createRequestMetrics", () => {
   });
 
   it("starts with empty queries and spans", () => {
-    expect(metrics.d1Queries).toEqual([]);
+    expect(metrics.sqlQueries).toEqual([]);
     expect(metrics.spans).toEqual({});
   });
 
   it("summarize() returns zeros when no queries recorded", () => {
     const summary = metrics.summarize();
     expect(summary).toEqual({
-      d1_query_count: 0,
-      d1_total_ms: 0,
-      d1_server_total_ms: 0,
-      d1_rows_read: 0,
-      d1_rows_written: 0,
+      sql_query_count: 0,
+      sql_total_ms: 0,
+      sql_engine_total_ms: 0,
+      sql_rows_read: 0,
+      sql_rows_written: 0,
     });
   });
 
@@ -145,25 +145,25 @@ describe("createRequestMetrics", () => {
 
   describe("summarize()", () => {
     it("computes correct totals from multiple query records", () => {
-      metrics.d1Queries.push(
-        { query_ms: 100, d1_server_ms: 10, rows_read: 5, rows_written: 0 },
-        { query_ms: 200, d1_server_ms: 20, rows_read: 15, rows_written: 3 },
+      metrics.sqlQueries.push(
+        { query_ms: 100, engine_ms: 10, rows_read: 5, rows_written: 0 },
+        { query_ms: 200, engine_ms: 20, rows_read: 15, rows_written: 3 },
         { query_ms: 50 } // first() call — no server metadata
       );
 
       const summary = metrics.summarize();
       expect(summary).toEqual({
-        d1_query_count: 3,
-        d1_total_ms: 350,
-        d1_server_total_ms: 30,
-        d1_rows_read: 20,
-        d1_rows_written: 3,
+        sql_query_count: 3,
+        sql_total_ms: 350,
+        sql_engine_total_ms: 30,
+        sql_rows_read: 20,
+        sql_rows_written: 3,
       });
     });
   });
 });
 
-describe("instrumentD1", () => {
+describe("instrumentSqlDatabase", () => {
   let fakeDb: FakeD1Database;
   let metrics: RequestMetrics;
   let db: SqlDatabase;
@@ -171,35 +171,35 @@ describe("instrumentD1", () => {
   beforeEach(() => {
     fakeDb = new FakeD1Database();
     metrics = createRequestMetrics();
-    db = instrumentD1(fakeDb as unknown as D1Database, metrics);
+    db = instrumentSqlDatabase(fakeDb as unknown as D1Database, metrics);
   });
 
   it("captures timing from run()", async () => {
     await db.prepare("INSERT INTO t VALUES (?)").bind(1).run();
 
-    expect(metrics.d1Queries).toHaveLength(1);
-    expect(metrics.d1Queries[0].query_ms).toBeGreaterThanOrEqual(0);
-    expect(metrics.d1Queries[0].d1_server_ms).toBe(5);
-    expect(metrics.d1Queries[0].rows_read).toBe(0);
-    expect(metrics.d1Queries[0].rows_written).toBe(1);
+    expect(metrics.sqlQueries).toHaveLength(1);
+    expect(metrics.sqlQueries[0].query_ms).toBeGreaterThanOrEqual(0);
+    expect(metrics.sqlQueries[0].engine_ms).toBe(5);
+    expect(metrics.sqlQueries[0].rows_read).toBe(0);
+    expect(metrics.sqlQueries[0].rows_written).toBe(1);
   });
 
   it("captures timing from all()", async () => {
     await db.prepare("SELECT * FROM t").all();
 
-    expect(metrics.d1Queries).toHaveLength(1);
-    expect(metrics.d1Queries[0].d1_server_ms).toBe(8);
-    expect(metrics.d1Queries[0].rows_read).toBe(10);
-    expect(metrics.d1Queries[0].rows_written).toBe(0);
+    expect(metrics.sqlQueries).toHaveLength(1);
+    expect(metrics.sqlQueries[0].engine_ms).toBe(8);
+    expect(metrics.sqlQueries[0].rows_read).toBe(10);
+    expect(metrics.sqlQueries[0].rows_written).toBe(0);
   });
 
   it("captures timing from first()", async () => {
     await db.prepare("SELECT * FROM t WHERE id = ?").bind(1).first();
 
-    expect(metrics.d1Queries).toHaveLength(1);
-    expect(metrics.d1Queries[0].query_ms).toBeGreaterThanOrEqual(0);
+    expect(metrics.sqlQueries).toHaveLength(1);
+    expect(metrics.sqlQueries[0].query_ms).toBeGreaterThanOrEqual(0);
     // first() does not return D1Meta
-    expect(metrics.d1Queries[0].d1_server_ms).toBeUndefined();
+    expect(metrics.sqlQueries[0].engine_ms).toBeUndefined();
   });
 
   it("captures batch() as a single query record with aggregated metadata", async () => {
@@ -211,14 +211,14 @@ describe("instrumentD1", () => {
 
     await db.batch(stmts);
 
-    expect(metrics.d1Queries).toHaveLength(1);
-    expect(metrics.d1Queries[0].query_ms).toBeGreaterThanOrEqual(0);
+    expect(metrics.sqlQueries).toHaveLength(1);
+    expect(metrics.sqlQueries[0].query_ms).toBeGreaterThanOrEqual(0);
     // 3 statements × 3ms server time each = 9ms aggregated
-    expect(metrics.d1Queries[0].d1_server_ms).toBe(9);
+    expect(metrics.sqlQueries[0].engine_ms).toBe(9);
     // 3 statements × 5 rows read each = 15 aggregated
-    expect(metrics.d1Queries[0].rows_read).toBe(15);
+    expect(metrics.sqlQueries[0].rows_read).toBe(15);
     // 3 statements × 2 rows written each = 6 aggregated
-    expect(metrics.d1Queries[0].rows_written).toBe(6);
+    expect(metrics.sqlQueries[0].rows_written).toBe(6);
   });
 
   it("batch() unwraps instrumented statements before passing to real D1", async () => {
@@ -241,8 +241,8 @@ describe("instrumentD1", () => {
     const bound = stmt.bind(1, 2);
     await bound.all();
 
-    expect(metrics.d1Queries).toHaveLength(1);
-    expect(metrics.d1Queries[0].d1_server_ms).toBe(8);
+    expect(metrics.sqlQueries).toHaveLength(1);
+    expect(metrics.sqlQueries[0].engine_ms).toBe(8);
   });
 
   it("accumulates queries across multiple calls", async () => {
@@ -250,15 +250,15 @@ describe("instrumentD1", () => {
     await db.prepare("SELECT * FROM t").all();
     await db.prepare("INSERT INTO t VALUES (?)").bind(1).run();
 
-    expect(metrics.d1Queries).toHaveLength(3);
+    expect(metrics.sqlQueries).toHaveLength(3);
 
     const summary = metrics.summarize();
-    expect(summary.d1_query_count).toBe(3);
-    expect(summary.d1_total_ms as number).toBeGreaterThanOrEqual(0);
+    expect(summary.sql_query_count).toBe(3);
+    expect(summary.sql_total_ms as number).toBeGreaterThanOrEqual(0);
     // first() has no server ms, all() has 8, run() has 5
-    expect(summary.d1_server_total_ms).toBe(13);
-    expect(summary.d1_rows_read).toBe(10);
-    expect(summary.d1_rows_written).toBe(1);
+    expect(summary.sql_engine_total_ms).toBe(13);
+    expect(summary.sql_rows_read).toBe(10);
+    expect(summary.sql_rows_written).toBe(1);
   });
 
   it("summarize includes both D1 and span fields", async () => {
@@ -266,8 +266,8 @@ describe("instrumentD1", () => {
     await metrics.time("github_api", async () => "repos");
 
     const summary = metrics.summarize();
-    expect(summary.d1_query_count).toBe(1);
-    expect(summary.d1_server_total_ms).toBe(8);
+    expect(summary.sql_query_count).toBe(1);
+    expect(summary.sql_engine_total_ms).toBe(8);
     expect(summary).toHaveProperty("github_api_ms");
   });
 });

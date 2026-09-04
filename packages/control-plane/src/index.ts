@@ -10,7 +10,11 @@ import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 import { handleAutofixQueue } from "./autofix/handler";
 import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
 import { createSessionRuntimeClient } from "./session/runtime-client";
-import { createRequestMetrics, instrumentD1, type RequestMetrics } from "./db/instrumented-d1";
+import {
+  createRequestMetrics,
+  instrumentSqlDatabase,
+  type RequestMetrics,
+} from "./db/instrumented-sql-database";
 import { SessionIndexStore } from "./db/session-index";
 import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
@@ -36,7 +40,7 @@ export default {
     if (upgradeHeader?.toLowerCase() === "websocket") {
       const metrics = createRequestMetrics();
       // eslint-disable-next-line no-restricted-syntax -- composition root: construct the request-scoped database adapter
-      const db = instrumentD1(bindings.DB, metrics);
+      const db = instrumentSqlDatabase(bindings.DB, metrics);
       return handleWebSocket(request, bindings, url, db, metrics);
     }
 

@@ -16,12 +16,12 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 // Types
 // ---------------------------------------------------------------------------
 
-/** Record of a single D1 query execution. */
-interface D1QueryRecord {
-  /** Wall-clock time in ms (includes network round-trip from Worker to D1 primary). */
+/** Record of a single query execution against the global store, whichever engine serves it. */
+interface SqlQueryRecord {
+  /** Wall-clock time in ms, as the caller saw it (on Workers this includes the round-trip to the D1 primary). */
   query_ms: number;
-  /** Engine-reported server-side execution time in ms (from meta.duration). */
-  d1_server_ms?: number;
+  /** Engine-reported execution time in ms (`meta.duration`), when the engine reports one. */
+  engine_ms?: number;
   /** Rows read, from result meta. */
   rows_read?: number;
   /** Rows written, from result meta. */
@@ -33,10 +33,10 @@ interface D1QueryRecord {
  * through RequestContext, and summarized into the http.request wide event.
  */
 export interface RequestMetrics {
-  /** Accumulated D1 query records (populated automatically by instrumentD1 wrapper). */
-  readonly d1Queries: D1QueryRecord[];
+  /** Accumulated query records (populated by the instrumentSqlDatabase wrapper). */
+  readonly sqlQueries: SqlQueryRecord[];
 
-  /** Named timing spans for non-D1 operations (populated via time()). */
+  /** Named timing spans for non-database operations (populated via time()). */
   readonly spans: Record<string, number>;
 
   /**
@@ -57,11 +57,11 @@ export interface RequestMetrics {
 // ---------------------------------------------------------------------------
 
 export function createRequestMetrics(): RequestMetrics {
-  const d1Queries: D1QueryRecord[] = [];
+  const sqlQueries: SqlQueryRecord[] = [];
   const spans: Record<string, number> = {};
 
   return {
-    d1Queries,
+    sqlQueries,
     spans,
 
     async time<T>(name: string, fn: () => Promise<T>): Promise<T> {
@@ -75,11 +75,11 @@ export function createRequestMetrics(): RequestMetrics {
 
     summarize(): Record<string, unknown> {
       const result: Record<string, unknown> = {
-        d1_query_count: d1Queries.length,
-        d1_total_ms: d1Queries.reduce((sum, q) => sum + q.query_ms, 0),
-        d1_server_total_ms: d1Queries.reduce((sum, q) => sum + (q.d1_server_ms ?? 0), 0),
-        d1_rows_read: d1Queries.reduce((sum, q) => sum + (q.rows_read ?? 0), 0),
-        d1_rows_written: d1Queries.reduce((sum, q) => sum + (q.rows_written ?? 0), 0),
+        sql_query_count: sqlQueries.length,
+        sql_total_ms: sqlQueries.reduce((sum, q) => sum + q.query_ms, 0),
+        sql_engine_total_ms: sqlQueries.reduce((sum, q) => sum + (q.engine_ms ?? 0), 0),
+        sql_rows_read: sqlQueries.reduce((sum, q) => sum + (q.rows_read ?? 0), 0),
+        sql_rows_written: sqlQueries.reduce((sum, q) => sum + (q.rows_written ?? 0), 0),
       };
 
       for (const [name, ms] of Object.entries(spans)) {
@@ -123,16 +123,16 @@ function instrumentStatement(stmt: SqlStatement, metrics: RequestMetrics): SqlSt
     async first<T = Record<string, unknown>>(): Promise<T | null> {
       const start = Date.now();
       const result = await stmt.first<T>();
-      metrics.d1Queries.push({ query_ms: Date.now() - start });
+      metrics.sqlQueries.push({ query_ms: Date.now() - start });
       return result;
     },
 
     async run<T = Record<string, unknown>>(): Promise<SqlResult<T>> {
       const start = Date.now();
       const result = await stmt.run<T>();
-      metrics.d1Queries.push({
+      metrics.sqlQueries.push({
         query_ms: Date.now() - start,
-        d1_server_ms: result.meta?.duration,
+        engine_ms: result.meta?.duration,
         rows_read: result.meta?.rows_read,
         rows_written: result.meta?.rows_written,
       });
@@ -142,9 +142,9 @@ function instrumentStatement(stmt: SqlStatement, metrics: RequestMetrics): SqlSt
     async all<T = Record<string, unknown>>(): Promise<SqlResult<T>> {
       const start = Date.now();
       const result = await stmt.all<T>();
-      metrics.d1Queries.push({
+      metrics.sqlQueries.push({
         query_ms: Date.now() - start,
-        d1_server_ms: result.meta?.duration,
+        engine_ms: result.meta?.duration,
         rows_read: result.meta?.rows_read,
         rows_written: result.meta?.rows_written,
       });
@@ -167,7 +167,7 @@ function instrumentStatement(stmt: SqlStatement, metrics: RequestMetrics): SqlSt
  * constructor — passing an instrumented DB means all their queries are timed
  * without any changes to the store code.
  */
-export function instrumentD1(db: SqlDatabase, metrics: RequestMetrics): SqlDatabase {
+export function instrumentSqlDatabase(db: SqlDatabase, metrics: RequestMetrics): SqlDatabase {
   return {
     prepare(query: string): SqlStatement {
       return instrumentStatement(db.prepare(query), metrics);
@@ -187,9 +187,9 @@ export function instrumentD1(db: SqlDatabase, metrics: RequestMetrics): SqlDatab
         rowsWritten += r.meta?.rows_written ?? 0;
       }
 
-      metrics.d1Queries.push({
+      metrics.sqlQueries.push({
         query_ms: elapsed,
-        d1_server_ms: serverMs,
+        engine_ms: serverMs,
         rows_read: rowsRead,
         rows_written: rowsWritten,
       });

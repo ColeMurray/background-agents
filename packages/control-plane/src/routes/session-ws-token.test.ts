@@ -43,7 +43,7 @@ function createContext(db: SqlDatabase = accessDatabase().db): RequestContext {
       permissions: ["sessions.read"],
     },
     metrics: {
-      d1Queries: [],
+      sqlQueries: [],
       spans: {},
       time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
       summarize: () => ({}),

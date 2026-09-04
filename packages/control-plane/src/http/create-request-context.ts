@@ -1,5 +1,5 @@
 import { getUserAuth, getUserAuthRuntime } from "../auth/user/runtime";
-import { createRequestMetrics, instrumentD1 } from "../db/instrumented-d1";
+import { createRequestMetrics, instrumentSqlDatabase } from "../db/instrumented-sql-database";
 import type { SqlDatabase } from "../db/sql-database";
 import type { BackgroundTasks } from "../platform-ports";
 import type { Env } from "../types";
@@ -19,7 +19,7 @@ export function createRequestContext(input: {
     trace_id: request.headers.get("x-trace-id") || crypto.randomUUID(),
     request_id: crypto.randomUUID().slice(0, 8),
     metrics,
-    db: instrumentD1(database, metrics),
+    db: instrumentSqlDatabase(database, metrics),
     // The stable uninstrumented binding remains the Better Auth cache key.
     getUserAuth: () => getUserAuth(env, database),
     getUserAuthRuntime: () => getUserAuthRuntime(env, database),

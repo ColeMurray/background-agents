@@ -13,7 +13,7 @@
  *
  * Contract the type system cannot express: statements passed to batch() must
  * originate from the same database's prepare(). Adapters must tolerate or
- * unwrap foreign statements (see ORIGINAL_STMT in instrumented-d1.ts, which
+ * unwrap foreign statements (see ORIGINAL_STMT in instrumented-sql-database.ts, which
  * exists exactly because wrapped statements cross into the raw db.batch()).
  *
  * Not to be confused with the session Durable Object's synchronous
@@ -33,7 +33,7 @@ interface SqlResultMeta {
 
   /**
    * Optional observability metadata, read only by query instrumentation
-   * (instrumented-d1.ts). Engines may omit these; consumers must never gate
+   * (instrumented-sql-database.ts). Engines may omit these; consumers must never gate
    * correctness on them — `changes` is the only required field.
    */
   duration?: number;

@@ -655,7 +655,7 @@ describe("handleCreateSession D1 ordering", () => {
         db: testEnv["DB"] as never,
         executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
         metrics: {
-          d1Queries: [],
+          sqlQueries: [],
           spans: {},
           time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
           summarize: () => ({}),
