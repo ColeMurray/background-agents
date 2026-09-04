@@ -158,6 +158,30 @@ describe("applyMigrations", () => {
     );
   });
 
+  it("does not let a literal and a comment mis-pair each other's delimiters", () => {
+    // A comment marker inside a literal must not swallow the COMMIT after it.
+    expect(
+      containsTransactionControl(
+        "CREATE TABLE t (v TEXT DEFAULT '--'); COMMIT; CREATE TABLE u (id)"
+      )
+    ).toBe(true);
+    expect(
+      containsTransactionControl(
+        "CREATE TABLE t (v TEXT DEFAULT '/*'); COMMIT; CREATE TABLE u (id)"
+      )
+    ).toBe(true);
+    // An apostrophe inside a comment must not open a literal that swallows the COMMIT.
+    expect(containsTransactionControl("-- don't\nCOMMIT;\nINSERT INTO t (v) VALUES ('x')")).toBe(
+      true
+    );
+    // Nor may either invent a statement: quoted text may hold a semicolon and an escaped quote.
+    expect(
+      containsTransactionControl(
+        "INSERT INTO t (v) VALUES ('a; COMMIT; it''s fine');\nCREATE INDEX \"i; COMMIT\" ON t (v);\n/* don't ' COMMIT */\nCREATE TABLE [u; COMMIT] (id)"
+      )
+    ).toBe(false);
+  });
+
   it("lets several processes open and migrate one fresh file at once, applying each migration once", async () => {
     const migrations = join(dir, "migrations");
     mkdirMigrations(migrations, {
