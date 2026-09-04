@@ -5,11 +5,13 @@
  * through R2 on Cloudflare.
  *
  * This is the one module that imports `@aws-sdk/*`. The contract mirrors
- * `R2ObjectStorage`: a missing key is `null` from `head` and `get`, never an
- * error; `size` is the whole object's size even for a ranged read; and
- * `writeHttpMetadata` writes the HTTP metadata stored with the object
- * (content type, language, disposition, encoding, cache control, expiry),
- * not the entity headers the response builder sets itself.
+ * `R2ObjectStorage`: a missing key is `null` from `head` and `get`, and only
+ * a missing key; a missing bucket, a wrong endpoint, or a response without
+ * the fields the port promises is an error, so a deployment fault never
+ * reads as an absent artifact. `size` is the whole object's size even for a
+ * ranged read, and `writeHttpMetadata` writes the HTTP metadata stored with
+ * the object (content type, language, disposition, encoding, cache control,
+ * expiry), not the entity headers the response builder sets itself.
  */
 
 import {
@@ -93,10 +95,16 @@ class S3ObjectStorage implements ObjectStorage {
     try {
       output = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
     } catch (error) {
-      if (isMissingObject(error)) return null;
+      // HeadObject answers a bare 404, which the SDK names NotFound; S3 gives
+      // it no body to say whether the key or the bucket is what is missing.
+      if (isNamed(error, "NotFound")) return null;
       throw error;
     }
-    return metadataOf(output, output.ContentLength ?? 0);
+    return metadataOf(
+      output,
+      required(output.ContentLength, "ContentLength", "HeadObject", key),
+      key
+    );
   }
 
   async get(key: string, options?: GetOptions): Promise<StoredObject | null> {
@@ -111,13 +119,13 @@ class S3ObjectStorage implements ObjectStorage {
         })
       );
     } catch (error) {
-      if (isMissingObject(error)) return null;
+      if (isNamed(error, "NoSuchKey")) return null;
       throw error;
     }
-    if (!output.Body) return null;
+    const body = required(output.Body, "Body", "GetObject", key);
     return {
-      ...metadataOf(output, totalSize(output)),
-      body: output.Body.transformToWebStream(),
+      ...metadataOf(output, totalSize(output, range !== undefined, key), key),
+      body: body.transformToWebStream(),
     };
   }
 }
@@ -127,17 +135,24 @@ export function createS3ObjectStorage(config: S3ObjectStorageConfig): ObjectStor
 }
 
 /** The object's whole size: from `Content-Range` on a ranged read, else the body length. */
-function totalSize(output: GetObjectCommandOutput): number {
-  const match = /\/(\d+)$/.exec(output.ContentRange ?? "");
-  if (match) return Number(match[1]);
-  return output.ContentLength ?? 0;
+function totalSize(output: GetObjectCommandOutput, ranged: boolean, key: string): number {
+  if (!ranged) return required(output.ContentLength, "ContentLength", "GetObject", key);
+  const match = /\/(\d+)$/.exec(required(output.ContentRange, "ContentRange", "GetObject", key));
+  if (!match) {
+    throw new Error(
+      `S3 GetObject for ${key} answered a range with Content-Range ${output.ContentRange}, ` +
+        "which does not carry the object's size"
+    );
+  }
+  return Number(match[1]);
 }
 
 function metadataOf(
   output: HeadObjectCommandOutput | GetObjectCommandOutput,
-  size: number
+  size: number,
+  key: string
 ): ObjectStorageMetadata {
-  const httpEtag = output.ETag ?? "";
+  const httpEtag = required(output.ETag, "ETag", "HeadObject/GetObject", key);
   const stored: Array<[string, string | undefined]> = [
     ["Content-Type", output.ContentType],
     ["Content-Language", output.ContentLanguage],
@@ -157,17 +172,21 @@ function metadataOf(
   };
 }
 
+/** Whether the SDK classified the failure as S3's error `name`. */
+function isNamed(error: unknown, name: string): boolean {
+  return (error as { name?: string }).name === name;
+}
+
 /**
- * Whether the error is S3 saying the key is absent: `NoSuchKey` from
- * GetObject, and the bare 404 (`NotFound`) HeadObject answers with.
+ * The field, which a well-formed S3 response always carries. Its absence
+ * is the provider not speaking the S3 API the port is built on, reported
+ * as such rather than read as an empty or absent object.
  */
-function isMissingObject(error: unknown): boolean {
-  const failure = error as { name?: string; $metadata?: { httpStatusCode?: number } };
-  return (
-    failure.name === "NoSuchKey" ||
-    failure.name === "NotFound" ||
-    failure.$metadata?.httpStatusCode === 404
-  );
+function required<T>(value: T | undefined, field: string, operation: string, key: string): T {
+  if (value === undefined) {
+    throw new Error(`S3 ${operation} for ${key} answered without ${field}`);
+  }
+  return value;
 }
 
 /**

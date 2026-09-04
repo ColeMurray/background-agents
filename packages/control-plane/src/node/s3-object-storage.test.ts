@@ -21,6 +21,8 @@ interface StoredObject {
 class FakeS3 {
   readonly objects = new Map<string, StoredObject>();
   readonly requests: Array<{ method: string; path: string; range: string | undefined }> = [];
+  /** A provider that answers without ETags, which the S3 API always carries. */
+  omitEtag = false;
   private server: Server | null = null;
   endpoint = "";
 
@@ -43,7 +45,14 @@ class FakeS3 {
       range: request.headers.range,
     });
     if (!url.pathname.startsWith(`/${BUCKET}/`)) {
-      response.writeHead(404).end();
+      // A missing bucket: S3 names it in the body, except on HEAD, which has none.
+      if (request.method === "HEAD") {
+        response.writeHead(404).end();
+      } else {
+        response
+          .writeHead(404, { "Content-Type": "application/xml" })
+          .end(`<?xml version="1.0"?><Error><Code>NoSuchBucket</Code></Error>`);
+      }
       return;
     }
     switch (request.method) {
@@ -68,7 +77,7 @@ class FakeS3 {
           response.writeHead(404).end();
           return;
         }
-        response.writeHead(200, headersOf(object)).end();
+        response.writeHead(200, headersOf(object, this.omitEtag)).end();
         return;
       }
       case "GET": {
@@ -106,12 +115,12 @@ function etagOf(bytes: Buffer): string {
   return `"${createHash("md5").update(bytes).digest("hex")}"`;
 }
 
-function headersOf(object: StoredObject): Record<string, string> {
+function headersOf(object: StoredObject, omitEtag = false): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Length": String(object.bytes.length),
-    ETag: etagOf(object.bytes),
     "Last-Modified": new Date(0).toUTCString(),
   };
+  if (!omitEtag) headers.ETag = etagOf(object.bytes);
   if (object.contentType) headers["Content-Type"] = object.contentType;
   return headers;
 }
@@ -142,6 +151,7 @@ describe("createS3ObjectStorage", () => {
   beforeEach(() => {
     s3.objects.clear();
     s3.requests.length = 0;
+    s3.omitEtag = false;
   });
 
   it("puts bytes with their content type, path-style, and reads them back whole", async () => {
@@ -221,6 +231,32 @@ describe("createS3ObjectStorage", () => {
     expect(s3.requests.at(-1)).toMatchObject({ method: "GET", range: "bytes=4-9" });
     expect((await readAll(part!.body)).toString()).toBe("456789");
     expect(part!.size).toBe(16);
+  });
+
+  it("reports a missing bucket as an error, not as a missing key", async () => {
+    const elsewhere = createS3ObjectStorage({
+      bucket: "no-such-bucket",
+      region: "us-east-1",
+      endpoint: s3.endpoint,
+      forcePathStyle: true,
+      credentials: { accessKeyId: "test", secretAccessKey: "test" },
+    });
+
+    await expect(elsewhere.get("k/doc")).rejects.toMatchObject({ name: "NoSuchBucket" });
+    await expect(elsewhere.put("k/doc", "x")).rejects.toMatchObject({ name: "NoSuchBucket" });
+    await expect(elsewhere.delete("k/doc")).rejects.toMatchObject({ name: "NoSuchBucket" });
+    // HEAD carries no body, so S3 cannot say which is missing; the port's
+    // answer for an unreachable object is null, the same as R2's.
+    expect(await elsewhere.head("k/doc")).toBeNull();
+  });
+
+  it("reports a provider answering without the fields the port promises", async () => {
+    await storage.put("k/doc", new Uint8Array(3));
+    s3.omitEtag = true;
+
+    await expect(storage.head("k/doc")).rejects.toThrow(
+      "S3 HeadObject/GetObject for k/doc answered without ETag"
+    );
   });
 
   it("deletes a key, and deleting an absent key is not an error", async () => {
