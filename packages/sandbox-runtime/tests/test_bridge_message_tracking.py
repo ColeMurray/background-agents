@@ -234,75 +234,35 @@ class TestBuildPromptRequestBody:
             "modelID": "claude-3-opus",
         }
 
-    def test_with_anthropic_manual_thinking(self, bridge: AgentBridge):
-        """Non-Opus-4.6 Claude models should use manual thinking budgets."""
+    @pytest.mark.parametrize(
+        "model,effort",
+        [
+            ("anthropic/claude-sonnet-4-5", "max"),
+            ("claude-haiku-4-5", "high"),
+            ("anthropic/claude-opus-4-5", "max"),
+            ("anthropic/claude-opus-4-6", "medium"),
+            ("anthropic/claude-opus-5", "xhigh"),
+            ("anthropic/claude-sonnet-4-6", "high"),
+            ("anthropic/claude-sonnet-5", "xhigh"),
+            ("openai/gpt-5.6-sol", "none"),
+            ("openai/gpt-5.6-sol", "low"),
+            ("openai/gpt-5.6-sol", "xhigh"),
+            ("openai/gpt-5.6-luna", "max"),
+        ],
+    )
+    def test_reasoning_effort_uses_variant(self, bridge: AgentBridge, model: str, effort: str):
         body = bridge._ensure_prompt_stream()._build_prompt_request_body(
-            "Hello",
-            "anthropic/claude-sonnet-4-5",
-            reasoning_effort="max",
+            "Hello", model, reasoning_effort=effort
         )
+        assert body["variant"] == effort
+        assert set(body["model"]) == {"providerID", "modelID"}
 
-        assert body["model"]["options"] == {"thinking": {"type": "enabled", "budgetTokens": 31_999}}
-
-    def test_with_opus_4_6_adaptive_thinking(self, bridge: AgentBridge):
-        """Opus 4.6 should use adaptive thinking instead of manual budgets."""
+    def test_no_effort_preserves_opencode_default(self, bridge: AgentBridge):
         body = bridge._ensure_prompt_stream()._build_prompt_request_body(
-            "Hello",
-            "anthropic/claude-opus-4-6",
-            reasoning_effort="medium",
+            "Hello", "openai/gpt-5.6-sol"
         )
-
-        assert body["model"]["options"] == {
-            "thinking": {"type": "adaptive"},
-            "outputConfig": {"effort": "medium"},
-        }
-
-    def test_with_opus_5_adaptive_thinking(self, bridge: AgentBridge):
-        """Opus 5 should use adaptive thinking instead of manual budgets."""
-        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
-            "Hello",
-            "anthropic/claude-opus-5",
-            reasoning_effort="xhigh",
-        )
-
-        assert body["model"] == {
-            "providerID": "anthropic",
-            "modelID": "claude-opus-5",
-            "options": {
-                "thinking": {"type": "adaptive"},
-                "outputConfig": {"effort": "xhigh"},
-            },
-        }
-
-    def test_with_sonnet_4_6_adaptive_thinking(self, bridge: AgentBridge):
-        """Sonnet 4.6 should use adaptive thinking instead of manual budgets."""
-        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
-            "Hello",
-            "anthropic/claude-sonnet-4-6",
-            reasoning_effort="high",
-        )
-
-        assert body["model"]["options"] == {
-            "thinking": {"type": "adaptive"},
-            "outputConfig": {"effort": "high"},
-        }
-
-    def test_with_sonnet_5_adaptive_thinking(self, bridge: AgentBridge):
-        """Sonnet 5 should use adaptive thinking instead of manual budgets."""
-        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
-            "Hello",
-            "anthropic/claude-sonnet-5",
-            reasoning_effort="xhigh",
-        )
-
-        assert body["model"] == {
-            "providerID": "anthropic",
-            "modelID": "claude-sonnet-5",
-            "options": {
-                "thinking": {"type": "adaptive"},
-                "outputConfig": {"effort": "xhigh"},
-            },
-        }
+        assert "variant" not in body
+        assert "options" not in body["model"]
 
     def test_with_xai_reasoning_effort(self, bridge: AgentBridge):
         body = bridge._ensure_prompt_stream()._build_prompt_request_body(

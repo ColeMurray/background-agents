@@ -39,28 +39,6 @@ if TYPE_CHECKING:
 MAX_PENDING_PART_EVENTS: Final = 2000
 CONTEXT_OVERFLOW_ERROR_NAME: Final = "ContextOverflowError"
 
-# Anthropic extended thinking budget tokens by reasoning effort level.
-# "max" uses 31,999 — the API maximum for streaming responses.
-# "high" uses 16,000 — a balanced level for faster responses with good reasoning.
-ANTHROPIC_THINKING_BUDGETS: Final[dict[str, int]] = {
-    "high": 16_000,
-    "max": 31_999,
-}
-ANTHROPIC_ADAPTIVE_THINKING_MODELS: Final[frozenset[str]] = frozenset(
-    {
-        "claude-fable-5",
-        "claude-opus-4-6",
-        "claude-opus-4-7",
-        "claude-opus-4-8",
-        "claude-opus-5",
-        "claude-sonnet-4-6",
-        "claude-sonnet-5",
-    }
-)
-ANTHROPIC_ADAPTIVE_EFFORTS: Final[frozenset[str]] = frozenset(
-    {"low", "medium", "high", "xhigh", "max"}
-)
-
 OPENCODE_DEFAULT_TITLE_RE: Final = re.compile(
     r"^(new session|child session) - " r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
     re.IGNORECASE,
@@ -857,28 +835,8 @@ class OpenCodePromptStream:
                 "modelID": model_id,
             }
 
-            if reasoning_effort:
-                if provider_id == "anthropic":
-                    if model_id in ANTHROPIC_ADAPTIVE_THINKING_MODELS:
-                        anthropic_options: dict[str, Any] = {
-                            "thinking": {"type": "adaptive"},
-                        }
-                        if reasoning_effort in ANTHROPIC_ADAPTIVE_EFFORTS:
-                            anthropic_options["outputConfig"] = {"effort": reasoning_effort}
-                        model_spec["options"] = anthropic_options
-                    else:
-                        budget = ANTHROPIC_THINKING_BUDGETS.get(reasoning_effort)
-                        if budget is not None:
-                            model_spec["options"] = {
-                                "thinking": {"type": "enabled", "budgetTokens": budget}
-                            }
-                elif provider_id == "openai":
-                    model_spec["options"] = {
-                        "reasoningEffort": reasoning_effort,
-                        "reasoningSummary": "auto",
-                    }
-                elif provider_id == "xai":
-                    request_body["variant"] = reasoning_effort
+            if reasoning_effort and provider_id in {"anthropic", "openai", "xai"}:
+                request_body["variant"] = reasoning_effort
 
             request_body["model"] = model_spec
 
