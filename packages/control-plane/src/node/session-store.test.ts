@@ -3,7 +3,11 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openSessionStore, type NodeSessionStore } from "./session-store";
+import {
+  createFileSessionStoreProvider,
+  openSessionStore,
+  type NodeSessionStore,
+} from "./session-store";
 
 describe("openSessionStore", () => {
   let dataDir: string;
@@ -113,5 +117,25 @@ describe("openSessionStore", () => {
     const store = open("session-1");
     store.close();
     expect(() => store.storage.sql.exec("SELECT 1")).toThrow("not open");
+  });
+});
+
+describe("createFileSessionStoreProvider", () => {
+  it("opens the same session file openSessionStore does", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "session-store-provider-"));
+    try {
+      const provider = createFileSessionStoreProvider(dataDir);
+      const store = await provider.open("session-1");
+      store.storage.sql.exec("CREATE TABLE marker (v TEXT)");
+      store.close();
+      expect(existsSync(join(dataDir, "sessions", "session-1.db"))).toBe(true);
+
+      const direct = openSessionStore({ dataDir, sessionId: "session-1" });
+      expect(direct.storage.sql.exec("SELECT count(*) AS n FROM marker").one()).toEqual({ n: 0 });
+      direct.close();
+      await expect(provider.open("../escape")).rejects.toThrow("cannot name a session file");
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });

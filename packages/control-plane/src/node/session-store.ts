@@ -36,6 +36,25 @@ export interface NodeSessionStore {
   close(): void;
 }
 
+/** A session's store, owned by whoever opened it until they close it. */
+export type OwnedSessionStore = Pick<NodeSessionStore, "storage" | "close">;
+
+/**
+ * How a host acquires a session's store. Acquisition is the host boundary
+ * (a file on this host today), so it is asynchronous; the store's query
+ * surface behind it stays synchronous.
+ */
+export interface SessionStoreProvider {
+  open(sessionId: string): Promise<OwnedSessionStore>;
+}
+
+/** The provider over `<dataDir>/sessions/<id>.db` files. */
+export function createFileSessionStoreProvider(dataDir: string): SessionStoreProvider {
+  return {
+    open: async (sessionId) => openSessionStore({ dataDir, sessionId }),
+  };
+}
+
 /**
  * Switch the file to WAL mode, waiting out another connection's write lock.
  * The busy timeout does not cover this switch: SQLite reports SQLITE_BUSY
