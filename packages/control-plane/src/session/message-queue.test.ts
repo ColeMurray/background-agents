@@ -9,6 +9,7 @@ import {
 } from "@open-inspect/shared/types/server-messages";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
+import type { MessageStatus } from "@open-inspect/shared/types/sessions";
 import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
@@ -149,7 +150,7 @@ function buildQueue() {
       messageId: "msg-autofix",
     })),
     getAutofixMessageId: vi.fn(() => null as string | null),
-    getMessageStatus: vi.fn(() => "pending" as const),
+    getMessageStatus: vi.fn((): MessageStatus | null => "pending"),
     cancelPendingMessage: vi.fn(() => false),
     getUnfinishedMessagePosition: vi.fn((): number | null => 1),
     listUnfinishedMessages: vi.fn((): MessageRow[] => []),
@@ -492,6 +493,31 @@ describe("SessionMessageQueue", () => {
       expect(h.wsManager.send).not.toHaveBeenCalled();
     }
   );
+
+  it("does not spawn a sandbox for a prompt cancelled during the provider-auth lookup", async () => {
+    const h = buildQueue();
+    const session = createSession();
+    h.repository.getSession.mockImplementation(() => session);
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.wsManager.getSandboxSocket.mockReturnValue(null);
+    h.getProviderAuthenticationError.mockImplementation(async () => {
+      // The cancel lands at this await: it closes the session and fails the
+      // pending prompt in one synchronous turn.
+      session.status = "cancelled";
+      h.repository.getMessageStatus.mockReturnValue("failed");
+      return null;
+    });
+
+    await h.queue.processMessageQueue();
+    await h.backgroundTasks.settle();
+
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalledWith({ type: "sandbox_spawning" });
+    expect(h.log.info).toHaveBeenCalledWith(
+      "prompt.dispatch",
+      expect.objectContaining({ outcome: "deferred", reason: "superseded_during_auth" })
+    );
+  });
 
   it("does not block queue processing on the sandbox spawn", async () => {
     const h = buildQueue();
