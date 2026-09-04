@@ -113,7 +113,7 @@ function prepareAll(db: DatabaseSync, query: string): StatementSync[] {
  * when the wrapper is collected. Never pass that input to
  * DatabaseSync.prepare().
  */
-function isStatementlessSql(sql: string): boolean {
+export function isStatementlessSql(sql: string): boolean {
   let index = 0;
   while (index < sql.length) {
     const char = sql[index];
