@@ -10,11 +10,20 @@ import {
   PersistedAlarmDeadlineStore,
 } from "../session/alarm/scheduler";
 import { initSchema } from "../session/schema";
-import { HostAlarmClock } from "./host-alarm-clock";
+import { HostAlarmClock, MAX_RETRIES, RETRY_BASE_DELAY_MS } from "./host-alarm-clock";
 import { openHostAlarmIndex, type HostAlarmIndex } from "./host-alarm-index";
 import { createNodeSqlStorage } from "./sqlite-storage";
 
 const log = createLogger("host-alarm-clock-test");
+
+/** The delay before retry number `n` (1-based). */
+const retryDelay = (n: number): number => RETRY_BASE_DELAY_MS * 2 ** (n - 1);
+/** Time for retries `from` through `to` inclusive to elapse. */
+const retriesElapsed = (from: number, to: number): number => {
+  let total = 0;
+  for (let n = from; n <= to; n += 1) total += retryDelay(n);
+  return total;
+};
 
 describe("HostAlarmClock", () => {
   let dataDir: string;
@@ -159,31 +168,31 @@ describe("HostAlarmClock", () => {
     await clock.storeFor("s1").setAlarm(Date.now() + 100);
     await vi.advanceTimersByTimeAsync(100);
     expect(deliver).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(retryDelay(1));
     expect(deliver).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(retryDelay(2));
     expect(deliver).toHaveBeenCalledTimes(3);
-    // 8s, 16s, 32s, 64s complete the six retries; nothing follows.
-    await vi.advanceTimersByTimeAsync(8_000 + 16_000 + 32_000 + 64_000);
-    expect(deliver).toHaveBeenCalledTimes(7);
+    // The remaining retries complete the budget; nothing follows.
+    await vi.advanceTimersByTimeAsync(retriesElapsed(3, MAX_RETRIES));
+    expect(deliver).toHaveBeenCalledTimes(1 + MAX_RETRIES);
     await vi.advanceTimersByTimeAsync(10_000_000);
-    expect(deliver).toHaveBeenCalledTimes(7);
+    expect(deliver).toHaveBeenCalledTimes(1 + MAX_RETRIES);
     expect(index.earliest()).toBeNull();
   });
 
   it("keeps the retry count across a restart", async () => {
     deliver.mockRejectedValue(new Error("handler failed"));
     await clock.storeFor("s1").setAlarm(Date.now() + 100);
-    await vi.advanceTimersByTimeAsync(100 + 2_000 + 4_000);
+    await vi.advanceTimersByTimeAsync(100 + retriesElapsed(1, 2));
     expect(deliver).toHaveBeenCalledTimes(3);
     clock.stop();
 
     const restarted = new HostAlarmClock({ index, deliver, log });
     restarted.start();
-    await vi.advanceTimersByTimeAsync(8_000 + 16_000 + 32_000 + 64_000);
-    expect(deliver).toHaveBeenCalledTimes(7);
+    await vi.advanceTimersByTimeAsync(retriesElapsed(3, MAX_RETRIES));
+    expect(deliver).toHaveBeenCalledTimes(1 + MAX_RETRIES);
     await vi.advanceTimersByTimeAsync(10_000_000);
-    expect(deliver).toHaveBeenCalledTimes(7);
+    expect(deliver).toHaveBeenCalledTimes(1 + MAX_RETRIES);
     restarted.stop();
   });
 
@@ -222,14 +231,14 @@ describe("HostAlarmClock", () => {
     deliver.mockRejectedValue(new Error("handler failed"));
     const store = clock.storeFor("s1");
     await store.setAlarm(Date.now() + 100);
-    await vi.advanceTimersByTimeAsync(100 + 2_000 + 4_000);
+    await vi.advanceTimersByTimeAsync(100 + retriesElapsed(1, 2));
     expect(deliver).toHaveBeenCalledTimes(3);
     // The session arms a new deadline: the three failures belonged to the old one.
     await store.setAlarm(Date.now() + 100);
-    await vi.advanceTimersByTimeAsync(100 + 2_000 * (1 + 2 + 4 + 8 + 16 + 32));
-    expect(deliver).toHaveBeenCalledTimes(3 + 7);
+    await vi.advanceTimersByTimeAsync(100 + retriesElapsed(1, MAX_RETRIES));
+    expect(deliver).toHaveBeenCalledTimes(3 + 1 + MAX_RETRIES);
     await vi.advanceTimersByTimeAsync(10_000_000);
-    expect(deliver).toHaveBeenCalledTimes(10);
+    expect(deliver).toHaveBeenCalledTimes(3 + 1 + MAX_RETRIES);
   });
 
   it("resumes deadlines recorded before a restart", async () => {
@@ -340,9 +349,9 @@ describe("HostAlarmClock", () => {
       await scheduler.schedule(Date.now() + 1_000);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(attempts).toBe(1);
-      expect(await clock.storeFor("s1").getAlarm()).toBe(Date.now() + 2_000);
+      expect(await clock.storeFor("s1").getAlarm()).toBe(Date.now() + retryDelay(1));
 
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(retryDelay(1));
       expect(attempts).toBe(2);
       // The retry acknowledged the failed deadline and re-armed its replacement.
       expect(deadlines.pending()).toBe(replacement);
@@ -363,8 +372,8 @@ describe("HostAlarmClock", () => {
         )
       );
       await scheduler.schedule(Date.now() + 100);
-      await vi.advanceTimersByTimeAsync(100 + 2_000 * (1 + 2 + 4 + 8 + 16 + 32));
-      expect(deliver).toHaveBeenCalledTimes(7);
+      await vi.advanceTimersByTimeAsync(100 + retriesElapsed(1, MAX_RETRIES));
+      expect(deliver).toHaveBeenCalledTimes(1 + MAX_RETRIES);
       expect(index.earliest()).toBeNull();
       // The session file still holds the deadline in flight.
       expect(deadlines.earliest()).toBe(1_000_100);

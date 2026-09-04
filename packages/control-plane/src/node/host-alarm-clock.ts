@@ -33,9 +33,9 @@ import type { ClaimedDeadline, HostAlarmIndex } from "./host-alarm-index";
 /** The longest delay a single timer can hold; farther deadlines re-arm. */
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 /** First retry delay after a failed delivery; doubles per retry, as on the platform. */
-const RETRY_BASE_DELAY_MS = 2_000;
+export const RETRY_BASE_DELAY_MS = 2_000;
 /** Retries before the host stops retrying on its own, as on the platform. */
-const MAX_RETRIES = 6;
+export const MAX_RETRIES = 6;
 /** Sessions delivered to at the same time, unless the host says otherwise. */
 const DEFAULT_MAX_CONCURRENT_DELIVERIES = 8;
 /** The clock source, unless a test supplies one; read per call so fake timers apply. */
