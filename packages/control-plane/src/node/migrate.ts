@@ -127,18 +127,15 @@ export function applyMigrations(db: DatabaseSync, directory: string): string[] {
 
 /**
  * Whether any statement in `sql` is transaction control. Comments and
- * string literals are removed first, so a mention inside either does not
- * count, and trigger bodies are skipped, since their `BEGIN … END` is not
- * a transaction; a migration is otherwise plain DDL/DML, so statement
- * starts are what matter.
+ * quoted text are blanked in one left-to-right pass, so a comment marker
+ * inside a literal (`DEFAULT '--'`) or an apostrophe inside a comment
+ * (`-- don't`) does not hide or invent a statement boundary. Trigger
+ * bodies are skipped, since their `BEGIN … END` is not a transaction; a
+ * migration is otherwise plain DDL/DML, so statement starts are what matter.
  */
 export function containsTransactionControl(sql: string): boolean {
-  const stripped = sql
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--[^\n]*/g, " ")
-    .replace(/'(?:[^']|'')*'/g, "''");
   let inTrigger = false;
-  for (const segment of stripped.split(";")) {
+  for (const segment of blankCommentsAndQuotes(sql).split(";")) {
     const statement = segment.trim();
     if (inTrigger) {
       if (/^END\b/i.test(statement)) inTrigger = false;
@@ -151,6 +148,56 @@ export function containsTransactionControl(sql: string): boolean {
     if (TRANSACTION_CONTROL.test(statement)) return true;
   }
   return false;
+}
+
+/**
+ * `sql` with each comment replaced by a space and each string literal or
+ * quoted identifier by an empty one. One scan decides which construct each
+ * character belongs to, so the two cannot mis-pair each other's delimiters.
+ * A doubled quote inside quoted text is an escaped quote; unterminated
+ * text runs to the end, as SQLite would read it.
+ */
+function blankCommentsAndQuotes(sql: string): string {
+  let out = "";
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i]!;
+    const next = sql[i + 1];
+    if (ch === "-" && next === "-") {
+      const end = sql.indexOf("\n", i);
+      i = end === -1 ? sql.length : end;
+      out += " ";
+    } else if (ch === "/" && next === "*") {
+      const end = sql.indexOf("*/", i + 2);
+      i = end === -1 ? sql.length : end + 2;
+      out += " ";
+    } else if (ch === "'" || ch === '"' || ch === "`") {
+      i = skipQuoted(sql, i, ch);
+      out += ch + ch;
+    } else if (ch === "[") {
+      const end = sql.indexOf("]", i + 1);
+      i = end === -1 ? sql.length : end + 1;
+      out += "[]";
+    } else {
+      out += ch;
+      i += 1;
+    }
+  }
+  return out;
+}
+
+/** The index just past the quoted text opening at `start` with `quote`. */
+function skipQuoted(sql: string, start: number, quote: string): number {
+  let i = start + 1;
+  for (;;) {
+    const close = sql.indexOf(quote, i);
+    if (close === -1) return sql.length;
+    if (sql[close + 1] === quote) {
+      i = close + 2;
+      continue;
+    }
+    return close + 1;
+  }
 }
 
 /** Roll back if a transaction is open; a failed COMMIT leaves one, a failed BEGIN does not. */
