@@ -13,24 +13,31 @@
  * itself stays on disk until the delivery settles, so a process that dies
  * mid-delivery fires it again at the next start.
  *
- * A failed delivery is retried with doubling backoff, sooner if the session
- * armed something sooner, a bounded number of times. After the last attempt
- * the host stops retrying on its own; the session file still holds the
- * deadline, and the session's next activation re-arms it through
- * `rehydrate()`, which is also what happens on Cloudflare once the platform
- * gives up on an alarm.
+ * A failed delivery is retried on the platform's policy (doubling backoff
+ * from two seconds, six retries), sooner if the session armed something
+ * sooner; the count lives in the index, so a restart does not renew it.
+ * After the last attempt the host stops retrying on its own; the session
+ * file still holds the deadline, and the session's next activation re-arms
+ * it through `rehydrate()`, which is also what happens on Cloudflare once
+ * the platform gives up on an alarm.
+ *
+ * Deliveries run concurrently across sessions up to a bound, so a host that
+ * comes back after downtime opens overdue sessions a few at a time rather
+ * than all at once; the next ones start as soon as one settles.
  */
 
 import type { Logger } from "../logger";
 import type { AlarmScheduleStore } from "../session/alarm/scheduler";
-import type { HostAlarmIndex } from "./host-alarm-index";
+import type { ClaimedDeadline, HostAlarmIndex } from "./host-alarm-index";
 
 /** The longest delay a single timer can hold; farther deadlines re-arm. */
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
-/** First retry delay after a failed delivery; doubles per attempt. */
-const RETRY_BASE_DELAY_MS = 30_000;
-/** Attempts before the host stops retrying on its own, as the platform does. */
-const MAX_DELIVERY_ATTEMPTS = 6;
+/** First retry delay after a failed delivery; doubles per retry, as on the platform. */
+const RETRY_BASE_DELAY_MS = 2_000;
+/** Retries before the host stops retrying on its own, as on the platform. */
+const MAX_RETRIES = 6;
+/** Sessions delivered to at the same time, unless the host says otherwise. */
+const DEFAULT_MAX_CONCURRENT_DELIVERIES = 8;
 
 export interface HostAlarmClockOptions {
   index: HostAlarmIndex;
@@ -41,6 +48,8 @@ export interface HostAlarmClockOptions {
   deliver: (sessionId: string) => Promise<void>;
   log: Logger;
   now?: () => number;
+  /** How many sessions may be delivered to at once. */
+  maxConcurrentDeliveries?: number;
 }
 
 export class HostAlarmClock {
@@ -48,31 +57,29 @@ export class HostAlarmClock {
   private readonly deliver: (sessionId: string) => Promise<void>;
   private readonly log: Logger;
   private readonly now: () => number;
+  private readonly maxConcurrentDeliveries: number;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private readonly inFlight = new Map<string, Promise<void>>();
-  private readonly failures = new Map<string, number>();
 
   constructor(options: HostAlarmClockOptions) {
     this.index = options.index;
     this.deliver = options.deliver;
     this.log = options.log;
     this.now = options.now ?? Date.now;
+    this.maxConcurrentDeliveries =
+      options.maxConcurrentDeliveries ?? DEFAULT_MAX_CONCURRENT_DELIVERIES;
   }
 
   /** The alarm port for one session runtime. */
   storeFor(sessionId: string): AlarmScheduleStore {
     return {
       getAlarm: async () => this.index.get(sessionId),
-      // Arming or disarming starts a new alarm: earlier failures were the
-      // previous one's, so it gets the full retry budget.
       setAlarm: async (timestamp) => {
-        this.failures.delete(sessionId);
         this.index.set(sessionId, timestamp);
         this.arm();
       },
       deleteAlarm: async () => {
-        this.failures.delete(sessionId);
         this.index.delete(sessionId);
         this.arm();
       },
@@ -115,8 +122,9 @@ export class HostAlarmClock {
       this.timer = null;
     }
     if (!this.running) return;
-    // A session being delivered to is left out: its next deadline is picked
-    // up when that delivery settles and re-arms the clock.
+    // At capacity, the settling delivery re-arms the clock. A session being
+    // delivered to is left out: its next deadline is picked up the same way.
+    if (this.inFlight.size >= this.maxConcurrentDeliveries) return;
     const next = this.index.earliest(this.inFlight.keys());
     if (next === null) return;
     const delay = Math.min(Math.max(0, next.deadline - this.now()), MAX_TIMER_DELAY_MS);
@@ -125,13 +133,15 @@ export class HostAlarmClock {
 
   private tick(): void {
     this.timer = null;
-    for (const { sessionId } of this.index.due(this.now(), this.inFlight.keys())) {
-      const deadline = this.index.claim(sessionId);
-      if (deadline === null) continue;
+    const capacity = this.maxConcurrentDeliveries - this.inFlight.size;
+    if (capacity <= 0) return;
+    for (const { sessionId } of this.index.due(this.now(), this.inFlight.keys(), capacity)) {
+      const claimed = this.index.claim(sessionId);
+      if (claimed === null) continue;
       // Registered before the handler starts, so a deadline it arms at once
       // is excluded from the next wake-up until this delivery settles.
       const delivery = Promise.resolve()
-        .then(() => this.deliverTo(sessionId, deadline))
+        .then(() => this.deliverTo(sessionId, claimed))
         .finally(() => {
           this.inFlight.delete(sessionId);
           this.arm();
@@ -141,31 +151,27 @@ export class HostAlarmClock {
     this.arm();
   }
 
-  private async deliverTo(sessionId: string, deadline: number): Promise<void> {
+  private async deliverTo(sessionId: string, claimed: ClaimedDeadline): Promise<void> {
     try {
       await this.deliver(sessionId);
-      this.failures.delete(sessionId);
       this.index.complete(sessionId);
     } catch (error) {
-      const attempt = (this.failures.get(sessionId) ?? 0) + 1;
-      const retry = attempt < MAX_DELIVERY_ATTEMPTS;
+      const retry = claimed.failures < MAX_RETRIES;
       this.log.error("Scheduled deadline delivery failed", {
         event: "alarm.delivery_failed",
         session_id: sessionId,
-        deadline,
-        attempt,
+        deadline: claimed.deadline,
+        attempt: claimed.failures + 1,
         will_retry: retry,
         error_message: error instanceof Error ? error.message : String(error),
       });
       if (!retry) {
         // The session file keeps the deadline; its next activation re-arms it.
-        this.failures.delete(sessionId);
         this.index.complete(sessionId);
         return;
       }
-      this.failures.set(sessionId, attempt);
       // Sooner than a replacement the handler armed, never later than it.
-      this.index.retry(sessionId, this.now() + RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+      this.index.retry(sessionId, this.now() + RETRY_BASE_DELAY_MS * 2 ** claimed.failures);
     }
   }
 }

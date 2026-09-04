@@ -154,35 +154,82 @@ describe("HostAlarmClock", () => {
     restarted.stop();
   });
 
-  it("retries a failed delivery with backoff and stops after the last attempt", async () => {
+  it("retries a failed delivery on the platform's backoff and stops after six retries", async () => {
     deliver.mockRejectedValue(new Error("handler failed"));
     await clock.storeFor("s1").setAlarm(Date.now() + 100);
     await vi.advanceTimersByTimeAsync(100);
     expect(deliver).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(deliver).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(4_000);
     expect(deliver).toHaveBeenCalledTimes(3);
-    // 120s, 240s, 480s complete the six attempts; nothing follows.
-    await vi.advanceTimersByTimeAsync(120_000 + 240_000 + 480_000);
-    expect(deliver).toHaveBeenCalledTimes(6);
+    // 8s, 16s, 32s, 64s complete the six retries; nothing follows.
+    await vi.advanceTimersByTimeAsync(8_000 + 16_000 + 32_000 + 64_000);
+    expect(deliver).toHaveBeenCalledTimes(7);
     await vi.advanceTimersByTimeAsync(10_000_000);
-    expect(deliver).toHaveBeenCalledTimes(6);
+    expect(deliver).toHaveBeenCalledTimes(7);
     expect(index.earliest()).toBeNull();
+  });
+
+  it("keeps the retry count across a restart", async () => {
+    deliver.mockRejectedValue(new Error("handler failed"));
+    await clock.storeFor("s1").setAlarm(Date.now() + 100);
+    await vi.advanceTimersByTimeAsync(100 + 2_000 + 4_000);
+    expect(deliver).toHaveBeenCalledTimes(3);
+    clock.stop();
+
+    const restarted = new HostAlarmClock({ index, deliver, log });
+    restarted.start();
+    await vi.advanceTimersByTimeAsync(8_000 + 16_000 + 32_000 + 64_000);
+    expect(deliver).toHaveBeenCalledTimes(7);
+    await vi.advanceTimersByTimeAsync(10_000_000);
+    expect(deliver).toHaveBeenCalledTimes(7);
+    restarted.stop();
+  });
+
+  it("delivers to overdue sessions a bounded number at a time after downtime", async () => {
+    const releases = new Map<string, () => void>();
+    deliver.mockImplementation(
+      (sessionId) =>
+        new Promise<void>((resolve) => {
+          releases.set(sessionId, resolve);
+        })
+    );
+    for (let i = 0; i < 10; i += 1) {
+      index.set(`s${i}`, Date.now() - 1_000);
+    }
+    const bounded = new HostAlarmClock({ index, deliver, log, maxConcurrentDeliveries: 3 });
+    bounded.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deliver).toHaveBeenCalledTimes(3);
+
+    // Each settled delivery lets the next overdue session start.
+    let settled = 0;
+    while (releases.size > 0) {
+      const [sessionId, release] = [...releases.entries()][0]!;
+      releases.delete(sessionId);
+      release();
+      settled += 1;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(deliver).toHaveBeenCalledTimes(Math.min(10, 3 + settled));
+    }
+    expect(deliver).toHaveBeenCalledTimes(10);
+    expect(index.earliest()).toBeNull();
+    bounded.stop();
   });
 
   it("gives a newly armed deadline its full retry budget", async () => {
     deliver.mockRejectedValue(new Error("handler failed"));
     const store = clock.storeFor("s1");
     await store.setAlarm(Date.now() + 100);
-    await vi.advanceTimersByTimeAsync(100 + 30_000 + 60_000);
+    await vi.advanceTimersByTimeAsync(100 + 2_000 + 4_000);
     expect(deliver).toHaveBeenCalledTimes(3);
     // The session arms a new deadline: the three failures belonged to the old one.
     await store.setAlarm(Date.now() + 100);
-    await vi.advanceTimersByTimeAsync(100 + 30_000 * (1 + 2 + 4 + 8 + 16));
-    expect(deliver).toHaveBeenCalledTimes(3 + 6);
+    await vi.advanceTimersByTimeAsync(100 + 2_000 * (1 + 2 + 4 + 8 + 16 + 32));
+    expect(deliver).toHaveBeenCalledTimes(3 + 7);
     await vi.advanceTimersByTimeAsync(10_000_000);
-    expect(deliver).toHaveBeenCalledTimes(9);
+    expect(deliver).toHaveBeenCalledTimes(10);
   });
 
   it("resumes deadlines recorded before a restart", async () => {
@@ -293,9 +340,9 @@ describe("HostAlarmClock", () => {
       await scheduler.schedule(Date.now() + 1_000);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(attempts).toBe(1);
-      expect(await clock.storeFor("s1").getAlarm()).toBe(Date.now() + 30_000);
+      expect(await clock.storeFor("s1").getAlarm()).toBe(Date.now() + 2_000);
 
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(2_000);
       expect(attempts).toBe(2);
       // The retry acknowledged the failed deadline and re-armed its replacement.
       expect(deadlines.pending()).toBe(replacement);
@@ -316,8 +363,8 @@ describe("HostAlarmClock", () => {
         )
       );
       await scheduler.schedule(Date.now() + 100);
-      await vi.advanceTimersByTimeAsync(100 + 30_000 * (1 + 2 + 4 + 8 + 16));
-      expect(deliver).toHaveBeenCalledTimes(6);
+      await vi.advanceTimersByTimeAsync(100 + 2_000 * (1 + 2 + 4 + 8 + 16 + 32));
+      expect(deliver).toHaveBeenCalledTimes(7);
       expect(index.earliest()).toBeNull();
       // The session file still holds the deadline in flight.
       expect(deadlines.earliest()).toBe(1_000_100);

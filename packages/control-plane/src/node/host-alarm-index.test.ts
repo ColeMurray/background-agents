@@ -46,17 +46,18 @@ describe("openHostAlarmIndex", () => {
     index.set("soon", 100);
     index.set("mid", 500);
     expect(index.earliest()).toEqual({ sessionId: "soon", deadline: 100 });
-    expect(index.due(500)).toEqual([
+    expect(index.due(500, [], 10)).toEqual([
       { sessionId: "soon", deadline: 100 },
       { sessionId: "mid", deadline: 500 },
     ]);
-    expect(index.due(99)).toEqual([]);
+    expect(index.due(500, [], 1)).toEqual([{ sessionId: "soon", deadline: 100 }]);
+    expect(index.due(99, [], 10)).toEqual([]);
   });
 
   it("claims a deadline for delivery, hides it while in flight, and completes it", () => {
     const index = open();
     index.set("s1", 100);
-    expect(index.claim("s1")).toBe(100);
+    expect(index.claim("s1")).toEqual({ deadline: 100, failures: 0 });
     expect(index.get("s1")).toBeNull();
     expect(index.earliest()).toBeNull();
     expect(index.claim("s1")).toBeNull();
@@ -75,6 +76,17 @@ describe("openHostAlarmIndex", () => {
     index.set("later", 5_000);
     index.retry("later", 1_000);
     expect(index.get("later")).toBe(1_000);
+    // The failure is counted for the next claim of the same alarm.
+    expect(index.claim("later")).toEqual({ deadline: 1_000, failures: 1 });
+    index.retry("later", 2_000);
+    expect(index.claim("later")).toEqual({ deadline: 2_000, failures: 2 });
+    // Arming anew, or completing, starts the count over.
+    index.set("later", 3_000);
+    expect(index.claim("later")).toEqual({ deadline: 3_000, failures: 0 });
+    index.retry("later", 4_000);
+    index.complete("later");
+    index.set("later", 5_000);
+    expect(index.claim("later")).toEqual({ deadline: 5_000, failures: 0 });
 
     index.set("sooner", 100);
     index.claim("sooner");
@@ -97,7 +109,7 @@ describe("openHostAlarmIndex", () => {
     // Before recovery only armed deadlines count: the crashed claim is invisible.
     expect(second.earliest(["rearmed"])).toEqual({ sessionId: "idle", deadline: 700 });
     expect(second.recoverClaims().sort()).toEqual(["crashed", "rearmed"]);
-    expect(second.due(100)).toEqual([
+    expect(second.due(100, [], 10)).toEqual([
       { sessionId: "rearmed", deadline: 50 },
       { sessionId: "crashed", deadline: 100 },
     ]);
@@ -109,8 +121,8 @@ describe("openHostAlarmIndex", () => {
     index.set("a", 100);
     index.set("b", 200);
     expect(index.earliest(["a"])).toEqual({ sessionId: "b", deadline: 200 });
-    expect(index.due(300, ["a", "b"])).toEqual([]);
-    expect(index.due(300, new Set(["b"]))).toEqual([{ sessionId: "a", deadline: 100 }]);
+    expect(index.due(300, ["a", "b"], 10)).toEqual([]);
+    expect(index.due(300, new Set(["b"]), 10)).toEqual([{ sessionId: "a", deadline: 100 }]);
   });
 
   it("survives close and reopen in a private file", () => {

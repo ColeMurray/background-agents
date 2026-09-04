@@ -12,7 +12,8 @@
  * clock waits for. `in_flight` holds a deadline from the moment the clock
  * claims it for delivery until the delivery settles, so a process that dies
  * mid-delivery finds the claim at the next start and fires it again instead
- * of stranding an evicted session.
+ * of stranding an evicted session. `failures` counts failed deliveries of
+ * the current alarm, on disk so a restart does not renew the retry budget.
  */
 
 import { join } from "node:path";
@@ -24,6 +25,12 @@ interface SessionDeadline {
   deadline: number;
 }
 
+export interface ClaimedDeadline {
+  deadline: number;
+  /** Failed deliveries of this alarm so far; arming a new deadline resets it. */
+  failures: number;
+}
+
 export interface HostAlarmIndex {
   /** The session's armed deadline, or null when none is armed. */
   get(sessionId: string): number | null;
@@ -33,17 +40,24 @@ export interface HostAlarmIndex {
   delete(sessionId: string): void;
   /** The soonest armed deadline, ignoring the sessions in `excluding`. */
   earliest(excluding?: Iterable<string>): SessionDeadline | null;
-  /** Sessions armed at or before `now`, soonest first, ignoring `excluding`. */
-  due(now: number, excluding?: Iterable<string>): SessionDeadline[];
   /**
-   * Take the session's armed deadline for delivery. Returns it, or null when
+   * Up to `limit` sessions armed at or before `now`, soonest first, ignoring
+   * `excluding`.
+   */
+  due(now: number, excluding: Iterable<string>, limit: number): SessionDeadline[];
+  /**
+   * Take the session's armed deadline for delivery, with the number of
+   * deliveries of this alarm that have already failed. Returns null when
    * nothing was armed. Until `complete` or `retry`, the session reads as
    * disarmed, so a handler that arms a new deadline replaces nothing.
    */
-  claim(sessionId: string): number | null;
+  claim(sessionId: string): ClaimedDeadline | null;
   /** The claimed delivery succeeded. */
   complete(sessionId: string): void;
-  /** The claimed delivery failed: arm again at `at`, or sooner if already armed. */
+  /**
+   * The claimed delivery failed: count the failure and arm again at `at`, or
+   * sooner if already armed.
+   */
   retry(sessionId: string, at: number): void;
   /**
    * Re-arm every claim a previous process left in flight, at its original
@@ -58,6 +72,7 @@ const SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS session_deadlines (
   session_id TEXT PRIMARY KEY,
   deadline INTEGER,
   in_flight INTEGER,
+  failures INTEGER NOT NULL DEFAULT 0,
   CHECK (deadline IS NOT NULL OR in_flight IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_session_deadlines_deadline ON session_deadlines (deadline);`;
@@ -77,7 +92,7 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
   const read = db.prepare("SELECT deadline FROM session_deadlines WHERE session_id = ?");
   const arm = db.prepare(
     `INSERT INTO session_deadlines (session_id, deadline) VALUES (?, ?)
-     ON CONFLICT(session_id) DO UPDATE SET deadline = excluded.deadline`
+     ON CONFLICT(session_id) DO UPDATE SET deadline = excluded.deadline, failures = 0`
   );
   // Disarming or settling removes the row once neither slot is used, and
   // otherwise clears just the one slot; the order keeps the row's CHECK true.
@@ -90,11 +105,14 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
   );
   const claimRow = db.prepare(
     `UPDATE session_deadlines SET in_flight = deadline, deadline = NULL
-     WHERE session_id = ? AND deadline IS NOT NULL RETURNING in_flight`
+     WHERE session_id = ? AND deadline IS NOT NULL RETURNING in_flight, failures`
   );
-  const settle = db.prepare("UPDATE session_deadlines SET in_flight = NULL WHERE session_id = ?");
+  const settle = db.prepare(
+    "UPDATE session_deadlines SET in_flight = NULL, failures = 0 WHERE session_id = ?"
+  );
   const armSooner = db.prepare(
-    `UPDATE session_deadlines SET deadline = MIN(COALESCE(deadline, ?), ?), in_flight = NULL
+    `UPDATE session_deadlines
+     SET deadline = MIN(COALESCE(deadline, ?), ?), in_flight = NULL, failures = failures + 1
      WHERE session_id = ?`
   );
   const recover = db.prepare(
@@ -108,7 +126,12 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
   // Armed rows only, soonest first, minus the sessions the caller is already
   // delivering to. The exclusion is a handful of ids at most, so it is
   // inlined as placeholders rather than kept in a table.
-  const armedRows = (condition: string, params: unknown[], excluding: Iterable<string>) => {
+  const armedRows = (
+    condition: string,
+    params: number[],
+    excluding: Iterable<string>,
+    limit: number
+  ) => {
     const excluded = [...excluding];
     const exclusion =
       excluded.length > 0 ? ` AND session_id NOT IN (${excluded.map(() => "?").join(", ")})` : "";
@@ -116,9 +139,9 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
       .prepare(
         `SELECT session_id, deadline FROM session_deadlines
          WHERE deadline IS NOT NULL${condition}${exclusion}
-         ORDER BY deadline, session_id`
+         ORDER BY deadline, session_id LIMIT ?`
       )
-      .all(...(params as string[]), ...excluded)
+      .all(...params, ...excluded, limit)
       .map(toDeadline);
   };
   return {
@@ -133,11 +156,11 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
       dropUnclaimed.run(sessionId);
       disarm.run(sessionId);
     },
-    earliest: (excluding = []) => armedRows("", [], excluding)[0] ?? null,
-    due: (now, excluding = []) => armedRows(" AND deadline <= ?", [now], excluding),
+    earliest: (excluding = []) => armedRows("", [], excluding, 1)[0] ?? null,
+    due: (now, excluding, limit) => armedRows(" AND deadline <= ?", [now], excluding, limit),
     claim: (sessionId) => {
-      const row = claimRow.get(sessionId) as { in_flight: number } | undefined;
-      return row?.in_flight ?? null;
+      const row = claimRow.get(sessionId) as { in_flight: number; failures: number } | undefined;
+      return row === undefined ? null : { deadline: row.in_flight, failures: row.failures };
     },
     complete: (sessionId) => {
       dropDisarmed.run(sessionId);
