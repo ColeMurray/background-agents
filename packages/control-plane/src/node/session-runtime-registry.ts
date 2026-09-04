@@ -277,9 +277,6 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
 
   private async quiesce(session: ResidentSession<Runtime>, deadlineMs: number): Promise<void> {
     session.state = "quiescing";
-    for (const socket of session.sockets.sockets()) {
-      socket.close(SERVICE_RESTART_CLOSE_CODE, "Service restart");
-    }
     const quiescent = await this.waitForQuiescence(session, deadlineMs);
     if (!quiescent) {
       this.log.warn("session_registry.retired_busy", {
@@ -292,12 +289,20 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
     this.retire(session, "shutdown");
   }
 
-  /** Whether the runtime reached quiescence before `deadlineMs` (wall clock). */
+  /**
+   * Whether the runtime reached quiescence before `deadlineMs` (wall clock).
+   * Every pass closes the sockets the runtime holds: a lease taken before
+   * the shutdown began (an upgrade being authorized, say) may still adopt
+   * one, and it must be closed like those that were there at the start.
+   */
   private async waitForQuiescence(
     session: ResidentSession<Runtime>,
     deadlineMs: number
   ): Promise<boolean> {
     for (;;) {
+      for (const socket of session.sockets.sockets()) {
+        socket.close(SERVICE_RESTART_CLOSE_CODE, "Service restart");
+      }
       const remainingMs = deadlineMs - Date.now();
       if (remainingMs <= 0) return this.isQuiescent(session);
       const tasks = session.tasks.current;

@@ -13,6 +13,7 @@
 
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
 import type { Logger } from "../logger";
+import { settlesWithin } from "./background-tasks";
 import type { ScheduledJob } from "../scheduled-jobs";
 
 /** The longest delay a single timer can hold; farther slots re-arm. */
@@ -56,9 +57,25 @@ export class CronLoop {
     this.timers.clear();
   }
 
-  /** Resolves once every run that was in progress has settled. */
-  async drain(): Promise<void> {
-    await Promise.allSettled([...this.running.values()]);
+  /**
+   * Wait for every run in progress for at most `timeoutMs`. Runs still
+   * going at the deadline are logged by job and left running; returns how
+   * many there were.
+   */
+  async drain(timeoutMs: number): Promise<number> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.running.size > 0) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0 || !(await settlesWithin([...this.running.values()], remaining))) break;
+    }
+    if (this.running.size > 0) {
+      this.log.warn("scheduled_job.drain_timeout", {
+        event: "scheduled_job.drain_timeout",
+        timeout_ms: timeoutMs,
+        jobs: [...this.running.keys()],
+      });
+    }
+    return this.running.size;
   }
 
   private arm(job: ScheduledJob): void {

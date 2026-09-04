@@ -22,24 +22,23 @@ async function main(): Promise<void> {
 
   const stop = (signal: NodeJS.Signals): void => {
     log.info("node_host.signal", { event: "node_host.signal", signal });
-    const forced = setTimeout(() => {
+    // Unreferenced, so it never holds the process open: a clean shutdown
+    // exits on its own, and one whose abandoned work keeps the event loop
+    // alive is forced down here.
+    setTimeout(() => {
       log.error("node_host.shutdown_forced", {
         event: "node_host.shutdown_forced",
         timeout_ms: settings.shutdownTimeoutMs + FORCE_EXIT_GRACE_MS,
       });
       process.exit(1);
-    }, settings.shutdownTimeoutMs + FORCE_EXIT_GRACE_MS);
-    forced.unref();
-    host.shutdown().then(
-      () => clearTimeout(forced),
-      (error: unknown) => {
-        log.error("node_host.shutdown_failed", {
-          event: "node_host.shutdown_failed",
-          error: error instanceof Error ? error : String(error),
-        });
-        process.exitCode = 1;
-      }
-    );
+    }, settings.shutdownTimeoutMs + FORCE_EXIT_GRACE_MS).unref();
+    host.shutdown().catch((error: unknown) => {
+      log.error("node_host.shutdown_failed", {
+        event: "node_host.shutdown_failed",
+        error: error instanceof Error ? error : String(error),
+      });
+      process.exitCode = 1;
+    });
   };
   process.once("SIGTERM", stop);
   process.once("SIGINT", stop);

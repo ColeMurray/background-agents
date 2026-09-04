@@ -607,6 +607,41 @@ describe("SessionRuntimeRegistry", () => {
     });
   });
 
+  it("shutdown closes a socket adopted under a lease that predates it", async () => {
+    // The upgrade path authorizes under a lease and adopts afterwards; a
+    // shutdown that began during the authorization still closes the socket.
+    const wss = new WebSocketServer({ port: 0 });
+    await new Promise<void>((done) => wss.once("listening", done));
+    const client = new NodeWebSocket(`ws://127.0.0.1:${(wss.address() as AddressInfo).port}`);
+    try {
+      const serverSide = new Promise<NodeWebSocket>((done) => wss.once("connection", done));
+      await new Promise<void>((done) => client.once("open", done));
+      const server = await serverSide;
+      const closed = new Promise<number>((done) => client.once("close", (code) => done(code)));
+
+      const registry = makeRegistry();
+      const authorizing = deferred();
+      const attached = registry.withRuntime("s1", async (runtime) => {
+        await authorizing.promise;
+        runtime.platform.sockets.adopt(server, ["wsid:late"]);
+      });
+      await flush();
+
+      const shutdown = registry.shutdown({ timeoutMs: 2_000 });
+      await flush();
+      authorizing.resolve();
+      await attached;
+
+      await shutdown;
+      expect(await closed).toBe(SERVICE_RESTART_CLOSE_CODE);
+      expect(registry.residentSessionIds()).toEqual([]);
+      expect(log.warn).not.toHaveBeenCalled();
+    } finally {
+      client.terminate();
+      await new Promise<void>((done) => wss.close(() => done()));
+    }
+  });
+
   it("shutdown refuses new leases on resident runtimes and waits for held ones", async () => {
     const registry = makeRegistry();
     const held = deferred();

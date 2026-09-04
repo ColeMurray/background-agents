@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect as connectTcp, type AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket as NodeWebSocket } from "ws";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
@@ -53,8 +53,23 @@ function rejected(ws: NodeWebSocket): Promise<string> {
   return new Promise((resolve) => ws.once("error", (error) => resolve(error.message)));
 }
 
+/** Send a raw upgrade request and collect the server's answer, for requests a client library would not send. */
+function rawUpgrade(port: number, requestText: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connectTcp(port, "127.0.0.1");
+    let received = "";
+    socket.on("connect", () => socket.write(requestText));
+    socket.on("data", (chunk) => {
+      received += chunk.toString();
+    });
+    socket.on("close", () => resolve(received));
+    socket.on("error", reject);
+  });
+}
+
 describe("createSessionUpgradeHandler", () => {
   const known = new Set(["s1", "s2"]);
+  let indexFailure: Error | null = null;
   const runtimes = new Map<string, UpgradeServingRuntime>();
   let log: Logger;
   let server: Server;
@@ -70,8 +85,16 @@ describe("createSessionUpgradeHandler", () => {
   beforeEach(async () => {
     log = fakeLogger();
     runtimes.clear();
+    indexFailure = null;
+    const index = indexDatabase(known);
     const handler = createSessionUpgradeHandler({
-      db: indexDatabase(known),
+      db: {
+        prepare: (query) => {
+          if (indexFailure) throw indexFailure;
+          return index.prepare(query);
+        },
+        batch: index.batch,
+      },
       runtimes: {
         withRuntimeIfPresent: async (sessionId, use) => {
           const runtime = runtimes.get(sessionId);
@@ -99,6 +122,29 @@ describe("createSessionUpgradeHandler", () => {
     expect(log.warn).toHaveBeenCalledWith(
       "Invalid WebSocket path",
       expect.objectContaining({ event: "ws.invalid_path" })
+    );
+  });
+
+  it("answers 400 to an upgrade whose Host makes no URL", async () => {
+    const answer = await rawUpgrade(
+      port,
+      "GET /sessions/s1/ws HTTP/1.1\r\nHost: [::1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    );
+    expect(answer.startsWith("HTTP/1.1 400 Bad Request")).toBe(true);
+    expect(answer.endsWith("Invalid WebSocket request")).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith(
+      "Invalid WebSocket request",
+      expect.objectContaining({ event: "ws.invalid_request" })
+    );
+  });
+
+  it("answers 500 and logs when the path itself fails, so nothing rejects past it", async () => {
+    indexFailure = new Error("index unavailable");
+    expect(await rejected(connect("/sessions/s1/ws"))).toBe("Unexpected server response: 500");
+    expect(log.error).toHaveBeenCalledWith(
+      "WebSocket upgrade failed",
+      expect.objectContaining({ event: "ws.upgrade_failed", error: indexFailure })
     );
   });
 

@@ -101,6 +101,23 @@ describe("CronLoop", () => {
     expect(vi.getTimerCount()).toBe(1);
   });
 
+  it("reports a run that outlives the drain budget instead of waiting for it", async () => {
+    const run = vi.fn(() => new Promise<void>(() => {}));
+    loop = new CronLoop({ jobs: [job("tick", "* * * * *")], run, log });
+    loop.start();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(run).toHaveBeenCalledTimes(1);
+
+    loop.stop();
+    const drained = loop.drain(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await drained).toBe(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      "scheduled_job.drain_timeout",
+      expect.objectContaining({ timeout_ms: 1_000, jobs: ["tick"] })
+    );
+  });
+
   it("stops firing once stopped and drains the run in progress", async () => {
     let finish!: () => void;
     const settled = vi.fn();
@@ -115,9 +132,9 @@ describe("CronLoop", () => {
     expect(run).toHaveBeenCalledTimes(1);
 
     loop.stop();
-    const drained = loop.drain();
+    const drained = loop.drain(5_000);
     finish();
-    await drained;
+    expect(await drained).toBe(0);
     expect(settled).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(run).toHaveBeenCalledTimes(1);

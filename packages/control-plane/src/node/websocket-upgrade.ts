@@ -11,6 +11,10 @@
  * it sees the 101, and a frame that arrived before adoption would have no
  * listener. A rejection carries the session's response; it is written to
  * the raw socket as the status line the peer's client library reports.
+ *
+ * The handler is total: every outcome answers the socket or destroys it,
+ * and nothing it awaits can reject past it. The HTTP server's boundary
+ * catches whatever might still escape.
  */
 
 import { STATUS_CODES, type IncomingMessage } from "node:http";
@@ -61,14 +65,18 @@ export function createSessionUpgradeHandler<Runtime extends UpgradeServingRuntim
     options.webSocketServer ??
     new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
 
-  return async (request, socket, head) => {
-    // The HTTP server hands the socket over with no error listener: a peer
-    // that resets while the index is read must not take the process down.
-    socket.on("error", (error: Error) => {
-      log.debug("ws.socket_error", { event: "ws.socket_error", error_message: error.message });
-    });
-
-    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+  const serve = async (request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> => {
+    let url: URL;
+    try {
+      url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+    } catch {
+      log.warn("Invalid WebSocket request", {
+        event: "ws.invalid_request",
+        http_path: request.url,
+      });
+      refuse(socket, 400, "Invalid WebSocket request");
+      return;
+    }
     const match = url.pathname.match(SESSION_WS_PATH);
     if (!match) {
       log.warn("Invalid WebSocket path", { event: "ws.invalid_path", http_path: url.pathname });
@@ -105,6 +113,24 @@ export function createSessionUpgradeHandler<Runtime extends UpgradeServingRuntim
       return;
     }
     if (rejection !== null) refuse(socket, rejection.status, await rejection.text());
+  };
+
+  return async (request, socket, head) => {
+    // The HTTP server hands the socket over with no error listener: a peer
+    // that resets while the index is read must not take the process down.
+    socket.on("error", (error: Error) => {
+      log.debug("ws.socket_error", { event: "ws.socket_error", error_message: error.message });
+    });
+    try {
+      await serve(request, socket, head);
+    } catch (error) {
+      log.error("WebSocket upgrade failed", {
+        event: "ws.upgrade_failed",
+        http_path: request.url,
+        error: error instanceof Error ? error : String(error),
+      });
+      refuse(socket, 500, "WebSocket upgrade failed");
+    }
   };
 }
 
