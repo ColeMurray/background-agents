@@ -33,7 +33,9 @@ Prerequisites: Docker with Compose v2, a GitHub App and OAuth app as in
    ```
 
    Every variable is documented in place. The three encryption keys are generated with
-   `openssl rand -base64 32`. The file's MinIO and Litestream defaults work as they are.
+   `openssl rand -base64 32`. Generate a MinIO root password with `openssl rand -hex 16` and set it
+   as `MINIO_ROOT_PASSWORD`, `AWS_SECRET_ACCESS_KEY` and `LITESTREAM_SECRET_ACCESS_KEY`; the stack
+   refuses to start without it. The other MinIO and Litestream defaults work as they are.
 
 2. Build and start:
 
@@ -147,8 +149,16 @@ leave `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` empty and the SDK uses the
 
 ```bash
 docker build -f packages/control-plane/Dockerfile -t open-inspect-control-plane .
-docker run --rm -p 8787:8787 --env-file .env -v control-plane-data:/data open-inspect-control-plane
+docker run --rm -p 127.0.0.1:8787:8787 --env-file .env -e LITESTREAM_BUCKET= \
+  -v control-plane-data:/data open-inspect-control-plane
 ```
+
+`LITESTREAM_BUCKET=` turns the restore-on-empty step off: outside the compose network there is no
+`minio` host, and the entrypoint would otherwise try to reach it before the host boots. Point
+`LITESTREAM_ENDPOINT` at a reachable bucket instead to keep the restore. The entrypoint refuses a
+plain-`http://` endpoint unless `OBJECT_STORE_ALLOW_HTTP=true`, the same opt-in the host applies to
+its own object store, and removes a stray `global.db-wal` or `-shm` left without its database so it
+cannot be replayed over the restored or new file.
 
 The build runs from the repository root so that `packages/shared` and the D1 migrations are in the
 context. The runtime image contains the bundled host, the migrations and the `litestream` binary; no
