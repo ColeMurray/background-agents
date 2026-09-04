@@ -136,7 +136,7 @@ interface Acquired<Runtime> {
   leased: boolean;
 }
 
-type RetireReason = "idle" | "capacity" | "shutdown";
+type RetireReason = "idle" | "capacity" | "shutdown" | "activation_failed";
 
 export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
   private readonly db: SqlDatabase;
@@ -367,25 +367,34 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
   ): Promise<ResidentSession<Runtime>> {
     const startedAt = performance.now();
     const store = await this.storeProvider.open(sessionId);
+    let session: ResidentSession<Runtime>;
     try {
-      const session = this.assemble(sessionId, store);
-      // Admission and publication in one continuation: capacity is taken
-      // from what is resident now, by a build that has already succeeded,
-      // and the runtime publishes already leased by every event waiting on it.
-      this.makeRoom();
-      session.activeLeases = intent.waiters;
-      this.resident.set(sessionId, session);
-      this.log.info("session_registry.opened", {
-        session_id: sessionId,
-        duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
-        resident: this.resident.size,
-      });
-      if (intent.rehydrate) session.runtime.alarms.rehydrate();
-      return session;
+      session = this.assemble(sessionId, store);
     } catch (error) {
       store.close();
       throw error;
     }
+    // Admission and publication in one continuation: capacity is taken
+    // from what is resident now, by a build that has already succeeded,
+    // and the runtime publishes already leased by every event waiting on it.
+    this.makeRoom();
+    session.activeLeases = intent.waiters;
+    this.resident.set(sessionId, session);
+    this.log.info("session_registry.opened", {
+      session_id: sessionId,
+      duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
+      resident: this.resident.size,
+    });
+    try {
+      if (intent.rehydrate) session.runtime.alarms.rehydrate();
+    } catch (error) {
+      // The activation failed after publication: the waiters get the error
+      // rather than the runtime, so their leases are dropped with it.
+      session.activeLeases = 0;
+      this.retire(session, "activation_failed");
+      throw error;
+    }
+    return session;
   }
 
   /** Build the platform record and the runtime over it; nothing is published here. */

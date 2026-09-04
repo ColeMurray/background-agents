@@ -225,6 +225,28 @@ describe("SessionRuntimeRegistry", () => {
     expect(registry.residentSessionIds()).toEqual(["s1"]);
   });
 
+  it("retires a published runtime whose rehydration throws, so the next event retries", async () => {
+    const registry = makeRegistry();
+    buildRuntime.mockImplementationOnce((platform) => {
+      const runtime = fakeRuntime(platform);
+      runtime.alarms.rehydrate = () => {
+        throw new Error("alarm index unavailable");
+      };
+      built.push(runtime);
+      return runtime;
+    });
+
+    await expect(registry.withRuntime("s1", async () => {})).rejects.toThrow(
+      "alarm index unavailable"
+    );
+    expect(registry.residentSessionIds()).toEqual([]);
+    expect(stores.opened).toMatchObject([{ id: "s1", closes: 1 }]);
+
+    await registry.withRuntime("s1", async () => {});
+    expect(buildRuntime).toHaveBeenCalledTimes(2);
+    expect(registry.residentSessionIds()).toEqual(["s1"]);
+  });
+
   it("leaves nothing resident when the store fails to open", async () => {
     const registry = makeRegistry();
     stores.state.failNext = new Error("disk full");
