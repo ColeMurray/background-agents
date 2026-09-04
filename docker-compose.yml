@@ -6,7 +6,10 @@
 #   cp .env.example .env   # then fill it in
 #   docker compose up --build
 #
-# See docs/CONTROL_PLANE_CONTAINER.md.
+# Only the app reads .env; the sidecars get the few variables they need by
+# name. The app's port is published on APP_BIND_ADDRESS (loopback unless
+# .env says otherwise) and MinIO's ports on loopback only, so nothing here
+# listens on a public interface by default. See docs/CONTROL_PLANE_CONTAINER.md.
 
 services:
   app:
@@ -15,14 +18,18 @@ services:
       dockerfile: packages/control-plane/Dockerfile
     image: open-inspect-control-plane:local
     env_file: .env
-    # Pinned here so a .env edit cannot move the host off its volume or its
-    # published port; PORT in .env is the host-side port below.
+    # Pinned here so a .env edit cannot move the host off its volume, its
+    # published port, or its drain budget; PORT in .env is the host-side port
+    # below. The stop grace period must outlast SHUTDOWN_TIMEOUT_MS plus the
+    # 5 s the host keeps before forcing its own exit, so both live here.
     environment:
       HOST: 0.0.0.0
       PORT: "8787"
       DATA_DIR: /data
+      SHUTDOWN_TIMEOUT_MS: "30000"
+    stop_grace_period: 40s
     ports:
-      - "${PORT:-8787}:8787"
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${PORT:-8787}:8787"
     volumes:
       - control-plane-data:/data
     depends_on:
@@ -36,9 +43,11 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    # Loopback only: the app and the sidecar reach MinIO over the compose
+    # network, and the console is a local convenience.
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -48,10 +57,15 @@ services:
       retries: 12
     restart: unless-stopped
 
-  # Creates the media and backup buckets once, then exits.
+  # Creates the media and backup buckets once, then exits. It sees only the
+  # variables named here, never the app's secrets.
   minio-init:
     image: minio/mc:RELEASE.2025-04-16T18-13-26Z
-    env_file: .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MEDIA_BUCKET: ${OBJECT_STORE_BUCKET:?OBJECT_STORE_BUCKET must name the media bucket}
+      BACKUP_BUCKET: ${LITESTREAM_BUCKET:?LITESTREAM_BUCKET must name the backup bucket}
     depends_on:
       minio:
         condition: service_healthy
@@ -59,7 +73,7 @@ services:
     command:
       - |
         mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
-        mc mb --ignore-existing "local/$$OBJECT_STORE_BUCKET" "local/$$LITESTREAM_BUCKET"
+        mc mb --ignore-existing "local/$$MEDIA_BUCKET" "local/$$BACKUP_BUCKET"
 
   litestream:
     image: litestream/litestream:0.3.13
@@ -67,7 +81,11 @@ services:
     # owned like the database.
     user: "1000:1000"
     command: replicate -config /etc/litestream.yml
-    env_file: .env
+    environment:
+      LITESTREAM_BUCKET: ${LITESTREAM_BUCKET:?LITESTREAM_BUCKET must name the backup bucket}
+      LITESTREAM_ENDPOINT: ${LITESTREAM_ENDPOINT:-}
+      LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:-}
+      LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:-}
     volumes:
       - control-plane-data:/data
       - ./packages/control-plane/docker/litestream.yml:/etc/litestream.yml:ro

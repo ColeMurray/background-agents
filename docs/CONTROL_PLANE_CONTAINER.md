@@ -49,9 +49,17 @@ Prerequisites: Docker with Compose v2, a GitHub App and OAuth app as in
 
    The response reports the migrations applied, the resident sessions, and the state of the cron
    loop and alarm clock. Litestream logs `snapshot written` once the first snapshot is in the
-   `backups` bucket; the MinIO console at http://localhost:9001 shows both buckets.
+   `backups` bucket; the MinIO console at http://127.0.0.1:9001 shows both buckets.
+
+The app's port and MinIO's ports are published on loopback only. `APP_BIND_ADDRESS` in `.env` moves
+the app's port to another interface where something in front of the host restricts access, such as a
+security group on AWS. Only the app reads `.env`; the sidecars receive the few variables they need
+by name, never the app's secrets.
 
 Stop with `docker compose down`. The data volume survives; `docker compose down -v` deletes it.
+Compose gives the app 40 seconds to drain before killing it, which covers the host's 30-second
+shutdown budget and the 5 seconds it keeps before forcing its own exit; both values are pinned in
+`docker-compose.yml` so a `.env` edit cannot separate them.
 
 ## Connecting the web app
 
@@ -83,20 +91,28 @@ Everything the host persists is under `/data` on the `control-plane-data` volume
 - `sessions/<id>.db`: one file per session (the Durable Object storage on Cloudflare).
 - `host-alarms.db`: the index of every session's next scheduled deadline.
 
-Litestream replicates `global.db` continuously to `LITESTREAM_BUCKET`. When the app starts on an
-empty volume and a replica exists, its entrypoint restores `global.db` from the replica before the
-host boots, so a lost or replaced instance comes back with its users, sessions index and settings.
-The per-session files are not replicated by this stack.
+These three are one deployment's state, and the unit of a deployment backup is the whole volume:
+stop the app, snapshot the volume (an EBS snapshot on AWS), start it again. That procedure and its
+rehearsal are tracked separately from this stack.
 
-To rehearse a restore, remove the containers that hold the volume open, delete the volume (its name
-is prefixed with the compose project name, the checkout's directory name by default), and start the
-app again:
+What this stack provides is narrower. Litestream replicates `global.db` continuously to
+`LITESTREAM_BUCKET`, and when the app starts on an empty volume and a replica exists, its entrypoint
+restores `global.db` before the host boots. That brings back users, settings and the session index.
+It does not bring back the session files or the alarm index: the restored index lists sessions whose
+files are gone, and the host opens each of those as an empty session when it is next touched, with
+no pending deadlines. The entrypoint logs a warning to that effect after every restore. Treat the
+replica as protection for the global store, not as recovery of a deployment.
+
+To rehearse the restore, remove the containers that hold the volume open, delete the volume (its
+name is prefixed with the compose project name, the checkout's directory name by default), then
+bring the whole stack back and confirm replication resumed:
 
 ```bash
 docker compose rm -sf app litestream
 docker volume rm "$(basename "$PWD")_control-plane-data"
-docker compose up -d --wait app
+docker compose up -d --wait
 docker compose logs app | grep litestream.restore
+docker compose logs litestream | grep "snapshot written"
 ```
 
 ## TLS
@@ -108,8 +124,10 @@ and 443, and start with the profile:
 docker compose --profile tls up -d
 ```
 
-Caddy obtains the certificate and proxies HTTP and WebSocket traffic to the app. `WORKER_URL` is
-then `https://<CADDY_DOMAIN>` and the web app's `NEXT_PUBLIC_WS_URL` is `wss://<CADDY_DOMAIN>`.
+Caddy obtains the certificate and proxies HTTP and WebSocket traffic to the app over the compose
+network, so `APP_BIND_ADDRESS` stays on loopback and the plaintext port is never reachable from
+outside. `WORKER_URL` is then `https://<CADDY_DOMAIN>` and the web app's `NEXT_PUBLIC_WS_URL` is
+`wss://<CADDY_DOMAIN>`.
 
 ## Configuration on AWS
 

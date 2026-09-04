@@ -5,7 +5,10 @@
 # from the replica when the data volume is empty. The LITESTREAM_* variables
 # come from .env; an empty LITESTREAM_ENDPOINT means AWS S3.
 #
-# The per-session files under /data/sessions are not replicated here.
+# Only the global store is replicated. The per-session files under
+# /data/sessions and the host alarm index are not, so this protects users,
+# settings and the session index, not a whole deployment; the data volume
+# is the unit for that.
 
 dbs:
   - path: /data/global.db
