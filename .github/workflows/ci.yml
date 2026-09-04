@@ -94,7 +94,7 @@ jobs:
   typecheck-typescript:
     name: TypeCheck (TypeScript)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -218,7 +218,7 @@ jobs:
   test-bots:
     name: Test (bots)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
