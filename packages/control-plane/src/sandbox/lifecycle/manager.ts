@@ -115,6 +115,13 @@ export interface SandboxStorage {
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
   /**
+   * Move the sandbox from `from` to `to` only while it is still in `from`;
+   * reports whether it was. The status writes that follow a provider await
+   * use this: an alarm, a bridge connect, or a cancel may have moved the row
+   * while the call was in flight, and that verdict stands.
+   */
+  transitionSandboxStatus(from: SandboxStatus, to: SandboxStatus): boolean;
+  /**
    * Reserve a replacement sandbox identity (status, sandbox ID, created_at).
    * Clears every field describing the previous sandbox instance, runtime
    * version included, and invalidates the stored credentials — phase 1 of
@@ -130,9 +137,10 @@ export interface SandboxStorage {
   /**
    * Publish the auth-token hash for the identity reserved by
    * `updateSandboxForSpawn` (phase 2 of the two-phase spawn write, #1589).
-   * Applies only while that identity is still the persisted sandbox, and
-   * reports whether it was — a delayed publisher must not attach its hash
-   * to a newer reservation.
+   * Applies only while that identity is still the persisted sandbox and
+   * still `spawning`, and reports whether it was: a delayed publisher must
+   * not attach its hash to a newer reservation, and a reservation that a
+   * cancel stopped while the hash was computed must not go live.
    */
   updateSandboxAuthTokenHash(modalSandboxId: string, authTokenHash: string): boolean;
   /** Update sandbox state for in-place resume without rotating auth/token identity */
@@ -142,14 +150,18 @@ export interface SandboxStorage {
   /** Set the runtime version describing the sandbox's current filesystem. */
   updateSandboxRuntimeVersion(runtimeVersion: string | null): void;
   /**
-   * Update sandbox snapshot image ID and the runtime version that produced it
-   * (null when the sandbox never reported one).
+   * Record `imageId` as the snapshot of the sandbox identified by
+   * `modalSandboxId`, with the runtime version that produced it (null when
+   * the sandbox never reported one). Applies only while that is still the
+   * row's sandbox, and reports whether it was: a snapshot completes after a
+   * provider await, and a replacement reserved meanwhile must not inherit
+   * an image of the sandbox it replaced.
    */
-  updateSandboxSnapshotImageId(
-    sandboxId: string,
+  recordSandboxSnapshot(
+    modalSandboxId: string | null,
     imageId: string,
     runtimeVersion: string | null
-  ): void;
+  ): boolean;
   /** Update last activity timestamp */
   updateSandboxLastActivity(timestamp: number): void;
   /** Increment circuit breaker failure count */
@@ -690,8 +702,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         this.log.info("Circuit breaker incremented", { error_type: "unknown" });
       }
 
-      this.storage.updateSandboxStatus("failed");
-      this.reportSandboxError(errorMessage);
+      this.failAttempt("spawning", errorMessage);
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
@@ -840,6 +851,28 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   /**
+   * Record that this spawn, restore, or resume attempt failed. The status
+   * write applies only while the row still shows the attempt in flight
+   * (`inFlight`): a bridge that connected during the provider call has
+   * already published `ready` and is serving the session, and an alarm that
+   * timed the attempt out has already failed it and told the user. In either
+   * case the failure is the provider's, not the sandbox's, and reporting it
+   * would persist a spawn error on a session that has none.
+   */
+  private failAttempt(inFlight: "spawning" | "connecting", reason: string): void {
+    if (this.storage.transitionSandboxStatus(inFlight, "failed")) {
+      this.reportSandboxError(reason);
+      return;
+    }
+    this.log.warn("Sandbox attempt failed after its status moved; leaving the row as it is", {
+      event: "sandbox.attempt_failed_superseded",
+      in_flight_status: inFlight,
+      sandbox_status: this.storage.getSandbox()?.status ?? null,
+      error: reason,
+    });
+  }
+
+  /**
    * Restore a sandbox from a filesystem snapshot.
    */
   private async restoreFromSnapshot(
@@ -960,8 +993,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           repo_owner: session.repo_owner,
           repo_name: session.repo_name,
         });
-        this.storage.updateSandboxStatus("failed");
-        this.reportSandboxError(result.error || "Failed to restore from snapshot");
+        this.failAttempt("spawning", result.error || "Failed to restore from snapshot");
       }
     } catch (error) {
       if (error instanceof SpawnSupersededError) {
@@ -980,8 +1012,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         repo_owner: session?.repo_owner,
         repo_name: session?.repo_name,
       });
-      this.storage.updateSandboxStatus("failed");
-      this.reportSandboxError(errorMessage);
+      this.failAttempt("spawning", errorMessage);
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
@@ -1061,8 +1092,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.storage.resetCircuitBreaker();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Failed to resume sandbox";
-      this.storage.updateSandboxStatus("failed");
-      this.reportSandboxError(errorMessage);
+      this.failAttempt("connecting", errorMessage);
       this.log.error("Sandbox resume failed", {
         error: error instanceof Error ? error : String(error),
       });
@@ -1095,9 +1125,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       return;
     }
 
-    // Track previous status for non-terminal states
+    // Everything the completion writes is decided from this read, before the
+    // provider await; the writes below are conditional on it still holding.
     const isTerminalState = isDeadSandboxStatus(sandbox.status);
     const previousStatus = sandbox.status;
+    const snapshotOf = sandbox.modal_sandbox_id;
+    const runtimeVersion = sandbox.runtime_version;
 
     if (!isTerminalState) {
       this.storage.updateSandboxStatus("snapshotting");
@@ -1120,23 +1153,29 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       if (result.success && result.imageId) {
         // Stamp the snapshot with the runtime that produced it: the image
         // carries that runtime's binaries, so this is what a later restore is
-        // gated on, not whatever the session runs next.
-        this.storage.updateSandboxSnapshotImageId(
-          sandbox.id,
-          result.imageId,
-          sandbox.runtime_version
-        );
-        this.log.info("Snapshot saved", {
-          event: "sandbox.snapshot_saved",
-          image_id: result.imageId,
-          runtime_version: sandbox.runtime_version,
-          reason,
-        });
-        this.broadcaster.broadcast({
-          type: "snapshot_saved",
-          imageId: result.imageId,
-          reason,
-        });
+        // gated on, not whatever the session runs next. Recorded for the
+        // sandbox it was taken of; a replacement reserved during the provider
+        // call keeps its own restore image.
+        if (this.storage.recordSandboxSnapshot(snapshotOf, result.imageId, runtimeVersion)) {
+          this.log.info("Snapshot saved", {
+            event: "sandbox.snapshot_saved",
+            image_id: result.imageId,
+            runtime_version: runtimeVersion,
+            reason,
+          });
+          this.broadcaster.broadcast({
+            type: "snapshot_saved",
+            imageId: result.imageId,
+            reason,
+          });
+        } else {
+          this.log.info("Snapshot completed for a replaced sandbox; not recorded", {
+            event: "sandbox.snapshot_superseded",
+            image_id: result.imageId,
+            sandbox_id: snapshotOf,
+            reason,
+          });
+        }
       } else {
         this.log.error("Snapshot failed", { error: result.error, reason });
       }
@@ -1148,12 +1187,25 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       });
     }
 
-    // Restore previous status if we weren't in a terminal state
+    // Restore the previous status only while the row still says
+    // `snapshotting`: a cancel, a stale heartbeat, or an unresponsive-sandbox
+    // termination during the provider call has already retired the sandbox
+    // (status written, access cleared, socket detached), and restoring `ready`
+    // over that would make the spawn decision wait for a reconnect that
+    // cannot come.
     if (!isTerminalState && reason !== "heartbeat_timeout") {
-      this.storage.updateSandboxStatus(previousStatus);
-      this.broadcaster.broadcast({ type: "sandbox_status", status: previousStatus });
-      if (previousStatus === "ready") {
-        this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+      if (this.storage.transitionSandboxStatus("snapshotting", previousStatus)) {
+        this.broadcaster.broadcast({ type: "sandbox_status", status: previousStatus });
+        if (previousStatus === "ready") {
+          this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+        }
+      } else {
+        this.log.info("Sandbox status moved during snapshot; leaving it", {
+          event: "sandbox.snapshot_status_superseded",
+          previous_status: previousStatus,
+          sandbox_status: this.storage.getSandbox()?.status ?? null,
+          reason,
+        });
       }
     }
   }
@@ -1673,8 +1725,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       return;
     }
 
-    if (this.storage.getSandbox()?.status !== "connecting") {
-      this.storage.updateSandboxStatus("connecting");
+    // Only this attempt's own `spawning` advances to `connecting`. A resume
+    // entered as `connecting` already; an alarm that timed the attempt out
+    // during the provider call has written `failed`, and a bridge that
+    // connected and dropped has left `ready` or `stale`. Those stand.
+    if (this.storage.transitionSandboxStatus("spawning", "connecting")) {
       this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
     }
   }
