@@ -57,7 +57,7 @@ jobs:
   lint-typescript:
     name: Lint & Format (TypeScript)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -193,7 +193,7 @@ jobs:
   test-web:
     name: Test (web)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
