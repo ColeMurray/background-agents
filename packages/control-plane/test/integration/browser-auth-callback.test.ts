@@ -1,13 +1,13 @@
 import { createExecutionContext, env } from "cloudflare:test";
-import { getSetCookies } from "./helpers";
+import { getSetCookies, routeRequest } from "./helpers";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getUserAuth } from "../../src/auth/user/runtime";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { resolveGitHubCredentialAuthority } from "../../src/source-control/github-credential-authority";
 import { decryptToken } from "../../src/auth/crypto";
 import { UserStore } from "../../src/db/user-store";
-import { handleControlPlaneHttp as routeRequest } from "../../src/routing/hono-app";
 import { resolveGitHubEnrichmentForRequest } from "../../src/session/identity";
 import { cleanD1Tables } from "./cleanup";
 import { createSignedGoogleIdToken } from "./google-id-token";
@@ -327,7 +327,7 @@ describe("browser auth callback", () => {
     ).resolves.toEqual({ count: 0 });
 
     const enrichment = await resolveGitHubEnrichmentForRequest(
-      env,
+      createCloudflareEnv(env),
       env.DB,
       new UserStore(env.DB),
       session.user.id,
@@ -339,7 +339,7 @@ describe("browser auth callback", () => {
             credentialId: session.session.id,
             channel: { kind: "sig1", service: "web" },
           },
-          getUserAuth: () => getUserAuth(env, env.DB),
+          getUserAuth: () => getUserAuth(createCloudflareEnv(env), env.DB),
         },
         new Headers({ Cookie: sessionCookie })
       )

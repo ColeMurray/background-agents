@@ -6,7 +6,6 @@
 
 import { handleControlPlaneHttp } from "./routing/hono-app";
 import { createLogger } from "./logger";
-import type { Env } from "./types";
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 import { handleAutofixQueue } from "./autofix/handler";
 import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
@@ -15,16 +14,21 @@ import { createRequestMetrics, instrumentD1, type RequestMetrics } from "./db/in
 import { SessionIndexStore } from "./db/session-index";
 import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
+import { createCloudflareEnv, type WorkerBindings } from "./cloudflare/platform";
 import { findScheduledJob } from "./scheduled-jobs";
 import { isAutofixQueue } from "./queue-routing";
 
 const logger = createLogger("worker");
 
 // Re-export Durable Objects for Cloudflare to discover
-export { SessionDO } from "./session/durable-object";
+export { SessionDO } from "./cloudflare/durable-object";
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(
+    request: Request,
+    bindings: WorkerBindings,
+    ctx: ExecutionContext
+  ): Promise<Response> {
     const url = new URL(request.url);
 
     // WebSocket upgrade for session
@@ -32,24 +36,29 @@ export default {
     if (upgradeHeader?.toLowerCase() === "websocket") {
       const metrics = createRequestMetrics();
       // eslint-disable-next-line no-restricted-syntax -- composition root: construct the request-scoped database adapter
-      const db = instrumentD1(env.DB, metrics);
-      return handleWebSocket(request, env, url, db, metrics);
+      const db = instrumentD1(bindings.DB, metrics);
+      return handleWebSocket(request, bindings, url, db, metrics);
     }
 
     // Regular API request — Hono owns HTTP route selection while the neutral
     // admission/dispatch pipeline retains authentication and authorization.
-    return handleControlPlaneHttp(request, env, ctx);
+    return handleControlPlaneHttp(request, createCloudflareEnv(bindings), ctx);
   },
 
   /**
    * Cron trigger handler: runs the job bound to the trigger's expression.
    */
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(
+    event: ScheduledEvent,
+    bindings: WorkerBindings,
+    ctx: ExecutionContext
+  ): Promise<void> {
     const job = findScheduledJob(event.cron);
     if (!job) {
       logger.warn("Unknown scheduled trigger", { cron: event.cron });
       return;
     }
+    const env = createCloudflareEnv(bindings);
     const runId = crypto.randomUUID();
     const correlation = { trace_id: runId, request_id: runId };
     await job.run(
@@ -66,7 +75,8 @@ export default {
     );
   },
 
-  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+  async queue(batch: MessageBatch<unknown>, bindings: WorkerBindings): Promise<void> {
+    const env = createCloudflareEnv(bindings);
     if (!isAutofixQueue(batch.queue)) {
       await consumeImageBuildFinalizations(batch, env);
       return;
@@ -81,7 +91,7 @@ export default {
  */
 async function handleWebSocket(
   request: Request,
-  env: Env,
+  env: WorkerBindings,
   url: URL,
   db: SqlDatabase,
   metrics: RequestMetrics

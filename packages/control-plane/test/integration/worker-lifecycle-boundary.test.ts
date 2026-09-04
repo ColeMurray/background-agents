@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import worker, { SessionDO } from "../../src/index";
-import type { Env } from "../../src/types";
+import type { WorkerBindings } from "../../src/cloudflare/platform";
 import { cleanD1Tables } from "./cleanup";
 
 const REPOS_CACHE_KEY = "repos:list:v2";
@@ -28,11 +28,11 @@ function recordingExecutionContext(): {
   };
 }
 
-function envWithSessionNamespace(sessionNamespace: object): Env {
+function envWithSessionNamespace(sessionNamespace: object): WorkerBindings {
   return {
-    ...(env as unknown as Env),
+    ...(env as unknown as WorkerBindings),
     SESSION: sessionNamespace,
-  } as unknown as Env;
+  } as unknown as WorkerBindings;
 }
 
 describe("composite Worker lifecycle boundary", () => {
@@ -57,7 +57,7 @@ describe("composite Worker lifecycle boundary", () => {
 
     const response = await worker.fetch(
       new Request("https://test.local/health"),
-      env as unknown as Env,
+      env as unknown as WorkerBindings,
       context
     );
 
@@ -142,7 +142,7 @@ describe("composite Worker lifecycle boundary", () => {
 
     const response = await worker.fetch(
       new Request(url, { headers: authHeaders }),
-      env as unknown as Env,
+      env as unknown as WorkerBindings,
       context
     );
 

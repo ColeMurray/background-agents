@@ -21,7 +21,7 @@ import {
   VIDEO_UPLOAD_LIMIT_PER_SESSION,
   type MultipartFieldValue,
 } from "../media";
-import { createMediaObjectStorage, type ObjectStorage } from "../storage/object-storage";
+import type { ObjectStorage } from "../storage/object-storage";
 import type { Env } from "../types";
 import { listSessionArtifactsFromRuntime, persistMediaArtifact } from "./session-media-artifacts";
 import { error, GITHUB_SANDBOX_FALLBACK_ROUTE, json, requirePermission } from "./shared";
@@ -48,7 +48,7 @@ export async function handleMediaUpload(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  const storage = createMediaObjectStorage(env);
+  const storage = env.MEDIA_BUCKET;
 
   let formData: FormData;
   try {

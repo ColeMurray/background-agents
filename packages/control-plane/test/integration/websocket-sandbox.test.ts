@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
-import type { SessionDO } from "../../src/session/durable-object";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import { hostContract } from "../conformance/session-core-conformance";
 import { encryptToken } from "../../src/auth/crypto";

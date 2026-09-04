@@ -12,7 +12,7 @@ import {
   createControlPlaneHttpHandler,
 } from "../../src/routing/hono-app";
 import { listRouteContracts } from "../../src/routing/route-contracts";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
 const PARAMETER = /:(\w+)/g;
 const routes = listRouteContracts(createControlPlaneApp(catalog, cloudflareHost));
@@ -76,7 +76,7 @@ describe("Hono route catalog conformance", () => {
       const { identity: expectedIdentity, pathname, groups } = manifest[routeIndex];
       const response = await handle(
         new Request(`https://test.local${pathname}`, { method: route.method }),
-        env as unknown as Env,
+        createCloudflareEnv(env),
         createExecutionContext()
       );
 

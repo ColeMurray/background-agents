@@ -1,5 +1,4 @@
 import {
-  createKvCacheStore,
   GITHUB_AUTOFIX_DEFAULTS,
   resolveAppName,
   type GitHubAutofixEnvelope,
@@ -47,7 +46,7 @@ export async function handleAutofixQueue(
   const appConfig = getGitHubAppConfig(env);
   const github = new GitHubSourceControlProvider({
     appConfig: appConfig ?? undefined,
-    cacheStore: createKvCacheStore(env.REPOS_CACHE),
+    cacheStore: env.REPOS_CACHE,
     userAgent: resolveAppName(env),
   });
   const sessions = createSessionRuntimeClient(env, {

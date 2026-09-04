@@ -17,6 +17,7 @@ import type * as OpenComputerProviderModule from "../sandbox/providers/opencompu
 import type * as OpenComputerClientModule from "../sandbox/opencomputer-rest-client";
 import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
 import {
+  createTestEnv,
   createTestRequestHandler,
   ownerAuthorizationDatabase,
   TEST_BACKGROUND_TASK_CONTEXT,
@@ -126,7 +127,7 @@ const TOGGLE_PATH = "/image-builds/toggle/repo/acme/repo";
 const handleRequest = createTestRequestHandler([imageBuildRoutes]);
 
 function createModalEnv(): Env {
-  return {
+  return createTestEnv({
     DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "modal",
     WORKER_URL: "https://cp.test",
@@ -135,11 +136,11 @@ function createModalEnv(): Env {
     IMAGE_BUILD_FINALIZATION_QUEUE: finalizationQueue,
     // Modal builds mint callback tokens like every provider.
     IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
-  } as Env;
+  });
 }
 
 function createVercelEnv(): Env {
-  return {
+  return createTestEnv({
     DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "vercel",
     SCM_PROVIDER: "github",
@@ -148,11 +149,11 @@ function createVercelEnv(): Env {
     VERCEL_TOKEN: "vercel-token",
     VERCEL_PROJECT_ID: "project-123",
     IMAGE_BUILD_FINALIZATION_QUEUE: finalizationQueue,
-  } as Env;
+  });
 }
 
 function createOpenComputerEnv(): Env {
-  return {
+  return createTestEnv({
     DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "opencomputer",
     SCM_PROVIDER: "github",
@@ -162,7 +163,7 @@ function createOpenComputerEnv(): Env {
     OPENCOMPUTER_API_KEY: "oc-token",
     OPENCOMPUTER_TEMPLATE: "openinspect-runtime",
     IMAGE_BUILD_FINALIZATION_QUEUE: finalizationQueue,
-  } as Env;
+  });
 }
 
 async function callTrigger(env: Env): Promise<Response> {

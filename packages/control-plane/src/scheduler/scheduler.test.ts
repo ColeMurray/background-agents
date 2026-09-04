@@ -9,6 +9,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
+import type { FetchClient } from "../platform-ports";
+import { fakeSessionRuntimeClient } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
@@ -210,7 +213,7 @@ function createMockSessionStub(): DurableObjectStub {
   } as never;
 }
 
-function createEmptyDbMock(): D1Database {
+function createEmptyDbMock(): SqlDatabase {
   return {
     prepare: vi.fn(() => ({
       bind: vi.fn(() => ({
@@ -218,13 +221,13 @@ function createEmptyDbMock(): D1Database {
         run: vi.fn(async () => undefined),
       })),
     })),
-  } as unknown as D1Database;
+  } as unknown as SqlDatabase;
 }
 
 function createIntegrationSettingsDbMock(
   slackSessionInstructions?: string,
   throwOnSlackSettings = false
-): D1Database {
+): SqlDatabase {
   return {
     prepare: vi.fn((query: string) => ({
       bind: vi.fn((integrationId: string, repo?: string) => ({
@@ -270,7 +273,7 @@ function createIntegrationSettingsDbMock(
         }),
       })),
     })),
-  } as unknown as D1Database;
+  } as unknown as SqlDatabase;
 }
 
 async function getInitBody(fetchMock: ReturnType<typeof vi.fn>): Promise<Record<string, unknown>> {
@@ -324,18 +327,30 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function createEnv(overrides?: Partial<Env>): Env {
-  const sessionStub = createMockSessionStub();
+/**
+ * The session port over a fake Durable Object namespace, which stays
+ * reachable so a test can swap the stub or read its fetch mock.
+ */
+function createEnv(overrides?: Partial<Env>) {
+  const namespace = {
+    idFromName: vi.fn().mockReturnValue("fake-do-id"),
+    get: vi.fn().mockReturnValue(createMockSessionStub()),
+  };
+  const SESSION = Object.assign(
+    fakeSessionRuntimeClient((request, sessionId) =>
+      namespace.get(namespace.idFromName(sessionId)).fetch(request)
+    ),
+    namespace
+  );
   return {
-    DB: createEmptyDbMock(),
-    SESSION: {
-      idFromName: vi.fn().mockReturnValue("fake-do-id"),
-      get: vi.fn().mockReturnValue(sessionStub),
-    } as unknown as DurableObjectNamespace,
-    DEPLOYMENT_NAME: "test",
-    TOKEN_ENCRYPTION_KEY: "test-key",
-    ...overrides,
-  } as Env;
+    ...({
+      DB: createEmptyDbMock(),
+      DEPLOYMENT_NAME: "test",
+      TOKEN_ENCRYPTION_KEY: "test-key",
+      ...overrides,
+    } as Env),
+    SESSION,
+  };
 }
 
 function createScheduler(env = createEnv()): InstanceType<typeof Scheduler> {
@@ -1934,7 +1949,7 @@ describe("Scheduler", () => {
       const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
       const scheduler = createScheduler(
         createEnv({
-          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+          SLACK_BOT: { fetch: slackFetch } as FetchClient,
           SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
         })
       );
@@ -1991,7 +2006,7 @@ describe("Scheduler", () => {
       const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
       const scheduler = createScheduler(
         createEnv({
-          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+          SLACK_BOT: { fetch: slackFetch } as FetchClient,
           SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
         })
       );
@@ -2187,7 +2202,7 @@ describe("Scheduler", () => {
         return {
           slackFetch,
           env: createEnv({
-            SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+            SLACK_BOT: { fetch: slackFetch } as FetchClient,
             SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
           } as Partial<Env>),
         };
@@ -2335,7 +2350,7 @@ describe("Scheduler", () => {
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
         const slackFetch = vi.fn(async () => new Response("nope", { status: 500 }));
         const env = createEnv({
-          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+          SLACK_BOT: { fetch: slackFetch } as FetchClient,
           SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
         } as Partial<Env>);
         const stub = env.SESSION.get(env.SESSION.idFromName("any"));
@@ -2359,7 +2374,7 @@ describe("Scheduler", () => {
           throw Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" });
         });
         const env = createEnv({
-          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+          SLACK_BOT: { fetch: slackFetch } as FetchClient,
           SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
         } as Partial<Env>);
         const stub = env.SESSION.get(env.SESSION.idFromName("any"));

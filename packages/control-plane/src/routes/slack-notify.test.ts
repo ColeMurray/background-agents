@@ -5,7 +5,7 @@ import { handleSlackNotify } from "./slack-notify";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { fakeSessionRuntimeClient, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const sessionStoreMock = {
   get: vi.fn(),
@@ -60,11 +60,8 @@ function createCtx(): RequestContext {
 
 function createEnv(overrides?: Partial<Env>): Env {
   return {
-    DB: {} as D1Database,
-    SESSION: {
-      idFromName: vi.fn().mockReturnValue("fake-do-id"),
-      get: vi.fn().mockReturnValue({ fetch: sessionFetchMock }),
-    } as unknown as DurableObjectNamespace,
+    DB: {} as SqlDatabase,
+    SESSION: fakeSessionRuntimeClient((request) => sessionFetchMock(request)),
     DEPLOYMENT_NAME: "test",
     TOKEN_ENCRYPTION_KEY: "test-key",
     SLACK_BOT_TOKEN: "xoxb-test",

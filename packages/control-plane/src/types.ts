@@ -2,33 +2,18 @@
  * Type definitions for Open-Inspect Control Plane.
  */
 
-import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
+import type { CacheStore } from "@open-inspect/shared/cache-store";
+import type { SqlDatabase } from "./db/sql-database";
+import type { ImageBuildFinalizationQueue } from "./image-builds/finalization-job";
+import type { FetchClient, QueueMetricsSource } from "./platform-ports";
+import type { SessionRuntimeClient } from "./session/runtime-client";
+import type { ObjectStorage } from "./storage/object-storage";
 
-// Environment bindings
-export interface Env {
-  // Durable Objects
-  SESSION: DurableObjectNamespace;
-
-  // KV Namespaces
-  REPOS_CACHE: KVNamespace; // Short-lived cache for /repos listing
-
-  // Service bindings
-  SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
-  LINEAR_BOT?: Fetcher; // Optional - only if linear-bot is deployed
-
-  // GitHub Autofix queue bindings used for read-only metrics.
-  AUTOFIX_QUEUE?: Queue<unknown>;
-  AUTOFIX_DLQ?: Queue<unknown>;
-
-  // D1 database
-  DB: D1Database;
-
-  // Durable callback-to-finalizer handoff for provider-session image builds.
-  IMAGE_BUILD_FINALIZATION_QUEUE?: Queue<ImageBuildFinalizationJob>;
-
-  // R2 buckets
-  MEDIA_BUCKET: R2Bucket;
-
+/**
+ * The deployment's configuration: variables and secrets, every one a string,
+ * so any host can supply them.
+ */
+export interface EnvConfig {
   // Secrets
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
@@ -110,6 +95,35 @@ export interface Env {
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
 }
+
+/**
+ * The deployment-wide ports the host supplies. Each field keeps the name of
+ * the Worker binding it stands in for, so services read the same `env` on
+ * every host; the host's composition root builds the record
+ * (`cloudflare/platform.ts` on Workers).
+ */
+export interface Platform {
+  /** The global store. Request paths take it injected and instrumented (`ctx.db`), never from here. */
+  DB: SqlDatabase;
+  /** Session runtimes, addressed by session id. */
+  SESSION: SessionRuntimeClient;
+  /** Short-lived cache for the /repos listing. */
+  REPOS_CACHE: CacheStore;
+  /** Media artifacts: screenshots, uploads, session media. */
+  MEDIA_BUCKET: ObjectStorage;
+  /** The slack-bot service, when deployed. */
+  SLACK_BOT?: FetchClient;
+  /** The linear-bot service, when deployed. */
+  LINEAR_BOT?: FetchClient;
+  /** GitHub Autofix queues, read for health metrics only. */
+  AUTOFIX_QUEUE?: QueueMetricsSource;
+  AUTOFIX_DLQ?: QueueMetricsSource;
+  /** Durable callback-to-finalizer handoff for provider-session image builds. */
+  IMAGE_BUILD_FINALIZATION_QUEUE?: ImageBuildFinalizationQueue;
+}
+
+/** What the application runs against: its configuration and the platform ports. */
+export interface Env extends EnvConfig, Platform {}
 
 /** Authenticated client state stored in session-runtime memory. */
 export interface ClientInfo {

@@ -1,7 +1,8 @@
 import type { CorrelationContext } from "../logger";
 import type { Env } from "../types";
-import { buildSessionInternalUrl, type SessionInternalPath } from "./contracts";
+import type { SessionInternalPath } from "./contracts";
 
+/** Reach one session's runtime by session id, wherever the host keeps it. */
 export interface SessionRuntimeClient {
   fetch(
     sessionId: string,
@@ -11,36 +12,22 @@ export interface SessionRuntimeClient {
   ): Promise<Response>;
 }
 
-class CloudflareSessionRuntimeClient implements SessionRuntimeClient {
-  constructor(
-    private readonly env: Env,
-    private readonly ctx: CorrelationContext
-  ) {}
-
-  fetch(
-    sessionId: string,
-    path: SessionInternalPath,
-    init?: RequestInit,
-    search?: string
-  ): Promise<Response> {
-    const doId = this.env.SESSION.idFromName(sessionId);
-    const stub = this.env.SESSION.get(doId);
-    return stub.fetch(this.internalRequest(buildSessionInternalUrl(path, search), init));
-  }
-
-  private internalRequest(url: string, init?: RequestInit): Request {
-    const headers = new Headers(init?.headers);
-    headers.set("x-trace-id", this.ctx.trace_id);
-    headers.set("x-request-id", this.ctx.request_id);
-    return new Request(url, { ...init, headers });
-  }
-}
-
+/**
+ * The platform's session client with `ctx` on every request as the
+ * `x-trace-id` and `x-request-id` headers the runtime's request log reads.
+ */
 export function createSessionRuntimeClient(
   env: Env,
   ctx: CorrelationContext
 ): SessionRuntimeClient {
-  return new CloudflareSessionRuntimeClient(env, ctx);
+  return {
+    fetch: (sessionId, path, init, search) => {
+      const headers = new Headers(init?.headers);
+      headers.set("x-trace-id", ctx.trace_id);
+      headers.set("x-request-id", ctx.request_id);
+      return env.SESSION.fetch(sessionId, path, { ...init, headers }, search);
+    },
+  };
 }
 
 /**

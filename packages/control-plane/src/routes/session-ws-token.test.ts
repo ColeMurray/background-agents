@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import {
+  TEST_BACKGROUND_TASK_CONTEXT,
+  fakeSessionRuntimeClient,
+  routePathPattern,
+} from "../router.test-support";
 import { handleSessionWsToken } from "./session-ws-token";
 import type { RequestContext } from "./shared";
 import type { Env } from "../types";
@@ -49,10 +53,7 @@ function createContext(db: SqlDatabase = accessDatabase().db): RequestContext {
 
 function createEnv(fetch: (request: Request) => Promise<Response>): Env {
   return {
-    SESSION: {
-      idFromName: vi.fn((name: string) => `do-${name}`),
-      get: vi.fn(() => ({ fetch })),
-    },
+    SESSION: fakeSessionRuntimeClient(fetch),
   } as unknown as Env;
 }
 

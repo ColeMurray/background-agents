@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createExecutionContext, createMessageBatch, env, getQueueResult } from "cloudflare:test";
 import worker from "../../src/index";
 import { ImageBuildStore } from "../../src/db/image-builds";
-import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
 import { environmentScope, getRow, seedEnvironment } from "./image-build-helpers";
 
@@ -81,7 +80,7 @@ describe("image build finalization Queue integration", () => {
 
     const batch = finalizationBatch("queue-message-resume", buildId);
     const ctx = createExecutionContext();
-    await worker.queue(batch, env as Env);
+    await worker.queue(batch, env);
     const queueResult = await getQueueResult(batch, ctx);
 
     expect(queueResult.explicitAcks).toEqual(["queue-message-resume"]);
@@ -108,7 +107,7 @@ describe("image build finalization Queue integration", () => {
 
     const batch = finalizationBatch("queue-message-busy", buildId);
     const ctx = createExecutionContext();
-    await worker.queue(batch, env as Env);
+    await worker.queue(batch, env);
     const queueResult = await getQueueResult(batch, ctx);
 
     expect(queueResult.explicitAcks).toEqual([]);

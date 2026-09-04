@@ -15,7 +15,7 @@ import type { ImageBuildScope } from "../../src/image-builds/model";
 import type { ImageBuildAdapterFactory } from "../../src/image-builds/provider-factory";
 import type { ImageBuildAdapter } from "../../src/image-builds/types";
 import { ImageBuildWorkflow } from "../../src/image-builds/workflow";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { cleanD1Tables } from "./cleanup";
 import { environmentScope, getRow, seedEnvironment, seedImageRow } from "./image-build-helpers";
 
@@ -52,7 +52,7 @@ function createTriggerWorkflow(scope: ImageBuildScope): ImageBuildWorkflow {
     }),
   } as unknown as NonNullable<ConstructorParameters<typeof ImageBuildWorkflow>[3]>["planner"];
   return new ImageBuildWorkflow(
-    { ...env, WORKER_URL: "https://worker.test" } as Env,
+    createCloudflareEnv({ ...env, WORKER_URL: "https://worker.test" }),
     new ImageBuildStore(env.DB),
     factory,
     { provider: "modal", planner },
