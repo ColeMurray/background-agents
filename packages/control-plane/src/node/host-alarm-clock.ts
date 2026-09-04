@@ -38,6 +38,8 @@ const RETRY_BASE_DELAY_MS = 2_000;
 const MAX_RETRIES = 6;
 /** Sessions delivered to at the same time, unless the host says otherwise. */
 const DEFAULT_MAX_CONCURRENT_DELIVERIES = 8;
+/** The clock source, unless a test supplies one; read per call so fake timers apply. */
+const DEFAULT_NOW = (): number => Date.now();
 
 export interface HostAlarmClockOptions {
   index: HostAlarmIndex;
@@ -66,7 +68,7 @@ export class HostAlarmClock {
     this.index = options.index;
     this.deliver = options.deliver;
     this.log = options.log;
-    this.now = options.now ?? Date.now;
+    this.now = options.now ?? DEFAULT_NOW;
     this.maxConcurrentDeliveries =
       options.maxConcurrentDeliveries ?? DEFAULT_MAX_CONCURRENT_DELIVERIES;
   }
