@@ -1,77 +1,64 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
 import { createRequestMetrics, instrumentSqlDatabase } from "./instrumented-sql-database";
 import type { RequestMetrics } from "./instrumented-sql-database";
-import type { SqlDatabase } from "./sql-database";
+import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 
 // ---------------------------------------------------------------------------
-// Fake D1 implementation for testing the instrumented wrapper
+// A SqlDatabase whose engine reports every metadata field, as D1 does for
+// run() and all(), so the wrapper's arithmetic can be checked exactly.
 // ---------------------------------------------------------------------------
 
-class FakeD1PreparedStatement {
-  private bound: unknown[] = [];
+function result<T>(results: T[], meta: SqlResult["meta"]): SqlResult<T> {
+  return { results, meta };
+}
 
-  constructor(private query: string) {}
+class FakeStatement implements SqlStatement {
+  constructor(
+    readonly query: string,
+    readonly bound: unknown[] = []
+  ) {}
 
-  bind(...args: unknown[]) {
-    const stmt = new FakeD1PreparedStatement(this.query);
-    stmt.bound = args;
-    return stmt;
+  bind(...values: unknown[]): SqlStatement {
+    return new FakeStatement(this.query, values);
   }
 
-  async first<T>(_colName?: string): Promise<T | null> {
-    // Simulate D1 latency
+  async first<T>(): Promise<T | null> {
     await delay(1);
     return { id: 1, name: "test" } as T;
   }
 
-  async run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+  async run<T>(): Promise<SqlResult<T>> {
     await delay(1);
-    return {
-      results: [],
-      success: true,
-      meta: { duration: 5, rows_read: 0, rows_written: 1 },
-    } as unknown as D1Result<T>;
+    return result<T>([], { changes: 1, duration: 5, rows_read: 0, rows_written: 1 });
   }
 
-  async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+  async all<T>(): Promise<SqlResult<T>> {
     await delay(1);
-    return {
-      results: [{ id: 1 }, { id: 2 }] as T[],
-      success: true,
-      meta: { duration: 8, rows_read: 10, rows_written: 0 },
-    } as unknown as D1Result<T>;
-  }
-
-  async raw<T = unknown[]>(_options?: { columnNames?: boolean }): Promise<T[]> {
-    await delay(1);
-    return [[1, "test"]] as T[];
+    return result([{ id: 1 }, { id: 2 }] as T[], {
+      changes: 0,
+      duration: 8,
+      rows_read: 10,
+      rows_written: 0,
+    });
   }
 }
 
-class FakeD1Database {
-  /** Statements received by the last batch() call (for assertion). */
-  lastBatchStatements: D1PreparedStatement[] = [];
+class FakeDatabase implements SqlDatabase {
+  /** Statements received by the last batch() call, for assertion. */
+  lastBatchStatements: SqlStatement[] = [];
 
-  prepare(query: string) {
-    return new FakeD1PreparedStatement(query);
+  prepare(query: string): SqlStatement {
+    return new FakeStatement(query);
   }
 
-  async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+  async batch<T>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
     this.lastBatchStatements = statements;
     await delay(1);
-    return statements.map(() => ({
-      results: [{ id: 1 }] as T[],
-      success: true,
-      meta: { duration: 3, rows_read: 5, rows_written: 2 },
-    })) as unknown as D1Result<T>[];
-  }
-
-  async exec(_query: string): Promise<D1ExecResult> {
-    return { count: 0, duration: 0 };
-  }
-
-  async dump(): Promise<ArrayBuffer> {
-    return new ArrayBuffer(0);
+    return statements.map(() =>
+      result([{ id: 1 }] as T[], { changes: 2, duration: 3, rows_read: 5, rows_written: 2 })
+    );
   }
 }
 
@@ -95,15 +82,8 @@ describe("createRequestMetrics", () => {
     expect(metrics.spans).toEqual({});
   });
 
-  it("summarize() returns zeros when no queries recorded", () => {
-    const summary = metrics.summarize();
-    expect(summary).toEqual({
-      sql_query_count: 0,
-      sql_total_ms: 0,
-      sql_engine_total_ms: 0,
-      sql_rows_read: 0,
-      sql_rows_written: 0,
-    });
+  it("summarize() reports the count and the caller-observed time alone when nothing ran", () => {
+    expect(metrics.summarize()).toEqual({ sql_query_count: 0, sql_total_ms: 0 });
   });
 
   describe("time()", () => {
@@ -144,15 +124,14 @@ describe("createRequestMetrics", () => {
   });
 
   describe("summarize()", () => {
-    it("computes correct totals from multiple query records", () => {
+    it("totals each engine field over the records that report it", () => {
       metrics.sqlQueries.push(
         { query_ms: 100, engine_ms: 10, rows_read: 5, rows_written: 0 },
         { query_ms: 200, engine_ms: 20, rows_read: 15, rows_written: 3 },
-        { query_ms: 50 } // first() call — no server metadata
+        { query_ms: 50 } // first() call: no engine metadata
       );
 
-      const summary = metrics.summarize();
-      expect(summary).toEqual({
+      expect(metrics.summarize()).toEqual({
         sql_query_count: 3,
         sql_total_ms: 350,
         sql_engine_total_ms: 30,
@@ -160,18 +139,32 @@ describe("createRequestMetrics", () => {
         sql_rows_written: 3,
       });
     });
+
+    it("leaves out a field no record reported instead of totalling it to zero", () => {
+      metrics.sqlQueries.push(
+        { query_ms: 10, engine_ms: 2, rows_written: 1 },
+        { query_ms: 20, engine_ms: 4, rows_written: 0 }
+      );
+
+      expect(metrics.summarize()).toEqual({
+        sql_query_count: 2,
+        sql_total_ms: 30,
+        sql_engine_total_ms: 6,
+        sql_rows_written: 1,
+      });
+    });
   });
 });
 
-describe("instrumentSqlDatabase", () => {
-  let fakeDb: FakeD1Database;
+describe("instrumentSqlDatabase over an engine that reports every field", () => {
+  let fakeDb: FakeDatabase;
   let metrics: RequestMetrics;
   let db: SqlDatabase;
 
   beforeEach(() => {
-    fakeDb = new FakeD1Database();
+    fakeDb = new FakeDatabase();
     metrics = createRequestMetrics();
-    db = instrumentSqlDatabase(fakeDb as unknown as D1Database, metrics);
+    db = instrumentSqlDatabase(fakeDb, metrics);
   });
 
   it("captures timing from run()", async () => {
@@ -193,13 +186,12 @@ describe("instrumentSqlDatabase", () => {
     expect(metrics.sqlQueries[0].rows_written).toBe(0);
   });
 
-  it("captures timing from first()", async () => {
+  it("captures timing from first(), which carries no engine metadata", async () => {
     await db.prepare("SELECT * FROM t WHERE id = ?").bind(1).first();
 
     expect(metrics.sqlQueries).toHaveLength(1);
     expect(metrics.sqlQueries[0].query_ms).toBeGreaterThanOrEqual(0);
-    // first() does not return D1Meta
-    expect(metrics.sqlQueries[0].engine_ms).toBeUndefined();
+    expect(metrics.sqlQueries[0]).not.toHaveProperty("engine_ms");
   });
 
   it("captures batch() as a single query record with aggregated metadata", async () => {
@@ -213,15 +205,15 @@ describe("instrumentSqlDatabase", () => {
 
     expect(metrics.sqlQueries).toHaveLength(1);
     expect(metrics.sqlQueries[0].query_ms).toBeGreaterThanOrEqual(0);
-    // 3 statements × 3ms server time each = 9ms aggregated
+    // 3 statements × 3ms engine time each
     expect(metrics.sqlQueries[0].engine_ms).toBe(9);
-    // 3 statements × 5 rows read each = 15 aggregated
+    // 3 statements × 5 rows read each
     expect(metrics.sqlQueries[0].rows_read).toBe(15);
-    // 3 statements × 2 rows written each = 6 aggregated
+    // 3 statements × 2 rows written each
     expect(metrics.sqlQueries[0].rows_written).toBe(6);
   });
 
-  it("batch() unwraps instrumented statements before passing to real D1", async () => {
+  it("batch() hands the engine its own statements, not the instrumented wrappers", async () => {
     const stmts = [
       db.prepare("SELECT * FROM t WHERE id = ?").bind(1),
       db.prepare("SELECT * FROM t WHERE id = ?").bind(2),
@@ -229,11 +221,11 @@ describe("instrumentSqlDatabase", () => {
 
     await db.batch(stmts);
 
-    // The real D1 should receive FakeD1PreparedStatement instances,
-    // not plain-object instrumented wrappers.
+    expect(fakeDb.lastBatchStatements).toHaveLength(2);
     for (const s of fakeDb.lastBatchStatements) {
-      expect(s).toBeInstanceOf(FakeD1PreparedStatement);
+      expect(s).toBeInstanceOf(FakeStatement);
     }
+    expect((fakeDb.lastBatchStatements[1] as FakeStatement).bound).toEqual([2]);
   });
 
   it("bind() chaining works correctly with instrumented statements", async () => {
@@ -255,13 +247,13 @@ describe("instrumentSqlDatabase", () => {
     const summary = metrics.summarize();
     expect(summary.sql_query_count).toBe(3);
     expect(summary.sql_total_ms as number).toBeGreaterThanOrEqual(0);
-    // first() has no server ms, all() has 8, run() has 5
+    // first() has no engine ms, all() has 8, run() has 5
     expect(summary.sql_engine_total_ms).toBe(13);
     expect(summary.sql_rows_read).toBe(10);
     expect(summary.sql_rows_written).toBe(1);
   });
 
-  it("summarize includes both D1 and span fields", async () => {
+  it("summarize includes both query and span fields", async () => {
     await db.prepare("SELECT * FROM t").all();
     await metrics.time("github_api", async () => "repos");
 
@@ -269,5 +261,65 @@ describe("instrumentSqlDatabase", () => {
     expect(summary.sql_query_count).toBe(1);
     expect(summary.sql_engine_total_ms).toBe(8);
     expect(summary).toHaveProperty("github_api_ms");
+  });
+});
+
+// The Node adapter reports duration and rows_written but never rows_read,
+// and admits only its own statements to batch(): the two contract edges
+// the wrapper has to respect on the host that is not D1.
+describe("instrumentSqlDatabase over the Node SQLite adapter", () => {
+  let engine: NodeSqlDatabase;
+  let metrics: RequestMetrics;
+  let db: SqlDatabase;
+
+  beforeEach(() => {
+    engine = createNodeSqlDatabase(new DatabaseSync(":memory:"));
+    metrics = createRequestMetrics();
+    db = instrumentSqlDatabase(engine, metrics);
+  });
+
+  afterEach(() => {
+    engine.close();
+  });
+
+  it("runs an instrumented batch through the engine's same-origin check", async () => {
+    await engine.prepare("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)").run();
+
+    const results = await db.batch([
+      db.prepare("INSERT INTO t (name) VALUES (?)").bind("a"),
+      db.prepare("INSERT INTO t (name) VALUES (?)").bind("b"),
+      db.prepare("SELECT name FROM t ORDER BY id"),
+    ]);
+
+    expect(results.map((r) => r.meta.changes)).toEqual([1, 1, 0]);
+    expect(results[2].results).toEqual([{ name: "a" }, { name: "b" }]);
+    expect(metrics.sqlQueries).toHaveLength(1);
+    expect(metrics.sqlQueries[0].rows_written).toBe(2);
+    expect(metrics.sqlQueries[0].engine_ms).toBeGreaterThanOrEqual(0);
+    expect(metrics.sqlQueries[0].rows_read).toBeUndefined();
+  });
+
+  it("reports only what the engine reports: no rows_read, nothing for first()", async () => {
+    await engine.prepare("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)").run();
+
+    await db.prepare("INSERT INTO t (name) VALUES (?)").bind("a").run();
+    await db.prepare("SELECT name FROM t WHERE id = ?").bind(1).first();
+
+    const summary = metrics.summarize();
+    expect(summary.sql_query_count).toBe(2);
+    expect(summary.sql_engine_total_ms).toBeGreaterThanOrEqual(0);
+    expect(summary.sql_rows_written).toBe(1);
+    expect(summary).not.toHaveProperty("sql_rows_read");
+  });
+
+  it("emits neither engine field for a request of only first() calls", async () => {
+    await engine.prepare("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)").run();
+
+    await db.prepare("SELECT COUNT(*) AS n FROM t").first();
+
+    expect(metrics.summarize()).toEqual({
+      sql_query_count: 1,
+      sql_total_ms: expect.any(Number),
+    });
   });
 });

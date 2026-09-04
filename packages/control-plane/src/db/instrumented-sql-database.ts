@@ -16,16 +16,37 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 // Types
 // ---------------------------------------------------------------------------
 
-/** Record of a single query execution against the global store, whichever engine serves it. */
+/**
+ * Record of a single query execution against the global store, whichever
+ * engine serves it. Only `query_ms` is always present: the engine metadata
+ * is optional on `SqlResultMeta`, and `first()` reports none, so a field an
+ * engine did not report stays absent here and in the summary rather than
+ * reading as a measured zero.
+ */
 interface SqlQueryRecord {
   /** Wall-clock time in ms, as the caller saw it (on Workers this includes the round-trip to the D1 primary). */
   query_ms: number;
   /** Engine-reported execution time in ms (`meta.duration`), when the engine reports one. */
   engine_ms?: number;
-  /** Rows read, from result meta. */
+  /** Rows read, when the engine reports it. */
   rows_read?: number;
-  /** Rows written, from result meta. */
+  /** Rows written, when the engine reports it. */
   rows_written?: number;
+}
+
+type ReportedField = "engine_ms" | "rows_read" | "rows_written";
+
+/** The sum of `field` over the records that report it; absent when none does. */
+function reportedTotal(
+  records: readonly Pick<SqlQueryRecord, ReportedField>[],
+  field: ReportedField
+): number | undefined {
+  let total: number | undefined;
+  for (const record of records) {
+    const value = record[field];
+    if (value !== undefined) total = (total ?? 0) + value;
+  }
+  return total;
 }
 
 /**
@@ -77,10 +98,17 @@ export function createRequestMetrics(): RequestMetrics {
       const result: Record<string, unknown> = {
         sql_query_count: sqlQueries.length,
         sql_total_ms: sqlQueries.reduce((sum, q) => sum + q.query_ms, 0),
-        sql_engine_total_ms: sqlQueries.reduce((sum, q) => sum + (q.engine_ms ?? 0), 0),
-        sql_rows_read: sqlQueries.reduce((sum, q) => sum + (q.rows_read ?? 0), 0),
-        sql_rows_written: sqlQueries.reduce((sum, q) => sum + (q.rows_written ?? 0), 0),
       };
+      // Reported by the engine or not in the event at all: a Node SQLite
+      // store reports no rows_read, and a request of only first() calls
+      // reports nothing, so a zero here would be a measurement that never
+      // happened.
+      const engineMs = reportedTotal(sqlQueries, "engine_ms");
+      if (engineMs !== undefined) result.sql_engine_total_ms = engineMs;
+      const rowsRead = reportedTotal(sqlQueries, "rows_read");
+      if (rowsRead !== undefined) result.sql_rows_read = rowsRead;
+      const rowsWritten = reportedTotal(sqlQueries, "rows_written");
+      if (rowsWritten !== undefined) result.sql_rows_written = rowsWritten;
 
       for (const [name, ms] of Object.entries(spans)) {
         result[`${name}_ms`] = ms;
@@ -178,20 +206,18 @@ export function instrumentSqlDatabase(db: SqlDatabase, metrics: RequestMetrics):
       const results = await db.batch<T>(statements.map(unwrapStatement));
       const elapsed = Date.now() - start;
 
-      let serverMs = 0;
-      let rowsRead = 0;
-      let rowsWritten = 0;
-      for (const r of results) {
-        serverMs += r.meta?.duration ?? 0;
-        rowsRead += r.meta?.rows_read ?? 0;
-        rowsWritten += r.meta?.rows_written ?? 0;
-      }
-
+      // One record for the batch, each field the sum over the statements
+      // whose engine reported it.
+      const reported = results.map((r) => ({
+        engine_ms: r.meta?.duration,
+        rows_read: r.meta?.rows_read,
+        rows_written: r.meta?.rows_written,
+      }));
       metrics.sqlQueries.push({
         query_ms: elapsed,
-        engine_ms: serverMs,
-        rows_read: rowsRead,
-        rows_written: rowsWritten,
+        engine_ms: reportedTotal(reported, "engine_ms"),
+        rows_read: reportedTotal(reported, "rows_read"),
+        rows_written: reportedTotal(reported, "rows_written"),
       });
 
       return results;
