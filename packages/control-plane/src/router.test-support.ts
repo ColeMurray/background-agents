@@ -17,7 +17,7 @@ import { cloudflareHost, createControlPlaneApp, type RouteModule } from "./routi
 import { listRouteContracts, type RouteContract } from "./routing/route-contracts";
 import { catalog } from "./routes/catalog";
 import type { RouteParams } from "./routes/shared";
-import type { Env } from "./types";
+import type { Env, EnvConfig } from "./types";
 
 // The single contract-faithful double lives in background-tasks.test-support;
 // this shared instance's recordings are unused by the router suites.
@@ -172,17 +172,22 @@ function unwired(port: keyof Env, member: string): () => Promise<never> {
   };
 }
 
+/** The configuration every unit fixture's `Env` starts from. */
+const TEST_ENV_CONFIG = {
+  DEPLOYMENT_NAME: "test",
+  GITHUB_BOT_USERNAME: "open-inspect[bot]",
+  TOKEN_ENCRYPTION_KEY: "test-key",
+  PROVIDER_ACCOUNTS_ENCRYPTION_KEY: "test-provider-accounts-key",
+} as const satisfies Partial<EnvConfig>;
+
 /**
- * An `Env` for unit fixtures: the required configuration, a database that
- * answers nothing, a cache, and ports that fail when reached, each replaced
- * by `overrides`.
+ * An `Env` for unit fixtures: `TEST_ENV_CONFIG`, a database that answers
+ * nothing, a cache, and ports that fail when reached, each replaced by
+ * `overrides`.
  */
 export function createTestEnv(overrides: Partial<Env> = {}): Env {
   return {
-    DEPLOYMENT_NAME: "test",
-    GITHUB_BOT_USERNAME: "open-inspect[bot]",
-    TOKEN_ENCRYPTION_KEY: "test-key",
-    PROVIDER_ACCOUNTS_ENCRYPTION_KEY: "test-provider-accounts-key",
+    ...TEST_ENV_CONFIG,
     DB: { prepare: () => emptyStatement(), batch: async () => [] },
     SESSION: unwired("SESSION", "dispatch"),
     REPOS_CACHE: memoryCacheStore(),
