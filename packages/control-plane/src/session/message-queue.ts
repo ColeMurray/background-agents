@@ -758,14 +758,17 @@ export class SessionMessageQueue {
   }
 
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
-    this.assertPromptableSession();
     let requestFingerprint: string | undefined;
     if (data.clientRequestId) {
       requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
     }
 
-    // Keep the idempotency lookup, capacity check, and insert in one synchronous
-    // turn so concurrent WebSocket requests cannot race between them.
+    // Keep the promptability check, idempotency lookup, capacity check, and
+    // insert in one synchronous turn so concurrent requests cannot race between
+    // them. The fingerprint hash above is a non-storage await: a cancel or
+    // archive can land while this request is suspended, so the session is
+    // read after it, not before.
+    this.assertPromptableSession();
     const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
     if (data.clientRequestId) {
       const existing = this.messageRepository.getMessageByClientRequestId(data.clientRequestId);

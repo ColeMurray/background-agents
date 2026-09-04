@@ -530,6 +530,28 @@ describe("SessionMessageQueue", () => {
     expect(h.backgroundTasks.failures).toEqual([expect.any(Error)]);
   });
 
+  it("rejects a prompt whose session closed while its fingerprint was being hashed", async () => {
+    const h = buildQueue();
+    const session = createSession();
+    h.repository.getSession.mockImplementation(() => session);
+    const ws = {} as WebSocket;
+
+    // The fingerprint hash is the first await; the cancel lands there.
+    const handled = h.queue.handlePromptMessage(ws, createClientInfo(), {
+      content: "hello",
+      clientRequestId: "req-1",
+    });
+    session.status = "cancelled";
+    await handled;
+
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    expect(h.sessionStatus.transition).not.toHaveBeenCalled();
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      ws,
+      expect.objectContaining({ type: "error", code: "SESSION_NOT_PROMPTABLE" })
+    );
+  });
+
   it("marks session active when a prompt is enqueued", async () => {
     const h = buildQueue();
 
