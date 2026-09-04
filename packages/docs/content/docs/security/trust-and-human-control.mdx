@@ -1,0 +1,86 @@
+---
+title: Trust, security, and human control
+description: Understand identity, workspace authorization, repository access, secrets, sandbox boundaries, and pull-request approval.
+audience: admin
+owner: security
+status: published
+lastReviewed: "2026-09-04"
+relatedCode:
+  - docs/AUTH.md
+  - docs/SECRETS.md
+  - docs/HOW_IT_WORKS.md
+---
+
+Background Agents is designed for a **single trusted organization**. A deployment is one workspace,
+and its source-control application installation defines which repositories are available to that
+workspace.
+
+## Identity and admission
+
+Signing in establishes identity through a configured provider such as GitHub or Google. Workspace
+admission and role checks then decide which Background Agents operations that identity may perform.
+Authentication alone does not grant access to the workspace.
+
+Suspending a user blocks new interactive access. Operators should review automation and service
+credentials separately because non-browser actors can have their own authority.
+
+## Workspace visibility
+
+Sessions are workspace resources. Creator and participant labels provide attribution and
+collaboration context; they are not private-session access-control lists. Do not put data in a
+session that other admitted workspace members must not see.
+
+Roles control Background Agents capabilities at the workspace level. They do not reproduce each
+person's source-control permissions repository by repository.
+
+## Repository boundary
+
+The source-control App installation is a deployment-wide trust boundary. Install it only on
+repositories the workspace may access. Where supported, use the provider's “selected repositories”
+option rather than granting organization-wide access.
+
+Git operations may use brokered App credentials. When a GitHub-authenticated user creates a pull
+request, the control plane can use that user's OAuth identity for PR attribution. Other sign-in
+modes can result in an App-authored branch and a manual pull-request creation link.
+
+## Secrets
+
+Secrets can be scoped globally, to repositories, or to saved environments. They are encrypted at
+rest and injected into the sandbox for the relevant session. Clients can list configured key names
+but do not receive secret values.
+
+Scope matters:
+
+- repository-targeted sessions receive global and applicable repository secrets;
+- ad-hoc multi-repository sessions can receive secrets from selected repositories, with the primary
+  repository winning key collisions;
+- environment-targeted sessions receive global and environment secrets, not repository secrets.
+
+System-provided runtime variables take precedence over user-defined values. Never commit secrets to
+the repository or place values in prompts, logs, screenshots, or documentation.
+
+## Sandbox and network boundaries
+
+Sandbox isolation, network access, pause/resume behavior, snapshot retention, and cleanup differ by
+provider and deployment configuration. This documentation does not make one universal persistence,
+egress, deletion, or incident-response guarantee. Confirm those policies with your operator before
+running sensitive workloads.
+
+## Human approval
+
+The agent may create code, commits, branches, pull requests, or reviews when authorized. Those
+actions do not replace branch protection, required reviewers, CI, or a person's responsibility to
+approve and merge. Attribution explains who initiated or authored an action; it does not itself
+prove that the action was authorized.
+
+Before production use:
+
+1. restrict workspace admission;
+2. limit the source-control App installation;
+3. assign the least capable workspace roles;
+4. review service and automation authority;
+5. configure secret scope deliberately;
+6. preserve branch protection and required CI;
+7. document provider-specific network and retention policy.
+
+Continue with [models, provider accounts, and secrets](/configure/models-providers-and-secrets) or [reviewing evidence and changes](/guides/review-evidence-and-changes).

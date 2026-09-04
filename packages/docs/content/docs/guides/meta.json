@@ -1,0 +1,9 @@
+{
+  "title": "Use Background Agents",
+  "pages": [
+    "choose-and-specify-work",
+    "monitor-and-steer",
+    "review-evidence-and-changes",
+    "recover-from-failed-run"
+  ]
+}

@@ -1,0 +1,63 @@
+---
+title: Integrations overview
+description: Start and follow Background Agents work from GitHub, Slack, or Linear while preserving each system's authorization model.
+audience: user
+owner: integrations
+status: published
+lastReviewed: "2026-09-04"
+relatedCode:
+  - docs/integrations/GITHUB.md
+  - docs/integrations/SLACK.md
+  - docs/integrations/LINEAR.md
+---
+
+Integrations let your team start and follow work where requests already happen. Each integration has
+its own trigger, continuation, output, and authorization behavior.
+
+## GitHub
+
+Use the GitHub integration to review newly opened pull requests when auto-review is enabled or to
+start analysis from an `@mention` in a pull-request conversation or inline review thread.
+
+An accepted request receives a best-effort eyes reaction. Each GitHub webhook starts a new session;
+comments do not continue one existing session the way Slack threads can. Mentions on ordinary issues
+are ignored. Comment-triggered sessions currently start from the repository's default branch, not
+the pull-request head branch.
+
+[Read the GitHub integration guide](https://github.com/ColeMurray/background-agents/blob/main/docs/integrations/GITHUB.md)
+
+## Slack
+
+Invite the Slack app to a channel and `@mention` it, or send it a direct message. If repository
+selection is ambiguous, choose from the provided repository or environment options. Reply in the
+same Slack thread to continue that session.
+
+Slack can forward supported prompt images and, when separately configured, post bounded completion
+media. Inbound and outbound files use different Slack scopes. Adding a scope requires reinstalling
+the app for the workspace.
+
+[Read the Slack integration guide](https://github.com/ColeMurray/background-agents/blob/main/docs/integrations/SLACK.md)
+
+## Linear
+
+Mention or assign the Linear Agent from an issue. Include the target `owner/repo` when project,
+team, label, and issue context do not identify one clearly. Follow-ups within an active Linear Agent
+session continue the associated Background Agents session; stopping or cancelling clears that
+mapping.
+
+Linear can show progress and link to the web session or resulting pull request. It does not own the
+repository's approval and merge policy.
+
+[Read the Linear integration guide](https://github.com/ColeMurray/background-agents/blob/main/docs/integrations/LINEAR.md)
+
+## Shared safety rules
+
+- Install each integration only in intended workspaces and repositories.
+- Scope which users, channels, teams, projects, or repositories may trigger work.
+- Treat messages and issue content as agent instructions only after the integration's trigger and
+  authorization checks accept them.
+- Use the web session for the complete shared timeline and file changes.
+- Preserve human review and source-control branch policy.
+
+The Chrome extension described in older planning material is not a shipped integration and is not
+included here.

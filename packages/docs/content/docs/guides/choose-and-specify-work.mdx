@@ -1,0 +1,75 @@
+---
+title: Choose and specify work
+description: Select tasks that can run independently and give the agent enough context to produce verifiable results.
+audience: user
+owner: platform
+status: published
+lastReviewed: "2026-09-04"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - packages/web/src/components/session-target-picker.tsx
+  - docs/integrations/LINEAR.md
+  - docs/integrations/SLACK.md
+---
+
+A strong background task can proceed without constant clarification and produces evidence a person
+can review later.
+
+## Choose a suitable task
+
+Prefer work with:
+
+- a concrete problem or outcome;
+- a bounded repository and area of code;
+- available examples, errors, or reproduction steps;
+- validation the sandbox can run;
+- low-cost rollback if the proposed change is wrong;
+- a clear human review point.
+
+Split work when it spans unrelated systems, has several independent acceptance decisions, or would
+require an agent to guess product policy. Keep sensitive production operations, irreversible data
+changes, and ambiguous incident response under closer human control.
+
+## Select the right target
+
+Choose a single repository for focused work. Use a saved environment when the same repositories and
+setup belong together repeatedly. Use an ad-hoc multi-repository target for a one-time coordinated
+change, and put the repository that should supply defaults first.
+
+Starting with the wrong target can produce correct work in the wrong codebase. Name `owner/repo` in
+Slack, Linear, or another integration whenever the surrounding conversation is ambiguous.
+
+## Write a request the agent can execute
+
+Include five elements:
+
+1. **Outcome:** what must be different when the task is complete.
+2. **Context:** the symptom, user impact, relevant file or issue, and known constraints.
+3. **Boundaries:** what must not change, including compatibility or security requirements.
+4. **Validation:** commands, tests, examples, or observable behavior that demonstrate success.
+5. **Handoff:** whether to stop with analysis, commit, or open a draft/ready pull request.
+
+```text
+Update the session list so failed sessions have a clear recovery action.
+
+Preserve existing status terminology and authorization behavior. Add a test that
+uses the rendered user interface, run the focused web test and typecheck, then
+summarize the result. Open a draft PR for review; do not merge it.
+```
+
+## State uncertainty instead of hiding it
+
+Tell the agent what it may decide and what requires confirmation. For example: “Choose the smallest
+existing component that fits this behavior, but stop if the change requires a database migration.”
+
+## Define evidence before work begins
+
+“Make it work” is difficult to review. Ask for the smallest validation that proves the behavior:
+
+- a failing test reproduced before the change and passing afterward;
+- a build or typecheck for the affected package;
+- a screenshot for a visible state;
+- a command output or reproduction sequence;
+- an explicit list of checks that could not run.
+
+Continue with [monitoring and steering](/guides/monitor-and-steer).

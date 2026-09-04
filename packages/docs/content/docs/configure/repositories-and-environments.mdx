@@ -1,0 +1,75 @@
+---
+title: Repositories and environments
+description: Choose repository targets, create reusable environments, and understand how branches, secrets, and prebuilt images apply.
+audience: team-owner
+owner: platform
+status: published
+lastReviewed: "2026-09-04"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - docs/SECRETS.md
+  - docs/GETTING_STARTED.md
+---
+
+A session target determines which repositories are cloned, which branches and defaults apply, and
+which target-scoped secrets can enter the sandbox.
+
+## Choose a target type
+
+| Target                | Use it when                                                               |
+| --------------------- | ------------------------------------------------------------------------- |
+| Single repository     | Work belongs to one codebase and one branch                               |
+| Multiple repositories | A one-time change needs up to ten repositories side by side               |
+| Saved environment     | The same repository set, setup, secrets, or prebuilt image will be reused |
+| No repository         | The task is scratch work and needs no existing codebase                   |
+
+For multi-repository targets, order matters. The first repository is primary and supplies defaults
+when settings collide. Git pushes and pull requests remain repository-specific.
+
+## Saved environments
+
+An environment is a named, reusable ordered repository set. Configure environments under
+**Settings → Environments**. A useful environment represents one working context, such as a web
+application with its API and shared library.
+
+An environment can define:
+
+- repositories and base branches;
+- environment-scoped secrets;
+- optional prebuilt images that include repository checkout and setup.
+
+Sessions snapshot the environment at creation. Editing or deleting the saved environment does not
+rewrite an existing session's target.
+
+## Branches and repository identity
+
+Confirm the source-control owner, repository, and base branch before starting work. Repository
+owners can include nested namespaces on providers such as GitLab; treat the complete identity as one
+value rather than assuming `owner/name` always has exactly two path segments.
+
+## Setup and prebuilt images
+
+Reliable agent work depends on setup that can run unattended. Keep installation and validation
+commands deterministic. A prebuilt image can reduce startup time by preparing dependencies and
+initial builds ahead of the session, but image availability and refresh behavior depend on the
+sandbox provider.
+
+When setup changes:
+
+1. validate it from a clean environment;
+2. rebuild or refresh the relevant provider image;
+3. start a new session to consume the updated configuration;
+4. do not assume an existing session changes in place.
+
+## Secrets by target
+
+- Single-repository sessions receive global secrets plus that repository's secrets.
+- Ad-hoc multi-repository sessions can receive selected repository secrets, with the primary
+  repository winning collisions.
+- Environment sessions receive global plus environment secrets; repository secrets do not flow
+  into them.
+
+Only configure values required by the target. Continue with [models, provider accounts, and secrets](/configure/models-providers-and-secrets).
+
+For full platform deployment, see the
+[self-hosting guide](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md).

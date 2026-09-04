@@ -1,0 +1,12 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "getting-started",
+    "concepts",
+    "guides",
+    "configure",
+    "integrations",
+    "security"
+  ]
+}

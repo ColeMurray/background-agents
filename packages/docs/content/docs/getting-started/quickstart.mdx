@@ -1,0 +1,83 @@
+---
+title: Quickstart for an existing workspace
+description: Start a background coding session when your team already has a deployed and configured workspace.
+audience: user
+owner: web
+status: published
+lastReviewed: "2026-09-04"
+relatedCode:
+  - packages/web/src/components/session-target-picker.tsx
+  - docs/AVAILABLE_MODELS.md
+---
+
+This quickstart assumes your team already operates a Background Agents deployment and has admitted
+your identity to its workspace. It does not cover deploying the platform itself.
+
+## Prerequisites
+
+You need:
+
+- the URL for your team's Background Agents web application;
+- an admitted workspace account;
+- at least one available repository or saved environment;
+- permission to create sessions;
+- a configured model available for interactive work.
+
+If your team does not have a deployment, follow the repository's
+[self-hosting guide](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md)
+or [contact the team about a managed deployment](https://backgroundagents.dev/#contact).
+
+## 1. Sign in
+
+Open your team's web application and use one of the identity providers configured by the operator.
+Signing in and being admitted to the workspace are separate steps. If you see an access request or
+denial, contact a workspace administrator.
+
+## 2. Start a session
+
+Choose **New session**. Select the target that contains the code you want to change:
+
+- a repository for a focused single-codebase task;
+- an environment for a saved multi-repository workspace;
+- multiple repositories for a one-off coordinated task;
+- no repository only when the work does not require an existing codebase.
+
+Select the expected base branch. For multi-repository work, put the repository that should supply
+defaults first.
+
+## 3. Choose a model
+
+Select one of the models enabled for the deployment. Some models use operator-managed subscription
+accounts; others require API-key mode. If a model is unavailable, choose an enabled alternative or
+ask an administrator to review model and provider-account settings.
+
+## 4. Send a bounded request
+
+Use a small task for the first run:
+
+```text
+Update the contributor guide to explain how to run the web tests.
+
+Keep the existing structure. Verify every command against package.json,
+run the relevant formatting check, and summarize the changed files.
+Do not create a pull request yet.
+```
+
+A useful request names the result, boundaries, evidence, and desired handoff. Avoid a broad request
+such as “improve this repository.”
+
+## 5. Confirm the session starts
+
+The session should enter an active state and begin showing activity in its shared timeline. You can
+leave the page and return later; closing the browser does not cancel the session.
+
+If sandbox startup fails, record the session identifier and visible error before following
+[failed-run recovery](/guides/recover-from-failed-run).
+
+## 6. Review the result
+
+Read the final response, inspect the changed files, and verify that the requested validation ran.
+The evidence shown depends on the tools the agent used, so absence of an explicit test result should
+lead you to request validation rather than assume it passed.
+
+Next, complete the [first task to a reviewed pull request](/getting-started/first-task).

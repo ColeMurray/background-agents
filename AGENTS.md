@@ -41,6 +41,7 @@ it at build time.
 | `shared`        | TypeScript                         | Shared types, auth utilities, model definitions             |
 | `control-plane` | TypeScript / CF Workers + DO       | Session management, WebSocket streaming, GitHub integration |
 | `web`           | TypeScript / Next.js 16 + React 19 | User-facing dashboard, OAuth, real-time UI                  |
+| `docs`          | TypeScript / Next.js 16 + Fumadocs | Public user documentation at docs.backgroundagents.dev      |
 | `slack-bot`     | TypeScript / CF Workers + Hono     | Slack event handler, session creation                       |
 | `github-bot`    | TypeScript / CF Workers + Hono     | PR review and @mention webhook handler                      |
 | `linear-bot`    | TypeScript / CF Workers + Hono     | Linear agent webhook handler                                |
@@ -63,6 +64,8 @@ npm run typecheck                                # tsc across all TS packages
 npm test -w @open-inspect/control-plane          # unit tests (node env)
 npm run test:integration -w @open-inspect/control-plane  # integration (workerd/Miniflare + real D1)
 npm test -w @open-inspect/web
+npm test -w @open-inspect/docs
+npm run build -w @open-inspect/docs
 npm test -w @open-inspect/github-bot
 npm test -w @open-inspect/slack-bot
 npm test -w @open-inspect/linear-bot
@@ -155,6 +158,8 @@ Pushing to `main` auto-deploys changed services:
   (triggers: `terraform/`, `packages/*/`)
 - **Vercel** → web app when `web_platform = "vercel"` (triggers: `packages/web/`,
   `packages/shared/`)
+- **Vercel Docs** → public documentation (triggers: `packages/docs/`; requires the dedicated docs
+  project secrets described in `packages/docs/README.md`)
 - **Modal** → data plane (triggers: `packages/modal-infra/`, deployed via Terraform apply)
 
 CI runs lint, typecheck, and tests for all TypeScript and Python packages on every push and PR.

@@ -1,0 +1,71 @@
+---
+title: Review evidence and changes
+description: Inspect the session result, repository identity, file diffs, validation, attribution, and pull-request handoff.
+audience: user
+owner: web
+status: published
+lastReviewed: "2026-09-04"
+relatedCode:
+  - packages/web/src/components/session-changes-panel.tsx
+  - packages/control-plane/src/routes/session-diffs.ts
+  - packages/web/src/components/create-pull-request-event.tsx
+---
+
+Review a background session as proposed engineering work. A confident summary is not a substitute
+for checking the actual diff and validation.
+
+## Confirm repository identity
+
+Before reading individual files, confirm:
+
+- repository owner and name;
+- base branch and head branch;
+- whether the session targeted one repository or several;
+- which repository is primary;
+- whether a displayed pull request belongs to the expected repository.
+
+For multi-repository sessions, review each repository independently. One session can produce more
+than one branch or pull request.
+
+## Read every changed file
+
+The changes panel presents file-level diffs and can identify binary files that cannot be rendered as
+text. Look for:
+
+- changes outside the requested scope;
+- generated or vendored files that should not be committed;
+- missing validation or error handling;
+- test changes that weaken assertions;
+- configuration or dependency changes with a wider deployment impact;
+- secrets or sensitive data in source, logs, fixtures, or screenshots.
+
+If diff loading fails, retry it. Do not interpret an unavailable diff as an empty change.
+
+## Verify evidence
+
+The exact evidence depends on what the agent ran. Ask:
+
+1. Did the agent reproduce the original problem?
+2. Does a behavior-focused test fail before the fix and pass afterward where practical?
+3. Did the test, typecheck, lint, or build run in the correct workspace?
+4. Were any checks skipped, interrupted, or treated as non-blocking?
+5. Does the evidence cover the changed behavior, not only implementation details?
+
+Background Agents does not guarantee a structured test report, video, or screenshot for every task.
+Request missing evidence explicitly.
+
+## Understand attribution
+
+Prompts and commits can identify the initiating user, while a platform or App identity may perform
+the underlying operation. Attribution answers who initiated or authored work; authorization depends
+on workspace roles, service policy, source-control credentials, and repository controls.
+
+## Review the pull request
+
+A pull-request result can be draft or ready for review. On the source-control platform, confirm the
+title, description, base/head branches, commits, checks, requested reviewers, and branch rules.
+
+Do not approve or merge solely because the session completed successfully. Apply the same review
+standard as human-authored code.
+
+If the evidence is incomplete or the diff is wrong, [monitor and steer the existing session](/guides/monitor-and-steer) or [recover from the failed run](/guides/recover-from-failed-run).

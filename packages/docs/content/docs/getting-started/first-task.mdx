@@ -1,0 +1,69 @@
+---
+title: First task to a reviewed pull request
+description: Delegate a bounded change, inspect its evidence and diff, then hand it to your repository's normal review process.
+audience: user
+owner: web
+status: published
+lastReviewed: "2026-09-04"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - packages/sandbox-runtime/src/sandbox_runtime/plugins/inspect-plugin.js
+  - packages/web/src/components/create-pull-request-event.tsx
+---
+
+Use this workflow after completing the quickstart. The goal is a reviewable proposal—not an
+automatically merged change.
+
+## Choose a low-risk first task
+
+Good first tasks have one clear outcome, a bounded part of the repository, and validation that the
+agent can run. Documentation, focused test additions, and small bug fixes are usually easier to
+review than broad migrations or sensitive production changes.
+
+## Send an executable request
+
+```text
+Fix the incorrect empty-state message in the sessions list.
+
+Requirements:
+- Preserve the existing component and design conventions.
+- Add or update a behavior-focused test for the empty state.
+- Run the focused web test and typecheck.
+- Summarize the root cause and validation.
+- Commit the change and open a pull request, but do not merge it.
+```
+
+Include the repository and expected base branch when the target is not obvious.
+
+## Monitor without micromanaging
+
+Use the timeline to confirm that the agent found the relevant code, is working within scope, and is
+running appropriate validation. Send a follow-up when new information changes the task or when the
+agent needs a constraint it could not infer. You do not need to respond to every tool action.
+
+## Inspect the result
+
+Before accepting the handoff:
+
+1. read the final summary and note any stated uncertainty;
+2. inspect every changed file in the changes panel;
+3. confirm the base and head repository/branch are correct;
+4. check the actual validation output;
+5. look for unrelated changes, generated files, or missing edge cases;
+6. request another iteration if the evidence does not establish the requested behavior.
+
+## Create the pull request
+
+When asked, Background Agents can push a branch and create or update a pull request. With usable
+GitHub OAuth, the pull request can be created as the user who initiated the action. With another
+sign-in method, the system can push through the GitHub App and return a manual GitHub creation URL.
+
+The resulting card can identify whether the pull request is a draft or ready for review. Confirm its
+state, title, description, base branch, and checks on GitHub.
+
+## Complete human review
+
+Follow the repository's required CI, review, approval, and merge process. Background Agents does
+not make a pull request safe by creating it, and it does not replace protected-branch controls.
+
+If the run fails or produces the wrong result, use [failed-run recovery](/guides/recover-from-failed-run). For review details, see [Review evidence and changes](/guides/review-evidence-and-changes).

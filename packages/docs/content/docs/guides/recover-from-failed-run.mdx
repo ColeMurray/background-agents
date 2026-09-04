@@ -1,0 +1,69 @@
+---
+title: Recover from a failed run
+description: Diagnose the visible failure and choose whether to follow up, retry, rebuild, restart, take over, or escalate.
+audience: user
+owner: control-plane
+status: published
+lastReviewed: "2026-09-04"
+relatedCode:
+  - docs/DEBUGGING_PLAYBOOK.md
+  - packages/web/src/components/session-prompt-composer.tsx
+  - packages/control-plane/src/routes/session-diffs.ts
+---
+
+A failed session is a durable record, not a dead end. Preserve its URL, visible error, target, and
+last successful activity before choosing a recovery action.
+
+## Choose the smallest recovery
+
+| Situation                                                         | Recommended action                                                         |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| The request lacked context or acceptance criteria                 | Follow up in the same session with the missing information                 |
+| The agent chose a wrong approach but the environment is healthy   | Stop current work and send a bounded correction                            |
+| A transient diff or UI request failed                             | Retry that operation before restarting the agent                           |
+| Model or provider-account authentication failed                   | Ask an administrator to reconnect or change the account, then retry        |
+| Setup dependencies or scripts are wrong                           | Correct and validate the environment, then start a fresh session if needed |
+| The target repository or base branch is wrong                     | Start a new session with the correct target                                |
+| Prior context is misleading or repeatedly causes the same failure | Start clean rather than adding more follow-ups                             |
+| The remaining operation is sensitive or time-critical             | Take over manually and preserve the session/branch for review              |
+
+## Follow up in the same session
+
+Completed and failed sessions can accept follow-up prompts when their target and context remain
+valid. State the observed failure, the correction, and the evidence required:
+
+```text
+The test command ran from the repository root, but this package owns its own
+environment. Run the package-level test shown in its package.json. If dependencies
+are unavailable, stop and report that rather than changing the test configuration.
+```
+
+## Retry a failed surface
+
+Some failures affect only a derived view such as the changes panel. Retry the view before assuming
+the underlying work or branch is missing. Check the source-control platform directly when a branch
+or pull request should exist.
+
+## Restart after environment failure
+
+Use a new session after changing the target, environment definition, setup scripts, secrets, or
+provider configuration. Existing sessions snapshot important configuration at creation and may not
+inherit later changes.
+
+## Escalate with useful evidence
+
+Provide the operator:
+
+- session identifier and URL;
+- timestamp and visible error text;
+- target repository/environment and selected model;
+- whether the failure occurred during creation, sandbox startup, execution, diff loading, or PR
+  creation;
+- what you already retried;
+- whether other users or sessions are affected.
+
+Do not paste secret values, OAuth tokens, private keys, or raw credentials into the report.
+
+Operators can use the repository's
+[debugging playbook](https://github.com/ColeMurray/background-agents/blob/main/docs/DEBUGGING_PLAYBOOK.md)
+for infrastructure-level diagnosis.

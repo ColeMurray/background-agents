@@ -1,0 +1,66 @@
+---
+title: What is Background Agents?
+description: Understand where background coding agents run, what they can produce, and where people stay in control.
+audience: user
+owner: platform
+status: published
+lastReviewed: "2026-09-04"
+relatedCode:
+  - README.md
+  - docs/HOW_IT_WORKS.md
+---
+
+Background Agents is an open framework for delegating coding work to agents that run in isolated
+cloud environments. You can start work, leave it running without keeping your laptop connected, and
+return later to review the shared session and proposed code changes.
+
+## Background work instead of a local loop
+
+A local coding assistant usually depends on your computer and an active interaction loop. A
+background session separates the work from your device:
+
+```text
+Choose a target → Send a request → Agent works remotely → Review the result
+```
+
+This is useful when work can proceed independently: investigating a bug, implementing a bounded
+change, improving tests, preparing a migration, or reviewing a pull request.
+
+## What a session contains
+
+A session records the target repositories, requests and follow-ups, agent activity, file changes,
+artifacts, participants, and sandbox state. Multiple workspace members can open the same session and
+see its shared timeline.
+
+The agent can explore files, edit code, run repository commands, use git, and—when the deployment
+and selected tools permit it—research documentation or verify a user interface.
+
+## Where people remain in control
+
+Background Agents produces proposed work. You decide whether the task is suitable, provide the
+constraints and acceptance criteria, review the evidence and diff, request changes, take over, or
+discard the result.
+
+When asked, the agent can push a branch and create or update a pull request. **It does not bypass
+your repository's review or merge policy.** A person with the required repository permission remains
+responsible for approving and merging changes.
+
+## Deployment model
+
+Background Agents is designed for a single trusted organization. A deployment combines:
+
+- a web client for creating and reviewing sessions;
+- a control plane that manages identity, session state, streaming, and integrations;
+- a data plane that creates isolated sandboxes through a configured provider.
+
+Self-hosted deployments can support Modal, Daytona, Vercel Sandboxes, OpenComputer, or E2B. Provider
+capabilities and lifecycle behavior differ; this list does not mean every deployment exposes every
+provider to each user.
+
+## What is not promised
+
+Capacity, execution time, availability, network access, and artifact support depend on the selected
+deployment and provider. Treat claims such as “unlimited concurrency,” “never sleeps,” or automatic
+merge as marketing shorthand—not product contracts.
+
+Next, learn [how a session works](/concepts/how-a-session-works) or [start your first task](/getting-started/quickstart).

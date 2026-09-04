@@ -1,0 +1,71 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-docs.yml"
+      - "package-lock.json"
+      - "package.json"
+      - "packages/docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-docs-production
+  cancel-in-progress: true
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_TEAM_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_DOCS_PROJECT_ID }}
+
+jobs:
+  deploy:
+    name: Deploy docs to Vercel
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check if docs deployment is configured
+        id: check-secrets
+        env:
+          VERCEL_API_TOKEN: ${{ secrets.VERCEL_API_TOKEN }}
+        run: |
+          if [ -z "$VERCEL_API_TOKEN" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "Skipping deployment - VERCEL_API_TOKEN or VERCEL_DOCS_PROJECT_ID is not configured"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: npm ci
+
+      - name: Install Vercel CLI 58.4.0
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: npm install -g vercel@58.4.0
+
+      - name: Pull Vercel environment
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_API_TOKEN }}
+
+      - name: Build docs
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: vercel build --prod --token=${{ secrets.VERCEL_API_TOKEN }}
+
+      - name: Deploy docs
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_API_TOKEN }}
