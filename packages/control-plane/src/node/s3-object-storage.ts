@@ -23,6 +23,7 @@ import {
   type GetObjectCommandOutput,
   type HeadObjectCommandOutput,
 } from "@aws-sdk/client-s3";
+import { VIDEO_MAX_BYTES } from "../media";
 import type { ObjectStorage, ObjectStorageMetadata } from "../storage/object-storage";
 
 export interface S3ObjectStorageConfig {
@@ -30,16 +31,31 @@ export interface S3ObjectStorageConfig {
   region: string;
   /** Set for MinIO or another non-AWS endpoint; AWS S3 when omitted. */
   endpoint?: string;
+  /**
+   * Whether a plaintext `http:` endpoint is accepted. Signed requests and
+   * object data would cross the network in the clear, so only a local
+   * compose stack should set it; an `http:` endpoint is otherwise refused.
+   */
+  allowHttpEndpoint?: boolean;
   /** `https://host/bucket/key` rather than `https://bucket.host/key`; MinIO needs it. */
   forcePathStyle?: boolean;
-  /** Static credentials; the SDK's default provider chain (instance role, env) when omitted. */
-  credentials?: { accessKeyId: string; secretAccessKey: string };
+  /**
+   * Static credentials, with the session token of temporary (STS) ones;
+   * the SDK's default provider chain (instance role, env) when omitted.
+   */
+  credentials?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
+  /**
+   * The largest object `put` accepts, so a stream cannot be buffered
+   * without bound. Defaults to the largest media object a route stores.
+   */
+  maxObjectBytes?: number;
 }
 
 /**
  * The configuration from the `OBJECT_STORE_*` variables. `OBJECT_STORE_BUCKET`
  * is required; `OBJECT_STORE_REGION` defaults to `us-east-1`, the region
- * MinIO and most S3-compatible services answer to.
+ * MinIO and most S3-compatible services answer to; `OBJECT_STORE_ALLOW_HTTP`
+ * is the opt-in for a plaintext endpoint.
  */
 export function readS3ObjectStorageConfig(
   env: Record<string, string | undefined>
@@ -52,6 +68,7 @@ export function readS3ObjectStorageConfig(
     bucket,
     region: env.OBJECT_STORE_REGION || "us-east-1",
     endpoint: env.OBJECT_STORE_ENDPOINT || undefined,
+    allowHttpEndpoint: env.OBJECT_STORE_ALLOW_HTTP === "true",
     forcePathStyle: env.OBJECT_STORE_FORCE_PATH_STYLE === "true",
   };
 }
@@ -64,9 +81,22 @@ type StoredObject = NonNullable<Awaited<ReturnType<ObjectStorage["get"]>>>;
 class S3ObjectStorage implements ObjectStorage {
   private readonly client: S3Client;
   private readonly bucket: string;
+  private readonly maxObjectBytes: number;
 
   constructor(config: S3ObjectStorageConfig) {
+    if (
+      config.endpoint &&
+      new URL(config.endpoint).protocol === "http:" &&
+      !config.allowHttpEndpoint
+    ) {
+      throw new Error(
+        `S3 endpoint ${config.endpoint} is plaintext http; signed requests and object data ` +
+          "would cross the network in the clear. Use https, or set OBJECT_STORE_ALLOW_HTTP=true " +
+          "for a local compose stack only."
+      );
+    }
     this.bucket = config.bucket;
+    this.maxObjectBytes = config.maxObjectBytes ?? VIDEO_MAX_BYTES;
     this.client = new S3Client({
       region: config.region,
       endpoint: config.endpoint,
@@ -80,7 +110,7 @@ class S3ObjectStorage implements ObjectStorage {
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
-        Body: await bodyBytes(value),
+        Body: await bodyBytes(value, this.maxObjectBytes),
         ContentType: options?.contentType,
       })
     );
@@ -190,14 +220,42 @@ function required<T>(value: T | undefined, field: string, operation: string, key
 }
 
 /**
- * The value as bytes. A stream is read to the end first: S3 needs the
- * content length up front, and every caller today hands over bytes.
+ * The value as bytes, refused past `maxBytes`. A stream is read to the end
+ * first, since S3 needs the content length up front, and is cancelled the
+ * moment it exceeds the limit, so no caller can have the host buffer
+ * without bound.
  */
-async function bodyBytes(value: PutValue): Promise<Uint8Array | string> {
-  if (typeof value === "string") return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+async function bodyBytes(value: PutValue, maxBytes: number): Promise<Uint8Array | string> {
+  if (typeof value === "string") return withinLimit(new TextEncoder().encode(value), maxBytes);
+  if (value instanceof ArrayBuffer) return withinLimit(new Uint8Array(value), maxBytes);
   if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    return withinLimit(new Uint8Array(value.buffer, value.byteOffset, value.byteLength), maxBytes);
   }
-  return new Uint8Array(await new Response(value).arrayBuffer());
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = value.getReader();
+  for (;;) {
+    const { done, value: chunk } = await reader.read();
+    if (done) break;
+    total += chunk.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new RangeError(`S3 put refused: the object exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(chunk);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function withinLimit(bytes: Uint8Array, maxBytes: number): Uint8Array {
+  if (bytes.byteLength > maxBytes) {
+    throw new RangeError(`S3 put refused: the object exceeds ${maxBytes} bytes`);
+  }
+  return bytes;
 }

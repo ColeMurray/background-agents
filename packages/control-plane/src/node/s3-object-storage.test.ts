@@ -20,7 +20,12 @@ interface StoredObject {
  */
 class FakeS3 {
   readonly objects = new Map<string, StoredObject>();
-  readonly requests: Array<{ method: string; path: string; range: string | undefined }> = [];
+  readonly requests: Array<{
+    method: string;
+    path: string;
+    range: string | undefined;
+    securityToken: string | undefined;
+  }> = [];
   /** A provider that answers without ETags, which the S3 API always carries. */
   omitEtag = false;
   private server: Server | null = null;
@@ -43,6 +48,7 @@ class FakeS3 {
       method: request.method!,
       path: url.pathname,
       range: request.headers.range,
+      securityToken: request.headers["x-amz-security-token"] as string | undefined,
     });
     if (!url.pathname.startsWith(`/${BUCKET}/`)) {
       // A missing bucket: S3 names it in the body, except on HEAD, which has none.
@@ -139,6 +145,7 @@ describe("createS3ObjectStorage", () => {
       bucket: BUCKET,
       region: "us-east-1",
       endpoint: s3.endpoint,
+      allowHttpEndpoint: true,
       forcePathStyle: true,
       credentials: { accessKeyId: "test", secretAccessKey: "test" },
     });
@@ -238,6 +245,7 @@ describe("createS3ObjectStorage", () => {
       bucket: "no-such-bucket",
       region: "us-east-1",
       endpoint: s3.endpoint,
+      allowHttpEndpoint: true,
       forcePathStyle: true,
       credentials: { accessKeyId: "test", secretAccessKey: "test" },
     });
@@ -257,6 +265,62 @@ describe("createS3ObjectStorage", () => {
     await expect(storage.head("k/doc")).rejects.toThrow(
       "S3 HeadObject/GetObject for k/doc answered without ETag"
     );
+  });
+
+  it("sends a temporary credential's session token with every request", async () => {
+    const temporary = createS3ObjectStorage({
+      bucket: BUCKET,
+      region: "us-east-1",
+      endpoint: s3.endpoint,
+      allowHttpEndpoint: true,
+      forcePathStyle: true,
+      credentials: { accessKeyId: "ASIA", secretAccessKey: "secret", sessionToken: "sts-token" },
+    });
+
+    await temporary.put("k/doc", "x");
+    expect(await temporary.head("k/doc")).not.toBeNull();
+
+    expect(s3.requests.map((request) => request.securityToken)).toEqual(["sts-token", "sts-token"]);
+  });
+
+  it("refuses a plaintext endpoint unless a local stack opts in", () => {
+    expect(() =>
+      createS3ObjectStorage({ bucket: BUCKET, region: "us-east-1", endpoint: s3.endpoint })
+    ).toThrow("plaintext http");
+    expect(() =>
+      createS3ObjectStorage({ bucket: BUCKET, region: "us-east-1", endpoint: "https://s3.example" })
+    ).not.toThrow();
+  });
+
+  it("refuses an object past the size limit, cancelling a stream as soon as it is exceeded", async () => {
+    const bounded = createS3ObjectStorage({
+      bucket: BUCKET,
+      region: "us-east-1",
+      endpoint: s3.endpoint,
+      allowHttpEndpoint: true,
+      forcePathStyle: true,
+      credentials: { accessKeyId: "test", secretAccessKey: "test" },
+      maxObjectBytes: 8,
+    });
+    let pulls = 0;
+    let cancelled = false;
+    // Never closes: without the limit, put would buffer it forever.
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new Uint8Array(4));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    await expect(bounded.put("k/endless", endless)).rejects.toThrow(RangeError);
+    expect(cancelled).toBe(true);
+    expect(pulls).toBeLessThan(8);
+    await expect(bounded.put("k/big", new Uint8Array(9))).rejects.toThrow("exceeds 8 bytes");
+    await expect(bounded.put("k/fits", new Uint8Array(8))).resolves.toBeUndefined();
+    expect(s3.requests.map((request) => request.path)).toEqual([`/${BUCKET}/k/fits`]);
   });
 
   it("deletes a key, and deleting an absent key is not an error", async () => {
@@ -280,11 +344,22 @@ describe("readS3ObjectStorageConfig", () => {
       bucket: "media",
       region: "us-east-1",
       endpoint: "http://minio:9000",
+      allowHttpEndpoint: false,
       forcePathStyle: true,
     });
     expect(
-      readS3ObjectStorageConfig({ OBJECT_STORE_BUCKET: "media", OBJECT_STORE_REGION: "eu-west-1" })
-    ).toEqual({ bucket: "media", region: "eu-west-1", endpoint: undefined, forcePathStyle: false });
+      readS3ObjectStorageConfig({
+        OBJECT_STORE_BUCKET: "media",
+        OBJECT_STORE_REGION: "eu-west-1",
+        OBJECT_STORE_ALLOW_HTTP: "true",
+      })
+    ).toEqual({
+      bucket: "media",
+      region: "eu-west-1",
+      endpoint: undefined,
+      allowHttpEndpoint: true,
+      forcePathStyle: false,
+    });
   });
 
   it("requires the bucket", () => {
