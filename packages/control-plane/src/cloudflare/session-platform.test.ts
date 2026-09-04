@@ -55,7 +55,7 @@ describe("createDurableObjectSessionPlatform", () => {
 
   it("delegates socket acceptance, tags, and enumeration, passing the tag filter through", () => {
     const { state, calls, db } = createFakeState();
-    const ws = {} as WebSocket;
+    const ws = Object.create(WebSocket.prototype) as WebSocket;
 
     const { sockets: host } = createDurableObjectSessionPlatform(state, db);
     host.accept(ws, ["sandbox", "sid:sb-1"]);
@@ -66,6 +66,14 @@ describe("createDurableObjectSessionPlatform", () => {
     expect(host.tags(ws)).toEqual(["sandbox", "sid:sb-1"]);
     expect(calls.getTags).toHaveBeenCalledWith(ws);
     expect(calls.getWebSockets.mock.calls).toEqual([[undefined], ["sandbox"]]);
+  });
+
+  it("refuses a socket the object did not upgrade", () => {
+    const { state, calls, db } = createFakeState();
+    const { sockets: host } = createDurableObjectSessionPlatform(state, db);
+
+    expect(() => host.accept({ readyState: 1, send() {}, close() {} }, [])).toThrow(TypeError);
+    expect(calls.acceptWebSocket).not.toHaveBeenCalled();
   });
 
   it("installs the auto-response as a request/response pair", () => {

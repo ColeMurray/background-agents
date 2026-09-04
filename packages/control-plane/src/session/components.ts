@@ -133,6 +133,7 @@ import { createSessionRuntimeClientForTrace } from "./runtime-client";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
+import type { SessionSocket } from "../platform-ports";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -150,7 +151,7 @@ const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
  */
 export interface SessionRuntime {
   readonly log: Logger;
-  readonly server: SessionServer<WebSocket, ClientInfo>;
+  readonly server: SessionServer<SessionSocket, ClientInfo>;
   /** Admission of WebSocket upgrades; the host completes the handshake and attaches its socket. */
   readonly upgrades: SessionUpgradeAdmission;
   readonly alarms: {
@@ -771,7 +772,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     nowMs: () => Date.now(),
     monotonicNowMs: () => performance.now(),
   };
-  const sockets: SocketRegistry<WebSocket, ClientInfo> = {
+  const sockets: SocketRegistry<SessionSocket, ClientInfo> = {
     classify: (ws) => wsManager.classify(ws),
     send: (ws, message) => wsManager.send(ws, message),
     getClient: (ws) => connectionAuthenticator.getClientInfo(ws),
@@ -799,7 +800,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     broadcast: (message) => messenger.broadcast(message),
   };
 
-  const server = new SessionServer<WebSocket, ClientInfo>({
+  const server = new SessionServer<SessionSocket, ClientInfo>({
     http: new SessionHttpDispatcher({ log, routes, clock }),
     messages: new SessionMessageRouter({
       log,

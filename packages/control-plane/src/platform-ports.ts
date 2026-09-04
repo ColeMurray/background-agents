@@ -16,6 +16,19 @@ export interface BackgroundTasks {
   ): void;
 }
 
+/**
+ * The socket surface the session core uses. Structural on purpose: the
+ * Cloudflare host hands the runtime hibernatable `WebSocket`s and the Node
+ * host hands it `ws` sockets, and the core compiles against both without
+ * naming a member only one platform has. `readyState` uses the standard
+ * CONNECTING/OPEN/CLOSING/CLOSED values on both.
+ */
+export interface SessionSocket {
+  readonly readyState: number;
+  send(message: string | ArrayBuffer | ArrayBufferView): void;
+  close(code?: number, reason?: string): void;
+}
+
 /** Access the runtime's single scheduled wake-up. */
 export interface AlarmScheduler {
   schedule(at: number): Promise<void>;

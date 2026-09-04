@@ -9,6 +9,7 @@ import { describe, it, expect, vi } from "vitest";
 import { SessionWebSocketManagerImpl } from "./websocket-manager";
 import type { WebSocketManagerConfig } from "./websocket-manager";
 import type { Logger } from "../logger";
+import type { SessionSocket } from "../platform-ports";
 import type { SocketHost } from "./platform";
 import type { ClientInfo } from "../types";
 import type { SandboxRepository } from "./sandbox-repository";
@@ -54,7 +55,7 @@ function createFakeWebSocket(readyState = WebSocket.OPEN): WebSocket {
 
 /** Type for the fake DurableObjectState with test helpers. */
 interface FakeSocketHost {
-  sockets: Map<WebSocket, string[]>;
+  sockets: Map<SessionSocket, string[]>;
   host: SocketHost;
 }
 
@@ -62,7 +63,7 @@ interface FakeSocketHost {
  * Fake SocketHost that tracks accepted WebSockets and their tags.
  */
 function createFakeSocketHost(): FakeSocketHost {
-  const sockets = new Map<WebSocket, string[]>();
+  const sockets = new Map<SessionSocket, string[]>();
 
   const host: SocketHost = {
     accept(ws, tags) {
@@ -1030,7 +1031,7 @@ describe("SessionWebSocketManagerImpl", () => {
       sockets.set(clientWs2, ["wsid:ws-2"]);
       sockets.set(sandboxWs, ["sandbox"]);
 
-      const called: WebSocket[] = [];
+      const called: SessionSocket[] = [];
       manager.forEachClientSocket("all_clients", (ws) => called.push(ws));
 
       expect(called).toHaveLength(2);
@@ -1049,7 +1050,7 @@ describe("SessionWebSocketManagerImpl", () => {
 
       manager.setClient(authedWs, createClientInfo({ ws: authedWs }));
 
-      const called: WebSocket[] = [];
+      const called: SessionSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => called.push(ws));
 
       expect(called).toEqual([authedWs]);
@@ -1072,7 +1073,7 @@ describe("SessionWebSocketManagerImpl", () => {
         authorization_expires_at: Date.now() + 300_000,
       });
 
-      const called: WebSocket[] = [];
+      const called: SessionSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => called.push(ws));
 
       expect(called).toEqual([ws]);
@@ -1084,7 +1085,7 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(ws, ["wsid:ws-unknown"]);
 
-      const called: WebSocket[] = [];
+      const called: SessionSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => called.push(ws));
 
       expect(called).toHaveLength(0);
@@ -1096,7 +1097,7 @@ describe("SessionWebSocketManagerImpl", () => {
       sockets.set(ws, ["wsid:ws-expired"]);
       manager.setClient(ws, createClientInfo({ ws, authorizationExpiresAt: Date.now() - 1 }));
 
-      const called: WebSocket[] = [];
+      const called: SessionSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (client) => called.push(client));
 
       expect(called).toEqual([]);
@@ -1116,7 +1117,7 @@ describe("SessionWebSocketManagerImpl", () => {
         authorization_expires_at: Date.now() - 1,
       });
 
-      const called: WebSocket[] = [];
+      const called: SessionSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (client) => called.push(client));
 
       expect(called).toEqual([]);
@@ -1170,11 +1171,11 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(sandboxWs, ["sandbox"]);
 
-      const allClientsCalled: WebSocket[] = [];
+      const allClientsCalled: SessionSocket[] = [];
       manager.forEachClientSocket("all_clients", (ws) => allClientsCalled.push(ws));
       expect(allClientsCalled).toHaveLength(0);
 
-      const authOnlyCalled: WebSocket[] = [];
+      const authOnlyCalled: SessionSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => authOnlyCalled.push(ws));
       expect(authOnlyCalled).toHaveLength(0);
     });

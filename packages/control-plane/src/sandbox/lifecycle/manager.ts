@@ -56,7 +56,7 @@ import {
   type ImageBuildLookup,
   type SelectedImageBuild,
 } from "./image-selection";
-import type { AlarmScheduler } from "../../platform-ports";
+import type { AlarmScheduler, SessionSocket } from "../../platform-ports";
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
 
 export type { ImageBuildLookup } from "./image-selection";
@@ -184,7 +184,7 @@ export interface SandboxBroadcaster {
  */
 export interface WebSocketManager {
   /** Get the sandbox WebSocket (with hibernation recovery) */
-  getSandboxWebSocket(): WebSocket | null;
+  getSandboxWebSocket(): SessionSocket | null;
   /** Detach the active sandbox dispatch boundary and close its WebSocket. */
   detachSandboxWebSocket(code: number, reason: string): void;
   /** Send a message to the sandbox */

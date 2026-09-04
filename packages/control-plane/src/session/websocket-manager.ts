@@ -14,7 +14,7 @@
  */
 
 import type { Logger } from "../logger";
-import type { AlarmScheduler } from "../platform-ports";
+import type { AlarmScheduler, SessionSocket } from "../platform-ports";
 import type { ClientInfo } from "../types";
 import type { SocketHost } from "./platform";
 import type { ConnectionClassification } from "./ports";
@@ -41,25 +41,25 @@ export interface WebSocketManagerConfig {
 /** Manages session sockets, client identity, and expiring authorization leases. */
 export interface SessionWebSocketManager {
   /** Accept a client WebSocket with a wsId tag for hibernation recovery. */
-  acceptClientSocket(ws: WebSocket, wsId: string): void;
+  acceptClientSocket(ws: SessionSocket, wsId: string): void;
 
   /**
    * Accept a sandbox WebSocket as the session's active bridge: persist its
    * identity, then close every other sandbox socket.
    */
-  acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean };
+  acceptAndSetSandboxSocket(ws: SessionSocket, sandboxId?: string): { replaced: boolean };
 
   /** Whether `ws` is the sandbox socket the session currently dispatches to. */
-  isActiveSandboxSocket(ws: WebSocket): boolean;
+  isActiveSandboxSocket(ws: SessionSocket): boolean;
 
   /** Parse a WebSocket's tags to determine its kind and identity. */
-  classify(ws: WebSocket): ConnectionClassification;
+  classify(ws: SessionSocket): ConnectionClassification;
 
   /**
    * Get the active sandbox socket, recovering from hibernation if needed.
    * Validates sandbox ID against the repository during hibernation recovery.
    */
-  getSandboxSocket(): WebSocket | null;
+  getSandboxSocket(): SessionSocket | null;
 
   /** Clear the in-memory sandbox socket reference. */
   clearSandboxSocket(): void;
@@ -76,38 +76,38 @@ export interface SessionWebSocketManager {
    * it was the active socket — whether its close is the loss of the session's
    * bridge rather than the tail of a replacement.
    */
-  clearSandboxSocketIfMatch(ws: WebSocket): boolean;
+  clearSandboxSocketIfMatch(ws: SessionSocket): boolean;
 
-  setClient(ws: WebSocket, info: ClientInfo): void;
-  removeClient(ws: WebSocket): ClientInfo | null;
+  setClient(ws: SessionSocket, info: ClientInfo): void;
+  removeClient(ws: SessionSocket): ClientInfo | null;
 
   /** Schedule, synchronize, and atomically publish a client authorization lease. */
-  activateClient(ws: WebSocket, info: ClientInfo, synchronize: () => boolean): Promise<boolean>;
+  activateClient(ws: SessionSocket, info: ClientInfo, synchronize: () => boolean): Promise<boolean>;
 
   /** Return a live client or its persisted hibernation mapping, rejecting expired leases. */
-  lookupClient(ws: WebSocket): ClientLookup;
+  lookupClient(ws: SessionSocket): ClientLookup;
 
   /** Close expired sockets, delete expired mappings, and schedule the next lease deadline. */
   expireAuthorizationLeases(now: number): Promise<void>;
 
-  setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void;
-  isClientSynchronizing(ws: WebSocket): boolean;
+  setClientSynchronizing(ws: SessionSocket, synchronizing: boolean): void;
+  isClientSynchronizing(ws: SessionSocket): boolean;
   /** Return whether the client has an unexpired authorization lease. */
-  isClientAuthenticated(ws: WebSocket): boolean;
+  isClientAuthenticated(ws: SessionSocket): boolean;
 
   /** Check if a wsId has a persisted mapping (used by auth timeout). */
   hasPersistedMapping(wsId: string): boolean;
 
-  send(ws: WebSocket, message: string | object): boolean;
-  close(ws: WebSocket, code: number, reason: string): void;
+  send(ws: SessionSocket, message: string | object): boolean;
+  close(ws: SessionSocket, code: number, reason: string): void;
 
   /** Visit client sockets, optionally limiting the visit to unexpired authorization leases. */
   forEachClientSocket(
     mode: "all_clients" | "authenticated_only",
-    fn: (ws: WebSocket) => void
+    fn: (ws: SessionSocket) => void
   ): void;
 
-  enforceAuthTimeout(ws: WebSocket, wsId: string): Promise<void>;
+  enforceAuthTimeout(ws: SessionSocket, wsId: string): Promise<void>;
   getAuthenticatedClients(): IterableIterator<ClientInfo>;
   getConnectedClientCount(): number;
 }
@@ -125,9 +125,9 @@ export type ClientLookup =
 
 /** Session WebSocket manager with persisted authorization leases. */
 export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
-  private clients = new Map<WebSocket, ClientInfo>();
-  private synchronizingClients = new Set<WebSocket>();
-  private sandboxWs: WebSocket | null = null;
+  private clients = new Map<SessionSocket, ClientInfo>();
+  private synchronizingClients = new Set<SessionSocket>();
+  private sandboxWs: SessionSocket | null = null;
 
   /** Create a WebSocket manager over the host's sockets and persisted client mappings. */
   constructor(
@@ -143,11 +143,11 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Accept
   // -------------------------------------------------------------------------
 
-  acceptClientSocket(ws: WebSocket, wsId: string): void {
+  acceptClientSocket(ws: SessionSocket, wsId: string): void {
     this.host.accept(ws, [`wsid:${wsId}`]);
   }
 
-  acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean } {
+  acceptAndSetSandboxSocket(ws: SessionSocket, sandboxId?: string): { replaced: boolean } {
     const socketId = `sbws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const tags = ["sandbox", ...(sandboxId ? [`sid:${sandboxId}`] : []), `socket:${socketId}`];
     this.host.accept(ws, tags);
@@ -181,7 +181,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Classification
   // -------------------------------------------------------------------------
 
-  classify(ws: WebSocket): ConnectionClassification {
+  classify(ws: SessionSocket): ConnectionClassification {
     const tags = this.host.tags(ws);
     if (tags.includes("sandbox")) {
       const sidTag = tags.find((t) => t.startsWith("sid:"));
@@ -196,7 +196,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Sandbox socket
   // -------------------------------------------------------------------------
 
-  isActiveSandboxSocket(ws: WebSocket): boolean {
+  isActiveSandboxSocket(ws: SessionSocket): boolean {
     return this.isAuthoritative(this.classify(ws), this.sandboxRepository.getSandbox());
   }
 
@@ -218,7 +218,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return parsed.socketId !== undefined && parsed.socketId === sandbox.active_socket_id;
   }
 
-  getSandboxSocket(): WebSocket | null {
+  getSandboxSocket(): SessionSocket | null {
     const sandbox = this.sandboxRepository.getSandbox();
     const expectedSandboxId = sandbox?.modal_sandbox_id;
 
@@ -278,7 +278,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   }
 
   detachSandboxSocket(code: number, reason: string): void {
-    const sockets = new Set<WebSocket>();
+    const sockets = new Set<SessionSocket>();
     if (this.sandboxWs) sockets.add(this.sandboxWs);
     for (const ws of this.host.sockets()) {
       if (this.classify(ws).kind === "sandbox") sockets.add(ws);
@@ -290,7 +290,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     for (const ws of sockets) this.close(ws, code, reason);
   }
 
-  clearSandboxSocketIfMatch(ws: WebSocket): boolean {
+  clearSandboxSocketIfMatch(ws: SessionSocket): boolean {
     const active = this.isActiveSandboxSocket(ws);
     if (active || this.sandboxWs === ws) this.sandboxWs = null;
     return active;
@@ -300,11 +300,11 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Client identity registry
   // -------------------------------------------------------------------------
 
-  setClient(ws: WebSocket, info: ClientInfo): void {
+  setClient(ws: SessionSocket, info: ClientInfo): void {
     this.clients.set(ws, info);
   }
 
-  removeClient(ws: WebSocket): ClientInfo | null {
+  removeClient(ws: SessionSocket): ClientInfo | null {
     return this.teardownClient(ws, this.classify(ws));
   }
 
@@ -313,7 +313,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // -------------------------------------------------------------------------
 
   /** Return cached or persisted client state, closing the socket if its lease expired. */
-  lookupClient(ws: WebSocket): ClientLookup {
+  lookupClient(ws: SessionSocket): ClientLookup {
     const client = this.clients.get(ws);
     if (client) {
       if (client.authorizationExpiresAt <= Date.now()) {
@@ -336,7 +336,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   /** Schedule and synchronize before publishing persistent and in-memory identity together. */
   async activateClient(
-    ws: WebSocket,
+    ws: SessionSocket,
     info: ClientInfo,
     synchronize: () => boolean
   ): Promise<boolean> {
@@ -382,17 +382,17 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     if (nextExpiry !== null) await this.alarmScheduler.schedule(nextExpiry);
   }
 
-  setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void {
+  setClientSynchronizing(ws: SessionSocket, synchronizing: boolean): void {
     if (synchronizing) this.synchronizingClients.add(ws);
     else this.synchronizingClients.delete(ws);
   }
 
-  isClientSynchronizing(ws: WebSocket): boolean {
+  isClientSynchronizing(ws: SessionSocket): boolean {
     return this.synchronizingClients.has(ws);
   }
 
   /** Return whether the client has an unexpired authorization lease. */
-  isClientAuthenticated(ws: WebSocket): boolean {
+  isClientAuthenticated(ws: SessionSocket): boolean {
     return this.isAuthenticated(ws, this.classify(ws));
   }
 
@@ -404,7 +404,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Send / close
   // -------------------------------------------------------------------------
 
-  send(ws: WebSocket, message: string | object): boolean {
+  send(ws: SessionSocket, message: string | object): boolean {
     try {
       if (ws.readyState !== WebSocket.OPEN) {
         this.log.debug("Cannot send: WebSocket not open", { ready_state: ws.readyState });
@@ -419,7 +419,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     }
   }
 
-  close(ws: WebSocket, code: number, reason: string): void {
+  close(ws: SessionSocket, code: number, reason: string): void {
     try {
       ws.close(code, reason);
     } catch {
@@ -434,7 +434,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   /** Visit client sockets, optionally limiting the visit to unexpired authorization leases. */
   forEachClientSocket(
     mode: "all_clients" | "authenticated_only",
-    fn: (ws: WebSocket) => void
+    fn: (ws: SessionSocket) => void
   ): void {
     for (const ws of this.host.sockets()) {
       const parsed = this.classify(ws);
@@ -452,7 +452,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
    * Check whether a client socket has authentication evidence,
    * either in-memory or via persisted DB mapping (post-hibernation).
    */
-  private isAuthenticated(ws: WebSocket, parsed: ConnectionClassification): boolean {
+  private isAuthenticated(ws: SessionSocket, parsed: ConnectionClassification): boolean {
     const expiresAt = this.authorizationExpiry(ws, parsed);
     if (expiresAt === null) return false;
     if (expiresAt > Date.now()) return true;
@@ -460,7 +460,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return false;
   }
 
-  private authorizationExpiry(ws: WebSocket, parsed: ConnectionClassification): number | null {
+  private authorizationExpiry(ws: SessionSocket, parsed: ConnectionClassification): number | null {
     const client = this.clients.get(ws);
     if (client) return client.authorizationExpiresAt;
     if (parsed.kind !== "client" || !parsed.wsId) return null;
@@ -468,13 +468,13 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return mapping?.authorization_expires_at ?? null;
   }
 
-  private rejectExpiredAuthorization(ws: WebSocket, parsed: ConnectionClassification): void {
+  private rejectExpiredAuthorization(ws: SessionSocket, parsed: ConnectionClassification): void {
     this.teardownClient(ws, parsed);
     this.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
   }
 
   /** Remove every representation of a client before callers notify or close it. */
-  private teardownClient(ws: WebSocket, parsed: ConnectionClassification): ClientInfo | null {
+  private teardownClient(ws: SessionSocket, parsed: ConnectionClassification): ClientInfo | null {
     const client = this.clients.get(ws) ?? null;
     this.clients.delete(ws);
     this.synchronizingClients.delete(ws);
@@ -488,7 +488,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Auth timeout enforcement
   // -------------------------------------------------------------------------
 
-  async enforceAuthTimeout(ws: WebSocket, wsId: string): Promise<void> {
+  async enforceAuthTimeout(ws: SessionSocket, wsId: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, this.config.authTimeoutMs));
 
     if (ws.readyState !== WebSocket.OPEN) return;
