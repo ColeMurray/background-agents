@@ -98,7 +98,7 @@ describe("HostAlarmClock", () => {
     expect(delivered).toEqual(["first", "s1"]);
   });
 
-  it("never overlaps two deliveries to one session", async () => {
+  it("never overlaps two deliveries to one session, and waits without spinning", async () => {
     const store = clock.storeFor("s1");
     let release!: () => void;
     deliver.mockImplementationOnce(async () => {
@@ -109,16 +109,52 @@ describe("HostAlarmClock", () => {
         release = resolve;
       });
     });
+    const due = vi.spyOn(index, "due");
     await store.setAlarm(Date.now() + 100);
     await vi.advanceTimersByTimeAsync(100);
+    const ticksBefore = due.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5_000);
     expect(delivered).toEqual(["slow"]);
+    // Nothing else is armed, so nothing wakes the clock while it waits.
+    expect(due.mock.calls.length).toBe(ticksBefore);
     release();
     await vi.advanceTimersByTimeAsync(0);
     expect(delivered).toEqual(["slow", "s1"]);
   });
 
-  it("retries a failed delivery with backoff and drops it after the last attempt", async () => {
+  it("fires other sessions while one delivery is still running", async () => {
+    let release!: () => void;
+    deliver.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+    await clock.storeFor("slow").setAlarm(Date.now() + 100);
+    await clock.storeFor("other").setAlarm(Date.now() + 200);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(deliver).toHaveBeenCalledWith("slow");
+    expect(deliver).toHaveBeenCalledWith("other");
+    release();
+  });
+
+  it("delivers again after a restart when the previous process died mid-delivery", async () => {
+    deliver.mockImplementationOnce(() => new Promise<void>(() => {}));
+    await clock.storeFor("s1").setAlarm(Date.now() + 100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    // The process dies here: the clock is abandoned with the claim on disk.
+    clock.stop();
+
+    const restarted = new HostAlarmClock({ index, deliver, log });
+    restarted.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(delivered).toEqual(["s1"]);
+    restarted.stop();
+  });
+
+  it("retries a failed delivery with backoff and stops after the last attempt", async () => {
     deliver.mockRejectedValue(new Error("handler failed"));
     await clock.storeFor("s1").setAlarm(Date.now() + 100);
     await vi.advanceTimersByTimeAsync(100);
@@ -133,6 +169,20 @@ describe("HostAlarmClock", () => {
     await vi.advanceTimersByTimeAsync(10_000_000);
     expect(deliver).toHaveBeenCalledTimes(6);
     expect(index.earliest()).toBeNull();
+  });
+
+  it("gives a newly armed deadline its full retry budget", async () => {
+    deliver.mockRejectedValue(new Error("handler failed"));
+    const store = clock.storeFor("s1");
+    await store.setAlarm(Date.now() + 100);
+    await vi.advanceTimersByTimeAsync(100 + 30_000 + 60_000);
+    expect(deliver).toHaveBeenCalledTimes(3);
+    // The session arms a new deadline: the three failures belonged to the old one.
+    await store.setAlarm(Date.now() + 100);
+    await vi.advanceTimersByTimeAsync(100 + 30_000 * (1 + 2 + 4 + 8 + 16));
+    expect(deliver).toHaveBeenCalledTimes(3 + 6);
+    await vi.advanceTimersByTimeAsync(10_000_000);
+    expect(deliver).toHaveBeenCalledTimes(9);
   });
 
   it("resumes deadlines recorded before a restart", async () => {
@@ -221,6 +271,63 @@ describe("HostAlarmClock", () => {
       await scheduler.rehydrate();
       await vi.advanceTimersByTimeAsync(500);
       expect(delivered).toEqual(["s1"]);
+    });
+
+    it("retries a failed delivery sooner than the replacement its handler armed, then restores the replacement", async () => {
+      const scheduler = createEarliestAlarmScheduler(clock.storeFor("s1"), deadlines);
+      const replacement = Date.now() + 3_600_000;
+      let attempts = 0;
+      deliver.mockImplementation(() =>
+        handleAlarmDelivery(
+          deadlines,
+          async () => {
+            attempts += 1;
+            if (attempts === 1) {
+              await scheduler.schedule(replacement);
+              throw new Error("first attempt failed");
+            }
+          },
+          () => scheduler.rearmPending()
+        )
+      );
+      await scheduler.schedule(Date.now() + 1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(attempts).toBe(1);
+      expect(await clock.storeFor("s1").getAlarm()).toBe(Date.now() + 30_000);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(attempts).toBe(2);
+      // The retry acknowledged the failed deadline and re-armed its replacement.
+      expect(deadlines.pending()).toBe(replacement);
+      expect(await clock.storeFor("s1").getAlarm()).toBe(replacement);
+      await vi.advanceTimersByTimeAsync(replacement - Date.now());
+      expect(attempts).toBe(3);
+    });
+
+    it("after the host stops retrying, the session's next rehydrate re-arms the deadline", async () => {
+      const scheduler = createEarliestAlarmScheduler(clock.storeFor("s1"), deadlines);
+      deliver.mockImplementation(() =>
+        handleAlarmDelivery(
+          deadlines,
+          async () => {
+            throw new Error("always fails");
+          },
+          () => scheduler.rearmPending()
+        )
+      );
+      await scheduler.schedule(Date.now() + 100);
+      await vi.advanceTimersByTimeAsync(100 + 30_000 * (1 + 2 + 4 + 8 + 16));
+      expect(deliver).toHaveBeenCalledTimes(6);
+      expect(index.earliest()).toBeNull();
+      // The session file still holds the deadline in flight.
+      expect(deadlines.earliest()).toBe(1_000_100);
+
+      deliver.mockImplementation(async () => {
+        delivered.push("recovered");
+      });
+      await scheduler.rehydrate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(delivered).toEqual(["recovered"]);
     });
 
     it("rearmPending re-arms a pending deadline the host has lost", async () => {

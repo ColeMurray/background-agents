@@ -53,6 +53,66 @@ describe("openHostAlarmIndex", () => {
     expect(index.due(99)).toEqual([]);
   });
 
+  it("claims a deadline for delivery, hides it while in flight, and completes it", () => {
+    const index = open();
+    index.set("s1", 100);
+    expect(index.claim("s1")).toBe(100);
+    expect(index.get("s1")).toBeNull();
+    expect(index.earliest()).toBeNull();
+    expect(index.claim("s1")).toBeNull();
+    // A deadline armed during delivery is visible and survives completion.
+    index.set("s1", 900);
+    index.complete("s1");
+    expect(index.get("s1")).toBe(900);
+    index.delete("s1");
+    expect(index.earliest()).toBeNull();
+  });
+
+  it("re-arms a failed claim at the retry time, or sooner if the session armed sooner", () => {
+    const index = open();
+    index.set("later", 100);
+    index.claim("later");
+    index.set("later", 5_000);
+    index.retry("later", 1_000);
+    expect(index.get("later")).toBe(1_000);
+
+    index.set("sooner", 100);
+    index.claim("sooner");
+    index.set("sooner", 200);
+    index.retry("sooner", 1_000);
+    expect(index.get("sooner")).toBe(200);
+  });
+
+  it("recovers claims left in flight at their original deadline, or sooner", () => {
+    const first = open();
+    first.set("crashed", 100);
+    first.claim("crashed");
+    first.set("rearmed", 100);
+    first.claim("rearmed");
+    first.set("rearmed", 50);
+    first.set("idle", 700);
+    first.close();
+
+    const second = open();
+    // Before recovery only armed deadlines count: the crashed claim is invisible.
+    expect(second.earliest(["rearmed"])).toEqual({ sessionId: "idle", deadline: 700 });
+    expect(second.recoverClaims().sort()).toEqual(["crashed", "rearmed"]);
+    expect(second.due(100)).toEqual([
+      { sessionId: "rearmed", deadline: 50 },
+      { sessionId: "crashed", deadline: 100 },
+    ]);
+    expect(second.recoverClaims()).toEqual([]);
+  });
+
+  it("leaves excluded sessions out of earliest and due", () => {
+    const index = open();
+    index.set("a", 100);
+    index.set("b", 200);
+    expect(index.earliest(["a"])).toEqual({ sessionId: "b", deadline: 200 });
+    expect(index.due(300, ["a", "b"])).toEqual([]);
+    expect(index.due(300, new Set(["b"]))).toEqual([{ sessionId: "a", deadline: 100 }]);
+  });
+
   it("survives close and reopen in a private file", () => {
     const first = open();
     first.set("s1", 700);
