@@ -4,14 +4,15 @@
  * Terraform declares (`cron_triggers` in
  * `terraform/environments/production/workers-control-plane.tf`), which must
  * list exactly the expressions below; a unit test checks the two agree. The
- * Node host runs an in-process loop over the same table with
- * `nextCronOccurrence` from `@open-inspect/shared`.
+ * Node host will drive the same table from an in-process loop over
+ * `nextCronOccurrence` from `@open-inspect/shared` (H-5); nothing on Node
+ * consumes it yet.
  *
  * A slot may fire twice (a retried trigger, two hosts during a cutover) and
  * that is harmless: the automation scheduler's tick claims its work with an
  * SQL compare-and-swap, and the sweeps are idempotent, so a double tick costs
- * extra reads and nothing else. The Node host is one process, so there is no
- * leader election and none is needed.
+ * extra reads and nothing else. The Node host is planned as one process, so
+ * it needs no leader election.
  */
 
 import { checkAutofixQueueHealth } from "./autofix/queue-health";

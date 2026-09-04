@@ -5,18 +5,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { checkAutofixQueueHealth } from "./autofix/queue-health";
 import { SessionIndexStore } from "./db/session-index";
 import type { SqlDatabase } from "./db/sql-database";
-import { runImageBuildScheduler } from "./image-builds/scheduler";
+import type * as ImageBuildScheduler from "./image-builds/scheduler";
+import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 import type { Logger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import { Scheduler } from "./scheduler/scheduler";
-import { AbandonedDraftSweep, SessionDraftExpiryClient } from "./session/abandoned-draft-sweep";
+import type * as AbandonedDraftSweepModule from "./session/abandoned-draft-sweep";
+import {
+  ABANDONED_DRAFT_SWEEP_CRON,
+  AbandonedDraftSweep,
+  SessionDraftExpiryClient,
+} from "./session/abandoned-draft-sweep";
 import type { SessionRuntimeClient } from "./session/runtime-client";
-import { SCHEDULED_JOBS, findScheduledJob, type ScheduledJobDeps } from "./scheduled-jobs";
+import {
+  SCHEDULED_JOBS,
+  SCHEDULER_TICK_CRON,
+  findScheduledJob,
+  type ScheduledJobDeps,
+} from "./scheduled-jobs";
 import type { Env } from "./types";
 
+// The job bodies are mocked; the cron constants stay the production values so
+// the Terraform parity check below reads what the Worker really registers.
 vi.mock("./autofix/queue-health", () => ({ checkAutofixQueueHealth: vi.fn(async () => {}) }));
-vi.mock("./image-builds/scheduler", () => ({
-  IMAGE_BUILD_SCHEDULER_CRON: "7,37 * * * *",
+vi.mock("./image-builds/scheduler", async (importOriginal) => ({
+  ...(await importOriginal<typeof ImageBuildScheduler>()),
   runImageBuildScheduler: vi.fn(async () => ({})),
 }));
 vi.mock("./scheduler/scheduler", () => ({
@@ -24,8 +37,8 @@ vi.mock("./scheduler/scheduler", () => ({
     return { tick: schedulerTick };
   }),
 }));
-vi.mock("./session/abandoned-draft-sweep", () => ({
-  ABANDONED_DRAFT_SWEEP_CRON: "23 * * * *",
+vi.mock("./session/abandoned-draft-sweep", async (importOriginal) => ({
+  ...(await importOriginal<typeof AbandonedDraftSweepModule>()),
   AbandonedDraftSweep: vi.fn(function () {
     return { run: sweepRun };
   }),
@@ -78,6 +91,9 @@ describe("SCHEDULED_JOBS", () => {
     const crons = SCHEDULED_JOBS.map((job) => job.cron);
     expect(new Set(crons).size).toBe(crons.length);
     expect(new Set(SCHEDULED_JOBS.map((job) => job.name)).size).toBe(crons.length);
+    expect([...crons].sort()).toEqual(
+      [SCHEDULER_TICK_CRON, IMAGE_BUILD_SCHEDULER_CRON, ABANDONED_DRAFT_SWEEP_CRON].sort()
+    );
     expect([...terraformCronTriggers()].sort()).toEqual([...crons].sort());
     for (const job of SCHEDULED_JOBS) expect(findScheduledJob(job.cron)).toBe(job);
     expect(findScheduledJob("0 0 * * *")).toBeUndefined();
@@ -86,7 +102,7 @@ describe("SCHEDULED_JOBS", () => {
   it("runs the every-minute tick: queue health in the background, the scheduler tick awaited", async () => {
     const deps = fakeDeps();
 
-    await findScheduledJob("* * * * *")!.run(deps, 1_000);
+    await findScheduledJob(SCHEDULER_TICK_CRON)!.run(deps, 1_000);
 
     expect(Scheduler).toHaveBeenCalledWith(deps.db, deps.env, deps.backgroundTasks);
     expect(schedulerTick).toHaveBeenCalledTimes(1);
@@ -99,7 +115,7 @@ describe("SCHEDULED_JOBS", () => {
   it("runs the image-build scheduler with the run's correlation", async () => {
     const deps = fakeDeps();
 
-    await findScheduledJob("7,37 * * * *")!.run(deps, 1_000);
+    await findScheduledJob(IMAGE_BUILD_SCHEDULER_CRON)!.run(deps, 1_000);
 
     expect(runImageBuildScheduler).toHaveBeenCalledWith(deps.env, deps.db, deps.correlation);
     expect(deps.submitted).toEqual([]);
@@ -108,7 +124,7 @@ describe("SCHEDULED_JOBS", () => {
   it("runs the abandoned-draft sweep over the index store and the session client at the run's time", async () => {
     const deps = fakeDeps();
 
-    await findScheduledJob("23 * * * *")!.run(deps, 1_234_567);
+    await findScheduledJob(ABANDONED_DRAFT_SWEEP_CRON)!.run(deps, 1_234_567);
 
     expect(SessionDraftExpiryClient).toHaveBeenCalledWith(deps.sessions);
     const [index, client, log] = vi.mocked(AbandonedDraftSweep).mock.calls[0]!;
