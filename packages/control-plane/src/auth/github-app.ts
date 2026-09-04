@@ -135,12 +135,14 @@ const repositoryBranchesResponseSchema = z.array(z.object({ name: z.string() }))
  * Parse PEM-encoded private key to raw bytes.
  */
 function parsePemPrivateKey(pem: string): Uint8Array {
-  // Remove PEM header/footer and newlines
+  // Remove PEM header/footer and newlines, including the two-character
+  // `\n` an environment file leaves in place of a newline.
   const pemContents = pem
     .replace(/-----BEGIN RSA PRIVATE KEY-----/g, "")
     .replace(/-----END RSA PRIVATE KEY-----/g, "")
     .replace(/-----BEGIN PRIVATE KEY-----/g, "")
     .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\\n/g, "")
     .replace(/\s/g, "");
 
   // Decode base64
