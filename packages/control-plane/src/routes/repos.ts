@@ -15,7 +15,7 @@ import {
   type InstallationRepository,
   type RepoMetadata,
 } from "@open-inspect/shared/types/repository-catalog";
-import { SourceControlProviderError } from "../source-control";
+import { resolveScmProviderFromEnv, SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
 import {
   GITHUB_USER_OR_SERVICE_ROUTE,
@@ -28,9 +28,27 @@ import {
 
 const logger = createLogger("router:repos");
 
-const REPOS_CACHE_KEY = "repos:list:v2";
-const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000; // Serve without revalidation for 5 minutes
-const REPOS_CACHE_KV_TTL_SECONDS = 3600; // Keep stale data in KV for 1 hour
+export const REPOS_CACHE_KEY = "repos:list:v3";
+const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000;
+const REPOS_CACHE_KV_TTL_SECONDS = 3600;
+
+export async function reposCacheIdentity(
+  env: Pick<
+    Env,
+    "SCM_PROVIDER" | "GITHUB_APP_INSTALLATION_ID" | "GITLAB_NAMESPACE" | "GITLAB_ACCESS_TOKEN"
+  >
+): Promise<string> {
+  const provider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
+  let identity: string[] = [provider];
+  if (provider === "github") identity = [provider, env.GITHUB_APP_INSTALLATION_ID ?? ""];
+  if (provider === "gitlab") {
+    identity = [provider, env.GITLAB_NAMESPACE ?? "", env.GITLAB_ACCESS_TOKEN ?? ""];
+  }
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(identity)))
+  );
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 /**
  * Cached repos list structure stored in KV.
@@ -38,6 +56,7 @@ const REPOS_CACHE_KV_TTL_SECONDS = 3600; // Keep stale data in KV for 1 hour
 interface CachedReposList {
   repos: EnrichedRepository[];
   cachedAt: string;
+  scmIdentity: string;
   /** Epoch ms — cache is considered fresh until this time. Missing in entries cached before this field was added. */
   freshUntil?: number;
 }
@@ -56,6 +75,7 @@ type ScmApiTimer = <T>(fn: () => Promise<T>) => Promise<T>;
 async function refreshReposCache(
   env: Env,
   db: SqlDatabase,
+  scmIdentity: string,
   traceId?: string,
   timeScmApi: ScmApiTimer = (fn) => fn()
 ): Promise<ReposRefreshResult> {
@@ -109,7 +129,7 @@ async function refreshReposCache(
   try {
     await cacheStore.put(
       REPOS_CACHE_KEY,
-      JSON.stringify({ repos: enrichedRepos, cachedAt, freshUntil }),
+      JSON.stringify({ repos: enrichedRepos, cachedAt, scmIdentity, freshUntil }),
       { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
     );
     logger.info("Repos cache refreshed", {
@@ -144,6 +164,7 @@ async function handleListRepos(
   ctx: RequestContext
 ): Promise<Response> {
   const cacheStore = env.REPOS_CACHE;
+  const scmIdentity = await reposCacheIdentity(env);
 
   // Read from KV cache
   let cached: CachedReposList | null = null;
@@ -155,7 +176,7 @@ async function handleListRepos(
     logger.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });
   }
 
-  if (cached) {
+  if (cached?.scmIdentity === scmIdentity) {
     const isFresh = cached.freshUntil && Date.now() < cached.freshUntil;
 
     if (!isFresh) {
@@ -164,7 +185,7 @@ async function handleListRepos(
         trace_id: ctx.trace_id,
         cached_at: cached.cachedAt,
       });
-      ctx.executionCtx.submit(() => refreshReposCache(env, ctx.db, ctx.trace_id), {
+      ctx.executionCtx.submit(() => refreshReposCache(env, ctx.db, scmIdentity, ctx.trace_id), {
         name: "repos_cache.refresh",
         context: { trace_id: ctx.trace_id },
       });
@@ -185,7 +206,7 @@ async function handleListRepos(
   // because the stale-while-revalidate branch above needs an entry to exist.
   // The refresh promise is created once and shared: the factory hands it to
   // waitUntil while the response below awaits the same run.
-  const refresh = refreshReposCache(env, ctx.db, ctx.trace_id, (fn) =>
+  const refresh = refreshReposCache(env, ctx.db, scmIdentity, ctx.trace_id, (fn) =>
     ctx.metrics.time("scm_api", fn)
   );
   ctx.executionCtx.submit(() => refresh, {

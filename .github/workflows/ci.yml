@@ -178,6 +178,9 @@ jobs:
       - name: Run shared tests
         run: npm test -w @open-inspect/shared
 
+      # Runs the node:sqlite lane of the session-core conformance suite
+      # (test/conformance). The Durable Object lane of the same suite runs in
+      # test-cp-integration; a session repository or migration has to pass both.
       - name: Run control-plane unit tests
         run: npm test -w @open-inspect/control-plane
 
@@ -205,6 +208,8 @@ jobs:
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
 
+      # Runs the Durable Object lane of the session-core conformance suite.
+      # The node:sqlite lane of the same suite runs in test-cp-unit.
       - name: Run control-plane integration tests
         run: npm run test:integration -w @open-inspect/control-plane -- --shard=${{ matrix.shard }}
 

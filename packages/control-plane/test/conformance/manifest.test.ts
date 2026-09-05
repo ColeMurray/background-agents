@@ -1,11 +1,12 @@
 /**
  * Every host contract is declared somewhere in the host's integration suites
- * through `hostContract(id, …)`, which owns the title and has no skipped form.
- * The scan is what makes omission visible: a host that forgets a contract
- * fails here rather than silently running fewer tests.
+ * through `hostContract(id, …)`, which owns the title and has no skipped form,
+ * and every storage lane registers the whole storage suite. The scan is what
+ * makes omission visible: a host that forgets a contract, or a lane that stops
+ * registering the suite, fails here rather than silently running fewer tests.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -16,6 +17,16 @@ import {
 } from "./session-core-conformance";
 
 const integrationDir = resolve(__dirname, "../integration");
+
+/**
+ * The storage lanes and the file that registers the suite for each. Both run
+ * in CI: the node:sqlite lane in `test-cp-unit`, the Durable Object lane in
+ * `test-cp-integration`.
+ */
+const STORAGE_LANES: Record<string, string> = {
+  "node:sqlite": join(__dirname, "session-core-conformance.node.test.ts"),
+  "Durable Object storage": join(integrationDir, "session-core-conformance.test.ts"),
+};
 
 function declaredHostContracts(): Map<HostContractId, string[]> {
   const declared = new Map<HostContractId, string[]>();
@@ -42,6 +53,14 @@ describe("session-core conformance manifest", () => {
     "%s is declared by the Cloudflare host",
     (id) => {
       expect(declaredHostContracts().get(id) ?? []).not.toEqual([]);
+    }
+  );
+
+  it.each(Object.entries(STORAGE_LANES))(
+    "the %s lane registers every storage contract",
+    (_lane, file) => {
+      expect(existsSync(file)).toBe(true);
+      expect(readFileSync(file, "utf8")).toContain("registerSessionCoreConformanceSuite(");
     }
   );
 });
