@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
@@ -8,6 +8,10 @@ import { SettingsViewportProvider } from "@/components/settings/settings-viewpor
 import { SettingsNav } from "@/components/settings/settings-nav";
 import { resolveSettingsCategory } from "@/components/settings/settings-registry";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+
+const subscribeToHydration = () => () => undefined;
+const getClientHydrationSnapshot = () => true;
+const getServerHydrationSnapshot = () => false;
 
 /**
  * Hosts responsive settings content and redirects routes whose category is unavailable to the current user.
@@ -17,7 +21,11 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
-  const [isHydrated, setIsHydrated] = useState(false);
+  const isHydrated = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot
+  );
   const tab = searchParams.get("tab");
   const { hasPermission, loading } = useCurrentUserAuthorization();
   const requestedCategory = pathname.startsWith("/settings/integrations/") ? "integrations" : tab;
@@ -29,7 +37,6 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   const categoryRedirectRequired =
     requestedCategory !== null && activeCategory !== requestedCategory;
 
-  useEffect(() => setIsHydrated(true), []);
   useEffect(() => {
     if (isHydrated && !loading && categoryRedirectRequired) {
       router.replace(`/settings?tab=${activeCategory}`);

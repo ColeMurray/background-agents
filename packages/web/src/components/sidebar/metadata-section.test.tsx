@@ -232,6 +232,39 @@ describe("MetadataSection", () => {
     expect(screen.getByText("acme/api: Secret key collision on API_KEY")).toBeInTheDocument();
   });
 
+  it("preserves warning row identity when warnings reorder", () => {
+    const warning = {
+      type: "warning" as const,
+      scope: "setup" as const,
+      message: "Setup warning",
+      timestamp: 1,
+    };
+    const otherWarning = {
+      type: "warning" as const,
+      scope: "sync" as const,
+      message: "Sync warning",
+      timestamp: 2,
+    };
+    const { rerender } = render(
+      <MetadataSection
+        createdAt={Date.now()}
+        baseBranch="main"
+        warnings={[warning, otherWarning]}
+      />
+    );
+    const warningRow = screen.getByText("Setup warning").parentElement;
+
+    rerender(
+      <MetadataSection
+        createdAt={Date.now()}
+        baseBranch="main"
+        warnings={[otherWarning, warning]}
+      />
+    );
+
+    expect(screen.getByText("Setup warning").parentElement).toBe(warningRow);
+  });
+
   it("renders the environment name for environment-launched sessions", () => {
     render(
       <MetadataSection
