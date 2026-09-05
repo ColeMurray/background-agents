@@ -25,8 +25,10 @@
  * cannot corrupt the redelivery that replaces it, because settling is fenced
  * on the claim token it no longer owns.
  *
- * Polling and delivery are total: a store that throws is logged and the
- * timer re-armed, never left as an unhandled rejection from a timer task.
+ * Polling, delivery and arming are total: a store that throws is logged and
+ * the timer re-armed, never left as an unhandled rejection from a timer task.
+ * The poller schedules itself only for the kinds it can actually claim, so a
+ * job left for a newer build waits quietly instead of being polled for.
  */
 
 import { JOB_KINDS, deliverJob, type Job, type JobDeps, type JobKind, type Jobs } from "../jobs";
@@ -46,9 +48,11 @@ const DEFAULT_MAX_CONCURRENT_JOBS = 8;
  */
 export const JOB_CLAIM_LEASE_MS = 15 * 60 * 1000;
 /** How often expired leases are swept when nothing else wakes the timer. */
-const LEASE_SWEEP_INTERVAL_MS = 60 * 1000;
+export const LEASE_SWEEP_INTERVAL_MS = 60 * 1000;
 /** The clock source, unless a test supplies one; read per call so fake timers apply. */
 const DEFAULT_NOW = (): number => Date.now();
+/** How job ids are minted, unless a test supplies its own. */
+const DEFAULT_NEW_ID = (): string => crypto.randomUUID();
 
 export interface NodeJobsOptions {
   store: JobStore;
@@ -84,7 +88,7 @@ export class NodeJobs implements Jobs {
     this.log = options.log;
     this.now = options.now ?? DEFAULT_NOW;
     this.maxConcurrentJobs = options.maxConcurrentJobs ?? DEFAULT_MAX_CONCURRENT_JOBS;
-    this.newId = options.newId ?? (() => crypto.randomUUID());
+    this.newId = options.newId ?? DEFAULT_NEW_ID;
   }
 
   /**
@@ -148,8 +152,20 @@ export class NodeJobs implements Jobs {
     const now = this.now();
     let wakeAt = now + LEASE_SWEEP_INTERVAL_MS;
     if (this.inFlight.size < this.maxConcurrentJobs) {
-      const next = this.store.earliest();
-      if (next !== null) wakeAt = Math.min(wakeAt, next);
+      try {
+        const next = this.store.earliest(KNOWN_KINDS);
+        if (next !== null) wakeAt = Math.min(wakeAt, next);
+      } catch (error) {
+        // Arming ends every path — a send, a tick, a settling delivery — so a
+        // throw here would reject a send whose row is already durable, or
+        // escape a timer task and take the process with it. The sweep
+        // interval is the fallback: the host keeps waking, just without
+        // knowing what is due until the store answers again.
+        this.log.error("Jobs poller could not schedule its next wake-up", {
+          event: "jobs.arm_failed",
+          error_message: message(error),
+        });
+      }
     }
     const delay = Math.min(Math.max(0, wakeAt - now), MAX_TIMER_DELAY_MS);
     this.timer = setTimeout(() => this.tick(), delay);

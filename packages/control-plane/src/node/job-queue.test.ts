@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { JOB_KINDS, type JobDeps, type JobOutcome } from "../jobs";
 import type { Logger } from "../logger";
-import { JOB_CLAIM_LEASE_MS, NodeJobs } from "./job-queue";
+import { JOB_CLAIM_LEASE_MS, LEASE_SWEEP_INTERVAL_MS, NodeJobs } from "./job-queue";
 import { openJobStore, type JobStore } from "./job-store";
 
 const KIND = "image_build.finalize" as const;
@@ -67,7 +67,7 @@ describe("NodeJobs", () => {
     const queue = createQueue(handle);
 
     await queue.send({ kind: KIND, payload: PAYLOAD });
-    expect(store.earliest()).toBe(10_000);
+    expect(store.earliest([KIND])).toBe(10_000);
     queue.start();
     await runPoller(queue);
 
@@ -104,7 +104,7 @@ describe("NodeJobs", () => {
     await runPoller(queue);
 
     expect(handle).toHaveBeenCalledOnce();
-    expect(store.earliest()).toBe(10_000 + retryDelayMs);
+    expect(store.earliest([KIND])).toBe(10_000 + retryDelayMs);
 
     await vi.advanceTimersByTimeAsync(retryDelayMs);
     await queue.drain();
@@ -124,7 +124,7 @@ describe("NodeJobs", () => {
     queue.start();
     await runPoller(queue);
 
-    expect(store.earliest()).toBe(10_000 + 300_000);
+    expect(store.earliest([KIND])).toBe(10_000 + 300_000);
   });
 
   it("buries a job that used its last attempt, keeping the row and the reason", async () => {
@@ -187,6 +187,47 @@ describe("NodeJobs", () => {
     expect(queue.stats()).toMatchObject({ pending: 1, running: 0, dead: 0 });
   });
 
+  it("does not schedule itself for a due job whose kind it cannot claim", async () => {
+    const queue = createQueue(vi.fn());
+    store.add({ id: "future", kind: "session.completed", payload: "{}", runAt: 10_000 }, 10_000);
+    const claim = vi.spyOn(store, "claim");
+
+    queue.start();
+    await vi.advanceTimersByTimeAsync(LEASE_SWEEP_INTERVAL_MS - 1);
+
+    // The row is due and never claimable, so waking for it would be a spin
+    // that never makes progress: the poller waits for the lease sweep instead.
+    expect(claim).not.toHaveBeenCalled();
+    expect(queue.stats()).toMatchObject({ pending: 1, dead: 0 });
+  });
+
+  it("keeps the send durable and the timer alive when the store cannot say what is next", async () => {
+    const handle = vi.fn(async (): Promise<JobOutcome> => "ack");
+    const queue = createQueue(handle);
+    const earliest = vi.spyOn(store, "earliest").mockImplementation(() => {
+      throw new Error("database is locked");
+    });
+
+    // The row is written before the poller is armed, so the send succeeded
+    // however scheduling went.
+    await expect(queue.send({ kind: KIND, payload: PAYLOAD })).resolves.toBeUndefined();
+    queue.start();
+    await vi.advanceTimersByTimeAsync(LEASE_SWEEP_INTERVAL_MS);
+    await queue.drain();
+
+    // Blind to what is due, the poller still wakes on its own interval.
+    expect(handle).toHaveBeenCalledOnce();
+    expect(log.error).toHaveBeenCalledWith(
+      "Jobs poller could not schedule its next wake-up",
+      expect.objectContaining({ event: "jobs.arm_failed", error_message: "database is locked" })
+    );
+
+    earliest.mockRestore();
+    await queue.send({ kind: KIND, payload: PAYLOAD });
+    await runPoller(queue);
+    expect(handle).toHaveBeenCalledTimes(2);
+  });
+
   it("retries an unreadable payload on the kind's policy rather than losing it", async () => {
     const handle = vi.fn(async (): Promise<JobOutcome> => "ack");
     const queue = createQueue(handle);
@@ -197,7 +238,7 @@ describe("NodeJobs", () => {
 
     expect(handle).not.toHaveBeenCalled();
     expect(queue.stats()).toMatchObject({ pending: 1, dead: 0 });
-    expect(store.earliest()).toBe(10_000 + retryDelayMs);
+    expect(store.earliest([KIND])).toBe(10_000 + retryDelayMs);
   });
 
   it("delivers no more than the concurrency bound at once, and starts the rest as they settle", async () => {
