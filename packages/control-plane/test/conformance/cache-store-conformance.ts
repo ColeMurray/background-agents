@@ -87,9 +87,14 @@ export function registerCacheStoreConformanceSuite(
     });
 
     it("replaces the value and the TTL of a key written twice", async () => {
-      await withKey("overwrite", async ({ store }, key) => {
+      await withKey("overwrite", async ({ store, advance }, key) => {
         await store.put(key, "first", { expirationTtl: MIN_TTL_SECONDS });
         await store.put(key, "second");
+        expect(await store.get(key)).toBe("second");
+        // The second write cleared the first's expiry rather than inheriting
+        // it. Only an implementation whose clock we own can be carried past
+        // that expiry to prove it; on KV the assertion above is the whole case.
+        advance?.(MIN_TTL_SECONDS * 1000 + 1);
         expect(await store.get(key)).toBe("second");
       });
     });

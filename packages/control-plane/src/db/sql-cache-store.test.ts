@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
 import { CACHE_ENTRIES_SCHEMA_SQL, SqlCacheStore } from "./sql-cache-store";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 let sqlite: DatabaseSync;
 let db: NodeSqlDatabase;
@@ -21,6 +22,35 @@ const store = (): SqlCacheStore => new SqlCacheStore(db, { now: () => nowMs });
 async function rowCount(): Promise<number> {
   const row = await db.prepare("SELECT count(*) AS n FROM cache_entries").first<{ n: number }>();
   return row!.n;
+}
+
+/**
+ * `db`, with `interrupt` run once after the first SELECT resolves — the exact
+ * window in which another writer can refresh a key that a reader has just
+ * observed as expired.
+ */
+function interleavingAfterFirstSelect(
+  db: SqlDatabase,
+  interrupt: () => Promise<void>
+): SqlDatabase {
+  let fired = false;
+  const wrap = (statement: SqlStatement, isSelect: boolean): SqlStatement => ({
+    bind: (...values: unknown[]) => wrap(statement.bind(...values), isSelect),
+    run: () => statement.run(),
+    all: () => statement.all(),
+    first: async <T>(): Promise<T | null> => {
+      const row = await statement.first<T>();
+      if (isSelect && !fired) {
+        fired = true;
+        await interrupt();
+      }
+      return row;
+    },
+  });
+  return {
+    prepare: (query: string) => wrap(db.prepare(query), query.trimStart().startsWith("SELECT")),
+    batch: (statements) => db.batch(statements),
+  };
 }
 
 beforeEach(() => {
@@ -54,6 +84,24 @@ describe("SqlCacheStore", () => {
     nowMs += 61_000;
     // The second write replaced the first entry's TTL, not just its value.
     expect(await cache.get("k")).toBe("second");
+  });
+
+  it("leaves a value another writer refreshed between the read and the cleanup", async () => {
+    await store().put("k", "stale", { expirationTtl: 60 });
+    nowMs += 61_000;
+
+    // The reader observes the expired row, a second writer refreshes the key,
+    // and only then does the reader's cleanup run.
+    const reader = new SqlCacheStore(
+      interleavingAfterFirstSelect(db, () => store().put("k", "fresh", { expirationTtl: 60 })),
+      { now: () => nowMs }
+    );
+
+    // The reader still reports the miss it observed...
+    expect(await reader.get("k")).toBeNull();
+    // ...but its cleanup did not take the replacement with it.
+    expect(await store().get("k")).toBe("fresh");
+    expect(await rowCount()).toBe(1);
   });
 
   it("treats an entry exactly at its expiry as gone", async () => {

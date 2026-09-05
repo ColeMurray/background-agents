@@ -71,7 +71,14 @@ export class SqlCacheStore implements CacheStore {
       .first<CacheEntryRow>();
     if (!row) return null;
     if (row.expires_at !== null && row.expires_at <= this.now()) {
-      await this.delete(key);
+      // Compare-and-delete on the row this read actually saw. Another writer
+      // can refresh the key between the select and here — the repos route's
+      // own background revalidation does exactly that — and an unconditional
+      // delete by key would throw that fresh entry away.
+      await this.db
+        .prepare("DELETE FROM cache_entries WHERE key = ? AND expires_at = ?")
+        .bind(key, row.expires_at)
+        .run();
       return null;
     }
     return type === "json" ? (JSON.parse(row.value) as T) : row.value;
