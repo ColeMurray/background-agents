@@ -568,8 +568,14 @@ describe("SessionRuntimeRegistry", () => {
       try {
         const registry = makeRegistry({ storeProvider: createFileSessionStoreProvider(dataDir) });
         const { server, client } = await connect();
-        const closed = new Promise<{ code: number; reason: string }>((done) =>
-          client.once("close", (code, reason) => done({ code, reason: reason.toString() }))
+        // The standards-style close event carries `wasClean`, which is what
+        // the browser decides on: a proper close frame makes this a clean
+        // close, so the web transport has to retry on the code rather than
+        // treat it as a deliberate teardown (`use-session-transport.ts`).
+        const closed = new Promise<{ code: number; reason: string; wasClean: boolean }>((done) =>
+          client.addEventListener("close", (event) =>
+            done({ code: event.code, reason: event.reason, wasClean: event.wasClean })
+          )
         );
         const runtime = await registry.withRuntime("s1", async (runtime) => {
           runtime.platform.sockets.adopt(server, ["wsid:c1"]);
@@ -589,6 +595,7 @@ describe("SessionRuntimeRegistry", () => {
         expect(await closed).toEqual({
           code: WS_CLOSE_SERVICE_RESTART,
           reason: "Service restart",
+          wasClean: true,
         });
         expect(runtime.server.onClose).toHaveBeenCalledWith(server, 1012, "Service restart", true);
         expect(deliveredAgainstOpenStore).toBe(true);
@@ -641,40 +648,6 @@ describe("SessionRuntimeRegistry", () => {
       expect(log.warn).not.toHaveBeenCalled();
     } finally {
       client.terminate();
-      await new Promise<void>((done) => wss.close(() => done()));
-    }
-  });
-
-  it("shutdown's close reaches a spec-compliant client as a clean 1012", async () => {
-    // The browser only reconnects on codes it is told to reconnect on, and a
-    // proper close frame makes this a *clean* close (`wasClean: true`), not the
-    // 1006 an abrupt teardown would produce. The web transport's retry set has
-    // to contain this code for a deploy not to strand every open tab; see
-    // `use-session-transport.ts`.
-    const wss = new WebSocketServer({ port: 0 });
-    await new Promise<void>((done) => wss.once("listening", done));
-    // Node's global WebSocket implements the browser spec, close event included.
-    const client = new WebSocket(`ws://127.0.0.1:${(wss.address() as AddressInfo).port}`);
-    try {
-      const serverSide = new Promise<NodeWebSocket>((done) => wss.once("connection", done));
-      await new Promise<void>((done) => client.addEventListener("open", () => done()));
-      const server = await serverSide;
-      const closed = new Promise<{ code: number; wasClean: boolean }>((done) =>
-        client.addEventListener("close", (event) =>
-          done({ code: event.code, wasClean: event.wasClean })
-        )
-      );
-
-      const registry = makeRegistry();
-      await registry.withRuntime("s1", async (runtime) => {
-        runtime.platform.sockets.adopt(server, ["wsid:c1"]);
-      });
-
-      await registry.shutdown();
-
-      expect(await closed).toEqual({ code: WS_CLOSE_SERVICE_RESTART, wasClean: true });
-    } finally {
-      client.close();
       await new Promise<void>((done) => wss.close(() => done()));
     }
   });

@@ -244,6 +244,7 @@ describe("useSessionTransport", () => {
     // when that is discovered: the retry presents the stale token and is closed
     // 4001, which has to recover on its own rather than sit behind a banner.
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     fetchMock
       .mockResolvedValueOnce(Response.json({ token: "stale-token" }))
       .mockResolvedValueOnce(Response.json({ token: "reissued-token" }));
@@ -256,7 +257,7 @@ describe("useSessionTransport", () => {
       FakeWebSocket.instances[0].serverClose(WS_CLOSE_SERVICE_RESTART, true);
     });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5_000);
     });
     expect(FakeWebSocket.instances).toHaveLength(2);
     expect(FakeWebSocket.instances[1].sentMessages).toEqual([]);
@@ -330,6 +331,8 @@ describe("useSessionTransport", () => {
       original.open();
       original.serverClose(4010, true);
     });
+    // Every scheduled reconnect reports the wait, not just the backoff ones.
+    expect(rendered.result.current.reconnecting).toBe(true);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -367,25 +370,29 @@ describe("useSessionTransport", () => {
     rendered.unmount();
   });
 
-  // The host closes every adopted socket with WS_CLOSE_SERVICE_RESTART on
-  // shutdown, and a proper close frame makes it a *clean* close in the browser.
-  it.each([
-    ["a service restart", WS_CLOSE_SERVICE_RESTART],
-    ["a try-again-later close", WS_CLOSE_TRY_AGAIN_LATER],
-    ["the host going away", WS_CLOSE_GOING_AWAY],
-  ])("reconnects after %s, which the host reports as a clean close", async (_label, code) => {
+  it("reconnects after a service restart on a randomized RFC delay", async () => {
+    // The host closes every adopted socket with WS_CLOSE_SERVICE_RESTART on
+    // shutdown, and a proper close frame makes it a *clean* close in the
+    // browser. RFC 6455 registers 1012 with a randomized 5-30s reconnect: the
+    // restart hits every tab at once, and the host is not listening again a
+    // second later anyway.
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const rendered = renderTransport();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     act(() => {
       FakeWebSocket.instances[0].open();
-      FakeWebSocket.instances[0].serverClose(code, true);
+      FakeWebSocket.instances[0].serverClose(WS_CLOSE_SERVICE_RESTART, true);
     });
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(4_999);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
     });
     expect(FakeWebSocket.instances).toHaveLength(2);
     // The credential outlives the host restart, so no second token fetch.
@@ -394,6 +401,78 @@ describe("useSessionTransport", () => {
 
     act(() => FakeWebSocket.instances[1].open());
     expect(rendered.result.current.connected).toBe(true);
+    rendered.unmount();
+  });
+
+  it("spreads service-restart reconnects across the whole randomized window", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => FakeWebSocket.instances[0].serverClose(WS_CLOSE_SERVICE_RESTART, true));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29_999);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    rendered.unmount();
+  });
+
+  it("leaves an overloaded server alone and offers the user a reconnect", async () => {
+    // 1013 is registered as overload, and this codebase's only sender closes a
+    // peer for exhausting its own delivery backlog. Reconnecting on a timer
+    // would repeat exactly what the host just refused, so the registry asks for
+    // a reconnect on user action - which is what the banner's button is.
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(WS_CLOSE_TRY_AGAIN_LATER, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(rendered.result.current.reconnecting).toBe(false);
+    expect(rendered.result.current.connectionError).toBe(
+      "The server is too busy to accept the connection. Try reconnecting in a moment."
+    );
+
+    act(() => rendered.result.current.reconnect());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(rendered.result.current.connectionError).toBeNull();
+    rendered.unmount();
+  });
+
+  it("reconnects on the transient backoff when the host goes away", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(WS_CLOSE_GOING_AWAY, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     rendered.unmount();
   });
 
@@ -406,7 +485,7 @@ describe("useSessionTransport", () => {
     act(() => FakeWebSocket.instances[0].open());
     expect(rendered.result.current.reconnecting).toBe(false);
 
-    act(() => FakeWebSocket.instances[0].serverClose(WS_CLOSE_SERVICE_RESTART, true));
+    act(() => FakeWebSocket.instances[0].serverClose(WS_CLOSE_GOING_AWAY, true));
     expect(rendered.result.current.reconnecting).toBe(true);
     expect(rendered.result.current.connected).toBe(false);
 
@@ -418,7 +497,7 @@ describe("useSessionTransport", () => {
     rendered.unmount();
   });
 
-  it("retries on a backoff schedule that outlasts a host restart", async () => {
+  it("retries a transient close on a backoff schedule that outlasts an outage", async () => {
     vi.useFakeTimers();
     const rendered = renderTransport();
     await act(async () => {
@@ -435,7 +514,7 @@ describe("useSessionTransport", () => {
     );
 
     for (const [attempt, delayMs] of expectedDelaysMs.entries()) {
-      act(() => FakeWebSocket.instances[attempt].serverClose(WS_CLOSE_SERVICE_RESTART, true));
+      act(() => FakeWebSocket.instances[attempt].serverClose(WS_CLOSE_GOING_AWAY, true));
       await act(async () => {
         await vi.advanceTimersByTimeAsync(delayMs - 1);
       });
@@ -448,7 +527,7 @@ describe("useSessionTransport", () => {
     expect(rendered.result.current.connectionError).toBeNull();
 
     act(() =>
-      FakeWebSocket.instances[expectedDelaysMs.length].serverClose(WS_CLOSE_SERVICE_RESTART, true)
+      FakeWebSocket.instances[expectedDelaysMs.length].serverClose(WS_CLOSE_GOING_AWAY, true)
     );
     expect(rendered.result.current.connectionError).toBe(
       "Connection lost. Please check your network and try reconnecting."

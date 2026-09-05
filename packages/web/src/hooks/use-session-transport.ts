@@ -27,12 +27,18 @@ const WS_CLOSE_AUTH_REQUIRED = 4001;
 const WS_CLOSE_SESSION_EXPIRED = 4002;
 const WS_CLOSE_INVALID_MESSAGE = 4004;
 
-// `MAX_RECONNECT_ATTEMPTS` on the backoff below spans ~3 minutes, so a host
-// restart (seconds to a minute of downtime) is ridden out rather than given
-// up on.
+// How long any *transient* cause may keep the socket down before the client
+// stops trying: `MAX_RECONNECT_ATTEMPTS` on the backoff below spans ~3
+// minutes, which covers a host restart, a redeploy behind a proxy, or a
+// network blip. The cause decides whether to retry; this decides for how long.
 const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_BASE_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30000;
+// RFC 6455 registers 1012 with a randomized 5-30s reconnect. A restart closes
+// every tab at once, so the randomization spreads the return; and a host that
+// is restarting is not listening again a second later anyway.
+const RESTART_MIN_DELAY_MS = 5000;
+const RESTART_MAX_DELAY_MS = 30000;
 const PING_INTERVAL_MS = 30000;
 // Only one WebSocket credential is stored per participant, so another tab
 // opening the session invalidates this one's. A single automatic reissue per
@@ -44,6 +50,13 @@ function reconnectDelayMs(attemptsSoFar: number): number {
   return Math.min(RECONNECT_BASE_DELAY_MS * Math.pow(2, attemptsSoFar), MAX_RECONNECT_DELAY_MS);
 }
 
+function restartDelayMs(): number {
+  return RESTART_MIN_DELAY_MS + Math.random() * (RESTART_MAX_DELAY_MS - RESTART_MIN_DELAY_MS);
+}
+
+/** Where the transport is in its connection lifecycle; states are exclusive. */
+type ConnectionPhase = "idle" | "connecting" | "connected" | "reconnecting";
+
 /** What a close event calls for, decided as data; the caller applies effects. */
 type CloseDirective =
   | { action: "auth_required" }
@@ -52,6 +65,7 @@ type CloseDirective =
   | { action: "session_expired" }
   | { action: "authorization_revoked"; delayMs?: number }
   | { action: "retry"; delayMs: number }
+  | { action: "await_user"; message: string }
   | { action: "give_up" }
   | { action: "none" };
 
@@ -73,19 +87,30 @@ function closeDirective(
   if (event.code === WS_CLOSE_SESSION_EXPIRED) {
     return { action: "session_expired" };
   }
+  const budget = (delayMs: number): CloseDirective =>
+    attemptsSoFar < MAX_RECONNECT_ATTEMPTS ? { action: "retry", delayMs } : { action: "give_up" };
+
+  if (event.code === WS_CLOSE_SERVICE_RESTART) {
+    return budget(restartDelayMs());
+  }
+  if (event.code === WS_CLOSE_TRY_AGAIN_LATER) {
+    // Overload, and the only sender here closes a peer for exhausting its own
+    // delivery backlog. Coming back on a timer would repeat what the host just
+    // refused, so RFC 6455 asks for a reconnect on user action instead - the
+    // banner's button, which needs `connectionError` set to appear.
+    return {
+      action: "await_user",
+      message: "The server is too busy to accept the connection. Try reconnecting in a moment.",
+    };
+  }
   if (
+    // Transient: the peer expects the client back as soon as it can manage.
     !event.wasClean ||
     event.code === WS_CLOSE_INVALID_MESSAGE ||
     event.code === WS_CLOSE_INTERNAL_ERROR ||
-    // A host that is restarting, overloaded, or going away closes cleanly and
-    // expects the client back: reconnect rather than strand the tab.
-    event.code === WS_CLOSE_GOING_AWAY ||
-    event.code === WS_CLOSE_SERVICE_RESTART ||
-    event.code === WS_CLOSE_TRY_AGAIN_LATER
+    event.code === WS_CLOSE_GOING_AWAY
   ) {
-    return attemptsSoFar < MAX_RECONNECT_ATTEMPTS
-      ? { action: "retry", delayMs: reconnectDelayMs(attemptsSoFar) }
-      : { action: "give_up" };
+    return budget(reconnectDelayMs(attemptsSoFar));
   }
   return { action: "none" };
 }
@@ -150,9 +175,14 @@ export function useSessionTransport(
     handlersRef.current = { onMessage, onClose };
   }, [onMessage, onClose]);
 
-  const [connected, setConnected] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const [reconnecting, setReconnecting] = useState(false);
+  // One phase, not three independent booleans: the socket is either down,
+  // being opened, open, or waiting out a scheduled reconnect. The three
+  // booleans below are views of it, kept because the session page composes
+  // `connecting` with protocol readiness before it reaches the header.
+  const [phase, setPhase] = useState<ConnectionPhase>("idle");
+  const connected = phase === "connected";
+  const connecting = phase === "connecting";
+  const reconnecting = phase === "reconnecting";
   const [authError, setAuthError] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
@@ -214,8 +244,7 @@ export function useSessionTransport(
     }
     console.log("WebSocket connected!");
     connectingEpochRef.current = null;
-    setConnected(true);
-    setConnecting(false);
+    setPhase("connected");
 
     ws.send(
       JSON.stringify({
@@ -243,98 +272,108 @@ export function useSessionTransport(
     }
   }, []);
 
-  /** `retry` is the connect function to schedule on an unclean close. */
-  const handleSocketClose = useCallback((ws: WebSocket, event: CloseEvent, retry: () => void) => {
-    // Browsers deliver close events asynchronously: a socket discarded by
-    // reconnect() or cleanup can close after its replacement exists. Only
-    // the current socket may mutate shared connection state.
-    if (wsRef.current !== ws) return;
-
-    console.log("WebSocket closed:", {
-      code: event.code,
-      reason: event.reason,
-      wasClean: event.wasClean,
-    });
-    connectingEpochRef.current = null;
-    setConnected(false);
-    setConnecting(false);
-    // Every close ends any pending reconnect; only the retry branch re-arms it.
-    setReconnecting(false);
-    wsRef.current = null;
-    handlersRef.current.onClose?.();
-
-    const directive = closeDirective(event, reconnectAttempts.current, credentialRefreshes.current);
-    switch (directive.action) {
-      case "auth_required":
-        setAuthError("Authentication failed. Please sign in again.");
-        // Clear the token so we fetch a new one on reconnect
-        wsTokenRef.current = null;
-        return;
-
-      case "refresh_credential":
-        if (!mountedRef.current) return;
-        credentialRefreshes.current++;
-        wsTokenRef.current = null;
-        setReconnecting(true);
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (mountedRef.current) retry();
-        }, 0);
-        return;
-
-      case "refresh_authorization":
-        if (!mountedRef.current) return;
-        wsTokenRef.current = null;
-        reconnectAttempts.current = 0;
-        setAuthError(null);
-        setConnectionError(null);
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (mountedRef.current) retry();
-        }, 0);
-        return;
-
-      case "session_expired":
-        // e.g. after server hibernation
-        setConnectionError("Session expired. Please reconnect.");
-        wsTokenRef.current = null;
-        return;
-
-      case "authorization_revoked":
-        wsTokenRef.current = null;
-        if (!mountedRef.current) return;
-        if (directive.delayMs === undefined) {
-          setConnectionError("Authorization could not be refreshed. Please try reconnecting.");
-          return;
-        }
-        reconnectAttempts.current++;
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (mountedRef.current) retry();
-        }, directive.delayMs);
-        return;
-
-      case "retry":
-        if (!mountedRef.current) return;
-        reconnectAttempts.current++;
-        setReconnecting(true);
-        console.log(
-          `Reconnecting in ${directive.delayMs}ms (attempt ${reconnectAttempts.current})`
-        );
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (mountedRef.current) {
-            retry();
-          }
-        }, directive.delayMs);
-        return;
-
-      case "give_up":
-        if (!mountedRef.current) return;
-        console.error(`WebSocket reconnection failed after ${MAX_RECONNECT_ATTEMPTS} attempts`);
-        setConnectionError("Connection lost. Please check your network and try reconnecting.");
-        return;
-
-      case "none":
-        return;
-    }
+  /**
+   * The single path back onto the wire: arms the timer and the phase together
+   * so no close branch can schedule a reconnect the UI does not report.
+   */
+  const scheduleReconnect = useCallback((delayMs: number, retry: () => void) => {
+    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+    setPhase("reconnecting");
+    reconnectTimeoutRef.current = setTimeout(() => {
+      if (mountedRef.current) retry();
+    }, delayMs);
   }, []);
+
+  /** `retry` is the connect function to schedule on an unclean close. */
+  const handleSocketClose = useCallback(
+    (ws: WebSocket, event: CloseEvent, retry: () => void) => {
+      // Browsers deliver close events asynchronously: a socket discarded by
+      // reconnect() or cleanup can close after its replacement exists. Only
+      // the current socket may mutate shared connection state.
+      if (wsRef.current !== ws) return;
+
+      console.log("WebSocket closed:", {
+        code: event.code,
+        reason: event.reason,
+        wasClean: event.wasClean,
+      });
+      connectingEpochRef.current = null;
+      // Every close ends any pending reconnect; a branch below re-arms it
+      // through scheduleReconnect, which owns the timer and the phase together.
+      setPhase("idle");
+      wsRef.current = null;
+      handlersRef.current.onClose?.();
+
+      const directive = closeDirective(
+        event,
+        reconnectAttempts.current,
+        credentialRefreshes.current
+      );
+      switch (directive.action) {
+        case "auth_required":
+          setAuthError("Authentication failed. Please sign in again.");
+          // Clear the token so we fetch a new one on reconnect
+          wsTokenRef.current = null;
+          return;
+
+        case "refresh_credential":
+          if (!mountedRef.current) return;
+          credentialRefreshes.current++;
+          wsTokenRef.current = null;
+          scheduleReconnect(0, retry);
+          return;
+
+        case "refresh_authorization":
+          if (!mountedRef.current) return;
+          wsTokenRef.current = null;
+          reconnectAttempts.current = 0;
+          setAuthError(null);
+          setConnectionError(null);
+          scheduleReconnect(0, retry);
+          return;
+
+        case "session_expired":
+          // e.g. after server hibernation
+          setConnectionError("Session expired. Please reconnect.");
+          wsTokenRef.current = null;
+          return;
+
+        case "authorization_revoked":
+          wsTokenRef.current = null;
+          if (!mountedRef.current) return;
+          if (directive.delayMs === undefined) {
+            setConnectionError("Authorization could not be refreshed. Please try reconnecting.");
+            return;
+          }
+          reconnectAttempts.current++;
+          scheduleReconnect(directive.delayMs, retry);
+          return;
+
+        case "retry":
+          if (!mountedRef.current) return;
+          reconnectAttempts.current++;
+          console.log(
+            `Reconnecting in ${directive.delayMs}ms (attempt ${reconnectAttempts.current})`
+          );
+          scheduleReconnect(directive.delayMs, retry);
+          return;
+
+        case "await_user":
+          setConnectionError(directive.message);
+          return;
+
+        case "give_up":
+          if (!mountedRef.current) return;
+          console.error(`WebSocket reconnection failed after ${MAX_RECONNECT_ATTEMPTS} attempts`);
+          setConnectionError("Connection lost. Please check your network and try reconnecting.");
+          return;
+
+        case "none":
+          return;
+      }
+    },
+    [scheduleReconnect]
+  );
 
   const connect = useCallback(async () => {
     // Use refs to avoid race conditions with React StrictMode
@@ -353,8 +392,7 @@ export function useSessionTransport(
 
     const epoch = connectEpochRef.current;
     connectingEpochRef.current = epoch;
-    setConnecting(true);
-    setReconnecting(false);
+    setPhase("connecting");
     setAuthError(null);
 
     const tokenReady = await ensureWsToken(epoch);
@@ -364,13 +402,13 @@ export function useSessionTransport(
       // owns it; a newer connect may hold it now.
       if (connectingEpochRef.current === epoch) {
         connectingEpochRef.current = null;
-        setConnecting(false);
+        setPhase("idle");
       }
       return;
     }
     if (!tokenReady) {
       connectingEpochRef.current = null;
-      setConnecting(false);
+      setPhase("idle");
       return;
     }
 
@@ -417,12 +455,11 @@ export function useSessionTransport(
       // The discarded socket's close event is ignored by the identity guard
       // (and may arrive late), so notify the protocol layer directly.
       handlersRef.current.onClose?.();
-      setConnected(false);
+      setPhase("idle");
     }
     reconnectAttempts.current = 0;
     credentialRefreshes.current = 0;
     wsTokenRef.current = null; // Clear token to fetch fresh one
-    setReconnecting(false);
     setAuthError(null);
     setConnectionError(null);
     connect();
@@ -462,9 +499,7 @@ export function useSessionTransport(
       wsTokenRef.current = null;
       reconnectAttempts.current = 0;
       credentialRefreshes.current = 0;
-      setConnected(false);
-      setConnecting(false);
-      setReconnecting(false);
+      setPhase("idle");
       setAuthError(null);
       setConnectionError(null);
       if (hadActiveAttempt) handlersRef.current.onClose?.();
