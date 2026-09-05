@@ -29,8 +29,9 @@ module "control_plane" {
   log_retention_days       = 30
   snapshot_retention_count = 30
 
-  # A destroy must not be able to take the media or the backups with it.
-  force_destroy_buckets = false
+  # A destroy must not be able to take the media, the backups or the images
+  # with it; it fails instead.
+  force_destroy_storage = false
 
   route53_zone_id = var.route53_zone_id
   alarm_topic_arn = var.alarm_topic_arn

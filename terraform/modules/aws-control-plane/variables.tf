@@ -145,8 +145,8 @@ variable "secret_names" {
   ]
 }
 
-variable "force_destroy_buckets" {
-  description = "Allow `terraform destroy` to empty the media and backup buckets. False keeps a destroy from taking the backups with it."
+variable "force_destroy_storage" {
+  description = "Allow `terraform destroy` to empty the media and backup buckets and the image registry. False keeps a destroy from taking the backups with it -- and also makes a destroy fail outright once CI has pushed an image, which is the right answer for production and the wrong one for an environment meant to be torn down and stood back up."
   type        = bool
   default     = false
 }

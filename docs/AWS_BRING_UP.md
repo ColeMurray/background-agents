@@ -204,8 +204,12 @@ Session files and the host alarm index are not in it. Restoring from it brings b
 and the session index but not the sessions' own state; the image's entrypoint does this
 automatically when it finds an empty volume.
 
-The volume carries `prevent_destroy`, so `terraform destroy` fails rather than taking the data with
-it. Releasing it is deliberate:
+Two things deliberately make `terraform destroy` fail rather than quietly taking data with it. The
+volume carries `prevent_destroy`. And with `force_destroy_storage = false`, which is production's
+setting, a non-empty bucket or a registry holding images refuses to be deleted as well. Staging sets
+it true, because staging is meant to be stood back up.
+
+Releasing the volume is deliberate:
 
 ```bash
 terraform state rm module.control_plane.aws_ebs_volume.data

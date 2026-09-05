@@ -40,7 +40,7 @@ module "control_plane" {
 
   # Staging is meant to be torn down and stood back up. The data volume is
   # still protected by the module's `prevent_destroy`.
-  force_destroy_buckets = true
+  force_destroy_storage = true
 
   route53_zone_id = var.route53_zone_id
   alarm_topic_arn = var.alarm_topic_arn

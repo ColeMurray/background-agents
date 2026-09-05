@@ -81,14 +81,14 @@ resource "aws_dlm_lifecycle_policy" "data" {
 
 resource "aws_s3_bucket" "media" {
   bucket        = "${var.name}-media"
-  force_destroy = var.force_destroy_buckets
+  force_destroy = var.force_destroy_storage
 
   tags = merge(local.tags, { Name = "${var.name}-media" })
 }
 
 resource "aws_s3_bucket" "backups" {
   bucket        = "${var.name}-backups"
-  force_destroy = var.force_destroy_buckets
+  force_destroy = var.force_destroy_storage
 
   tags = merge(local.tags, { Name = "${var.name}-backups" })
 }
@@ -171,6 +171,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
 resource "aws_ecr_repository" "control_plane" {
   name                 = "${var.name}-control-plane"
   image_tag_mutability = "MUTABLE" # the deployed tag moves; digests are immutable
+  # A repository holding images refuses to be deleted, so without this a
+  # destroy fails the moment anything has been pushed.
+  force_delete = var.force_destroy_storage
 
   image_scanning_configuration {
     scan_on_push = true
