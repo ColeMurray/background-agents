@@ -6,9 +6,13 @@
  * Worker on its own release cycle, so an envelope with the kind inside
  * would open a skew window for nothing.
  *
- * Terraform names each queue `<prefix>-<deployment>` and declares its
- * consumer's `max_retries` and `retry_delay`; `job-queue.test.ts` holds
- * those equal to the kind's `JobRetryPolicy`, so the two cannot drift.
+ * Terraform names each queue `<prefix>-<deployment name>`, the deployment
+ * name being the `DEPLOYMENT_NAME` the Worker is configured with, so a
+ * batch is routed by the exact name and a dead-letter queue
+ * (`<prefix>-dlq-<deployment name>`) is never mistaken for a live one.
+ * Terraform also declares each consumer's `max_retries` and `retry_delay`;
+ * `job-queue.test.ts` holds those equal to the kind's `JobRetryPolicy`, so
+ * the two cannot drift.
  */
 
 import { deliverJob, type JobDeps, type JobKind, type Jobs } from "../jobs";
@@ -31,10 +35,15 @@ export const JOB_QUEUE_BINDINGS: Record<JobKind, keyof JobQueueBindings> = {
   "github.autofix": "AUTOFIX_QUEUE",
 };
 
-/** The kind delivered on `queueName`, or `undefined` for a queue no kind owns. */
-export function jobKindForQueue(queueName: string): JobKind | undefined {
-  return (Object.keys(JOB_QUEUE_PREFIXES) as JobKind[]).find((kind) =>
-    queueName.startsWith(`${JOB_QUEUE_PREFIXES[kind]}-`)
+/** The queue Terraform names for `kind` on the deployment called `deploymentName`. */
+export function jobQueueName(kind: JobKind, deploymentName: string): string {
+  return `${JOB_QUEUE_PREFIXES[kind]}-${deploymentName}`;
+}
+
+/** The kind delivered on `queueName` for this deployment, or `undefined` for a queue no kind owns. */
+export function jobKindForQueue(queueName: string, deploymentName: string): JobKind | undefined {
+  return (Object.keys(JOB_QUEUE_PREFIXES) as JobKind[]).find(
+    (kind) => queueName === jobQueueName(kind, deploymentName)
   );
 }
 
@@ -55,19 +64,21 @@ export function createQueueJobs(bindings: JobQueueBindings): Jobs {
 export type JobQueueHost = Omit<JobDeps, "correlation">;
 
 /**
- * The consumer side: route the batch by its queue, deliver each message,
- * and map the outcome onto the message. A batch from a queue no kind owns
- * is retried whole so it dead-letters rather than disappears.
+ * The consumer side: route the batch by its queue's exact name, deliver
+ * each message, and map the outcome onto the message. A batch from a queue
+ * no kind owns is retried whole so it dead-letters rather than disappears.
  */
 export async function consumeJobBatch(
   batch: MessageBatch<unknown>,
   host: JobQueueHost
 ): Promise<void> {
-  const kind = jobKindForQueue(batch.queue);
+  const kind = jobKindForQueue(batch.queue, host.env.DEPLOYMENT_NAME);
   if (!kind) {
     host.log.error("job.queue_unknown", {
       queue: batch.queue,
-      known_prefixes: Object.values(JOB_QUEUE_PREFIXES),
+      known_queues: (Object.keys(JOB_QUEUE_PREFIXES) as JobKind[]).map((known) =>
+        jobQueueName(known, host.env.DEPLOYMENT_NAME)
+      ),
       messages: batch.messages.length,
     });
     batch.retryAll();

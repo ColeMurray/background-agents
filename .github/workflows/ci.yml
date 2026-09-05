@@ -21,6 +21,9 @@ on:
       - "packages/web/**"
       - "scripts/**"
       - "terraform/d1/migrations/**"
+      # Unit tests hold the Worker's cron triggers and queue consumers equal
+      # to what Terraform declares, so a Terraform-only change must run them.
+      - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
   pull_request:
@@ -43,6 +46,9 @@ on:
       - "packages/web/**"
       - "scripts/**"
       - "terraform/d1/migrations/**"
+      # Unit tests hold the Worker's cron triggers and queue consumers equal
+      # to what Terraform declares, so a Terraform-only change must run them.
+      - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
 

@@ -13,6 +13,7 @@ import {
   consumeJobBatch,
   createQueueJobs,
   jobKindForQueue,
+  jobQueueName,
 } from "./job-queue";
 
 // Delivery itself is `deliverJob`'s to test (jobs.test.ts); here only the
@@ -32,7 +33,7 @@ interface TerraformConsumer {
   queuePrefix: string;
   bindingName: string | undefined;
   maxRetries: number;
-  retryDelay: number;
+  retryDelaySeconds: number;
 }
 
 /** Every `cloudflare_queue_consumer` Terraform points at the control-plane Worker, by queue prefix. */
@@ -65,16 +66,16 @@ function terraformControlPlaneConsumers(): TerraformConsumer[] {
     if (!body.includes(`script_name       = ${CONTROL_PLANE_WORKER}`)) continue;
     const queue = /queue_id\s*=\s*cloudflare_queue\.(\w+)/.exec(body)?.[1];
     const maxRetries = /max_retries\s*=\s*(\d+)/.exec(body)?.[1];
-    const retryDelay = /retry_delay\s*=\s*(\d+)/.exec(body)?.[1];
+    const retryDelaySeconds = /retry_delay\s*=\s*(\d+)/.exec(body)?.[1];
     const queuePrefix = queue && queuePrefixes.get(queue);
-    if (!queuePrefix || !maxRetries || !retryDelay) {
+    if (!queuePrefix || !maxRetries || !retryDelaySeconds) {
       throw new Error(`Unparsed cloudflare_queue_consumer block:\n${body}`);
     }
     consumers.push({
       queuePrefix,
       bindingName: bindings.get(queue),
       maxRetries: Number(maxRetries),
-      retryDelay: Number(retryDelay),
+      retryDelaySeconds: Number(retryDelaySeconds),
     });
   }
   return consumers;
@@ -95,7 +96,7 @@ function batch(queue: string, ...messages: ReturnType<typeof message>[]) {
 
 function fakeHost() {
   return {
-    env: { LOG_LEVEL: "error" } as unknown as Env,
+    env: { LOG_LEVEL: "error", DEPLOYMENT_NAME: "prod" } as unknown as Env,
     db: {} as SqlDatabase,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
   };
@@ -108,19 +109,31 @@ const FINALIZE_PAYLOAD = {
 };
 
 describe("jobKindForQueue", () => {
-  it("recovers the kind from the queue prefix Terraform names it with", () => {
-    expect(jobKindForQueue("open-inspect-image-build-finalization-prod")).toBe(
+  it("recovers the kind from the exact name Terraform gives the queue on this deployment", () => {
+    expect(jobKindForQueue("open-inspect-image-build-finalization-prod", "prod")).toBe(
       "image_build.finalize"
     );
-    expect(jobKindForQueue("open-inspect-github-autofix-prod")).toBe("github.autofix");
+    expect(jobKindForQueue("open-inspect-github-autofix-prod", "prod")).toBe("github.autofix");
+    expect(jobQueueName("github.autofix", "prod")).toBe("open-inspect-github-autofix-prod");
   });
 
-  it("matches the prefix as a whole word: a deployment named after another kind does not misroute", () => {
-    expect(jobKindForQueue("open-inspect-image-build-finalization-github-autofix-test")).toBe(
-      "image_build.finalize"
-    );
-    expect(jobKindForQueue("open-inspect-github-autofix")).toBeUndefined();
-    expect(jobKindForQueue("open-inspect-slack-completion-prod")).toBeUndefined();
+  it("owns only this deployment's queues: another deployment's, a dead-letter, or a foreign queue is unknown", () => {
+    expect(jobKindForQueue("open-inspect-github-autofix-prod", "staging")).toBeUndefined();
+    expect(jobKindForQueue("open-inspect-github-autofix-dlq-prod", "prod")).toBeUndefined();
+    expect(
+      jobKindForQueue("open-inspect-image-build-finalization-dlq-prod", "prod")
+    ).toBeUndefined();
+    expect(jobKindForQueue("open-inspect-slack-completion-prod", "prod")).toBeUndefined();
+    expect(jobKindForQueue("open-inspect-github-autofix", "prod")).toBeUndefined();
+  });
+
+  it("does not misroute a deployment named after another kind", () => {
+    expect(
+      jobKindForQueue(
+        "open-inspect-image-build-finalization-github-autofix-test",
+        "github-autofix-test"
+      )
+    ).toBe("image_build.finalize");
   });
 });
 
@@ -133,12 +146,15 @@ describe("Terraform parity", () => {
       kinds.map((kind) => JOB_QUEUE_PREFIXES[kind]).sort()
     );
     for (const consumer of consumers) {
-      const kind = jobKindForQueue(`${consumer.queuePrefix}-prod`);
+      const kind = jobKindForQueue(`${consumer.queuePrefix}-prod`, "prod");
       expect(kind, consumer.queuePrefix).toBeDefined();
       const { retry } = JOB_KINDS[kind!];
       // Cloudflare counts retries after the first delivery; the table counts deliveries.
       expect(consumer.maxRetries, `${kind} max_retries`).toBe(retry.maxAttempts - 1);
-      expect(consumer.retryDelay, `${kind} retry_delay`).toBe(retry.retryDelayMs / 1000);
+      // Cloudflare takes whole seconds; the adapter rounds a delay up the same way.
+      expect(consumer.retryDelaySeconds, `${kind} retry_delay`).toBe(
+        Math.ceil(retry.retryDelayMs / 1000)
+      );
       expect(consumer.bindingName, `${kind} producer binding`).toBe(JOB_QUEUE_BINDINGS[kind!]);
     }
   });
@@ -264,7 +280,25 @@ describe("consumeJobBatch", () => {
     expect(stray.ack).not.toHaveBeenCalled();
     expect(host.log.error).toHaveBeenCalledWith(
       "job.queue_unknown",
-      expect.objectContaining({ queue: "open-inspect-slack-completion-prod", messages: 1 })
+      expect.objectContaining({
+        queue: "open-inspect-slack-completion-prod",
+        known_queues: [
+          "open-inspect-image-build-finalization-prod",
+          "open-inspect-github-autofix-prod",
+        ],
+        messages: 1,
+      })
     );
+  });
+
+  it("never runs a dead-letter queue's messages as live jobs", async () => {
+    const host = fakeHost();
+    const poison = message("message-1", FINALIZE_PAYLOAD);
+    const deadLetter = batch("open-inspect-image-build-finalization-dlq-prod", poison);
+
+    await consumeJobBatch(deadLetter, host);
+
+    expect(deliverJob).not.toHaveBeenCalled();
+    expect(deadLetter.retryAll).toHaveBeenCalledOnce();
   });
 });

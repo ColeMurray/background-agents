@@ -34,7 +34,7 @@ const AUTOFIX_PAYLOAD: GitHubAutofixEnvelope = {
 function fakeDeps(): JobDeps & { log: { error: ReturnType<typeof vi.fn> } } {
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   return {
-    env: { LOG_LEVEL: "error" } as unknown as Env,
+    env: { LOG_LEVEL: "error", DEPLOYMENT_NAME: "test" } as unknown as Env,
     db: {} as SqlDatabase,
     log: log as unknown as Logger & typeof log,
     correlation: { trace_id: "trace-1", request_id: "request-1" },
