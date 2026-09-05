@@ -196,7 +196,8 @@ describe("openHostAlarmIndex", () => {
     // What it already held is intact, and a claim carrying no lease is one
     // whose lease has run out — which is what it is.
     expect(index.get("armed")).toBe(700);
-    expect(index.earliestLease()).toBe(0);
+    // It carries no lease, so nothing waits on one; recovery takes it back.
+    expect(index.earliestLease()).toBeNull();
     expect(index.recoverForeignClaims([])).toEqual(["legacy"]);
     expect(index.get("legacy")).toBe(100);
   });

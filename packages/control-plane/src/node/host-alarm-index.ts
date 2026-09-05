@@ -58,10 +58,11 @@ export interface HostAlarmIndex {
   earliest(excluding?: Iterable<string>): SessionDeadline | null;
   /**
    * When the soonest claim's lease runs out, or null when nothing is
-   * claimed. A claim recorded before leases existed reads as already
-   * expired. This is on disk rather than in the clock's memory because a
+   * claimed. This is on disk rather than in the clock's memory because a
    * claim outlives the delivery that held it — a settlement that could not
-   * be written leaves one behind.
+   * be written leaves one behind. A claim recorded before leases existed
+   * carries none and is not counted: nothing here acts on an expired lease,
+   * and the next `recoverForeignClaims` takes such a claim back anyway.
    */
   earliestLease(): number | null;
   /**
@@ -109,7 +110,8 @@ const TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_deadlines (
 // the lease columns, the table statement above is a no-op and the lease index
 // would name a column that is only added below.
 const INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_session_deadlines_deadline ON session_deadlines (deadline);
-CREATE INDEX IF NOT EXISTS idx_session_deadlines_leases ON session_deadlines (lease_expires_at);`;
+CREATE INDEX IF NOT EXISTS idx_session_deadlines_leases ON session_deadlines (lease_expires_at)
+  WHERE in_flight IS NOT NULL;`;
 
 /**
  * The lease columns, for a file written before claims carried one. Both are
@@ -196,8 +198,11 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
     foreignStatements.set(owned, statement);
     return statement;
   };
+  // Partial index territory: the predicate matches the index's own, and the
+  // aggregate is over the bare column, so this reads one entry rather than
+  // scanning every armed session.
   const soonestLease = db.prepare(
-    `SELECT MIN(COALESCE(lease_expires_at, 0)) AS lease_expires_at FROM session_deadlines
+    `SELECT MIN(lease_expires_at) AS lease_expires_at FROM session_deadlines
      WHERE in_flight IS NOT NULL`
   );
   const toDeadline = (row: unknown): SessionDeadline => {
