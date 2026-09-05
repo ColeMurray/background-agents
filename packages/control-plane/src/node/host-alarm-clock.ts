@@ -25,15 +25,24 @@
  * comes back after downtime opens overdue sessions a few at a time rather
  * than all at once; the next ones start as soon as one settles.
  *
- * Every claim is a lease. When one runs out the clock lets go of that
- * delivery in both places at once: the row goes back to armed, and the slot
- * it held stops counting against the bound. A handler that never returns
- * therefore costs one lease rather than a permanently narrower clock, and it
- * cannot corrupt the redelivery that replaces it, because settling is fenced
- * on the claim token it no longer owns.
+ * Every claim is a lease, held by the delivery that took it. Settling names
+ * that token, so a claim recovered from a process that is gone cannot be
+ * settled by a delivery that outlived it, and starting twice never takes a
+ * claim away from a delivery still running here.
+ *
+ * When a lease runs out in a live process the clock stops counting that
+ * delivery against the concurrency bound, so one handler that never returns
+ * cannot narrow the clock for every other session. It does *not* redeliver
+ * that session. The promise cannot be cancelled, the registry's leases count
+ * rather than exclude, and the session's own alarm state carries no claim
+ * token — so a second delivery would run into the same runtime beside the
+ * first, and the stale one could clear a deadline the new one owns. Until
+ * that fence reaches the session core, the abandoned session stays excluded
+ * and its claim stays on disk, for the next start to recover.
  *
  * Polling, delivery and arming are total: an index that throws is logged and
- * the timer re-armed, never left as an unhandled rejection from a timer task.
+ * the timer re-armed — behind a backoff, so a failure that persists is not a
+ * spin — never left as an unhandled rejection from a timer task.
  */
 
 import type { Logger } from "../logger";
@@ -82,10 +91,15 @@ export class HostAlarmClock {
   private readonly maxConcurrentDeliveries: number;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
-  /** Deliveries this process started, by session id, with the claim each holds. */
+  /**
+   * Deliveries this process started, by session id, with the claim each
+   * holds. An entry past its lease is `abandoned`: it no longer counts
+   * against the bound, but the session stays excluded while the promise it
+   * cannot cancel is still running.
+   */
   private readonly inFlight = new Map<
     string,
-    { delivery: Promise<void>; token: string; leaseUntil: number }
+    { delivery: Promise<void>; token: string; leaseUntil: number; abandoned: boolean }
   >();
 
   constructor(options: HostAlarmClockOptions) {
@@ -156,21 +170,25 @@ export class HostAlarmClock {
    * capacity only the lease matters — a settling delivery re-arms for the
    * rest, and expired leases still have to be reclaimed meanwhile.
    */
-  private arm(): void {
+  private arm(notBefore?: number): void {
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
     }
     if (!this.running) return;
     const now = this.now();
-    let wakeAt: number | null = null;
+    let wakeAt: number | null = notBefore ?? null;
     try {
-      wakeAt = this.index.earliestLease();
+      const lease = this.index.earliestLease();
+      if (lease !== null) wakeAt = Math.max(lease, notBefore ?? lease);
       // A session being delivered to is left out: its next deadline is
       // picked up when this delivery settles.
-      if (this.inFlight.size < this.maxConcurrentDeliveries) {
+      if (this.liveDeliveries() < this.maxConcurrentDeliveries) {
         const next = this.index.earliest(this.inFlight.keys());
-        if (next !== null) wakeAt = Math.min(wakeAt ?? next.deadline, next.deadline);
+        if (next !== null) {
+          const deadline = Math.max(next.deadline, notBefore ?? next.deadline);
+          wakeAt = Math.min(wakeAt ?? deadline, deadline);
+        }
       }
     } catch (error) {
       // Arming ends every path — setting a deadline, a tick, a settling
@@ -192,51 +210,52 @@ export class HostAlarmClock {
   private tick(): void {
     this.timer = null;
     try {
-      this.forgetExpiredDeliveries();
-      this.recoverExpiredClaims();
+      this.abandonExpiredDeliveries();
       this.claimAndDeliver();
     } catch (error) {
-      // The index is unusable for now. Keep the timer alive so the host
-      // recovers on its own if the failure was transient.
+      // The index is unusable for now. Back off before waking again: the
+      // deadline that could not be claimed is still overdue, so arming for it
+      // would schedule another zero-delay tick and spin.
       this.log.error("Alarm clock failed to claim work", {
         event: "alarm.poll_failed",
         error_message: message(error),
       });
+      this.arm(this.now() + BLIND_RETRY_INTERVAL_MS);
+      return;
     }
     this.arm();
   }
 
   /**
-   * Stop counting deliveries whose lease has run out. The promise itself
-   * cannot be cancelled, so it is simply no longer ours: whatever it does
-   * later is fenced by a claim token the row no longer carries.
+   * Stop counting deliveries whose lease has run out against the bound, so
+   * one handler that never returns does not narrow the clock for every other
+   * session. The entry stays: the promise cannot be cancelled, and this
+   * session must not be delivered to again while it runs.
    */
-  private forgetExpiredDeliveries(): void {
+  private abandonExpiredDeliveries(): void {
     const now = this.now();
     const abandoned: string[] = [];
     for (const [sessionId, entry] of this.inFlight) {
-      if (entry.leaseUntil > now) continue;
-      this.inFlight.delete(sessionId);
+      if (entry.abandoned || entry.leaseUntil > now) continue;
+      entry.abandoned = true;
       abandoned.push(sessionId);
     }
     if (abandoned.length === 0) return;
-    this.log.error("Deadline deliveries outlived their lease and were abandoned", {
+    this.log.error("Deadline deliveries outlived their lease and stopped counting", {
       event: "alarm.delivery_abandoned",
       session_ids: abandoned,
     });
   }
 
-  private recoverExpiredClaims(): void {
-    const recovered = this.index.recoverExpiredClaims(this.now());
-    if (recovered.length === 0) return;
-    this.log.warn("Re-arming deadlines whose claim expired", {
-      event: "alarm.claims_expired",
-      session_ids: recovered,
-    });
+  /** Deliveries still counted against the bound; an abandoned one is not. */
+  private liveDeliveries(): number {
+    let live = 0;
+    for (const entry of this.inFlight.values()) if (!entry.abandoned) live += 1;
+    return live;
   }
 
   private claimAndDeliver(): void {
-    const capacity = this.maxConcurrentDeliveries - this.inFlight.size;
+    const capacity = this.maxConcurrentDeliveries - this.liveDeliveries();
     if (capacity <= 0) return;
     const leaseUntil = this.now() + ALARM_CLAIM_LEASE_MS;
     for (const { sessionId } of this.index.due(this.now(), this.inFlight.keys(), capacity)) {
@@ -261,11 +280,23 @@ export class HostAlarmClock {
           if (this.inFlight.get(sessionId)?.delivery === delivery) this.inFlight.delete(sessionId);
           this.arm();
         });
-      this.inFlight.set(sessionId, { delivery, token: claimed.token, leaseUntil });
+      this.inFlight.set(sessionId, {
+        delivery,
+        token: claimed.token,
+        leaseUntil,
+        abandoned: false,
+      });
     }
   }
 
   private async deliverTo(sessionId: string, claimed: ClaimedDeadline): Promise<void> {
+    // Only a recovered claim can arrive over budget: the settlement below
+    // stops retrying a deadline that spent its last attempt, so the normal
+    // path never hands one back.
+    if (claimed.failures > MAX_RETRIES) {
+      this.index.complete(sessionId, claimed.token);
+      return;
+    }
     try {
       await this.deliver(sessionId);
       this.index.complete(sessionId, claimed.token);

@@ -80,8 +80,8 @@ describe("openHostAlarmIndex", () => {
     index.set("s1", 100);
     const stale = index.claim("s1", 500)!;
 
-    // The lease runs out and the session is claimed again.
-    expect(index.recoverExpiredClaims(500)).toEqual(["s1"]);
+    // A restart recovers the claim, and the session is claimed again.
+    expect(index.recoverForeignClaims([])).toEqual(["s1"]);
     const live = index.claim("s1", LEASE_UNTIL)!;
     expect(live.token).not.toBe(stale.token);
 
@@ -96,28 +96,26 @@ describe("openHostAlarmIndex", () => {
     expect(index.get("s1")).toBe(9_000);
   });
 
-  it("counts an expired claim as a failure but a foreign one as nothing", () => {
+  it("recovers a claim without spending its retry budget", () => {
     const index = open();
-    index.set("hung", 100);
-    index.claim("hung", 500);
-    // A handler that never returned: the abandoned delivery is a failed one.
-    expect(index.recoverExpiredClaims(500)).toEqual(["hung"]);
-    expect(index.claim("hung", LEASE_UNTIL)).toMatchObject({ failures: 1 });
-
     index.set("killed", 100);
+    const held = index.claim("killed", LEASE_UNTIL)!;
+    index.retry("killed", held.token, 200);
     index.claim("killed", LEASE_UNTIL);
-    // A host that was killed did not fail to deliver; its budget is untouched.
+
+    // A host that was killed did not fail to deliver; the count it already
+    // carried stands, and recovery adds nothing to it.
     expect(index.recoverForeignClaims([])).toContain("killed");
-    expect(index.claim("killed", LEASE_UNTIL)).toMatchObject({ failures: 0 });
+    expect(index.claim("killed", LEASE_UNTIL)).toMatchObject({ failures: 1 });
   });
 
-  it("leaves a lease that still holds, and the claims a caller still owns", () => {
+  it("leaves the claims a caller still owns, however long their leases have run", () => {
     const index = open();
     index.set("live", 100);
     const live = index.claim("live", 500)!;
 
-    expect(index.recoverExpiredClaims(499)).toEqual([]);
-    // Starting again must not take back a delivery this process is running.
+    // Starting again must not take back a delivery this process is running,
+    // and an expired lease is not on its own a reason to take one back.
     expect(index.recoverForeignClaims([live.token])).toEqual([]);
     expect(index.get("live")).toBeNull();
 
@@ -199,7 +197,7 @@ describe("openHostAlarmIndex", () => {
     // whose lease has run out — which is what it is.
     expect(index.get("armed")).toBe(700);
     expect(index.earliestLease()).toBe(0);
-    expect(index.recoverExpiredClaims(0)).toEqual(["legacy"]);
+    expect(index.recoverForeignClaims([])).toEqual(["legacy"]);
     expect(index.get("legacy")).toBe(100);
   });
 

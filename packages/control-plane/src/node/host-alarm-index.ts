@@ -15,15 +15,18 @@
  * of stranding an evicted session. `failures` counts failed deliveries of
  * the current alarm, on disk so a restart does not renew the retry budget.
  *
- * A claim is a lease. It carries the token of the delivery that holds it and
- * the time that hold runs out, and settling names the token, so a delivery
- * that comes back after its lease expired cannot settle the redelivery that
- * replaced it. Two things end a claim early, and they are different
- * questions: a claim no live delivery owns belongs to a process that is gone
- * (`recoverForeignClaims`, at start), and a claim whose lease ran out belongs
- * to a delivery that hung (`recoverExpiredClaims`, on every sweep). Only the
- * second counts a failure — a host that was killed did not fail to deliver,
- * but a handler that never returned did.
+ * A claim is a lease: it carries the token of the delivery holding it and the
+ * time that hold runs out. Settling names the token, so a claim recovered
+ * from a process that is gone cannot be settled by a delivery that outlived
+ * it. `recoverForeignClaims` is what recovers one — a claim no live delivery
+ * owns belongs to a process that is gone — and naming the claims the caller
+ * still holds is what lets it run more than once safely.
+ *
+ * `lease_expires_at` is read but never acted on here. The clock uses it to
+ * stop counting a delivery that outlived its lease, and deliberately leaves
+ * the claim on disk for the next start rather than re-arming it: nothing can
+ * cancel the delivery still running, so redelivering would put two of them
+ * into one session.
  */
 
 import { join } from "node:path";
@@ -89,12 +92,6 @@ export interface HostAlarmIndex {
    * recovered.
    */
   recoverForeignClaims(ownedTokens: readonly string[]): string[];
-  /**
-   * Re-arm every claim whose lease has run out, counting the abandoned
-   * delivery as a failure so a handler that always hangs runs out of retries
-   * like one that always throws. Returns the session ids recovered.
-   */
-  recoverExpiredClaims(now: number): string[];
   close(): void;
 }
 
@@ -179,17 +176,9 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
          claim_token = NULL, lease_expires_at = NULL
      WHERE session_id = ? AND claim_token = ?`
   );
-  const releaseClaims = (condition: string, countFailure: boolean) =>
-    db.prepare(
-      `UPDATE session_deadlines
-       SET deadline = MIN(COALESCE(deadline, in_flight), in_flight), in_flight = NULL,
-           failures = failures ${countFailure ? "+ 1" : "+ 0"},
-           claim_token = NULL, lease_expires_at = NULL
-       WHERE in_flight IS NOT NULL${condition} RETURNING session_id`
-    );
-  const recoverExpired = releaseClaims(" AND COALESCE(lease_expires_at, 0) <= ?", true);
   // Prepared per owned-token count and kept: a host delivers to a handful of
-  // sessions at most, so the token list is inlined as placeholders.
+  // sessions at most, so the token list is inlined as placeholders. The retry
+  // budget is untouched — a host that was killed did not fail to deliver.
   const foreignStatements = new Map<number, ReturnType<DatabaseSync["prepare"]>>();
   const recoverForeign = (owned: number): ReturnType<DatabaseSync["prepare"]> => {
     const cached = foreignStatements.get(owned);
@@ -198,7 +187,12 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
       owned > 0
         ? ` AND COALESCE(claim_token, '') NOT IN (${Array.from({ length: owned }, () => "?").join(", ")})`
         : "";
-    const statement = releaseClaims(exclusion, false);
+    const statement = db.prepare(
+      `UPDATE session_deadlines
+       SET deadline = MIN(COALESCE(deadline, in_flight), in_flight), in_flight = NULL,
+           claim_token = NULL, lease_expires_at = NULL
+       WHERE in_flight IS NOT NULL${exclusion} RETURNING session_id`
+    );
     foreignStatements.set(owned, statement);
     return statement;
   };
@@ -267,8 +261,6 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
       (recoverForeign(ownedTokens.length).all(...ownedTokens) as Array<{ session_id: string }>).map(
         (row) => row.session_id
       ),
-    recoverExpiredClaims: (now) =>
-      (recoverExpired.all(now) as Array<{ session_id: string }>).map((row) => row.session_id),
     close: () => db.close(),
   };
 }
