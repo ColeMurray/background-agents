@@ -9,6 +9,10 @@
 
 services:
   app:
+    # The run's temporary configuration, not the checkout's `.env`, which the
+    # base file names and the smoke has no business reading or removing.
+    env_file: !override
+      - ${SMOKE_ENV_FILE:?SMOKE_ENV_FILE must name the run's environment file; use scripts/compose-smoke.sh}
     environment:
       # Modal's functions, served by path from the stand-in host instead of
       # from their derived *.modal.run hosts.

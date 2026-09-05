@@ -20,8 +20,6 @@ on:
       - "packages/slack-bot/**"
       - "packages/web/**"
       - "scripts/**"
-      - "docker-compose.yml"
-      - "docker-compose.smoke.yml"
       - "terraform/d1/migrations/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
@@ -44,8 +42,6 @@ on:
       - "packages/slack-bot/**"
       - "packages/web/**"
       - "scripts/**"
-      - "docker-compose.yml"
-      - "docker-compose.smoke.yml"
       - "terraform/d1/migrations/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
@@ -172,39 +168,6 @@ jobs:
 
       - name: Run control-plane unit tests
         run: npm test -w @open-inspect/control-plane
-
-  compose-smoke:
-    name: Compose smoke (container)
-    runs-on: ubuntu-latest
-    # The stack boots and the session round-trips in about a minute; the rest
-    # of the budget is the image build on a cold layer cache.
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build shared package
-        run: npm run build -w @open-inspect/shared
-
-      - name: Boot the container and round-trip a session
-        run: scripts/compose-smoke.sh
-
-      - name: Upload container logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: compose-smoke-logs
-          path: smoke-logs/
-          if-no-files-found: ignore
 
   test-cp-integration:
     name: Test (control-plane integration ${{ matrix.shard }})

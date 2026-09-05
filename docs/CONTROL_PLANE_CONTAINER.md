@@ -145,11 +145,12 @@ CI boots this stack on every pull request and round-trips one session through it
 scripts/compose-smoke.sh
 ```
 
-It writes its own throwaway `.env` (and refuses to run if one already exists), builds the image,
-brings the stack up with a stand-in for the Modal data plane, creates a session, sends a prompt, and
-waits for the stand-in sandbox's reply to arrive on a subscribed client socket. Then it checks what
-only a booted container shows: migrations applied, the cron loop ticking, Litestream replicating, a
-clean drain on SIGTERM, and a readable failure when a required key is blank.
+It runs under its own Compose project name and a temporary environment file, so it never touches
+this checkout's `.env` or a development stack's containers and volumes. It builds the image, brings
+the stack up with a stand-in for the Modal data plane, creates a session, sends a prompt, and waits
+for that exact message's reply to arrive on a subscribed client socket. Then it checks what only a
+booted container shows: migrations applied, the cron loop ticking, Litestream replicating, a clean
+drain on SIGTERM, and a readable failure when a required key is blank.
 
 The stand-in lives in `packages/control-plane/test/smoke/`. It answers the control plane's sandbox
 endpoints, verifying the same HMAC token Modal verifies, then connects back over the compose network

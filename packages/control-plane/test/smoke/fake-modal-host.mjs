@@ -167,9 +167,14 @@ const ROUTES = {
   },
   "/api-restore-sandbox": (body) => {
     const sandboxId = body.sandbox_id ?? `smoke-sandbox-${Date.now()}`;
+    // Restore carries the session inside `session_config`, unlike create,
+    // which carries it at the root. Reading the wrong one dials
+    // `/sessions/undefined/ws`, so fail loudly instead.
+    const sessionId = body.session_config?.session_id;
+    if (!sessionId) throw new Error("restore request carried no session_config.session_id");
     setImmediate(() => {
       void runBridge({
-        sessionId: body.session_id,
+        sessionId,
         sandboxId,
         controlPlaneUrl: body.control_plane_url,
         authToken: body.sandbox_auth_token,

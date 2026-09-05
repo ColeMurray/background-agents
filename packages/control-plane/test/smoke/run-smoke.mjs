@@ -191,14 +191,20 @@ async function main() {
   const { socket, received } = await subscribeClient(sessionId, token);
   pass("client socket subscribed");
 
+  const promptContent = "Say hello from the compose smoke.";
   const prompt = await signedFetch(`/sessions/${sessionId}/prompt`, {
     method: "POST",
-    body: { content: "Say hello from the compose smoke." },
+    body: { content: promptContent },
   });
   if (prompt.status !== 200 && prompt.status !== 202) {
     fail(`prompt returned ${prompt.status}`, prompt.body);
   }
-  pass(`prompt accepted: message ${prompt.body?.messageId ?? "(unnamed)"}`);
+  // Everything below is matched against this id. Without it the smoke would
+  // accept any canned reply and could not tell a lost or altered prompt from a
+  // delivered one.
+  const messageId = prompt.body?.messageId;
+  if (!messageId) fail("prompt returned no messageId", prompt.body);
+  pass(`prompt accepted: message ${messageId}`);
 
   // The reply travels sandbox -> control plane -> client socket, so seeing it
   // here proves the spawn, the sandbox socket, dispatch, and the client fan-out.
@@ -208,8 +214,9 @@ async function main() {
     (message) =>
       message.type === "sandbox_event" &&
       message.event?.type === "token" &&
+      message.event.messageId === messageId &&
       message.event.content === BRIDGE_REPLY,
-    "the sandbox's token event on the client socket"
+    `the sandbox's token event for message ${messageId}`
   );
   pass("sandbox reply reached the client socket as a token event");
 
@@ -219,8 +226,9 @@ async function main() {
     (message) =>
       message.type === "sandbox_event" &&
       message.event?.type === "execution_complete" &&
+      message.event.messageId === messageId &&
       message.event.success === true,
-    "the turn to complete"
+    `the turn for message ${messageId} to complete`
   );
   pass("turn completed");
   socket.close();
@@ -228,11 +236,17 @@ async function main() {
   const state = await fakeModalState();
   if (state.createRequests.length < 1) fail("no sandbox was requested", state);
   if (state.bridgeConnections < 1) fail("the bridge never connected", state);
-  if (state.promptsReceived.length < 1) fail("the bridge received no prompt", state);
   if (state.rejectedTokens > 0) fail("the stand-in rejected a control-plane token", state);
+  // The sandbox has to have been handed this exact prompt, not merely some
+  // prompt: dispatch that dropped or rewrote the content would otherwise pass.
+  const delivered = state.promptsReceived.find((entry) => entry.messageId === messageId);
+  if (!delivered) fail(`the bridge never received message ${messageId}`, state);
+  if (delivered.content !== promptContent) {
+    fail(`the bridge received altered content: ${delivered.content}`, state);
+  }
   pass(
     `stand-in Modal host: ${state.createRequests.length} create, ` +
-      `${state.bridgeConnections} bridge connect, ${state.promptsReceived.length} prompt, ` +
+      `${state.bridgeConnections} bridge connect, message ${messageId} delivered verbatim, ` +
       "0 rejected tokens"
   );
 
