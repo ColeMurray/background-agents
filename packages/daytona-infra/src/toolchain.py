@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from pathlib import Path
 
 from daytona import CreateSnapshotParams, Daytona, Image
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 # OpenCode version to install.
 #
@@ -19,8 +17,12 @@ if TYPE_CHECKING:
 OPENCODE_VERSION = "1.18.29"
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
-# Bump when changing image contents to invalidate the Daytona snapshot.
-SANDBOX_VERSION = "daytona-v6-vnc-opencode-1-18-18"
+# The shared runtime generation invalidates the Daytona snapshot.
+SANDBOX_VERSION = json.loads(
+    (
+        Path(__file__).parents[2] / "sandbox-runtime/src/sandbox_runtime/runtime_manifest.json"
+    ).read_text()
+)["runtimeVersion"]
 
 
 def build_base_image(repo_root: Path) -> Image:
