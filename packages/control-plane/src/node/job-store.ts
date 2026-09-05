@@ -74,7 +74,9 @@ export interface JobStoreStats {
   /**
    * How long the most overdue runnable job has been waiting past the time it
    * became runnable, or null when nothing is runnable. A job deliberately
-   * delayed into the future is not late and is not counted.
+   * delayed into the future is not late and is not counted. Every kind
+   * counts, including one this build cannot claim: a lag that never clears
+   * is how a stranded job gets noticed.
    */
   oldestRunnableLagMs: number | null;
 }
@@ -82,8 +84,14 @@ export interface JobStoreStats {
 export interface JobStore {
   /** Record a job to run at or after `job.runAt`. */
   add(job: StoredJob, now: number): void;
-  /** The soonest time a pending job may run, or null when none is pending. */
-  earliest(): number | null;
+  /**
+   * The soonest time a pending job of one of `kinds` may run, or null when
+   * none is. Filtered exactly as `claim` is: a kind this build cannot claim
+   * must not schedule a wake-up either, or a due one would be polled for
+   * without end. Such a row is still counted by `stats`, where a lag that no
+   * delivery clears is what a human needs to see.
+   */
+  earliest(kinds: readonly string[]): number | null;
   /**
    * Lease up to `limit` of the jobs runnable at `now` whose kind is one of
    * `kinds`, counting the attempt. Which jobs are taken is ordered — the
@@ -145,7 +153,6 @@ export function openJobStore(dataDir: string): JobStore {
     `INSERT INTO jobs (id, kind, payload, status, run_at, created_at)
      VALUES (?, ?, ?, 'pending', ?, ?)`
   );
-  const soonest = db.prepare("SELECT MIN(run_at) AS run_at FROM jobs WHERE status = 'pending'");
   const remove = db.prepare("DELETE FROM jobs WHERE id = ? AND claim_token = ?");
   const reschedule = db.prepare(
     `UPDATE jobs SET status = 'pending', run_at = ?, claim_token = NULL, lease_expires_at = NULL
@@ -164,32 +171,48 @@ export function openJobStore(dataDir: string): JobStore {
     "SELECT MIN(run_at) AS run_at FROM jobs WHERE status = 'pending' AND run_at <= ?"
   );
 
+  // Both kind-filtered queries take the list as inlined placeholders — it is a
+  // handful of literals from the code, not a table — so each is prepared once
+  // per list length and kept.
+  const byKindCount = (
+    sql: (placeholders: string) => string
+  ): ((kinds: number) => ReturnType<DatabaseSync["prepare"]>) => {
+    const prepared = new Map<number, ReturnType<DatabaseSync["prepare"]>>();
+    return (kinds) => {
+      const cached = prepared.get(kinds);
+      if (cached) return cached;
+      const statement = db.prepare(sql(Array.from({ length: kinds }, () => "?").join(", ")));
+      prepared.set(kinds, statement);
+      return statement;
+    };
+  };
+
+  const soonestFor = byKindCount(
+    (placeholders) =>
+      `SELECT MIN(run_at) AS run_at FROM jobs
+       WHERE status = 'pending' AND kind IN (${placeholders})`
+  );
   // The claim is one statement, so two pollers in this process cannot take
   // the same row: node:sqlite runs it to completion before either yields.
-  // The kind list is a handful of literals from the code, so it is inlined as
-  // placeholders rather than kept in a table.
-  const claimStatements = new Map<number, ReturnType<DatabaseSync["prepare"]>>();
-  const claimFor = (kinds: number): ReturnType<DatabaseSync["prepare"]> => {
-    const cached = claimStatements.get(kinds);
-    if (cached) return cached;
-    const statement = db.prepare(
+  const claimFor = byKindCount(
+    (placeholders) =>
       `UPDATE jobs SET status = 'running', attempts = attempts + 1, claim_token = ?, lease_expires_at = ?
        WHERE id IN (
          SELECT id FROM jobs
-         WHERE status = 'pending' AND run_at <= ? AND kind IN (${Array.from({ length: kinds }, () => "?").join(", ")})
+         WHERE status = 'pending' AND run_at <= ? AND kind IN (${placeholders})
          ORDER BY run_at, id LIMIT ?
        )
        RETURNING id, kind, payload, attempts`
-    );
-    claimStatements.set(kinds, statement);
-    return statement;
-  };
+  );
 
   return {
     add: ({ id, kind, payload, runAt }, now) => {
       insert.run(id, kind, payload, runAt, now);
     },
-    earliest: () => (soonest.get() as { run_at: number | null }).run_at,
+    earliest: (kinds) =>
+      kinds.length === 0
+        ? null
+        : (soonestFor(kinds.length).get(...kinds) as { run_at: number | null }).run_at,
     claim: (now, limit, kinds, leaseUntil) => {
       if (kinds.length === 0) return [];
       const token = crypto.randomUUID();

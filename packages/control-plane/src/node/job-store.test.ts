@@ -33,12 +33,22 @@ describe("openJobStore", () => {
     add("late", 5_000);
     add("soon", 2_000);
 
-    expect(store.earliest()).toBe(2_000);
+    expect(store.earliest(KINDS)).toBe(2_000);
     expect(
       claim(5_000)
         .map((job) => job.id)
         .sort()
     ).toEqual(["late", "soon"]);
+  });
+
+  it("leaves a kind it was not asked about out of the soonest runnable job", () => {
+    add("mine", 5_000);
+    add("theirs", 1_000, "session.completed");
+
+    // Symmetric with claim: a kind this build cannot take must not be what
+    // the poller schedules itself for.
+    expect(store.earliest(KINDS)).toBe(5_000);
+    expect(store.earliest([])).toBeNull();
   });
 
   it("takes the soonest jobs when it cannot take them all", () => {
@@ -78,7 +88,7 @@ describe("openJobStore", () => {
     expect(claimed).toMatchObject({ kind: KINDS[0], attempts: 1 });
     expect(claimed!.token).toEqual(expect.any(String));
     expect(claim(1_000)).toEqual([]);
-    expect(store.earliest()).toBeNull();
+    expect(store.earliest(KINDS)).toBeNull();
   });
 
   it("removes a completed job and reschedules a retried one, keeping its attempts", () => {
@@ -90,7 +100,7 @@ describe("openJobStore", () => {
     store.complete("done", tokenOf("done"));
     store.retry("again", tokenOf("again"), 4_000);
 
-    expect(store.earliest()).toBe(4_000);
+    expect(store.earliest(KINDS)).toBe(4_000);
     expect(claim(4_000)).toEqual([expect.objectContaining({ id: "again", attempts: 2 })]);
   });
 
