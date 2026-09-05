@@ -259,8 +259,13 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
    * runtime's leases (including those close deliveries) and background
    * tasks are waited for; only then is its store closed. A runtime still
    * busy at the budget is logged and forced.
+   *
+   * Returns the sessions that were forced. A caller deciding whether the
+   * process stopped cleanly needs those: work cut off mid-flight can have
+   * persisted a deadline without arming it, which is exactly what the next
+   * boot's recovery scan exists to find.
    */
-  async shutdown(options: ShutdownOptions = {}): Promise<void> {
+  async shutdown(options: ShutdownOptions = {}): Promise<{ forced: string[] }> {
     const deadlineMs = Date.now() + (options.timeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS);
     this.shuttingDown = true;
     this.stopSweeper();
@@ -270,12 +275,17 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
       await Promise.allSettled([...this.opening.values()].map((o) => o.promise));
     }
     if (this.sweeping) await this.sweeping;
-    await Promise.all(
+    const outcomes = await Promise.all(
       [...this.resident.values()].map((session) => this.quiesce(session, deadlineMs))
     );
+    return { forced: outcomes.filter((outcome) => outcome !== null) };
   }
 
-  private async quiesce(session: ResidentSession<Runtime>, deadlineMs: number): Promise<void> {
+  /** The session id when it had to be forced, and null when it quiesced. */
+  private async quiesce(
+    session: ResidentSession<Runtime>,
+    deadlineMs: number
+  ): Promise<string | null> {
     session.state = "quiescing";
     const quiescent = await this.waitForQuiescence(session, deadlineMs);
     if (!quiescent) {
@@ -287,6 +297,7 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
       });
     }
     this.retire(session, "shutdown");
+    return quiescent ? null : session.id;
   }
 
   /**

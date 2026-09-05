@@ -163,6 +163,17 @@ async function boot(
     log,
     nowMs: startedAtMs,
   });
+  // The same question for the jobs table, and the same moment to ask it: one
+  // host holds this volume, so a claim already on disk was left by a process
+  // that is gone. Returning them here rather than from the poller is what
+  // makes it a boot concern — the poller has no way to tell whose a claim is.
+  const reclaimed = jobStore.recoverAllClaims();
+  if (reclaimed.length > 0) {
+    log.warn("Returning jobs a previous process left claimed", {
+      event: "jobs.claims_recovered",
+      job_ids: reclaimed,
+    });
+  }
   const clock: HostAlarmClock = new HostAlarmClock({
     index: alarmIndex,
     deliver: (sessionId) => registry.deliverScheduledDeadline(sessionId),
@@ -289,7 +300,11 @@ async function boot(
     if (tasks > 0) abandoned.push(`background_tasks:${tasks}`);
 
     // Then the runtimes: sockets closed with 1012, per-session work waited for.
-    await registry.shutdown({ timeoutMs: remaining() });
+    // A runtime forced at the budget is abandoned work like any other: it can
+    // have persisted a deadline without arming it, and only the next boot's
+    // scan would find that.
+    const { forced } = await registry.shutdown({ timeoutMs: remaining() });
+    if (forced.length > 0) abandoned.push(`sessions_forced:${forced.length}`);
 
     // Then the transports. A peer that ignored its close frame is cut, as
     // is any connection still open, so the server's close can complete.

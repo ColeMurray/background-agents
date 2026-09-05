@@ -28,12 +28,20 @@
  * boot exactly the same work.
  */
 
-import { readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { Logger } from "../logger";
 import { PersistedAlarmDeadlineStore } from "../session/alarm/scheduler";
 import type { HostAlarmIndex } from "./host-alarm-index";
-import { makeFilePrivate } from "./private-paths";
 import { openPrivateSqliteFile } from "./sqlite-file";
 import { createNodeSqlStorage } from "./sqlite-storage";
 
@@ -90,7 +98,13 @@ export interface DeadlineRecoveryOptions {
  */
 export function recoverSessionDeadlines(options: DeadlineRecoveryOptions): DeadlineRecoveryReport {
   const { dataDir, index, log, nowMs } = options;
-  const previous = readHostState(dataDir);
+  // The scan compares the marker's wall-clock time against file timestamps,
+  // so a clock that stepped backwards would hide every write made since. A
+  // point that has not happened yet is the symptom, and a marker that cannot
+  // be trusted is no marker: scanning everything is the answer that cannot be
+  // wrong, and that includes not trusting its claim of a clean stop.
+  const stored = readHostState(dataDir);
+  const previous = stored !== null && stored.indexedThroughMs <= nowMs ? stored : null;
 
   if (previous?.cleanShutdown === true) {
     // Nothing to scan, but the marker still has to stop saying so: the time
@@ -134,6 +148,16 @@ export function recoverSessionDeadlines(options: DeadlineRecoveryOptions): Deadl
  * missing.
  */
 export function markCleanShutdown(dataDir: string, atMs: number): void {
+  if (readHostState(dataDir)?.indexedThroughMs === SCAN_EVERYTHING_MS) {
+    // This boot could not read a session file, and stopping cleanly does not
+    // repair it. Claiming a clean stop would let the next boot skip its scan
+    // entirely, which is how that one deadline would be lost for good.
+    writeHostState(dataDir, {
+      indexedThroughMs: SCAN_EVERYTHING_MS,
+      cleanShutdown: false,
+    });
+    return;
+  }
   writeHostState(dataDir, { indexedThroughMs: atMs, cleanShutdown: true });
 }
 
@@ -165,23 +189,31 @@ function scanSessionFiles(
   for (const entry of entries) {
     if (!entry.endsWith(SESSION_FILE_SUFFIX)) continue;
     const path = join(directory, entry);
-    if (sinceMs !== null && lastWriteMs(path) < sinceMs) continue;
-    counts.scanned += 1;
     const sessionId = entry.slice(0, -SESSION_FILE_SUFFIX.length);
+    let deadline: number | null;
     try {
-      const deadline = earliestDeadline(path);
-      if (deadline !== null && index.armIfSooner(sessionId, deadline)) counts.rearmed += 1;
+      // Reading when the file was written is part of reading the file: a
+      // permission or I/O error here is a session this boot did not examine,
+      // not a session written long ago.
+      if (sinceMs !== null && lastWriteMs(path) < sinceMs) continue;
+      counts.scanned += 1;
+      deadline = earliestDeadline(path);
     } catch (error) {
       // One unreadable file is one session that will not fire on its own.
       // It is not a reason to refuse the boot, which would take every other
-      // session down with it.
+      // session down with it — but it does hold the recovery point back.
       counts.unreadable += 1;
       log.error("A session file could not be read for its scheduled deadline", {
         event: "node_host.deadline_recovery_failed",
         session_id: sessionId,
         error: error instanceof Error ? error : String(error),
       });
+      continue;
     }
+    // Outside the catch on purpose: an index that cannot be written is not an
+    // unreadable session, and a boot must not continue with an index it knows
+    // is missing a deadline it just read.
+    if (deadline !== null && index.armIfSooner(sessionId, deadline)) counts.rearmed += 1;
   }
   return counts;
 }
@@ -215,12 +247,17 @@ function lastWriteMs(path: string): number {
   return Math.max(modifiedAtMs(path), modifiedAtMs(`${path}-wal`));
 }
 
-/** The file's last write, or 0 when there is no such file. */
+/**
+ * The file's last write, or 0 when there is no such file — a session with no
+ * write-ahead log has none, and that is not a failure. Every other error is
+ * the caller's to handle: a file that cannot be stat'd has not been examined.
+ */
 function modifiedAtMs(path: string): number {
   try {
     return statSync(path).mtimeMs;
-  } catch {
-    return 0;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
   }
 }
 
@@ -249,14 +286,29 @@ function readHostState(dataDir: string): HostState | null {
 }
 
 /**
- * Replace the marker. Written beside its target and renamed over it, so a
- * process that dies mid-write leaves the previous marker rather than a
- * truncated one.
+ * Replace the marker, durably. Written beside its target and renamed over it,
+ * so a process that dies mid-write leaves the previous marker rather than a
+ * truncated one — and flushed before the rename and the directory after it,
+ * because the case this whole file exists for is losing power. A rename that
+ * only reached the page cache would let the previous `cleanShutdown: true`
+ * come back while the session writes that outran it survived, and the next
+ * boot would skip the scan that was meant to catch exactly that.
  */
 function writeHostState(dataDir: string, state: HostState): void {
   const path = join(dataDir, HOST_STATE_FILE);
   const temporary = `${path}.tmp`;
-  writeFileSync(temporary, JSON.stringify(state));
-  makeFilePrivate(temporary);
+  const file = openSync(temporary, "w", 0o600);
+  try {
+    writeFileSync(file, JSON.stringify(state));
+    fsyncSync(file);
+  } finally {
+    closeSync(file);
+  }
   renameSync(temporary, path);
+  const directory = openSync(dataDir, "r");
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
+  }
 }

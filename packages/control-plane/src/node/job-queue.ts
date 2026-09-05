@@ -112,22 +112,14 @@ export class NodeJobs implements Jobs {
   }
 
   /**
-   * Start delivering. A claim on disk that no delivery here owns was left by
-   * a process that is gone, and is returned to pending at once: its handler
-   * may not have run, and waiting out its lease would leave the job sitting
-   * for a quarter of an hour after every restart. Idempotent, because the
-   * claims this process is still delivering are named and left alone.
+   * Start delivering. Carries no recovery: a claim left by a dead process is
+   * the boot's to return, once, before any poller runs. This process cannot
+   * tell from its own memory which claims are someone else's — one token
+   * covers a whole claimed batch — so it does not try, and starting twice is
+   * harmless for the simpler reason that it does nothing but arm a timer.
    */
   start(): void {
     this.running = true;
-    const owned = [...this.inFlight.values()].map((entry) => entry.token);
-    const recovered = this.store.recoverForeignClaims(owned);
-    if (recovered.length > 0) {
-      this.log.warn("Returning jobs a previous process left claimed", {
-        event: "jobs.claims_recovered",
-        job_ids: recovered,
-      });
-    }
     this.arm();
   }
 

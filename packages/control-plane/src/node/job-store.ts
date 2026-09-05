@@ -10,14 +10,13 @@
  * writes a fresh token and an expiry; settling names the token, so a
  * delivery that comes back after its lease expired cannot settle the
  * redelivery that replaced it. Two things end a claim early, and they answer
- * different questions: a claim no live delivery owns belongs to a process
- * that is gone (`recoverForeignClaims`, at start), and a claim whose lease
- * ran out belongs to a handler that hung (`recoverExpiredClaims`, on every
- * sweep). Naming the claims this process still holds is what keeps the first
- * from taking a job away from a delivery that is still running, so starting a
- * poller twice stays harmless. The cost of both is Cloudflare's own: two
- * deliveries of one job can overlap, which `jobs.ts` already requires every
- * handler to tolerate.
+ * different questions asked at different moments: at boot every claim on disk
+ * belongs to a process that is gone (`recoverAllClaims`, called once before
+ * any poller runs, because only one host may hold this volume), and while
+ * running, a claim whose lease has run out belongs to a handler that hung
+ * (`recoverExpiredClaims`, on every sweep). The cost of both is Cloudflare's
+ * own: two deliveries of one job can overlap, which `jobs.ts` already
+ * requires every handler to tolerate.
  *
  * Neither recovery refunds an attempt. The attempt is counted when the job
  * is claimed, exactly as a queue counts a delivery however it ended, so a
@@ -118,12 +117,12 @@ export interface JobStore {
   /** The leased job will not be delivered again: keep the row with what ended it. */
   bury(id: string, token: string, error: string): void;
   /**
-   * Return every claim no live delivery owns to pending, runnable at once.
-   * `ownedTokens` are the claims this process is still delivering, so
-   * starting a poller again never takes one of them back. Returns the job
-   * ids recovered.
+   * Return every claim to pending, runnable at once. For the boot that opens
+   * the store, before any poller can claim: one host holds this volume, so a
+   * claim already on disk is a dead process's and its handler may not have
+   * run. Returns the job ids recovered.
    */
-  recoverForeignClaims(ownedTokens: readonly string[]): string[];
+  recoverAllClaims(): string[];
   /**
    * Return every claim whose lease has run out to pending, runnable at once.
    * Returns the job ids recovered.
@@ -186,10 +185,11 @@ export function openJobStore(dataDir: string): JobStore {
     "SELECT MIN(run_at) AS run_at FROM jobs WHERE status = 'pending' AND run_at <= ?"
   );
 
+  const recoverAll = db.prepare(releaseClaimsSql(""));
+
   // Every list-filtered statement takes its list as inlined placeholders — a
-  // handful of kinds from the code, or the tokens of the jobs this process is
-  // delivering, neither of them a table — so each is prepared once per list
-  // length and kept.
+  // handful of kinds from the code, not a table — so each is prepared once
+  // per list length and kept.
   const byListLength = (
     sql: (placeholders: string) => string
   ): ((length: number) => ReturnType<DatabaseSync["prepare"]>) => {
@@ -202,14 +202,6 @@ export function openJobStore(dataDir: string): JobStore {
       return statement;
     };
   };
-
-  // A claim carrying no token at all predates leases, and is owned by no live
-  // delivery whatever tokens this process holds.
-  const recoverForeign = byListLength((placeholders) =>
-    releaseClaimsSql(
-      placeholders === "" ? "" : ` AND COALESCE(claim_token, '') NOT IN (${placeholders})`
-    )
-  );
 
   const soonestFor = byListLength(
     (placeholders) =>
@@ -261,10 +253,7 @@ export function openJobStore(dataDir: string): JobStore {
     bury: (id, token, error) => {
       kill.run(error, id, token);
     },
-    recoverForeignClaims: (ownedTokens) =>
-      (recoverForeign(ownedTokens.length).all(...ownedTokens) as Array<{ id: string }>).map(
-        (row) => row.id
-      ),
+    recoverAllClaims: () => (recoverAll.all() as Array<{ id: string }>).map((row) => row.id),
     recoverExpiredClaims: (now) =>
       (recoverExpired.all(now) as Array<{ id: string }>).map((row) => row.id),
     stats: (now) => {

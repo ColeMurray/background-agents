@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -173,6 +174,59 @@ describe("recoverSessionDeadlines", () => {
 
     // The file has not been written since, and is read again all the same.
     expect(recover(bootMs + 1)).toMatchObject({ scanned: 1, unreadable: 1 });
+  });
+
+  it("counts a file it cannot even stat as unreadable rather than as an old one", () => {
+    writeSessionDeadline("fine", 6_000);
+    // A complete scan, so the next one is incremental and rests on mtimes.
+    recover();
+    // A link that resolves to itself: statting it fails with ELOOP, not
+    // ENOENT. Reading that as "written long ago" would skip the session and
+    // still advance the point past it.
+    symlinkSync("loop.db", join(dataDir, "sessions", "loop.db"));
+
+    const report = recover(BOOT_MS + 1);
+
+    expect(report.unreadable).toBe(1);
+    expect(marker().indexedThroughMs).toBe(0);
+  });
+
+  it("fails the boot when the index rejects a deadline it just read", () => {
+    writeSessionDeadline("s1", 5_000);
+    vi.spyOn(index, "armIfSooner").mockImplementation(() => {
+      throw new Error("database is locked");
+    });
+
+    // An index that cannot be written is not an unreadable session file: the
+    // host must not serve with an index it knows is missing a deadline.
+    expect(() => recover()).toThrow("database is locked");
+  });
+
+  it("does not claim a clean stop while a file it could not read is still unread", () => {
+    writeSessionDeadline("s1", 5_000);
+    const path = join(dataDir, "sessions", "broken.db");
+    writeFileSync(path, "not a database");
+    expect(recover().unreadable).toBe(1);
+    expect(marker().indexedThroughMs).toBe(0);
+
+    markCleanShutdown(dataDir, BOOT_MS + 1_000);
+
+    // Stopping cleanly does not repair that file. A clean marker would let
+    // the next boot skip its scan altogether, which is how the deadline in it
+    // would be lost for good.
+    expect(marker()).toEqual({ indexedThroughMs: 0, cleanShutdown: false });
+  });
+
+  it("distrusts a marker from the future and scans everything", () => {
+    writeSessionDeadline("s1", 5_000);
+    markCleanShutdown(dataDir, BOOT_MS + 60_000);
+
+    // The clock stepped backwards, so every file looks older than the point
+    // and an incremental scan would find nothing — and the marker's claim of
+    // a clean stop cannot be trusted either.
+    const report = recover();
+    expect(report).toMatchObject({ previousStop: "no_marker", scanned: 1, rearmed: 1 });
+    expect(index.get("s1")).toBe(5_000);
   });
 
   it("treats a data directory with no sessions as nothing to do", () => {

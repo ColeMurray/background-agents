@@ -657,7 +657,7 @@ describe("SessionRuntimeRegistry", () => {
 
     held.resolve();
     await pending;
-    await shutdown;
+    expect(await shutdown).toEqual({ forced: [] });
     expect(stores.opened[0]!.closes).toBe(1);
     expect(log.warn).not.toHaveBeenCalled();
   });
@@ -668,8 +668,11 @@ describe("SessionRuntimeRegistry", () => {
     const pending = registry.withRuntime("s1", () => never.promise);
     await flush();
 
-    await registry.shutdown({ timeoutMs: 20 });
+    const report = await registry.shutdown({ timeoutMs: 20 });
 
+    // Reported, not only logged: the host writes a clean-stop marker from
+    // this, and forced work can have persisted a deadline without arming it.
+    expect(report).toEqual({ forced: ["s1"] });
     expect(stores.opened[0]!.closes).toBe(1);
     expect(log.warn).toHaveBeenCalledWith("session_registry.retired_busy", {
       session_id: "s1",
