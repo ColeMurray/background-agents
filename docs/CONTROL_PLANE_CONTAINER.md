@@ -92,21 +92,29 @@ Everything the host persists is under `/data` on the `control-plane-data` volume
 - `global.db`: the global store (the tables D1 holds on Cloudflare).
 - `sessions/<id>.db`: one file per session (the Durable Object storage on Cloudflare).
 - `host-alarms.db`: the index of every session's next scheduled deadline.
+- `jobs.db`: background jobs waiting to run, leased to a delivery, or dead — what a Cloudflare Queue
+  and its dead-letter queue hold on the other host.
 - `cache.db`: the cache the host uses where Cloudflare uses KV. Alone among these, it is not
   deployment state — every entry is rebuilt by being used, so a file that cannot be opened is
   discarded and recreated rather than failing the boot.
 
-The first three are one deployment's state, and the unit of a deployment backup is the whole volume:
-stop the app, snapshot the volume (an EBS snapshot on AWS), start it again. That procedure and its
-rehearsal are tracked separately from this stack.
+All but the last are one deployment's state, and the unit of a deployment backup is the whole
+volume: stop the app, snapshot the volume (an EBS snapshot on AWS), start it again. That procedure
+and its rehearsal are tracked separately from this stack.
 
 What this stack provides is narrower. Litestream replicates `global.db` continuously to
 `LITESTREAM_BUCKET`, and when the app starts on an empty volume and a replica exists, its entrypoint
 restores `global.db` before the host boots. That brings back users, settings and the session index.
-It does not bring back the session files or the alarm index: the restored index lists sessions whose
-files are gone, and the host opens each of those as an empty session when it is next touched, with
-no pending deadlines. The entrypoint logs a warning to that effect after every restore. Treat the
-replica as protection for the global store, not as recovery of a deployment.
+It does not bring back the session files, the alarm index or the jobs table: the restored index
+lists sessions whose files are gone, and the host opens each of those as an empty session when it is
+next touched, with no pending deadlines. The entrypoint logs a warning to that effect after every
+restore. Treat the replica as protection for the global store, not as recovery of a deployment.
+
+`jobs.db` is left out of the replica for the same reason the alarm index is: what it holds is
+reconstructible from what _is_ replicated. Every job the control plane produces today is an
+image-build finalization, and the image-build scheduler republishes those from `global.db` on its
+cron slot — a build still `building` with an accepted completion and no live lease. A future job
+kind that cannot be rebuilt that way, such as a session callback, would have to revisit this.
 
 `cache.db` is deliberately excluded from that replication: it holds the repositories listing and a
 live GitHub installation token, neither of which belongs in a backup bucket, and a cache refills by

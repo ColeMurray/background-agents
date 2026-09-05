@@ -13,6 +13,7 @@
 import { getRequestListener } from "@hono/node-server";
 import { createServer, type Server } from "node:http";
 import type { Logger } from "../logger";
+import type { JobStoreStats } from "./job-store";
 import { settlesWithin } from "./background-tasks";
 import type { UpgradeHandler } from "./websocket-upgrade";
 
@@ -27,6 +28,8 @@ export interface HealthReport {
   background_tasks: number;
   alarm_clock: "running" | "stopped";
   cron: "running" | "stopped";
+  /** The jobs poller, and the jobs table's rows by status. */
+  jobs: { poller: "running" | "stopped" } & JobStoreStats;
 }
 
 export interface NodeHttpServerOptions {

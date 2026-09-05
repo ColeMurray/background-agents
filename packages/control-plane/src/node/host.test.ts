@@ -10,6 +10,7 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { CACHE_STORE_FILE } from "./cache-database";
 import { DEFAULT_MIGRATIONS_DIR, type NodeHostSettings } from "./config";
 import { GLOBAL_STORE_FILE, startNodeHost, type NodeHost, type NodeHostOptions } from "./host";
+import { JOB_STORE_FILE } from "./job-store";
 import type { HealthReport } from "./http-server";
 
 const KEY = Buffer.alloc(32, 7).toString("base64");
@@ -108,8 +109,10 @@ describe("startNodeHost", () => {
       sessions_resident: 0,
       alarm_clock: "running",
       cron: "running",
+      jobs: { poller: "running", pending: 0, running: 0, dead: 0, oldestRunnableLagMs: null },
     });
     expect(report.migrations_applied).toBeGreaterThan(0);
+    expect(existsSync(join(dataDir, JOB_STORE_FILE))).toBe(true);
 
     const missing = await fetch(`${base}/no-such-route`);
     expect(missing.status).toBe(404);

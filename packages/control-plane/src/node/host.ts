@@ -46,6 +46,8 @@ import { CronLoop } from "./cron-loop";
 import { HostAlarmClock } from "./host-alarm-clock";
 import { openHostAlarmIndex } from "./host-alarm-index";
 import { createNodeHttpServer, type HealthReport } from "./http-server";
+import { NodeJobs } from "./job-queue";
+import { openJobStore } from "./job-store";
 import { ensurePrivateDirectory } from "./private-paths";
 import { createNodeSessionRuntimeDispatch } from "./runtime-client";
 import { createS3ObjectStorage, type S3ObjectStorageConfig } from "./s3-object-storage";
@@ -144,6 +146,9 @@ async function boot(
 
   const cacheDb = ownStore(openNodeCacheDatabase(settings.dataDir, log));
 
+  const jobStore = ownStore(openJobStore(settings.dataDir));
+  const jobs = new NodeJobs({ store: jobStore, deps: () => ({ env, db, log }), log });
+
   const alarmIndex = ownStore(openHostAlarmIndex(settings.dataDir));
   const clock: HostAlarmClock = new HostAlarmClock({
     index: alarmIndex,
@@ -163,7 +168,7 @@ async function boot(
     SESSION: createNodeSessionRuntimeDispatch(registry),
     REPOS_CACHE: new SqlCacheStore(cacheDb),
     MEDIA_BUCKET: createS3ObjectStorage(options.objectStorage),
-    JOBS: null, // Unavailable until this host has a durable jobs table and poller.
+    JOBS: jobs,
   };
   const env: Env = { ...config, ...platform };
 
@@ -202,6 +207,7 @@ async function boot(
     background_tasks: processTasks.size,
     alarm_clock: clocksRunning ? "running" : "stopped",
     cron: clocksRunning ? "running" : "stopped",
+    jobs: { poller: clocksRunning ? "running" : "stopped", ...jobs.stats() },
   });
   const http = createNodeHttpServer({
     fetch: (request) => Promise.resolve(app.fetch(request, env)),
@@ -225,6 +231,8 @@ async function boot(
   acquire(() => registry.stopSweeper());
   cron.start();
   acquire(() => cron.stop());
+  jobs.start();
+  acquire(() => jobs.stop());
   clocksRunning = true;
   log.info("node_host.listening", {
     event: "node_host.listening",
@@ -248,6 +256,7 @@ async function boot(
     // are drained below.
     cron.stop();
     clock.stop();
+    jobs.stop();
     clocksRunning = false;
     const closed = once(server, "close");
     server.close();
@@ -260,6 +269,7 @@ async function boot(
     const runs = await cron.drain(remaining());
     if (runs > 0) abandoned.push(`scheduled_runs:${runs}`);
     if (!(await settlesWithin([clock.drain()], remaining()))) abandoned.push("alarm_deliveries");
+    if (!(await settlesWithin([jobs.drain()], remaining()))) abandoned.push("job_deliveries");
     const tasks = await processTasks.drain(remaining());
     if (tasks > 0) abandoned.push(`background_tasks:${tasks}`);
 

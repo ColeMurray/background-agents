@@ -18,6 +18,7 @@ function report(status: HealthReport["status"]): HealthReport {
     background_tasks: 0,
     alarm_clock: "running",
     cron: "running",
+    jobs: { poller: "running", pending: 0, running: 0, dead: 0, oldestRunnableLagMs: null },
   };
 }
 
