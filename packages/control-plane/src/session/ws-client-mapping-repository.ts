@@ -31,9 +31,14 @@ export class WsClientMappingRepository {
   /** Persist a client mapping and its authorization expiration. */
   upsertWsClientMapping(data: WsClientMappingData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO ws_client_mapping
+      `INSERT INTO ws_client_mapping
          (ws_id, participant_id, client_id, created_at, authorization_expires_at)
-       VALUES (?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (ws_id) DO UPDATE SET
+         participant_id = excluded.participant_id,
+         client_id = excluded.client_id,
+         created_at = excluded.created_at,
+         authorization_expires_at = excluded.authorization_expires_at`,
       data.wsId,
       data.participantId,
       data.clientId,

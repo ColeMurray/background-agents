@@ -79,6 +79,11 @@ Use clear, descriptive commit messages:
 4. Update documentation if needed
 5. Provide a clear description of your changes
 
+### Database Changes
+
+SQL in the control plane must stay inside the portable subset — see
+[docs/PORTABLE_SQL.md](docs/PORTABLE_SQL.md). `npm run lint:sql-portability` checks it.
+
 ### Source Control Provider Contributions
 
 For SCM/provider changes, follow:

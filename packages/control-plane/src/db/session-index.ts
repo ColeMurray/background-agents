@@ -318,10 +318,16 @@ export class SessionIndexStore {
     const providerAuthStmts = (session.providerAuth ?? []).map((auth) =>
       this.db
         .prepare(
-          `INSERT OR REPLACE INTO session_model_provider_auth (
+          `INSERT INTO session_model_provider_auth (
              session_id, provider, auth_mode, provider_account_id, selection_source,
              inherited_from_session_id, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (session_id, provider) DO UPDATE SET
+             auth_mode = excluded.auth_mode,
+             provider_account_id = excluded.provider_account_id,
+             selection_source = excluded.selection_source,
+             inherited_from_session_id = excluded.inherited_from_session_id,
+             created_at = excluded.created_at`
         )
         .bind(
           session.id,
@@ -486,18 +492,18 @@ export class SessionIndexStore {
     const row = await this.db
       .prepare(
         `SELECT 1 AS ok FROM sessions
-         WHERE id = ?1
+         WHERE id = ?
            AND (
-             (LOWER(repo_owner) = LOWER(?2) AND LOWER(repo_name) = LOWER(?3))
+             (LOWER(repo_owner) = LOWER(?) AND LOWER(repo_name) = LOWER(?))
              OR EXISTS (
                SELECT 1 FROM session_repositories sr
                WHERE sr.session_id = sessions.id
-                 AND LOWER(sr.repo_owner) = LOWER(?2)
-                 AND LOWER(sr.repo_name) = LOWER(?3)
+                 AND LOWER(sr.repo_owner) = LOWER(?)
+                 AND LOWER(sr.repo_name) = LOWER(?)
              )
            )`
       )
-      .bind(sessionId, repoOwner, repoName)
+      .bind(sessionId, repoOwner, repoName, repoOwner, repoName)
       .first<{ ok: number }>();
 
     return row !== null;

@@ -1,0 +1,39 @@
+{
+  "migrationBaseline": 74,
+  "allowed": {
+    "packages/control-plane/src/db/authorization-store.ts": {
+      "collate-nocase": {
+        "count": 1,
+        "reason": "Member listing orders by display name case-insensitively. LOWER() over the COALESCE would drop the index the ORDER BY relies on."
+      },
+      "json-function": {
+        "count": 5,
+        "reason": "The audit row's before/requested/after payload is assembled from subqueries inside the same batch as the mutation, so it observes exactly the state the write saw. Building it in TypeScript would need a separate read and lose that. Postgres form is json_build_object."
+      }
+    },
+    "packages/control-plane/src/db/automation-store.ts": {
+      "collate-nocase": {
+        "count": 1,
+        "reason": "Case-insensitive automation name search. Portable form is LOWER(name) LIKE LOWER(?), deferred with the rest of the name-search query."
+      }
+    },
+    "packages/control-plane/src/db/user-merge.ts": {
+      "json-function": {
+        "count": 7,
+        "reason": "Merge audit payload, same constraint as authorization-store: before/after state is read inside the mutating batch. Postgres form is json_build_object."
+      }
+    },
+    "packages/control-plane/src/session/schema.ts": {
+      "pragma": {
+        "count": 4,
+        "reason": "Column introspection that decides whether a session-storage migration still has work to do. Postgres reads information_schema instead; there is no shared spelling."
+      }
+    },
+    "packages/control-plane/src/session/session-core-repository.ts": {
+      "collate-nocase": {
+        "count": 4,
+        "reason": "Case-insensitive repository match against session-local storage. Portable form is LOWER(col) = LOWER(?); deferred so this change stays confined to writes."
+      }
+    }
+  }
+}

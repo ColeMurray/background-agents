@@ -1030,7 +1030,7 @@ export class AutomationStore {
   /**
    * Record a skipped firing: a childless invocation carrying skip_reason,
    * atomically paired with the schedule advance when the skip serves a cron
-   * slot. INSERT OR IGNORE tolerates an idempotency-index race without
+   * slot. The conflict-tolerant insert absorbs an idempotency-index race without
    * blocking the advance — a skip recorded without the advance would
    * re-collide on (automation_id, scheduled_at) every tick thereafter. The
    * advance is a compare-and-set on the claimed slot, so a firing that lost
@@ -1043,10 +1043,11 @@ export class AutomationStore {
     const statements: SqlStatement[] = [
       this.db
         .prepare(
-          `INSERT OR IGNORE INTO automation_invocations
+          `INSERT INTO automation_invocations
            (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT DO NOTHING`
         )
         .bind(
           invocation.id,
@@ -1091,10 +1092,11 @@ export class AutomationStore {
     const results = await this.db.batch([
       this.db
         .prepare(
-          `INSERT OR IGNORE INTO automation_invocations
+          `INSERT INTO automation_invocations
            (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT DO NOTHING`
         )
         .bind(
           invocation.id,

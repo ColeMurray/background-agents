@@ -89,6 +89,12 @@ jobs:
       - name: Test complexity reporter
         run: npm run test:lint-complexity
 
+      - name: Check SQL portability
+        run: npm run lint:sql-portability
+
+      - name: Test SQL portability check
+        run: npm run test:lint-sql-portability
+
       - name: Test Owner bootstrap CLI
         run: npm run test:rbac-bootstrap-owner
 

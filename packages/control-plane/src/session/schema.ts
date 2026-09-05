@@ -695,7 +695,7 @@ export function applyMigrations(sql: SqlStorage): void {
     }
 
     sql.exec(
-      `INSERT OR IGNORE INTO _schema_migrations (id, applied_at) VALUES (?, ?)`,
+      `INSERT INTO _schema_migrations (id, applied_at) VALUES (?, ?) ON CONFLICT DO NOTHING`,
       migration.id,
       Date.now()
     );

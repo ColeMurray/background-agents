@@ -61,6 +61,12 @@ export class SessionCoreRepository {
     return rows[0] ?? null;
   }
 
+  /**
+   * Writes the session row. On a repeat for the same id every named column
+   * takes the new value; working state the aggregate accumulates elsewhere
+   * (branch_name, base_sha, current_sha, opencode_session_id, total_cost) is
+   * left as it stands.
+   */
   upsertSession(data: UpsertSessionData): void {
     const hasRepoOwner = data.repoOwner !== null;
     const hasRepoName = data.repoName !== null;
@@ -72,8 +78,27 @@ export class SessionCoreRepository {
     }
 
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET
+         session_name = excluded.session_name,
+         title = excluded.title,
+         repo_owner = excluded.repo_owner,
+         repo_name = excluded.repo_name,
+         repo_id = excluded.repo_id,
+         base_branch = excluded.base_branch,
+         model = excluded.model,
+         reasoning_effort = excluded.reasoning_effort,
+         status = excluded.status,
+         parent_session_id = excluded.parent_session_id,
+         spawn_source = excluded.spawn_source,
+         spawn_depth = excluded.spawn_depth,
+         code_server_enabled = excluded.code_server_enabled,
+         vnc_enabled = excluded.vnc_enabled,
+         sandbox_settings = excluded.sandbox_settings,
+         environment_id = excluded.environment_id,
+         created_at = excluded.created_at,
+         updated_at = excluded.updated_at`,
       data.id,
       data.sessionName,
       data.title,

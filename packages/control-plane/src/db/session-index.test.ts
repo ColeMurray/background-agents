@@ -235,7 +235,7 @@ class FakeD1Database {
         number,
         number,
       ];
-      // INSERT OR IGNORE — skip if exists
+      // ON CONFLICT DO NOTHING — skip if exists
       const inserted = !this.rows.has(id);
       if (inserted) {
         const rootSessionId = rootParentId

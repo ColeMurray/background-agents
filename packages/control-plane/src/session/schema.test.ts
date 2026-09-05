@@ -76,9 +76,7 @@ describe("applyMigrations", () => {
     expect(selectCall).toBeDefined();
 
     // Each migration produces an exec call + an INSERT
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(MIGRATIONS.length);
 
     // Verify all IDs are recorded
@@ -94,9 +92,7 @@ describe("applyMigrations", () => {
     applyMigrations(mock.sql);
 
     // Should only have CREATE TABLE + SELECT, no migration execs or inserts
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(0);
 
     const alterCalls = mock.calls.filter((c) => c.query.includes("ALTER TABLE"));
@@ -110,9 +106,7 @@ describe("applyMigrations", () => {
 
     applyMigrations(mock.sql);
 
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     // Migrations 11 through MIGRATIONS.length
     const unappliedCount = MIGRATIONS.length - 10;
     expect(inserts).toHaveLength(unappliedCount);
@@ -144,8 +138,7 @@ describe("applyMigrations", () => {
 
     expect(
       mock.calls.some(
-        ({ query, params }) =>
-          query.includes("INSERT OR IGNORE INTO _schema_migrations") && params[0] === 23
+        ({ query, params }) => query.includes("INSERT INTO _schema_migrations") && params[0] === 23
       )
     ).toBe(false);
   });
@@ -193,9 +186,7 @@ describe("applyMigrations", () => {
     expect(() => applyMigrations(mock.sql)).not.toThrow();
 
     // All migrations should still be recorded
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(MIGRATIONS.length);
   });
 
@@ -209,9 +200,7 @@ describe("applyMigrations", () => {
 
     applyMigrations(mock.sql);
 
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(0);
   });
 
@@ -229,9 +218,7 @@ describe("applyMigrations", () => {
   it("records applied_at timestamp", () => {
     applyMigrations(mock.sql);
 
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     // Second param should be the timestamp
     for (const insert of inserts) {
       expect(insert.params[1]).toBe(1000);

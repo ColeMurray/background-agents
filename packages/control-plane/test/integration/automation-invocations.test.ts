@@ -536,7 +536,7 @@ describe("automation invocations (D1 integration)", () => {
       expect(await countRows("automation_invocations", "skip_reason IS NOT NULL")).toBe(1);
     });
 
-    it("hands the slot over exactly once when two skips collide (INSERT OR IGNORE)", async () => {
+    it("hands the slot over exactly once when two skips collide (ON CONFLICT DO NOTHING)", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-s2", next_run_at: 1_000 }));
 

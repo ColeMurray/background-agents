@@ -4,7 +4,10 @@
  * Uses a mock SqlStorage to verify SQL operations are called correctly.
  */
 
+import { DatabaseSync } from "node:sqlite";
 import { describe, it, expect, beforeEach } from "vitest";
+import { createNodeSqlStorage } from "../node/sqlite-storage";
+import { initSchema } from "./schema";
 import { SessionCoreRepository } from "./session-core-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 
@@ -110,7 +113,8 @@ describe("SessionCoreRepository", () => {
       });
 
       expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("INSERT OR REPLACE INTO session");
+      expect(mock.calls[0].query).toContain("INSERT INTO session");
+      expect(mock.calls[0].query).toContain("ON CONFLICT (id) DO UPDATE SET");
       expect(mock.calls[0].params).toEqual([
         "sess-1",
         "test-session",
@@ -243,6 +247,45 @@ describe("SessionCoreRepository", () => {
       expect(mock.calls[0].query).toContain("SET total_cost = total_cost + ?");
       expect(mock.calls[0].query).toContain("updated_at = ?");
       expect(mock.calls[0].params).toEqual([0.0123, 5000]);
+    });
+  });
+
+  describe("upsertSession against real storage", () => {
+    it("overwrites the columns it names and leaves working state alone", () => {
+      const db = new DatabaseSync(":memory:");
+      const storage = createNodeSqlStorage(db);
+      const realRepo = new SessionCoreRepository(storage.sql, storage.transactionSync);
+
+      try {
+        initSchema(storage.sql);
+        const base = {
+          id: "sess-1",
+          sessionName: "test-session",
+          title: "First",
+          repoOwner: "owner",
+          repoName: "repo",
+          repoId: 42,
+          model: "claude-sonnet-4",
+          status: "created" as const,
+          createdAt: 1000,
+          updatedAt: 1000,
+        };
+        realRepo.upsertSession(base);
+        realRepo.updateSessionBranch("sess-1", "feature/x");
+        realRepo.addSessionCost(1.5, 2000);
+
+        realRepo.upsertSession({ ...base, title: "Second", updatedAt: 3000 });
+
+        expect(realRepo.getSession()).toMatchObject({
+          id: "sess-1",
+          title: "Second",
+          updated_at: 3000,
+          branch_name: "feature/x",
+          total_cost: 1.5,
+        });
+      } finally {
+        db.close();
+      }
     });
   });
 
