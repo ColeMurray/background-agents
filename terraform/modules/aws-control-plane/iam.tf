@@ -32,10 +32,15 @@ resource "aws_iam_role_policy_attachment" "ssm_core" {
 }
 
 data "aws_iam_policy_document" "instance" {
+  # GetParametersByPath is authorized against the path itself as well as what is
+  # under it, so a grant on only `<prefix>/*` is denied.
   statement {
-    sid       = "ReadStackConfiguration"
-    actions   = ["ssm:GetParametersByPath", "ssm:GetParameter", "ssm:GetParameters"]
-    resources = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_env_prefix}/*"]
+    sid     = "ReadStackConfiguration"
+    actions = ["ssm:GetParametersByPath", "ssm:GetParameter", "ssm:GetParameters"]
+    resources = [
+      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_env_prefix}",
+      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_env_prefix}/*",
+    ]
   }
 
   # The parameters are SecureString under the account's default SSM key.

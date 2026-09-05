@@ -32,7 +32,7 @@ resource "aws_instance" "this" {
   iam_instance_profile   = aws_iam_instance_profile.instance.name
   key_name               = var.ssh_key_name
 
-  user_data                   = data.cloudinit_config.this.rendered
+  user_data_base64            = data.cloudinit_config.this.rendered
   user_data_replace_on_change = false
 
   root_block_device {
@@ -43,9 +43,14 @@ resource "aws_instance" "this" {
   }
 
   metadata_options {
-    http_tokens                 = "required" # IMDSv2
-    http_endpoint               = "enabled"
-    http_put_response_hop_limit = 1
+    http_tokens   = "required" # IMDSv2
+    http_endpoint = "enabled"
+    # Two, not one. Everything that reaches AWS here runs in a container on
+    # Docker's bridge network, which is one hop further from the metadata
+    # service than the instance itself. At a limit of 1 the app and Litestream
+    # both fail with "no valid providers in chain", which reads like a missing
+    # credential rather than an unreachable one.
+    http_put_response_hop_limit = 2
   }
 
   monitoring = true
@@ -60,7 +65,7 @@ resource "aws_instance" "this" {
     # routine plan propose a replacement. Rolling the instance is deliberate:
     #
     #   terraform apply -replace=module.control_plane.aws_instance.this
-    ignore_changes = [ami, user_data]
+    ignore_changes = [ami, user_data_base64]
   }
 }
 

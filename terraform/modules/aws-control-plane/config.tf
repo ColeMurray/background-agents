@@ -25,7 +25,15 @@ locals {
   # the instance role. An SSM parameter cannot hold an empty string, so "unset"
   # here is "no parameter", which is exactly how the host reads it.
   derived_config = {
-    DEPLOYMENT_NAME     = var.name
+    DEPLOYMENT_NAME = var.name
+
+    # One of the five keys the host requires before it will listen. The
+    # placeholder is the same one .env.example ships and for the same reason:
+    # it only attributes and filters the bot's own activity, so it boots a
+    # staging stack, and a deployment with a real GitHub App overrides it
+    # through var.config.
+    GITHUB_BOT_USERNAME = "open-inspect[bot]"
+
     WORKER_URL          = "https://${var.hostname}"
     CADDY_DOMAIN        = var.hostname
     OBJECT_STORE_BUCKET = aws_s3_bucket.media.bucket
