@@ -302,8 +302,11 @@ async function boot(
     // Only a drain that abandoned nothing may claim a clean stop: work that
     // outlived the budget can still arm a deadline the index would then be
     // missing, and the next boot has to go looking for it.
-    if (report.clean) markCleanShutdown(settings.dataDir, Date.now());
-    closeStores();
+    try {
+      if (report.clean) markCleanShutdown(settings.dataDir, Date.now());
+    } finally {
+      closeStores();
+    }
 
     if (report.clean) {
       log.info("node_host.stopped", { event: "node_host.stopped" });

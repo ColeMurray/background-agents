@@ -158,6 +158,23 @@ describe("recoverSessionDeadlines", () => {
     );
   });
 
+  it("keeps a session file it could not read in the next scan's range", () => {
+    writeSessionDeadline("broken", 1_000);
+    const broken = join(dataDir, "sessions", "broken.db");
+    rmSync(`${broken}-wal`, { force: true });
+    writeFileSync(broken, "not a database at all");
+    chmodSync(broken, 0o600);
+    // A boot after every file was last written, so the point it records is
+    // what decides whether the file is looked at again.
+    const bootMs = Date.now() + 1_000;
+
+    expect(recover(bootMs)).toMatchObject({ scanned: 1, unreadable: 1 });
+    expect(marker()).toEqual({ indexedThroughMs: 0, cleanShutdown: false });
+
+    // The file has not been written since, and is read again all the same.
+    expect(recover(bootMs + 1)).toMatchObject({ scanned: 1, unreadable: 1 });
+  });
+
   it("treats a data directory with no sessions as nothing to do", () => {
     expect(recover()).toEqual({
       previousStop: "no_marker",

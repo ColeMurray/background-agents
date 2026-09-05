@@ -46,6 +46,8 @@ const SESSIONS_DIRECTORY = "sessions";
 const SESSION_FILE_SUFFIX = ".db";
 /** The session table holding what the session has scheduled. */
 const ALARM_STATE_TABLE = "session_alarm_state";
+/** A point before any file's timestamp: the next scan reads every session. */
+const SCAN_EVERYTHING_MS = 0;
 
 /** What the marker file holds. */
 interface HostState {
@@ -107,7 +109,13 @@ export function recoverSessionDeadlines(options: DeadlineRecoveryOptions): Deadl
   // after which a marker exists.
   const previousStop: PreviousStop = previous === null ? "no_marker" : "unclean_stop";
   const scan = scanSessionFiles(dataDir, index, previous?.indexedThroughMs ?? null, log);
-  writeHostState(dataDir, { indexedThroughMs: nowMs, cleanShutdown: false });
+  // The point moves forward only over a scan that read everything it looked
+  // at. A file this boot could not read has to stay in the next scan's range,
+  // or one unreadable moment would put its deadline out of reach for good.
+  writeHostState(dataDir, {
+    indexedThroughMs: scan.unreadable === 0 ? nowMs : SCAN_EVERYTHING_MS,
+    cleanShutdown: false,
+  });
 
   const report: DeadlineRecoveryReport = { previousStop, ...scan };
   if (scan.scanned > 0) {
