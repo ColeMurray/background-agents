@@ -76,6 +76,7 @@ export default function SessionPage() {
   const {
     connected,
     connecting,
+    reconnecting,
     ready,
     presenceSynced,
     authError,
@@ -392,6 +393,7 @@ export default function SessionPage() {
         fallbackSessionInfo={fallbackSessionInfo}
         connected={connected && ready}
         connecting={connecting || (connected && !ready)}
+        reconnecting={reconnecting}
         isDetailsOpen={isDetailsOpen}
         isDesktopDetailsOpen={isDesktopDetailsOpen}
         showDesktopDetailsToggle={!resolvedDiff}

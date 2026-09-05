@@ -42,6 +42,8 @@ const NO_MESSAGES: Message[] = [];
 interface UseSessionSocketReturn {
   connected: boolean;
   connecting: boolean;
+  /** A reconnect is scheduled and has not started yet. */
+  reconnecting: boolean;
   ready: boolean;
   presenceSynced: boolean;
   authError: string | null;
@@ -414,6 +416,7 @@ export function useSessionSocket(
   return {
     connected: transport.connected,
     connecting: transport.connecting,
+    reconnecting: transport.reconnecting,
     ready: state.ready,
     presenceSynced: state.presenceSynced,
     authError: transport.authError,

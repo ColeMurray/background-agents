@@ -8,7 +8,10 @@ import {
 } from "@open-inspect/shared/types/server-messages";
 import {
   WS_CLOSE_AUTHORIZATION_REVOKED,
+  WS_CLOSE_GOING_AWAY,
   WS_CLOSE_INTERNAL_ERROR,
+  WS_CLOSE_SERVICE_RESTART,
+  WS_CLOSE_TRY_AGAIN_LATER,
 } from "@open-inspect/shared/types/websocket";
 
 function parseWsMessage(raw: unknown): ServerMessage | null {
@@ -24,7 +27,9 @@ const WS_CLOSE_AUTH_REQUIRED = 4001;
 const WS_CLOSE_SESSION_EXPIRED = 4002;
 const WS_CLOSE_INVALID_MESSAGE = 4004;
 
-const MAX_RECONNECT_ATTEMPTS = 5;
+// Ten attempts with the backoff below span ~3 minutes, so a host restart
+// (seconds to a minute of downtime) is ridden out rather than given up on.
+const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_BASE_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 const PING_INTERVAL_MS = 30000;
@@ -59,7 +64,12 @@ function closeDirective(
   if (
     !event.wasClean ||
     event.code === WS_CLOSE_INVALID_MESSAGE ||
-    event.code === WS_CLOSE_INTERNAL_ERROR
+    event.code === WS_CLOSE_INTERNAL_ERROR ||
+    // A host that is restarting, overloaded, or going away closes cleanly and
+    // expects the client back: reconnect rather than strand the tab.
+    event.code === WS_CLOSE_GOING_AWAY ||
+    event.code === WS_CLOSE_SERVICE_RESTART ||
+    event.code === WS_CLOSE_TRY_AGAIN_LATER
   ) {
     return attemptsSoFar < MAX_RECONNECT_ATTEMPTS
       ? { action: "retry", delayMs: reconnectDelayMs(attemptsSoFar) }
@@ -78,6 +88,8 @@ export interface SessionTransportHandlers {
 export interface UseSessionTransportReturn {
   connected: boolean;
   connecting: boolean;
+  /** A reconnect is scheduled and has not started yet. */
+  reconnecting: boolean;
   authError: string | null;
   connectionError: string | null;
   /** Whether the socket is currently open. */
@@ -126,6 +138,7 @@ export function useSessionTransport(
 
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
@@ -231,6 +244,8 @@ export function useSessionTransport(
     connectingEpochRef.current = null;
     setConnected(false);
     setConnecting(false);
+    // Every close ends any pending reconnect; only the retry branch re-arms it.
+    setReconnecting(false);
     wsRef.current = null;
     handlersRef.current.onClose?.();
 
@@ -275,6 +290,7 @@ export function useSessionTransport(
       case "retry":
         if (!mountedRef.current) return;
         reconnectAttempts.current++;
+        setReconnecting(true);
         console.log(
           `Reconnecting in ${directive.delayMs}ms (attempt ${reconnectAttempts.current})`
         );
@@ -314,6 +330,7 @@ export function useSessionTransport(
     const epoch = connectEpochRef.current;
     connectingEpochRef.current = epoch;
     setConnecting(true);
+    setReconnecting(false);
     setAuthError(null);
 
     const tokenReady = await ensureWsToken(epoch);
@@ -380,6 +397,7 @@ export function useSessionTransport(
     }
     reconnectAttempts.current = 0;
     wsTokenRef.current = null; // Clear token to fetch fresh one
+    setReconnecting(false);
     setAuthError(null);
     setConnectionError(null);
     connect();
@@ -419,6 +437,7 @@ export function useSessionTransport(
       reconnectAttempts.current = 0;
       setConnected(false);
       setConnecting(false);
+      setReconnecting(false);
       setAuthError(null);
       setConnectionError(null);
       if (hadActiveAttempt) handlersRef.current.onClose?.();
@@ -440,6 +459,7 @@ export function useSessionTransport(
   return {
     connected,
     connecting,
+    reconnecting,
     authError,
     connectionError,
     isOpen,

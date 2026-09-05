@@ -33,6 +33,7 @@
  * explicit archive or delete route may.
  */
 
+import { WS_CLOSE_SERVICE_RESTART } from "@open-inspect/shared/types/websocket";
 import type { Logger } from "../logger";
 import type { SqlDatabase } from "../db/sql-database";
 import type { AlarmScheduleStore } from "../session/alarm/scheduler";
@@ -55,8 +56,6 @@ const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
 const DEFAULT_MAX_RESIDENT = 256;
 /** How long a shutdown waits for every runtime to quiesce before forcing it. */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
-/** The close code sent to sockets a shutdown closes: the peer should reconnect. */
-export const SERVICE_RESTART_CLOSE_CODE = 1012;
 
 /**
  * What the registry drives on a runtime: the session server's socket entry
@@ -312,7 +311,7 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
   ): Promise<boolean> {
     for (;;) {
       for (const socket of session.sockets.sockets()) {
-        socket.close(SERVICE_RESTART_CLOSE_CODE, "Service restart");
+        socket.close(WS_CLOSE_SERVICE_RESTART, "Service restart");
       }
       const remainingMs = deadlineMs - Date.now();
       if (remainingMs <= 0) return this.isQuiescent(session);

@@ -3,6 +3,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import {
+  WS_CLOSE_GOING_AWAY,
+  WS_CLOSE_SERVICE_RESTART,
+  WS_CLOSE_TRY_AGAIN_LATER,
+} from "@open-inspect/shared/types/websocket";
 import { useSessionTransport } from "./use-session-transport";
 
 class FakeWebSocket {
@@ -289,6 +294,96 @@ describe("useSessionTransport", () => {
     rendered.unmount();
   });
 
+  // The host closes every adopted socket with WS_CLOSE_SERVICE_RESTART on
+  // shutdown, and a proper close frame makes it a *clean* close in the browser.
+  it.each([
+    ["a service restart", WS_CLOSE_SERVICE_RESTART],
+    ["a try-again-later close", WS_CLOSE_TRY_AGAIN_LATER],
+    ["the host going away", WS_CLOSE_GOING_AWAY],
+  ])("reconnects after %s, which the host reports as a clean close", async (_label, code) => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(code, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    // The credential outlives the host restart, so no second token fetch.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(rendered.result.current.connectionError).toBeNull();
+
+    act(() => FakeWebSocket.instances[1].open());
+    expect(rendered.result.current.connected).toBe(true);
+    rendered.unmount();
+  });
+
+  it("reports reconnecting while a scheduled retry is pending", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => FakeWebSocket.instances[0].open());
+    expect(rendered.result.current.reconnecting).toBe(false);
+
+    act(() => FakeWebSocket.instances[0].serverClose(WS_CLOSE_SERVICE_RESTART, true));
+    expect(rendered.result.current.reconnecting).toBe(true);
+    expect(rendered.result.current.connected).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(rendered.result.current.reconnecting).toBe(false);
+    rendered.unmount();
+  });
+
+  it("retries on a backoff schedule that outlasts a host restart", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const expectedDelaysMs = [
+      1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000, 30_000, 30_000,
+    ];
+    // A restart of the Node host takes seconds to a minute; the budget has to
+    // outlast it, not the ~31s five attempts bought.
+    expect(expectedDelaysMs.reduce((total, delay) => total + delay, 0)).toBeGreaterThanOrEqual(
+      150_000
+    );
+
+    for (const [attempt, delayMs] of expectedDelaysMs.entries()) {
+      act(() => FakeWebSocket.instances[attempt].serverClose(WS_CLOSE_SERVICE_RESTART, true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(delayMs - 1);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(attempt + 1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(attempt + 2);
+    }
+    expect(rendered.result.current.connectionError).toBeNull();
+
+    act(() =>
+      FakeWebSocket.instances[expectedDelaysMs.length].serverClose(WS_CLOSE_SERVICE_RESTART, true)
+    );
+    expect(rendered.result.current.connectionError).toBe(
+      "Connection lost. Please check your network and try reconnecting."
+    );
+    expect(rendered.result.current.reconnecting).toBe(false);
+    rendered.unmount();
+  });
+
   it("reconnects with backoff after an unclean close and reuses the cached token", async () => {
     vi.useFakeTimers();
     const rendered = renderTransport();
@@ -325,7 +420,7 @@ describe("useSessionTransport", () => {
     });
 
     // Never mark the sockets healthy, so repeated failures exhaust the budget.
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; attempt < 11; attempt++) {
       const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
       act(() => {
         socket.serverClose(1006);
@@ -335,7 +430,7 @@ describe("useSessionTransport", () => {
       });
     }
 
-    expect(FakeWebSocket.instances).toHaveLength(6);
+    expect(FakeWebSocket.instances).toHaveLength(11);
     expect(rendered.result.current.connectionError).toBe(
       "Connection lost. Please check your network and try reconnecting."
     );

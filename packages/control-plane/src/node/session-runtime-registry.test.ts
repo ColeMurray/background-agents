@@ -6,13 +6,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
+import { WS_CLOSE_SERVICE_RESTART } from "@open-inspect/shared/types/websocket";
 import type { SqlDatabase } from "../db/sql-database";
 import type { AlarmScheduleStore } from "../session/alarm/scheduler";
 import type { SessionRuntime } from "../session/components";
 import type { SessionPlatform, SessionStorage } from "../session/platform";
 import type { BackgroundTasks } from "../platform-ports";
 import {
-  SERVICE_RESTART_CLOSE_CODE,
   SessionRuntimeRegistry,
   type ManagedSessionRuntime,
   type SessionRuntimeRegistryOptions,
@@ -587,7 +587,7 @@ describe("SessionRuntimeRegistry", () => {
         await registry.shutdown();
 
         expect(await closed).toEqual({
-          code: SERVICE_RESTART_CLOSE_CODE,
+          code: WS_CLOSE_SERVICE_RESTART,
           reason: "Service restart",
         });
         expect(runtime.server.onClose).toHaveBeenCalledWith(server, 1012, "Service restart", true);
@@ -636,11 +636,45 @@ describe("SessionRuntimeRegistry", () => {
       await attached;
 
       await shutdown;
-      expect(await closed).toBe(SERVICE_RESTART_CLOSE_CODE);
+      expect(await closed).toBe(WS_CLOSE_SERVICE_RESTART);
       expect(registry.residentSessionIds()).toEqual([]);
       expect(log.warn).not.toHaveBeenCalled();
     } finally {
       client.terminate();
+      await new Promise<void>((done) => wss.close(() => done()));
+    }
+  });
+
+  it("shutdown's close reaches a spec-compliant client as a clean 1012", async () => {
+    // The browser only reconnects on codes it is told to reconnect on, and a
+    // proper close frame makes this a *clean* close (`wasClean: true`), not the
+    // 1006 an abrupt teardown would produce. The web transport's retry set has
+    // to contain this code for a deploy not to strand every open tab; see
+    // `use-session-transport.ts`.
+    const wss = new WebSocketServer({ port: 0 });
+    await new Promise<void>((done) => wss.once("listening", done));
+    // Node's global WebSocket implements the browser spec, close event included.
+    const client = new WebSocket(`ws://127.0.0.1:${(wss.address() as AddressInfo).port}`);
+    try {
+      const serverSide = new Promise<NodeWebSocket>((done) => wss.once("connection", done));
+      await new Promise<void>((done) => client.addEventListener("open", () => done()));
+      const server = await serverSide;
+      const closed = new Promise<{ code: number; wasClean: boolean }>((done) =>
+        client.addEventListener("close", (event) =>
+          done({ code: event.code, wasClean: event.wasClean })
+        )
+      );
+
+      const registry = makeRegistry();
+      await registry.withRuntime("s1", async (runtime) => {
+        runtime.platform.sockets.adopt(server, ["wsid:c1"]);
+      });
+
+      await registry.shutdown();
+
+      expect(await closed).toEqual({ code: WS_CLOSE_SERVICE_RESTART, wasClean: true });
+    } finally {
+      client.close();
       await new Promise<void>((done) => wss.close(() => done()));
     }
   });

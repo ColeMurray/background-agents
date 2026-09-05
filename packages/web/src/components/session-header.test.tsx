@@ -30,11 +30,15 @@ const FULL_CAPABILITIES: SessionCapabilities = {
 
 function SessionHeader({
   capabilities = FULL_CAPABILITIES,
+  reconnecting = false,
   ...props
-}: Omit<ComponentProps<typeof SessionHeaderComponent>, "capabilities"> & {
+}: Omit<ComponentProps<typeof SessionHeaderComponent>, "capabilities" | "reconnecting"> & {
   capabilities?: SessionCapabilities;
+  reconnecting?: boolean;
 }) {
-  return <SessionHeaderComponent {...props} capabilities={capabilities} />;
+  return (
+    <SessionHeaderComponent {...props} capabilities={capabilities} reconnecting={reconnecting} />
+  );
 }
 
 const actions: SessionActionProps = {
@@ -371,6 +375,28 @@ describe("SessionHeader", () => {
     rerender(<SessionHeader {...props} connected={false} connecting={false} />);
     expect(
       screen.getByRole("status", { name: "Connection status: Disconnected" })
+    ).toBeInTheDocument();
+  });
+
+  it("labels a pending reconnect distinctly from a first connection", () => {
+    const props = {
+      sessionState: createSessionState(),
+      fallbackSessionInfo: { repoOwner: "acme", repoName: "web", title: "Status icons" },
+      isDetailsOpen: false,
+      isDesktopDetailsOpen: true,
+      showDesktopDetailsToggle: true,
+      detailsButtonRef: createRef<HTMLButtonElement>(),
+      actionsButtonRef: createRef<HTMLButtonElement>(),
+      onToggleDetails: vi.fn(),
+      onToggleDesktopDetails: vi.fn(),
+      onOpenMobileDetails: vi.fn(),
+      actions,
+      renameSession: vi.fn(),
+    };
+    render(<SessionHeader {...props} connected={false} connecting={false} reconnecting />);
+
+    expect(
+      screen.getByRole("status", { name: "Connection status: Reconnecting..." })
     ).toBeInTheDocument();
   });
 
