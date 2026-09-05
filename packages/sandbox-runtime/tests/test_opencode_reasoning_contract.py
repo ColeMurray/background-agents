@@ -1,6 +1,6 @@
 """Opt-in wire tests: OPENCODE_TEST_BINARY=/path/to/opencode pytest ... -v.
 
-Uses real OpenCode 1.18.18, an isolated catalog/config, and fake localhost providers.
+Uses real OpenCode 1.18.29, an isolated catalog/config, and fake localhost providers.
 Only reasoning settings are retained from requests; no real provider keys are used.
 
 Fixture: public subset of https://models.opencode.ai/api.json, retrieved 2026-09-04.
@@ -98,7 +98,7 @@ def anthropic_events(model):
 
 @pytest.fixture
 async def wire_server(tmp_path, reasoning_config):
-    assert subprocess.check_output([BINARY, "--version"], text=True).strip() == "1.18.18"
+    assert subprocess.check_output([BINARY, "--version"], text=True).strip() == "1.18.29"
     captured = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -249,10 +249,7 @@ async def test_all_fixture_efforts_reach_provider(wire_server):
                     assert sent["output_config"]["effort"] == effort, context
 
 
-async def test_runtime_config_registers_gpt_6_astra(tmp_path, reasoning_config):
-    catalog = json.loads(CATALOG.read_text())
-    assert "gpt-6-astra" not in catalog["openai"]["models"]
-
+def test_opencode_catalog_includes_gpt_6_astra(tmp_path):
     env = {key: os.environ[key] for key in ("PATH", "HOME", "SYSTEMROOT") if key in os.environ}
     env.update(
         {
@@ -260,9 +257,7 @@ async def test_runtime_config_registers_gpt_6_astra(tmp_path, reasoning_config):
             "XDG_DATA_HOME": str(tmp_path / "data"),
             "XDG_CACHE_HOME": str(tmp_path / "cache"),
             "XDG_STATE_HOME": str(tmp_path / "state"),
-            "OPENCODE_MODELS_PATH": str(CATALOG),
             "OPENCODE_DISABLE_MODELS_FETCH": "1",
-            "OPENCODE_CONFIG_CONTENT": json.dumps(reasoning_config),
             "OPENAI_API_KEY": "test-only",
         }
     )

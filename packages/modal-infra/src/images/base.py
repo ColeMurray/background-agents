@@ -32,7 +32,7 @@ SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 # releases order the turn loop by comparing those IDs as strings, which makes
 # any session carrying pre-wraparound history exit the loop without calling the
 # model. 1.18.15 orders by message creation time instead.
-OPENCODE_VERSION = "1.18.18"
+OPENCODE_VERSION = "1.18.29"
 
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"
@@ -51,7 +51,7 @@ TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 # v59: OpenCode past the message-ID wraparound (see OPENCODE_VERSION)
 # v60: generic provider-account token broker plugin
 # v61: account/init helpers and /usr/sbin on PATH
-# v62: register GPT-6 Astra in OpenCode's runtime catalog
+# v62: OpenCode with GPT-6 Astra in its bundled catalog
 CACHE_BUSTER = RUNTIME_VERSION
 
 # Base image with all development tools

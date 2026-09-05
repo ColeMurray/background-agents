@@ -38,29 +38,3 @@ async def test_manual_variants_available_when_switching_from_adaptive_model(reas
                 "max": {"thinking": {"type": "enabled", "budgetTokens": 31_999}},
             }
         }
-
-
-async def test_gpt_6_astra_is_registered_for_opencode(reasoning_config):
-    astra = reasoning_config["provider"]["openai"]["models"]["gpt-6-astra"]
-
-    assert astra["name"] == "GPT-6 Astra"
-    assert astra["reasoning"] is True
-    assert astra["attachment"] is True
-    assert astra["temperature"] is False
-    assert astra["tool_call"] is True
-    assert astra["modalities"] == {
-        "input": ["text", "image", "pdf"],
-        "output": ["text"],
-    }
-    assert astra["limit"] == {
-        "context": 1_050_000,
-        "input": 922_000,
-        "output": 128_000,
-    }
-    assert set(astra["variants"]) == {"low", "medium", "high", "xhigh", "max"}
-    for effort, options in astra["variants"].items():
-        assert options == {
-            "reasoningEffort": effort,
-            "reasoningSummary": "auto",
-            "include": ["reasoning.encrypted_content"],
-        }
