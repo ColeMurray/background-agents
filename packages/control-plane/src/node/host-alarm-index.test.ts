@@ -61,17 +61,17 @@ describe("openHostAlarmIndex", () => {
   it("leaves a claim in flight and the retry budget alone when it arms a missing deadline", () => {
     const index = open();
     index.set("s1", 500);
-    index.claim("s1");
-    index.retry("s1", 800);
-    index.claim("s1");
+    const first = index.claim("s1", LEASE_UNTIL)!;
+    index.retry("s1", first.token, 800);
+    index.claim("s1", LEASE_UNTIL);
     expect(index.get("s1")).toBeNull();
 
     expect(index.armIfSooner("s1", 900)).toBe(true);
     // The claim still stands and still carries its failure, so recovery
     // re-arms it at the deadline it was claimed at rather than the later one.
-    expect(index.recoverClaims()).toEqual(["s1"]);
+    expect(index.recoverForeignClaims([])).toEqual(["s1"]);
     expect(index.get("s1")).toBe(800);
-    expect(index.claim("s1")).toEqual({ deadline: 800, failures: 1 });
+    expect(index.claim("s1", LEASE_UNTIL)).toMatchObject({ deadline: 800, failures: 1 });
   });
 
   it("orders the earliest and the due deadlines soonest first", () => {
