@@ -112,7 +112,7 @@ function createWorkflow(options: {
   createCallbackAuth?: ReturnType<typeof vi.fn>;
   env?: Env;
   provider?: "modal" | "vercel" | "opencomputer" | null;
-  jobs?: Jobs;
+  jobs?: Jobs | null;
 }) {
   const store = options.store ?? createStore();
   const adapter = options.adapter ?? createAdapter();
@@ -142,7 +142,7 @@ function createWorkflow(options: {
     store as unknown as ImageBuildStore,
     factory,
     provider ? { provider, planner } : null,
-    options.jobs ?? { send: vi.fn().mockResolvedValue(undefined) }
+    options.jobs === undefined ? { send: vi.fn().mockResolvedValue(undefined) } : options.jobs
   );
   return { workflow, store, adapter, factory, planBuild, resolveTarget, createCallbackAuth };
 }
@@ -296,6 +296,19 @@ describe("ImageBuildWorkflow", () => {
       ).rejects.toBeInstanceOf(ImageBuildScopeNotFoundError);
       expect(store.registerBuild).not.toHaveBeenCalled();
     });
+
+    it.each(["triggerBuild", "triggerBuildIfStale"] as const)(
+      "rejects %s before registration or provider work when jobs are unavailable",
+      async (method) => {
+        const { workflow, store, adapter, planBuild } = createWorkflow({ jobs: null });
+        await expect(workflow[method](ENV_SCOPE, ctx)).rejects.toThrow(
+          "Background jobs are not available on this host"
+        );
+        expect(store.registerBuild).not.toHaveBeenCalled();
+        expect(planBuild).not.toHaveBeenCalled();
+        expect(adapter.startBuild).not.toHaveBeenCalled();
+      }
+    );
 
     it("registers the build row before secrets are read (§7.4 supersede window)", async () => {
       const { workflow, store, planBuild } = createWorkflow({});

@@ -174,8 +174,8 @@ SMOKE_APP_PORT=8798 SMOKE_MINIO_PORT=9010 SMOKE_MINIO_CONSOLE_PORT=9011 \
 ## Not yet available on the container
 
 - Repository image builds: the finalization step is a background job (`src/jobs.ts`), and the jobs
-  seam has no container implementation yet, so a build's callback fails at the hand-off. Sessions
-  start from the base sandbox image.
+  seam has no container implementation yet, so build triggers fail before registration or provider
+  startup. Sessions start from the base sandbox image.
 - The GitHub autofix queue and the Slack and Linear bots: the bots remain Cloudflare Workers and
   reach a container-hosted control plane over HTTPS once that transport lands.
 - Crash recovery of scheduled deadlines after an unclean stop.

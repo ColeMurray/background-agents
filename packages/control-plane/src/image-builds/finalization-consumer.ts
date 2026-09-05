@@ -19,5 +19,5 @@ export async function handleImageBuildFinalization(
     createImageBuildAdapterFactory(deps.env)
   );
   const result = await finalizer.process(job, deps.correlation);
-  return result.type === "retry" ? { retry: true, delaySeconds: result.delaySeconds } : "ack";
+  return result.type === "retry" ? { retry: true, delayMs: result.delayMs } : "ack";
 }

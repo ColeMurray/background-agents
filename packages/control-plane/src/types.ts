@@ -122,8 +122,8 @@ export interface Platform {
   /** GitHub Autofix queues, read for health metrics only. */
   AUTOFIX_QUEUE?: QueueMetricsSource;
   AUTOFIX_DLQ?: QueueMetricsSource;
-  /** Durable background work, delivered later to the job's handler (see `jobs.ts`). */
-  JOBS: Jobs;
+  /** Durable background work; null when the host cannot deliver jobs yet (see `jobs.ts`). */
+  JOBS: Jobs | null;
 }
 
 /** What the application runs against: its configuration and the platform ports. */

@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 import { handleAutofixJob } from "./autofix/handler";
 import type { SqlDatabase } from "./db/sql-database";
+import { consumeJobBatch } from "./cloudflare/job-queue";
 import { handleImageBuildFinalization } from "./image-builds/finalization-consumer";
-import { IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS } from "./image-builds/finalizer";
+import { IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS } from "./image-builds/finalizer";
 import type { Logger } from "./logger";
 import { JOB_KINDS, deliverJob, type Job, type JobDeps, type JobKind } from "./jobs";
 import type { Env } from "./types";
@@ -44,10 +45,10 @@ describe("JOB_KINDS", () => {
   it("declares every kind with a retry policy a host can act on", () => {
     for (const [kind, definition] of Object.entries(JOB_KINDS)) {
       expect(definition.retry.maxAttempts, kind).toBeGreaterThanOrEqual(1);
-      expect(definition.retry.retryDelaySeconds, kind).toBeGreaterThan(0);
+      expect(definition.retry.retryDelayMs, kind).toBeGreaterThan(0);
     }
-    expect(JOB_KINDS["image_build.finalize"].retry.retryDelaySeconds).toBe(
-      IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS
+    expect(JOB_KINDS["image_build.finalize"].retry.retryDelayMs).toBe(
+      IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS
     );
   });
 
@@ -74,12 +75,12 @@ describe("deliverJob", () => {
     const deps = fakeDeps();
     vi.mocked(handleImageBuildFinalization).mockResolvedValueOnce({
       retry: true,
-      delaySeconds: 365,
+      delayMs: 365_000,
     });
 
     const outcome = await deliverJob("image_build.finalize", FINALIZE_PAYLOAD, 3, deps);
 
-    expect(outcome).toEqual({ retry: true, delaySeconds: 365 });
+    expect(outcome).toEqual({ retry: true, delayMs: 365_000 });
     expect(handleImageBuildFinalization).toHaveBeenCalledWith(
       FINALIZE_PAYLOAD,
       { attempts: 3, maxAttempts: JOB_KINDS["image_build.finalize"].retry.maxAttempts },
@@ -147,6 +148,35 @@ describe("deliverJob", () => {
 
     expect(outcome).toEqual({ retry: true });
     expect(handleAutofixJob).not.toHaveBeenCalled();
+  });
+
+  it("continues the real batch adapter after a handler throws", async () => {
+    const deps = fakeDeps();
+    vi.mocked(handleImageBuildFinalization)
+      .mockRejectedValueOnce(new Error("provider unreachable"))
+      .mockResolvedValueOnce("ack");
+    const messages = ["failed", "completed"].map((id) => ({
+      id,
+      timestamp: new Date(),
+      attempts: 1,
+      body: FINALIZE_PAYLOAD,
+      ack: vi.fn(),
+      retry: vi.fn(),
+    }));
+    const batch = {
+      queue: "open-inspect-image-build-finalization-test",
+      messages,
+      ackAll: vi.fn(),
+      retryAll: vi.fn(),
+    } as unknown as MessageBatch<unknown>;
+
+    await consumeJobBatch(batch, deps);
+
+    expect(handleImageBuildFinalization).toHaveBeenCalledTimes(2);
+    expect(messages[0]!.retry).toHaveBeenCalledOnce();
+    expect(messages[0]!.ack).not.toHaveBeenCalled();
+    expect(messages[1]!.ack).toHaveBeenCalledOnce();
+    expect(messages[1]!.retry).not.toHaveBeenCalled();
   });
 
   it("covers every kind in the table", async () => {

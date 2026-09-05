@@ -81,10 +81,10 @@ export async function consumeJobBatch(
     });
     if (outcome === "ack") {
       message.ack();
-    } else if (outcome.delaySeconds === undefined) {
+    } else if (outcome.delayMs === undefined) {
       message.retry();
     } else {
-      message.retry({ delaySeconds: outcome.delaySeconds });
+      message.retry({ delaySeconds: Math.ceil(outcome.delayMs / 1000) });
     }
   }
 }

@@ -48,9 +48,11 @@ function terraformControlPlaneConsumers(): TerraformConsumer[] {
       ),
     ].map((match) => [match[1]!, match[2]!])
   );
+  const controlPlaneModule = /module "control_plane_worker" \{([\s\S]*?)\n\}/.exec(source)?.[1];
+  if (!controlPlaneModule) throw new Error("Missing control-plane Worker module");
   const bindings = new Map(
     [
-      ...source.matchAll(
+      ...controlPlaneModule.matchAll(
         /binding_name\s*=\s*"(\w+)"\s*\n\s*queue_name\s*=\s*cloudflare_queue\.(\w+)(?:\[0\])?\.queue_name/g
       ),
     ].map((match) => [match[2]!, match[1]!])
@@ -136,7 +138,7 @@ describe("Terraform parity", () => {
       const { retry } = JOB_KINDS[kind!];
       // Cloudflare counts retries after the first delivery; the table counts deliveries.
       expect(consumer.maxRetries, `${kind} max_retries`).toBe(retry.maxAttempts - 1);
-      expect(consumer.retryDelay, `${kind} retry_delay`).toBe(retry.retryDelaySeconds);
+      expect(consumer.retryDelay, `${kind} retry_delay`).toBe(retry.retryDelayMs / 1000);
       expect(consumer.bindingName, `${kind} producer binding`).toBe(JOB_QUEUE_BINDINGS[kind!]);
     }
   });
@@ -223,7 +225,7 @@ describe("consumeJobBatch", () => {
   it("maps a retry onto the message: the handler's delay when named, the queue's own otherwise", async () => {
     const host = fakeHost();
     vi.mocked(deliverJob)
-      .mockResolvedValueOnce({ retry: true, delaySeconds: 365 })
+      .mockResolvedValueOnce({ retry: true, delayMs: 364_001 })
       .mockResolvedValueOnce({ retry: true });
     const delayed = message("message-1", FINALIZE_PAYLOAD);
     const bare = message("message-2", FINALIZE_PAYLOAD);

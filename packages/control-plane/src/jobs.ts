@@ -7,8 +7,8 @@
  *
  * On Cloudflare each kind is a Queue (`cloudflare/job-queue.ts`) whose
  * consumer Terraform declares with the retry settings below; a unit test
- * holds the two equal. The Node host delivers the same table from a jobs
- * table and an in-process poller.
+ * holds the two equal. A future Node jobs table and poller can deliver the
+ * same registry; until then that host exposes JOBS as null.
  *
  * Retry taxonomy. Delivery is at-least-once on every host, so a handler
  * must tolerate a duplicate: image-build finalization is fenced by a store
@@ -29,7 +29,7 @@ import {
   imageBuildFinalizationJobSchema,
   type ImageBuildFinalizationJob,
 } from "./image-builds/finalization-job";
-import { IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS } from "./image-builds/finalizer";
+import { IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS } from "./image-builds/finalizer";
 import type { CorrelationContext, Logger } from "./logger";
 import type { Env } from "./types";
 
@@ -37,8 +37,8 @@ import type { Env } from "./types";
 export interface JobRetryPolicy {
   /** Deliveries a job gets in total, the first included; the host dead-letters it after the last. */
   maxAttempts: number;
-  /** Seconds a retry waits when the handler names no delay of its own. */
-  retryDelaySeconds: number;
+  /** Milliseconds a retry waits when the handler names no delay of its own. */
+  retryDelayMs: number;
 }
 
 /** What the host knows about one delivery. */
@@ -60,10 +60,10 @@ export interface JobDeps {
 
 /**
  * A handler's answer. `"ack"` retires the job. A retry redelivers it after
- * `delaySeconds`, or after the kind's `retryDelaySeconds` when unset; the
+ * `delayMs`, or after the kind's `retryDelayMs` when unset; the
  * host dead-letters it instead once `maxAttempts` is spent.
  */
-export type JobOutcome = "ack" | { retry: true; delaySeconds?: number };
+export type JobOutcome = "ack" | { retry: true; delayMs?: number };
 
 interface JobKindDefinition<Payload> {
   /** The wire shape of the payload; a host parses every delivery with it. */
@@ -87,7 +87,7 @@ export const JOB_KINDS = {
    */
   "image_build.finalize": defineJobKind<ImageBuildFinalizationJob>({
     payload: imageBuildFinalizationJobSchema,
-    retry: { maxAttempts: 13, retryDelaySeconds: IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS },
+    retry: { maxAttempts: 13, retryDelayMs: IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS },
     handle: handleImageBuildFinalization,
   }),
   /**
@@ -97,7 +97,7 @@ export const JOB_KINDS = {
    */
   "github.autofix": defineJobKind<GitHubAutofixEnvelope>({
     payload: githubAutofixEnvelopeSchema,
-    retry: { maxAttempts: 5, retryDelaySeconds: 30 },
+    retry: { maxAttempts: 5, retryDelayMs: 30_000 },
     handle: handleAutofixJob,
   }),
 };

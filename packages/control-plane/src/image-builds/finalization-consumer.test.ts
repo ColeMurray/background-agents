@@ -43,7 +43,7 @@ describe("handleImageBuildFinalization", () => {
   });
 
   it("asks for a retry after the delay the finalizer names while the build is busy", async () => {
-    process.mockResolvedValueOnce({ type: "retry", delaySeconds: 365 });
+    process.mockResolvedValueOnce({ type: "retry", delayMs: 365_000 });
 
     const outcome = await handleImageBuildFinalization(
       JOB,
@@ -51,6 +51,6 @@ describe("handleImageBuildFinalization", () => {
       deps()
     );
 
-    expect(outcome).toEqual({ retry: true, delaySeconds: 365 });
+    expect(outcome).toEqual({ retry: true, delayMs: 365_000 });
   });
 });
