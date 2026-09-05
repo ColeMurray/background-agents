@@ -1,39 +1,124 @@
 {
-  "migrationBaseline": 74,
   "allowed": {
     "packages/control-plane/src/db/authorization-store.ts": {
       "collate-nocase": {
-        "count": 1,
+        "occurrences": ["COLLATE NOCASE"],
         "reason": "Member listing orders by display name case-insensitively. LOWER() over the COALESCE would drop the index the ORDER BY relies on."
       },
       "json-function": {
-        "count": 5,
+        "occurrences": [
+          "json(",
+          "json(",
+          "json(",
+          "json(",
+          "json(",
+          "json(",
+          "json_object(",
+          "json_object(",
+          "json_object(",
+          "json_object(",
+          "json_object(",
+          "json_object(",
+          "json_object(",
+          "json_object("
+        ],
         "reason": "The audit row's before/requested/after payload is assembled from subqueries inside the same batch as the mutation, so it observes exactly the state the write saw. Building it in TypeScript would need a separate read and lose that. Postgres form is json_build_object."
       }
     },
     "packages/control-plane/src/db/automation-store.ts": {
       "collate-nocase": {
-        "count": 1,
+        "occurrences": ["COLLATE NOCASE"],
         "reason": "Case-insensitive automation name search. Portable form is LOWER(name) LIKE LOWER(?), deferred with the rest of the name-search query."
       }
     },
     "packages/control-plane/src/db/user-merge.ts": {
       "json-function": {
-        "count": 7,
+        "occurrences": [
+          "json_object(",
+          "json_object(",
+          "json_object(",
+          "json_object(",
+          "json_object(",
+          "json_object(",
+          "json_object("
+        ],
         "reason": "Merge audit payload, same constraint as authorization-store: before/after state is read inside the mutating batch. Postgres form is json_build_object."
       }
-    },
-    "packages/control-plane/src/session/schema.ts": {
-      "pragma": {
-        "count": 4,
-        "reason": "Column introspection that decides whether a session-storage migration still has work to do. Postgres reads information_schema instead; there is no shared spelling."
-      }
-    },
-    "packages/control-plane/src/session/session-core-repository.ts": {
-      "collate-nocase": {
-        "count": 4,
-        "reason": "Case-insensitive repository match against session-local storage. Portable form is LOWER(col) = LOWER(?); deferred so this change stays confined to writes."
-      }
     }
-  }
+  },
+  "grandfatheredMigrations": [
+    "0001_create_repo_secrets.sql",
+    "0002_create_session_index.sql",
+    "0003_prefix_model_ids.sql",
+    "0004_create_global_secrets.sql",
+    "0005_add_reasoning_effort_to_sessions.sql",
+    "0006_create_model_preferences.sql",
+    "0007_create_integration_settings.sql",
+    "0008_create_user_scm_tokens.sql",
+    "0009_create_repo_images.sql",
+    "0010_add_image_build_enabled.sql",
+    "0011_add_branch_to_sessions.sql",
+    "0012_add_parent_session.sql",
+    "0013_create_automations.sql",
+    "0014_add_reasoning_effort_to_automations.sql",
+    "0015_trigger_automations.sql",
+    "0016_rename_trigger_auth_data.sql",
+    "0017_add_analytics_columns.sql",
+    "0018_create_mcp_servers.sql",
+    "0019_create_users.sql",
+    "0020_add_sessions_updated_at_index.sql",
+    "0021_add_sessions_user_updated_at_index.sql",
+    "0022_add_repo_image_provider.sql",
+    "0023_bind_repo_image_callbacks.sql",
+    "0024_fix_recovery_sweep_indexes.sql",
+    "0025_optimize_active_run_lookup.sql",
+    "0026_slack_triggers.sql",
+    "0027_drop_max_runs_per_hour.sql",
+    "0028_slack_thread_continuity_index.sql",
+    "0029_allow_no_repository_context.sql",
+    "0030_automation_repositories_and_invocations.sql",
+    "0031_drop_deprecated_automation_columns.sql",
+    "0032_session_repositories.sql",
+    "0033_environments.sql",
+    "0034_rename_environment_image_provenance_columns.sql",
+    "0035_environment_channel_associations.sql",
+    "0036_repo_metadata_default_environment.sql",
+    "0037_automation_environments.sql",
+    "0038_integration_environment_settings.sql",
+    "0039_image_builds.sql",
+    "0040_drop_repo_images.sql",
+    "0041_session_pull_requests.sql",
+    "0042_session_pull_request_timestamps.sql",
+    "0043_commit_signing_configuration.sql",
+    "0044_api_tokens.sql",
+    "0045_api_tokens_family_expiry_index.sql",
+    "0047_terminal_browser_auth.sql",
+    "0048_better_auth_core.sql",
+    "0049_backfill_better_auth_accounts.sql",
+    "0050_purge_retired_api_tokens.sql",
+    "0051_drop_retired_custom_auth.sql",
+    "0052_image_build_finalization.sql",
+    "0053_image_build_scheduler.sql",
+    "0054_index_non_automation_sessions.sql",
+    "0055_session_read_states.sql",
+    "0056_backfill_user_identity_issuers.sql",
+    "0057_reconcile_canonical_auth_identities.sql",
+    "0058_child_admission_leases.sql",
+    "0059_require_automation_run_invocation.sql",
+    "0060_automation_list_index.sql",
+    "0061_managed_skills.sql",
+    "0062_mcp_server_revisions.sql",
+    "0063_session_root.sql",
+    "0064_provider_accounts.sql",
+    "0065_provider_account_authorizations.sql",
+    "0066_drop_automation_environment_id.sql",
+    "0067_keyboard_shortcut_preferences.sql",
+    "0068_default_single_provider_accounts.sql",
+    "0069_skill_import_sources.sql",
+    "0070_pr_autofix_feedback.sql",
+    "0071_rbac_foundation.sql",
+    "0072_rbac_audit_fidelity.sql",
+    "0073_rbac_audit_decision_outcomes.sql",
+    "0074_audit_event_list_index.sql"
+  ]
 }

@@ -19,12 +19,19 @@ the cheapest time to avoid it is while the statement is being written.
 | `?1`, `?2` numbered placeholders        | positional `?`, bound once per occurrence                 |
 | `unixepoch()`, `strftime(…)`            | pass `Date.now()` from TypeScript; format dates there too |
 | `json_object(…)`, `json_group_array(…)` | build the JSON in TypeScript and bind it as a parameter   |
-| `COLLATE NOCASE`                        | `LOWER(column) = LOWER(?)`                                |
+| `COLLATE NOCASE`                        | see below — the portable form depends on the clause       |
 | `AUTOINCREMENT`                         | an application-generated id, or `INTEGER PRIMARY KEY`     |
 | `CREATE TRIGGER`                        | enforce the invariant in the store                        |
 | `PRAGMA …`                              | nothing — pragmas belong in the engine adapter            |
 
-Notes on the two that are easy to get wrong:
+Notes on the three that are easy to get wrong:
+
+- **`COLLATE NOCASE` has no single replacement.** It is a property of a comparison, so the portable
+  form depends on the clause it sits in: `LOWER(lhs) = LOWER(?)` for equality,
+  `LOWER(lhs) LIKE LOWER(?)` for a pattern match, and `ORDER BY LOWER(expr)` for a sort. Rewriting a
+  `LIKE` or an `ORDER BY` as an equality is not the same query. Note also that `LOWER(expr)` in an
+  `ORDER BY` or a predicate will not use a plain index on `expr`; where that matters, the portable
+  answer is an expression index on `LOWER(expr)`, which both engines support.
 
 - **`OR REPLACE` is not an upsert.** It deletes the conflicting row and inserts a new one, so every
   column absent from the statement is reset to its default and any delete-side trigger or cascade

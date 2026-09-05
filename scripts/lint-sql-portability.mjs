@@ -7,16 +7,24 @@
  * becomes a migration twin or a store rewrite then, so this check holds the
  * line at the portable subset documented in docs/PORTABLE_SQL.md.
  *
- * Scope:
- *   - TypeScript under packages/control-plane/src, excluding tests and
- *     src/node (that directory is the SQLite driver itself: its job is to
- *     speak SQLite).
- *   - terraform/d1/migrations/NNNN_*.sql numbered above the checked-in
- *     baseline. Migrations at or below it are grandfathered.
+ * Scope is the storage contract, not the directory tree. Checked: TypeScript
+ * under packages/control-plane/src whose SQL goes to the engine-neutral
+ * `SqlDatabase`. Not checked:
+ *   - src/node, the SQLite adapter itself; speaking SQLite is its job.
+ *   - any file naming `SqlStorage`, the session Durable Object's synchronous
+ *     engine, which src/db/sql-database.ts states is "a different engine with
+ *     a load-bearing sync contract, and is intentionally not covered by this
+ *     port". Holding it to Postgres policy would be a category error — its
+ *     PRAGMA introspection is adapter surface, not portability debt.
+ *   - every terraform/d1/migrations/*.sql except the ones named in the
+ *     baseline's `grandfatheredMigrations`. Naming them rather than taking
+ *     everything below a number is what stops a new migration from being
+ *     written into the gap the numbering leaves.
  *
  * Occurrences that must stay are listed with a reason in
- * scripts/sql-portability-baseline.json. The counts there are a ratchet:
- * adding one fails, and removing one fails until the baseline is lowered.
+ * scripts/sql-portability-baseline.json, which lists the exact text of each
+ * one rather than a count: a ratchet in both directions, and one that a
+ * swapped construct cannot slip through while the total stays the same.
  *
  * Usage: node scripts/lint-sql-portability.mjs
  */
@@ -58,7 +66,8 @@ export const RULES = [
   {
     id: "collate-nocase",
     pattern: /\bCOLLATE\s+NOCASE\b/gi,
-    portable: "LOWER(column) = LOWER(?)",
+    portable:
+      "LOWER(lhs) = LOWER(?) for equality, LOWER(lhs) LIKE LOWER(?) for a match, ORDER BY LOWER(expr) for a sort",
   },
   {
     id: "autoincrement",
@@ -67,35 +76,136 @@ export const RULES = [
   },
   {
     id: "json-function",
-    pattern: /\bjson(?:_[a-z_]+)?\s*\(/g,
+    pattern: /\bjson(?:_[a-z_]+)?\s*\(/gi,
     portable: "build the JSON in TypeScript and bind it as a parameter",
+  },
+  {
+    id: "numbered-placeholder",
+    pattern: /\?\d+/g,
+    portable: "positional ?, bound in order",
   },
 ];
 
-/** A literal reads as SQL when it contains a statement this codebase issues. */
-const SQL_SHAPE =
-  /\b(SELECT\s|INSERT\s+INTO\b|INSERT\s+OR\s+(IGNORE|REPLACE|ABORT|FAIL|ROLLBACK)\b|UPDATE\s+[a-z_"]+\s+SET\b|DELETE\s+FROM\b|CREATE\s+(TABLE|INDEX|TRIGGER|VIEW|UNIQUE)\b|ALTER\s+TABLE\b|DROP\s+(TABLE|INDEX|TRIGGER|VIEW)\b|WITH\s+[a-z_]+\s+AS\s*\()/i;
+/**
+ * A pragma is the whole statement, so it is recognised only as a literal of
+ * the shape `PRAGMA name`, `PRAGMA name = value` or `PRAGMA name(argument)`.
+ * Prose that opens with the word does not qualify. Every other rule matches a
+ * token that means nothing outside SQL, so those run over every literal —
+ * including a fragment that carries no statement of its own, which is how
+ * this codebase composes a `WHERE` clause.
+ */
+const SQL_PRAGMA = /^\s*PRAGMA\s+[a-z_]+\s*(?:[(=]|$)/i;
 
 /**
- * A pragma is always the whole statement, so it is recognised only as a
- * literal of the shape `PRAGMA name`, `PRAGMA name = value` or
- * `PRAGMA name(argument)`. Prose that opens with the word does not qualify.
+ * The contents of every string and template literal in TypeScript source,
+ * with the offset each begins at.
+ *
+ * A scanner rather than a regex: a regex cannot tell a quote that opens a
+ * literal from one inside another literal or a comment, and desynchronising
+ * once makes the rest of the file one long "literal". Comments are skipped,
+ * because SQL quoted in one is documentation and reporting it would make the
+ * check reject its own explanations. A template yields one literal per chunk
+ * between substitutions, and the substitutions themselves are scanned as the
+ * code they are.
  */
-const SQL_PRAGMA = /^[`'"]\s*PRAGMA\s+[a-z_]+\s*[(=]|^[`'"]\s*PRAGMA\s+[a-z_]+\s*[`'"]/i;
-
-/**
- * String and template literals in TypeScript source, with the offset of each.
- * A regex scan rather than a parse: it over-reports at worst, and SQL_SHAPE
- * then discards anything that is not a statement.
- */
-function stringLiterals(source) {
+export function stringLiterals(source) {
   const literals = [];
-  const scanner = /`(?:\\.|\$\{[^}]*\}|[^\\`])*`|"(?:\\.|[^\\"])*"|'(?:\\.|[^\\'])*'/gs;
-  let match;
-  while ((match = scanner.exec(source)) !== null) {
-    literals.push({ text: match[0], offset: match.index });
-  }
+  scanCode(source, 0, literals, false);
   return literals;
+}
+
+/**
+ * Scan code, collecting the literals in it. With `untilBrace`, stops after
+ * the `}` that closes the substitution this call is scanning and returns the
+ * index past it.
+ */
+function scanCode(source, start, literals, untilBrace) {
+  let i = start;
+  let depth = 0;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "/" && source[i + 1] === "/") {
+      while (i < source.length && source[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && source[i + 1] === "*") {
+      i += 2;
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      i = scanQuoted(source, i, literals);
+      continue;
+    }
+    if (c === "`") {
+      i = scanTemplate(source, i, literals);
+      continue;
+    }
+    if (untilBrace) {
+      if (c === "{") depth++;
+      else if (c === "}") {
+        if (depth === 0) return i + 1;
+        depth--;
+      }
+    }
+    i++;
+  }
+  return i;
+}
+
+/** Read one `'`- or `"`-quoted literal; an unterminated one is not a literal. */
+function scanQuoted(source, start, literals) {
+  const quote = source[start];
+  let i = start + 1;
+  while (i < source.length) {
+    if (source[i] === "\\") {
+      i += 2;
+      continue;
+    }
+    if (source[i] === "\n") return start + 1;
+    if (source[i] === quote) {
+      literals.push({ text: source.slice(start + 1, i), offset: start + 1 });
+      return i + 1;
+    }
+    i++;
+  }
+  return start + 1;
+}
+
+/** Read a template literal, emitting each chunk between substitutions. */
+function scanTemplate(source, start, literals) {
+  let i = start + 1;
+  let chunk = i;
+  while (i < source.length) {
+    if (source[i] === "\\") {
+      i += 2;
+      continue;
+    }
+    if (source[i] === "`") {
+      literals.push({ text: source.slice(chunk, i), offset: chunk });
+      return i + 1;
+    }
+    if (source[i] === "$" && source[i + 1] === "{") {
+      literals.push({ text: source.slice(chunk, i), offset: chunk });
+      i = scanCode(source, i + 2, literals, true);
+      chunk = i;
+      continue;
+    }
+    i++;
+  }
+  return i;
+}
+
+/** The members of `from` left after removing one of each member of `remove`. */
+function withoutFirst(from, remove) {
+  const left = [...remove];
+  return from.filter((item) => {
+    const at = left.indexOf(item);
+    if (at === -1) return true;
+    left.splice(at, 1);
+    return false;
+  });
 }
 
 function lineOf(source, offset) {
@@ -104,9 +214,9 @@ function lineOf(source, offset) {
   return line;
 }
 
-export function findingsInSql(text, baseOffset, source, file) {
+export function findingsIn(text, baseOffset, source, file, rules = RULES) {
   const found = [];
-  for (const rule of RULES) {
+  for (const rule of rules) {
     rule.pattern.lastIndex = 0;
     let match;
     while ((match = rule.pattern.exec(text)) !== null) {
@@ -125,8 +235,8 @@ export function findingsInSql(text, baseOffset, source, file) {
 export function scanTypeScript(file, source) {
   const found = [];
   for (const literal of stringLiterals(source)) {
-    if (!SQL_SHAPE.test(literal.text) && !SQL_PRAGMA.test(literal.text)) continue;
-    found.push(...findingsInSql(literal.text, literal.offset, source, file));
+    const rules = SQL_PRAGMA.test(literal.text) ? RULES : RULES.filter((r) => r.id !== "pragma");
+    found.push(...findingsIn(literal.text, literal.offset, source, file, rules));
   }
   return found;
 }
@@ -140,22 +250,67 @@ function walk(dir, out = []) {
   return out;
 }
 
+/** Whether the file's SQL belongs to the session engine rather than the port. */
+export function targetsSessionEngine(source) {
+  return /\bSqlStorage\b/.test(source);
+}
+
 function controlPlaneSources() {
   const root = join(repoRoot, "packages/control-plane/src");
   return walk(root)
     .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))
     .filter((file) => !relative(root, file).split(sep).includes("node"))
+    .filter((file) => !targetsSessionEngine(readFileSync(file, "utf8")))
     .sort();
+}
+
+/**
+ * Migration text with its comments blanked, offsets preserved so a finding
+ * still reports the line it is on. A comment is documentation: a migration
+ * that says why it avoids AUTOINCREMENT must not be read as using it.
+ */
+export function maskSqlComments(sql) {
+  let out = "";
+  let i = 0;
+  while (i < sql.length) {
+    if (sql[i] === "'" || sql[i] === '"') {
+      const quote = sql[i];
+      let j = i + 1;
+      // SQL escapes a quote by doubling it, so a pair is not the end.
+      while (j < sql.length && !(sql[j] === quote && sql[j + 1] !== quote)) {
+        j += sql[j] === quote ? 2 : 1;
+      }
+      out += sql.slice(i, Math.min(j + 1, sql.length));
+      i = j + 1;
+      continue;
+    }
+    if (sql[i] === "-" && sql[i + 1] === "-") {
+      while (i < sql.length && sql[i] !== "\n") {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    if (sql[i] === "/" && sql[i + 1] === "*") {
+      while (i < sql.length && !(sql[i] === "*" && sql[i + 1] === "/")) {
+        out += sql[i] === "\n" ? "\n" : " ";
+        i++;
+      }
+      out += "  ";
+      i += 2;
+      continue;
+    }
+    out += sql[i];
+    i++;
+  }
+  return out;
 }
 
 function newMigrations() {
   const root = join(repoRoot, "terraform/d1/migrations");
   return readdirSync(root)
     .filter((name) => name.endsWith(".sql"))
-    .filter((name) => {
-      const number = Number.parseInt(name.slice(0, 4), 10);
-      return Number.isInteger(number) && number > baseline.migrationBaseline;
-    })
+    .filter((name) => !baseline.grandfatheredMigrations.includes(name))
     .map((name) => join(root, name))
     .sort();
 }
@@ -169,32 +324,45 @@ function main() {
   for (const file of newMigrations()) {
     const rel = relative(repoRoot, file);
     const source = readFileSync(file, "utf8");
-    findings.push(...findingsInSql(source, 0, source, rel));
+    findings.push(...findingsIn(maskSqlComments(source), 0, source, rel));
   }
 
-  const counted = new Map();
+  // Grouped by file and rule, and compared as a multiset of the matched text
+  // rather than a count: swapping one allowed construct for a different one
+  // of the same rule would keep the count and change the SQL.
+  const found = new Map();
   for (const finding of findings) {
     const key = `${finding.file} ${finding.rule}`;
-    counted.set(key, (counted.get(key) ?? 0) + 1);
+    if (!found.has(key)) found.set(key, []);
+    found.get(key).push(finding);
   }
 
   const errors = [];
-  for (const finding of findings) {
-    const allowed = baseline.allowed[finding.file]?.[finding.rule]?.count ?? 0;
-    if (counted.get(`${finding.file} ${finding.rule}`) <= allowed) continue;
-    errors.push(
-      `${finding.file}:${finding.line}  ${finding.rule}  ${finding.text}\n` +
-        `    portable form: ${finding.portable}`
-    );
-  }
-
   const stale = [];
-  for (const [file, rules] of Object.entries(baseline.allowed)) {
-    for (const [rule, entry] of Object.entries(rules)) {
-      const actual = counted.get(`${file} ${rule}`) ?? 0;
-      if (actual < entry.count) {
-        stale.push(`${file}  ${rule}: baseline allows ${entry.count}, found ${actual}`);
-      }
+  const keys = new Set([
+    ...found.keys(),
+    ...Object.entries(baseline.allowed).flatMap(([file, rules]) =>
+      Object.keys(rules).map((rule) => `${file} ${rule}`)
+    ),
+  ]);
+  for (const key of [...keys].sort()) {
+    const [file, rule] = [key.slice(0, key.lastIndexOf(" ")), key.slice(key.lastIndexOf(" ") + 1)];
+    const occurrences = found.get(key) ?? [];
+    const allowed = [...(baseline.allowed[file]?.[rule]?.occurrences ?? [])].sort();
+    const actual = occurrences.map((finding) => finding.text).sort();
+    if (allowed.join("\u0000") === actual.join("\u0000")) continue;
+    const surplus = withoutFirst(actual, allowed);
+    for (const finding of occurrences.filter((f) => surplus.includes(f.text))) {
+      errors.push(
+        `${finding.file}:${finding.line}  ${finding.rule}  ${finding.text}\n` +
+          `    portable form: ${finding.portable}`
+      );
+    }
+    const missing = withoutFirst(allowed, actual);
+    if (missing.length > 0) {
+      stale.push(
+        `${file}  ${rule}: baseline still allows ${missing.join(", ")}, no longer present`
+      );
     }
   }
 
@@ -203,7 +371,7 @@ function main() {
     for (const error of errors) console.error(error);
     console.error(
       "\nRewrite in the portable subset (docs/PORTABLE_SQL.md), or, if the " +
-        "construct must stay, raise its count in scripts/sql-portability-baseline.json " +
+        "construct must stay, list it in scripts/sql-portability-baseline.json " +
         "with a reason."
     );
   }
