@@ -22,7 +22,6 @@ import {
 } from "./manager";
 import type { ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
-import { MIN_COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/model";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import {
   SandboxProviderError,
@@ -1475,35 +1474,6 @@ describe("SandboxLifecycleManager", () => {
           (m) => (m as { type: string }).type === "sandbox_access_changed"
         )
       ).toContainEqual({ type: "sandbox_access_changed" });
-    });
-
-    it("replaces a persistent sandbox below the runtime compatibility floor", async () => {
-      const sandbox = createMockSandbox({
-        status: "stopped",
-        modal_object_id: "retired-provider-obj",
-        runtime_version: `v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-retired`,
-        snapshot_image_id: null,
-      });
-      const storage = createMockStorage(createMockSession(), sandbox);
-      const provider = createMockProvider({
-        capabilities: { supportsPersistentResume: true },
-        resumeSandbox: vi.fn(async () => ({ success: true })),
-      });
-      const manager = new SandboxLifecycleManager(
-        provider,
-        storage,
-        storage,
-        createMockBroadcaster(),
-        createMockWebSocketManager(false),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig()
-      );
-
-      await manager.spawnSandbox();
-
-      expect(provider.resumeSandbox).not.toHaveBeenCalled();
-      expect(provider.createSandbox).toHaveBeenCalled();
     });
 
     it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {

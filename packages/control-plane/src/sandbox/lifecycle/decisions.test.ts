@@ -15,7 +15,7 @@ import {
   evaluateWarmDecision,
   evaluateExecutionTimeout,
   isSandboxReconnectBlockedStatus,
-  isRuntimeVersionCompatible,
+  isSnapshotRuntimeCompatible,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   type CircuitBreakerState,
@@ -498,7 +498,6 @@ describe("evaluateSpawnDecision", () => {
       status: "stopped",
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
-      runtimeVersion: "v99-test",
       snapshotImageId: null,
       snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
@@ -518,7 +517,6 @@ describe("evaluateSpawnDecision", () => {
       status: "stale",
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
-      runtimeVersion: "v99-test",
       snapshotImageId: null,
       snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
@@ -535,7 +533,6 @@ describe("evaluateSpawnDecision", () => {
       status: "stopped",
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
-      runtimeVersion: "v99-test",
       snapshotImageId: "img-abc123",
       snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
@@ -544,36 +541,6 @@ describe("evaluateSpawnDecision", () => {
     const decision = evaluateSpawnDecision(state, config, now, false, true);
 
     expect(decision.action).toBe("resume");
-  });
-
-  it("does not resume a persistent sandbox below the runtime compatibility floor", () => {
-    const now = Date.now();
-    const state: SandboxState = {
-      status: "stopped",
-      createdAt: now - 120000,
-      providerObjectId: "daytona-abc123",
-      runtimeVersion: `v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-retired`,
-      snapshotImageId: null,
-      snapshotRuntimeVersion: null,
-      hasActiveWebSocket: false,
-    };
-
-    expect(evaluateSpawnDecision(state, config, now, false, true).action).toBe("spawn");
-  });
-
-  it("restores a compatible snapshot instead of resuming a retired persistent sandbox", () => {
-    const now = Date.now();
-    const state: SandboxState = {
-      status: "stopped",
-      createdAt: now - 120000,
-      providerObjectId: "daytona-abc123",
-      runtimeVersion: `v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-retired`,
-      snapshotImageId: "img-abc123",
-      snapshotRuntimeVersion: `v${MIN_COMPATIBLE_RUNTIME_VERSION}-current`,
-      hasActiveWebSocket: false,
-    };
-
-    expect(evaluateSpawnDecision(state, config, now, false, true).action).toBe("restore");
   });
 
   it('falls back to "restore" when supportsPersistentResume but no providerObjectId', () => {
@@ -1083,19 +1050,19 @@ describe("evaluateExecutionTimeout", () => {
 
 // ==================== Snapshot Runtime Floor ====================
 
-describe("isRuntimeVersionCompatible", () => {
+describe("isSnapshotRuntimeCompatible", () => {
   it("accepts a snapshot at or above the floor", () => {
-    expect(isRuntimeVersionCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION}-x`)).toBe(true);
-    expect(isRuntimeVersionCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION + 1}-x`)).toBe(true);
+    expect(isSnapshotRuntimeCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION}-x`)).toBe(true);
+    expect(isSnapshotRuntimeCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION + 1}-x`)).toBe(true);
   });
 
   it("rejects a snapshot below the floor", () => {
-    expect(isRuntimeVersionCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-x`)).toBe(false);
+    expect(isSnapshotRuntimeCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-x`)).toBe(false);
   });
 
   it("fails closed on missing or unparseable versions", () => {
-    expect(isRuntimeVersionCompatible(null)).toBe(false);
-    expect(isRuntimeVersionCompatible("")).toBe(false);
-    expect(isRuntimeVersionCompatible("daytona-v6-vnc")).toBe(false);
+    expect(isSnapshotRuntimeCompatible(null)).toBe(false);
+    expect(isSnapshotRuntimeCompatible("")).toBe(false);
+    expect(isSnapshotRuntimeCompatible("daytona-v6-vnc")).toBe(false);
   });
 });

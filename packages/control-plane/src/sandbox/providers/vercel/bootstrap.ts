@@ -4,7 +4,7 @@
  * Used by CI when building the managed Vercel base-runtime snapshot.
  */
 
-import { OPENCODE_VERSION, SANDBOX_RUNTIME_VERSION } from "../../runtime-manifest";
+import { SANDBOX_RUNTIME_VERSION } from "../../runtime-manifest";
 
 export const VERCEL_PYTHON_BIN = "/usr/bin/python3.12";
 export const DEFAULT_VERCEL_RUNTIME = "node24";
@@ -18,7 +18,7 @@ export function buildVercelBootstrapScript(params: { runtimeExtractDir?: string 
   return `
 set -euo pipefail
 
-OPENCODE_VERSION="${OPENCODE_VERSION}"
+OPENCODE_VERSION="1.18.29"
 CODE_SERVER_VERSION="4.109.5"
 AGENT_BROWSER_VERSION="0.21.2"
 TTYD_VERSION="1.7.7"

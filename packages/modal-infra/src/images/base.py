@@ -16,7 +16,7 @@ from pathlib import Path
 import modal
 
 import sandbox_runtime
-from sandbox_runtime.runtime_manifest import OPENCODE_VERSION, RUNTIME_VERSION
+from sandbox_runtime.runtime_manifest import RUNTIME_VERSION
 
 # Get the path to the sandbox runtime code (provider-agnostic)
 SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
@@ -32,6 +32,8 @@ SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 # releases order the turn loop by comparing those IDs as strings, which makes
 # any session carrying pre-wraparound history exit the loop without calling the
 # model. 1.18.15 orders by message creation time instead.
+OPENCODE_VERSION = "1.18.29"
+
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"
 

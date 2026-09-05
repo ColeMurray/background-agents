@@ -19,13 +19,11 @@ data "external" "vercel_source_hash" {
     )
     if command -v sha256sum &> /dev/null; then
       hash=$(find "$${paths[@]}" -type f \
-        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
-        -not -name '*.pyc' -not -name '.DS_Store' \
+        \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "pyproject.toml" \) \
         -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
     else
       hash=$(find "$${paths[@]}" -type f \
-        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
-        -not -name '*.pyc' -not -name '.DS_Store' \
+        \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "pyproject.toml" \) \
         -exec shasum -a 256 {} \; | sort | shasum -a 256 | cut -d' ' -f1)
     fi
     echo "{\"hash\": \"$hash\"}"

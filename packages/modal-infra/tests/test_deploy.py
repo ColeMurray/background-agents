@@ -104,22 +104,3 @@ def test_modal_deployment_hash_includes_deployment_entrypoints() -> None:
 
     assert "packages/modal-infra/deploy.py" in modal_tf
     assert "terraform/modules/modal-app/scripts/deploy.sh" in modal_tf
-
-
-def test_daytona_deployment_hash_includes_the_runtime_manifest() -> None:
-    daytona_tf = (
-        Path(__file__).parents[3] / "terraform/environments/production/daytona.tf"
-    ).read_text()
-
-    assert "find packages/daytona-infra/src packages/sandbox-runtime/src" in daytona_tf
-    assert "-type f" in daytona_tf
-    assert '-name "*.py"' not in daytona_tf
-
-
-def test_vercel_deployment_hash_includes_the_runtime_manifest() -> None:
-    vercel_tf = (
-        Path(__file__).parents[3] / "terraform/environments/production/vercel.tf"
-    ).read_text()
-
-    assert "packages/sandbox-runtime/src" in vercel_tf
-    assert '-name "*.py"' not in vercel_tf

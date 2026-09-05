@@ -88,12 +88,7 @@ def _ignore_pycache(src: str, names: list[str]) -> list[str]:
 shutil.copytree(RUNTIME_SRC, STAGED, ignore=_ignore_pycache)
 atexit.register(lambda: shutil.rmtree(STAGED, ignore_errors=True))
 
-runtime_manifest = json.loads((RUNTIME_SRC / "runtime_manifest.json").read_text())
-dockerfile = (
-    (SCRIPT_DIR / "e2b.Dockerfile")
-    .read_text()
-    .replace("__OPENCODE_VERSION__", runtime_manifest["opencodeVersion"])
-)
+dockerfile = (SCRIPT_DIR / "e2b.Dockerfile").read_text()
 
 print(f"Building E2B template: {TEMPLATE_ID} (cpu={CPU}, mem={MEM})")
 

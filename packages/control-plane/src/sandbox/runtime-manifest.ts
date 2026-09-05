@@ -6,7 +6,6 @@ if (Number(parsedGeneration) !== runtimeManifest.generation) {
 }
 
 export const SANDBOX_RUNTIME_VERSION = runtimeManifest.runtimeVersion;
-export const OPENCODE_VERSION = runtimeManifest.opencodeVersion;
 export const SANDBOX_RUNTIME_GENERATION = runtimeManifest.generation;
 export const MIN_COMPATIBLE_RUNTIME_GENERATION = runtimeManifest.minimumCompatibleGeneration;
 export const MIN_REBUILD_RUNTIME_GENERATION = runtimeManifest.minimumRebuildGeneration;

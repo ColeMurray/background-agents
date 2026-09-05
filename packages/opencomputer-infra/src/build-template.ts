@@ -6,7 +6,7 @@ import runtimeManifest from "../../sandbox-runtime/src/sandbox_runtime/runtime_m
 
 // Never pin below 1.18.15 — see packages/modal-infra/src/images/base.py for why
 // (OpenCode's message-ID counter wraps and earlier releases order by ID string).
-const OPENCODE_VERSION = runtimeManifest.opencodeVersion;
+const OPENCODE_VERSION = "1.18.29";
 const CODE_SERVER_VERSION = "4.109.5";
 const PYTHON_VERSION = "3.12";
 const AGENT_BROWSER_VERSION = "0.21.2";
