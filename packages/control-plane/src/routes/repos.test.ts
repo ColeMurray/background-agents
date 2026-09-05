@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
-import { reposRoutes } from "./repos";
+import { reposCacheKey, reposRoutes } from "./repos";
 import type * as SharedRoutes from "./shared";
 import {
   createTestRequestHandler,
@@ -127,6 +127,45 @@ describe("repository list route", () => {
     await backgroundTasks.settle();
     expect(backgroundTasks.failures).toEqual([]);
   });
+
+  it("namespaces the cache by SCM provider configuration", async () => {
+    const githubEnv = {
+      ...createEnv(),
+      GITHUB_APP_INSTALLATION_ID: "installation-1",
+    };
+    const otherGitHubEnv = {
+      ...githubEnv,
+      GITHUB_APP_INSTALLATION_ID: "installation-2",
+    };
+    const gitlabEnv = {
+      ...createEnv(),
+      SCM_PROVIDER: "gitlab",
+      GITLAB_NAMESPACE: "acme/platform",
+    };
+    const otherGitlabEnv = { ...gitlabEnv, GITLAB_NAMESPACE: "acme/services" };
+
+    const githubKey = await reposCacheKey(githubEnv);
+    const gitlabKey = await reposCacheKey(gitlabEnv);
+
+    expect(githubKey).toMatch(/^repos:list:v3:[0-9a-f]{64}$/);
+    expect(githubKey).not.toContain("installation-1");
+    await expect(reposCacheKey(otherGitHubEnv)).resolves.not.toBe(githubKey);
+    expect(gitlabKey).not.toBe(githubKey);
+    await expect(reposCacheKey(otherGitlabEnv)).resolves.not.toBe(gitlabKey);
+  });
+
+  it("uses the configuration-specific key for cache reads and writes", async () => {
+    const env = { ...createEnv(), GITHUB_APP_INSTALLATION_ID: "installation-1" };
+    const expectedKey = await reposCacheKey(env);
+
+    const response = await handleRequest(request("/repos"), env, createTestBackgroundTasks());
+
+    expect(response.status).toBe(200);
+    expect(mockCacheGet).toHaveBeenCalledWith(expectedKey, "json");
+    expect(mockCachePut).toHaveBeenCalledWith(expectedKey, expect.any(String), {
+      expirationTtl: 3600,
+    });
+  });
 });
 
 describe("repository metadata routes", () => {
@@ -169,7 +208,7 @@ describe("repository metadata routes", () => {
     expect(mockUpsert).toHaveBeenCalledWith("Acme", "Widget", {
       description: "Updated description",
     });
-    expect(mockCacheDelete).toHaveBeenCalledOnce();
+    expect(mockCacheDelete).toHaveBeenCalledWith(await reposCacheKey(createEnv()));
     expect(mockLogger.warn).toHaveBeenCalledWith("Failed to invalidate repos cache", {
       trace_id: "trace-1",
       error: cacheError,

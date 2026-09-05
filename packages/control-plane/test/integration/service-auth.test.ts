@@ -10,6 +10,7 @@ import {
 import { generateInternalToken } from "@open-inspect/shared/auth";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { UserStore } from "../../src/db/user-store";
+import { reposCacheKey } from "../../src/routes/repos";
 import { cleanD1Tables } from "./cleanup";
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
@@ -75,7 +76,7 @@ describe("sig1 service-credential authentication", () => {
     async (service, path, expectedStatus) => {
       if (path === "/repos") {
         await env.REPOS_CACHE.put(
-          "repos:list:v2",
+          await reposCacheKey(env),
           JSON.stringify({
             repos: [],
             cachedAt: new Date().toISOString(),

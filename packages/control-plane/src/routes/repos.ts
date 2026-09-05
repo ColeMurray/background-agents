@@ -15,7 +15,7 @@ import {
   type InstallationRepository,
   type RepoMetadata,
 } from "@open-inspect/shared/types/repository-catalog";
-import { SourceControlProviderError } from "../source-control";
+import { resolveScmProviderFromEnv, SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
 import {
   GITHUB_USER_OR_SERVICE_ROUTE,
@@ -28,9 +28,24 @@ import {
 
 const logger = createLogger("router:repos");
 
-const REPOS_CACHE_KEY = "repos:list:v2";
+const REPOS_CACHE_KEY_PREFIX = "repos:list:v3";
 const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000; // Serve without revalidation for 5 minutes
 const REPOS_CACHE_KV_TTL_SECONDS = 3600; // Keep stale data in KV for 1 hour
+
+export async function reposCacheKey(
+  env: Pick<Env, "SCM_PROVIDER" | "GITHUB_APP_INSTALLATION_ID" | "GITLAB_NAMESPACE">
+): Promise<string> {
+  const provider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
+  let scope = "";
+  if (provider === "github") scope = env.GITHUB_APP_INSTALLATION_ID ?? "";
+  if (provider === "gitlab") scope = env.GITLAB_NAMESPACE ?? "";
+  const identity = JSON.stringify([provider, scope]);
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity))
+  );
+  const fingerprint = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${REPOS_CACHE_KEY_PREFIX}:${fingerprint}`;
+}
 
 /**
  * Cached repos list structure stored in KV.
@@ -56,6 +71,7 @@ type ScmApiTimer = <T>(fn: () => Promise<T>) => Promise<T>;
 async function refreshReposCache(
   env: Env,
   db: SqlDatabase,
+  cacheKey: string,
   traceId?: string,
   timeScmApi: ScmApiTimer = (fn) => fn()
 ): Promise<ReposRefreshResult> {
@@ -107,11 +123,9 @@ async function refreshReposCache(
   const cachedAt = new Date().toISOString();
   const freshUntil = Date.now() + REPOS_CACHE_FRESH_MS;
   try {
-    await cacheStore.put(
-      REPOS_CACHE_KEY,
-      JSON.stringify({ repos: enrichedRepos, cachedAt, freshUntil }),
-      { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
-    );
+    await cacheStore.put(cacheKey, JSON.stringify({ repos: enrichedRepos, cachedAt, freshUntil }), {
+      expirationTtl: REPOS_CACHE_KV_TTL_SECONDS,
+    });
     logger.info("Repos cache refreshed", {
       trace_id: traceId,
       repo_count: enrichedRepos.length,
@@ -144,12 +158,13 @@ async function handleListRepos(
   ctx: RequestContext
 ): Promise<Response> {
   const cacheStore = env.REPOS_CACHE;
+  const cacheKey = await reposCacheKey(env);
 
   // Read from KV cache
   let cached: CachedReposList | null = null;
   try {
     cached = await ctx.metrics.time("kv_read", () =>
-      cacheStore.get<CachedReposList>(REPOS_CACHE_KEY, "json")
+      cacheStore.get<CachedReposList>(cacheKey, "json")
     );
   } catch (e) {
     logger.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });
@@ -164,7 +179,7 @@ async function handleListRepos(
         trace_id: ctx.trace_id,
         cached_at: cached.cachedAt,
       });
-      ctx.executionCtx.submit(() => refreshReposCache(env, ctx.db, ctx.trace_id), {
+      ctx.executionCtx.submit(() => refreshReposCache(env, ctx.db, cacheKey, ctx.trace_id), {
         name: "repos_cache.refresh",
         context: { trace_id: ctx.trace_id },
       });
@@ -185,7 +200,7 @@ async function handleListRepos(
   // because the stale-while-revalidate branch above needs an entry to exist.
   // The refresh promise is created once and shared: the factory hands it to
   // waitUntil while the response below awaits the same run.
-  const refresh = refreshReposCache(env, ctx.db, ctx.trace_id, (fn) =>
+  const refresh = refreshReposCache(env, ctx.db, cacheKey, ctx.trace_id, (fn) =>
     ctx.metrics.time("scm_api", fn)
   );
   ctx.executionCtx.submit(() => refresh, {
@@ -247,7 +262,7 @@ async function handleUpdateRepoMetadata(
   }
 
   try {
-    await env.REPOS_CACHE.delete(REPOS_CACHE_KEY);
+    await env.REPOS_CACHE.delete(await reposCacheKey(env));
   } catch (e) {
     logger.warn("Failed to invalidate repos cache", {
       trace_id: ctx.trace_id,
