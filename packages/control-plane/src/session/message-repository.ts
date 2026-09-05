@@ -19,6 +19,18 @@ interface RecordedMessageCompletion {
   status: "completed" | "failed";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readRequiredNumberColumn(result: SqlResult, column: string): number {
+  const row = result.one();
+  if (!isRecord(row) || typeof row[column] !== "number") {
+    throw new Error(`Malformed numeric SQL result for ${column}`);
+  }
+  return row[column];
+}
+
 /** Data for creating a message. */
 export interface CreateMessageData {
   id: string;
@@ -91,7 +103,7 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT COUNT(*) as count FROM messages WHERE status IN ('pending', 'processing')`
     );
-    return (result.one() as { count: number }).count;
+    return readRequiredNumberColumn(result, "count");
   }
 
   getProcessingMessage(): { id: string } | null {
@@ -180,15 +192,13 @@ export class MessageRepository {
       }
 
       if (data.attemptLimit !== null) {
-        const count = this.sql
-          .exec(
-            `SELECT COUNT(*) AS count FROM messages
+        const countResult = this.sql.exec(
+          `SELECT COUNT(*) AS count FROM messages
            WHERE autofix_pr_key = ? AND created_at >= ?`,
-            data.pullRequestKey,
-            data.windowStart
-          )
-          .one() as { count: number };
-        if (count.count >= data.attemptLimit) {
+          data.pullRequestKey,
+          data.windowStart
+        );
+        if (readRequiredNumberColumn(countResult, "count") >= data.attemptLimit) {
           return { kind: "rejected", reason: "attempt_limit" };
         }
       }

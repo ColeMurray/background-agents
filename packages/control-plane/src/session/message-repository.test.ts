@@ -68,6 +68,13 @@ describe("MessageRepository", () => {
     expect(mock.calls[1].query).toContain("'pending', 'processing'");
   });
 
+  it("rejects malformed numeric SQL aggregate rows", () => {
+    mock.setOne({ count: "5" });
+    expect(() => repository.getPendingOrProcessingCount()).toThrow(
+      "Malformed numeric SQL result for count"
+    );
+  });
+
   it("calculates active duration", () => {
     mock.setOne({ duration_ms: 4500 });
     expect(repository.getActiveDurationMs()).toBe(4500);
