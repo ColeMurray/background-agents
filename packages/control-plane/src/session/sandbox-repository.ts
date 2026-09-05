@@ -117,6 +117,33 @@ export class SandboxRepository {
   }
 
   /**
+   * Move the sandbox from `from` to `to` only while the row still carries the
+   * sandbox `generation` names (its logical id and the `created_at` its
+   * reservation or resume stamped) and is still in `from`; reports whether it
+   * was. The conditional form of `updateSandboxStatus` for writes that follow
+   * an await: another event may have moved the row, and a newer attempt may
+   * have brought it back to the same status.
+   */
+  transitionSandboxStatus(
+    generation: { sandboxId: string | null; createdAt: number },
+    from: SandboxStatus,
+    to: SandboxStatus
+  ): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET status = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ? AND status = ?`,
+      to,
+      generation.sandboxId,
+      generation.createdAt,
+      from
+    );
+    // Consume the result before reading rowsWritten so the count is final.
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  /**
    * Phase 1 of the two-phase spawn write (#1589): the reservation itself
    * invalidates credentials — no token can match the emptied hash — until
    * `updateSandboxAuthTokenHash` publishes the new one.
@@ -169,12 +196,14 @@ export class SandboxRepository {
 
   /**
    * Phase 2 of the two-phase spawn write (#1589): publish the reserved
-   * identity's hash. Scoped to that identity so a delayed publisher cannot
-   * attach its hash to a newer reservation; reports whether it applied.
+   * identity's hash. Scoped to that identity and to the reservation's
+   * `spawning` status, so a delayed publisher cannot attach its hash to a
+   * newer reservation and a reservation that a cancel stopped while the hash
+   * was computed cannot go live; reports whether it applied.
    */
   updateSandboxAuthTokenHash(modalSandboxId: string, authTokenHash: string): boolean {
     const result = this.sql.exec(
-      `UPDATE sandbox SET auth_token_hash = ? WHERE modal_sandbox_id = ?`,
+      `UPDATE sandbox SET auth_token_hash = ? WHERE modal_sandbox_id = ? AND status = 'spawning'`,
       authTokenHash,
       modalSandboxId
     );
@@ -202,17 +231,26 @@ export class SandboxRepository {
     );
   }
 
-  updateSandboxSnapshotImageId(
-    sandboxId: string,
+  /**
+   * Record `imageId` as the snapshot of the sandbox identified by
+   * `sandboxId`, with the runtime version that produced it. Applies
+   * only while that is still the row's sandbox; reports whether it was.
+   */
+  recordSandboxSnapshot(
+    sandboxId: string | null,
     imageId: string,
     runtimeVersion: string | null
-  ): void {
-    this.sql.exec(
-      `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ? WHERE id = ?`,
+  ): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ?`,
       imageId,
       runtimeVersion,
       sandboxId
     );
+    // Consume the result before reading rowsWritten so the count is final.
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   /**

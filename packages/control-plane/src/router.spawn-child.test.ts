@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  fakeSessionRuntimeDispatch,
   handleRequest,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
@@ -207,10 +208,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
         ...TEST_SERVICE_SECRETS,
         SCM_PROVIDER: "github",
         DB: authorizedDb(permissions),
-        SESSION: {
-          idFromName: (name: string) => name,
-          get: (id: string) => (id === parentId ? parentStub : childStub),
-        },
+        SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
+          (sessionId === parentId ? parentStub : childStub).fetch(request)
+        ),
       },
     };
   }
@@ -387,10 +387,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: (id: string) => (id === parentId ? parentStub : childStub),
-      },
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
+        (sessionId === parentId ? parentStub : childStub).fetch(request)
+      ),
     };
 
     const response = await makeRequest(env);
@@ -481,10 +480,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: (id: string) => (id === parentId ? parentStub : childStub),
-      },
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
+        (sessionId === parentId ? parentStub : childStub).fetch(request)
+      ),
     };
 
     const response = await makeRequest(env);
@@ -529,10 +527,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: (id: string) => (id === parentId ? parentStub : childStub),
-      },
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
+        (sessionId === parentId ? parentStub : childStub).fetch(request)
+      ),
     };
 
     const response = await makeRequest(env);
@@ -561,10 +558,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await handleRequest(
@@ -602,10 +596,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -625,10 +616,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: vi.fn(),
-      },
+      SESSION: fakeSessionRuntimeDispatch(vi.fn()),
     };
 
     const response = await handleRequest(
@@ -657,10 +645,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: vi.fn(),
-      },
+      SESSION: fakeSessionRuntimeDispatch(vi.fn()),
     };
 
     const response = await handleRequest(
@@ -693,10 +678,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -721,10 +703,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -747,10 +726,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -780,10 +756,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -821,10 +794,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -849,10 +819,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await handleRequest(
@@ -891,10 +858,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -931,10 +895,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: (id: string) => (id === parentId ? parentStub : childStub),
-      },
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
+        (sessionId === parentId ? parentStub : childStub).fetch(request)
+      ),
     };
 
     const response = await makeRequest(env);

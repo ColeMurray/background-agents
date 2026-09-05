@@ -1,75 +1,23 @@
 import { ImageBuildStore } from "../db/image-builds";
-import { createLogger } from "../logger";
-import type { Env } from "../types";
-import {
-  IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS,
-  ImageBuildFinalizer,
-  type ImageBuildFinalizationResult,
-} from "./finalizer";
-import {
-  imageBuildFinalizationJobSchema,
-  type ImageBuildFinalizationJob,
-} from "./finalization-job";
+import type { JobDelivery, JobDeps, JobOutcome } from "../jobs";
+import type { ImageBuildFinalizationJob } from "./finalization-job";
+import { ImageBuildFinalizer } from "./finalizer";
 import { createImageBuildAdapterFactory } from "./provider-factory";
 
-const logger = createLogger("image-builds:finalization-consumer");
-
-type FinalizationProcessor = (
-  job: ImageBuildFinalizationJob,
-  requestId: string
-) => Promise<ImageBuildFinalizationResult>;
-
 /**
- * Applies Queue delivery semantics to one batch: invalid commands are
- * discarded, completed work is acknowledged, and busy or failed work is
- * retried without aborting later messages in the batch.
+ * Handler for `image_build.finalize`: the production finalizer over the
+ * delivery's store. The finalizer decides between done and busy; a throw
+ * is the host's to retry.
  */
-export async function consumeImageBuildFinalizationBatch(
-  batch: MessageBatch<unknown>,
-  process: FinalizationProcessor
-): Promise<void> {
-  for (const message of batch.messages) {
-    const parsed = imageBuildFinalizationJobSchema.safeParse(message.body);
-    if (!parsed.success) {
-      logger.error("image_build.finalization_job_invalid", {
-        queue_message_id: message.id,
-        attempts: message.attempts,
-      });
-      message.ack();
-      continue;
-    }
-
-    try {
-      const result = await process(parsed.data, message.id);
-      if (result.type === "retry") {
-        message.retry({ delaySeconds: result.delaySeconds });
-      } else {
-        message.ack();
-      }
-    } catch (error) {
-      logger.error("image_build.finalization_error", {
-        build_id: parsed.data.buildId,
-        queue_message_id: message.id,
-        attempts: message.attempts,
-        error: error instanceof Error ? error : new Error(String(error)),
-      });
-      message.retry({ delaySeconds: IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS });
-    }
-  }
-}
-
-/** Cloudflare Queue composition root for the production finalizer. */
-export async function consumeImageBuildFinalizations(
-  batch: MessageBatch<unknown>,
-  env: Env
-): Promise<void> {
-  // eslint-disable-next-line no-restricted-syntax -- Queue composition root: the one consumer env.DB read
-  const db = env.DB;
+export async function handleImageBuildFinalization(
+  job: ImageBuildFinalizationJob,
+  _delivery: JobDelivery,
+  deps: JobDeps
+): Promise<JobOutcome> {
   const finalizer = new ImageBuildFinalizer(
-    new ImageBuildStore(db),
-    createImageBuildAdapterFactory(env)
+    new ImageBuildStore(deps.db),
+    createImageBuildAdapterFactory(deps.env)
   );
-  await consumeImageBuildFinalizationBatch(batch, (job, requestId) =>
-    finalizer.process(job, { request_id: requestId, trace_id: requestId })
-  );
+  const result = await finalizer.process(job, deps.correlation);
+  return result.type === "retry" ? { retry: true, delayMs: result.delayMs } : "ack";
 }

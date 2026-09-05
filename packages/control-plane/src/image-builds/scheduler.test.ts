@@ -302,7 +302,7 @@ describe("ImageBuildScheduler", () => {
   it("republishes persisted artifacts left behind by exhausted Queue delivery", async () => {
     const send = vi.fn(async () => undefined);
     const { scheduler, listRecoverableFinalizations } = harness({
-      env: { IMAGE_BUILD_FINALIZATION_QUEUE: { send } } as unknown as Env,
+      env: { JOBS: { send } } as unknown as Env,
     });
     listRecoverableFinalizations.mockResolvedValue([
       {
@@ -316,18 +316,17 @@ describe("ImageBuildScheduler", () => {
 
     expect(stats.finalizationsRepublished).toBe(1);
     expect(send).toHaveBeenCalledWith({
-      version: 1,
-      buildId: "build-recover",
-      completionHash: "a".repeat(64),
+      kind: "image_build.finalize",
+      payload: { version: 1, buildId: "build-recover", completionHash: "a".repeat(64) },
     });
   });
 
   it("republishes every recoverable finalization and contains a publish failure", async () => {
-    const send = vi.fn(async ({ buildId }: { buildId: string }) => {
-      if (buildId === "build-05") throw new Error("queue unavailable");
+    const send = vi.fn(async ({ payload }: { payload: { buildId: string } }) => {
+      if (payload.buildId === "build-05") throw new Error("queue unavailable");
     });
     const { scheduler, listRecoverableFinalizations } = harness({
-      env: { IMAGE_BUILD_FINALIZATION_QUEUE: { send } } as unknown as Env,
+      env: { JOBS: { send } } as unknown as Env,
     });
     const recoverable = Array.from({ length: 21 }, (_, index) => ({
       id: `build-${String(index + 1).padStart(2, "0")}`,
@@ -342,9 +341,8 @@ describe("ImageBuildScheduler", () => {
     expect(send).toHaveBeenCalledTimes(21);
     expect(listRecoverableFinalizations).toHaveBeenCalledWith(expect.any(Number));
     expect(send).toHaveBeenCalledWith({
-      version: 1,
-      buildId: "build-21",
-      completionHash: "21".repeat(32),
+      kind: "image_build.finalize",
+      payload: { version: 1, buildId: "build-21", completionHash: "21".repeat(32) },
     });
   });
 });

@@ -4,7 +4,7 @@ import type { RequestContext, UserRouteContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import type { Principal } from "../auth/principal";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { createTestEnv, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const mockSessionIndexStore = {
   list: vi.fn(),
@@ -38,7 +38,7 @@ function createCtx(principal?: Principal): RequestContext {
     db: { prepare: vi.fn(() => statement) } as unknown as SqlDatabase,
     executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
-      d1Queries: [],
+      sqlQueries: [],
       spans: {},
       time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
       summarize: () => ({}),
@@ -58,9 +58,7 @@ function createCtx(principal?: Principal): RequestContext {
 }
 
 function createEnv(): Env {
-  return {
-    DB: {} as D1Database,
-  } as Env;
+  return createTestEnv();
 }
 
 async function listSessions(query = "", principal?: Principal): Promise<Response> {

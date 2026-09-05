@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { env, runDurableObjectAlarm } from "cloudflare:test";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { runInSessionDO } from "./session-do-access";
-import type { SessionDO } from "../../src/session/durable-object";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { cleanD1Tables } from "./cleanup";
 import {
   INTEGRATION_WEBSOCKET_TIMEOUT_MS,

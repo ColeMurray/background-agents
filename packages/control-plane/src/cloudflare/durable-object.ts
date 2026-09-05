@@ -8,14 +8,15 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { initSchema } from "./schema";
+import { initSchema } from "../session/schema";
 import type { Env } from "../types";
-import { createDurableObjectSessionPlatform } from "../cloudflare/session-platform";
-import { upgradeWebSocket } from "../cloudflare/websocket-upgrade";
-import type { SessionPlatform } from "./platform";
-import { createSessionRuntime, type SessionRuntime } from "./components";
+import { createDurableObjectSessionPlatform } from "./session-platform";
+import { createCloudflareEnv, type WorkerBindings } from "./platform";
+import { upgradeWebSocket } from "./websocket-upgrade";
+import type { SessionPlatform } from "../session/platform";
+import { createSessionRuntime, type SessionRuntime } from "../session/components";
 
-export class SessionDO extends DurableObject<Env> {
+export class SessionDO extends DurableObject<WorkerBindings> {
   /**
    * This object's storage, sockets, alarm, and event lifetime as the ports
    * the runtime is built over, with the deployment's global store. The
@@ -23,10 +24,12 @@ export class SessionDO extends DurableObject<Env> {
    * fails construction instead of running a degraded session.
    */
   private readonly platform: SessionPlatform;
+  /** The application environment over this object's bindings. */
+  private readonly appEnv: Env;
   // The per-activation runtime; null until ensureInitialized() builds it.
   private _runtime: SessionRuntime | null = null;
 
-  constructor(ctx: DurableObjectState, env: Env) {
+  constructor(ctx: DurableObjectState, env: WorkerBindings) {
     super(ctx, env);
     // eslint-disable-next-line no-restricted-syntax -- composition root input: the DO's one env.DB read
     const db = env.DB;
@@ -36,6 +39,7 @@ export class SessionDO extends DurableObject<Env> {
       );
     }
     this.platform = createDurableObjectSessionPlatform(ctx, db);
+    this.appEnv = createCloudflareEnv(env);
   }
 
   /** The runtime, (re)built on first touch after construction or eviction. */
@@ -52,7 +56,7 @@ export class SessionDO extends DurableObject<Env> {
     if (this._runtime) return;
     const initStart = performance.now();
     initSchema(this.platform.storage.sql);
-    const runtime = createSessionRuntime(this.platform, this.env);
+    const runtime = createSessionRuntime(this.platform, this.appEnv);
     // Publish only after the graph is fully built: a throw above leaves the
     // activation uninitialized, so the next event retries initialization
     // instead of dereferencing an undefined runtime.

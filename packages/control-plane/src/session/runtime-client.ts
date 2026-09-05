@@ -1,7 +1,8 @@
 import type { CorrelationContext } from "../logger";
 import type { Env } from "../types";
-import { buildSessionInternalUrl, type SessionInternalPath } from "./contracts";
+import { buildSessionInternalRequest, type SessionInternalPath } from "./contracts";
 
+/** Reach one session's runtime by session id, wherever the host keeps it. */
 export interface SessionRuntimeClient {
   fetch(
     sessionId: string,
@@ -11,9 +12,17 @@ export interface SessionRuntimeClient {
   ): Promise<Response>;
 }
 
-class CloudflareSessionRuntimeClient implements SessionRuntimeClient {
+/**
+ * Delivers one internal request to the session's runtime, however the host
+ * reaches it: a Durable Object stub on Cloudflare, the runtime registry on
+ * Node. The platform record carries the host's as `SESSION`. The request's
+ * signal aborts the delivery as it aborts a fetch.
+ */
+export type SessionRuntimeDispatch = (sessionId: string, request: Request) => Promise<Response>;
+
+class DispatchingSessionRuntimeClient implements SessionRuntimeClient {
   constructor(
-    private readonly env: Env,
+    private readonly dispatch: SessionRuntimeDispatch,
     private readonly ctx: CorrelationContext
   ) {}
 
@@ -23,40 +32,58 @@ class CloudflareSessionRuntimeClient implements SessionRuntimeClient {
     init?: RequestInit,
     search?: string
   ): Promise<Response> {
-    const doId = this.env.SESSION.idFromName(sessionId);
-    const stub = this.env.SESSION.get(doId);
-    return stub.fetch(this.internalRequest(buildSessionInternalUrl(path, search), init));
-  }
-
-  private internalRequest(url: string, init?: RequestInit): Request {
     const headers = new Headers(init?.headers);
     headers.set("x-trace-id", this.ctx.trace_id);
     headers.set("x-request-id", this.ctx.request_id);
-    return new Request(url, { ...init, headers });
+    return this.dispatch(
+      sessionId,
+      buildSessionInternalRequest(path, { ...init, headers }, search)
+    );
   }
 }
 
-export function createSessionRuntimeClient(
-  env: Env,
+/** A client for the caller's own request, correlated with `ctx`, over `dispatch`. */
+export function createSessionRuntimeClientOver(
+  dispatch: SessionRuntimeDispatch,
   ctx: CorrelationContext
 ): SessionRuntimeClient {
-  return new CloudflareSessionRuntimeClient(env, ctx);
+  return new DispatchingSessionRuntimeClient(dispatch, ctx);
 }
 
 /**
- * A client for a caller that has no request of its own, such as a runtime
- * notifying another runtime. Every call is one hop: it carries `traceId` and
- * a fresh request id, so unrelated calls never share a request identity.
+ * A client over `dispatch` for a caller that has no request of its own, such
+ * as a runtime notifying another runtime. Every call is one hop: it carries
+ * `traceId` and a fresh request id, so unrelated calls never share a request
+ * identity.
  */
-export function createSessionRuntimeClientForTrace(
-  env: Env,
+export function createSessionRuntimeClientForTraceOver(
+  dispatch: SessionRuntimeDispatch,
   traceId: string
 ): SessionRuntimeClient {
   return {
     fetch: (sessionId, path, init, search) =>
-      createSessionRuntimeClient(env, {
+      createSessionRuntimeClientOver(dispatch, {
         trace_id: traceId,
         request_id: crypto.randomUUID(),
       }).fetch(sessionId, path, init, search),
   };
+}
+
+/**
+ * The platform's session client with `ctx` on every request as the
+ * `x-trace-id` and `x-request-id` headers the runtime's request log reads.
+ */
+export function createSessionRuntimeClient(
+  env: Env,
+  ctx: CorrelationContext
+): SessionRuntimeClient {
+  return createSessionRuntimeClientOver(env.SESSION, ctx);
+}
+
+/** The platform's session client for a caller without a request of its own; see `createSessionRuntimeClientForTraceOver`. */
+export function createSessionRuntimeClientForTrace(
+  env: Env,
+  traceId: string
+): SessionRuntimeClient {
+  return createSessionRuntimeClientForTraceOver(env.SESSION, traceId);
 }

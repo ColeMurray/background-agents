@@ -486,6 +486,23 @@ class OpenCodeServer:
         opencode_config: dict[str, Any] = {
             "model": f"{self.provider}/{self.model}",
             "permission": {"*": {"*": "allow"}},
+            "provider": {
+                "anthropic": {
+                    "models": {
+                        model: {
+                            "variants": {
+                                effort: {"thinking": {"type": "enabled", "budgetTokens": budget}}
+                                for effort, budget in (("high", 16_000), ("max", 31_999))
+                            }
+                        }
+                        for model in (
+                            "claude-haiku-4-5",
+                            "claude-sonnet-4-5",
+                            "claude-opus-4-5",
+                        )
+                    }
+                }
+            },
         }
 
         # Inject MCP servers

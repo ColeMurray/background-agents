@@ -3,6 +3,7 @@ import { generateEncryptionKey } from "./auth/crypto";
 import { SessionIndexStore } from "./db/session-index";
 import { UserStore } from "./db/user-store";
 import {
+  fakeSessionRuntimeDispatch,
   handleRequest,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
@@ -134,7 +135,7 @@ describe("handleCreateSession D1 ordering", () => {
   }
 
   function createEnv(
-    initFetch: ReturnType<typeof vi.fn>,
+    initFetch: (request: Request) => Promise<Response>,
     permissions = ["sessions.create", "repositories.use", "environments.use"]
   ): Record<string, unknown> {
     const statement = {
@@ -195,10 +196,7 @@ describe("handleCreateSession D1 ordering", () => {
         exec: vi.fn(),
         dump: vi.fn(),
       },
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => ({ fetch: initFetch }),
-      },
+      SESSION: fakeSessionRuntimeDispatch(initFetch),
     };
   }
 
@@ -657,7 +655,7 @@ describe("handleCreateSession D1 ordering", () => {
         db: testEnv["DB"] as never,
         executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
         metrics: {
-          d1Queries: [],
+          sqlQueries: [],
           spans: {},
           time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
           summarize: () => ({}),

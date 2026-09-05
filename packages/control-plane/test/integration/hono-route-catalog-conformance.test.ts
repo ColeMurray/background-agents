@@ -6,13 +6,10 @@ import { NO_AUTHORIZATION } from "../../src/routes/shared";
 import { admit } from "../../src/routing/admit";
 import type { ControlPlaneHonoEnv } from "../../src/routing/hono-env";
 import { rawRouteParams } from "../../src/routing/route-params";
-import {
-  cloudflareHost,
-  createControlPlaneApp,
-  createControlPlaneHttpHandler,
-} from "../../src/routing/hono-app";
+import { cloudflareHost, createControlPlaneHttpHandler } from "../../src/cloudflare/http-host";
+import { createControlPlaneApp } from "../../src/routing/hono-app";
 import { listRouteContracts } from "../../src/routing/route-contracts";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
 const PARAMETER = /:(\w+)/g;
 const routes = listRouteContracts(createControlPlaneApp(catalog, cloudflareHost));
@@ -76,7 +73,7 @@ describe("Hono route catalog conformance", () => {
       const { identity: expectedIdentity, pathname, groups } = manifest[routeIndex];
       const response = await handle(
         new Request(`https://test.local${pathname}`, { method: route.method }),
-        env as unknown as Env,
+        createCloudflareEnv(env),
         createExecutionContext()
       );
 

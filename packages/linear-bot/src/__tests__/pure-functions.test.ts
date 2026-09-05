@@ -92,6 +92,10 @@ describe("extractModelFromLabels", () => {
     expect(extractModelFromLabels([{ name: "model:gpt-5.4" }])).toBe("openai/gpt-5.4");
   });
 
+  it("returns GPT-6 Astra for model:gpt-6-astra label", () => {
+    expect(extractModelFromLabels([{ name: "model:gpt-6-astra" }])).toBe("openai/gpt-6-astra");
+  });
+
   it("returns GPT 5.5 for model:gpt-5.5 label", () => {
     expect(extractModelFromLabels([{ name: "model:gpt-5.5" }])).toBe("openai/gpt-5.5");
   });

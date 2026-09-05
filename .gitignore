@@ -94,3 +94,7 @@ terraform/environments/production/plan.out
 terraform/environments/production/backend_override.tf
 terraform/environments/production/terraform.tfstate*
 terraform/environments/production/.terraform*
+
+# The compose smoke bundles its driver here at run time.
+packages/control-plane/test/smoke/run-smoke.bundle.mjs
+smoke-logs/

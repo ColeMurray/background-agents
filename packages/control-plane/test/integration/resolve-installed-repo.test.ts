@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { createRouteSourceControlProvider, resolveInstalledRepo } from "../../src/routes/shared";
 
 describe("resolveInstalledRepo", () => {
   it("handles a missing GitHub App configuration without leaking an unhandled rejection", async () => {
-    const provider = createRouteSourceControlProvider(env);
+    const provider = createRouteSourceControlProvider(createCloudflareEnv(env));
     const unhandled: unknown[] = [];
     const onUnhandledRejection = (event: PromiseRejectionEvent) => {
       unhandled.push(event.reason);

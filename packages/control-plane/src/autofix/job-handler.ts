@@ -1,10 +1,11 @@
-import { githubAutofixEnvelopeSchema, type GitHubAutofixEnvelope } from "@open-inspect/shared";
+import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 import { githubAutofixFeedbackKey } from "../db/pr-autofix-feedback-store";
+import type { JobDelivery, JobOutcome } from "../jobs";
 import { SourceControlProviderError } from "../source-control/errors";
 import type { AutofixProcessResult } from "./service";
 
 interface AutofixProcessor {
-  process(body: GitHubAutofixEnvelope): Promise<AutofixProcessResult>;
+  process(envelope: GitHubAutofixEnvelope): Promise<AutofixProcessResult>;
 }
 
 interface FailureStore {
@@ -17,37 +18,29 @@ interface FailureStore {
   ): Promise<boolean>;
 }
 
-interface QueueMessage {
-  body: unknown;
-  attempts: number;
-  ack(): void;
-  retry(): void;
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export class AutofixQueueConsumer {
+/**
+ * Decides one `github.autofix` delivery: a processed envelope is
+ * acknowledged; a permanent provider error is made terminal in the ledger
+ * and acknowledged; anything else is recorded and retried, and the last
+ * delivery is made terminal first so the ledger explains the dead letter.
+ */
+export class AutofixJobHandler {
   constructor(
     private readonly service: AutofixProcessor,
     private readonly feedbackStore: FailureStore,
-    private readonly now: () => number,
-    private readonly maxDeliveryAttempts: number
+    private readonly now: () => number
   ) {}
 
-  async consume(message: QueueMessage): Promise<void> {
-    const parsed = githubAutofixEnvelopeSchema.safeParse(message.body);
-    if (!parsed.success) {
-      message.retry();
-      return;
-    }
-
+  async handle(envelope: GitHubAutofixEnvelope, delivery: JobDelivery): Promise<JobOutcome> {
     try {
-      await this.service.process(parsed.data);
-      message.ack();
+      await this.service.process(envelope);
+      return "ack";
     } catch (error) {
-      const feedbackKey = githubAutofixFeedbackKey(parsed.data);
+      const feedbackKey = githubAutofixFeedbackKey(envelope);
       const detail = errorMessage(error);
       if (error instanceof SourceControlProviderError && error.errorType === "permanent") {
         await this.feedbackStore.markFailed(
@@ -56,23 +49,19 @@ export class AutofixQueueConsumer {
           detail,
           this.now()
         );
-        message.ack();
-        return;
+        return "ack";
       }
       await this.feedbackStore.recordError(feedbackKey, detail);
-      if (message.attempts >= this.maxDeliveryAttempts) {
+      if (delivery.attempts >= delivery.maxAttempts) {
         const failed = await this.feedbackStore.markFailed(
           feedbackKey,
           "delivery_attempts_exhausted",
           detail,
           this.now()
         );
-        if (!failed) {
-          message.ack();
-          return;
-        }
+        if (!failed) return "ack";
       }
-      message.retry();
+      return { retry: true };
     }
   }
 }

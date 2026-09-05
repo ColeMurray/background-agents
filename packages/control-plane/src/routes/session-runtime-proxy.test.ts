@@ -5,9 +5,10 @@ import type * as AuthenticateModule from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import {
-  createTestRequestHandler,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
+  createTestRequestHandler,
+  fakeSessionRuntimeDispatch,
 } from "../router.test-support";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
@@ -85,10 +86,7 @@ function createEnv(
     ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "github",
     DB: createDatabase(database),
-    SESSION: {
-      idFromName: vi.fn((name: string) => `do-${name}`),
-      get: vi.fn(() => ({ fetch })),
-    },
+    SESSION: fakeSessionRuntimeDispatch(fetch),
   } as unknown as Env;
 }
 

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import type { Mock } from "vitest";
 import type { SessionComponents } from "../../src/session/components";
-import type { SessionDO } from "../../src/session/durable-object";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import type { SourceControlProvider } from "../../src/source-control";
 import type { GitPushSpec } from "../../src/source-control";
 import { cleanD1Tables } from "./cleanup";

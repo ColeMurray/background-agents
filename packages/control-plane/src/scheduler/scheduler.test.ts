@@ -9,6 +9,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
+import type { FetchClient } from "../platform-ports";
+import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
@@ -197,7 +200,12 @@ vi.mock("../auth/crypto", () => ({
   generateId: vi.fn(() => `id-${Math.random().toString(36).slice(2, 8)}`),
 }));
 
-function createMockSessionStub(): DurableObjectStub {
+/** A session runtime's server as the scheduler's requests reach it. */
+interface SessionStub {
+  fetch(request: Request): Promise<Response>;
+}
+
+function createMockSessionStub(): SessionStub {
   return {
     fetch: vi.fn(async (input: RequestInfo, _init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url;
@@ -210,7 +218,7 @@ function createMockSessionStub(): DurableObjectStub {
   } as never;
 }
 
-function createEmptyDbMock(): D1Database {
+function createEmptyDbMock(): SqlDatabase {
   return {
     prepare: vi.fn(() => ({
       bind: vi.fn(() => ({
@@ -218,13 +226,13 @@ function createEmptyDbMock(): D1Database {
         run: vi.fn(async () => undefined),
       })),
     })),
-  } as unknown as D1Database;
+  } as unknown as SqlDatabase;
 }
 
 function createIntegrationSettingsDbMock(
   slackSessionInstructions?: string,
   throwOnSlackSettings = false
-): D1Database {
+): SqlDatabase {
   return {
     prepare: vi.fn((query: string) => ({
       bind: vi.fn((integrationId: string, repo?: string) => ({
@@ -270,7 +278,7 @@ function createIntegrationSettingsDbMock(
         }),
       })),
     })),
-  } as unknown as D1Database;
+  } as unknown as SqlDatabase;
 }
 
 async function getInitBody(fetchMock: ReturnType<typeof vi.fn>): Promise<Record<string, unknown>> {
@@ -324,17 +332,17 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function createEnv(overrides?: Partial<Env>): Env {
-  const sessionStub = createMockSessionStub();
+/** An `Env` whose sessions all answer through `sessionStub`. */
+function createEnv(
+  overrides?: Partial<Env>,
+  sessionStub: SessionStub = createMockSessionStub()
+): Env {
   return {
     DB: createEmptyDbMock(),
-    SESSION: {
-      idFromName: vi.fn().mockReturnValue("fake-do-id"),
-      get: vi.fn().mockReturnValue(sessionStub),
-    } as unknown as DurableObjectNamespace,
     DEPLOYMENT_NAME: "test",
     TOKEN_ENCRYPTION_KEY: "test-key",
     ...overrides,
+    SESSION: fakeSessionRuntimeDispatch((request) => sessionStub.fetch(request)),
   } as Env;
 }
 
@@ -518,8 +526,11 @@ describe("Scheduler", () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
 
-      const env = createEnv();
-      const fetchMock = vi.mocked(env.SESSION.get(env.SESSION.idFromName("auto-1")).fetch);
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
+
+      const fetchMock = vi.mocked(stub.fetch);
       const scheduler = createScheduler(env);
       const result = await scheduler.tick();
 
@@ -584,8 +595,9 @@ describe("Scheduler", () => {
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockStore.claimRunSession.mockResolvedValue(false);
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -760,8 +772,7 @@ describe("Scheduler", () => {
         return new Response("Not Found", { status: 404 });
       });
 
-      const env = createEnv();
-      vi.mocked(env.SESSION.get).mockReturnValue({ fetch: fetchMock } as never);
+      const env = createEnv(undefined, { fetch: fetchMock });
 
       const scheduler = createScheduler(env);
       const tickPromise = scheduler.tick();
@@ -786,8 +797,9 @@ describe("Scheduler", () => {
       mockStore.getOverdueAutomations.mockResolvedValue([automation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -807,8 +819,9 @@ describe("Scheduler", () => {
         defaultBranch: "main",
       });
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -844,8 +857,9 @@ describe("Scheduler", () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", []);
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -894,8 +908,9 @@ describe("Scheduler", () => {
         defaultBranch: "main",
       }));
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -945,8 +960,9 @@ describe("Scheduler", () => {
         defaultBranch: "main",
       }));
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -978,8 +994,9 @@ describe("Scheduler", () => {
       selectEnvironments("auto-1", ["env_gone"]);
       mockEnvironmentGetById.mockResolvedValue(null);
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -1011,8 +1028,9 @@ describe("Scheduler", () => {
           : { repoId: 12345, repoOwner: owner, repoName: name, defaultBranch: "main" }
       );
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -1037,8 +1055,9 @@ describe("Scheduler", () => {
         defaultBranch: "develop",
       });
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -1111,8 +1130,9 @@ describe("Scheduler", () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1", { base_branch: "main" })]);
 
-      const env = createEnv({ DB: createIntegrationSettingsDbMock() });
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv({ DB: createIntegrationSettingsDbMock() }, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -1263,8 +1283,7 @@ describe("Scheduler", () => {
         fetch: vi.fn().mockRejectedValue(new Error("Session init failed")),
       } as never;
 
-      const env = createEnv();
-      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+      const env = createEnv(undefined, failingStub);
 
       const scheduler = createScheduler(env);
       const result = await scheduler.tick();
@@ -1321,8 +1340,7 @@ describe("Scheduler", () => {
         fetch: vi.fn().mockRejectedValue(new Error("Session init failed")),
       } as never;
 
-      const env = createEnv();
-      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+      const env = createEnv(undefined, failingStub);
 
       const scheduler = createScheduler(env);
       await scheduler.tick();
@@ -1342,8 +1360,7 @@ describe("Scheduler", () => {
         fetch: vi.fn().mockRejectedValue(new Error("fail")),
       } as never;
 
-      const env = createEnv();
-      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+      const env = createEnv(undefined, failingStub);
 
       const scheduler = createScheduler(env);
       await scheduler.tick();
@@ -1362,8 +1379,7 @@ describe("Scheduler", () => {
       const failingStub = {
         fetch: vi.fn().mockRejectedValue(new Error("fail")),
       } as never;
-      const env = createEnv();
-      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+      const env = createEnv(undefined, failingStub);
 
       const scheduler = createScheduler(env);
       await scheduler.tick();
@@ -1430,8 +1446,7 @@ describe("Scheduler", () => {
         fetch: vi.fn().mockRejectedValue(new Error("Session init failed")),
       } as never;
 
-      const env = createEnv();
-      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+      const env = createEnv(undefined, failingStub);
 
       const scheduler = createScheduler(env);
       const errorSpy = vi
@@ -1934,7 +1949,7 @@ describe("Scheduler", () => {
       const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
       const scheduler = createScheduler(
         createEnv({
-          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+          SLACK_BOT: { fetch: slackFetch } as FetchClient,
           SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
         })
       );
@@ -1991,7 +2006,7 @@ describe("Scheduler", () => {
       const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
       const scheduler = createScheduler(
         createEnv({
-          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+          SLACK_BOT: { fetch: slackFetch } as FetchClient,
           SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
         })
       );
@@ -2106,8 +2121,11 @@ describe("Scheduler", () => {
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
       mockStore.getRepositoriesForAutomation.mockResolvedValue([repositoryRow("auto-1")]);
 
-      const env = createEnv();
-      const fetchMock = vi.mocked(env.SESSION.get(env.SESSION.idFromName("auto-1")).fetch);
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
+
+      const fetchMock = vi.mocked(stub.fetch);
       const scheduler = createScheduler(env);
       const result = await scheduler.trigger("auto-1", "user-1", {
         scmUserId: "123",
@@ -2159,8 +2177,7 @@ describe("Scheduler", () => {
         fetch: vi.fn().mockRejectedValue(new Error("Session init failed")),
       } as never;
 
-      const env = createEnv();
-      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+      const env = createEnv(undefined, failingStub);
 
       const scheduler = createScheduler(env);
       const errorSpy = vi
@@ -2184,12 +2201,17 @@ describe("Scheduler", () => {
       /** A slack-bot binding that records thread-context calls. */
       function threadContextEnv(threadContext = "<thread_context>[]</thread_context>") {
         const slackFetch = vi.fn(async () => Response.json({ threadContext }));
+        const stub = createMockSessionStub();
         return {
           slackFetch,
-          env: createEnv({
-            SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
-            SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
-          } as Partial<Env>),
+          stub,
+          env: createEnv(
+            {
+              SLACK_BOT: { fetch: slackFetch } as FetchClient,
+              SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+            } as Partial<Env>,
+            stub
+          ),
         };
       }
 
@@ -2263,8 +2285,7 @@ describe("Scheduler", () => {
       it("requests context once for an admitted run and splices it into the prompt", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
-        const { slackFetch, env } = threadContextEnv();
-        const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+        const { slackFetch, env, stub } = threadContextEnv();
 
         expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
           triggered: 1,
@@ -2334,11 +2355,14 @@ describe("Scheduler", () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
         const slackFetch = vi.fn(async () => new Response("nope", { status: 500 }));
-        const env = createEnv({
-          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
-          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
-        } as Partial<Env>);
-        const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+        const stub = createMockSessionStub();
+        const env = createEnv(
+          {
+            SLACK_BOT: { fetch: slackFetch } as FetchClient,
+            SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+          } as Partial<Env>,
+          stub
+        );
 
         expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
           triggered: 1,
@@ -2358,11 +2382,14 @@ describe("Scheduler", () => {
         const slackFetch = vi.fn(async () => {
           throw Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" });
         });
-        const env = createEnv({
-          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
-          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
-        } as Partial<Env>);
-        const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+        const stub = createMockSessionStub();
+        const env = createEnv(
+          {
+            SLACK_BOT: { fetch: slackFetch } as FetchClient,
+            SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+          } as Partial<Env>,
+          stub
+        );
 
         expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
           triggered: 1,
@@ -2379,8 +2406,7 @@ describe("Scheduler", () => {
       it("uses the baseline prompt when lazy prompt construction rejects", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
-        const { env } = threadContextEnv();
-        const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+        const { env, stub } = threadContextEnv();
         const scheduler = createScheduler(env);
         const promptBuilder = scheduler as unknown as {
           buildSlackContextWithThread: () => Promise<string>;
@@ -2426,8 +2452,9 @@ describe("Scheduler", () => {
         sampleRunRow({ id: "active-run", session_id: "sess-running" })
       );
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -2501,8 +2528,9 @@ describe("Scheduler", () => {
         sampleRunRow({ id: "done-run", status: "completed", session_id: "sess-done" })
       );
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -2534,8 +2562,9 @@ describe("Scheduler", () => {
         })
       );
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -2558,8 +2587,9 @@ describe("Scheduler", () => {
         sampleRunRow({ id: "active-run", session_id: "sess-running" })
       );
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -2583,8 +2613,11 @@ describe("Scheduler", () => {
       mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
-      const env = createEnv();
-      const fetchMock = vi.mocked(env.SESSION.get(env.SESSION.idFromName("auto-slack")).fetch);
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
+
+      const fetchMock = vi.mocked(stub.fetch);
       const scheduler = createScheduler(env);
       // Matching text so the trigger conditions pass.
       const result = await scheduler.event(makeSlackEvent());
@@ -2623,8 +2656,9 @@ describe("Scheduler", () => {
       mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
-      const env = createEnv({ DB: createIntegrationSettingsDbMock("Always run tests.") });
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv({ DB: createIntegrationSettingsDbMock("Always run tests.") }, stub);
       const scheduler = createScheduler(env);
 
       const result = await scheduler.event(makeSlackEvent());
@@ -2644,8 +2678,9 @@ describe("Scheduler", () => {
       mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
-      const env = createEnv({ DB: createIntegrationSettingsDbMock("   \n") });
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv({ DB: createIntegrationSettingsDbMock("   \n") }, stub);
       const scheduler = createScheduler(env);
 
       expect(await scheduler.event(makeSlackEvent())).toEqual({
@@ -2667,8 +2702,9 @@ describe("Scheduler", () => {
       mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
-      const env = createEnv({ DB: createIntegrationSettingsDbMock(undefined, true) });
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv({ DB: createIntegrationSettingsDbMock(undefined, true) }, stub);
       const scheduler = createScheduler(env);
 
       const result = await scheduler.event(makeSlackEvent());
@@ -2692,8 +2728,9 @@ describe("Scheduler", () => {
         session_id: null,
       });
 
-      const env = createEnv();
-      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const stub = createMockSessionStub();
+
+      const env = createEnv(undefined, stub);
       const fetchMock = vi.mocked(stub.fetch);
 
       const scheduler = createScheduler(env);
@@ -2754,8 +2791,7 @@ describe("Scheduler", () => {
       const failingStub = {
         fetch: vi.fn().mockResolvedValue(new Response("boom", { status: 500 })),
       } as never;
-      const env = createEnv();
-      vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
+      const env = createEnv(undefined, failingStub);
 
       const scheduler = createScheduler(env);
       const result = await scheduler.event(makeSlackEvent());

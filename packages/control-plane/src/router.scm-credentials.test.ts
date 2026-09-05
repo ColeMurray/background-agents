@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  fakeSessionRuntimeDispatch,
   handleRequest,
   matchRoute,
+  routeContracts as routes,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
-  routeContracts as routes,
 } from "./router.test-support";
 
 function routeFor(method: string, path: string) {
@@ -27,10 +28,10 @@ function createEnv(options?: { actorAuthorized?: boolean }) {
     run: vi.fn(async () => ({ meta: { changes: 0 } })),
   };
 
-  const idFromName = vi.fn((name: string) => name);
+  const addressed = vi.fn((sessionId: string) => sessionId);
   return {
     fetch,
-    idFromName,
+    addressed,
     statement,
     env: {
       ...TEST_SERVICE_SECRETS,
@@ -77,10 +78,10 @@ function createEnv(options?: { actorAuthorized?: boolean }) {
         exec: vi.fn(),
         dump: vi.fn(),
       },
-      SESSION: {
-        idFromName,
-        get: () => ({ fetch }),
-      },
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) => {
+        addressed(sessionId);
+        return fetch(request);
+      }),
     },
   };
 }
@@ -232,7 +233,7 @@ describe("SCM credentials router provider gate", () => {
   });
 
   it("allows GitLab parent sandboxes to reach the child prompt route", async () => {
-    const { env, fetch, idFromName } = createEnv();
+    const { env, fetch, addressed } = createEnv();
 
     const response = await handleRequest(
       new Request("https://test.local/sessions/parent-1/children/child-1/prompt", {
@@ -250,7 +251,7 @@ describe("SCM credentials router provider gate", () => {
     // The null DB lookup rejects the unknown child after sandbox auth and SCM classification.
     expect(response.status).toBe(404);
     expect(fetch).toHaveBeenCalledOnce();
-    expect(idFromName).toHaveBeenCalledWith("parent-1");
+    expect(addressed).toHaveBeenCalledWith("parent-1");
     expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/internal/verify-sandbox-token");
   });
 

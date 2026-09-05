@@ -55,8 +55,10 @@ module "control_plane_worker" {
     }
   ]
 
-  # These bindings provide read-only queue metrics to the operator health
-  # check. Autofix production remains owned by the GitHub bot.
+  # One producer binding per job kind (packages/control-plane/src/jobs.ts;
+  # the mapping lives in src/cloudflare/job-queue.ts). The autofix bindings
+  # also feed the operator health check its read-only queue metrics; autofix
+  # production itself remains with the GitHub bot.
   queue_bindings = concat(
     [
       {

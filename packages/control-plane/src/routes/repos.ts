@@ -9,7 +9,6 @@ import { repositoryParams } from "./repository-params";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
-import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import {
   repoMetadataSchema,
   type EnrichedRepository,
@@ -61,7 +60,7 @@ async function refreshReposCache(
   timeScmApi: ScmApiTimer = (fn) => fn()
 ): Promise<ReposRefreshResult> {
   const provider = createRouteSourceControlProvider(env);
-  const cacheStore = createKvCacheStore(env.REPOS_CACHE);
+  const cacheStore = env.REPOS_CACHE;
 
   let repos: InstallationRepository[];
   try {
@@ -144,7 +143,7 @@ async function handleListRepos(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const cacheStore = createKvCacheStore(env.REPOS_CACHE);
+  const cacheStore = env.REPOS_CACHE;
 
   // Read from KV cache
   let cached: CachedReposList | null = null;
@@ -248,7 +247,7 @@ async function handleUpdateRepoMetadata(
   }
 
   try {
-    await createKvCacheStore(env.REPOS_CACHE).delete(REPOS_CACHE_KEY);
+    await env.REPOS_CACHE.delete(REPOS_CACHE_KEY);
   } catch (e) {
     logger.warn("Failed to invalidate repos cache", {
       trace_id: ctx.trace_id,

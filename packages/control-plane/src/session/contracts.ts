@@ -60,6 +60,19 @@ export type SessionInternalPath = (typeof SessionInternalPaths)[keyof typeof Ses
 
 const INTERNAL_ORIGIN = "http://internal";
 
-export function buildSessionInternalUrl(path: SessionInternalPath, search?: string): string {
+function buildSessionInternalUrl(path: SessionInternalPath, search?: string): string {
   return `${INTERNAL_ORIGIN}${path}${search ?? ""}`;
+}
+
+/**
+ * The request a session runtime receives for `path`: whichever host's
+ * client addresses the runtime builds this and hands it to the runtime's
+ * server, so the two halves agree on the URL and the caller's `init`.
+ */
+export function buildSessionInternalRequest(
+  path: SessionInternalPath,
+  init?: RequestInit,
+  search?: string
+): Request {
+  return new Request(buildSessionInternalUrl(path, search), init);
 }

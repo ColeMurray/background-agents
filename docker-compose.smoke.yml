@@ -1,0 +1,64 @@
+# CI overlay for the compose smoke: the same stack, with a stand-in for the
+# Modal data plane in place of the real one.
+#
+#   scripts/compose-smoke.sh
+#
+# The stand-in answers the control plane's sandbox endpoints and then plays the
+# sandbox, dialing back over the compose network. Nothing here reaches a cloud,
+# so the smoke runs on a fork's pull request with no secrets.
+
+services:
+  app:
+    # The run's temporary configuration, not the checkout's `.env`, which the
+    # base file names and the smoke has no business reading or removing.
+    env_file: !override
+      - ${SMOKE_ENV_FILE:?SMOKE_ENV_FILE must name the run's environment file; use scripts/compose-smoke.sh}
+    environment:
+      # Modal's functions, served by path from the stand-in host instead of
+      # from their derived *.modal.run hosts.
+      MODAL_API_URL: http://fake-modal:9900
+      # What the stand-in is told to dial back on: the app's name on this
+      # network, not the published loopback port.
+      WORKER_URL: http://app:8787
+    depends_on:
+      fake-modal:
+        condition: service_healthy
+    # Replaced, not appended, so the smoke can run beside a development stack
+    # already holding the default ports.
+    ports: !override
+      - "127.0.0.1:${SMOKE_APP_PORT:-8787}:8787"
+
+  minio:
+    ports: !override
+      - "127.0.0.1:${SMOKE_MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${SMOKE_MINIO_CONSOLE_PORT:-9001}:9001"
+
+  fake-modal:
+    image: node:22-slim
+    # The repository is the working directory so `ws` resolves from the root
+    # node_modules the CI job already installed.
+    working_dir: /repo
+    volumes:
+      - .:/repo:ro
+    command: node packages/control-plane/test/smoke/fake-modal-host.mjs
+    environment:
+      PORT: "9900"
+      # The same secret the control plane signs its calls with; the stand-in
+      # verifies every one, so a mismatch fails the smoke rather than passing
+      # unnoticed.
+      MODAL_API_SECRET: ${MODAL_API_SECRET:?MODAL_API_SECRET must be set for the smoke}
+    # Published so the smoke driver can read the stand-in's record of what the
+    # control plane asked it to do.
+    ports:
+      - "127.0.0.1:${SMOKE_FAKE_MODAL_PORT:-9900}:9900"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:9900/__smoke/state').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 15

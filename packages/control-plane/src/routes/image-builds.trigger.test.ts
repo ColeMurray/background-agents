@@ -17,6 +17,7 @@ import type * as OpenComputerProviderModule from "../sandbox/providers/opencompu
 import type * as OpenComputerClientModule from "../sandbox/opencomputer-rest-client";
 import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
 import {
+  createTestEnv,
   createTestRequestHandler,
   ownerAuthorizationDatabase,
   TEST_BACKGROUND_TASK_CONTEXT,
@@ -60,9 +61,9 @@ const integrationSettings = vi.hoisted(() => ({
   resolveSandboxSettings: vi.fn(),
 }));
 
-const finalizationQueue = {
+const jobs = {
   send: vi.fn(async () => undefined),
-} as unknown as Queue;
+};
 
 vi.mock("../source-control", async (importOriginal) => {
   const actual = await importOriginal<typeof SourceControlModule>();
@@ -126,20 +127,20 @@ const TOGGLE_PATH = "/image-builds/toggle/repo/acme/repo";
 const handleRequest = createTestRequestHandler([imageBuildRoutes]);
 
 function createModalEnv(): Env {
-  return {
+  return createTestEnv({
     DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "modal",
     WORKER_URL: "https://cp.test",
     MODAL_API_SECRET: "modal-secret",
     MODAL_WORKSPACE: "modal-ws",
-    IMAGE_BUILD_FINALIZATION_QUEUE: finalizationQueue,
+    JOBS: jobs,
     // Modal builds mint callback tokens like every provider.
     IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
-  } as Env;
+  });
 }
 
 function createVercelEnv(): Env {
-  return {
+  return createTestEnv({
     DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "vercel",
     SCM_PROVIDER: "github",
@@ -147,12 +148,12 @@ function createVercelEnv(): Env {
     IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
     VERCEL_TOKEN: "vercel-token",
     VERCEL_PROJECT_ID: "project-123",
-    IMAGE_BUILD_FINALIZATION_QUEUE: finalizationQueue,
-  } as Env;
+    JOBS: jobs,
+  });
 }
 
 function createOpenComputerEnv(): Env {
-  return {
+  return createTestEnv({
     DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "opencomputer",
     SCM_PROVIDER: "github",
@@ -161,8 +162,8 @@ function createOpenComputerEnv(): Env {
     OPENCOMPUTER_API_URL: "https://opencomputer.test",
     OPENCOMPUTER_API_KEY: "oc-token",
     OPENCOMPUTER_TEMPLATE: "openinspect-runtime",
-    IMAGE_BUILD_FINALIZATION_QUEUE: finalizationQueue,
-  } as Env;
+    JOBS: jobs,
+  });
 }
 
 async function callTrigger(env: Env): Promise<Response> {

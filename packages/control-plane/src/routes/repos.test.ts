@@ -47,14 +47,6 @@ vi.mock("../db/repo-metadata", () => ({
   }),
 }));
 
-vi.mock("@open-inspect/shared/cache-store", () => ({
-  createKvCacheStore: vi.fn(() => ({
-    delete: mockCacheDelete,
-    get: mockCacheGet,
-    put: mockCachePut,
-  })),
-}));
-
 vi.mock("../logger", () => ({
   createLogger: vi.fn(() => mockLogger),
 }));
@@ -76,7 +68,7 @@ function createEnv(): Env {
     ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "github",
     DB: ownerAuthorizationDatabase(),
-    REPOS_CACHE: {} as KVNamespace,
+    REPOS_CACHE: { delete: mockCacheDelete, get: mockCacheGet, put: mockCachePut },
   } as unknown as Env;
 }
 

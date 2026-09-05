@@ -71,8 +71,8 @@ export function createNodeBackgroundTasks(log: Logger): NodeBackgroundTasks {
   };
 }
 
-/** Whether every task in `tasks` settles within `ms`. */
-function settlesWithin(tasks: Promise<unknown>[], ms: number): Promise<boolean> {
+/** Whether every promise in `tasks` settles within `ms`. */
+export function settlesWithin(tasks: Promise<unknown>[], ms: number): Promise<boolean> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(false), ms);
     void Promise.allSettled(tasks).then(() => {

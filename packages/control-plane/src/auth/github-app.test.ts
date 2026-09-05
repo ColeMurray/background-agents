@@ -291,6 +291,29 @@ describe("github-app utilities", () => {
       expect(result).toEqual({ token: "fresh-token", expiresAtEpochMs: Date.parse(expiresAt) });
     });
 
+    it("signs with a key whose newlines are the two characters backslash-n", async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      const { privateKeyPem } = await generateTestKeyPair();
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      fetchMock.mockResolvedValue(
+        new Response(JSON.stringify({ token: "escaped-key-token", expires_at: expiresAt }), {
+          status: 201,
+        })
+      );
+
+      const result = await getCachedInstallationTokenWithExpiry(
+        {
+          appId: `app-escaped-key-${Date.now()}`,
+          privateKey: privateKeyPem.replace(/\n/g, "\\n"),
+          installationId: "installation-escaped-key",
+        },
+        undefined,
+        { forceRefresh: true }
+      );
+
+      expect(result.token).toBe("escaped-key-token");
+    });
+
     it("rejects a malformed GitHub installation token response", async () => {
       const fetchMock = vi.spyOn(globalThis, "fetch");
       const { privateKeyPem } = await generateTestKeyPair();

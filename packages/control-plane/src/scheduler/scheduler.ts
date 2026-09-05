@@ -54,7 +54,7 @@ import {
   type SlackCompletionContext,
 } from "./slack-completion";
 import { UserStore } from "../db/user-store";
-import { createRequestMetrics } from "../db/instrumented-d1";
+import { createRequestMetrics } from "../db/instrumented-sql-database";
 import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
 import type { CorrelationContext, Logger } from "../logger";

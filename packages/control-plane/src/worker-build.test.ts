@@ -32,7 +32,7 @@ describe("control-plane worker build", () => {
         readFileSync(new URL("../dist/meta.json", import.meta.url), "utf8")
       ) as { inputs: Record<string, unknown> };
       const bundledSources = Object.keys(metafile.inputs);
-      expect(bundledSources).toContain("src/session/durable-object.ts");
+      expect(bundledSources).toContain("src/cloudflare/durable-object.ts");
       expect(bundledSources.filter((input) => input.startsWith("src/node/"))).toEqual([]);
     },
     WORKER_BUILD_TIMEOUT_MS
