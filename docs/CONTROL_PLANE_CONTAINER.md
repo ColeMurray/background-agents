@@ -32,10 +32,16 @@ Prerequisites: Docker with Compose v2, a GitHub App and OAuth app as in
    cp .env.example .env
    ```
 
-   Every variable is documented in place. The three encryption keys are generated with
-   `openssl rand -base64 32`. Generate a MinIO root password with `openssl rand -hex 16` and set it
-   as `MINIO_ROOT_PASSWORD`, `AWS_SECRET_ACCESS_KEY` and `LITESTREAM_SECRET_ACCESS_KEY`; the stack
-   refuses to start without it. The other MinIO and Litestream defaults work as they are.
+   Every variable is documented in place, and every value a boot cannot do without either ships with
+   a working default or is listed here. Generate the three encryption keys — `TOKEN_ENCRYPTION_KEY`,
+   `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` and `REPO_SECRETS_ENCRYPTION_KEY` — with
+   `openssl rand -base64 32` each. Generate a MinIO root password with `openssl rand -hex 16` and
+   set it as `MINIO_ROOT_PASSWORD`, `AWS_SECRET_ACCESS_KEY` and `LITESTREAM_SECRET_ACCESS_KEY`; the
+   stack refuses to start without it. The other MinIO and Litestream defaults work as they are.
+
+   The rest of the file boots as shipped. A GitHub App, an OAuth app and a sandbox provider are what
+   the stack needs to do anything useful, but their variables are read at use rather than at boot,
+   so fill them in when you connect each one.
 
 2. Build and start:
 

@@ -15,6 +15,12 @@ const ENV_EXAMPLE_PATH = resolve(
   "../../../../.env.example"
 );
 
+/** The document whose quick start is the bring-up a clean checkout is expected to follow. */
+const CONTAINER_DOC_PATH = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../../docs/CONTROL_PLANE_CONTAINER.md"
+);
+
 /** Variables docker-compose.yml and its sidecars read; the host never sees them. */
 const COMPOSE_VARIABLES = [
   "APP_BIND_ADDRESS",
@@ -34,6 +40,8 @@ interface DocumentedVariable {
   name: string;
   /** The comment lines directly above the assignment, up to the previous blank line. */
   comment: string[];
+  /** What the file ships as the value; empty means the operator has to supply one. */
+  value: string;
 }
 
 interface EnvExample {
@@ -55,15 +63,24 @@ function parseEnvExample(): EnvExample {
       comment.push(line);
       continue;
     }
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line);
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
     if (match) {
-      variables.push({ name: match[1], comment });
+      variables.push({ name: match[1], comment, value: match[2].trim() });
       comment = [];
     } else {
       malformed.push(line);
     }
   }
   return { variables, malformed };
+}
+
+/** The "## Quick start" section of the container document, and no other section. */
+function readQuickStart(): string {
+  const doc = readFileSync(CONTAINER_DOC_PATH, "utf8");
+  const start = doc.indexOf("\n## Quick start\n");
+  if (start === -1) throw new Error("CONTROL_PLANE_CONTAINER.md has no Quick start section");
+  const end = doc.indexOf("\n## ", start + 1);
+  return end === -1 ? doc.slice(start) : doc.slice(start, end);
 }
 
 describe(".env.example", () => {
@@ -90,5 +107,22 @@ describe(".env.example", () => {
       .filter((variable) => variable.comment[0]?.startsWith(REQUIRED_MARKER))
       .map((variable) => variable.name);
     expect(marked.sort()).toEqual([...REQUIRED_ENV_CONFIG_KEY_NAMES].sort());
+  });
+
+  /**
+   * A copy of this file plus the documented quick start has to produce a host that
+   * boots. A required key may therefore ship a working value, or be one the quick
+   * start names as an operator's to supply — the encryption keys, which cannot have
+   * a default. A key that is neither is a crash loop on a clean checkout, and the
+   * compose smoke cannot catch it: that script writes its own environment file.
+   */
+  it("gives every required key a value, or has the quick start ask for it", () => {
+    const required = new Set<string>(REQUIRED_ENV_CONFIG_KEY_NAMES);
+    const quickStart = readQuickStart();
+    const unsupplied = example.variables
+      .filter((variable) => required.has(variable.name))
+      .filter((variable) => variable.value === "" && !quickStart.includes(variable.name))
+      .map((variable) => variable.name);
+    expect(unsupplied).toEqual([]);
   });
 });
