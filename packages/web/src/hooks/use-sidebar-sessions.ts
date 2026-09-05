@@ -1,31 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { MutableRefObject } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import useSWR, { mutate, useSWRConfig } from "swr";
 import type {
   SessionInboxCategory,
-  SessionInboxItem,
   SessionInboxPage,
   SessionInboxSnapshot,
   SessionListItem,
 } from "@open-inspect/shared/types/session-inbox";
 import {
-  applySessionInboxItemReadState,
-  applySessionInboxReadStateUpdate,
   buildSessionInboxKey,
   buildSessionInboxSnapshotKey,
   isSessionInboxItemFullyRead,
   isSessionInboxKey,
-  isSessionInboxPaginationKey,
-  sessionInboxDestinationCategory,
 } from "@/lib/session-inbox-api";
 import {
+  applySessionReadOverlay,
+  applySessionReadResult,
+  getSessionReadOverlay,
   markLatestMessageRead,
-  reconcileSessionReadState,
-  subscribeSessionReadStateReconciliation,
-  type SessionReadStateReconciledDetail,
+  subscribeSessionReadOverlay,
 } from "@/lib/session-read-state";
 
 const VISIBLE_INBOX_POLL_MS = 30_000;
@@ -33,16 +29,40 @@ const SESSION_CREATOR_FILTER_STORAGE_KEY = "open-inspect-sidebar-session-creator
 
 export type SessionItem = SessionListItem;
 type SessionCreatorFilter = "all" | "mine";
-type PaginationKey = ReturnType<typeof buildSessionInboxKey>;
 
-interface AdditionalPagesState {
-  filterIdentity: string;
-  pages: Array<{ page: SessionInboxPage; sequence: number }>;
+interface LoadedPage {
+  page: SessionInboxPage;
+  sequence: number;
 }
 
-interface PaginationRequest {
-  filterIdentity: string;
-  key: PaginationKey;
+/**
+ * Pages loaded through "Load more" have exactly one owner: this state. They
+ * are fetched with a plain request and never stored under a cache key, so a
+ * remount starts again from the head and nothing can restore a page the
+ * server has since changed.
+ *
+ * A chain of loaded pages continues the head page from its cursor, so it is
+ * only coherent with the head it was loaded after. When the head's boundary
+ * moves (a row entered or left the first page) the chain is discarded along
+ * with any response still in flight; keeping it would hide the rows between
+ * the new boundary and the old tail. `generation` counts those resets so a
+ * response for an earlier chain can never land in a later one, even one
+ * with the same identity.
+ */
+interface LoadedPagesState {
+  identity: string;
+  generation: number;
+  pages: LoadedPage[];
+  loading: boolean;
+  error: unknown;
+}
+
+function emptyPages(identity: string, generation: number): LoadedPagesState {
+  return { identity, generation, pages: [], loading: false, error: undefined };
+}
+
+function withoutRoots(page: SessionInboxPage, rootIds: Set<string>): SessionInboxPage {
+  return { ...page, items: page.items.filter((item) => !rootIds.has(item.rootSession.id)) };
 }
 
 function useCategoryPagination(
@@ -55,126 +75,123 @@ function useCategoryPagination(
   nextPageSequence: MutableRefObject<number>
 ) {
   const { fetcher } = useSWRConfig();
-  const [additionalPagesState, setAdditionalPagesState] = useState<AdditionalPagesState>({
-    filterIdentity,
-    pages: [],
-  });
-  const [paginationRequest, setPaginationRequest] = useState<PaginationRequest | null>(null);
+  // The generation with a request in flight, so a second click before the
+  // loading state renders cannot send the same cursor twice.
+  const inFlightGeneration = useRef<number | null>(null);
   const firstPage = snapshot?.categories[category];
-  const additionalPages =
-    additionalPagesState.filterIdentity === filterIdentity ? additionalPagesState.pages : [];
+  const chainIdentity = JSON.stringify([filterIdentity, firstPage?.nextCursor ?? null]);
+  const [state, setState] = useState<LoadedPagesState>(() => emptyPages(chainIdentity, 0));
+  const current =
+    state.identity === chainIdentity ? state : emptyPages(chainIdentity, state.generation);
+  const lastPage = current.pages.at(-1)?.page ?? firstPage;
 
   useEffect(() => {
-    setAdditionalPagesState({ filterIdentity, pages: [] });
-    setPaginationRequest(null);
-  }, [filterIdentity]);
+    setState((previous) =>
+      previous.identity === chainIdentity
+        ? previous
+        : emptyPages(chainIdentity, previous.generation + 1)
+    );
+  }, [chainIdentity]);
 
+  // Once the head snapshot carries a root, the loaded copy is stale for good:
+  // the session may since have been archived or ranked past every loaded page.
   useEffect(() => {
-    setAdditionalPagesState((state) => {
-      if (state.filterIdentity !== filterIdentity) return state;
-      const pages = state.pages.map(({ page, sequence }) => ({
+    setState((previous) => {
+      let changed = false;
+      const pages = previous.pages.map(({ page, sequence }) => {
+        const filtered = withoutRoots(page, canonicalRootIds);
+        if (filtered.items.length === page.items.length) return { page, sequence };
+        changed = true;
+        return { page: filtered, sequence };
+      });
+      return changed ? { ...previous, pages } : previous;
+    });
+  }, [canonicalRootIds]);
+
+  const requestPage = useCallback(async () => {
+    const cursor = lastPage?.nextCursor;
+    const generation = current.generation;
+    if (!snapshot || !cursor || inFlightGeneration.current === generation) return;
+    inFlightGeneration.current = generation;
+    const key = buildSessionInboxKey({ category, cursor, mine });
+    const sequence = nextPageSequence.current++;
+    setState((previous) =>
+      previous.generation === generation
+        ? { ...previous, loading: true, error: undefined }
+        : previous
+    );
+    try {
+      if (!fetcher) throw new Error("Missing SWR fetcher");
+      const page = withoutRoots((await fetcher(key)) as SessionInboxPage, canonicalRootIds);
+      setState((previous) =>
+        previous.generation === generation
+          ? { ...previous, loading: false, pages: [...previous.pages, { page, sequence }] }
+          : previous
+      );
+    } catch (error) {
+      setState((previous) =>
+        previous.generation === generation ? { ...previous, loading: false, error } : previous
+      );
+    } finally {
+      if (inFlightGeneration.current === generation) inFlightGeneration.current = null;
+    }
+  }, [
+    canonicalRootIds,
+    category,
+    current.generation,
+    fetcher,
+    lastPage,
+    mine,
+    nextPageSequence,
+    snapshot,
+  ]);
+
+  const loadMore = useCallback(() => {
+    void requestPage();
+  }, [requestPage]);
+  const retry = useCallback(
+    () => (current.error ? requestPage() : refreshSnapshot()),
+    [current.error, refreshSnapshot, requestPage]
+  );
+  const removeSession = useCallback((sessionId: string) => {
+    setState((previous) => ({
+      ...previous,
+      pages: previous.pages.map(({ page, sequence }) => ({
         sequence,
         page: {
           ...page,
-          items: page.items.filter((item) => !canonicalRootIds.has(item.rootSession.id)),
+          items: page.items.flatMap((item) => {
+            if (item.rootSession.id === sessionId) return [];
+            return [
+              {
+                ...item,
+                descendantSessions: item.descendantSessions.filter(
+                  (session) => session.id !== sessionId
+                ),
+              },
+            ];
+          }),
         },
-      }));
-      return { filterIdentity, pages };
-    });
-  }, [canonicalRootIds, filterIdentity]);
-
-  const {
-    data: loadedPage,
-    error,
-    isLoading: loadingMore,
-    mutate: retryPage,
-  } = useSWR<SessionInboxPage>(
-    paginationRequest ? [paginationRequest.key, paginationRequest.filterIdentity] : null,
-    paginationRequest
-      ? () => {
-          if (!fetcher) throw new Error("Missing SWR fetcher");
-          return fetcher(paginationRequest.key) as Promise<SessionInboxPage>;
-        }
-      : null,
-    { shouldRetryOnError: false }
-  );
-
-  useEffect(() => {
-    if (!loadedPage || !paginationRequest) return;
-    if (paginationRequest.filterIdentity === filterIdentity) {
-      const sequence = nextPageSequence.current++;
-      const page = {
-        ...loadedPage,
-        items: loadedPage.items.filter((item) => !canonicalRootIds.has(item.rootSession.id)),
-      };
-      setAdditionalPagesState((state) => ({
-        filterIdentity,
-        pages: [
-          ...(state.filterIdentity === filterIdentity ? state.pages : []),
-          { page, sequence },
-        ],
-      }));
-    }
-    setPaginationRequest(null);
-  }, [canonicalRootIds, filterIdentity, loadedPage, nextPageSequence, paginationRequest]);
-
-  const lastPage = additionalPages.at(-1)?.page ?? firstPage;
-  const hasMore = lastPage?.hasMore ?? false;
-  const loadMore = useCallback(() => {
-    if (!snapshot || !lastPage?.nextCursor || paginationRequest) return;
-    setPaginationRequest({
-      filterIdentity,
-      key: buildSessionInboxKey({
-        category,
-        cursor: lastPage.nextCursor,
-        mine,
-      }),
-    });
-  }, [category, filterIdentity, lastPage, mine, paginationRequest, snapshot]);
-
-  const retry = useCallback(
-    () => (error && paginationRequest ? retryPage() : refreshSnapshot()),
-    [error, paginationRequest, refreshSnapshot, retryPage]
-  );
-
-  // Mutations revalidate the head snapshot, but pages loaded through `Load
-  // more` live only in this retained state. Reconcile them in place or they
-  // keep rendering the pre-mutation rows.
-  const updateRetainedItems = useCallback(
-    (update: (item: SessionInboxItem) => SessionInboxItem | null) => {
-      setAdditionalPagesState((state) => ({
-        ...state,
-        pages: state.pages.map(({ page, sequence }) => ({
-          sequence,
-          page: {
-            ...page,
-            items: page.items.flatMap((item) => {
-              const updated = update(item);
-              return updated ? [updated] : [];
-            }),
-          },
-        })),
-      }));
-    },
-    []
-  );
-  const resetRetainedPages = useCallback(() => {
-    setAdditionalPagesState({ filterIdentity, pages: [] });
-    setPaginationRequest(null);
-  }, [filterIdentity]);
+      })),
+    }));
+  }, []);
 
   return {
     firstPageItems: firstPage?.items ?? [],
-    additionalPages,
-    error,
+    loadedPages: current.pages,
+    error: current.error,
     isLoading: firstPage === undefined,
-    hasMore,
-    loadingMore,
+    hasMore: lastPage?.hasMore ?? false,
+    loadingMore: current.loading,
     loadMore,
     retry,
-    updateRetainedItems,
-    resetRetainedPages,
+    removeSession,
   };
+}
+
+function useSessionReadOverlay(viewerId: string | null) {
+  const getSnapshot = useCallback(() => getSessionReadOverlay(viewerId), [viewerId]);
+  return useSyncExternalStore(subscribeSessionReadOverlay, getSnapshot, getSnapshot);
 }
 
 export function useSidebarSessions() {
@@ -265,24 +282,17 @@ export function useSidebarSessions() {
   );
   const categoryResults = [attention, inProgress, finished];
 
-  const categoryItems = useMemo(() => {
+  // Rows as the server sent them. A root that appears in several loaded
+  // pages renders only in the newest of them.
+  const fetchedCategoryItems = useMemo(() => {
     const results = [
-      {
-        firstPageItems: attention.firstPageItems,
-        additionalPages: attention.additionalPages,
-      },
-      {
-        firstPageItems: inProgress.firstPageItems,
-        additionalPages: inProgress.additionalPages,
-      },
-      {
-        firstPageItems: finished.firstPageItems,
-        additionalPages: finished.additionalPages,
-      },
+      { firstPageItems: attention.firstPageItems, loadedPages: attention.loadedPages },
+      { firstPageItems: inProgress.firstPageItems, loadedPages: inProgress.loadedPages },
+      { firstPageItems: finished.firstPageItems, loadedPages: finished.loadedPages },
     ];
     const latestTailSequence = new Map<string, number>();
     for (const result of results) {
-      for (const { page, sequence } of result.additionalPages) {
+      for (const { page, sequence } of result.loadedPages) {
         for (const item of page.items) {
           const id = item.rootSession.id;
           if (!canonicalRootIds.has(id) && sequence > (latestTailSequence.get(id) ?? -1)) {
@@ -296,7 +306,7 @@ export function useSidebarSessions() {
       const renderedIds = new Set(result.firstPageItems.map((item) => item.rootSession.id));
       return [
         ...result.firstPageItems,
-        ...result.additionalPages.flatMap(({ page, sequence }) =>
+        ...result.loadedPages.flatMap(({ page, sequence }) =>
           page.items.filter((item) => {
             const id = item.rootSession.id;
             if (renderedIds.has(id) || latestTailSequence.get(id) !== sequence) return false;
@@ -307,15 +317,30 @@ export function useSidebarSessions() {
       ];
     });
   }, [
-    attention.additionalPages,
     attention.firstPageItems,
+    attention.loadedPages,
     canonicalRootIds,
-    finished.additionalPages,
     finished.firstPageItems,
-    inProgress.additionalPages,
+    finished.loadedPages,
     inProgress.firstPageItems,
+    inProgress.loadedPages,
   ]);
-  const [attentionItems, inProgressItems, finishedItems] = categoryItems;
+
+  const overlay = useSessionReadOverlay(userId);
+
+  // Reads this page established are merged over the fetched rows at render.
+  // The server places sessions; the client only stops showing a hierarchy in
+  // attention once the viewer has read all of it.
+  const [attentionItems, inProgressItems, finishedItems] = useMemo(() => {
+    const [attentionRows, inProgressRows, finishedRows] = fetchedCategoryItems.map((items) =>
+      items.map((item) => applySessionReadOverlay(item, overlay))
+    );
+    return [
+      attentionRows.filter((item) => !isSessionInboxItemFullyRead(item)),
+      inProgressRows,
+      finishedRows,
+    ];
+  }, [fetchedCategoryItems, overlay]);
 
   const inboxItems = useMemo(
     () => [...attentionItems, ...inProgressItems, ...finishedItems],
@@ -337,107 +362,29 @@ export function useSidebarSessions() {
     return result;
   }, [inboxItems]);
 
-  const updateAttentionRetained = attention.updateRetainedItems;
-  const updateInProgressRetained = inProgress.updateRetainedItems;
-  const updateFinishedRetained = finished.updateRetainedItems;
-  const resetInProgressRetained = inProgress.resetRetainedPages;
-  const resetFinishedRetained = finished.resetRetainedPages;
-  const updateAllRetainedItems = useCallback(
-    (update: (item: SessionInboxItem) => SessionInboxItem | null) => {
-      updateAttentionRetained(update);
-      updateInProgressRetained(update);
-      updateFinishedRetained(update);
-    },
-    [updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
-  );
-
-  // Every session open acknowledges its terminal message, read or not, so
-  // this runs far more often than read state actually changes. Retained pages
-  // are updated in place; only a hierarchy leaving attention restarts a chain.
-  const reconcileSidebarReadState = useCallback(
-    ({ sessionId, outcome, readState }: SessionReadStateReconciledDetail) => {
-      const applyReadState = (item: SessionInboxItem) =>
-        applySessionInboxItemReadState(item, sessionId, readState);
-      updateAttentionRetained((item) => {
-        const updated = applyReadState(item);
-        return isSessionInboxItemFullyRead(updated) ? null : updated;
-      });
-      updateInProgressRetained(applyReadState);
-      updateFinishedRetained(applyReadState);
-
-      // The destination chain was paged without the arriving hierarchy, so a
-      // rank between its head and retained tail would never render. Restart
-      // that one chain from the head.
-      const attentionItem = attentionItems.find(
-        (item) =>
-          item.rootSession.id === sessionId ||
-          item.descendantSessions.some((session) => session.id === sessionId)
-      );
-      if (
-        attentionItem &&
-        !readState.unread &&
-        isSessionInboxItemFullyRead(applyReadState(attentionItem))
-      ) {
-        if (sessionInboxDestinationCategory(attentionItem) === "in_progress") {
-          resetInProgressRetained();
-        } else {
-          resetFinishedRetained();
-        }
-      }
-
-      return Promise.all([
-        mutateCache<SessionInboxSnapshot | SessionInboxPage>(
-          isSessionInboxKey,
-          (current) => applySessionInboxReadStateUpdate(current, sessionId, readState),
-          // `already_read` confirms the cached state; any other outcome may
-          // carry a change the snapshot has not seen yet.
-          { populateCache: true, revalidate: outcome !== "already_read" }
-        ),
-        // Cached cursor pages would restore pre-acknowledgement rows on remount.
-        mutateCache<SessionInboxPage | undefined>(isSessionInboxPaginationKey, () => undefined, {
-          populateCache: true,
-          revalidate: false,
-        }),
-      ]);
-    },
-    [
-      attentionItems,
-      mutateCache,
-      resetFinishedRetained,
-      resetInProgressRetained,
-      updateAttentionRetained,
-      updateFinishedRetained,
-      updateInProgressRetained,
-    ]
-  );
-
-  useEffect(() => {
-    return subscribeSessionReadStateReconciliation(reconcileSidebarReadState);
-  }, [reconcileSidebarReadState]);
-
+  const removeFromAttention = attention.removeSession;
+  const removeFromInProgress = inProgress.removeSession;
+  const removeFromFinished = finished.removeSession;
   const handleSessionArchived = useCallback(
     async (sessionId: string) => {
-      updateAllRetainedItems((item) =>
-        item.rootSession.id === sessionId
-          ? null
-          : {
-              ...item,
-              descendantSessions: item.descendantSessions.filter(
-                (session) => session.id !== sessionId
-              ),
-            }
-      );
+      removeFromAttention(sessionId);
+      removeFromInProgress(sessionId);
+      removeFromFinished(sessionId);
       void refreshInbox().catch((error) => {
         console.error("Failed to refresh session inbox after archive", error);
       });
     },
-    [refreshInbox, updateAllRetainedItems]
+    [refreshInbox, removeFromAttention, removeFromFinished, removeFromInProgress]
   );
 
-  const handleMarkLatestMessageRead = useCallback(async (sessionId: string) => {
-    const result = await markLatestMessageRead(sessionId);
-    await reconcileSessionReadState(result);
-  }, []);
+  const handleMarkLatestMessageRead = useCallback(
+    async (sessionId: string) => {
+      if (!userId) return;
+      const result = await markLatestMessageRead(sessionId);
+      applySessionReadResult(result, mutateCache, userId);
+    },
+    [mutateCache, userId]
+  );
 
   return {
     needsAttention: attentionItems.map((item) => item.rootSession),
