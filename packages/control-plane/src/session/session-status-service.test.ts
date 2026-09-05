@@ -4,7 +4,6 @@ import { SessionStatusService } from "./session-status-service";
 import { SessionInternalPaths } from "./contracts";
 import type { SessionRuntimeClient } from "./runtime-client";
 import type { Logger } from "../logger";
-import type { SessionIndexStore } from "../db/session-index";
 import type { SessionRow, ArtifactRow, MessageRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ArtifactRepository } from "./artifact-repository";
@@ -90,7 +89,7 @@ function harness(options: { session?: SessionRow | null } = {}) {
     repository as unknown as MessageRepository,
     artifactRepository,
     messenger,
-    sessionIndex as unknown as SessionIndexStore,
+    sessionIndex,
     parentSessions
   );
 

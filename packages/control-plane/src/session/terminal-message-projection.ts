@@ -10,7 +10,7 @@ export interface TerminalMessageProjectionInput {
 }
 
 export interface SessionTerminalMessageProjectionDeps {
-  sessionIndex: SessionIndexStore;
+  sessionIndex: Pick<SessionIndexStore, "recordLatestTerminalMessage">;
   getSessionId: () => string | null;
   store: TerminalMessageProjectionStore;
   alarmScheduler: AlarmScheduler;

@@ -21,6 +21,12 @@ import type { SessionMessenger } from "./messenger";
 import type { BackgroundTasks } from "../platform-ports";
 import { isSessionPromptable, isTurnSettled } from "@open-inspect/shared/types/session-activity";
 
+/** The index projections this service keeps consistent with the session row. */
+type SessionIndexProjections = Pick<
+  SessionIndexStore,
+  "updateStatus" | "repairStatus" | "finalizeChildAdmission" | "updateMetrics"
+>;
+
 export class SessionStatusService {
   constructor(
     private readonly backgroundTasks: BackgroundTasks,
@@ -29,7 +35,7 @@ export class SessionStatusService {
     private readonly messageRepository: MessageRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly messenger: SessionMessenger,
-    private readonly sessionIndex: SessionIndexStore,
+    private readonly sessionIndex: SessionIndexProjections,
     /** Reaches the parent session's runtime for the child rollup. */
     private readonly sessions: SessionRuntimeClient
   ) {}

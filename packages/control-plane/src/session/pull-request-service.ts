@@ -464,10 +464,8 @@ export class SessionPullRequestService {
    * webhook or read-through repairs a missing record (design §5).
    */
   private async writeSessionPullRequestRecord(record: SessionPullRequestRecord): Promise<void> {
-    const store = this.deps.sessionPullRequests;
-    if (!store) return;
     try {
-      await store.upsert(record);
+      await this.deps.sessionPullRequests.upsert(record);
     } catch (error) {
       this.deps.log.error("Failed to write session pull request record", {
         artifact_id: record.artifactId,

@@ -15,7 +15,7 @@ export interface SessionTitleServiceDeps {
   messenger: SessionMessenger;
   statusService: Pick<SessionStatusService, "notifyParentOfChildUpdate">;
   backgroundTasks: BackgroundTasks;
-  sessionIndexStore: SessionIndexStore;
+  sessionIndexStore: Pick<SessionIndexStore, "updateTitleIfNewer">;
   durableObjectId: string;
   now: () => number;
 }

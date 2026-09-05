@@ -165,7 +165,7 @@ export class SessionMessageQueue {
       completedAt: number
     ) => Promise<void>,
     private readonly sandboxLifecycle: SandboxLifecycle,
-    private readonly sessionIndex: SessionIndexStore,
+    private readonly sessionIndex: Pick<SessionIndexStore, "touchUpdatedAt">,
     private readonly scmProvider: SourceControlProviderName,
     private readonly alarmScheduler: AlarmScheduler,
     /** Resolved per use so it honors settings persisted after construction. */

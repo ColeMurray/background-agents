@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
-import type { SessionIndexStore } from "../db/session-index";
 import { SessionTitleService } from "./title-service";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionRow } from "./types";
@@ -28,13 +27,13 @@ function makeHarness(options: { session?: SessionRow | null } = {}) {
   const messenger = { broadcast: vi.fn(), sendToSandbox: vi.fn(async () => {}) };
   const statusService = { notifyParentOfChildUpdate: vi.fn() };
   const backgroundTasks = createTestBackgroundTasks();
-  const updateTitleIfNewer = vi.fn(async () => {});
+  const updateTitleIfNewer = vi.fn(async () => true);
   const service = new SessionTitleService({
     sessionCoreRepository: repository as unknown as SessionCoreRepository,
     messenger,
     statusService,
     backgroundTasks,
-    sessionIndexStore: { updateTitleIfNewer } as unknown as SessionIndexStore,
+    sessionIndexStore: { updateTitleIfNewer },
     durableObjectId: "do-hex-id",
     now: () => NOW,
   });

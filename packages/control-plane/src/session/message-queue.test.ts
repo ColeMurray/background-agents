@@ -12,7 +12,6 @@ import type { ClientInfo } from "../types";
 import type { MessageStatus } from "@open-inspect/shared/types/sessions";
 import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
-import type { SessionIndexStore } from "../db/session-index";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
@@ -216,7 +215,7 @@ function buildQueue() {
     reportSandboxError: vi.fn((_reason: string) => {}),
   };
   const backgroundTasks = createTestBackgroundTasks();
-  const sessionIndex = { touchUpdatedAt: vi.fn(async () => {}) };
+  const sessionIndex = { touchUpdatedAt: vi.fn(async () => true) };
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
   const projectTerminalMessage = vi.fn(async () => {});
@@ -237,7 +236,7 @@ function buildQueue() {
     getProviderAuthenticationError,
     projectTerminalMessage,
     sandboxLifecycle,
-    sessionIndex as unknown as SessionIndexStore,
+    sessionIndex,
     "github",
     createEarliestAlarmScheduler(
       { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },

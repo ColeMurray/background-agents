@@ -213,7 +213,6 @@ function makeHarness(
   options: {
     session?: SessionRow | null;
     memberRows?: SessionRepositoryRow[];
-    /** Model a deployment where the DB binding is missing. */
     /** Defaults to ENCRYPTION_KEY — the key is required in production. */
     encryptionKey?: string;
     /** Omit to model an unset SECRETS_CAP_ENFORCEMENT (fail-closed enforce). */
