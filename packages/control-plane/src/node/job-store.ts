@@ -9,12 +9,20 @@
  * A claim is a **lease**, as a queue's invisibility window is. Claiming
  * writes a fresh token and an expiry; settling names the token, so a
  * delivery that comes back after its lease expired cannot settle the
- * redelivery that replaced it. A claim whose lease has run out is the only
- * thing recovery touches, which covers both a process that died mid-job and
- * a handler that never returns — one rule for both, and it makes starting a
- * poller twice harmless. The cost is Cloudflare's own: two deliveries of one
- * job can overlap, which `jobs.ts` already requires every handler to
- * tolerate.
+ * redelivery that replaced it. Two things end a claim early, and they answer
+ * different questions: a claim no live delivery owns belongs to a process
+ * that is gone (`recoverForeignClaims`, at start), and a claim whose lease
+ * ran out belongs to a handler that hung (`recoverExpiredClaims`, on every
+ * sweep). Naming the claims this process still holds is what keeps the first
+ * from taking a job away from a delivery that is still running, so starting a
+ * poller twice stays harmless. The cost of both is Cloudflare's own: two
+ * deliveries of one job can overlap, which `jobs.ts` already requires every
+ * handler to tolerate.
+ *
+ * Neither recovery refunds an attempt. The attempt is counted when the job
+ * is claimed, exactly as a queue counts a delivery however it ended, so a
+ * job whose handler takes the process down with it still runs out of
+ * attempts and reaches the dead rows instead of being redelivered for ever.
  *
  * It is deliberately not part of the global store, whose schema is
  * `terraform/d1/migrations` and lands on D1 as well: nothing on Cloudflare
@@ -110,6 +118,13 @@ export interface JobStore {
   /** The leased job will not be delivered again: keep the row with what ended it. */
   bury(id: string, token: string, error: string): void;
   /**
+   * Return every claim no live delivery owns to pending, runnable at once.
+   * `ownedTokens` are the claims this process is still delivering, so
+   * starting a poller again never takes one of them back. Returns the job
+   * ids recovered.
+   */
+  recoverForeignClaims(ownedTokens: readonly string[]): string[];
+  /**
    * Return every claim whose lease has run out to pending, runnable at once.
    * Returns the job ids recovered.
    */
@@ -162,39 +177,48 @@ export function openJobStore(dataDir: string): JobStore {
     `UPDATE jobs SET status = 'dead', claim_token = NULL, lease_expires_at = NULL, last_error = ?
      WHERE id = ? AND claim_token = ?`
   );
-  const recover = db.prepare(
+  const releaseClaimsSql = (condition: string): string =>
     `UPDATE jobs SET status = 'pending', claim_token = NULL, lease_expires_at = NULL
-     WHERE status = 'running' AND lease_expires_at <= ? RETURNING id`
-  );
+     WHERE status = 'running'${condition} RETURNING id`;
+  const recoverExpired = db.prepare(releaseClaimsSql(" AND lease_expires_at <= ?"));
   const countByStatus = db.prepare("SELECT status, COUNT(*) AS count FROM jobs GROUP BY status");
   const oldestRunnable = db.prepare(
     "SELECT MIN(run_at) AS run_at FROM jobs WHERE status = 'pending' AND run_at <= ?"
   );
 
-  // Both kind-filtered queries take the list as inlined placeholders — it is a
-  // handful of literals from the code, not a table — so each is prepared once
-  // per list length and kept.
-  const byKindCount = (
+  // Every list-filtered statement takes its list as inlined placeholders — a
+  // handful of kinds from the code, or the tokens of the jobs this process is
+  // delivering, neither of them a table — so each is prepared once per list
+  // length and kept.
+  const byListLength = (
     sql: (placeholders: string) => string
-  ): ((kinds: number) => ReturnType<DatabaseSync["prepare"]>) => {
+  ): ((length: number) => ReturnType<DatabaseSync["prepare"]>) => {
     const prepared = new Map<number, ReturnType<DatabaseSync["prepare"]>>();
-    return (kinds) => {
-      const cached = prepared.get(kinds);
+    return (length) => {
+      const cached = prepared.get(length);
       if (cached) return cached;
-      const statement = db.prepare(sql(Array.from({ length: kinds }, () => "?").join(", ")));
-      prepared.set(kinds, statement);
+      const statement = db.prepare(sql(Array.from({ length }, () => "?").join(", ")));
+      prepared.set(length, statement);
       return statement;
     };
   };
 
-  const soonestFor = byKindCount(
+  // A claim carrying no token at all predates leases, and is owned by no live
+  // delivery whatever tokens this process holds.
+  const recoverForeign = byListLength((placeholders) =>
+    releaseClaimsSql(
+      placeholders === "" ? "" : ` AND COALESCE(claim_token, '') NOT IN (${placeholders})`
+    )
+  );
+
+  const soonestFor = byListLength(
     (placeholders) =>
       `SELECT MIN(run_at) AS run_at FROM jobs
        WHERE status = 'pending' AND kind IN (${placeholders})`
   );
   // The claim is one statement, so two pollers in this process cannot take
   // the same row: node:sqlite runs it to completion before either yields.
-  const claimFor = byKindCount(
+  const claimFor = byListLength(
     (placeholders) =>
       `UPDATE jobs SET status = 'running', attempts = attempts + 1, claim_token = ?, lease_expires_at = ?
        WHERE id IN (
@@ -237,7 +261,12 @@ export function openJobStore(dataDir: string): JobStore {
     bury: (id, token, error) => {
       kill.run(error, id, token);
     },
-    recoverExpiredClaims: (now) => (recover.all(now) as Array<{ id: string }>).map((row) => row.id),
+    recoverForeignClaims: (ownedTokens) =>
+      (recoverForeign(ownedTokens.length).all(...ownedTokens) as Array<{ id: string }>).map(
+        (row) => row.id
+      ),
+    recoverExpiredClaims: (now) =>
+      (recoverExpired.all(now) as Array<{ id: string }>).map((row) => row.id),
     stats: (now) => {
       const counts = countByStatus.all() as Array<{ status: string; count: number }>;
       const countOf = (status: string): number =>

@@ -94,6 +94,8 @@ Everything the host persists is under `/data` on the `control-plane-data` volume
 - `host-alarms.db`: the index of every session's next scheduled deadline.
 - `jobs.db`: background jobs waiting to run, leased to a delivery, or dead — what a Cloudflare Queue
   and its dead-letter queue hold on the other host.
+- `host-state.json`: the marker that says whether the host stopped cleanly, and the time through
+  which the alarm index is known to be complete. See "Recovering from an unclean stop".
 - `cache.db`: the cache the host uses where Cloudflare uses KV. Alone among these, it is not
   deployment state — every entry is rebuilt by being used, so a file that cannot be opened is
   discarded and recreated rather than failing the boot.
@@ -132,6 +134,44 @@ docker compose up -d --wait
 docker compose logs app | grep litestream.restore
 docker compose logs litestream | grep "snapshot written"
 ```
+
+## Recovering from an unclean stop
+
+A `docker compose down`, a `docker compose up -d` that recreates the app, and a stopped instance all
+end in `SIGTERM`, which the host drains: it stops accepting, finishes what is in flight, quiesces
+every session, closes the files, and writes `host-state.json` saying the stop was clean. A kill, an
+OOM, a power loss or a drain that ran out of budget writes no such marker, and the next boot has two
+things to put right.
+
+**Deadlines the index never recorded.** A session's scheduled wake-up is written twice: the session
+core commits it to the session's own file and then arms the runtime alarm, which here is a row in
+`host-alarms.db`. On Cloudflare both writes land in one Durable Object storage; here they are two
+files, so a process that dies between them leaves a deadline the session knows about and the index
+does not. The session would still fire it the next time anything touched it, but a session nobody
+touches again would not. So a boot that finds no clean marker reads the session files written since
+the last time the index was known complete, and arms each file's earliest deadline. That can only
+bring a wake-up forward — it never postpones or replaces what the index already holds — and a
+session file that cannot be read is logged and skipped rather than failing the boot. On a fresh
+volume there are no session files and the scan costs nothing; on a volume written by a build that
+predates the marker it is one full pass.
+
+**Jobs the dead process was running.** A claim on a job is a lease, and a lease runs for fifteen
+minutes. Waiting one out after every restart would leave a build finalization sitting for a quarter
+of an hour, so starting the poller returns every claim no delivery in this process owns — a claim
+belonging to a process that is gone — to pending at once. The attempt that process spent stays
+spent, exactly as a queue counts a delivery however it ended, so a job whose handler takes the
+process down with it still runs out of attempts and ends in the dead rows. A claim whose lease
+simply ran out is a different thing, a handler that hung, and is still recovered on the sweep.
+
+**Two processes at once.** Neither recovery guards against another live process holding the same
+volume: a boot-time reclaim assumes the claims it finds belong to nobody. That assumption is the
+deploy shape's, not the code's. Compose recreates the app container in place, and the new container
+cannot start until the old one has released the volume; the AWS deploy replaces the instance the
+same way. If that ever changes — two app containers behind a load balancer, a blue/green deploy that
+overlaps the old and new instances, or anything else that lets two hosts open one data directory —
+these recoveries stop being safe, and the claims would have to carry the boot id of the process that
+holds them so a live one could be told from a dead one. Until then that column would only be a
+column nothing reads.
 
 ## TLS
 
@@ -186,7 +226,6 @@ SMOKE_APP_PORT=8798 SMOKE_MINIO_PORT=9010 SMOKE_MINIO_CONSOLE_PORT=9011 \
   startup. Sessions start from the base sandbox image.
 - The GitHub autofix queue and the Slack and Linear bots: the bots remain Cloudflare Workers and
   reach a container-hosted control plane over HTTPS once that transport lands.
-- Crash recovery of scheduled deadlines after an unclean stop.
 
 ## Building the image alone
 

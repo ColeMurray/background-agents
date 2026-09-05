@@ -290,7 +290,7 @@ describe("NodeJobs", () => {
     await vi.advanceTimersByTimeAsync(2);
     expect(log.warn).toHaveBeenCalledWith(
       "Returning jobs whose claim expired",
-      expect.objectContaining({ event: "jobs.claims_recovered" })
+      expect.objectContaining({ event: "jobs.claims_expired" })
     );
     expect(handle).toHaveBeenCalledTimes(2);
   });
@@ -327,7 +327,27 @@ describe("NodeJobs", () => {
     expect(queue.stats()).toMatchObject({ pending: 0, running: 0, dead: 0 });
   });
 
-  it("does not let a second poller take a job the first is still delivering", async () => {
+  it("takes back a claim a dead process left, rather than waiting out its lease", async () => {
+    const handle = vi.fn(async (): Promise<JobOutcome> => "ack");
+    // A row left `running` on disk by a process that is gone, its lease with
+    // most of the quarter hour still to run.
+    store.add({ id: "orphan", kind: KIND, payload: JSON.stringify(PAYLOAD), runAt: 9_000 }, 9_000);
+    store.claim(9_000, 1, [KIND], 9_000 + JOB_CLAIM_LEASE_MS);
+    expect(store.stats(10_000)).toMatchObject({ running: 1, pending: 0 });
+
+    const queue = createQueue(handle);
+    queue.start();
+    await runPoller(queue);
+
+    expect(handle).toHaveBeenCalledOnce();
+    expect(queueIsEmpty()).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith(
+      "Returning jobs a previous process left claimed",
+      expect.objectContaining({ event: "jobs.claims_recovered", job_ids: ["orphan"] })
+    );
+  });
+
+  it("does not take back a job it is still delivering when it is started again", async () => {
     let release = (): void => {};
     const handle = vi.fn(async (): Promise<JobOutcome> => {
       await new Promise<void>((resolve) => {
@@ -335,28 +355,21 @@ describe("NodeJobs", () => {
       });
       return "ack";
     });
-    const first = createQueue(handle);
-    const second = new NodeJobs({
-      store,
-      deps: () => ({ env: {}, db: {}, log }) as unknown as Omit<JobDeps, "correlation">,
-      log,
-      now: () => Date.now(),
-      newId: () => `other-${++ids}`,
-    });
+    const queue = createQueue(handle);
 
-    await first.send({ kind: KIND, payload: PAYLOAD });
-    first.start();
-    // The first poller has claimed and is blocked before the second starts.
+    await queue.send({ kind: KIND, payload: PAYLOAD });
+    queue.start();
+    // The delivery has claimed the job and is blocked in the handler.
     await vi.advanceTimersByTimeAsync(1);
     expect(handle).toHaveBeenCalledOnce();
 
-    second.start();
+    queue.start();
     await vi.advanceTimersByTimeAsync(1);
     expect(handle).toHaveBeenCalledOnce();
+    expect(queue.stats()).toMatchObject({ running: 1, pending: 0 });
 
     release();
-    await Promise.all([first.drain(), second.drain()]);
-    second.stop();
+    await queue.drain();
     expect(queueIsEmpty()).toBe(true);
   });
 

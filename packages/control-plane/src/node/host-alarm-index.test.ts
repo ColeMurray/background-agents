@@ -40,6 +40,36 @@ describe("openHostAlarmIndex", () => {
     expect(index.earliest()).toBeNull();
   });
 
+  it("arms a deadline the index is missing and leaves a sooner one alone", () => {
+    const index = open();
+    // Nothing armed: the deadline read back from the session file is taken.
+    expect(index.armIfSooner("lost", 500)).toBe(true);
+    expect(index.get("lost")).toBe(500);
+    // Already armed sooner, and already armed at the same time: no change.
+    expect(index.armIfSooner("lost", 700)).toBe(false);
+    expect(index.armIfSooner("lost", 500)).toBe(false);
+    expect(index.get("lost")).toBe(500);
+    // Sooner than what is armed: brought forward.
+    expect(index.armIfSooner("lost", 200)).toBe(true);
+    expect(index.get("lost")).toBe(200);
+  });
+
+  it("leaves a claim in flight and the retry budget alone when it arms a missing deadline", () => {
+    const index = open();
+    index.set("s1", 500);
+    index.claim("s1");
+    index.retry("s1", 800);
+    index.claim("s1");
+    expect(index.get("s1")).toBeNull();
+
+    expect(index.armIfSooner("s1", 900)).toBe(true);
+    // The claim still stands and still carries its failure, so recovery
+    // re-arms it at the deadline it was claimed at rather than the later one.
+    expect(index.recoverClaims()).toEqual(["s1"]);
+    expect(index.get("s1")).toBe(800);
+    expect(index.claim("s1")).toEqual({ deadline: 800, failures: 1 });
+  });
+
   it("orders the earliest and the due deadlines soonest first", () => {
     const index = open();
     index.set("late", 900);

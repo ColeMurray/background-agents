@@ -6,10 +6,12 @@
  * the adapters in this directory.
  *
  * Boot: the configuration is validated before any file is touched, then
- * the global store is opened and migrated, the alarm clock and the
- * registry are built, the server listens, and the clock, sweeper, and
- * cron start. Everything acquired is released in reverse order if a later
- * step fails, and owned by the returned host once boot succeeds.
+ * the global store is opened and migrated, the deadlines a previous
+ * process may not have indexed are recovered (crash-recovery.ts), the
+ * alarm clock and the registry are built, the server listens, and the
+ * clock, sweeper, and cron start. Everything acquired is released in
+ * reverse order if a later step fails, and owned by the returned host once
+ * boot succeeds.
  *
  * Shutdown runs one deadline: the health check answers 503 and the clocks
  * stop, the server stops accepting, then everything that can still reach
@@ -17,7 +19,9 @@
  * scheduled runs, alarm deliveries, background tasks), then the registry
  * quiesces every runtime (sockets closed with 1012 so peers reconnect),
  * then the transports are closed, the peers that ignored the close are
- * cut, and the stores are closed. What outlived the budget is reported.
+ * cut, and the stores are closed. What outlived the budget is reported. A
+ * drain that abandoned nothing leaves the clean-shutdown marker the next
+ * boot reads.
  */
 
 import { once } from "node:events";
@@ -42,6 +46,7 @@ import type { Env, EnvConfig, Platform } from "../types";
 import { createNodeBackgroundTasks, settlesWithin } from "./background-tasks";
 import { openNodeCacheDatabase } from "./cache-database";
 import type { NodeHostSettings } from "./config";
+import { markCleanShutdown, recoverSessionDeadlines } from "./crash-recovery";
 import { CronLoop } from "./cron-loop";
 import { HostAlarmClock } from "./host-alarm-clock";
 import { openHostAlarmIndex } from "./host-alarm-index";
@@ -150,6 +155,14 @@ async function boot(
   const jobs = new NodeJobs({ store: jobStore, deps: () => ({ env, db, log }), log });
 
   const alarmIndex = ownStore(openHostAlarmIndex(settings.dataDir));
+  // Before anything can arm a deadline: a stop that left no clean marker may
+  // have left deadlines in session files that never reached the index.
+  const recovery = recoverSessionDeadlines({
+    dataDir: settings.dataDir,
+    index: alarmIndex,
+    log,
+    nowMs: startedAtMs,
+  });
   const clock: HostAlarmClock = new HostAlarmClock({
     index: alarmIndex,
     deliver: (sessionId) => registry.deliverScheduledDeadline(sessionId),
@@ -240,6 +253,8 @@ async function boot(
     port: address.port,
     data_dir: settings.dataDir,
     migrations_applied: migrationsApplied,
+    previous_stop: recovery.previousStop,
+    deadlines_rearmed: recovery.rearmed,
   });
 
   const shutdown = async (): Promise<ShutdownReport> => {
@@ -283,9 +298,13 @@ async function boot(
     server.closeAllConnections();
     await closed;
 
+    const report: ShutdownReport = { clean: abandoned.length === 0, abandoned };
+    // Only a drain that abandoned nothing may claim a clean stop: work that
+    // outlived the budget can still arm a deadline the index would then be
+    // missing, and the next boot has to go looking for it.
+    if (report.clean) markCleanShutdown(settings.dataDir, Date.now());
     closeStores();
 
-    const report: ShutdownReport = { clean: abandoned.length === 0, abandoned };
     if (report.clean) {
       log.info("node_host.stopped", { event: "node_host.stopped" });
     } else {

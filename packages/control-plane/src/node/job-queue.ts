@@ -18,12 +18,14 @@
  *
  * Jobs run concurrently up to a bound, so a host coming back to a backlog
  * works through it a few at a time; the next ones start as soon as one
- * settles. Every claim is a lease, and when a lease runs out the poller lets
- * go of that delivery in both places at once: the row goes back to pending,
- * and the slot it held stops counting against the bound. A hung handler
- * therefore costs one lease, not a permanently narrower queue — and it
- * cannot corrupt the redelivery that replaces it, because settling is fenced
- * on the claim token it no longer owns.
+ * settles. Starting the poller takes back every claim no delivery here owns,
+ * so a job the process that died was running is retried at once instead of
+ * waiting out its lease. Every claim is a lease, and when a lease runs out
+ * the poller lets go of that delivery in both places at once: the row goes
+ * back to pending, and the slot it held stops counting against the bound. A
+ * hung handler therefore costs one lease, not a permanently narrower queue —
+ * and it cannot corrupt the redelivery that replaces it, because settling is
+ * fenced on the claim token it no longer owns.
  *
  * Polling, delivery and arming are total: a store that throws is logged and
  * the timer re-armed, never left as an unhandled rejection from a timer task.
@@ -79,8 +81,11 @@ export class NodeJobs implements Jobs {
   private readonly newId: () => string;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
-  /** Deliveries this process started, by job id, with the lease each holds. */
-  private readonly inFlight = new Map<string, { delivery: Promise<void>; leaseUntil: number }>();
+  /** Deliveries this process started, by job id, with the claim each holds. */
+  private readonly inFlight = new Map<
+    string,
+    { delivery: Promise<void>; token: string; leaseUntil: number }
+  >();
 
   constructor(options: NodeJobsOptions) {
     this.store = options.store;
@@ -107,12 +112,22 @@ export class NodeJobs implements Jobs {
   }
 
   /**
-   * Start delivering. Idempotent: recovery takes only claims whose lease has
-   * run out, so starting again never takes a job away from a delivery that
-   * is still running.
+   * Start delivering. A claim on disk that no delivery here owns was left by
+   * a process that is gone, and is returned to pending at once: its handler
+   * may not have run, and waiting out its lease would leave the job sitting
+   * for a quarter of an hour after every restart. Idempotent, because the
+   * claims this process is still delivering are named and left alone.
    */
   start(): void {
     this.running = true;
+    const owned = [...this.inFlight.values()].map((entry) => entry.token);
+    const recovered = this.store.recoverForeignClaims(owned);
+    if (recovered.length > 0) {
+      this.log.warn("Returning jobs a previous process left claimed", {
+        event: "jobs.claims_recovered",
+        job_ids: recovered,
+      });
+    }
     this.arm();
   }
 
@@ -213,7 +228,7 @@ export class NodeJobs implements Jobs {
     const recovered = this.store.recoverExpiredClaims(this.now());
     if (recovered.length === 0) return;
     this.log.warn("Returning jobs whose claim expired", {
-      event: "jobs.claims_recovered",
+      event: "jobs.claims_expired",
       job_ids: recovered,
     });
   }
@@ -244,7 +259,7 @@ export class NodeJobs implements Jobs {
           if (this.inFlight.get(job.id)?.delivery === delivery) this.inFlight.delete(job.id);
           this.arm();
         });
-      this.inFlight.set(job.id, { delivery, leaseUntil });
+      this.inFlight.set(job.id, { delivery, token: job.token, leaseUntil });
     }
   }
 

@@ -36,6 +36,14 @@ export interface HostAlarmIndex {
   get(sessionId: string): number | null;
   /** Arm (replacing any earlier armed deadline) the session's next deadline. */
   set(sessionId: string, deadline: number): void;
+  /**
+   * Arm `deadline` unless the index already holds one at or before it,
+   * leaving the retry budget and any claim in flight alone. Returns whether
+   * the index changed. This is how a deadline read back from a session's own
+   * file is restored after an unclean stop: it can only bring the session's
+   * next wake-up forward, never postpone or replace what the index holds.
+   */
+  armIfSooner(sessionId: string, deadline: number): boolean;
   /** Disarm the session. A claim in flight is unaffected. */
   delete(sessionId: string): void;
   /** The soonest armed deadline, ignoring the sessions in `excluding`. */
@@ -103,6 +111,12 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
   const dropDisarmed = db.prepare(
     "DELETE FROM session_deadlines WHERE session_id = ? AND deadline IS NULL"
   );
+  const armSoonerUnlessArmed = db.prepare(
+    `INSERT INTO session_deadlines (session_id, deadline) VALUES (?, ?)
+     ON CONFLICT(session_id) DO UPDATE SET deadline = excluded.deadline
+     WHERE deadline IS NULL OR deadline > excluded.deadline
+     RETURNING session_id`
+  );
   const claimRow = db.prepare(
     `UPDATE session_deadlines SET in_flight = deadline, deadline = NULL
      WHERE session_id = ? AND deadline IS NOT NULL RETURNING in_flight, failures`
@@ -152,6 +166,8 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
     set: (sessionId, deadline) => {
       arm.run(sessionId, deadline);
     },
+    armIfSooner: (sessionId, deadline) =>
+      armSoonerUnlessArmed.get(sessionId, deadline) !== undefined,
     delete: (sessionId) => {
       dropUnclaimed.run(sessionId);
       disarm.run(sessionId);
