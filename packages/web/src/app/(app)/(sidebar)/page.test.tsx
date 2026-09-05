@@ -709,4 +709,29 @@ describe("Home", () => {
 
     await screen.findByRole("button", { name: /docs/i });
   });
+
+  it("surfaces the error and stays put when the initial prompt fails", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/sessions") {
+        return Response.json({ sessionId: "session-1", status: "created" });
+      }
+      if (url === "/api/sessions/session-1/prompt") {
+        return Response.json({ error: "Prompt rejected" }, { status: 500 });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.click(await screen.findByRole("button", { name: /background-agents/i }));
+    await user.click(
+      within(screen.getByRole("listbox")).getByRole("option", { name: /no repository/i })
+    );
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Investigate logs");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByText("Prompt rejected")).toBeInTheDocument();
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+  });
 });
