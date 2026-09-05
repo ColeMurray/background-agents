@@ -3,7 +3,7 @@ import { SELF, env } from "cloudflare:test";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import worker, { SessionDO } from "../../src/index";
 import type { WorkerBindings } from "../../src/cloudflare/platform";
-import { reposCacheKey } from "../../src/routes/repos";
+import { REPOS_CACHE_KEY, reposCacheIdentity } from "../../src/routes/repos";
 import { cleanD1Tables } from "./cleanup";
 
 function recordingExecutionContext(): {
@@ -37,11 +37,11 @@ function envWithSessionNamespace(sessionNamespace: object): WorkerBindings {
 describe("composite Worker lifecycle boundary", () => {
   beforeEach(async () => {
     await cleanD1Tables();
-    await env.REPOS_CACHE.delete(await reposCacheKey(env));
+    await env.REPOS_CACHE.delete(REPOS_CACHE_KEY);
   });
 
   afterEach(async () => {
-    await env.REPOS_CACHE.delete(await reposCacheKey(env));
+    await env.REPOS_CACHE.delete(REPOS_CACHE_KEY);
   });
 
   it("exports the entrypoints required by the Cloudflare deployment", () => {
@@ -127,8 +127,13 @@ describe("composite Worker lifecycle boundary", () => {
 
   it("keeps route background work on the original fetch execution context", async () => {
     await env.REPOS_CACHE.put(
-      await reposCacheKey(env),
-      JSON.stringify({ repos: [], cachedAt: new Date(0).toISOString(), freshUntil: 0 })
+      REPOS_CACHE_KEY,
+      JSON.stringify({
+        repos: [],
+        cachedAt: new Date(0).toISOString(),
+        scmIdentity: await reposCacheIdentity(env),
+        freshUntil: 0,
+      })
     );
     const url = "https://test.local/repos";
     const authHeaders = await buildServiceAuthHeaders({
