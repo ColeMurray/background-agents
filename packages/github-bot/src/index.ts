@@ -188,27 +188,19 @@ async function handleWebhook(
   };
 
   const start = Date.now();
-  let result: HandlerResult | undefined;
-  let dispatchFailure: { error: unknown } | undefined;
+  const normalizationPayload = actionResult.success ? actionResult.data : {};
+  const [dispatchResult, forwardingResult] = await Promise.allSettled([
+    dispatchHandler(env, log, event, p, payload, traceId),
+    forwardGitHubAutomationEvent(env, event, normalizationPayload, traceId),
+  ]);
 
-  try {
-    result = await dispatchHandler(env, log, event, p, payload, traceId);
-  } catch (err) {
-    dispatchFailure = { error: err };
-    log.info("webhook.handled", {
-      ...wideEventBase,
-      outcome: "error",
-      duration_ms: Date.now() - start,
-      error: err instanceof Error ? err : new Error(String(err)),
-    });
-  }
-
-  if (result !== undefined) {
-    const wideEvent: Record<string, unknown> = {
-      ...wideEventBase,
-      outcome: result.outcome,
-      duration_ms: Date.now() - start,
-    };
+  const wideEvent: Record<string, unknown> = {
+    ...wideEventBase,
+    outcome: dispatchResult.status === "fulfilled" ? dispatchResult.value.outcome : "error",
+    duration_ms: Date.now() - start,
+  };
+  if (dispatchResult.status === "fulfilled") {
+    const result = dispatchResult.value;
     if (result.outcome === "skipped") {
       wideEvent.skip_reason = result.skip_reason;
     } else {
@@ -216,43 +208,53 @@ async function handleWebhook(
       wideEvent.message_id = result.message_id;
       wideEvent.handler_action = result.handler_action;
     }
-    log.info("webhook.handled", wideEvent);
+  } else {
+    wideEvent.error =
+      dispatchResult.reason instanceof Error
+        ? dispatchResult.reason
+        : new Error(String(dispatchResult.reason));
+  }
+  log.info("webhook.handled", wideEvent);
+
+  if (forwardingResult.status === "rejected") {
+    const err = forwardingResult.reason;
+    log.warn("webhook.github_event_forward_error", {
+      trace_id: traceId,
+      delivery_id: deliveryId,
+      event_type: event,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+  } else if (forwardingResult.value && !forwardingResult.value.ok) {
+    log.warn("webhook.github_event_forward_failed", {
+      trace_id: traceId,
+      delivery_id: deliveryId,
+      event_type: event,
+      status: forwardingResult.value.status,
+    });
   }
 
-  // Forwarding and built-in dispatch are independent; both must run before a
-  // failure reaches the waitUntil cleanup path. Use the passthrough parse so
-  // nested lifecycle fields are not stripped by the summary schema.
-  if (event) {
-    const normalizationPayload = actionResult.success ? actionResult.data : {};
-    const normalizedEvent = normalizeGitHubEvent(event, normalizationPayload);
-    if (normalizedEvent !== null) {
-      try {
-        const url = "https://internal/internal/github-event";
-        const body = JSON.stringify(normalizedEvent);
-        const response = await signedControlPlaneFetch(env, { method: "POST", url, body, traceId });
-        if (!response.ok) {
-          log.warn("webhook.github_event_forward_failed", {
-            trace_id: traceId,
-            delivery_id: deliveryId,
-            event_type: event,
-            status: response.status,
-          });
-        }
-      } catch (err) {
-        log.warn("webhook.github_event_forward_error", {
-          trace_id: traceId,
-          delivery_id: deliveryId,
-          event_type: event,
-          error: err instanceof Error ? err : new Error(String(err)),
-        });
-      }
-    }
-  }
-
-  if (dispatchFailure !== undefined) throw dispatchFailure.error;
+  if (dispatchResult.status === "rejected") throw dispatchResult.reason;
 }
 
-function dispatchHandler(
+async function forwardGitHubAutomationEvent(
+  env: Env,
+  event: string | undefined,
+  normalizationPayload: Record<string, unknown>,
+  traceId: string
+): Promise<Response | null> {
+  if (!event) return null;
+
+  // Use the passthrough parse so nested lifecycle fields are not stripped by
+  // the summary schema used for logging and bot dispatch.
+  const normalizedEvent = normalizeGitHubEvent(event, normalizationPayload);
+  if (normalizedEvent === null) return null;
+
+  const url = "https://internal/internal/github-event";
+  const body = JSON.stringify(normalizedEvent);
+  return signedControlPlaneFetch(env, { method: "POST", url, body, traceId });
+}
+
+async function dispatchHandler(
   env: Env,
   log: Logger,
   event: string | undefined,
@@ -269,26 +271,26 @@ function dispatchHandler(
       }
       if (p.action === "review_requested") {
         if (!isReviewRequestedForBot(payload, env.GITHUB_BOT_USERNAME)) {
-          return Promise.resolve({ outcome: "skipped", skip_reason: "review_not_for_bot" });
+          return { outcome: "skipped", skip_reason: "review_not_for_bot" };
         }
         const parsed = reviewRequestedPayloadSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Malformed pull_request review_requested payload");
         return handleReviewRequested(env, log, parsed.data, traceId);
       }
-      return Promise.resolve({
+      return {
         outcome: "skipped",
         skip_reason: "unsupported_action",
-      });
+      };
     case "issue_comment":
       if (p.action === "created") {
         const parsed = issueCommentPayloadSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Malformed issue_comment created payload");
         return handleIssueComment(env, log, parsed.data, traceId);
       }
-      return Promise.resolve({
+      return {
         outcome: "skipped",
         skip_reason: "unsupported_action",
-      });
+      };
     case "pull_request_review_comment":
       if (p.action === "created") {
         const parsed = reviewCommentPayloadSchema.safeParse(payload);
@@ -296,15 +298,15 @@ function dispatchHandler(
           throw new Error("Malformed pull_request_review_comment created payload");
         return handleReviewComment(env, log, parsed.data, traceId);
       }
-      return Promise.resolve({
+      return {
         outcome: "skipped",
         skip_reason: "unsupported_action",
-      });
+      };
     default:
-      return Promise.resolve({
+      return {
         outcome: "skipped",
         skip_reason: "unsupported_event",
-      });
+      };
   }
 }
 
