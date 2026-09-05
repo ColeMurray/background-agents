@@ -25,6 +25,7 @@ import {
 } from "./automation-event";
 import {
   processPullRequestLifecycleEvent,
+  sessionArtifactsResponseSchema,
   type PullRequestLifecycleDeps,
   type SessionArtifactSummary,
 } from "./pull-request-lifecycle";
@@ -55,8 +56,11 @@ async function trackPullRequestLifecycle(
           method: "GET",
         });
         if (!response.ok) return [];
-        const body = (await response.json()) as { artifacts?: SessionArtifactSummary[] };
-        return body.artifacts ?? [];
+        const parsed = sessionArtifactsResponseSchema.safeParse(
+          await response.json().catch(() => null)
+        );
+        if (!parsed.success) return [];
+        return parsed.data.artifacts ?? [];
       },
       pushSnapshotToSession: async (sessionId, artifactId, snapshot) => {
         const response = await sessionRuntime.fetch(

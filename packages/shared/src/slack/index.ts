@@ -17,6 +17,8 @@ export {
   removeReaction,
   SLACK_PAGINATION_TIMEOUT_MS,
   SLACK_REQUEST_TIMEOUT_MS,
+  controlPlaneSlackChannelsResponseSchema,
+  slackChannelListingSchema,
   slackMessageAttachmentSchema,
   slackMessageFileSchema,
   updateMessage,

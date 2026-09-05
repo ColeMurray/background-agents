@@ -3,6 +3,7 @@ import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
 import type { SessionPullRequestRecord } from "../db/session-pull-request-store";
 import {
   processPullRequestLifecycleEvent,
+  sessionArtifactsResponseSchema,
   type PullRequestLifecycleDeps,
   type SessionArtifactSummary,
 } from "./pull-request-lifecycle";
@@ -95,6 +96,58 @@ function createHarness() {
     pushSnapshotToSession,
   };
 }
+
+describe("sessionArtifactsResponseSchema", () => {
+  it("parses valid artifact summaries with nullable boundary fields", () => {
+    const result = sessionArtifactsResponseSchema.safeParse({
+      artifacts: [
+        {
+          id: "artifact-1",
+          type: "pr",
+          url: null,
+          metadata: null,
+          ignored: true,
+        },
+        {
+          id: "artifact-2",
+          type: "log",
+          url: "https://example.com/log.txt",
+          metadata: { repoOwner: "acme", repoName: "web" },
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.artifacts).toEqual([
+        { id: "artifact-1", type: "pr", url: null, metadata: null },
+        {
+          id: "artifact-2",
+          type: "log",
+          url: "https://example.com/log.txt",
+          metadata: { repoOwner: "acme", repoName: "web" },
+        },
+      ]);
+    }
+  });
+
+  it("parses a response with no artifacts as empty lifecycle input", () => {
+    const result = sessionArtifactsResponseSchema.safeParse({});
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.artifacts).toBeUndefined();
+    }
+  });
+
+  it("rejects partial artifact summaries", () => {
+    const result = sessionArtifactsResponseSchema.safeParse({
+      artifacts: [{ id: "artifact-1", type: "pr", url: null }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
 
 describe("processPullRequestLifecycleEvent", () => {
   let harness: ReturnType<typeof createHarness>;
