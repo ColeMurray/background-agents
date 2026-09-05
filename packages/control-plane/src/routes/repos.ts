@@ -29,8 +29,8 @@ import {
 const logger = createLogger("router:repos");
 
 export const REPOS_CACHE_KEY = "repos:list:v3";
-const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000; // Serve without revalidation for 5 minutes
-const REPOS_CACHE_KV_TTL_SECONDS = 3600; // Keep stale data in KV for 1 hour
+const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000;
+const REPOS_CACHE_KV_TTL_SECONDS = 3600;
 
 export async function reposCacheIdentity(
   env: Pick<
