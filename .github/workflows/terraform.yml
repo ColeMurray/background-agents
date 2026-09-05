@@ -17,6 +17,10 @@ on:
       - "packages/sandbox-runtime/**"
       - "packages/shared/**"
       - "packages/web/**" # Web app deployed via Terraform when web_platform = "cloudflare"
+      # Uploaded verbatim by modules/aws-control-plane, so a change to either
+      # changes the stack the AWS instance runs.
+      - "docker-compose.yml"
+      - "docker-compose.aws.yml"
       - ".github/workflows/terraform.yml"
   pull_request:
     branches: [main]
@@ -34,6 +38,10 @@ on:
       - "packages/sandbox-runtime/**"
       - "packages/shared/**"
       - "packages/web/**"
+      # Uploaded verbatim by modules/aws-control-plane, so a change to either
+      # changes the stack the AWS instance runs.
+      - "docker-compose.yml"
+      - "docker-compose.aws.yml"
       - ".github/workflows/terraform.yml"
   workflow_dispatch: # Allow manual trigger
 
@@ -97,6 +105,18 @@ jobs:
         id: validate
         run: terraform validate -no-color
         working-directory: ${{ env.TF_WORKING_DIR }}
+
+      # Not applied from CI yet -- that is I-3 -- so this is the only thing that
+      # parses them. The module is shared, so a break here is a break there.
+      - name: Terraform Init and Validate (AWS environments)
+        id: validate_aws
+        run: |
+          for environment in aws-staging aws-production; do
+            echo "::group::$environment"
+            terraform -chdir="terraform/environments/$environment" init -backend=false -no-color
+            terraform -chdir="terraform/environments/$environment" validate -no-color
+            echo "::endgroup::"
+          done
 
       - name: Terraform Tests
         id: test

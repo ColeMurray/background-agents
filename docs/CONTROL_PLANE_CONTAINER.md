@@ -200,6 +200,25 @@ On AWS the container reads the same `.env` variables from its environment. The d
 materializes them from SSM Parameter Store; nothing is baked into the image. With an instance role,
 leave `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` empty and the SDK uses the role.
 
+The instance runs this same stack with one overlay, `docker-compose.aws.yml`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d
+```
+
+It changes three things and nothing else. The app runs the image `CONTROL_PLANE_IMAGE` names — set
+in the systemd unit's environment, not in `.env` — rather than a build, because the instance has no
+checkout. MinIO does not run, because S3 is the object store and Litestream's replica target. And
+Caddy leaves the `tls` profile and starts with the rest, because TLS is not optional on a public
+address.
+
+`.env` still has to carry `MINIO_ROOT_PASSWORD`: Compose interpolates the base file before it
+applies an overlay, so that variable's `:?` guard fires whether or not MinIO is among the services
+that end up running. The AWS deployment gives it an unused value.
+
+[docs/AWS_BRING_UP.md](AWS_BRING_UP.md) is the whole path from an empty account to `/healthz` over
+HTTPS.
+
 ## The smoke test
 
 CI boots this stack on every pull request and round-trips one session through it:

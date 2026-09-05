@@ -1,0 +1,175 @@
+#!/bin/bash
+# Bootstrap for the Open-Inspect control plane on Amazon Linux 2023 (arm64).
+#
+# This runs once, at first boot. It puts the data volume under Docker, installs
+# the unit that runs the stack, and starts it. Everything that changes between
+# deploys -- the compose files, `.env`, the image tag -- is fetched by the
+# unit's ExecStartPre, so a deploy is `terraform apply` plus a restart and
+# never a new instance.
+set -euxo pipefail
+
+STACK_DIR=/opt/open-inspect
+DATA_DIR=/data
+# Addressed by volume id rather than by the /dev/sdf the attachment asks for:
+# on Nitro instances the kernel names EBS volumes /dev/nvme*n1 in attach order,
+# which is not stable across reboots.
+DEVICE="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${data_volume_id_nodash}"
+
+# AL2023 ships the CLI and the SSM agent; installing them is a no-op there and
+# the fallback covers an image that does not. The Compose plugin is the one
+# piece not reliably in the repositories, so a missing package is not fatal --
+# the release binary is.
+dnf install -y docker
+command -v aws >/dev/null 2>&1 || dnf install -y awscli-2
+systemctl list-unit-files amazon-ssm-agent.service >/dev/null 2>&1 ||
+  dnf install -y amazon-ssm-agent
+
+if ! dnf install -y docker-compose-plugin; then
+  install -d /usr/libexec/docker/cli-plugins
+  curl -fsSL -o /usr/libexec/docker/cli-plugins/docker-compose \
+    "https://github.com/docker/compose/releases/download/v${compose_version}/docker-compose-linux-aarch64"
+  chmod 755 /usr/libexec/docker/cli-plugins/docker-compose
+fi
+
+# ---------------------------------------------------------------------------
+# The data volume, before Docker so its data root lands on it
+# ---------------------------------------------------------------------------
+
+for _ in $(seq 1 60); do
+  [ -e "$DEVICE" ] && break
+  sleep 2
+done
+[ -e "$DEVICE" ] || { echo "data volume never appeared at $DEVICE" >&2; exit 1; }
+
+# An unformatted volume has no type; a restored one does, and must not be
+# reformatted. `blkid` is the difference between a first boot and a restore.
+if ! blkid "$DEVICE" >/dev/null 2>&1; then
+  mkfs.ext4 -L open-inspect "$DEVICE"
+fi
+
+mkdir -p "$DATA_DIR"
+grep -q "^LABEL=open-inspect " /etc/fstab ||
+  echo "LABEL=open-inspect $DATA_DIR ext4 defaults,nofail 0 2" >>/etc/fstab
+mount -a
+[ -d "$DATA_DIR" ] && mountpoint -q "$DATA_DIR"
+
+# ---------------------------------------------------------------------------
+# Docker
+# ---------------------------------------------------------------------------
+# The data root moves onto the volume, so images and every named volume the
+# compose stack declares are on the thing that gets snapshotted -- which is
+# what makes "the data volume is the unit of a deployment backup" true.
+#
+# Container logs go straight to CloudWatch. `docker compose logs` therefore
+# shows nothing on this host; `aws logs tail` is the equivalent, and it keeps
+# working after the instance is replaced.
+
+mkdir -p "$DATA_DIR/docker" /etc/docker
+cat >/etc/docker/daemon.json <<JSON
+{
+  "data-root": "$DATA_DIR/docker",
+  "log-driver": "awslogs",
+  "log-opts": {
+    "awslogs-region": "${region}",
+    "awslogs-group": "${log_group}",
+    "awslogs-create-group": "false"
+  }
+}
+JSON
+
+systemctl enable --now docker
+systemctl enable --now amazon-ssm-agent
+
+# ---------------------------------------------------------------------------
+# Fetching what the stack is made of
+# ---------------------------------------------------------------------------
+
+mkdir -p "$STACK_DIR"
+
+cat >/usr/local/bin/open-inspect-fetch-config <<'SCRIPT'
+#!/bin/bash
+# Pulls the stack files from S3 and rebuilds `.env` from SSM. Run before every
+# start, so a configuration change takes effect on restart.
+set -euo pipefail
+
+STACK_DIR=/opt/open-inspect
+source /etc/open-inspect.conf
+
+aws s3 sync "s3://$CONFIG_BUCKET/stack/" "$STACK_DIR/" --region "$AWS_REGION" --exact-timestamps
+
+umask 077
+aws ssm get-parameters-by-path \
+  --path "$SSM_ENV_PREFIX" \
+  --recursive --with-decryption \
+  --region "$AWS_REGION" \
+  --query 'Parameters[].[Name,Value]' --output json >/run/open-inspect-params.json
+
+SSM_ENV_PREFIX="$SSM_ENV_PREFIX" python3 - <<'PY'
+import json, os, sys
+
+prefix = os.environ["SSM_ENV_PREFIX"].rstrip("/") + "/"
+with open("/run/open-inspect-params.json") as handle:
+    parameters = json.load(handle)
+
+lines = []
+for name, value in parameters:
+    key = name[len(prefix):] if name.startswith(prefix) else name.rsplit("/", 1)[-1]
+    # `.env` is one assignment per line and Compose does not unescape it, so a
+    # value with a newline in it would silently truncate and take the rest of
+    # the file with it. The one multi-line value here, the GitHub App private
+    # key, is stored with the two characters \n in place of each newline.
+    if "\n" in value or "\r" in value:
+        sys.exit(f"{key}: SSM value spans multiple lines; store it on one")
+    lines.append(f"{key}={value}")
+
+with open("/opt/open-inspect/.env.new", "w") as handle:
+    handle.write("\n".join(sorted(lines)) + "\n")
+PY
+
+rm -f /run/open-inspect-params.json
+chmod 600 "$STACK_DIR/.env.new"
+mv "$STACK_DIR/.env.new" "$STACK_DIR/.env"
+
+aws ecr get-login-password --region "$AWS_REGION" |
+  docker login --username AWS --password-stdin "$${CONTROL_PLANE_IMAGE%%/*}"
+SCRIPT
+chmod 755 /usr/local/bin/open-inspect-fetch-config
+
+cat >/etc/open-inspect.conf <<CONF
+AWS_REGION=${region}
+CONFIG_BUCKET=${config_bucket}
+SSM_ENV_PREFIX=${ssm_env_prefix}
+CONTROL_PLANE_IMAGE=${control_plane_image}
+CONF
+
+# ---------------------------------------------------------------------------
+# The unit
+# ---------------------------------------------------------------------------
+
+cat >/etc/systemd/system/open-inspect.service <<'UNIT'
+[Unit]
+Description=Open-Inspect control plane
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/open-inspect
+EnvironmentFile=/etc/open-inspect.conf
+ExecStartPre=/usr/local/bin/open-inspect-fetch-config
+ExecStartPre=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.aws.yml pull
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d --wait
+ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.aws.yml down
+# Longer than the app's 40s stop grace period, so an instance stop drains the
+# host the way a deploy does rather than pulling the power on SQLite.
+TimeoutStopSec=180
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now open-inspect.service

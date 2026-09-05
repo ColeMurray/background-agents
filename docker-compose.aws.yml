@@ -1,0 +1,44 @@
+# AWS overlay: the same stack the smoke boots, on one EC2 instance.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d
+#
+# Three differences from the base file, and nothing else. The instance has no
+# checkout, so the app runs the image built and pushed by CI rather than a
+# build context. Object storage is S3 and the credentials come from the
+# instance role, so MinIO does not run. TLS is not optional on a public
+# address, so Caddy leaves the "tls" profile and starts with the rest.
+#
+# The `.env` this reads is written by the instance's user-data from SSM
+# Parameter Store. It still has to carry MINIO_ROOT_PASSWORD, OBJECT_STORE_BUCKET
+# and LITESTREAM_BUCKET: Compose interpolates the base file before it applies
+# this one, so their `:?` guards fire whether or not the services that use them
+# are started. The AWS `.env` gives MinIO's an unused value.
+
+services:
+  app:
+    # No build context on the instance. `image` names the ECR tag CI pushed;
+    # resetting `build` is what makes `up` pull it instead of trying to build.
+    build: !reset null
+    image: ${CONTROL_PLANE_IMAGE:?CONTROL_PLANE_IMAGE must name the ECR image to run, including its tag}
+    # The base file waits for MinIO's buckets to be created. On S3 the buckets
+    # are Terraform's, and nothing here creates them.
+    depends_on: !reset null
+
+  # Not started on AWS: S3 is the object store and the Litestream replica
+  # target. A profile no environment enables is how a service is left out of
+  # a merged stack; there is no way to delete one in an overlay.
+  minio:
+    profiles: ["local-object-store"]
+  minio-init:
+    profiles: ["local-object-store"]
+
+  litestream:
+    # The base file also waits for MinIO here.
+    depends_on: !override
+      app:
+        condition: service_healthy
+
+  # TLS terminates on the instance, so Caddy is part of the stack rather than
+  # an opt-in profile.
+  caddy:
+    profiles: !reset []

@@ -13,6 +13,13 @@ The infrastructure spans multiple cloud providers:
 | **Vercel**     | Next.js Web App, optional sandbox sessions           | Native provider + Sandbox API calls |
 | **Modal**      | Optional sandbox infrastructure                      | CLI wrapper (no provider exists)    |
 | **Daytona**    | Optional sandbox snapshots                           | REST API wrapper                    |
+| **AWS**        | EC2 control plane, EBS, S3, ECR, SSM, CloudWatch     | Native provider                     |
+
+The Cloudflare and AWS deployments are alternatives, not layers. `environments/production` is the
+Cloudflare one. `environments/aws-staging` and `environments/aws-production` stand the control plane
+up on AWS with **no Cloudflare account involved at any point** — no provider, no credential, no
+Cloudflare-specific header. TLS there is Caddy with a Let's Encrypt certificate, and DNS is whatever
+the operator already runs.
 
 ## Directory Structure
 
@@ -23,6 +30,8 @@ terraform/
 ├── modules/                      # Reusable Terraform modules
 │   ├── cloudflare-kv/           # KV namespace management
 │   ├── cloudflare-worker/       # Worker deployment with bindings (KV, DO, D1)
+│   ├── aws-control-plane/       # One EC2 instance running the compose stack
+│   │   └── templates/           # Instance bootstrap
 │   ├── daytona-infra/           # Daytona snapshot bootstrap wrapper
 │   ├── vercel-project/          # Vercel project + environment vars
 │   └── modal-app/               # Modal CLI wrapper
@@ -44,8 +53,20 @@ terraform/
 │       ├── backend.tf           # State backend (R2)
 │       ├── versions.tf          # Provider versions
 │       └── terraform.tfvars.example
+├── environments/aws-staging/     # AWS staging root module (S3 backend)
+├── environments/aws-production/  # AWS production root module (S3 backend)
 └── README.md                    # This file
 ```
+
+### State backends
+
+The Cloudflare environment keeps its R2 backend. The AWS environments use **S3**, with S3-native
+locking (`use_lockfile`, so there is no DynamoDB table). They deliberately do not share R2: this
+deployment exists so that a team can run Open-Inspect without a Cloudflare account, and a state file
+on Cloudflare would put one back. The bucket name has to be globally unique, so it is not committed
+— copy `backend.tfvars.example` and pass it to `terraform init -backend-config=backend.tfvars`.
+
+Bringing an AWS environment up is documented in [docs/AWS_BRING_UP.md](../docs/AWS_BRING_UP.md).
 
 ## Prerequisites
 
