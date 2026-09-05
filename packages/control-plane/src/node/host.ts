@@ -40,6 +40,7 @@ import { createSessionRuntime, type SessionRuntime } from "../session/components
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import type { Env, EnvConfig, Platform } from "../types";
 import { createNodeBackgroundTasks, settlesWithin } from "./background-tasks";
+import { openNodeCacheDatabase } from "./cache-database";
 import type { NodeHostSettings } from "./config";
 import { CronLoop } from "./cron-loop";
 import { HostAlarmClock } from "./host-alarm-clock";
@@ -125,6 +126,9 @@ async function boot(
   acquire(() => db.close());
   const migrationsApplied = await countMigrations(db);
 
+  const cacheDb = openNodeCacheDatabase(settings.dataDir);
+  acquire(() => cacheDb.close());
+
   const alarmIndex = openHostAlarmIndex(settings.dataDir);
   acquire(() => alarmIndex.close());
   const clock: HostAlarmClock = new HostAlarmClock({
@@ -143,7 +147,7 @@ async function boot(
   const platform: Platform = {
     DB: db,
     SESSION: createNodeSessionRuntimeDispatch(registry),
-    REPOS_CACHE: new SqlCacheStore(db),
+    REPOS_CACHE: new SqlCacheStore(cacheDb),
     MEDIA_BUCKET: createS3ObjectStorage(options.objectStorage),
   };
   const env: Env = { ...config, ...platform };

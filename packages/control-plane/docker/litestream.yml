@@ -6,9 +6,10 @@
 # come from .env; an empty LITESTREAM_ENDPOINT means AWS S3.
 #
 # Only the global store is replicated. The per-session files under
-# /data/sessions and the host alarm index are not, so this protects users,
-# settings and the session index, not a whole deployment; the data volume
-# is the unit for that.
+# /data/sessions, the host alarm index and the cache are not, so this protects
+# users, settings and the session index, not a whole deployment; the data
+# volume is the unit for that. The cache is excluded on purpose as well as by
+# omission: it holds a live GitHub installation token.
 
 dbs:
   - path: /data/global.db

@@ -7,16 +7,10 @@
  * (test/conformance/cache-store-conformance.ts).
  */
 
-import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
-import { SqlCacheStore } from "./sql-cache-store";
-
-const MIGRATION = fileURLToPath(
-  new URL("../../../../terraform/d1/migrations/0075_cache_entries.sql", import.meta.url)
-);
+import { CACHE_ENTRIES_SCHEMA_SQL, SqlCacheStore } from "./sql-cache-store";
 
 let sqlite: DatabaseSync;
 let db: NodeSqlDatabase;
@@ -31,7 +25,7 @@ async function rowCount(): Promise<number> {
 
 beforeEach(() => {
   sqlite = new DatabaseSync(":memory:");
-  sqlite.exec(readFileSync(MIGRATION, "utf8"));
+  sqlite.exec(CACHE_ENTRIES_SCHEMA_SQL);
   db = createNodeSqlDatabase(sqlite);
   nowMs = 1_800_000_000_000;
 });

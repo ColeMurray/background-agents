@@ -1,11 +1,17 @@
 /**
- * `CacheStore` over a table in the global store, for hosts that have no KV.
+ * `CacheStore` over a SQL table, for hosts that have no KV.
  *
  * The port has one other implementation, `createKvCacheStore`, which the
  * Cloudflare host keeps. This one is engine-neutral — it runs on any
  * `SqlDatabase`, D1 and `node:sqlite` alike — so it lives with the stores
  * rather than under `src/node/`, and the same adapter serves the bots' caches
  * when they move off KV.
+ *
+ * The table is not part of the global store's schema. Nothing on Cloudflare
+ * reads or writes it, so it is not in `terraform/d1/migrations`, where every
+ * table lands on D1 as well; the Node host keeps it in a file of its own
+ * (`src/node/cache-database.ts`), the way the host alarm index does. A caller
+ * that needs this table on D1 adds the migration then.
  *
  * Expiry is lazy on read, the way KV's is observable: a row past its TTL
  * reads as absent and is deleted on the spot. That is the whole reclamation
@@ -22,6 +28,18 @@
 
 import type { CacheStore, CacheStorePutOptions } from "@open-inspect/shared/cache-store";
 import type { SqlDatabase } from "./sql-database";
+
+/**
+ * The table this store reads and writes, as one statement so any engine can
+ * apply it. Values are opaque strings; `expires_at` is epoch milliseconds,
+ * NULL for an entry that never expires. No index on it: reads go by primary
+ * key and expiry is lazy, so nothing queries the column.
+ */
+export const CACHE_ENTRIES_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS cache_entries (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  expires_at INTEGER
+)`;
 
 interface CacheEntryRow {
   value: string;
