@@ -204,30 +204,103 @@ describe("useSessionTransport", () => {
     expect(result.current.connecting).toBe(false);
   });
 
-  it("sets an auth error on close code 4001 and fetches a fresh token on reconnect", async () => {
-    const { result, socket } = await openSocket();
-
-    act(() => {
-      socket.serverClose(4001);
+  it("refreshes a rejected credential once, then reports an auth error", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
     });
 
-    await waitFor(() => {
-      expect(result.current.authError).toBe("Authentication failed. Please sign in again.");
-      expect(result.current.connected).toBe(false);
+    // One automatic refresh: the credential may simply be stale.
+    act(() => FakeWebSocket.instances[0].serverClose(4001, true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
     });
-    expect(onClose).toHaveBeenCalledTimes(1);
-    // No automatic reconnect on auth failure.
-    expect(FakeWebSocket.instances).toHaveLength(1);
-
-    act(() => {
-      result.current.reconnect();
-    });
-
-    await waitFor(() => {
-      expect(FakeWebSocket.instances).toHaveLength(2);
-    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(result.current.authError).toBeNull();
+    expect(rendered.result.current.authError).toBeNull();
+
+    // A freshly issued credential rejected too is a real auth failure.
+    act(() => FakeWebSocket.instances[1].serverClose(4001, true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(rendered.result.current.authError).toBe("Authentication failed. Please sign in again.");
+    expect(rendered.result.current.connected).toBe(false);
+
+    act(() => rendered.result.current.reconnect());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    expect(rendered.result.current.authError).toBeNull();
+    rendered.unmount();
+  });
+
+  it("refreshes a credential another tab invalidated while the host was restarting", async () => {
+    // Only one WebSocket credential is stored per participant, so a second tab
+    // opening the session invalidates this tab's cached token. The restart is
+    // when that is discovered: the retry presents the stale token and is closed
+    // 4001, which has to recover on its own rather than sit behind a banner.
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(Response.json({ token: "stale-token" }))
+      .mockResolvedValueOnce(Response.json({ token: "reissued-token" }));
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(WS_CLOSE_SERVICE_RESTART, true);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(FakeWebSocket.instances[1].sentMessages).toEqual([]);
+
+    act(() => FakeWebSocket.instances[1].serverClose(4001, true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    act(() => FakeWebSocket.instances[2].open());
+    expect(FakeWebSocket.instances[2].sentMessages).toEqual([
+      expect.objectContaining({ token: "reissued-token" }),
+    ]);
+    expect(rendered.result.current.connected).toBe(true);
+    expect(rendered.result.current.authError).toBeNull();
+    rendered.unmount();
+  });
+
+  it("restores the credential-refresh budget once a connection synchronizes", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => FakeWebSocket.instances[0].serverClose(4001, true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    act(() => {
+      FakeWebSocket.instances[1].open();
+      rendered.result.current.markHealthy();
+      FakeWebSocket.instances[1].serverClose(4001, true);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // The budget is spent per healthy connection, not once per page load.
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    expect(rendered.result.current.authError).toBeNull();
+    rendered.unmount();
   });
 
   it("reports session expiry on close code 4002 without reconnecting", async () => {

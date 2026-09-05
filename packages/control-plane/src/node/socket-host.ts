@@ -13,7 +13,7 @@
  * empties, so the peer's bytes wait in the kernel rather than on the heap;
  * only the frames `ws` had already decoded from the read in progress queue
  * behind an in-flight delivery, up to `maxPendingDeliveries`. A peer that
- * exceeds that bound is closed with 1013. A handler that never settles holds
+ * exceeds that bound is closed with `WS_CLOSE_TRY_AGAIN_LATER`. A handler that never settles holds
  * only its own socket; bounding handler time is the session executor's
  * concern, which is whatever `bindEventSink` receives.
  *
@@ -23,6 +23,7 @@
  */
 
 import { WebSocket as NodeWebSocket, type RawData } from "ws";
+import { WS_CLOSE_TRY_AGAIN_LATER } from "@open-inspect/shared/types/websocket";
 import type { Logger } from "../logger";
 import type { SessionWebSocket } from "../platform-ports";
 import type { SessionWebSocketHost } from "../session/platform";
@@ -49,9 +50,6 @@ export interface NodeSocketHostOptions {
 }
 
 const DEFAULT_MAX_PENDING_DELIVERIES = 4096;
-
-/** RFC 6455 "try again later": the server cannot keep up with this peer. */
-export const BACKLOG_EXCEEDED_CLOSE_CODE = 1013;
 
 interface Deliveries {
   queue: Array<() => Promise<void>>;
@@ -151,7 +149,7 @@ export class NodeWebSocketHost implements SessionWebSocketHost {
         pending: deliveries.queue.length,
       });
       deliveries.queue.length = 0;
-      socket.close(BACKLOG_EXCEEDED_CLOSE_CODE, "Message backlog exceeded");
+      socket.close(WS_CLOSE_TRY_AGAIN_LATER, "Message backlog exceeded");
       // The socket was paused for the in-flight delivery, which may never
       // settle; the closing handshake still has to read the peer's frame.
       socket.resume();

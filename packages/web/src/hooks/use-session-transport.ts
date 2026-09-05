@@ -27,12 +27,18 @@ const WS_CLOSE_AUTH_REQUIRED = 4001;
 const WS_CLOSE_SESSION_EXPIRED = 4002;
 const WS_CLOSE_INVALID_MESSAGE = 4004;
 
-// Ten attempts with the backoff below span ~3 minutes, so a host restart
-// (seconds to a minute of downtime) is ridden out rather than given up on.
+// `MAX_RECONNECT_ATTEMPTS` on the backoff below spans ~3 minutes, so a host
+// restart (seconds to a minute of downtime) is ridden out rather than given
+// up on.
 const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_BASE_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 const PING_INTERVAL_MS = 30000;
+// Only one WebSocket credential is stored per participant, so another tab
+// opening the session invalidates this one's. A single automatic reissue per
+// healthy connection recovers from that without turning a genuine auth
+// failure into a refresh loop.
+const MAX_CREDENTIAL_REFRESHES = 1;
 
 function reconnectDelayMs(attemptsSoFar: number): number {
   return Math.min(RECONNECT_BASE_DELAY_MS * Math.pow(2, attemptsSoFar), MAX_RECONNECT_DELAY_MS);
@@ -41,6 +47,7 @@ function reconnectDelayMs(attemptsSoFar: number): number {
 /** What a close event calls for, decided as data; the caller applies effects. */
 type CloseDirective =
   | { action: "auth_required" }
+  | { action: "refresh_credential" }
   | { action: "refresh_authorization" }
   | { action: "session_expired" }
   | { action: "authorization_revoked"; delayMs?: number }
@@ -50,10 +57,15 @@ type CloseDirective =
 
 function closeDirective(
   event: Pick<CloseEvent, "code" | "wasClean">,
-  attemptsSoFar: number
+  attemptsSoFar: number,
+  refreshesSoFar: number
 ): CloseDirective {
   if (event.code === WS_CLOSE_AUTH_REQUIRED) {
-    return { action: "auth_required" };
+    // A rejected credential is more often stale than revoked: reissue once
+    // before telling a signed-in user to sign in again.
+    return refreshesSoFar < MAX_CREDENTIAL_REFRESHES
+      ? { action: "refresh_credential" }
+      : { action: "auth_required" };
   }
   if (event.code === WS_CLOSE_AUTHORIZATION_REVOKED) {
     return { action: "refresh_authorization" };
@@ -118,6 +130,8 @@ export function useSessionTransport(
   const wsTokenRef = useRef<string | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
+  // Automatic credential reissues spent since the last healthy connection.
+  const credentialRefreshes = useRef(0);
   // Monotonic id for connection attempts. reconnect() and unmount bump it so
   // a connect() that resumes after awaiting its token can tell it has been
   // superseded and must not open a socket.
@@ -249,12 +263,22 @@ export function useSessionTransport(
     wsRef.current = null;
     handlersRef.current.onClose?.();
 
-    const directive = closeDirective(event, reconnectAttempts.current);
+    const directive = closeDirective(event, reconnectAttempts.current, credentialRefreshes.current);
     switch (directive.action) {
       case "auth_required":
         setAuthError("Authentication failed. Please sign in again.");
         // Clear the token so we fetch a new one on reconnect
         wsTokenRef.current = null;
+        return;
+
+      case "refresh_credential":
+        if (!mountedRef.current) return;
+        credentialRefreshes.current++;
+        wsTokenRef.current = null;
+        setReconnecting(true);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (mountedRef.current) retry();
+        }, 0);
         return;
 
       case "refresh_authorization":
@@ -396,6 +420,7 @@ export function useSessionTransport(
       setConnected(false);
     }
     reconnectAttempts.current = 0;
+    credentialRefreshes.current = 0;
     wsTokenRef.current = null; // Clear token to fetch fresh one
     setReconnecting(false);
     setAuthError(null);
@@ -405,6 +430,7 @@ export function useSessionTransport(
 
   const markHealthy = useCallback(() => {
     reconnectAttempts.current = 0;
+    credentialRefreshes.current = 0;
   }, []);
 
   // Track the actual component lifetime separately from capability changes.
@@ -435,6 +461,7 @@ export function useSessionTransport(
       }
       wsTokenRef.current = null;
       reconnectAttempts.current = 0;
+      credentialRefreshes.current = 0;
       setConnected(false);
       setConnecting(false);
       setReconnecting(false);
