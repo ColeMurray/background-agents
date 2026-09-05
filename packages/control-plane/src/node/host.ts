@@ -120,17 +120,31 @@ async function boot(
   const startedAtMs = Date.now();
 
   ensurePrivateDirectory(settings.dataDir);
-  const db = openNodeSqlDatabase(join(settings.dataDir, GLOBAL_STORE_FILE), {
-    migrationsDir: settings.migrationsDir,
-  });
-  acquire(() => db.close());
+
+  // Every file the host holds open, registered once. Boot failure unwinds it
+  // with everything else acquired; a successful shutdown closes it through
+  // `closeStores` below. One registration, so the two paths cannot drift.
+  const stores: Array<() => void> = [];
+  const ownStore = <T extends { close(): void }>(store: T): T => {
+    const close = (): void => store.close();
+    stores.push(close);
+    acquire(close);
+    return store;
+  };
+  const closeStores = (): void => {
+    for (const close of [...stores].reverse()) close();
+  };
+
+  const db = ownStore(
+    openNodeSqlDatabase(join(settings.dataDir, GLOBAL_STORE_FILE), {
+      migrationsDir: settings.migrationsDir,
+    })
+  );
   const migrationsApplied = await countMigrations(db);
 
-  const cacheDb = openNodeCacheDatabase(settings.dataDir);
-  acquire(() => cacheDb.close());
+  const cacheDb = ownStore(openNodeCacheDatabase(settings.dataDir, log));
 
-  const alarmIndex = openHostAlarmIndex(settings.dataDir);
-  acquire(() => alarmIndex.close());
+  const alarmIndex = ownStore(openHostAlarmIndex(settings.dataDir));
   const clock: HostAlarmClock = new HostAlarmClock({
     index: alarmIndex,
     deliver: (sessionId) => registry.deliverScheduledDeadline(sessionId),
@@ -258,8 +272,7 @@ async function boot(
     server.closeAllConnections();
     await closed;
 
-    alarmIndex.close();
-    db.close();
+    closeStores();
 
     const report: ShutdownReport = { clean: abandoned.length === 0, abandoned };
     if (report.clean) {

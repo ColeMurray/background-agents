@@ -13,13 +13,13 @@
  * (`src/node/cache-database.ts`), the way the host alarm index does. A caller
  * that needs this table on D1 adds the migration then.
  *
- * Expiry is lazy on read, the way KV's is observable: a row past its TTL
- * reads as absent and is deleted on the spot. That is the whole reclamation
- * story, because the key space is two singletons — the repositories listing
- * and one GitHub installation token — and both are read on the paths that
- * write them, so an expired row is deleted by the next request that wants it.
- * A caller that starts writing keys nobody reads back (per-user, per-repo)
- * would need a periodic sweep; none exists today, so none is scheduled.
+ * Expiry is by comparison on read, and reads do not write: a row past its TTL
+ * reads as absent and is left where it is. Nothing reclaims it and nothing
+ * needs to, because the key space is two singletons — the repositories listing
+ * and one GitHub installation token — and the miss it causes goes straight to
+ * a refresh that overwrites the same key. The most an unlucky deployment holds
+ * is those two rows, inert. A caller that starts writing keys nobody reads back
+ * (per-user, per-repo) is the one that would need a sweep; there is none today.
  *
  * The installation token is stored as written, exactly as it is in KV on
  * Cloudflare — but on a container that means it is in the global store file,
@@ -70,17 +70,9 @@ export class SqlCacheStore implements CacheStore {
       .bind(key)
       .first<CacheEntryRow>();
     if (!row) return null;
-    if (row.expires_at !== null && row.expires_at <= this.now()) {
-      // Compare-and-delete on the row this read actually saw. Another writer
-      // can refresh the key between the select and here — the repos route's
-      // own background revalidation does exactly that — and an unconditional
-      // delete by key would throw that fresh entry away.
-      await this.db
-        .prepare("DELETE FROM cache_entries WHERE key = ? AND expires_at = ?")
-        .bind(key, row.expires_at)
-        .run();
-      return null;
-    }
+    // Deliberately no delete here. Cleaning up on read would put a write in
+    // the read path and race the refresh this miss is about to trigger.
+    if (row.expires_at !== null && row.expires_at <= this.now()) return null;
     return type === "json" ? (JSON.parse(row.value) as T) : row.value;
   }
 

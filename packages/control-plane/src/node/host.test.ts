@@ -7,6 +7,7 @@ import { WebSocket as NodeWebSocket } from "ws";
 import { NO_AUTHORIZATION } from "../routes/shared";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { CACHE_STORE_FILE } from "./cache-database";
 import { DEFAULT_MIGRATIONS_DIR, type NodeHostSettings } from "./config";
 import { GLOBAL_STORE_FILE, startNodeHost, type NodeHost, type NodeHostOptions } from "./host";
 import type { HealthReport } from "./http-server";
@@ -23,6 +24,24 @@ const CONFIG = {
 };
 
 const OBJECT_STORAGE = { bucket: "media", region: "us-east-1" };
+
+/** A public route that writes to the cache, so the cache file has a WAL to close. */
+function cacheWritingRoute(): Hono<ControlPlaneHonoEnv>[] {
+  const routes = new Hono<ControlPlaneHonoEnv>();
+  routes.get(
+    "/cache-write",
+    admit({
+      authentication: { kind: "public" },
+      supportedScmProviders: "all",
+      authorization: NO_AUTHORIZATION,
+    }),
+    async (c) => {
+      await c.env.REPOS_CACHE.put("host-test", "written");
+      return Response.json({ written: true });
+    }
+  );
+  return [routes];
+}
 
 /** A public route that answers once `release` is called, for shutdown against work in flight. */
 function blockingRoute(): { routes: Hono<ControlPlaneHonoEnv>[]; release: () => void } {
@@ -111,6 +130,19 @@ describe("startNodeHost", () => {
       });
     expect(await rejection("/sessions/unknown/ws")).toBe("Unexpected server response: 404");
     expect(await rejection("/sessions/unknown/events")).toBe("Unexpected server response: 400");
+  });
+
+  it("closes the cache database on a normal shutdown, not only on a failed boot", async () => {
+    host = await start({ routes: cacheWritingRoute() });
+    await fetch(`http://127.0.0.1:${host.address.port}/cache-write`);
+    // An open connection holds its write-ahead log; a closed one checkpoints
+    // and removes it, so the sidecar file is the observable for the close.
+    expect(existsSync(join(dataDir, `${CACHE_STORE_FILE}-wal`))).toBe(true);
+
+    await host.shutdown();
+    host = null;
+
+    expect(existsSync(join(dataDir, `${CACHE_STORE_FILE}-wal`))).toBe(false);
   });
 
   it("reports draining once a shutdown begins and stops listening when it ends", async () => {
