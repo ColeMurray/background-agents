@@ -22,8 +22,9 @@
  * (per-user, per-repo) is the one that would need a sweep; there is none today.
  *
  * The installation token is stored as written, exactly as it is in KV on
- * Cloudflare — but on a container that means it is in the global store file,
- * and in whatever Litestream replicates it to.
+ * Cloudflare. On a container that means the host's own `cache.db`, which
+ * Litestream does not replicate — so it stays on the data volume, and a
+ * volume snapshot is the one artifact that carries it.
  */
 
 import type { CacheStore, CacheStorePutOptions } from "@open-inspect/shared/cache-store";
