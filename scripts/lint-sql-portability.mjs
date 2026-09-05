@@ -250,9 +250,63 @@ function walk(dir, out = []) {
   return out;
 }
 
-/** Whether the file's SQL belongs to the session engine rather than the port. */
+/**
+ * Source with every comment blanked, offsets preserved. Literals are left
+ * as they are: a module specifier is one, so blanking them would hide the
+ * import this is read from. `stringLiterals` says where they are, and the
+ * caller uses that to reject a match that sits inside one.
+ */
+export function withoutComments(source) {
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "/" && source[i + 1] === "/") {
+      while (i < source.length && source[i] !== "\n") {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    if (c === "/" && source[i + 1] === "*") {
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
+        out += source[i] === "\n" ? "\n" : " ";
+        i++;
+      }
+      out += "  ";
+      i += 2;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      const end = c === "`" ? scanTemplate(source, i, []) : scanQuoted(source, i, []);
+      out += source.slice(i, end);
+      i = end;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/**
+ * Whether the file's SQL belongs to the session engine rather than the port.
+ * Read from an import of the engine's own module in the code — not from the
+ * type's name appearing anywhere in the text, which a comment could supply
+ * and so turn the check off for a whole file.
+ */
+const SESSION_ENGINE_IMPORT = /^\s*import\b[^;]*?\bfrom\s*["'][^"']*sql-storage["']/gm;
+
 export function targetsSessionEngine(source) {
-  return /\bSqlStorage\b/.test(source);
+  const code = withoutComments(source);
+  const literals = stringLiterals(source).map((l) => [l.offset, l.offset + l.text.length]);
+  SESSION_ENGINE_IMPORT.lastIndex = 0;
+  let match;
+  while ((match = SESSION_ENGINE_IMPORT.exec(code)) !== null) {
+    // An import inside a literal is text about an import, not one.
+    if (!literals.some(([from, to]) => match.index >= from && match.index < to)) return true;
+  }
+  return false;
 }
 
 function controlPlaneSources() {
@@ -315,6 +369,58 @@ function newMigrations() {
     .sort();
 }
 
+/**
+ * Findings weighed against the baseline. `errors` are the occurrences it does
+ * not cover; `stale` names the entries it still lists that are gone.
+ *
+ * Grouped by file and rule and compared as a multiset of the matched text
+ * rather than a count: swapping one allowed construct for a different one of
+ * the same rule would keep the count and change the SQL.
+ */
+export function compareToBaseline(findings, allowed) {
+  const found = new Map();
+  for (const finding of findings) {
+    const key = `${finding.file} ${finding.rule}`;
+    if (!found.has(key)) found.set(key, []);
+    found.get(key).push(finding);
+  }
+
+  const errors = [];
+  const stale = [];
+  const keys = new Set([
+    ...found.keys(),
+    ...Object.entries(allowed).flatMap(([file, rules]) =>
+      Object.keys(rules).map((rule) => `${file} ${rule}`)
+    ),
+  ]);
+  for (const key of [...keys].sort()) {
+    const [file, rule] = [key.slice(0, key.lastIndexOf(" ")), key.slice(key.lastIndexOf(" ") + 1)];
+    const occurrences = found.get(key) ?? [];
+    const permitted = [...(allowed[file]?.[rule]?.occurrences ?? [])].sort();
+    const actual = occurrences.map((finding) => finding.text).sort();
+    if (permitted.join("\u0000") === actual.join("\u0000")) continue;
+    // One report per surplus occurrence, not per occurrence whose text is
+    // over budget: with two `json(` and one allowed, only one is disallowed.
+    const surplus = withoutFirst(actual, permitted);
+    for (const finding of occurrences) {
+      const at = surplus.indexOf(finding.text);
+      if (at === -1) continue;
+      surplus.splice(at, 1);
+      errors.push(
+        `${finding.file}:${finding.line}  ${finding.rule}  ${finding.text}\n` +
+          `    portable form: ${finding.portable}`
+      );
+    }
+    const missing = withoutFirst(permitted, actual);
+    if (missing.length > 0) {
+      stale.push(
+        `${file}  ${rule}: baseline still allows ${missing.join(", ")}, no longer present`
+      );
+    }
+  }
+  return { errors, stale };
+}
+
 function main() {
   const findings = [];
   for (const file of controlPlaneSources()) {
@@ -327,44 +433,7 @@ function main() {
     findings.push(...findingsIn(maskSqlComments(source), 0, source, rel));
   }
 
-  // Grouped by file and rule, and compared as a multiset of the matched text
-  // rather than a count: swapping one allowed construct for a different one
-  // of the same rule would keep the count and change the SQL.
-  const found = new Map();
-  for (const finding of findings) {
-    const key = `${finding.file} ${finding.rule}`;
-    if (!found.has(key)) found.set(key, []);
-    found.get(key).push(finding);
-  }
-
-  const errors = [];
-  const stale = [];
-  const keys = new Set([
-    ...found.keys(),
-    ...Object.entries(baseline.allowed).flatMap(([file, rules]) =>
-      Object.keys(rules).map((rule) => `${file} ${rule}`)
-    ),
-  ]);
-  for (const key of [...keys].sort()) {
-    const [file, rule] = [key.slice(0, key.lastIndexOf(" ")), key.slice(key.lastIndexOf(" ") + 1)];
-    const occurrences = found.get(key) ?? [];
-    const allowed = [...(baseline.allowed[file]?.[rule]?.occurrences ?? [])].sort();
-    const actual = occurrences.map((finding) => finding.text).sort();
-    if (allowed.join("\u0000") === actual.join("\u0000")) continue;
-    const surplus = withoutFirst(actual, allowed);
-    for (const finding of occurrences.filter((f) => surplus.includes(f.text))) {
-      errors.push(
-        `${finding.file}:${finding.line}  ${finding.rule}  ${finding.text}\n` +
-          `    portable form: ${finding.portable}`
-      );
-    }
-    const missing = withoutFirst(allowed, actual);
-    if (missing.length > 0) {
-      stale.push(
-        `${file}  ${rule}: baseline still allows ${missing.join(", ")}, no longer present`
-      );
-    }
-  }
+  const { errors, stale } = compareToBaseline(findings, baseline.allowed);
 
   if (errors.length > 0) {
     console.error(`SQL portability: ${errors.length} disallowed construct(s).\n`);

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   RULES,
+  compareToBaseline,
   findingsIn,
   maskSqlComments,
   scanTypeScript,
@@ -114,6 +115,51 @@ test("leaves the session engine's own SQL out of scope", () => {
     targetsSessionEngine("import type { SqlDatabase } from '../db/sql-database';"),
     false
   );
+});
+
+test("does not let a comment or a string turn the check off for a file", () => {
+  // Naming the type is not importing it; either of these would otherwise
+  // exempt every statement in the file.
+  assert.equal(
+    targetsSessionEngine('db.prepare("INSERT OR IGNORE INTO t VALUES (?)"); // SqlStorage'),
+    false
+  );
+  assert.equal(targetsSessionEngine("// import type { SqlStorage } from './sql-storage';"), false);
+  assert.equal(
+    targetsSessionEngine("const doc = `\nimport { SqlStorage } from './sql-storage';\n`;"),
+    false
+  );
+});
+
+test("counts a surplus occurrence once, not every occurrence sharing its text", () => {
+  const finding = (line) => ({
+    file: "f.ts",
+    line,
+    rule: "json-function",
+    text: "json(",
+    portable: "p",
+  });
+  const allowed = { "f.ts": { "json-function": { occurrences: ["json("], reason: "r" } } };
+
+  // Two occurrences, one allowed: one is over budget, not both.
+  const { errors, stale } = compareToBaseline([finding(1), finding(2)], allowed);
+  assert.equal(errors.length, 1);
+  assert.deepEqual(stale, []);
+});
+
+test("reports a swapped construct even when the total is unchanged", () => {
+  const allowed = { "f.ts": { "json-function": { occurrences: ["json_object("], reason: "r" } } };
+  const swapped = {
+    file: "f.ts",
+    line: 1,
+    rule: "json-function",
+    text: "json_group_array(",
+    portable: "p",
+  };
+
+  const { errors, stale } = compareToBaseline([swapped], allowed);
+  assert.match(errors[0], /json_group_array\(/);
+  assert.match(stale[0], /still allows json_object\(/);
 });
 
 test("reports the line the construct sits on", () => {
