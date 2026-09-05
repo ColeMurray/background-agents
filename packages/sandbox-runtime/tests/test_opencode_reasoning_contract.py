@@ -249,6 +249,30 @@ async def test_all_fixture_efforts_reach_provider(wire_server):
                     assert sent["output_config"]["effort"] == effort, context
 
 
+async def test_runtime_config_registers_gpt_6_astra(tmp_path, reasoning_config):
+    catalog = json.loads(CATALOG.read_text())
+    assert "gpt-6-astra" not in catalog["openai"]["models"]
+
+    env = {key: os.environ[key] for key in ("PATH", "HOME", "SYSTEMROOT") if key in os.environ}
+    env.update(
+        {
+            "XDG_CONFIG_HOME": str(tmp_path / "config"),
+            "XDG_DATA_HOME": str(tmp_path / "data"),
+            "XDG_CACHE_HOME": str(tmp_path / "cache"),
+            "XDG_STATE_HOME": str(tmp_path / "state"),
+            "OPENCODE_MODELS_PATH": str(CATALOG),
+            "OPENCODE_DISABLE_MODELS_FETCH": "1",
+            "OPENCODE_CONFIG_CONTENT": json.dumps(reasoning_config),
+            "OPENAI_API_KEY": "test-only",
+        }
+    )
+    models = subprocess.check_output(
+        [BINARY, "models", "openai"], cwd=tmp_path, env=env, text=True
+    ).splitlines()
+
+    assert "openai/gpt-6-astra" in models
+
+
 async def test_defaults_and_switching(wire_server):
     call, captured = wire_server
     # The configured agent's High default must survive omission and yield to a variant.

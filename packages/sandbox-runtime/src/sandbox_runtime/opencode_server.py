@@ -501,7 +501,43 @@ class OpenCodeServer:
                             "claude-opus-4-5",
                         )
                     }
-                }
+                },
+                "openai": {
+                    "models": {
+                        "gpt-6-astra": {
+                            "name": "GPT-6 Astra",
+                            "family": "gpt-astra",
+                            "attachment": True,
+                            "reasoning": True,
+                            "temperature": False,
+                            "tool_call": True,
+                            "release_date": "2026-09-04",
+                            "modalities": {
+                                "input": ["text", "image", "pdf"],
+                                "output": ["text"],
+                            },
+                            "limit": {
+                                "context": 1_050_000,
+                                "input": 922_000,
+                                "output": 128_000,
+                            },
+                            "cost": {
+                                "input": 10,
+                                "output": 50,
+                                "cache_read": 1,
+                                "cache_write": 12.5,
+                            },
+                            "variants": {
+                                effort: {
+                                    "reasoningEffort": effort,
+                                    "reasoningSummary": "auto",
+                                    "include": ["reasoning.encrypted_content"],
+                                }
+                                for effort in ("low", "medium", "high", "xhigh", "max")
+                            },
+                        }
+                    }
+                },
             },
         }
 
