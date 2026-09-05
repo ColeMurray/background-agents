@@ -25,6 +25,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { SessionIndexStore } from "../db/session-index";
+import { SqlCacheStore } from "../db/sql-cache-store";
 import type { SqlDatabase } from "../db/sql-database";
 import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
 import { createLogger, parseLogLevel, type Logger } from "../logger";
@@ -44,7 +45,6 @@ import { CronLoop } from "./cron-loop";
 import { HostAlarmClock } from "./host-alarm-clock";
 import { openHostAlarmIndex } from "./host-alarm-index";
 import { createNodeHttpServer, type HealthReport } from "./http-server";
-import { createMemoryCacheStore } from "./memory-cache-store";
 import { ensurePrivateDirectory } from "./private-paths";
 import { createNodeSessionRuntimeDispatch } from "./runtime-client";
 import { createS3ObjectStorage, type S3ObjectStorageConfig } from "./s3-object-storage";
@@ -143,7 +143,7 @@ async function boot(
   const platform: Platform = {
     DB: db,
     SESSION: createNodeSessionRuntimeDispatch(registry),
-    REPOS_CACHE: createMemoryCacheStore(),
+    REPOS_CACHE: new SqlCacheStore(db),
     MEDIA_BUCKET: createS3ObjectStorage(options.objectStorage),
   };
   const env: Env = { ...config, ...platform };

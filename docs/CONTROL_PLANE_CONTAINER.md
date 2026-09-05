@@ -105,6 +105,11 @@ files are gone, and the host opens each of those as an empty session when it is 
 no pending deadlines. The entrypoint logs a warning to that effect after every restore. Treat the
 replica as protection for the global store, not as recovery of a deployment.
 
+`global.db` also holds the cache table the host uses in place of Cloudflare's KV: the repositories
+listing, and GitHub installation tokens for as long as they are valid, each stored as written. That
+is what Cloudflare keeps in KV, but here it is on the volume and in the replica bucket, so give the
+bucket the access policy you would give the database.
+
 To rehearse the restore, remove the containers that hold the volume open, delete the volume (its
 name is prefixed with the compose project name, the checkout's directory name by default), then
 bring the whole stack back and confirm replication resumed:

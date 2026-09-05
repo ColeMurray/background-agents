@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { checkAutofixQueueHealth } from "./autofix/queue-health";
 import { SessionIndexStore } from "./db/session-index";
+import type * as SqlCacheStoreModule from "./db/sql-cache-store";
+import { CACHE_ENTRY_SWEEP_CRON, SqlCacheStore } from "./db/sql-cache-store";
 import type { SqlDatabase } from "./db/sql-database";
 import type * as ImageBuildScheduler from "./image-builds/scheduler";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
@@ -37,6 +39,12 @@ vi.mock("./scheduler/scheduler", () => ({
     return { tick: schedulerTick };
   }),
 }));
+vi.mock("./db/sql-cache-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof SqlCacheStoreModule>()),
+  SqlCacheStore: vi.fn(function () {
+    return { sweepExpired: sweepExpiredCacheEntries };
+  }),
+}));
 vi.mock("./session/abandoned-draft-sweep", async (importOriginal) => ({
   ...(await importOriginal<typeof AbandonedDraftSweepModule>()),
   AbandonedDraftSweep: vi.fn(function () {
@@ -45,9 +53,10 @@ vi.mock("./session/abandoned-draft-sweep", async (importOriginal) => ({
   SessionDraftExpiryClient: vi.fn(),
 }));
 
-const { schedulerTick, sweepRun } = vi.hoisted(() => ({
+const { schedulerTick, sweepRun, sweepExpiredCacheEntries } = vi.hoisted(() => ({
   schedulerTick: vi.fn(async () => ({})),
   sweepRun: vi.fn(async () => ({})),
+  sweepExpiredCacheEntries: vi.fn(async () => 3),
 }));
 
 const TERRAFORM_WORKER = resolve(
@@ -92,7 +101,12 @@ describe("SCHEDULED_JOBS", () => {
     expect(new Set(crons).size).toBe(crons.length);
     expect(new Set(SCHEDULED_JOBS.map((job) => job.name)).size).toBe(crons.length);
     expect([...crons].sort()).toEqual(
-      [SCHEDULER_TICK_CRON, IMAGE_BUILD_SCHEDULER_CRON, ABANDONED_DRAFT_SWEEP_CRON].sort()
+      [
+        SCHEDULER_TICK_CRON,
+        IMAGE_BUILD_SCHEDULER_CRON,
+        CACHE_ENTRY_SWEEP_CRON,
+        ABANDONED_DRAFT_SWEEP_CRON,
+      ].sort()
     );
     expect([...terraformCronTriggers()].sort()).toEqual([...crons].sort());
     for (const job of SCHEDULED_JOBS) expect(findScheduledJob(job.cron)).toBe(job);
@@ -118,6 +132,20 @@ describe("SCHEDULED_JOBS", () => {
     await findScheduledJob(IMAGE_BUILD_SCHEDULER_CRON)!.run(deps, 1_000);
 
     expect(runImageBuildScheduler).toHaveBeenCalledWith(deps.env, deps.db, deps.correlation);
+    expect(deps.submitted).toEqual([]);
+  });
+
+  it("sweeps expired cache entries from the global store and logs the count", async () => {
+    const deps = fakeDeps();
+
+    await findScheduledJob(CACHE_ENTRY_SWEEP_CRON)!.run(deps, 1_000);
+
+    expect(SqlCacheStore).toHaveBeenCalledWith(deps.db);
+    expect(sweepExpiredCacheEntries).toHaveBeenCalledTimes(1);
+    expect(deps.log.info).toHaveBeenCalledWith("Cache entry sweep completed", {
+      event: "scheduler.cache_entry_sweep",
+      removed: 3,
+    });
     expect(deps.submitted).toEqual([]);
   });
 

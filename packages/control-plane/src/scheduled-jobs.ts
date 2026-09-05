@@ -4,9 +4,8 @@
  * Terraform declares (`cron_triggers` in
  * `terraform/environments/production/workers-control-plane.tf`), which must
  * list exactly the expressions below; a unit test checks the two agree. The
- * Node host will drive the same table from an in-process loop over
- * `nextCronOccurrence` from `@open-inspect/shared` (H-5); nothing on Node
- * consumes it yet.
+ * Node host drives the same table from an in-process loop over
+ * `nextCronOccurrence` from `@open-inspect/shared` (src/node/cron-loop.ts).
  *
  * A slot may fire twice (a retried trigger, two hosts during a cutover) and
  * that is harmless: the automation scheduler's tick claims its work with an
@@ -17,6 +16,7 @@
 
 import { checkAutofixQueueHealth } from "./autofix/queue-health";
 import { SessionIndexStore } from "./db/session-index";
+import { CACHE_ENTRY_SWEEP_CRON, SqlCacheStore } from "./db/sql-cache-store";
 import type { SqlDatabase } from "./db/sql-database";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 import type { CorrelationContext, Logger } from "./logger";
@@ -70,6 +70,20 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     cron: IMAGE_BUILD_SCHEDULER_CRON,
     async run({ env, db, correlation }) {
       await runImageBuildScheduler(env, db, correlation);
+    },
+  },
+  {
+    name: "cache_entry_sweep",
+    cron: CACHE_ENTRY_SWEEP_CRON,
+    async run({ db, log }) {
+      // Cloudflare caches in KV, so there the table stays empty and this
+      // deletes nothing. It runs on both hosts because the job table is one
+      // table, and because the bots' caches land here when they leave KV.
+      const removed = await new SqlCacheStore(db).sweepExpired();
+      log.info("Cache entry sweep completed", {
+        event: "scheduler.cache_entry_sweep",
+        removed,
+      });
     },
   },
   {

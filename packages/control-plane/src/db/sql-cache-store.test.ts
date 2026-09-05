@@ -1,0 +1,98 @@
+/**
+ * What the `CacheStore` contract cannot see: that a row past its TTL is
+ * removed rather than hidden, that a key holds one row however often it is
+ * written, and what the sweep leaves behind. The port's own semantics are
+ * covered for every implementation by the conformance suite
+ * (test/conformance/cache-store-conformance.ts).
+ */
+
+import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
+import { SqlCacheStore } from "./sql-cache-store";
+
+const MIGRATION = fileURLToPath(
+  new URL("../../../../terraform/d1/migrations/0075_cache_entries.sql", import.meta.url)
+);
+
+const HOUR_MS = 60 * 60 * 1000;
+
+let sqlite: DatabaseSync;
+let db: NodeSqlDatabase;
+let nowMs: number;
+
+const store = (): SqlCacheStore => new SqlCacheStore(db, { now: () => nowMs });
+
+async function rowCount(): Promise<number> {
+  const row = await db.prepare("SELECT count(*) AS n FROM cache_entries").first<{ n: number }>();
+  return row!.n;
+}
+
+beforeEach(() => {
+  sqlite = new DatabaseSync(":memory:");
+  sqlite.exec(readFileSync(MIGRATION, "utf8"));
+  db = createNodeSqlDatabase(sqlite);
+  nowMs = 1_800_000_000_000;
+});
+
+afterEach(() => {
+  db.close();
+});
+
+describe("SqlCacheStore", () => {
+  it("deletes an expired row on the read that finds it, rather than leaving it to the sweep", async () => {
+    const cache = store();
+    await cache.put("k", "v", { expirationTtl: 60 });
+
+    nowMs += 61_000;
+
+    expect(await cache.get("k")).toBeNull();
+    expect(await rowCount()).toBe(0);
+  });
+
+  it("keeps one row per key however many times it is written", async () => {
+    const cache = store();
+    await cache.put("k", "first", { expirationTtl: 60 });
+    await cache.put("k", "second", { expirationTtl: 120 });
+
+    expect(await rowCount()).toBe(1);
+    nowMs += 61_000;
+    // The second write replaced the first entry's TTL, not just its value.
+    expect(await cache.get("k")).toBe("second");
+  });
+
+  it("sweeps only entries whose TTL has passed, and reports how many went", async () => {
+    const cache = store();
+    await cache.put("expired-1", "v", { expirationTtl: 60 });
+    await cache.put("expired-2", "v", { expirationTtl: 120 });
+    await cache.put("live", "v", { expirationTtl: 60 * 60 * 24 });
+    await cache.put("forever", "v");
+
+    nowMs += HOUR_MS;
+
+    expect(await cache.sweepExpired()).toBe(2);
+    expect(await rowCount()).toBe(2);
+    expect(await cache.get("live")).toBe("v");
+    expect(await cache.get("forever")).toBe("v");
+  });
+
+  it("sweeps nothing when every entry is live", async () => {
+    const cache = store();
+    await cache.put("live", "v", { expirationTtl: 60 });
+    await cache.put("forever", "v");
+
+    expect(await cache.sweepExpired()).toBe(0);
+    expect(await rowCount()).toBe(2);
+  });
+
+  it("treats an entry exactly at its expiry as gone", async () => {
+    const cache = store();
+    await cache.put("k", "v", { expirationTtl: 60 });
+
+    nowMs += 60_000;
+
+    expect(await cache.get("k")).toBeNull();
+  });
+});
