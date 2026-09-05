@@ -1,11 +1,6 @@
 import useSWR from "swr";
 import { useAuthSession } from "@/lib/auth-session";
-import type { SlackChannelListing } from "@open-inspect/shared/slack";
-
-interface SlackChannelsResponse {
-  channels: SlackChannelListing[];
-  error?: string;
-}
+import type { ControlPlaneSlackChannelsResponse } from "@open-inspect/shared/slack";
 
 /**
  * Fetch the workspace's Slack channels for the automation channel picker.
@@ -19,7 +14,7 @@ interface SlackChannelsResponse {
 export function useSlackChannels(enabled = true) {
   const { data: session } = useAuthSession();
 
-  const { data, isLoading } = useSWR<SlackChannelsResponse>(
+  const { data, isLoading } = useSWR<ControlPlaneSlackChannelsResponse>(
     enabled && session ? "/api/integrations/slack/channels" : null
   );
 

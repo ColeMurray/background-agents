@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addReaction,
   completeExternalUpload,
-  controlPlaneSlackChannelsResponseSchema,
   getExternalUploadUrl,
   getChannelInfo,
   getMessageDetails,
@@ -16,7 +15,6 @@ import {
   postMessage,
   publishView,
   removeReaction,
-  slackChannelListingSchema,
   updateMessage,
   uploadToExternalUrl,
 } from "./client";
@@ -726,42 +724,6 @@ describe("openView", () => {
 describe("listChannels", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("parses normalized control-plane channel listings", () => {
-    const channel = slackChannelListingSchema.safeParse({
-      id: "C1",
-      name: "general",
-      isPrivate: false,
-      isMember: true,
-      ignored: "field",
-    });
-    const response = controlPlaneSlackChannelsResponseSchema.safeParse({
-      channels: [{ id: "C1", name: "general", isPrivate: false, isMember: true }],
-      error: "missing_scope",
-    });
-
-    expect(channel.success).toBe(true);
-    if (channel.success) {
-      expect(channel.data).toEqual({
-        id: "C1",
-        name: "general",
-        isPrivate: false,
-        isMember: true,
-      });
-    }
-    expect(response.success).toBe(true);
-  });
-
-  it("rejects malformed control-plane channel listings", () => {
-    expect(
-      controlPlaneSlackChannelsResponseSchema.safeParse({
-        channels: [{ id: "C1", name: "general", isPrivate: null, isMember: true }],
-      }).success
-    ).toBe(false);
-    expect(
-      controlPlaneSlackChannelsResponseSchema.safeParse({ error: "missing_scope" }).success
-    ).toBe(false);
   });
 
   it("normalizes a single page and requests public + private, non-archived", async () => {

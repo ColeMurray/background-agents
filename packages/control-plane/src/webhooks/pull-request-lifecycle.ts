@@ -19,8 +19,7 @@ import type {
   GitHubAutomationEvent,
   GitHubPullRequestEventFacts,
 } from "@open-inspect/shared/triggers";
-import type { PullRequestStatus } from "@open-inspect/shared/types/artifacts";
-import { z } from "zod";
+import type { PullRequestStatus, SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,
@@ -29,18 +28,7 @@ import { snapshotToRecord } from "../session/pull-request-snapshot";
 import type { PullRequestSnapshot } from "../source-control";
 
 /** A DO artifact as served by GET /internal/artifacts (metadata pre-parsed). */
-export const sessionArtifactSummarySchema = z.object({
-  id: z.string(),
-  type: z.string(),
-  url: z.string().nullable(),
-  metadata: z.record(z.string(), z.unknown()).nullable(),
-});
-
-export const sessionArtifactsResponseSchema = z.object({
-  artifacts: z.array(sessionArtifactSummarySchema).optional(),
-});
-
-export type SessionArtifactSummary = z.infer<typeof sessionArtifactSummarySchema>;
+export type SessionArtifactSummary = Pick<SessionArtifact, "id" | "type" | "url" | "metadata">;
 
 /** The slice of session-index state the processor needs. */
 interface PullRequestLifecycleSessions {

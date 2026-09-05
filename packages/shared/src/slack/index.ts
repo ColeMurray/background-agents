@@ -17,8 +17,6 @@ export {
   removeReaction,
   SLACK_PAGINATION_TIMEOUT_MS,
   SLACK_REQUEST_TIMEOUT_MS,
-  controlPlaneSlackChannelsResponseSchema,
-  slackChannelListingSchema,
   slackMessageAttachmentSchema,
   slackMessageFileSchema,
   updateMessage,
@@ -28,7 +26,6 @@ export {
 export type {
   SlackAuthTestResult,
   SlackChannelInfo,
-  SlackChannelListing,
   SlackEnvelope,
   CompleteExternalUploadOptions,
   ExternalUploadUrlOptions,
@@ -38,6 +35,11 @@ export type {
   SlackThreadMessage,
   SlackUser,
 } from "./client";
+export {
+  controlPlaneSlackChannelsResponseSchema,
+  slackChannelListingSchema,
+} from "./channel-contract";
+export type { ControlPlaneSlackChannelsResponse, SlackChannelListing } from "./channel-contract";
 export {
   applyMentionPolicy,
   escapeMrkdwnText,

@@ -7,6 +7,7 @@
  */
 
 import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
+import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { createLogger, parseLogLevel } from "../logger";
@@ -25,7 +26,6 @@ import {
 } from "./automation-event";
 import {
   processPullRequestLifecycleEvent,
-  sessionArtifactsResponseSchema,
   type PullRequestLifecycleDeps,
   type SessionArtifactSummary,
 } from "./pull-request-lifecycle";
@@ -55,11 +55,17 @@ async function trackPullRequestLifecycle(
         const response = await sessionRuntime.fetch(sessionId, SessionInternalPaths.artifacts, {
           method: "GET",
         });
-        if (!response.ok) return [];
-        const parsed = sessionArtifactsResponseSchema.safeParse(
-          await response.json().catch(() => null)
-        );
-        if (!parsed.success) return [];
+        if (!response.ok) {
+          throw new Error(`List session artifacts failed (status ${response.status})`);
+        }
+        let raw: unknown;
+        try {
+          raw = await response.json();
+        } catch {
+          throw new Error("List session artifacts returned invalid JSON");
+        }
+        const parsed = listArtifactsResponseSchema.safeParse(raw);
+        if (!parsed.success) throw new Error("List session artifacts returned invalid shape");
         return parsed.data.artifacts ?? [];
       },
       pushSnapshotToSession: async (sessionId, artifactId, snapshot) => {
