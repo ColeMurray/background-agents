@@ -10,7 +10,13 @@ import {
   PersistedAlarmDeadlineStore,
 } from "../session/alarm/scheduler";
 import { initSchema } from "../session/schema";
-import { HostAlarmClock, MAX_RETRIES, RETRY_BASE_DELAY_MS } from "./host-alarm-clock";
+import {
+  ALARM_CLAIM_LEASE_MS,
+  HostAlarmClock,
+  BLIND_RETRY_INTERVAL_MS,
+  MAX_RETRIES,
+  RETRY_BASE_DELAY_MS,
+} from "./host-alarm-clock";
 import { openHostAlarmIndex, type HostAlarmIndex } from "./host-alarm-index";
 import { createNodeSqlStorage } from "./sqlite-storage";
 
@@ -75,6 +81,97 @@ describe("HostAlarmClock", () => {
     expect(delivered).toEqual(["soon"]);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(delivered).toEqual(["soon", "late"]);
+  });
+
+  it("frees the session a hung delivery holds once its lease runs out", async () => {
+    let release!: () => void;
+    deliver.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+    await clock.storeFor("s1").setAlarm(Date.now() + 1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(deliver).toHaveBeenCalledTimes(1);
+
+    // The handler never returns. The row is not armed and the slot is held.
+    await vi.advanceTimersByTimeAsync(ALARM_CLAIM_LEASE_MS - 1);
+    expect(deliver).toHaveBeenCalledTimes(1);
+
+    // At the lease boundary both are released: the row is armed again, and
+    // the slot it held stops counting, so the redelivery can start.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(deliver).toHaveBeenCalledTimes(2);
+    // Only the redelivery ran to completion; the first is still hanging.
+    expect(delivered).toEqual(["s1"]);
+
+    // The abandoned delivery finally returns; it must not settle the claim
+    // that replaced it.
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await clock.storeFor("s1").getAlarm()).toBeNull();
+  });
+
+  it("keeps ticking when the index throws, rather than rejecting out of the timer", async () => {
+    const due = vi.spyOn(index, "due").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    const failed = vi.spyOn(log, "error");
+    await clock.storeFor("s1").setAlarm(Date.now() + 1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledWith(
+      "Alarm clock failed to claim work",
+      expect.objectContaining({ event: "alarm.poll_failed", error_message: "database is locked" })
+    );
+
+    // The timer survived: the next sweep delivers the deadline it missed.
+    due.mockRestore();
+    await vi.advanceTimersByTimeAsync(BLIND_RETRY_INTERVAL_MS);
+    expect(delivered).toEqual(["s1"]);
+  });
+
+  it("keeps the armed deadline and a live timer when the index cannot say what is next", async () => {
+    const earliest = vi.spyOn(index, "earliest").mockImplementation(() => {
+      throw new Error("database is locked");
+    });
+    const failed = vi.spyOn(log, "error");
+
+    // Arming ends setAlarm, so a throw here must not reject a recorded deadline.
+    await expect(clock.storeFor("s1").setAlarm(Date.now() + 1_000)).resolves.toBeUndefined();
+    expect(failed).toHaveBeenCalledWith(
+      "Alarm clock could not schedule its next wake-up",
+      expect.objectContaining({ event: "alarm.arm_failed", error_message: "database is locked" })
+    );
+
+    // Blind to what is due, the clock still wakes on its own interval.
+    await vi.advanceTimersByTimeAsync(BLIND_RETRY_INTERVAL_MS);
+    expect(delivered).toEqual(["s1"]);
+    earliest.mockRestore();
+  });
+
+  it("logs a settlement it could not write, leaving the lease to return the session", async () => {
+    // The index cannot be written at all, so neither settlement can land.
+    for (const method of ["complete", "retry"] as const) {
+      vi.spyOn(index, method).mockImplementation(() => {
+        throw new Error("disk I/O error");
+      });
+    }
+    const failed = vi.spyOn(log, "error");
+    await clock.storeFor("s1").setAlarm(Date.now() + 1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(failed).toHaveBeenCalledWith(
+      "Deadline delivery could not be settled",
+      expect.objectContaining({ event: "alarm.settle_failed", session_id: "s1" })
+    );
+    // Still claimed, so the session is not lost: the lease brings it back.
+    expect(index.get("s1")).toBeNull();
+    await vi.advanceTimersByTimeAsync(ALARM_CLAIM_LEASE_MS);
+    expect(deliver).toHaveBeenCalledTimes(2);
   });
 
   it("does not fire a deleted deadline", async () => {
