@@ -98,7 +98,7 @@ export interface HostAlarmIndex {
   close(): void;
 }
 
-const SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS session_deadlines (
+const TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_deadlines (
   session_id TEXT PRIMARY KEY,
   deadline INTEGER,
   in_flight INTEGER,
@@ -106,8 +106,12 @@ const SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS session_deadlines (
   claim_token TEXT,
   lease_expires_at INTEGER,
   CHECK (deadline IS NOT NULL OR in_flight IS NOT NULL)
-);
-CREATE INDEX IF NOT EXISTS idx_session_deadlines_deadline ON session_deadlines (deadline);
+);`;
+
+// Indexes come after the columns are known to exist: on a file written before
+// the lease columns, the table statement above is a no-op and the lease index
+// would name a column that is only added below.
+const INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_session_deadlines_deadline ON session_deadlines (deadline);
 CREATE INDEX IF NOT EXISTS idx_session_deadlines_leases ON session_deadlines (lease_expires_at);`;
 
 /**
@@ -137,8 +141,9 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
   ensurePrivateDirectory(dataDir);
   const db = openPrivateSqliteFile(join(dataDir, "host-alarms.db"));
   try {
-    db.exec(SCHEMA_SQL);
+    db.exec(TABLE_SQL);
     addMissingColumns(db);
+    db.exec(INDEX_SQL);
   } catch (error) {
     db.close();
     throw error;

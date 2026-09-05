@@ -178,20 +178,29 @@ describe("openHostAlarmIndex", () => {
     expect(second.recoverForeignClaims([])).toEqual([]);
   });
 
-  it("treats a claim written before leases existed as one whose lease has run out", () => {
-    const first = open();
-    first.set("legacy", 100);
-    first.claim("legacy", LEASE_UNTIL);
-    first.close();
+  it("opens a file written before the lease columns existed, and frees the claims in it", () => {
+    // The table an older build wrote: no claim_token, no lease_expires_at,
+    // and one deadline already taken for delivery.
+    const older = new DatabaseSync(join(dataDir, "host-alarms.db"));
+    older.exec(`CREATE TABLE session_deadlines (
+      session_id TEXT PRIMARY KEY,
+      deadline INTEGER,
+      in_flight INTEGER,
+      failures INTEGER NOT NULL DEFAULT 0,
+      CHECK (deadline IS NOT NULL OR in_flight IS NOT NULL)
+    );
+    CREATE INDEX idx_session_deadlines_deadline ON session_deadlines (deadline);`);
+    older.exec("INSERT INTO session_deadlines (session_id, deadline) VALUES ('armed', 700)");
+    older.exec("INSERT INTO session_deadlines (session_id, in_flight) VALUES ('legacy', 100)");
+    older.close();
 
-    // The shape an older build left behind: a claim with no lease recorded.
-    const db = new DatabaseSync(join(dataDir, "host-alarms.db"));
-    db.exec("UPDATE session_deadlines SET claim_token = NULL, lease_expires_at = NULL");
-    db.close();
-
-    const second = open();
-    expect(second.recoverExpiredClaims(0)).toEqual(["legacy"]);
-    expect(second.get("legacy")).toBe(100);
+    const index = open();
+    // What it already held is intact, and a claim carrying no lease is one
+    // whose lease has run out — which is what it is.
+    expect(index.get("armed")).toBe(700);
+    expect(index.earliestLease()).toBe(0);
+    expect(index.recoverExpiredClaims(0)).toEqual(["legacy"]);
+    expect(index.get("legacy")).toBe(100);
   });
 
   it("leaves excluded sessions out of earliest and due", () => {
