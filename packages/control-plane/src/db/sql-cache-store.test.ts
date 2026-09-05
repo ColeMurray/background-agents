@@ -1,8 +1,9 @@
 /**
  * What the `CacheStore` contract cannot see: that a row past its TTL is
- * removed rather than hidden, that a key holds one row however often it is
- * written, and what the sweep leaves behind. The port's own semantics are
- * covered for every implementation by the conformance suite
+ * removed rather than hidden — nothing sweeps the table, so a read that
+ * leaves the row behind would leak it — and that a key holds one row however
+ * often it is written. The port's own semantics are covered for every
+ * implementation by the conformance suite
  * (test/conformance/cache-store-conformance.ts).
  */
 
@@ -16,8 +17,6 @@ import { SqlCacheStore } from "./sql-cache-store";
 const MIGRATION = fileURLToPath(
   new URL("../../../../terraform/d1/migrations/0075_cache_entries.sql", import.meta.url)
 );
-
-const HOUR_MS = 60 * 60 * 1000;
 
 let sqlite: DatabaseSync;
 let db: NodeSqlDatabase;
@@ -61,30 +60,6 @@ describe("SqlCacheStore", () => {
     nowMs += 61_000;
     // The second write replaced the first entry's TTL, not just its value.
     expect(await cache.get("k")).toBe("second");
-  });
-
-  it("sweeps only entries whose TTL has passed, and reports how many went", async () => {
-    const cache = store();
-    await cache.put("expired-1", "v", { expirationTtl: 60 });
-    await cache.put("expired-2", "v", { expirationTtl: 120 });
-    await cache.put("live", "v", { expirationTtl: 60 * 60 * 24 });
-    await cache.put("forever", "v");
-
-    nowMs += HOUR_MS;
-
-    expect(await cache.sweepExpired()).toBe(2);
-    expect(await rowCount()).toBe(2);
-    expect(await cache.get("live")).toBe("v");
-    expect(await cache.get("forever")).toBe("v");
-  });
-
-  it("sweeps nothing when every entry is live", async () => {
-    const cache = store();
-    await cache.put("live", "v", { expirationTtl: 60 });
-    await cache.put("forever", "v");
-
-    expect(await cache.sweepExpired()).toBe(0);
-    expect(await rowCount()).toBe(2);
   });
 
   it("treats an entry exactly at its expiry as gone", async () => {

@@ -16,7 +16,6 @@
 
 import { checkAutofixQueueHealth } from "./autofix/queue-health";
 import { SessionIndexStore } from "./db/session-index";
-import { CACHE_ENTRY_SWEEP_CRON, SqlCacheStore } from "./db/sql-cache-store";
 import type { SqlDatabase } from "./db/sql-database";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 import type { CorrelationContext, Logger } from "./logger";
@@ -70,20 +69,6 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     cron: IMAGE_BUILD_SCHEDULER_CRON,
     async run({ env, db, correlation }) {
       await runImageBuildScheduler(env, db, correlation);
-    },
-  },
-  {
-    name: "cache_entry_sweep",
-    cron: CACHE_ENTRY_SWEEP_CRON,
-    async run({ db, log }) {
-      // Cloudflare caches in KV, so there the table stays empty and this
-      // deletes nothing. It runs on both hosts because the job table is one
-      // table, and because the bots' caches land here when they leave KV.
-      const removed = await new SqlCacheStore(db).sweepExpired();
-      log.info("Cache entry sweep completed", {
-        event: "scheduler.cache_entry_sweep",
-        removed,
-      });
     },
   },
   {

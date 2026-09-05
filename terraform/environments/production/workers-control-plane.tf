@@ -227,7 +227,7 @@ module "control_plane_worker" {
 
   # The image-build schedule must match IMAGE_BUILD_SCHEDULER_CRON in scheduler.ts,
   # and the draft sweep ABANDONED_DRAFT_SWEEP_CRON in abandoned-draft-sweep.ts.
-  cron_triggers = ["* * * * *", "7,37 * * * *", "23 * * * *", "41 * * * *"]
+  cron_triggers = ["* * * * *", "7,37 * * * *", "23 * * * *"]
 
   # module.e2b_infra is deliberately absent: its template build depends on THIS
   # worker instead (see e2b.tf), so control-plane deploys land before template

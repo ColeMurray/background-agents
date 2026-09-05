@@ -8,25 +8,20 @@
  * when they move off KV.
  *
  * Expiry is lazy on read, the way KV's is observable: a row past its TTL
- * reads as absent and is deleted on the spot. `sweepExpired` reclaims the
- * rows nothing reads again; the scheduled `cache_entry_sweep` job calls it.
+ * reads as absent and is deleted on the spot. That is the whole reclamation
+ * story, because the key space is two singletons — the repositories listing
+ * and one GitHub installation token — and both are read on the paths that
+ * write them, so an expired row is deleted by the next request that wants it.
+ * A caller that starts writing keys nobody reads back (per-user, per-repo)
+ * would need a periodic sweep; none exists today, so none is scheduled.
  *
- * What lands in the table is whatever callers cache, today the repositories
- * listing and GitHub installation tokens. Those tokens are short-lived and
- * stored as written, exactly as they are in KV on Cloudflare — but on a
- * container that means they are in the global store file, and in whatever
- * Litestream replicates it to.
+ * The installation token is stored as written, exactly as it is in KV on
+ * Cloudflare — but on a container that means it is in the global store file,
+ * and in whatever Litestream replicates it to.
  */
 
 import type { CacheStore, CacheStorePutOptions } from "@open-inspect/shared/cache-store";
 import type { SqlDatabase } from "./sql-database";
-
-/**
- * Hourly, at a minute no other scheduled job uses. Expiry is lazy on read, so
- * the sweep only reclaims rows nothing comes back for; an hour of those is a
- * few kilobytes.
- */
-export const CACHE_ENTRY_SWEEP_CRON = "41 * * * *";
 
 interface CacheEntryRow {
   value: string;
@@ -78,14 +73,5 @@ export class SqlCacheStore implements CacheStore {
 
   async delete(key: string): Promise<void> {
     await this.db.prepare("DELETE FROM cache_entries WHERE key = ?").bind(key).run();
-  }
-
-  /** Delete every entry whose TTL has passed, and report how many went. */
-  async sweepExpired(): Promise<number> {
-    const result = await this.db
-      .prepare("DELETE FROM cache_entries WHERE expires_at IS NOT NULL AND expires_at <= ?")
-      .bind(this.now())
-      .run();
-    return result.meta.changes;
   }
 }
