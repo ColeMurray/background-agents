@@ -148,12 +148,14 @@ export interface SandboxState {
   createdAt: number;
   /** Provider object ID if the sandbox exists remotely */
   providerObjectId?: string | null;
+  /** SANDBOX_VERSION reported by the current provider object. */
+  runtimeVersion?: string | null;
   /** Snapshot image ID if available for restore */
   snapshotImageId: string | null;
   /**
    * SANDBOX_VERSION of the runtime that produced `snapshotImageId`, or null
    * when the snapshot predates version recording. Gates restore — see
-   * {@link isSnapshotRuntimeCompatible}.
+   * {@link isRuntimeVersionCompatible}.
    */
   snapshotRuntimeVersion: string | null;
   /** Whether an active WebSocket connection exists */
@@ -191,24 +193,20 @@ export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
 };
 
 /**
- * Whether a filesystem snapshot may be booted again.
+ * Whether recorded runtime state may be booted again.
  *
- * A snapshot carries the whole sandbox filesystem, including the pinned agent
- * binary, so restoring one silently resurrects the runtime that took it. A
- * runtime fix therefore never reaches a session that keeps restoring — the
- * failure mode that stranded every pre-existing session on the OpenCode
- * message-ID wraparound. Bumping MIN_COMPATIBLE_RUNTIME_VERSION now retires
- * those snapshots the same way it retires prebuilt images.
+ * Filesystem snapshots and persistent provider objects carry the pinned agent
+ * binary, so reusing either can silently resurrect a retired runtime.
  *
- * Fails closed, matching image selection: a snapshot whose runtime version was
- * never recorded (taken before this column existed) or does not parse is
+ * Fails closed, matching image selection: state whose runtime version was
+ * never recorded or does not parse is
  * treated as below the floor. The cost is one fresh spawn — the sandbox's
  * uncommitted filesystem state — after which the next snapshot records its
  * version and restores resume as normal.
  */
-export function isSnapshotRuntimeCompatible(snapshotRuntimeVersion: string | null): boolean {
-  if (!snapshotRuntimeVersion) return false;
-  const version = parseRuntimeVersionNumber(snapshotRuntimeVersion);
+export function isRuntimeVersionCompatible(runtimeVersion: string | null): boolean {
+  if (!runtimeVersion) return false;
+  const version = parseRuntimeVersionNumber(runtimeVersion);
   return version !== null && version >= MIN_COMPATIBLE_RUNTIME_VERSION;
 }
 
@@ -280,6 +278,7 @@ export function evaluateSpawnDecision(
   if (
     supportsPersistentResume &&
     state.providerObjectId &&
+    isRuntimeVersionCompatible(state.runtimeVersion ?? null) &&
     (state.status === "stopped" || state.status === "stale")
   ) {
     return { action: "resume", providerObjectId: state.providerObjectId };
@@ -291,7 +290,7 @@ export function evaluateSpawnDecision(
     state.snapshotImageId &&
     (state.status === "stopped" || state.status === "stale" || state.status === "failed")
   ) {
-    if (isSnapshotRuntimeCompatible(state.snapshotRuntimeVersion)) {
+    if (isRuntimeVersionCompatible(state.snapshotRuntimeVersion)) {
       return {
         action: "restore",
         snapshotImageId: state.snapshotImageId,

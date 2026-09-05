@@ -1,11 +1,11 @@
 """Opt-in wire tests: OPENCODE_TEST_BINARY=/path/to/opencode pytest ... -v.
 
-Uses real OpenCode 1.18.29, an isolated catalog/config, and fake localhost providers.
+Uses the pinned OpenCode binary, an isolated catalog/config, and fake localhost providers.
 Only reasoning settings are retained from requests; no real provider keys are used.
 
-Fixture: public subset of https://models.opencode.ai/api.json, retrieved 2026-09-04.
-Source SHA-256: ef112420273b7e572ef9c87db13a2f30fe1a562c29ea30d365b911889f9ff46c
-Subset SHA-256: 18e7e0ca29f785f273d50776d9d96f6dd2be6e754d62d14d73b23325d7eac6da
+Fixture: public subset of https://models.opencode.ai/api.json, retrieved 2026-09-05.
+Source SHA-256: c2276b50cae3c9b90dab2d8fc0e9dac25346780661c2c86205712d1f35cd338b
+Subset SHA-256: 9a4f68f1bc2ab2333eab54ca2fcfe3bc12735a9edd5de2be198b58e1c60ccc1a
 Reconcile this frozen fixture with shared model/effort definitions when changing
 models or the binary. Mocks verify serialization, not live provider acceptance.
 """
@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from sandbox_runtime.runtime_manifest import OPENCODE_VERSION
 from tests.test_prompt_stream import make_stream
 
 pytest_plugins = ["tests.test_reasoning_config"]
@@ -29,6 +30,9 @@ pytest_plugins = ["tests.test_reasoning_config"]
 BINARY = os.environ.get("OPENCODE_TEST_BINARY")
 pytestmark = pytest.mark.skipif(not BINARY, reason="set OPENCODE_TEST_BINARY for wire tests")
 CATALOG = Path(__file__).parent / "fixtures/reasoning-models.json"
+OPENCODE_START_TIMEOUT_SECONDS = 60
+OPENCODE_HEALTH_REQUEST_TIMEOUT_SECONDS = 1
+OPENCODE_REQUEST_TIMEOUT_SECONDS = 30
 
 
 def openai_events(model):
@@ -98,7 +102,7 @@ def anthropic_events(model):
 
 @pytest.fixture
 async def wire_server(tmp_path, reasoning_config):
-    assert subprocess.check_output([BINARY, "--version"], text=True).strip() == "1.18.29"
+    assert subprocess.check_output([BINARY, "--version"], text=True).strip() == OPENCODE_VERSION
     captured = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -164,19 +168,19 @@ async def wire_server(tmp_path, reasoning_config):
             stderr=subprocess.DEVNULL,
         )
 
-        def call(path, body=None):
+        def call(path, body=None, timeout_seconds=OPENCODE_REQUEST_TIMEOUT_SECONDS):
             request = urllib.request.Request(
                 f"http://127.0.0.1:{port}" + path,
                 data=json.dumps(body).encode() if body is not None else None,
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 return json.load(response)
 
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + OPENCODE_START_TIMEOUT_SECONDS
         while True:
             try:
-                call("/global/health")
+                call("/global/health", timeout_seconds=OPENCODE_HEALTH_REQUEST_TIMEOUT_SECONDS)
                 break
             except OSError:
                 if process.poll() is not None or time.monotonic() >= deadline:
@@ -250,6 +254,7 @@ async def test_all_fixture_efforts_reach_provider(wire_server):
 
 
 def test_opencode_catalog_includes_gpt_6_astra(tmp_path):
+    assert subprocess.check_output([BINARY, "--version"], text=True).strip() == OPENCODE_VERSION
     env = {key: os.environ[key] for key in ("PATH", "HOME", "SYSTEMROOT") if key in os.environ}
     env.update(
         {

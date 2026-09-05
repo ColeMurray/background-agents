@@ -1,6 +1,7 @@
 {
   "runtimeVersion": "v62-gpt6-astra",
+  "opencodeVersion": "1.18.29",
   "generation": 62,
-  "minimumCompatibleGeneration": 60,
+  "minimumCompatibleGeneration": 62,
   "minimumRebuildGeneration": 62
 }

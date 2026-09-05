@@ -8,14 +8,18 @@ data "external" "daytona_source_hash" {
   count = local.use_daytona_backend ? 1 : 0
 
   program = ["bash", "-c", <<-EOF
-    cd ${var.project_root}
+    cd "${var.project_root}"
     if command -v sha256sum &> /dev/null; then
       hash=$(find packages/daytona-infra/src packages/sandbox-runtime/src \
-        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) \
+        -type f \
+        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
+        -not -name '*.pyc' -not -name '.DS_Store' \
         -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
     else
       hash=$(find packages/daytona-infra/src packages/sandbox-runtime/src \
-        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) \
+        -type f \
+        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
+        -not -name '*.pyc' -not -name '.DS_Store' \
         -exec shasum -a 256 {} \; | sort | shasum -a 256 | cut -d' ' -f1)
     fi
     echo "{\"hash\": \"$hash\"}"

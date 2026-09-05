@@ -183,9 +183,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+          OPENCODE_VERSION="$(python -c 'from sandbox_runtime.runtime_manifest import OPENCODE_VERSION; print(OPENCODE_VERSION)')"
+          npm install --global "opencode-ai@$OPENCODE_VERSION"
 
       - name: Run tests
-        run: pytest tests/ -v
+        run: OPENCODE_TEST_BINARY="$(command -v opencode)" pytest tests/ -v
 
       - name: Run Node.js tests
         run: node --test tests/*.test.mjs

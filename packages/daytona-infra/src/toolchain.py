@@ -3,31 +3,22 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from daytona import CreateSnapshotParams, Daytona, Image
 
-# OpenCode version to install.
-#
-# OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
-# eager-subscription race in 1.15.5. Keep the CLI and plugin on the same pin.
-#
-# Never pin below 1.18.15 — see packages/modal-infra/src/images/base.py for why
-# (OpenCode's message-ID counter wraps and earlier releases order by ID string).
-OPENCODE_VERSION = "1.18.29"
+if TYPE_CHECKING:
+    from pathlib import Path
+
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
-# The shared runtime generation invalidates the Daytona snapshot.
-SANDBOX_VERSION = json.loads(
-    (
-        Path(__file__).parents[2] / "sandbox-runtime/src/sandbox_runtime/runtime_manifest.json"
-    ).read_text()
-)["runtimeVersion"]
 
 
 def build_base_image(repo_root: Path) -> Image:
     """Build the Open-Inspect Daytona base image."""
     sandbox_runtime_dir = repo_root / "packages" / "sandbox-runtime" / "src" / "sandbox_runtime"
+    runtime_manifest = json.loads((sandbox_runtime_dir / "runtime_manifest.json").read_text())
+    opencode_version = runtime_manifest["opencodeVersion"]
 
     return (
         Image.base("python:3.12-slim-bookworm")
@@ -59,8 +50,8 @@ def build_base_image(repo_root: Path) -> Image:
             "PyJWT[crypto]",
         )
         .run_commands(
-            f"npm install -g opencode-ai@{OPENCODE_VERSION}",
-            f"npm install -g @opencode-ai/plugin@{OPENCODE_VERSION} zod",
+            f"npm install -g opencode-ai@{opencode_version}",
+            f"npm install -g @opencode-ai/plugin@{opencode_version} zod",
             f"curl -fsSL -o /tmp/code-server.deb "
             f"https://github.com/coder/code-server/releases/download/v{CODE_SERVER_VERSION}/"
             f"code-server_{CODE_SERVER_VERSION}_amd64.deb",
@@ -90,7 +81,7 @@ def build_base_image(repo_root: Path) -> Image:
                 "PATH": "/root/.bun/bin:/usr/local/bin:/usr/bin:/bin",
                 "PYTHONPATH": "/app",
                 "NODE_PATH": "/usr/lib/node_modules",
-                "SANDBOX_VERSION": SANDBOX_VERSION,
+                "SANDBOX_VERSION": runtime_manifest["runtimeVersion"],
             }
         )
         .add_local_dir(str(sandbox_runtime_dir), "/app/sandbox_runtime")

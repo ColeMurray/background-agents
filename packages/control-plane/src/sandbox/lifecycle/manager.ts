@@ -91,6 +91,7 @@ interface SandboxCircuitBreakerInfo {
   modal_object_id: string | null;
   snapshot_image_id: string | null;
   snapshot_runtime_version: string | null;
+  runtime_version: string | null;
   spawn_failure_count: number | null;
   last_spawn_failure: number | null;
 }
@@ -448,6 +449,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       providerObjectId: sandboxState?.modal_object_id || null,
       snapshotImageId: sandboxState?.snapshot_image_id || null,
       snapshotRuntimeVersion: sandboxState?.snapshot_runtime_version || null,
+      runtimeVersion: sandboxState?.runtime_version || null,
       hasActiveWebSocket: this.wsManager.getSandboxWebSocket() !== null,
     };
 

@@ -85,6 +85,15 @@ describe("SandboxRepository", () => {
     });
   });
 
+  describe("getSandboxWithCircuitBreaker", () => {
+    it("selects the current runtime version for persistent resume decisions", () => {
+      repository.getSandboxWithCircuitBreaker();
+
+      expect(mock.calls).toHaveLength(1);
+      expect(mock.calls[0].query).toContain(", runtime_version,");
+    });
+  });
+
   describe("createSandbox", () => {
     it("creates sandbox with correct parameters", () => {
       repository.createSandbox({
