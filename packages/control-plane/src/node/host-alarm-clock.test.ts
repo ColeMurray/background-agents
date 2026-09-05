@@ -111,6 +111,19 @@ describe("HostAlarmClock", () => {
     clock.stop();
   });
 
+  it("does not spin on the elapsed lease of a delivery it has already abandoned", async () => {
+    deliver.mockImplementationOnce(() => new Promise<void>(() => {}));
+    await clock.storeFor("hung").setAlarm(Date.now() + 1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const due = vi.spyOn(index, "due");
+
+    // Past the lease, the claim stays on disk with an expiry already behind
+    // us. Waking for it would arm at zero delay and never make progress.
+    await vi.advanceTimersByTimeAsync(ALARM_CLAIM_LEASE_MS + BLIND_RETRY_INTERVAL_MS * 5);
+
+    expect(due.mock.calls.length).toBeLessThanOrEqual(3);
+  });
+
   it("re-arms a claim a dead process left, and refuses the delivery that outlived it", async () => {
     const releases: Array<() => void> = [];
     deliver.mockImplementation(

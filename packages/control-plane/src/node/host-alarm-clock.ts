@@ -179,8 +179,12 @@ export class HostAlarmClock {
     const now = this.now();
     let wakeAt: number | null = notBefore ?? null;
     try {
+      // Only a lease still to come is worth waking for. One already behind
+      // us belongs to a delivery this clock has let go of, or to a claim a
+      // settlement could not clear; either way the tick would find nothing to
+      // do and arm again at once. The next start recovers both.
       const lease = this.index.earliestLease();
-      if (lease !== null) wakeAt = Math.max(lease, notBefore ?? lease);
+      if (lease !== null && lease > now) wakeAt = Math.max(lease, notBefore ?? lease);
       // A session being delivered to is left out: its next deadline is
       // picked up when this delivery settles.
       if (this.liveDeliveries() < this.maxConcurrentDeliveries) {
