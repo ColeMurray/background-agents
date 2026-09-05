@@ -61,9 +61,9 @@ const integrationSettings = vi.hoisted(() => ({
   resolveSandboxSettings: vi.fn(),
 }));
 
-const finalizationQueue = {
+const jobs = {
   send: vi.fn(async () => undefined),
-} as unknown as Queue;
+};
 
 vi.mock("../source-control", async (importOriginal) => {
   const actual = await importOriginal<typeof SourceControlModule>();
@@ -133,7 +133,7 @@ function createModalEnv(): Env {
     WORKER_URL: "https://cp.test",
     MODAL_API_SECRET: "modal-secret",
     MODAL_WORKSPACE: "modal-ws",
-    IMAGE_BUILD_FINALIZATION_QUEUE: finalizationQueue,
+    JOBS: jobs,
     // Modal builds mint callback tokens like every provider.
     IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
   });
@@ -148,7 +148,7 @@ function createVercelEnv(): Env {
     IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
     VERCEL_TOKEN: "vercel-token",
     VERCEL_PROJECT_ID: "project-123",
-    IMAGE_BUILD_FINALIZATION_QUEUE: finalizationQueue,
+    JOBS: jobs,
   });
 }
 
@@ -162,7 +162,7 @@ function createOpenComputerEnv(): Env {
     OPENCOMPUTER_API_URL: "https://opencomputer.test",
     OPENCOMPUTER_API_KEY: "oc-token",
     OPENCOMPUTER_TEMPLATE: "openinspect-runtime",
-    IMAGE_BUILD_FINALIZATION_QUEUE: finalizationQueue,
+    JOBS: jobs,
   });
 }
 

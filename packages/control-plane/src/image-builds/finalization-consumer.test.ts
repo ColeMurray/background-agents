@@ -1,55 +1,56 @@
 import { describe, expect, it, vi } from "vitest";
-import { consumeImageBuildFinalizationBatch } from "./finalization-consumer";
+import type { SqlDatabase } from "../db/sql-database";
+import type { JobDeps } from "../jobs";
+import type { Logger } from "../logger";
+import type { Env } from "../types";
+import { handleImageBuildFinalization } from "./finalization-consumer";
+import { ImageBuildFinalizer } from "./finalizer";
 
-function message(body: unknown) {
+vi.mock("./finalizer", () => ({
+  ImageBuildFinalizer: vi.fn(function () {
+    return { process };
+  }),
+}));
+vi.mock("./provider-factory", () => ({ createImageBuildAdapterFactory: vi.fn(() => ({})) }));
+
+const { process } = vi.hoisted(() => ({ process: vi.fn() }));
+
+const JOB = { version: 1 as const, buildId: "build-1", completionHash: "a".repeat(64) };
+
+function deps(): JobDeps {
   return {
-    id: "message-1",
-    timestamp: new Date(),
-    body,
-    attempts: 1,
-    ack: vi.fn(),
-    retry: vi.fn(),
+    env: { LOG_LEVEL: "error" } as unknown as Env,
+    db: {} as SqlDatabase,
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+    correlation: { trace_id: "message-1", request_id: "message-1" },
   };
 }
 
-function batch(...messages: ReturnType<typeof message>[]): MessageBatch<unknown> {
-  return {
-    queue: "image-build-finalization",
-    messages,
-    ackAll: vi.fn(),
-    retryAll: vi.fn(),
-  } as unknown as MessageBatch<unknown>;
-}
+describe("handleImageBuildFinalization", () => {
+  it("acknowledges completed work, processed under the delivery's correlation", async () => {
+    const delivery = deps();
+    process.mockResolvedValueOnce({ type: "completed" });
 
-describe("image build finalization Queue consumer", () => {
-  it("acknowledges completed work", async () => {
-    const queued = message({
-      version: 1,
-      buildId: "build-1",
-      completionHash: "a".repeat(64),
-    });
-    const process = vi.fn(async () => ({ type: "completed" as const }));
+    const outcome = await handleImageBuildFinalization(
+      JOB,
+      { attempts: 1, maxAttempts: 13 },
+      delivery
+    );
 
-    await consumeImageBuildFinalizationBatch(batch(queued), process);
-
-    expect(process).toHaveBeenCalledWith(queued.body, "message-1");
-    expect(queued.ack).toHaveBeenCalledOnce();
-    expect(queued.retry).not.toHaveBeenCalled();
+    expect(outcome).toBe("ack");
+    expect(ImageBuildFinalizer).toHaveBeenCalledOnce();
+    expect(process).toHaveBeenCalledWith(JOB, delivery.correlation);
   });
 
-  it("retries busy or failed processing and rejects malformed commands", async () => {
-    const retry = message({
-      version: 1,
-      buildId: "build-1",
-      completionHash: "a".repeat(64),
-    });
-    const malformed = message({ buildId: "build-2", callbackToken: "secret" });
-    const process = vi.fn(async () => ({ type: "retry" as const, delaySeconds: 365 }));
+  it("asks for a retry after the delay the finalizer names while the build is busy", async () => {
+    process.mockResolvedValueOnce({ type: "retry", delaySeconds: 365 });
 
-    await consumeImageBuildFinalizationBatch(batch(retry, malformed), process);
+    const outcome = await handleImageBuildFinalization(
+      JOB,
+      { attempts: 2, maxAttempts: 13 },
+      deps()
+    );
 
-    expect(retry.retry).toHaveBeenCalledWith({ delaySeconds: 365 });
-    expect(malformed.ack).toHaveBeenCalledOnce();
-    expect(process).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({ retry: true, delaySeconds: 365 });
   });
 });

@@ -38,6 +38,7 @@ import {
 import { SCHEDULED_JOBS } from "../scheduled-jobs";
 import { createSessionRuntime, type SessionRuntime } from "../session/components";
 import { createSessionRuntimeClient } from "../session/runtime-client";
+import type { Jobs } from "../jobs";
 import type { Env, EnvConfig, Platform } from "../types";
 import { createNodeBackgroundTasks, settlesWithin } from "./background-tasks";
 import { openNodeCacheDatabase } from "./cache-database";
@@ -56,6 +57,17 @@ import { createSessionUpgradeHandler, MAX_MESSAGE_BYTES } from "./websocket-upgr
 
 /** The global store's file inside the data directory. */
 export const GLOBAL_STORE_FILE = "global.db";
+
+/**
+ * The jobs port until the Node host has a jobs table and poller of its own:
+ * a producer's `send` fails in the open, so the work it would have deferred
+ * is reported rather than lost.
+ */
+const jobsUnavailable: Jobs = {
+  async send(job) {
+    throw new Error(`Background jobs are not available on the Node host yet (${job.kind})`);
+  },
+};
 
 export interface NodeHostOptions {
   config: EnvConfig;
@@ -163,6 +175,7 @@ async function boot(
     SESSION: createNodeSessionRuntimeDispatch(registry),
     REPOS_CACHE: new SqlCacheStore(cacheDb),
     MEDIA_BUCKET: createS3ObjectStorage(options.objectStorage),
+    JOBS: jobsUnavailable,
   };
   const env: Env = { ...config, ...platform };
 

@@ -1,13 +1,11 @@
 import { generateId } from "../auth/crypto";
 import { ImageBuildStore, type ImageBuildRegistration } from "../db/image-builds";
+import type { Jobs } from "../jobs";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { hashImageBuildCallbackToken, type ImageBuildCallbackAuthFailure } from "./callback-auth";
-import {
-  createImageBuildFinalizationJob,
-  type ImageBuildFinalizationQueue,
-} from "./finalization-job";
+import { createImageBuildFinalizationJob } from "./finalization-job";
 import {
   errorMessage,
   ImageBuildCallbackAuthRejectedError,
@@ -80,7 +78,7 @@ export class ImageBuildWorkflow {
     private readonly store: ImageBuildStore,
     private readonly adapterFactory: ImageBuildAdapterFactory,
     private readonly providerDeps: ImageBuildProviderDeps,
-    private readonly finalizationQueue: ImageBuildFinalizationQueue | null = null
+    private readonly jobs: Jobs
   ) {}
 
   /**
@@ -187,10 +185,6 @@ export class ImageBuildWorkflow {
       });
       throw new ImageBuildProviderUnconfiguredError("Image build provider is not configured", e);
     }
-    if (!this.finalizationQueue) {
-      throw new ImageBuildWorkflowUnavailableError("Image build finalization Queue not configured");
-    }
-
     await this.failStaleScopeBuild(scope, provider, ctx);
 
     const active = await this.store.getActiveBuild(scope, provider);
@@ -365,7 +359,7 @@ export class ImageBuildWorkflow {
       throw new ImageBuildCompletionNotAcceptedError("Build is not accepting completion");
     }
     if (authenticated.build.status === "building") {
-      await this.requireFinalizationQueue().send(job);
+      await this.jobs.send({ kind: "image_build.finalize", payload: job });
     }
 
     logger.info("image_build.build_complete_received", {
@@ -409,7 +403,7 @@ export class ImageBuildWorkflow {
     if (acceptance === "rejected") {
       throw new ImageBuildFailureNotAcceptedError("Build is not accepting failure");
     }
-    await this.requireFinalizationQueue().send(job);
+    await this.jobs.send({ kind: "image_build.finalize", payload: job });
 
     logger.info("image_build.build_failed", {
       build_id: failure.buildId,
@@ -458,13 +452,6 @@ export class ImageBuildWorkflow {
     return { build, tokenHash };
   }
 
-  private requireFinalizationQueue(): ImageBuildFinalizationQueue {
-    if (!this.finalizationQueue) {
-      throw new ImageBuildWorkflowUnavailableError("Image build finalization Queue not configured");
-    }
-    return this.finalizationQueue;
-  }
-
   private loggedCallbackAuthError(
     failure: ImageBuildCallbackAuthFailure,
     params: {
@@ -501,7 +488,7 @@ export function createImageBuildWorkflowFromEnv(env: Env, db: SqlDatabase): Imag
     new ImageBuildStore(db),
     createImageBuildAdapterFactory(env),
     provider ? { provider, planner: new ImageBuildPlanner(env, db) } : null,
-    env.IMAGE_BUILD_FINALIZATION_QUEUE ?? null
+    env.JOBS
   );
 }
 

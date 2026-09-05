@@ -6,9 +6,7 @@
 
 import { handleControlPlaneHttp } from "./cloudflare/http-host";
 import { createLogger } from "./logger";
-import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
-import { handleAutofixQueue } from "./autofix/handler";
-import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
+import { consumeJobBatch } from "./cloudflare/job-queue";
 import { createSessionRuntimeClient } from "./session/runtime-client";
 import {
   createRequestMetrics,
@@ -20,7 +18,6 @@ import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
 import { createCloudflareEnv, type WorkerBindings } from "./cloudflare/platform";
 import { findScheduledJob } from "./scheduled-jobs";
-import { isAutofixQueue } from "./queue-routing";
 
 const logger = createLogger("worker");
 
@@ -79,14 +76,18 @@ export default {
     );
   },
 
+  /**
+   * Queue consumer: delivers each message to the handler of the job kind
+   * the queue carries (see `jobs.ts`).
+   */
   async queue(batch: MessageBatch<unknown>, bindings: WorkerBindings): Promise<void> {
     const env = createCloudflareEnv(bindings);
-    if (!isAutofixQueue(batch.queue)) {
-      await consumeImageBuildFinalizations(batch, env);
-      return;
-    }
-    // eslint-disable-next-line no-restricted-syntax -- worker composition root: inject D1 once
-    await handleAutofixQueue(batch as MessageBatch<GitHubAutofixEnvelope>, env, env.DB);
+    await consumeJobBatch(batch, {
+      env,
+      // eslint-disable-next-line no-restricted-syntax -- queue composition root: the one consumer env.DB read
+      db: env.DB,
+      log: logger,
+    });
   },
 };
 

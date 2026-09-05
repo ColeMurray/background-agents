@@ -192,6 +192,7 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
     DB: { prepare: () => emptyStatement(), batch: async () => [] },
     SESSION: unwired("SESSION", "dispatch"),
     REPOS_CACHE: memoryCacheStore(),
+    JOBS: { send: unwired("JOBS", "send") },
     MEDIA_BUCKET: {
       put: unwired("MEDIA_BUCKET", "put"),
       delete: unwired("MEDIA_BUCKET", "delete"),

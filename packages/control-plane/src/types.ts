@@ -4,7 +4,7 @@
 
 import type { CacheStore } from "@open-inspect/shared/cache-store";
 import type { SqlDatabase } from "./db/sql-database";
-import type { ImageBuildFinalizationQueue } from "./image-builds/finalization-job";
+import type { Jobs } from "./jobs";
 import type { FetchClient, QueueMetricsSource } from "./platform-ports";
 import type { SessionRuntimeDispatch } from "./session/runtime-client";
 import type { ObjectStorage } from "./storage/object-storage";
@@ -122,8 +122,8 @@ export interface Platform {
   /** GitHub Autofix queues, read for health metrics only. */
   AUTOFIX_QUEUE?: QueueMetricsSource;
   AUTOFIX_DLQ?: QueueMetricsSource;
-  /** Durable callback-to-finalizer handoff for provider-session image builds. */
-  IMAGE_BUILD_FINALIZATION_QUEUE?: ImageBuildFinalizationQueue;
+  /** Durable background work, delivered later to the job's handler (see `jobs.ts`). */
+  JOBS: Jobs;
 }
 
 /** What the application runs against: its configuration and the platform ports. */

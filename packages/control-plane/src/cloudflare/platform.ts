@@ -7,21 +7,19 @@
  */
 
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
-import type { ImageBuildFinalizationJob } from "../image-builds/finalization-job";
 import type { Env, EnvConfig, Platform } from "../types";
+import { createQueueJobs, type JobQueueBindings } from "./job-queue";
 import { R2ObjectStorage } from "./object-storage";
 import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dispatch";
 
 /** The bindings Cloudflare hands the Worker and its Durable Objects, with the deployment's configuration. */
-export interface WorkerBindings extends EnvConfig {
+export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   SESSION: DurableObjectNamespace;
   REPOS_CACHE: KVNamespace;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
-  AUTOFIX_QUEUE?: Queue<unknown>;
   AUTOFIX_DLQ?: Queue<unknown>;
   DB: D1Database;
-  IMAGE_BUILD_FINALIZATION_QUEUE?: Queue<ImageBuildFinalizationJob>;
   MEDIA_BUCKET: R2Bucket;
 }
 
@@ -53,15 +51,16 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     LINEAR_BOT,
     AUTOFIX_QUEUE,
     AUTOFIX_DLQ,
-    IMAGE_BUILD_FINALIZATION_QUEUE,
+    JOBS: createQueueJobs({ IMAGE_BUILD_FINALIZATION_QUEUE, AUTOFIX_QUEUE }),
   };
   return { ...config, ...platform };
 }
 
-// Every field of WorkerBindings is either a platform port (adapted above) or
-// configuration: a new binding that is neither fails to compile here.
+// Every field of WorkerBindings is either a platform port (adapted above), a
+// queue behind the jobs port, or configuration: a new binding that is none
+// of these fails to compile here.
 type _AssertExtends<A extends B, B> = A;
 type _BindingsAreConfigOrPlatform = _AssertExtends<
-  Exclude<keyof WorkerBindings, keyof Platform>,
+  Exclude<keyof WorkerBindings, keyof Platform | keyof JobQueueBindings>,
   keyof EnvConfig
 >;

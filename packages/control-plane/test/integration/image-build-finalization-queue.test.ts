@@ -5,7 +5,8 @@ import { ImageBuildStore } from "../../src/db/image-builds";
 import { cleanD1Tables } from "./cleanup";
 import { environmentScope, getRow, seedEnvironment } from "./image-build-helpers";
 
-const QUEUE_NAME = "image-build-finalization-test";
+// Named as Terraform names it: the kind is recovered from the queue prefix.
+const QUEUE_NAME = "open-inspect-image-build-finalization-integration-test";
 const COMPLETION_HASH = "a".repeat(64);
 
 async function seedAcceptedBuild(buildId: string): Promise<ImageBuildStore> {
