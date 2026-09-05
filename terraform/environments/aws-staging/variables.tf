@@ -32,3 +32,9 @@ variable "config" {
   type        = map(string)
   default     = {}
 }
+
+variable "data_volume_snapshot_id" {
+  description = "Snapshot to build the data volume from, for a restore. Null creates an empty volume. The module ignores later changes to it, so setting it is a one-time act rather than a standing instruction to re-restore."
+  type        = string
+  default     = null
+}

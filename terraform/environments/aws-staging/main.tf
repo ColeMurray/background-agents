@@ -25,6 +25,7 @@ module "control_plane" {
   instance_type           = "t4g.small"
   data_volume_size_gb     = 50
   control_plane_image_tag = var.control_plane_image_tag
+  data_volume_snapshot_id = var.data_volume_snapshot_id
 
   # Off outside working hours. Staging holds nothing that has to answer at
   # 03:00, and a stopped instance bills only its volumes.

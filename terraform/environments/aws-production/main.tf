@@ -22,6 +22,7 @@ module "control_plane" {
   instance_type           = "t4g.large"
   data_volume_size_gb     = 200
   control_plane_image_tag = var.control_plane_image_tag
+  data_volume_snapshot_id = var.data_volume_snapshot_id
 
   # No schedule: production answers at 03:00.
   out_of_hours_stop = null
