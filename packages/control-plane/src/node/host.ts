@@ -28,6 +28,7 @@ import { SessionIndexStore } from "../db/session-index";
 import { SqlCacheStore } from "../db/sql-cache-store";
 import type { SqlDatabase } from "../db/sql-database";
 import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
+import type { JobQueue } from "../jobs";
 import { createLogger, parseLogLevel, type Logger } from "../logger";
 import { catalog } from "../routes/catalog";
 import {
@@ -53,6 +54,18 @@ import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { createFileSessionStoreProvider } from "./session-store";
 import { openNodeSqlDatabase } from "./sqlite-database";
 import { createSessionUpgradeHandler, MAX_MESSAGE_BYTES } from "./websocket-upgrade";
+
+/**
+ * Background jobs have no home on this host yet: there is no queue service on
+ * a container and no jobs table behind the seam. Sending throws rather than
+ * dropping the job silently, which is what the image-build workflow already
+ * did here when the Cloudflare Queue binding was the only producer.
+ */
+const unavailableJobQueue: JobQueue = {
+  send() {
+    return Promise.reject(new Error("Background jobs are not available on the Node host"));
+  },
+};
 
 /** The global store's file inside the data directory. */
 export const GLOBAL_STORE_FILE = "global.db";
@@ -163,6 +176,7 @@ async function boot(
     SESSION: createNodeSessionRuntimeDispatch(registry),
     REPOS_CACHE: new SqlCacheStore(cacheDb),
     MEDIA_BUCKET: createS3ObjectStorage(options.objectStorage),
+    JOBS: unavailableJobQueue,
   };
   const env: Env = { ...config, ...platform };
 

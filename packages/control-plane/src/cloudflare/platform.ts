@@ -9,6 +9,7 @@
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import type { ImageBuildFinalizationJob } from "../image-builds/finalization-job";
 import type { Env, EnvConfig, Platform } from "../types";
+import { createCloudflareJobQueue } from "./job-queue";
 import { R2ObjectStorage } from "./object-storage";
 import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dispatch";
 
@@ -21,7 +22,7 @@ export interface WorkerBindings extends EnvConfig {
   AUTOFIX_QUEUE?: Queue<unknown>;
   AUTOFIX_DLQ?: Queue<unknown>;
   DB: D1Database;
-  IMAGE_BUILD_FINALIZATION_QUEUE?: Queue<ImageBuildFinalizationJob>;
+  IMAGE_BUILD_FINALIZATION_QUEUE: Queue<ImageBuildFinalizationJob>;
   MEDIA_BUCKET: R2Bucket;
 }
 
@@ -53,15 +54,23 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     LINEAR_BOT,
     AUTOFIX_QUEUE,
     AUTOFIX_DLQ,
-    IMAGE_BUILD_FINALIZATION_QUEUE,
+    JOBS: createCloudflareJobQueue({ IMAGE_BUILD_FINALIZATION_QUEUE }),
   };
   return { ...config, ...platform };
 }
 
-// Every field of WorkerBindings is either a platform port (adapted above) or
-// configuration: a new binding that is neither fails to compile here.
+/**
+ * Bindings the composition above folds into a port named for the seam rather
+ * than for the binding. Listed so the assertion below still refuses a binding
+ * nobody composed.
+ */
+type FoldedBindings = "IMAGE_BUILD_FINALIZATION_QUEUE";
+
+// Every field of WorkerBindings is a platform port (adapted above), one of the
+// bindings folded into one, or configuration: a new binding that is none of
+// those fails to compile here.
 type _AssertExtends<A extends B, B> = A;
-type _BindingsAreConfigOrPlatform = _AssertExtends<
-  Exclude<keyof WorkerBindings, keyof Platform>,
+type _EveryBindingIsComposed = _AssertExtends<
+  Exclude<keyof WorkerBindings, keyof Platform | FoldedBindings>,
   keyof EnvConfig
 >;

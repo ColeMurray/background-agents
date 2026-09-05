@@ -198,6 +198,7 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
       head: unwired("MEDIA_BUCKET", "head"),
       get: unwired("MEDIA_BUCKET", "get"),
     },
+    JOBS: { send: unwired("JOBS", "send") },
     ...overrides,
   };
 }

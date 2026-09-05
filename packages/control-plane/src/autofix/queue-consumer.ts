@@ -1,5 +1,6 @@
 import { githubAutofixEnvelopeSchema, type GitHubAutofixEnvelope } from "@open-inspect/shared";
 import { githubAutofixFeedbackKey } from "../db/pr-autofix-feedback-store";
+import type { JobConsumer, JobDelivery, JobOutcome } from "../jobs";
 import { SourceControlProviderError } from "../source-control/errors";
 import type { AutofixProcessResult } from "./service";
 
@@ -17,35 +18,24 @@ interface FailureStore {
   ): Promise<boolean>;
 }
 
-interface QueueMessage {
-  body: unknown;
-  attempts: number;
-  ack(): void;
-  retry(): void;
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export class AutofixQueueConsumer {
+export class AutofixQueueConsumer implements JobConsumer {
   constructor(
     private readonly service: AutofixProcessor,
     private readonly feedbackStore: FailureStore,
-    private readonly now: () => number,
-    private readonly maxDeliveryAttempts: number
+    private readonly now: () => number
   ) {}
 
-  async consume(message: QueueMessage): Promise<void> {
-    const parsed = githubAutofixEnvelopeSchema.safeParse(message.body);
-    if (!parsed.success) {
-      message.retry();
-      return;
-    }
+  async run(body: unknown, delivery: JobDelivery): Promise<JobOutcome> {
+    const parsed = githubAutofixEnvelopeSchema.safeParse(body);
+    if (!parsed.success) return "retry";
 
     try {
       await this.service.process(parsed.data);
-      message.ack();
+      return "ack";
     } catch (error) {
       const feedbackKey = githubAutofixFeedbackKey(parsed.data);
       const detail = errorMessage(error);
@@ -56,23 +46,21 @@ export class AutofixQueueConsumer {
           detail,
           this.now()
         );
-        message.ack();
-        return;
+        return "ack";
       }
       await this.feedbackStore.recordError(feedbackKey, detail);
-      if (message.attempts >= this.maxDeliveryAttempts) {
+      if (delivery.attempts >= delivery.maxAttempts) {
         const failed = await this.feedbackStore.markFailed(
           feedbackKey,
           "delivery_attempts_exhausted",
           detail,
           this.now()
         );
-        if (!failed) {
-          message.ack();
-          return;
-        }
+        // A key another delivery already failed is not this one's to end:
+        // acknowledge and leave the recorded verdict alone.
+        if (!failed) return "ack";
       }
-      message.retry();
+      return "retry";
     }
   }
 }

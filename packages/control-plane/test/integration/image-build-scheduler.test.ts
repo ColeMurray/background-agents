@@ -55,7 +55,7 @@ describe("image build scheduler integration", () => {
     const send = vi.fn(async () => undefined);
     const workflow = {} as unknown as ImageBuildWorkflow;
     const scheduler = new ImageBuildScheduler(
-      { IMAGE_BUILD_FINALIZATION_QUEUE: { send } } as unknown as Env,
+      { JOBS: { send } } as unknown as Env,
       env.DB,
       null,
       store,
@@ -69,9 +69,8 @@ describe("image build scheduler integration", () => {
     expect(stats.finalizationsRepublished).toBe(1);
     expect(stats.staleMarked).toBe(0);
     expect(send).toHaveBeenCalledWith({
-      version: 1,
-      buildId: "recover-before-stale",
-      completionHash,
+      kind: "image_build.finalize",
+      payload: { version: 1, buildId: "recover-before-stale", completionHash },
     });
     expect(await getRow("recover-before-stale")).toMatchObject({
       status: "building",
@@ -110,7 +109,7 @@ describe("image build scheduler integration", () => {
     const send = vi.fn(async () => undefined);
     const workflow = {} as unknown as ImageBuildWorkflow;
     const scheduler = new ImageBuildScheduler(
-      { IMAGE_BUILD_FINALIZATION_QUEUE: { send } } as unknown as Env,
+      { JOBS: { send } } as unknown as Env,
       env.DB,
       null,
       store,
