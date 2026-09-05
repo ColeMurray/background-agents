@@ -21,6 +21,9 @@ import { createFileSessionStoreProvider, type SessionStoreProvider } from "./ses
 
 const GC_CHILD = "SESSION_REGISTRY_GC_CHILD";
 const GC_CHILD_TIMEOUT_MS = 60_000;
+/** The one test the child is spawned to run; everything else in this file would
+ *  otherwise run a second time inside it. */
+const GC_CHILD_TEST = "opens, reads, retires, and lets the collector run afterwards";
 const isGcChild = process.env[GC_CHILD] === "1";
 
 interface Deferred<T = void> {
@@ -811,31 +814,45 @@ describe("SessionRuntimeRegistry", () => {
     expect(stores.opened.map((s) => s.closes)).toEqual([0, 1]);
   });
 
-  it("survives late garbage collection of a retired session's store", () => {
-    if (isGcChild) return;
-    const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-    const vitestRoot = dirname(dirname(fileURLToPath(import.meta.resolve("vitest"))));
-    const child = spawnSync(
-      process.execPath,
-      ["--expose-gc", "--no-warnings", join(vitestRoot, "vitest.mjs"), "run", import.meta.filename],
-      {
-        cwd: packageRoot,
-        encoding: "utf8",
-        env: { ...process.env, [GC_CHILD]: "1" },
-        timeout: GC_CHILD_TIMEOUT_MS,
-      }
-    );
+  it(
+    "survives late garbage collection of a retired session's store",
+    () => {
+      if (isGcChild) return;
+      const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+      const vitestRoot = dirname(dirname(fileURLToPath(import.meta.resolve("vitest"))));
+      const child = spawnSync(
+        process.execPath,
+        [
+          "--expose-gc",
+          "--no-warnings",
+          join(vitestRoot, "vitest.mjs"),
+          "run",
+          import.meta.filename,
+          "-t",
+          GC_CHILD_TEST,
+        ],
+        {
+          cwd: packageRoot,
+          encoding: "utf8",
+          env: { ...process.env, [GC_CHILD]: "1" },
+          timeout: GC_CHILD_TIMEOUT_MS,
+        }
+      );
 
-    expect(
-      { status: child.status, signal: child.signal, stdout: child.stdout, stderr: child.stderr },
-      "the isolated registry eviction probe must exit normally"
-    ).toMatchObject({ status: 0, signal: null });
-  });
+      expect(
+        { status: child.status, signal: child.signal, stdout: child.stdout, stderr: child.stderr },
+        "the isolated registry eviction probe must exit normally"
+      ).toMatchObject({ status: 0, signal: null });
+    },
+    // Spawning a vitest run costs more than the default 5s per-test budget on a
+    // loaded machine; hold this test to the same bound as the child itself.
+    GC_CHILD_TIMEOUT_MS
+  );
 });
 
 if (isGcChild) {
   describe("session registry eviction under late garbage collection", () => {
-    it("opens, reads, retires, and lets the collector run afterwards", async () => {
+    it(GC_CHILD_TEST, async () => {
       const dataDir = mkdtempSync(join(tmpdir(), "session-registry-gc-"));
       const alarms = fakeAlarms();
       const registry = new SessionRuntimeRegistry<FakeRuntime>({
