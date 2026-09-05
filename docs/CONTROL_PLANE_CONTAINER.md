@@ -91,7 +91,8 @@ Everything the host persists is under `/data` on the `control-plane-data` volume
 
 - `global.db`: the global store (the tables D1 holds on Cloudflare).
 - `sessions/<id>.db`: one file per session (the Durable Object storage on Cloudflare).
-- `host-alarms.db`: the index of every session's next scheduled deadline.
+- `host-alarms.db`: the index of every session's next scheduled deadline, and the claim each
+  deadline being delivered is leased under.
 - `jobs.db`: background jobs waiting to run, leased to a delivery, or dead — what a Cloudflare Queue
   and its dead-letter queue hold on the other host.
 - `host-state.json`: the marker that says whether the host stopped cleanly, and the time through
