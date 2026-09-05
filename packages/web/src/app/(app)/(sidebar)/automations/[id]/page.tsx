@@ -19,6 +19,7 @@ import { formatModelNameLower } from "@/lib/format";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useLocalizedDateTime } from "@/hooks/use-localized-date-time";
 import { canAccessAutomation } from "@/lib/automation-authorization";
 
 const HISTORY_PAGE_SIZE = 20;
@@ -48,6 +49,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   } = useAutomationInvocations(id, historyLimit, 0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const nextRunAt = useLocalizedDateTime(automation?.nextRunAt);
   const reasoningLabel = automation
     ? (automation.reasoningEffort ??
       (getReasoningConfig(automation.model) ? "Model default" : "Not supported"))
@@ -319,9 +321,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
               {automation.triggerType === "schedule" && (
                 <div>
                   <dt className="text-muted-foreground">Next Run</dt>
-                  <dd className="text-foreground">
-                    {automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleString() : "—"}
-                  </dd>
+                  <dd className="text-foreground">{automation.nextRunAt ? nextRunAt : "—"}</dd>
                 </div>
               )}
               <div className="sm:col-span-2">

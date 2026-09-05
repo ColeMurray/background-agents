@@ -5,6 +5,7 @@ import type { AuditEvent, AuditOperationResult } from "@open-inspect/shared/type
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useAuditEvents } from "@/hooks/use-audit-events";
+import { useLocalizedDateTime } from "@/hooks/use-localized-date-time";
 import { formatRelativeTime } from "@/lib/time";
 
 const OUTCOMES: Record<AuditOperationResult, { label: string; className: string }> = {
@@ -45,7 +46,7 @@ function resourceSummary(event: AuditEvent): string {
 
 function AuditEventCard({ event }: { event: AuditEvent }) {
   const outcome = OUTCOMES[event.operationResult];
-  const localTimestamp = new Date(event.occurredAt).toLocaleString();
+  const localTimestamp = useLocalizedDateTime(event.occurredAt);
 
   return (
     <li className="min-w-0 px-4 py-4 sm:px-5">
