@@ -15,6 +15,12 @@ const ENV_EXAMPLE_PATH = resolve(
   "../../../../.env.example"
 );
 
+/** The compose file, which has required variables of its own beyond the host's. */
+const COMPOSE_PATH = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../../docker-compose.yml"
+);
+
 /** The document whose quick start is the bring-up a clean checkout is expected to follow. */
 const CONTAINER_DOC_PATH = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -65,13 +71,32 @@ function parseEnvExample(): EnvExample {
     }
     const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
     if (match) {
-      variables.push({ name: match[1], comment, value: match[2].trim() });
+      variables.push({ name: match[1], comment, value: readEnvValue(match[2]) });
       comment = [];
     } else {
       malformed.push(line);
     }
   }
   return { variables, malformed };
+}
+
+/**
+ * The value dotenv would hand the process: an unquoted value ends at a comment,
+ * and a quoted one is its contents. `KEY=""` and `KEY= # unset` are both empty,
+ * and a check that read the raw text would take either for a supplied value.
+ */
+function readEnvValue(raw: string): string {
+  const quoted = /^\s*(["'])(.*?)\1\s*(?:#.*)?$/.exec(raw);
+  if (quoted) return quoted[2];
+  return raw.split("#")[0].trim();
+}
+
+/** The variables docker-compose.yml refuses to start without: `${NAME:?message}`. */
+function readComposeRequiredVariables(): string[] {
+  const compose = readFileSync(COMPOSE_PATH, "utf8");
+  const names = new Set<string>();
+  for (const match of compose.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*):\?/g)) names.add(match[1]);
+  return [...names];
 }
 
 /** The "## Quick start" section of the container document, and no other section. */
@@ -110,19 +135,30 @@ describe(".env.example", () => {
   });
 
   /**
-   * A copy of this file plus the documented quick start has to produce a host that
-   * boots. A required key may therefore ship a working value, or be one the quick
+   * A copy of this file plus the documented quick start has to produce a stack that
+   * comes up. A required key may therefore ship a working value, or be one the quick
    * start names as an operator's to supply — the encryption keys, which cannot have
    * a default. A key that is neither is a crash loop on a clean checkout, and the
    * compose smoke cannot catch it: that script writes its own environment file.
+   *
+   * "Required" spans both gates a bring-up passes through: `readEnvConfig`, which
+   * the host checks before it listens, and the `${NAME:?}` variables compose refuses
+   * to start without. Both sets are read from the artifacts that enforce them, so
+   * neither can drift from this test.
+   *
+   * The set is iterated, not the file, so deleting an assignment outright reads as
+   * the empty value it becomes rather than dropping out of the check.
    */
-  it("gives every required key a value, or has the quick start ask for it", () => {
-    const required = new Set<string>(REQUIRED_ENV_CONFIG_KEY_NAMES);
+  it("gives every required variable a value, or has the quick start ask for it", () => {
+    const required = new Set<string>([
+      ...REQUIRED_ENV_CONFIG_KEY_NAMES,
+      ...readComposeRequiredVariables(),
+    ]);
     const quickStart = readQuickStart();
-    const unsupplied = example.variables
-      .filter((variable) => required.has(variable.name))
-      .filter((variable) => variable.value === "" && !quickStart.includes(variable.name))
-      .map((variable) => variable.name);
+    const shipped = new Map(example.variables.map(({ name, value }) => [name, value]));
+    const unsupplied = [...required]
+      .filter((name) => (shipped.get(name) ?? "") === "" && !quickStart.includes(name))
+      .sort();
     expect(unsupplied).toEqual([]);
   });
 });

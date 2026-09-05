@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - ".env.example"
       - ".github/workflows/ci.yml"
       - ".prettierignore"
       - ".prettierrc"
@@ -26,9 +27,13 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      # Re-included after the exclusion above, which later patterns override: a
+      # unit test holds this document's quick start to the required variables.
+      - "docs/CONTROL_PLANE_CONTAINER.md"
   pull_request:
     branches: [main]
     paths:
+      - ".env.example"
       - ".github/workflows/ci.yml"
       - ".prettierignore"
       - ".prettierrc"
@@ -51,6 +56,9 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      # Re-included after the exclusion above, which later patterns override: a
+      # unit test holds this document's quick start to the required variables.
+      - "docs/CONTROL_PLANE_CONTAINER.md"
 
 permissions:
   contents: read
