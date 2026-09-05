@@ -77,6 +77,32 @@ async function makeToolCallPayload(
   return signPayload(data, secret);
 }
 
+async function makeActivityPayload(
+  overrides: Partial<{
+    sessionId: string;
+    messageId: string;
+    timestamp: number;
+    context: Record<string, unknown>;
+  }> = {},
+  secret = "callback-secret"
+) {
+  const data = {
+    sessionId: "session-1",
+    messageId: "message-1",
+    timestamp: Date.now(),
+    context: {
+      source: "slack",
+      channel: "C123",
+      threadTs: "111.222",
+      repoFullName: "acme/app",
+      model: "anthropic/claude-haiku-4-5",
+    },
+    ...overrides,
+  };
+
+  return signPayload(data, secret);
+}
+
 async function postToolCall(payload: unknown, env = makeEnv(), ctx = makeCtx()) {
   const response = await makeApp().fetch(
     new Request("http://localhost/callbacks/tool_call", {
@@ -101,6 +127,68 @@ function createDeferred<T>() {
   });
   return { promise, resolve };
 }
+
+describe("POST /callbacks/activity", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("accepts a signed heartbeat and refreshes the Slack working status", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const payload = await makeActivityPayload();
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    await flushWaitUntil(ctx);
+
+    expect(fetchMock).toHaveBeenCalledWith("https://slack.com/api/assistant.threads.setStatus", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer xoxb-test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel_id: "C123",
+        thread_ts: "111.222",
+        status: "Working...",
+        loading_messages: ["Working..."],
+      }),
+    });
+  });
+
+  it("rejects a heartbeat with an invalid signature", async () => {
+    const payload = await makeActivityPayload({}, "wrong-secret");
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["stale", -60 * 60 * 1000],
+    ["future", 60 * 60 * 1000],
+  ])("rejects a signed %s heartbeat timestamp", async (_label, offsetMs) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const payload = await makeActivityPayload({ timestamp: Date.now() + offsetMs });
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
 
 describe("POST /callbacks/tool_call", () => {
   afterEach(() => {

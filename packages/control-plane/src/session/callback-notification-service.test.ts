@@ -37,6 +37,9 @@ function createMockLogger(): Logger {
 function createMockRepository() {
   return {
     getMessageCallbackContext: vi.fn<MessageRepository["getMessageCallbackContext"]>(() => null),
+    getProcessingMessageWithStartedAt: vi.fn<
+      MessageRepository["getProcessingMessageWithStartedAt"]
+    >(() => ({ id: "msg-1", started_at: 1 })),
     getSession: vi.fn(() => null),
   };
 }
@@ -501,6 +504,112 @@ describe("CallbackNotificationService", () => {
         expect(harness.linearBot.fetch).not.toHaveBeenCalled();
       }
     );
+  });
+
+  describe("notifyActivityHeartbeat", () => {
+    it("sends a signed refresh for a Slack processing message", async () => {
+      const context = {
+        source: "slack",
+        channel: "C123",
+        threadTs: "111.222",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+      };
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(context),
+        source: "slack",
+      });
+      harness.slackBot.fetch.mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await expect(harness.service.notifyActivityHeartbeat("msg-1")).resolves.toBe(true);
+
+      expect(harness.slackBot.fetch).toHaveBeenCalledWith(
+        "https://internal/callbacks/activity",
+        expect.objectContaining({ method: "POST" })
+      );
+      const body = JSON.parse(String(harness.slackBot.fetch.mock.calls[0][1]?.body));
+      expect(body).toMatchObject({
+        sessionId: "session-123",
+        messageId: "msg-1",
+        timestamp: expect.any(Number),
+        context,
+        signature: expect.any(String),
+      });
+      expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+    });
+
+    it("does not refresh or re-arm non-Slack messages", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(LINEAR_CALLBACK_CONTEXT),
+        source: "linear",
+      });
+
+      await expect(harness.service.notifyActivityHeartbeat("msg-1")).resolves.toBe(false);
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+      expect(harness.linearBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it("does not deliver after the message completes while the heartbeat is prepared", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ source: "slack", channel: "C123" }),
+        source: "slack",
+      });
+      harness.repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+
+      await expect(harness.service.notifyActivityHeartbeat("msg-1")).resolves.toBe(false);
+
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it("bounds a heartbeat fetch that never resolves", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+          callback_context: JSON.stringify({ source: "slack", channel: "C123" }),
+          source: "slack",
+        });
+        harness.slackBot.fetch.mockImplementation(
+          (_input, init) =>
+            new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+                once: true,
+              });
+            })
+        );
+        let settled = false;
+        const heartbeat = harness.service.notifyActivityHeartbeat("msg-1").then(() => {
+          settled = true;
+        });
+        await vi.waitFor(() => {
+          expect(harness.slackBot.fetch).toHaveBeenCalledTimes(1);
+        });
+
+        await vi.advanceTimersByTimeAsync(10_001);
+        await vi.waitFor(() => {
+          expect(harness.slackBot.fetch).toHaveBeenCalledTimes(2);
+        });
+        await vi.advanceTimersByTimeAsync(10_001);
+        await heartbeat;
+
+        expect(settled).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the heartbeat active after a transient delivery failure", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ source: "slack", channel: "C123" }),
+        source: "slack",
+      });
+      harness.slackBot.fetch.mockRejectedValue(new Error("network unavailable"));
+
+      await expect(harness.service.notifyActivityHeartbeat("msg-1")).resolves.toBe(true);
+      expect(harness.log.warn).toHaveBeenCalledWith(
+        "callback.activity_heartbeat",
+        expect.objectContaining({ outcome: "error", error: expect.any(Error) })
+      );
+    });
   });
 
   describe("notifyToolCall", () => {

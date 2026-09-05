@@ -17,6 +17,7 @@ import type { MessageRepository } from "./message-repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
+import { SLACK_ACTIVITY_HEARTBEAT_INTERVAL_MS } from "./activity-heartbeat";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import type { SessionStatusService } from "./session-status-service";
 import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
@@ -1235,6 +1236,24 @@ describe("SessionMessageQueue", () => {
       const deadline = h.setAlarm.mock.calls[0][0];
       expect(deadline).toBeGreaterThanOrEqual(before + EXECUTION_TIMEOUT_MS);
       expect(deadline).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS);
+    });
+
+    it("schedules Slack activity before its two-minute expiry", async () => {
+      const h = buildQueue();
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage({ source: "slack" }));
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+      const before = Date.now();
+
+      await h.queue.processMessageQueue();
+
+      expect(h.setAlarm).toHaveBeenCalledTimes(2);
+      const activityDeadline = h.setAlarm.mock.calls[1][0];
+      expect(activityDeadline).toBeGreaterThanOrEqual(
+        before + SLACK_ACTIVITY_HEARTBEAT_INTERVAL_MS
+      );
+      expect(activityDeadline).toBeLessThanOrEqual(
+        Date.now() + SLACK_ACTIVITY_HEARTBEAT_INTERVAL_MS
+      );
     });
 
     it("arms each deadline with the timeout current at that dispatch", async () => {
