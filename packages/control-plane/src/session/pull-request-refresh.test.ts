@@ -291,21 +291,6 @@ describe("refreshSessionPullRequests", () => {
     expect(harness.artifactRepository.updateArtifact).not.toHaveBeenCalled();
   });
 
-  it("updates the DO mirror without a D1 store", async () => {
-    const harness = createHarness([createPrArtifact()]);
-
-    const result = await refreshSessionPullRequests(
-      harness.repository,
-      harness.artifactRepository,
-      { getPullRequest: harness.getPullRequest },
-      null
-    );
-
-    expect(result.updated).toHaveLength(1);
-    expect(result.failures).toEqual([]);
-    expect(harness.artifactRepository.updateArtifact).toHaveBeenCalledTimes(1);
-  });
-
   it("no-ops without a session row", async () => {
     const harness = createHarness([createPrArtifact()], null);
 

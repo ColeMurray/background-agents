@@ -960,16 +960,5 @@ describe("SessionPullRequestService", () => {
         expect.objectContaining({ artifact_id: "id-1", pr_number: 42 })
       );
     });
-
-    it("skips the D1 write when no store is configured", async () => {
-      const deps = { ...harness.deps };
-      delete deps.sessionPullRequests;
-      const service = new SessionPullRequestService(deps);
-
-      const result = await service.createPullRequest(createInput());
-
-      expect(result.kind).toBe("created");
-      expect(harness.sessionPullRequests.upsert).not.toHaveBeenCalled();
-    });
   });
 });

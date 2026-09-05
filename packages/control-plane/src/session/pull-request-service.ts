@@ -158,10 +158,10 @@ export interface PullRequestServiceDeps {
   /** Display name used in the PR body footer (e.g. "Created with [name](url)"). */
   appName: string;
   /**
-   * D1 authority store for session PR records (design §4). Absent when the
-   * deployment has no D1 binding; the write is best-effort either way.
+   * D1 authority store for session PR records (design §4). The write is
+   * best-effort: an upsert failure still leaves the mirror updated.
    */
-  sessionPullRequests?: Pick<SessionPullRequestStore, "upsert">;
+  sessionPullRequests: Pick<SessionPullRequestStore, "upsert">;
   /** Resolves SCM policy for the pull request's target repository. */
   resolveScmSettings: (repo: RepoIdentity) => Promise<ScmSettings>;
 }
@@ -610,7 +610,7 @@ export class SessionPullRequestService {
     const applied = await applyPullRequestSnapshot(
       {
         artifactRepository: this.deps.artifactRepository,
-        sessionPullRequests: this.deps.sessionPullRequests ?? null,
+        sessionPullRequests: this.deps.sessionPullRequests,
       },
       { artifactId: artifact.id, sessionId, artifactCreatedAt: artifact.created_at },
       live

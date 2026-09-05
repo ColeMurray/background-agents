@@ -35,8 +35,7 @@ export interface SessionSnapshotReaderDeps {
   messageService: MessageService;
   eventStream: SessionEventStream;
   sandboxDashboardSettings: SandboxDashboardSettings;
-  /** Null when the deployment has no D1 binding — environment names resolve null. */
-  db: SqlDatabase | null;
+  db: SqlDatabase;
   durableObjectId: string;
   /** DO storage transaction so the snapshot reads are a consistent cut. */
   transaction: <T>(closure: () => T) => T;
@@ -128,7 +127,7 @@ export class SessionSnapshotReader {
    * lookup failure resolves null rather than failing the whole state read.
    */
   private async resolveEnvironmentName(environmentId: string | null): Promise<string | null> {
-    if (!environmentId || !this.deps.db) {
+    if (!environmentId) {
       return null;
     }
     try {

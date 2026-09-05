@@ -25,12 +25,6 @@ function fakeDb(rows: { global?: object; repo?: object } = {}): {
 }
 
 describe("resolveScmSettings", () => {
-  it("returns the built-in defaults when the deployment has no database", async () => {
-    await expect(resolveScmSettings(null, { repoOwner: "acme", repoName: "web" })).resolves.toEqual(
-      {}
-    );
-  });
-
   it("keys the per-repo lookup by owner/name", async () => {
     const { db, bindings } = fakeDb();
 

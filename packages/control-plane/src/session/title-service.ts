@@ -15,8 +15,7 @@ export interface SessionTitleServiceDeps {
   messenger: SessionMessenger;
   statusService: Pick<SessionStatusService, "notifyParentOfChildUpdate">;
   backgroundTasks: BackgroundTasks;
-  /** Null when the deployment has no D1 binding — the index sync is skipped. */
-  sessionIndexStore: SessionIndexStore | null;
+  sessionIndexStore: SessionIndexStore;
   durableObjectId: string;
   now: () => number;
 }
@@ -75,7 +74,6 @@ export class SessionTitleService {
 
   private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {
     const { sessionIndexStore, backgroundTasks } = this.deps;
-    if (!sessionIndexStore) return;
     backgroundTasks.submit(
       () => sessionIndexStore.updateTitleIfNewer(sessionId, title, updatedAt),
       {

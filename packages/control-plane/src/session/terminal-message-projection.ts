@@ -10,7 +10,7 @@ export interface TerminalMessageProjectionInput {
 }
 
 export interface SessionTerminalMessageProjectionDeps {
-  sessionIndex: SessionIndexStore | null;
+  sessionIndex: SessionIndexStore;
   getSessionId: () => string | null;
   store: TerminalMessageProjectionStore;
   alarmScheduler: AlarmScheduler;
@@ -37,7 +37,7 @@ export class SessionTerminalMessageProjection {
 
   async recordTerminalMessage(input: TerminalMessageProjectionInput): Promise<void> {
     const sessionId = this.deps.getSessionId();
-    if (!this.deps.sessionIndex || !sessionId) return;
+    if (!sessionId) return;
 
     const storeInput = { sessionId, ...input };
     try {
@@ -79,7 +79,7 @@ export class SessionTerminalMessageProjection {
       return;
     }
     const sessionId = this.deps.getSessionId();
-    if (!this.deps.sessionIndex || !sessionId) return;
+    if (!sessionId) return;
 
     const { messageId, messageCreatedAt, terminalMessageCompletedAt } = pending;
     try {

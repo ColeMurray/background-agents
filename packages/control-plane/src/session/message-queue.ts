@@ -165,7 +165,7 @@ export class SessionMessageQueue {
       completedAt: number
     ) => Promise<void>,
     private readonly sandboxLifecycle: SandboxLifecycle,
-    private readonly sessionIndex: SessionIndexStore | null,
+    private readonly sessionIndex: SessionIndexStore,
     private readonly scmProvider: SourceControlProviderName,
     private readonly alarmScheduler: AlarmScheduler,
     /** Resolved per use so it honors settings persisted after construction. */
@@ -302,16 +302,13 @@ export class SessionMessageQueue {
       throw error;
     }
 
-    const sessionIndex = this.sessionIndex;
-    if (sessionIndex) {
-      const session = this.repository.getSession();
-      const sessionId = session?.session_name || session?.id;
-      if (sessionId) {
-        this.backgroundTasks.submit(() => sessionIndex.touchUpdatedAt(sessionId), {
-          name: "session_index.touch_updated_at",
-          context: { session_id: sessionId },
-        });
-      }
+    const session = this.repository.getSession();
+    const sessionId = session?.session_name || session?.id;
+    if (sessionId) {
+      this.backgroundTasks.submit(() => this.sessionIndex.touchUpdatedAt(sessionId), {
+        name: "session_index.touch_updated_at",
+        context: { session_id: sessionId },
+      });
     }
 
     this.wsManager.send(ws, {

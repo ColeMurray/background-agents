@@ -29,7 +29,7 @@ export class SessionStatusService {
     private readonly messageRepository: MessageRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly messenger: SessionMessenger,
-    private readonly sessionIndex: SessionIndexStore | null,
+    private readonly sessionIndex: SessionIndexStore,
     /** Reaches the parent session's runtime for the child rollup. */
     private readonly sessions: SessionRuntimeClient
   ) {}
@@ -77,7 +77,7 @@ export class SessionStatusService {
    */
   async repairIndexStatus(): Promise<void> {
     const session = this.repository.getSession();
-    if (!session || !this.sessionIndex) return;
+    if (!session) return;
 
     const publicSessionId = this.getPublicSessionId(session);
     const repaired = await this.sessionIndex
@@ -247,7 +247,6 @@ export class SessionStatusService {
     status: SessionStatus,
     updatedAt: number
   ): Promise<void> {
-    if (!this.sessionIndex) return;
     const projected = await this.sessionIndex.updateStatus(sessionId, status, updatedAt);
     if (projected && status === "active") {
       await this.sessionIndex.finalizeChildAdmission(sessionId);
@@ -269,9 +268,6 @@ export class SessionStatusService {
   }
 
   private syncSessionMetrics(sessionId: string): void {
-    const sessionIndex = this.sessionIndex;
-    if (!sessionIndex) return;
-
     const session = this.repository.getSession();
     if (!session) return;
 
@@ -282,7 +278,7 @@ export class SessionStatusService {
 
     this.backgroundTasks.submit(
       () =>
-        sessionIndex.updateMetrics(sessionId, {
+        this.sessionIndex.updateMetrics(sessionId, {
           totalCost: session.total_cost ?? 0,
           activeDurationMs,
           messageCount,

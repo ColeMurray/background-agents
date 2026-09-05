@@ -12,6 +12,7 @@ import type { ClientInfo } from "../types";
 import type { MessageStatus } from "@open-inspect/shared/types/sessions";
 import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
+import type { SessionIndexStore } from "../db/session-index";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
@@ -215,6 +216,7 @@ function buildQueue() {
     reportSandboxError: vi.fn((_reason: string) => {}),
   };
   const backgroundTasks = createTestBackgroundTasks();
+  const sessionIndex = { touchUpdatedAt: vi.fn(async () => {}) };
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
   const projectTerminalMessage = vi.fn(async () => {});
@@ -235,7 +237,7 @@ function buildQueue() {
     getProviderAuthenticationError,
     projectTerminalMessage,
     sandboxLifecycle,
-    null,
+    sessionIndex as unknown as SessionIndexStore,
     "github",
     createEarliestAlarmScheduler(
       { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
@@ -262,6 +264,7 @@ function buildQueue() {
     broadcast,
     sessionStatus,
     sandboxLifecycle,
+    sessionIndex,
     backgroundTasks,
     getAlarm,
     setAlarm,
@@ -659,6 +662,21 @@ describe("SessionMessageQueue", () => {
         messageId: "msg-existing",
       })
     );
+  });
+
+  it("touches the session index when a prompt is queued", async () => {
+    const h = buildQueue();
+
+    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+      clientRequestId: "request-touch",
+      content: "hello",
+    });
+    await h.backgroundTasks.settle();
+
+    expect(h.backgroundTasks.submissions).toContainEqual(
+      expect.objectContaining({ name: "session_index.touch_updated_at" })
+    );
+    expect(h.sessionIndex.touchUpdatedAt).toHaveBeenCalledWith("s1");
   });
 
   it("returns a null position when retrying a completed correlated prompt", async () => {

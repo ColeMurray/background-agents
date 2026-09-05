@@ -41,7 +41,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   } as SessionRow;
 }
 
-function harness(options: { session?: SessionRow | null; sessionIndex?: null } = {}) {
+function harness(options: { session?: SessionRow | null } = {}) {
   const session = options.session === undefined ? createSession() : options.session;
 
   const repository = {
@@ -61,15 +61,12 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
   const broadcast = vi.fn();
   const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) } as SessionMessenger;
 
-  const sessionIndex =
-    options.sessionIndex === null
-      ? null
-      : {
-          updateStatus: vi.fn(async () => true),
-          repairStatus: vi.fn(async () => true),
-          finalizeChildAdmission: vi.fn(async () => {}),
-          updateMetrics: vi.fn(async () => true),
-        };
+  const sessionIndex = {
+    updateStatus: vi.fn(async () => true),
+    repairStatus: vi.fn(async () => true),
+    finalizeChildAdmission: vi.fn(async () => {}),
+    updateMetrics: vi.fn(async () => true),
+  };
 
   const parentFetch = vi.fn(
     async (_sessionId: string, _path: string, _init?: RequestInit) =>
@@ -93,7 +90,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
     repository as unknown as MessageRepository,
     artifactRepository,
     messenger,
-    sessionIndex as unknown as SessionIndexStore | null,
+    sessionIndex as unknown as SessionIndexStore,
     parentSessions
   );
 
@@ -117,7 +114,7 @@ describe("SessionStatusService.transition", () => {
     expect(await h.service.transition("active")).toBe(false);
 
     expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
-    expect(h.sessionIndex!.updateStatus).not.toHaveBeenCalled();
+    expect(h.sessionIndex.updateStatus).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
@@ -133,12 +130,12 @@ describe("SessionStatusService.transition", () => {
     );
     const updatedAt = h.repository.updateSessionStatus.mock.calls[0][2] as number;
     expect(updatedAt).toBeGreaterThan(2000);
-    expect(h.sessionIndex!.updateStatus).toHaveBeenCalledWith(
+    expect(h.sessionIndex.updateStatus).toHaveBeenCalledWith(
       "public-session-1",
       "active",
       updatedAt
     );
-    expect(h.sessionIndex!.finalizeChildAdmission).toHaveBeenCalledWith("public-session-1");
+    expect(h.sessionIndex.finalizeChildAdmission).toHaveBeenCalledWith("public-session-1");
     expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "active" });
   });
 
@@ -147,7 +144,7 @@ describe("SessionStatusService.transition", () => {
 
     expect(await h.service.transition("active")).toBe(false);
 
-    expect(h.sessionIndex!.updateStatus).toHaveBeenCalledWith("public-session-1", "active", 2000);
+    expect(h.sessionIndex.updateStatus).toHaveBeenCalledWith("public-session-1", "active", 2000);
     expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.parentFetch).not.toHaveBeenCalled();
@@ -158,7 +155,7 @@ describe("SessionStatusService.transition", () => {
 
     await h.service.transition("completed");
 
-    expect(h.sessionIndex!.updateMetrics).toHaveBeenCalledWith("public-session-1", {
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledWith("public-session-1", {
       totalCost: 2.5,
       activeDurationMs: 4500,
       messageCount: 3,
@@ -172,7 +169,7 @@ describe("SessionStatusService.transition", () => {
 
     expect(await h.service.transition("failed")).toBe(false);
 
-    expect(h.sessionIndex!.updateMetrics).toHaveBeenCalledWith(
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledWith(
       "public-session-1",
       expect.any(Object)
     );
@@ -183,12 +180,12 @@ describe("SessionStatusService.transition", () => {
 
     await h.service.transition("active");
 
-    expect(h.sessionIndex!.updateMetrics).not.toHaveBeenCalled();
+    expect(h.sessionIndex.updateMetrics).not.toHaveBeenCalled();
   });
 
   it("logs index sync failures without throwing", async () => {
     const h = harness({ session: createSession({ status: "created" }) });
-    h.sessionIndex!.updateStatus.mockRejectedValue(new Error("d1 down"));
+    h.sessionIndex.updateStatus.mockRejectedValue(new Error("d1 down"));
 
     expect(await h.service.transition("active")).toBe(true);
 
@@ -201,15 +198,6 @@ describe("SessionStatusService.transition", () => {
       })
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "active" });
-  });
-
-  it("skips index and metrics writes when no session index is bound", async () => {
-    const h = harness({ session: createSession({ status: "active" }), sessionIndex: null });
-
-    expect(await h.service.transition("completed")).toBe(true);
-
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "completed" });
-    expect(h.backgroundTasks.submissions).toHaveLength(0);
   });
 
   it("submits the parent notification as a background job", async () => {
@@ -245,7 +233,7 @@ describe("SessionStatusService.cancel", () => {
   it("closes local status and unfinished messages before publishing projections", async () => {
     const h = harness({ session: createSession({ status: "active" }) });
     let releaseIndex!: () => void;
-    h.sessionIndex!.updateStatus.mockImplementation(
+    h.sessionIndex.updateStatus.mockImplementation(
       () => new Promise<boolean>((resolve) => (releaseIndex = () => resolve(true)))
     );
     const terminalize = vi.fn();
@@ -368,13 +356,13 @@ describe("SessionStatusService.repairIndexStatus", () => {
 
     await h.service.repairIndexStatus();
 
-    expect(h.sessionIndex!.repairStatus).toHaveBeenCalledWith("public-session-1", "completed");
+    expect(h.sessionIndex.repairStatus).toHaveBeenCalledWith("public-session-1", "completed");
   });
 
   it("logs and propagates repair failures", async () => {
     const h = harness({ session: createSession({ status: "completed" }) });
     const error = new Error("d1 down");
-    h.sessionIndex!.repairStatus.mockRejectedValue(error);
+    h.sessionIndex.repairStatus.mockRejectedValue(error);
 
     await expect(h.service.repairIndexStatus()).rejects.toThrow(error);
 
