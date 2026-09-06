@@ -98,3 +98,8 @@ terraform/environments/production/.terraform*
 # The compose smoke bundles its driver here at run time.
 packages/control-plane/test/smoke/run-smoke.bundle.mjs
 smoke-logs/
+
+# AWS environments (see terraform/environments/aws-*); state files and
+# *_override.tf are already covered globally above.
+terraform/environments/aws-staging/plan.out
+terraform/environments/aws-production/plan.out
