@@ -116,6 +116,10 @@ app.post("/webhooks/github", async (c) => {
         delivery_id: deliveryId,
         error: err instanceof Error ? err : new Error(String(err)),
       });
+      // Acknowledging this delivery would mark it processed with no queued revision.
+      // Release the receipt so the sender can retry the same delivery identity.
+      if (dedupeKey) await cacheStore.delete(dedupeKey);
+      return c.json({ error: "Autofix queue unavailable" }, 503);
     }
   }
 
