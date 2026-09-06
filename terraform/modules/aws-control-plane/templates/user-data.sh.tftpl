@@ -10,41 +10,61 @@ set -euxo pipefail
 
 STACK_DIR=/opt/open-inspect
 DATA_DIR=/data
-# Addressed by volume id rather than by the /dev/sdf the attachment asks for:
-# on Nitro instances the kernel names EBS volumes /dev/nvme*n1 in attach order,
-# which is not stable across reboots.
+# By volume id, because on Nitro the kernel names EBS volumes /dev/nvme*n1 in
+# attach order, which is not stable across reboots. Only needed to format a
+# blank volume; once formatted the label below identifies it.
 DEVICE="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${data_volume_id_nodash}"
+LABEL_PATH="/dev/disk/by-label/open-inspect"
 
 # AL2023 ships the CLI and the SSM agent; installing them is a no-op there and
-# the fallback covers an image that does not. The Compose plugin is the one
-# piece not reliably in the repositories, so a missing package is not fatal --
-# the release binary is.
+# covers an image that does not.
 dnf install -y docker
 command -v aws >/dev/null 2>&1 || dnf install -y awscli-2
 systemctl list-unit-files amazon-ssm-agent.service >/dev/null 2>&1 ||
   dnf install -y amazon-ssm-agent
 
-if ! dnf install -y docker-compose-plugin; then
-  install -d /usr/libexec/docker/cli-plugins
-  curl -fsSL -o /usr/libexec/docker/cli-plugins/docker-compose \
-    "https://github.com/docker/compose/releases/download/v${compose_version}/docker-compose-linux-aarch64"
-  chmod 755 /usr/libexec/docker/cli-plugins/docker-compose
-fi
+# AL2023 has no docker-compose-plugin package, so this is the only path rather
+# than a fallback. The checksum is pinned beside the version: this is a binary
+# fetched over the internet and then run as root on every boot.
+install -d /usr/libexec/docker/cli-plugins
+curl -fsSL -o /usr/libexec/docker/cli-plugins/docker-compose \
+  "https://github.com/docker/compose/releases/download/v${compose_version}/docker-compose-linux-aarch64"
+echo "${compose_sha256}  /usr/libexec/docker/cli-plugins/docker-compose" | sha256sum -c -
+chmod 755 /usr/libexec/docker/cli-plugins/docker-compose
 
 # ---------------------------------------------------------------------------
 # The data volume, before Docker so its data root lands on it
 # ---------------------------------------------------------------------------
 
-for _ in $(seq 1 60); do
-  [ -e "$DEVICE" ] && break
+# Either the volume already carries the filesystem -- a reboot, a replaced
+# instance, or a volume restored from a snapshot -- or it is blank and this is a
+# first boot. The label answers the first case without knowing the volume id,
+# which is what lets a restored volume attach to an instance whose user data was
+# rendered for a different one.
+#
+# Five minutes, not two: on `-replace` the attachment is created after the
+# instance is already running, so this covers a Terraform round trip rather than
+# just the hypervisor.
+for _ in $(seq 1 150); do
+  if [ -e "$LABEL_PATH" ] || [ -e "$DEVICE" ]; then
+    break
+  fi
   sleep 2
 done
-[ -e "$DEVICE" ] || { echo "data volume never appeared at $DEVICE" >&2; exit 1; }
 
-# An unformatted volume has no type; a restored one does, and must not be
-# reformatted. `blkid` is the difference between a first boot and a restore.
-if ! blkid "$DEVICE" >/dev/null 2>&1; then
+if [ -e "$LABEL_PATH" ]; then
+  : # formatted already; nothing to do but mount it
+elif [ -e "$DEVICE" ]; then
+  # A blank volume has no filesystem type. `blkid` is the difference between a
+  # first boot and a volume that arrived with data on it under another label.
+  if blkid "$DEVICE" >/dev/null 2>&1; then
+    echo "$DEVICE holds a filesystem that is not labelled open-inspect; refusing to touch it" >&2
+    exit 1
+  fi
   mkfs.ext4 -L open-inspect "$DEVICE"
+else
+  echo "no data volume appeared at $LABEL_PATH or $DEVICE" >&2
+  exit 1
 fi
 
 mkdir -p "$DATA_DIR"
@@ -60,9 +80,10 @@ mount -a
 # compose stack declares are on the thing that gets snapshotted -- which is
 # what makes "the data volume is the unit of a deployment backup" true.
 #
-# Container logs go straight to CloudWatch. `docker compose logs` therefore
-# shows nothing on this host; `aws logs tail` is the equivalent, and it keeps
-# working after the instance is replaced.
+# Container logs go to CloudWatch, one stream per service. `aws logs tail` is
+# the way to read them and keeps working after the instance is replaced; Docker
+# also caches locally by default, so `docker compose logs` may still answer on
+# the box.
 
 mkdir -p "$DATA_DIR/docker" /etc/docker
 cat >/etc/docker/daemon.json <<JSON
@@ -72,11 +93,23 @@ cat >/etc/docker/daemon.json <<JSON
   "log-opts": {
     "awslogs-region": "${region}",
     "awslogs-group": "${log_group}",
-    "awslogs-create-group": "false"
+    "awslogs-create-group": "false",
+    "tag": "{{.Name}}"
   }
 }
 JSON
 
+# Docker's data root is on the volume, so the unit must not start before the
+# mount. `nofail` in fstab keeps a missing volume from blocking boot, which
+# without this would mean Docker quietly using the root disk and Litestream's
+# restore-on-empty making that look like a working deployment.
+install -d /etc/systemd/system/docker.service.d
+cat >/etc/systemd/system/docker.service.d/10-data-volume.conf <<'DROPIN'
+[Unit]
+RequiresMountsFor=/data
+DROPIN
+
+systemctl daemon-reload
 systemctl enable --now docker
 systemctl enable --now amazon-ssm-agent
 
@@ -112,15 +145,43 @@ with open("/run/open-inspect-params.json") as handle:
     parameters = json.load(handle)
 
 lines = []
+placeholders = []
 for name, value in parameters:
     key = name[len(prefix):] if name.startswith(prefix) else name.rsplit("/", 1)[-1]
-    # `.env` is one assignment per line and Compose does not unescape it, so a
-    # value with a newline in it would silently truncate and take the rest of
-    # the file with it. The one multi-line value here, the GitHub App private
-    # key, is stored with the two characters \n in place of each newline.
+
+    # A parameter still holding its placeholder is dropped rather than written.
+    # Absence is the safe state everywhere it matters: the host refuses to start
+    # when a key it requires is missing, and an unset SERVICE_AUTH_SECRET_* is a
+    # 500 "not configured" rather than a signature that verifies. Writing the
+    # placeholder through would hand the deployment a working signing key whose
+    # value is published in this repository.
+    if value.startswith("CHANGE_ME_"):
+        placeholders.append(key)
+        continue
+
+    # `.env` is one assignment per line, so a value with a newline in it would
+    # truncate and take the rest of the file with it. The one multi-line value
+    # here, the GitHub App private key, is stored with the two characters \n in
+    # place of each newline.
     if "\n" in value or "\r" in value:
         sys.exit(f"{key}: SSM value spans multiple lines; store it on one")
-    lines.append(f"{key}={value}")
+
+    # Compose reads this file twice -- to interpolate the compose files, and as
+    # the app's env_file -- and both readers expand $VAR and strip a trailing
+    # # comment from an unquoted value, so `pa$word` reaches the container as
+    # `pa`. Single quotes are literal, including the \n above; a single-quoted
+    # value is the one thing that cannot contain its own quote.
+    if "'" in value:
+        sys.exit(f"{key}: value contains a single quote, which .env cannot quote")
+
+    lines.append(f"{key}='{value}'")
+
+if placeholders:
+    # Loud, because the symptom otherwise turns up later and somewhere else.
+    sys.stderr.write(
+        "open-inspect: these parameters still hold their placeholder and were "
+        "left unset: " + ", ".join(sorted(placeholders)) + "\n"
+    )
 
 with open("/opt/open-inspect/.env.new", "w") as handle:
     handle.write("\n".join(sorted(lines)) + "\n")
@@ -130,8 +191,20 @@ rm -f /run/open-inspect-params.json
 chmod 600 "$STACK_DIR/.env.new"
 mv "$STACK_DIR/.env.new" "$STACK_DIR/.env"
 
-aws ecr get-login-password --region "$AWS_REGION" |
-  docker login --username AWS --password-stdin "$${CONTROL_PLANE_IMAGE%%/*}"
+# The image comes from the .env just written, not from a value baked in at boot,
+# so changing the tag takes effect on a restart.
+image="$(sed -n "s/^CONTROL_PLANE_IMAGE='\\(.*\\)'$/\\1/p" "$STACK_DIR/.env")"
+[ -n "$image" ] || { echo "CONTROL_PLANE_IMAGE is not in .env" >&2; exit 1; }
+registry="$${image%%/*}"
+case "$registry" in
+  *.dkr.ecr.*.amazonaws.com)
+    aws ecr get-login-password --region "$AWS_REGION" |
+      docker login --username AWS --password-stdin "$registry"
+    ;;
+  *)
+    : # a public or already-authenticated registry; nothing to log in to
+    ;;
+esac
 SCRIPT
 chmod 755 /usr/local/bin/open-inspect-fetch-config
 
@@ -139,7 +212,6 @@ cat >/etc/open-inspect.conf <<CONF
 AWS_REGION=${region}
 CONFIG_BUCKET=${config_bucket}
 SSM_ENV_PREFIX=${ssm_env_prefix}
-CONTROL_PLANE_IMAGE=${control_plane_image}
 CONF
 
 # ---------------------------------------------------------------------------
@@ -152,6 +224,7 @@ Description=Open-Inspect control plane
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
+RequiresMountsFor=/data
 
 [Service]
 Type=oneshot
@@ -172,4 +245,10 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now open-inspect.service
+systemctl enable open-inspect.service
+# Not `--now`: on a first boot CI has usually not pushed an image yet, so the
+# pull fails and a non-zero exit here would have cloud-init report an otherwise
+# healthy bootstrap as failed. The start is attempted, and its own status is
+# where a real failure shows up.
+systemctl start open-inspect.service ||
+  echo "open-inspect did not start yet; check 'systemctl status open-inspect' (expected before the first image push)"

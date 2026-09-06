@@ -35,6 +35,7 @@ module "control_plane" {
   force_destroy_storage = false
 
   route53_zone_id = var.route53_zone_id
+  secret_names    = var.secret_names
   alarm_topic_arn = var.alarm_topic_arn
 
   config = merge({

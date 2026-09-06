@@ -99,8 +99,7 @@ terraform/environments/production/.terraform*
 packages/control-plane/test/smoke/run-smoke.bundle.mjs
 smoke-logs/
 
-# AWS environments (see terraform/environments/aws-*)
+# AWS environments (see terraform/environments/aws-*); state files and
+# *_override.tf are already covered globally above.
 terraform/environments/aws-staging/plan.out
-terraform/environments/aws-staging/terraform.tfstate*
 terraform/environments/aws-production/plan.out
-terraform/environments/aws-production/terraform.tfstate*

@@ -25,8 +25,10 @@ same module with different sizes.
 Once per account. The bucket name has to be globally unique, so it is not in the repository.
 
 ```bash
+REGION=us-west-2   # must match the `region` variable in terraform.tfvars
+
 aws s3api create-bucket --bucket open-inspect-terraform-state-$ACCOUNT_ID \
-  --region us-west-2 --create-bucket-configuration LocationConstraint=us-west-2
+  --region "$REGION" --create-bucket-configuration LocationConstraint="$REGION"
 aws s3api put-bucket-versioning --bucket open-inspect-terraform-state-$ACCOUNT_ID \
   --versioning-configuration Status=Enabled
 ```
@@ -70,8 +72,17 @@ If you would rather Terraform created the record, set `route53_zone_id` and re-a
 
 ## 4. Secrets
 
-The module creates one SSM parameter per key, each holding a `CHANGE_ME_` placeholder, and then
-ignores the value — so Terraform owns the inventory and never the secrets. List what is still unset:
+The module creates one SecureString parameter per key, each holding a `CHANGE_ME_` placeholder, and
+never reads the value back — the value is write-only, so Terraform owns the inventory and the state
+file never contains a secret. Setting one is entirely out of band.
+
+A parameter still holding its placeholder is **left out of `.env` rather than written through**.
+That matters most for the four `SERVICE_AUTH_SECRET_*` keys: they are HMAC signing keys used exactly
+as given, with no length or format check, so a placeholder — a value published in this repository —
+would be a working credential for anyone who read it. Unset, they are a `500` instead. The instance
+logs every key it skipped for this reason.
+
+List what is still unset:
 
 ```bash
 PREFIX=$(terraform output -raw ssm_env_prefix)
@@ -79,33 +90,66 @@ aws ssm get-parameters-by-path --path "$PREFIX" --recursive --with-decryption \
   --query 'Parameters[?starts_with(Value, `CHANGE_ME_`)].Name' --output table
 ```
 
-Set each one:
+Values reach `put-parameter` through a file rather than the command line, so they stay out of shell
+history and out of `ps` while the call runs:
 
 ```bash
-put() { aws ssm put-parameter --overwrite --type SecureString --name "$PREFIX/$1" --value "$2"; }
-
-put TOKEN_ENCRYPTION_KEY              "$(openssl rand -base64 32)"
-put PROVIDER_ACCOUNTS_ENCRYPTION_KEY  "$(openssl rand -base64 32)"
-put REPO_SECRETS_ENCRYPTION_KEY       "$(openssl rand -base64 32)"
-put BROWSER_AUTH_SECRET               "$(openssl rand -base64 32)"
-put IMAGE_CALLBACK_TOKEN_PEPPER       "$(openssl rand -base64 32)"
-put GITHUB_APP_ID                     "123456"
-put GITHUB_APP_INSTALLATION_ID        "12345678"
-put GITHUB_CLIENT_ID                  "Iv1...."
-put GITHUB_CLIENT_SECRET              "...."
-put ANTHROPIC_API_KEY                 "sk-ant-...."
+put() { # value on stdin
+  umask 077
+  local request; request="$(mktemp)"
+  python3 -c 'import json,sys; json.dump(
+      {"Name": sys.argv[1], "Value": sys.stdin.read().rstrip("\n"),
+       "Type": "SecureString", "Overwrite": True}, open(sys.argv[2], "w"))' \
+    "$PREFIX/$1" "$request"
+  aws ssm put-parameter --cli-input-json "file://$request" >/dev/null && echo "set $1"
+  rm -f "$request"
+}
 ```
 
-The three encryption keys are 32 bytes and are rejected at any other length. Generate them once and
-keep them: rotating one invalidates everything it encrypted.
+### The whole inventory
 
-**The GitHub App private key has to be on one line.** `.env` is one assignment per line and Compose
-does not unescape it, so a PEM with real newlines would truncate at the first one and take the rest
-of the file with it. The instance refuses to write a multi-line value rather than doing that
-silently. Convert it first:
+Sixteen keys. The first five are the only ones the host refuses to start without; the rest disable a
+feature when unset rather than blocking a boot.
 
 ```bash
-put GITHUB_APP_PRIVATE_KEY "$(awk '{printf "%s\\n", $0}' key-pkcs8.pem)"
+# Required at boot. 32 bytes each, rejected at any other length. Generate once
+# and keep them: rotating one invalidates everything it encrypted.
+openssl rand -base64 32 | put TOKEN_ENCRYPTION_KEY
+openssl rand -base64 32 | put PROVIDER_ACCOUNTS_ENCRYPTION_KEY
+openssl rand -base64 32 | put REPO_SECRETS_ENCRYPTION_KEY
+openssl rand -base64 32 | put BROWSER_AUTH_SECRET
+openssl rand -base64 32 | put IMAGE_CALLBACK_TOKEN_PEPPER
+
+# Service-to-service signing keys, one per caller. Set the ones you run; the
+# others stay unset, which is a refusal rather than a weak key. The web app's
+# own SERVICE_AUTH_SECRET must equal SERVICE_AUTH_SECRET_WEB.
+openssl rand -base64 32 | put SERVICE_AUTH_SECRET_WEB
+openssl rand -base64 32 | put SERVICE_AUTH_SECRET_SLACK_BOT
+openssl rand -base64 32 | put SERVICE_AUTH_SECRET_GITHUB_BOT
+openssl rand -base64 32 | put SERVICE_AUTH_SECRET_LINEAR_BOT
+
+# The sandbox provider. Both environments select Modal, and this is the shared
+# HMAC secret between the control plane and the Modal deployment; without it the
+# stack answers /healthz and cannot spawn a session. Another provider's key
+# replaces this entry through the `secret_names` variable.
+openssl rand -hex 32 | put MODAL_API_SECRET
+
+# GitHub App, for repository access and git operations.
+printf '123456'   | put GITHUB_APP_ID
+printf '12345678' | put GITHUB_APP_INSTALLATION_ID
+printf 'Iv1....'  | put GITHUB_CLIENT_ID
+printf '....'     | put GITHUB_CLIENT_SECRET
+
+# Models.
+printf 'sk-ant-....' | put ANTHROPIC_API_KEY
+```
+
+**The GitHub App private key has to be on one line.** `.env` is one assignment per line, so a PEM
+with real newlines would truncate at the first one and take the rest of the file with it. The
+instance refuses to write a multi-line value rather than doing that silently. Convert it first:
+
+```bash
+awk '{printf "%s\\n", $0}' key-pkcs8.pem | put GITHUB_APP_PRIVATE_KEY
 ```
 
 The key must be PKCS#8, as on Cloudflare:
@@ -114,9 +158,18 @@ The key must be PKCS#8, as on Cloudflare:
 openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in key.pem -out key-pkcs8.pem
 ```
 
-Non-secret values — access-control lists, `WEB_APP_URL`, the sandbox provider's settings — go in the
-`config` map in `terraform.tfvars`, not here. Anything in that map lands in the state file, so
-nothing secret belongs in it.
+A value may not contain a single quote. `.env` is read twice by Compose — to interpolate the compose
+files, and as the app's environment — and both readers expand `$VAR` and strip a trailing `#`
+comment from an unquoted value, so every value is written single-quoted, which is the one form that
+cannot contain its own quote. The instance rejects such a value rather than corrupting it.
+
+Non-secret values — access-control lists, `WEB_APP_URL`, the sandbox provider's non-secret settings
+— go in the `config` map in `terraform.tfvars`, not here. **Anything in that map lands in the state
+file**, so nothing secret belongs in it.
+
+Adding a key the module does not know about — another provider's token — means adding it to the
+`secret_names` variable, which replaces the inventory rather than extending it. Removing a name from
+that set deletes the parameter, and the operator's value with it.
 
 ## 5. Push an image
 
@@ -125,7 +178,7 @@ Graviton, and there is no amd64 fallback.
 
 ```bash
 REGISTRY=$(terraform output -raw ecr_repository_url)
-aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin "${REGISTRY%%/*}"
+aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "${REGISTRY%%/*}"
 
 docker buildx build --platform linux/arm64 \
   -f packages/control-plane/Dockerfile \
@@ -157,8 +210,9 @@ curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}\n' https://<your-hos
 
 ## Watching it
 
-Container logs go straight from the Docker daemon to CloudWatch, so `docker compose logs` shows
-nothing on the instance. The equivalent, which also keeps working after the instance is replaced:
+Container logs go from the Docker daemon to CloudWatch, one stream per service. Docker also keeps a
+local cache, so `docker compose logs` on the instance generally still answers; CloudWatch is the one
+that survives the instance being replaced, and it is what the runbook uses:
 
 ```bash
 aws logs tail "$(terraform output -raw log_group_name)" --follow
@@ -195,9 +249,24 @@ Two layers, and they cover different things.
 
 **The data volume** is the deployment. Docker's data root sits on it, so the global store, every
 session database, the host alarm index and the images are all on it. Data Lifecycle Manager
-snapshots it daily and keeps `snapshot_retention_count` of them. To restore, set
-`data_volume_snapshot_id` and apply into an empty state — the module ignores later changes to it, so
-a restore does not turn into a permanent instruction to re-restore.
+snapshots it daily, scoped to this deployment's volume, and keeps `snapshot_retention_count` of
+them.
+
+Restoring into a fresh environment is just `data_volume_snapshot_id` plus an apply. Restoring an
+existing one in place needs the current volume released first, because `prevent_destroy` and
+`ignore_changes` together mean Terraform will neither replace it nor notice the new snapshot id:
+
+```bash
+terraform state rm module.control_plane.aws_ebs_volume.data
+# then set data_volume_snapshot_id in terraform.tfvars
+terraform apply
+```
+
+The attachment is replaced along with the volume, which stops the instance and starts it again; the
+filesystem is found by its label rather than by volume id, so the instance itself does not need
+replacing. The released volume is left unmanaged — keep it until the restore is verified, then
+delete it with `aws ec2 delete-volume`. The module ignores later changes to
+`data_volume_snapshot_id`, so a restore does not become a standing instruction to re-restore.
 
 **The Litestream replica** in the backups bucket covers the global store alone, continuously.
 Session files and the host alarm index are not in it. Restoring from it brings back users, settings
@@ -219,7 +288,7 @@ terraform destroy
 
 ## What it costs
 
-Rough monthly figures, us-west-2, on-demand, excluding data transfer and whatever the sandbox
+Rough monthly figures, `us-west-2`, on-demand, excluding data transfer and whatever the sandbox
 provider bills.
 
 |                          | Staging                                     | Production                 |

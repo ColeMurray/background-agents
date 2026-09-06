@@ -55,7 +55,9 @@ resource "aws_vpc_endpoint" "s3" {
 }
 
 resource "aws_security_group" "instance" {
-  name        = "${var.name}-instance"
+  # A prefix, not a name: create_before_destroy needs the replacement to exist
+  # alongside the original, which a fixed name forbids.
+  name_prefix = "${var.name}-instance-"
   description = "Open-Inspect control plane: HTTP and HTTPS in, everything out"
   vpc_id      = aws_vpc.this.id
 

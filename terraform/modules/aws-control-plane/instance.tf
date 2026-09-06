@@ -2,6 +2,12 @@
 # Amazon Linux 2023's arm64 AMI. Looked up with DescribeImages rather than
 # through the public `/aws/service/ami-al2023` SSM parameter: plenty of accounts
 # deny the `/aws/` namespace to their operators, and this needs no such grant.
+# The authority on whether the chosen type can run the image, rather than a
+# list of family prefixes that goes stale with every Graviton generation.
+data "aws_ec2_instance_type" "this" {
+  instance_type = var.instance_type
+}
+
 data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
@@ -24,13 +30,17 @@ data "aws_ami" "al2023" {
 }
 
 resource "aws_instance" "this" {
-  ami                    = data.aws_ami.al2023.id
-  instance_type          = var.instance_type
-  subnet_id              = aws_subnet.public.id
-  availability_zone      = local.az
-  vpc_security_group_ids = [aws_security_group.instance.id]
-  iam_instance_profile   = aws_iam_instance_profile.instance.name
-  key_name               = var.ssh_key_name
+  ami               = data.aws_ami.al2023.id
+  instance_type     = var.instance_type
+  subnet_id         = aws_subnet.public.id
+  availability_zone = local.az
+  # The Elastic IP is associated after the instance is running, and cloud-init
+  # needs the internet before that. A launch-time public address closes the gap
+  # rather than relying on dnf's retries to cover it; the EIP then replaces it.
+  associate_public_ip_address = true
+  vpc_security_group_ids      = [aws_security_group.instance.id]
+  iam_instance_profile        = aws_iam_instance_profile.instance.name
+  key_name                    = var.ssh_key_name
 
   user_data_base64            = data.cloudinit_config.this.rendered
   user_data_replace_on_change = false
@@ -53,11 +63,14 @@ resource "aws_instance" "this" {
     http_put_response_hop_limit = 2
   }
 
-  monitoring = true
-
   tags = merge(local.tags, { Name = var.name })
 
   lifecycle {
+    precondition {
+      condition     = contains(data.aws_ec2_instance_type.this.supported_architectures, "arm64")
+      error_message = "instance_type ${var.instance_type} is not arm64; the control-plane image has no amd64 build."
+    }
+
     # This instance is stateful in practice even though its state is on the
     # attached volume: replacing it drops every in-flight session. AWS moves
     # the AL2023 parameter whenever it publishes an image, and user data
@@ -81,9 +94,9 @@ data "cloudinit_config" "this" {
       log_group             = aws_cloudwatch_log_group.containers.name
       config_bucket         = aws_s3_bucket.backups.id
       ssm_env_prefix        = local.ssm_env_prefix
-      control_plane_image   = local.image
       data_volume_id_nodash = replace(aws_ebs_volume.data.id, "-", "")
       compose_version       = var.compose_plugin_version
+      compose_sha256        = var.compose_plugin_sha256
     })
   }
 }

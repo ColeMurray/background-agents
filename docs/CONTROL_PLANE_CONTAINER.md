@@ -206,8 +206,9 @@ The instance runs this same stack with one overlay, `docker-compose.aws.yml`:
 docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d
 ```
 
-It changes three things and nothing else. The app runs the image `CONTROL_PLANE_IMAGE` names — set
-in the systemd unit's environment, not in `.env` — rather than a build, because the instance has no
+It changes three things and nothing else. The app runs the image `CONTROL_PLANE_IMAGE` names — an
+ordinary `.env` entry, written from SSM like the rest, so changing the tag is a `terraform apply`
+and a restart rather than a new instance — rather than a build, because the instance has no
 checkout. MinIO does not run, because S3 is the object store and Litestream's replica target. And
 Caddy leaves the `tls` profile and starts with the rest, because TLS is not optional on a public
 address.

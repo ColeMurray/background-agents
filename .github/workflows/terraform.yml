@@ -106,6 +106,13 @@ jobs:
         run: terraform validate -no-color
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      # `validate` reads HCL only: it never renders the instance bootstrap, and
+      # the compose smoke boots a different overlay. This is the only thing that
+      # parses either.
+      - name: AWS stack static checks
+        id: aws_stack
+        run: scripts/check-aws-stack.sh
+
       # Not applied from CI yet -- that is I-3 -- so this is the only thing that
       # parses them. The module is shared, so a break here is a break there.
       - name: Terraform Init and Validate (AWS environments)

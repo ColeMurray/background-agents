@@ -40,8 +40,13 @@ locals {
     OBJECT_STORE_REGION = data.aws_region.current.region
     LITESTREAM_BUCKET   = aws_s3_bucket.backups.bucket
     DATA_DIR            = "/data"
-    MIGRATIONS_DIR      = "" # the image sets its own
     APP_BIND_ADDRESS    = "127.0.0.1"
+
+    # Read by docker-compose.aws.yml, and the reason a tag change takes effect
+    # at all: user data is ignored after first boot, so an image reference
+    # written only there would leave `terraform apply` with nothing to do while
+    # the instance went on pulling its old one.
+    CONTROL_PLANE_IMAGE = local.image
 
     # docker-compose.yml refuses to start without this one, and Compose
     # interpolates the base file whether or not MinIO is among the services the
@@ -49,14 +54,18 @@ locals {
     MINIO_ROOT_PASSWORD = "unused-on-aws"
   }
 
-  # The keys have to be known at plan time, so everything here is: the bucket
-  # names are the ones this module sets rather than the computed `id`, and the
-  # only values filtered out are var.config's, which the caller supplies.
-  # MIGRATIONS_DIR is absent on purpose -- the image sets its own -- and so are
-  # the endpoint and credential variables, per the comment above.
-  env_config = {
-    for key, value in merge(local.derived_config, var.config) : key => value if value != ""
-  }
+  # `for_each` needs its keys known at plan time, and filtering on a value makes
+  # the keys depend on it. Only var.config is filtered, because only its values
+  # are known then; the derived map holds computed ones -- the image reference,
+  # the bucket names -- and every key in it is deliberately non-empty. An
+  # operator therefore cannot blank a derived value by setting it to "".
+  #
+  # MIGRATIONS_DIR is absent on purpose (the image sets its own), as are the
+  # endpoint and credential variables, per the comment above.
+  env_config = merge(
+    local.derived_config,
+    { for key, value in var.config : key => value if value != "" },
+  )
 }
 
 resource "aws_s3_object" "stack" {
@@ -86,14 +95,20 @@ resource "aws_ssm_parameter" "config" {
 #   aws ssm put-parameter --overwrite --type SecureString \
 #     --name /<name>/env/TOKEN_ENCRYPTION_KEY --value "$(openssl rand -base64 32)"
 resource "aws_ssm_parameter" "secret" {
-  for_each = var.secret_names
+  for_each = local.secret_names
 
-  name  = "${local.ssm_env_prefix}/${each.value}"
-  type  = "SecureString"
-  value = "CHANGE_ME_${each.value}"
-  tags  = local.tags
+  name = "${local.ssm_env_prefix}/${each.value}"
+  type = "SecureString"
 
-  lifecycle {
-    ignore_changes = [value]
-  }
+  # Write-only. `ignore_changes` on `value` suppresses the diff but not the
+  # refresh, so the first plan after an operator sets a real secret would read
+  # it back with decryption and write the plaintext into the state file. A
+  # write-only value is sent on create and never read back, which is the
+  # boundary this module claims: the inventory is Terraform's, the values are
+  # not. The version is fixed, so the placeholder is re-sent only if it is
+  # bumped and an operator's `put-parameter` is left alone.
+  value_wo         = "CHANGE_ME_${each.value}"
+  value_wo_version = 1
+
+  tags = local.tags
 }

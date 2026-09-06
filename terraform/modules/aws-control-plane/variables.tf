@@ -29,14 +29,10 @@ variable "hostname" {
 # ---------------------------------------------------------------------------
 
 variable "instance_type" {
-  description = "EC2 instance type. Graviton (t4g.*) only: the control-plane image is built for arm64."
+  description = "EC2 instance type. Must be arm64 (Graviton): the control-plane image has no amd64 build. Checked against the instance type's advertised architectures rather than its family name, so newer Graviton generations need no change here."
   type        = string
   default     = "t4g.small"
 
-  validation {
-    condition     = startswith(var.instance_type, "t4g.") || startswith(var.instance_type, "m7g.") || startswith(var.instance_type, "c7g.")
-    error_message = "instance_type must be a Graviton (arm64) type: the control-plane image has no amd64 build."
-  }
 }
 
 variable "control_plane_image" {
@@ -124,25 +120,9 @@ variable "config" {
 }
 
 variable "secret_names" {
-  description = "`.env` keys held as SecureString parameters. The module creates each one with a placeholder and then ignores its value, so the inventory is Terraform's and the values are not: set them with `aws ssm put-parameter --overwrite`. A key still holding its placeholder fails at boot rather than silently."
+  description = "`.env` keys held as SecureString parameters, replacing the module's default inventory rather than adding to it. Null uses the default. The module creates each name with a placeholder and never reads the value back, so the inventory is Terraform's and the values are the operator's -- which also means removing a name here deletes that parameter and the operator's secret with it."
   type        = set(string)
-  default = [
-    "ANTHROPIC_API_KEY",
-    "BROWSER_AUTH_SECRET",
-    "GITHUB_APP_ID",
-    "GITHUB_APP_INSTALLATION_ID",
-    "GITHUB_APP_PRIVATE_KEY",
-    "GITHUB_CLIENT_ID",
-    "GITHUB_CLIENT_SECRET",
-    "IMAGE_CALLBACK_TOKEN_PEPPER",
-    "PROVIDER_ACCOUNTS_ENCRYPTION_KEY",
-    "REPO_SECRETS_ENCRYPTION_KEY",
-    "SERVICE_AUTH_SECRET_GITHUB_BOT",
-    "SERVICE_AUTH_SECRET_LINEAR_BOT",
-    "SERVICE_AUTH_SECRET_SLACK_BOT",
-    "SERVICE_AUTH_SECRET_WEB",
-    "TOKEN_ENCRYPTION_KEY",
-  ]
+  default     = null
 }
 
 variable "force_destroy_storage" {
@@ -200,7 +180,13 @@ variable "repository_root" {
 }
 
 variable "compose_plugin_version" {
-  description = "Docker Compose plugin release the instance falls back to when the distribution has no package for it. Needs to be at least 2.24, where the `!reset` and `!override` tags docker-compose.aws.yml uses were introduced."
+  description = "Docker Compose plugin release the instance installs. Amazon Linux 2023 packages no Compose v2 plugin, so this is the only source. Needs to be at least 2.24, where the `!reset` and `!override` tags docker-compose.aws.yml uses were introduced."
   type        = string
   default     = "2.31.0"
+}
+
+variable "compose_plugin_sha256" {
+  description = "Expected sha256 of the linux/aarch64 Compose plugin for compose_plugin_version. Checked on the instance before the binary is made executable; change both together."
+  type        = string
+  default     = "a1f85584584d0c3c489f31f015c97eb543f1f0949fdc5ce3ded88c05a5188729"
 }

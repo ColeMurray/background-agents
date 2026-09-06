@@ -6,6 +6,10 @@ resource "aws_cloudwatch_log_group" "containers" {
   tags              = local.tags
 }
 
+# `treat_missing_data` follows the schedule: an instance stopped every evening
+# publishes no status checks, and "breaching" would page at the stop and again
+# at the start, every day.
+#
 # The two alarms that need nothing installed on the instance. Disk and memory
 # need the CloudWatch agent, and the alarms that actually describe the control
 # plane -- queue depth, spawn failures -- need metrics the host does not
@@ -20,7 +24,7 @@ resource "aws_cloudwatch_metric_alarm" "instance_status" {
   evaluation_periods  = 3
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "breaching"
+  treat_missing_data  = local.scheduled ? "notBreaching" : "breaching"
   dimensions          = { InstanceId = aws_instance.this.id }
 
   alarm_actions = var.alarm_topic_arn == null ? [] : [var.alarm_topic_arn]
@@ -39,7 +43,7 @@ resource "aws_cloudwatch_metric_alarm" "system_status" {
   evaluation_periods  = 3
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "breaching"
+  treat_missing_data  = local.scheduled ? "notBreaching" : "breaching"
   dimensions          = { InstanceId = aws_instance.this.id }
 
   alarm_actions = var.alarm_topic_arn == null ? [] : [var.alarm_topic_arn]

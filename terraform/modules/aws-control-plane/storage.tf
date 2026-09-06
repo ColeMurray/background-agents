@@ -16,8 +16,7 @@ resource "aws_ebs_volume" "data" {
   snapshot_id       = var.data_volume_snapshot_id
 
   tags = merge(local.tags, {
-    Name     = "${var.name}-data"
-    Snapshot = "daily" # what the Data Lifecycle Manager policy below selects on
+    Name = "${var.name}-data"
   })
 
   lifecycle {
@@ -47,7 +46,11 @@ resource "aws_dlm_lifecycle_policy" "data" {
 
   policy_details {
     resource_types = ["VOLUME"]
-    target_tags    = { Snapshot = "daily" }
+    # Scoped to this deployment. DLM selects across the whole account and
+    # region, so a tag that names the schedule rather than the owner is shared
+    # by every environment, and each policy then snapshots the others' volumes
+    # under its own retention.
+    target_tags = { Deployment = var.name }
 
     schedule {
       name = "daily"
@@ -80,14 +83,17 @@ resource "aws_dlm_lifecycle_policy" "data" {
 # fetches at boot. Both are private, versioned and encrypted.
 
 resource "aws_s3_bucket" "media" {
-  bucket        = "${var.name}-media"
+  # Bucket names are global, so a second installation of this module would
+  # collide with the first on its first apply. The account id is the smallest
+  # thing that makes them unique, and renaming once data exists is a migration.
+  bucket        = "${var.name}-media-${data.aws_caller_identity.current.account_id}"
   force_destroy = var.force_destroy_storage
 
   tags = merge(local.tags, { Name = "${var.name}-media" })
 }
 
 resource "aws_s3_bucket" "backups" {
-  bucket        = "${var.name}-backups"
+  bucket        = "${var.name}-backups-${data.aws_caller_identity.current.account_id}"
   force_destroy = var.force_destroy_storage
 
   tags = merge(local.tags, { Name = "${var.name}-backups" })
@@ -127,7 +133,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
     }
-    bucket_key_enabled = true
   }
 }
 

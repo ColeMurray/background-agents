@@ -43,25 +43,34 @@ data "aws_iam_policy_document" "instance" {
     ]
   }
 
-  # The parameters are SecureString under the account's default SSM key.
+  # No kms:Decrypt statement. The parameters are SecureString under the
+  # AWS-managed aws/ssm key, whose own key policy admits account principals
+  # through SSM, so nothing here is needed. An IAM statement would not help in
+  # any case: KMS authorizes against key ARNs, and an alias ARN matches nothing.
+  # A customer-managed key would need a real key ARN here and a grant on the key.
+
+  # The stack files are fetched by root and executed on every start, so the
+  # instance may read them and nothing more. Granting write there would let
+  # anything that reaches the instance role -- which is every container, one hop
+  # from the metadata service -- rewrite what root runs on the next restart.
   statement {
-    sid       = "DecryptStackConfiguration"
-    actions   = ["kms:Decrypt"]
-    resources = ["arn:aws:kms:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alias/aws/ssm"]
+    sid       = "ReadStackFiles"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.backups.arn}/stack/*"]
   }
 
   statement {
-    sid     = "UseBuckets"
-    actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucketMultipartUploads", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
+    sid     = "WriteMediaAndReplica"
+    actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
     resources = [
       "${aws_s3_bucket.media.arn}/*",
-      "${aws_s3_bucket.backups.arn}/*",
+      "${aws_s3_bucket.backups.arn}/control-plane/*",
     ]
   }
 
   statement {
     sid       = "ListBuckets"
-    actions   = ["s3:ListBucket", "s3:GetBucketLocation"]
+    actions   = ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"]
     resources = [aws_s3_bucket.media.arn, aws_s3_bucket.backups.arn]
   }
 

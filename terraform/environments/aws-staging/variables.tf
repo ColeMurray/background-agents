@@ -38,3 +38,9 @@ variable "data_volume_snapshot_id" {
   type        = string
   default     = null
 }
+
+variable "secret_names" {
+  description = "`.env` keys held as SecureString parameters, replacing the module's default inventory. Extend it when a deployment needs secrets the module does not know about -- another sandbox provider's key, for instance. Removing a name deletes that parameter and the operator's value with it."
+  type        = set(string)
+  default     = null
+}
