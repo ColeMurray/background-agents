@@ -58,7 +58,7 @@ locals {
     : [{ name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key }]
   )
 
-  # Deployment-wide LLM keys injected into every Modal sandbox. Every key stays
+  # Deployment-wide LLM keys injected into Modal session sandboxes. Every key stays
   # present with an empty value when unconfigured, so clearing one reconciles the
   # old credential away on the next apply; Modal rejects a secret with no keys at
   # all. An empty value means sandboxes take that provider's credential from the

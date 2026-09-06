@@ -73,10 +73,10 @@ The most common example:
 | `ZHIPU_API_KEY`     | Required for Z.AI Coding Plan GLM models with any sandbox provider                        |
 
 > **Claude models**: add `ANTHROPIC_API_KEY` as a global secret after deploying. A deployment can
-> instead set `anthropic_api_key` in Terraform to inject one fleet-wide key into every Modal
-> sandbox; that is optional, and a global secret of the same name takes precedence over it. With
-> neither, Claude sessions fail with "Model not found." See [Getting Started](GETTING_STARTED.md)
-> for details.
+> instead set `anthropic_api_key` in Terraform to inject one fleet-wide key into Modal session
+> sandboxes and OpenComputer sandboxes; that is optional, and a global secret of the same name takes
+> precedence over it. With neither, Claude sessions fail with "Model not found." See
+> [Getting Started](GETTING_STARTED.md) for details.
 
 ### When to use repository secrets
 
