@@ -286,7 +286,7 @@ variable "linear_api_key" {
 # =============================================================================
 
 variable "anthropic_api_key" {
-  description = "Anthropic API key injected into every sandbox, and used by the Slack and Linear bot classifiers when classification_model is an Anthropic model. Optional: leave blank when sandboxes get their model credentials from the per-repository secret store instead."
+  description = "Anthropic API key for the Slack and Linear bot classifiers, also injected into Modal session sandboxes and OpenComputer sandboxes. Daytona, E2B and Vercel read model keys only from the scoped secret store, as do Modal image builds. Optional: leave blank to supply model credentials as scoped secrets, which override this value on every provider. Required only when a classifier bot is enabled and classification_model is an Anthropic model."
   type        = string
   sensitive   = true
   default     = ""

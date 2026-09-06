@@ -262,8 +262,11 @@ For the full runtime, lifecycle, and configuration model, see
 
 ### Anthropic
 
-Optional. Skip this if your sessions run on other providers' models, or if you would rather add the
-key as a global secret after deploying.
+Required by the default configuration: the Slack bot is enabled by default and its classifier runs
+on Claude, so `terraform apply` fails without this key. You can skip it only if you set both
+`enable_slack_bot = false` and `enable_linear_bot = false`, or point `classification_model` at an
+OpenAI model. Coding sessions themselves need no key here — those model credentials can be added as
+secrets in the web app after deploying.
 
 1. Go to [Anthropic Console](https://console.anthropic.com)
 2. Create an API key
