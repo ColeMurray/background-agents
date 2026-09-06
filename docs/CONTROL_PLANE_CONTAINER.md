@@ -217,9 +217,6 @@ address.
 applies an overlay, so that variable's `:?` guard fires whether or not MinIO is among the services
 that end up running. The AWS deployment gives it an unused value.
 
-[docs/AWS_BRING_UP.md](AWS_BRING_UP.md) is the whole path from an empty account to `/healthz` over
-HTTPS.
-
 ## The smoke test
 
 CI boots this stack on every pull request and round-trips one session through it:
