@@ -59,11 +59,14 @@ echo "${SECRETS_JSON}" | jq -c '.[]' | while IFS= read -r secret; do
     # behind keeps being injected into every new sandbox.
     if [[ ${#args[@]} -eq 0 ]]; then
         echo "Deleting secret ${secret_name}: no keys configured"
-        if uv run --directory "${DEPLOY_PATH}" modal secret delete "${secret_name}" --allow-missing --yes; then
-            echo "Secret ${secret_name} absent"
-        else
-            echo "Warning: Failed to delete secret ${secret_name}"
+        # Unlike a failed create, a failed delete is not survivable: the apply
+        # would redeploy while the cleared credential is still in the secret and
+        # still reaching new sandboxes. Fail the apply instead.
+        if ! uv run --directory "${DEPLOY_PATH}" modal secret delete "${secret_name}" --allow-missing --yes; then
+            echo "Error: Failed to delete secret ${secret_name}"
+            exit 1
         fi
+        echo "Secret ${secret_name} absent"
         continue
     fi
 
