@@ -503,6 +503,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageQueue,
     lifecycleManager,
     terminalMessageProjection,
+    callbackService,
     alarmScheduler,
     getExecutionTimeoutMs,
     now: () => Date.now(),

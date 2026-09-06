@@ -7,7 +7,7 @@ const DEFAULT_STATUS_PART_MAX_LENGTH = 80;
 const DEFAULT_STATUS_TEXT_MAX_LENGTH = 80;
 const LOADING_MESSAGE_MAX_LENGTH = 50;
 const FILE_ARG_KEYS = ["filePath", "file_path", "filepath", "path", "file"];
-const TOOL_STATUS_INDICATOR = "Working...";
+export const ASSISTANT_WORKING_STATUS = "Working...";
 
 const log = createLogger("activity-status");
 
@@ -39,7 +39,7 @@ type AssistantThreadStatusResult =
     };
 
 type AssistantStatusMeta = {
-  event: "start" | "tool_call";
+  event: "start" | "tool_call" | "heartbeat";
   traceId?: string;
   sessionId?: string;
   tool?: string;
@@ -235,7 +235,9 @@ export async function setAssistantThreadStatusBestEffort(
   const eventName =
     meta.event === "tool_call"
       ? "slack.assistant_status.tool_call"
-      : "slack.assistant_status.start";
+      : meta.event === "heartbeat"
+        ? "slack.assistant_status.heartbeat"
+        : "slack.assistant_status.start";
   const base = {
     trace_id: meta.traceId,
     session_id: meta.sessionId,
@@ -246,7 +248,7 @@ export async function setAssistantThreadStatusBestEffort(
   };
 
   try {
-    const statusText = meta.event === "tool_call" ? TOOL_STATUS_INDICATOR : status;
+    const statusText = meta.event === "tool_call" ? ASSISTANT_WORKING_STATUS : status;
     const requestStatusLength = prepareStatusText(statusText).length;
     const requestLoadingMessageLengths = [status].map(
       (message) => prepareLoadingMessageText(message).length

@@ -35,6 +35,7 @@ import type { SessionMessenger } from "./messenger";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
+import { SLACK_ACTIVITY_HEARTBEAT_INTERVAL_MS } from "./activity-heartbeat";
 import type { SessionStatusService } from "./session-status-service";
 import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
@@ -501,9 +502,14 @@ export class SessionMessageQueue {
       this.broadcastPromptQueue();
       this.sandboxLifecycle.updateLastActivity(now);
 
-      // Execution timeout shares the DO's single alarm slot with lifecycle checks.
+      // Execution timeout and Slack activity share the DO's single alarm slot.
+      // The scheduler persists the earliest deadline and re-arms the other one
+      // after each delivery.
       const deadline = now + this.getExecutionTimeoutMs();
       await this.alarmScheduler.schedule(deadline);
+      if (message.source === "slack") {
+        await this.alarmScheduler.schedule(now + SLACK_ACTIVITY_HEARTBEAT_INTERVAL_MS);
+      }
 
       this.backgroundTasks.submit(() => this.callbackService.notifyStarted(message.id), {
         name: "callback.notify_started",
