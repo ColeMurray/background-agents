@@ -208,6 +208,30 @@ esac
 SCRIPT
 chmod 755 /usr/local/bin/open-inspect-fetch-config
 
+# Activating a new deployment, without taking the running stack down first.
+#
+# `systemctl restart` would take it down: the unit's ExecStop drains the stack
+# before ExecStartPre reaches S3, SSM and ECR, so a transient failure in any of
+# them leaves nothing running and nothing to roll back to. Here the fetch and
+# the pull happen while the old containers are still serving, and `up -d`
+# recreates only what changed. Anything that fails before that line changes
+# nothing at all, which is what makes a failed deploy a no-op rather than an
+# outage -- and what lets a rollback be the same command with the parameter put
+# back.
+cat >/usr/local/bin/open-inspect-deploy <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+
+STACK_DIR=/opt/open-inspect
+compose() { docker compose -f docker-compose.yml -f docker-compose.aws.yml "$@"; }
+
+/usr/local/bin/open-inspect-fetch-config
+cd "$STACK_DIR"
+compose pull
+compose up -d --wait
+SCRIPT
+chmod 755 /usr/local/bin/open-inspect-deploy
+
 cat >/etc/open-inspect.conf <<CONF
 AWS_REGION=${region}
 CONFIG_BUCKET=${config_bucket}

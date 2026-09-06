@@ -103,6 +103,9 @@ jobs:
       - name: Test SQL portability check
         run: npm run test:lint-sql-portability
 
+      - name: Test AWS deploy rollback
+        run: npm run test:deploy-aws
+
       - name: Test Owner bootstrap CLI
         run: npm run test:rbac-bootstrap-owner
 
