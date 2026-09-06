@@ -42,12 +42,6 @@ locals {
     DATA_DIR            = "/data"
     APP_BIND_ADDRESS    = "127.0.0.1"
 
-    # Read by docker-compose.aws.yml, and the reason a tag change takes effect
-    # at all: user data is ignored after first boot, so an image reference
-    # written only there would leave `terraform apply` with nothing to do while
-    # the instance went on pulling its old one.
-    CONTROL_PLANE_IMAGE = local.image
-
     # docker-compose.yml refuses to start without this one, and Compose
     # interpolates the base file whether or not MinIO is among the services the
     # AWS overlay leaves running. Nothing reads it here.
@@ -61,7 +55,8 @@ locals {
   # operator therefore cannot blank a derived value by setting it to "".
   #
   # MIGRATIONS_DIR is absent on purpose (the image sets its own), as are the
-  # endpoint and credential variables, per the comment above.
+  # endpoint and credential variables, per the comment above. CONTROL_PLANE_IMAGE
+  # is absent because it is its own resource below, owned differently.
   env_config = merge(
     local.derived_config,
     { for key, value in var.config : key => value if value != "" },
@@ -111,4 +106,30 @@ resource "aws_ssm_parameter" "secret" {
   value_wo_version = 1
 
   tags = local.tags
+}
+
+# The deployed version, and the one parameter here whose value Terraform sets
+# once and then stops owning.
+#
+# It is an ordinary `.env` entry -- docker-compose.aws.yml reads it, and
+# `open-inspect-fetch-config` materializes it from SSM on every start -- which
+# is what makes a deploy a parameter write plus a restart rather than a new
+# instance. But a deploy has to be able to move it, and roll it back, without a
+# `terraform apply`: CI knows the digest it just pushed and Terraform does not.
+# So the module creates it at `control_plane_image_tag` for the first boot and
+# `ignore_changes` leaves every later value alone. Same boundary as the secrets
+# above, for the same reason.
+#
+# The consequence worth knowing: after the first deploy, `control_plane_image`
+# and `control_plane_image_tag` no longer describe what is running.
+# `terraform output deployed_image_parameter` names where that lives.
+resource "aws_ssm_parameter" "deployed_image" {
+  name  = "${local.ssm_env_prefix}/CONTROL_PLANE_IMAGE"
+  type  = "String"
+  value = local.image
+  tags  = local.tags
+
+  lifecycle {
+    ignore_changes = [value]
+  }
 }

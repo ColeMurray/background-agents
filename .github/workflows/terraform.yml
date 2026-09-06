@@ -125,6 +125,14 @@ jobs:
             echo "::endgroup::"
           done
 
+      # `validate` does not evaluate locals, so these runs are the only thing
+      # that plans the AWS module at all. Mocked providers, no credentials.
+      - name: Terraform Test (AWS control-plane module)
+        id: test_aws
+        run: |
+          terraform -chdir=terraform/modules/aws-control-plane init -backend=false -no-color
+          terraform -chdir=terraform/modules/aws-control-plane test -no-color
+
       - name: Terraform Tests
         id: test
         run: |
