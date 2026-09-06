@@ -37,9 +37,6 @@ module "modal_app" {
   source_hash                  = data.external.modal_source_hash[0].result.hash
 
   secrets = [
-    # Empty values mean the deployment configured no fleet-wide LLM key, and the
-    # secret is deleted rather than created — clearing the key in Terraform has
-    # to actually stop injecting it, not just stop managing it.
     {
       name   = "llm-api-keys"
       values = local.modal_llm_secret_values

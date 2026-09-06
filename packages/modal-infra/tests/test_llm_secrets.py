@@ -1,16 +1,15 @@
-"""The deployment-wide LLM secret is optional.
+"""No LLM API key is required to launch a sandbox.
 
-A deployment can supply model credentials per repository through the control
-plane's secret store, so sandboxes must launch whether or not the `llm-api-keys`
-Modal secret exists, and whichever providers it holds.
+The `llm-api-keys` secret carries whichever providers the deployment configured,
+and a deployment that configured none holds empty values rather than a key. It is
+attached to every sandbox either way, so nothing asserts a particular provider's
+key is present.
 """
 
 import pytest
 
 from src.app import llm_secrets
 from src.sandbox.manager import SandboxConfig, SandboxManager
-
-from .conftest import StubSecret
 
 
 @pytest.fixture
@@ -32,25 +31,13 @@ def captured_launch(monkeypatch):
     return captured
 
 
-async def test_configured_secret_is_attached_to_the_sandbox(
-    captured_launch, configured_llm_secret: StubSecret
-):
+async def test_create_attaches_the_deployment_wide_secret(captured_launch):
     await SandboxManager().create_sandbox(SandboxConfig(repo_owner="acme", repo_name="repo"))
 
-    assert captured_launch["secrets"] == [configured_llm_secret]
+    assert captured_launch["secrets"] == [llm_secrets]
 
 
-async def test_sandbox_launches_when_no_llm_secret_is_configured(
-    captured_launch, unconfigured_llm_secret: StubSecret
-):
-    await SandboxManager().create_sandbox(SandboxConfig(repo_owner="acme", repo_name="repo"))
-
-    assert captured_launch["secrets"] == []
-
-
-async def test_restore_launches_when_no_llm_secret_is_configured(
-    captured_launch, unconfigured_llm_secret: StubSecret, monkeypatch
-):
+async def test_restore_attaches_the_deployment_wide_secret(captured_launch, monkeypatch):
     class FakeImage:
         object_id = "img-llm-secrets"
 
@@ -61,20 +48,4 @@ async def test_restore_launches_when_no_llm_secret_is_configured(
         session_config={"repo_owner": "acme", "repo_name": "repo", "session_id": "sess-1"},
     )
 
-    assert captured_launch["secrets"] == []
-
-
-async def test_an_absent_secret_is_looked_up_once_per_container(
-    unconfigured_llm_secret: StubSecret,
-):
-    assert await llm_secrets() == []
-    assert await llm_secrets() == []
-
-    assert unconfigured_llm_secret.hydrate.calls == 1
-
-
-async def test_a_configured_secret_is_returned_on_every_call(
-    configured_llm_secret: StubSecret,
-):
-    assert await llm_secrets() == [configured_llm_secret]
-    assert await llm_secrets() == [configured_llm_secret]
+    assert captured_launch["secrets"] == [llm_secrets]

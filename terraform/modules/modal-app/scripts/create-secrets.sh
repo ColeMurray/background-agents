@@ -53,23 +53,6 @@ echo "${SECRETS_JSON}" | jq -c '.[]' | while IFS= read -r secret; do
         args+=("${key}=${value}")
     done < <(echo "${secret}" | jq -c '.values | to_entries | .[]')
 
-    # Modal cannot hold a secret with no keys, so an empty map means the
-    # deployment configured none and the secret must not exist. Deleting rather
-    # than skipping is what makes clearing a key take effect: a secret left
-    # behind keeps being injected into every new sandbox.
-    if [[ ${#args[@]} -eq 0 ]]; then
-        echo "Deleting secret ${secret_name}: no keys configured"
-        # Unlike a failed create, a failed delete is not survivable: the apply
-        # would redeploy while the cleared credential is still in the secret and
-        # still reaching new sandboxes. Fail the apply instead.
-        if ! uv run --directory "${DEPLOY_PATH}" modal secret delete "${secret_name}" --allow-missing --yes; then
-            echo "Error: Failed to delete secret ${secret_name}"
-            exit 1
-        fi
-        echo "Secret ${secret_name} absent"
-        continue
-    fi
-
     # Create or update the secret using array expansion
     # The --force flag will update if it exists
     if uv run --directory "${DEPLOY_PATH}" modal secret create "${secret_name}" "${args[@]}" --force; then

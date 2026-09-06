@@ -58,13 +58,13 @@ locals {
     : [{ name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key }]
   )
 
-  # Deployment-wide LLM keys injected into every Modal sandbox. Blank keys are
-  # dropped and the secret is omitted entirely when none remain: Modal rejects a
-  # secret with no keys, and a sandbox with no deployment-wide secret takes its
-  # model credentials from the per-repository secret store instead.
+  # Deployment-wide LLM keys injected into every Modal sandbox. Every key stays
+  # present with an empty value when unconfigured, so clearing one reconciles the
+  # old credential away on the next apply; Modal rejects a secret with no keys at
+  # all. An empty value means sandboxes take that provider's credential from the
+  # per-repository secret store, which overrides this secret either way.
   modal_llm_secret_values = {
-    for name, value in { ANTHROPIC_API_KEY = var.anthropic_api_key } :
-    name => value if trimspace(value) != ""
+    ANTHROPIC_API_KEY = trimspace(var.anthropic_api_key)
   }
 
   # OpenComputer reads its sandbox credentials from the control plane rather than

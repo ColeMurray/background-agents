@@ -449,7 +449,7 @@ class SandboxManager:
         create_kwargs: dict[str, Any] = {
             "image": image,
             "app": app,
-            "secrets": await llm_secrets(),
+            "secrets": [llm_secrets],
             "timeout": config.timeout_seconds,
             "workdir": "/workspace",
             "env": env_vars,

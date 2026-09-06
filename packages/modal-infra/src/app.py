@@ -5,13 +5,11 @@ This module defines the Modal app and shared resources used across
 all sandbox operations.
 """
 
-import asyncio
 import os
 from pathlib import Path
 from urllib.parse import urlparse
 
 import modal
-from modal.exception import NotFoundError
 
 import sandbox_runtime
 
@@ -41,38 +39,10 @@ function_image = (
 )
 
 # Deployment-wide LLM API keys, injected into sandboxes but never stored in
-# snapshots. The secret is optional and holds whichever providers the deployment
-# configured: sandboxes can equally get their model credentials from the control
-# plane's secret store, so a deployment that uses only that store never creates
-# this secret at all.
-LLM_SECRET_NAME = "llm-api-keys"
-
-_llm_secret = modal.Secret.from_name(LLM_SECRET_NAME)
-_llm_secret_lock = asyncio.Lock()
-_llm_secret_absent = False
-
-
-async def llm_secrets() -> list[modal.Secret]:
-    """Deployment-wide LLM keys, or nothing when the secret is not configured.
-
-    The result splices straight into a `secrets=` argument. Resolution happens at
-    most once per container: `hydrate` short-circuits on an already-hydrated
-    secret, and an absent one is remembered so later launches skip the lookup.
-    """
-    global _llm_secret_absent
-
-    async with _llm_secret_lock:
-        if _llm_secret_absent:
-            return []
-        try:
-            await _llm_secret.hydrate.aio()
-        except NotFoundError:
-            log.info("llm_secrets.not_configured", secret=LLM_SECRET_NAME)
-            _llm_secret_absent = True
-            return []
-
-    return [_llm_secret]
-
+# snapshots. No key is required: the secret holds whichever providers the
+# deployment configured, and a value left empty means sandboxes take that
+# provider's credential from the control plane's secret store instead.
+llm_secrets = modal.Secret.from_name("llm-api-keys")
 
 # Secrets for GitHub App - used for git operations (clone, push)
 # These are used to generate installation tokens, NOT injected into sandboxes

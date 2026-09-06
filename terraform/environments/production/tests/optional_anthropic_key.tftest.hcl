@@ -53,16 +53,14 @@ variables {
 run "a_deployment_with_no_anthropic_key_plans" {
   command = plan
 
-  # Empty values are what tell the module to delete the secret rather than
-  # create it, so clearing the key actually stops the injection.
+  # The key stays present with an empty value: --force then reconciles a
+  # previously configured credential away instead of leaving it behind.
   assert {
-    condition     = local.modal_llm_secret_values == {}
-    error_message = "An unset Anthropic key must leave no deployment-wide LLM keys to inject."
+    condition     = local.modal_llm_secret_values == { ANTHROPIC_API_KEY = "" }
+    error_message = "An unset Anthropic key must be injected as an empty value, not a credential."
   }
 }
 
-# The module always declares llm-api-keys; the values decide whether it is
-# created or deleted, so a configured key must reach it as an actual value.
 run "a_configured_key_is_injected_into_modal" {
   command = plan
 
@@ -85,8 +83,8 @@ run "a_blank_key_is_not_treated_as_configured" {
   }
 
   assert {
-    condition     = local.modal_llm_secret_values == {}
-    error_message = "A whitespace-only Anthropic key must be dropped, not injected."
+    condition     = local.modal_llm_secret_values == { ANTHROPIC_API_KEY = "" }
+    error_message = "A whitespace-only Anthropic key must normalize to empty, not reach a sandbox."
   }
 }
 
