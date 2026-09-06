@@ -6,6 +6,7 @@ import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 
 const BASE = "https://test.local/autofix/activity";
+const DEFAULT_ACTIVITY_LIMIT = 50;
 
 function envelope(id: string): GitHubAutofixEnvelope {
   return {
@@ -23,55 +24,45 @@ function envelope(id: string): GitHubAutofixEnvelope {
 describe("GET /autofix/activity", () => {
   beforeEach(cleanD1Tables);
 
-  it("paginates real feedback activity through the Worker route", async () => {
+  it("applies the default limit and paginates equal-timestamp records without gaps", async () => {
     const store = new PrAutofixFeedbackStore(env.DB);
-    await store.receive(envelope("older"), 1_000);
-    await store.receive(envelope("newer"), 2_000);
+    const ids = Array.from(
+      { length: DEFAULT_ACTIVITY_LIMIT + 1 },
+      (_, index) => `record-${String(index).padStart(2, "0")}`
+    );
+    for (const id of ids) await store.receive(envelope(id), 1_000);
+    const expectedKeys = ids.map((id) => `github:pr_comment:${id}`).reverse();
 
-    const first = await serviceFetch(`${BASE}?limit=1`);
+    const first = await serviceFetch(BASE);
     expect(first.status).toBe(200);
     const firstBody = await first.json<{
-      records: Array<{ feedbackKey: string; deliveryId: string }>;
+      records: Array<{ feedbackKey: string }>;
       nextCursor: string | null;
     }>();
-    expect(firstBody.records).toEqual([
-      expect.objectContaining({
-        feedbackKey: "github:pr_comment:newer",
-        deliveryId: "delivery-newer",
-      }),
-    ]);
+    expect(firstBody.records).toHaveLength(DEFAULT_ACTIVITY_LIMIT);
+    expect(firstBody.records.map((record) => record.feedbackKey)).toEqual(
+      expectedKeys.slice(0, DEFAULT_ACTIVITY_LIMIT)
+    );
     expect(firstBody.nextCursor).toEqual(expect.any(String));
 
     const second = await serviceFetch(
-      `${BASE}?limit=1&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`
+      `${BASE}?cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`
     );
     expect(second.status).toBe(200);
-    await expect(second.json()).resolves.toMatchObject({
-      records: [
-        expect.objectContaining({
-          feedbackKey: "github:pr_comment:older",
-          deliveryId: "delivery-older",
-        }),
-      ],
-      nextCursor: null,
-    });
-  });
+    const secondBody = await second.json<{
+      records: Array<{ feedbackKey: string }>;
+      nextCursor: string | null;
+    }>();
+    expect(secondBody.records.map((record) => record.feedbackKey)).toEqual(
+      expectedKeys.slice(DEFAULT_ACTIVITY_LIMIT)
+    );
+    expect(secondBody.nextCursor).toBeNull();
 
-  it("uses the default limit and newest-first ordering", async () => {
-    const store = new PrAutofixFeedbackStore(env.DB);
-    await store.receive(envelope("first"), 1_000);
-    await store.receive(envelope("second"), 2_000);
-
-    const response = await serviceFetch(BASE);
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      records: [
-        expect.objectContaining({ feedbackKey: "github:pr_comment:second" }),
-        expect.objectContaining({ feedbackKey: "github:pr_comment:first" }),
-      ],
-      nextCursor: null,
-    });
+    const traversedKeys = [...firstBody.records, ...secondBody.records].map(
+      (record) => record.feedbackKey
+    );
+    expect(traversedKeys).toEqual(expectedKeys);
+    expect(new Set(traversedKeys).size).toBe(ids.length);
   });
 
   it("rejects invalid limits and cursors at the route boundary", async () => {

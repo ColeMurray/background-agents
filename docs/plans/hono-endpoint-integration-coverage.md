@@ -31,12 +31,12 @@ not cover Hono dispatch, decoded parameters, real persistence, or response envel
 Add route-level coverage for `GET /autofix/activity`:
 
 - seed real feedback records and traverse stable newest-first cursor pagination;
-- verify default and explicit limits;
+- verify the exact default limit;
 - reject invalid limits and cursors with the route's public error contract;
 - reject unsigned and non-web service requests.
 
-The store already has cursor tests, but the production Hono route and web-service boundary are only
-incidentally reached by the all-route matrix.
+The store already has cursor tests, and production-route unit tests exercise signed web and non-web
+service requests. This PR adds the missing Workerd `SELF.fetch` workflow backed by real D1 state.
 
 ### 3. Routing and authentication regressions
 
@@ -63,4 +63,5 @@ run:
 2. All control-plane unit tests.
 3. All control-plane Workerd/D1 integration tests.
 4. Control-plane typecheck and build.
-5. Repository ESLint, Prettier, and `git diff --check`.
+5. Repository ESLint (`npm run lint`) and complexity (`npm run lint:complexity`).
+6. Prettier (`npm run format:check`) and `git diff --check`.

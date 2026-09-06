@@ -163,7 +163,9 @@ describe("sig1 service-credential authentication", () => {
       url,
       mutateHeaders(headers) {
         headers.Authorization = `Bearer ${sandboxToken}`;
-        headers[SERVICE_SIGNATURE_HEADER] = "sig1.invalid";
+        headers[SERVICE_SIGNATURE_HEADER] = headers[SERVICE_SIGNATURE_HEADER].replace(/.$/, (c) =>
+          c === "0" ? "1" : "0"
+        );
       },
     });
     expect(failedService.status).toBe(401);
