@@ -1001,11 +1001,90 @@ curl -I "$(terraform output -raw web_app_url)"
 
 ## Step 10: Set Up CI/CD (Optional)
 
-Enable automatic deployments when you push to main by adding GitHub Secrets.
+Enable automatic deployments when you push to main by configuring GitHub Actions secrets and
+variables under your fork's **Settings → Secrets and variables → Actions**.
 
-Go to your fork's Settings → Secrets and variables → Actions, and add:
+Use the **Variables** tab for the following non-secret settings (only configure the providers and
+features you use):
 
-| Secret Name                        | Value                                                                                       |
+```text
+# Deployment and Cloudflare
+DEPLOYMENT_NAME
+WEB_PLATFORM
+SANDBOX_PROVIDER
+CLOUDFLARE_ACCOUNT_ID
+CLOUDFLARE_WORKER_SUBDOMAIN
+ENABLE_DURABLE_OBJECT_BINDINGS
+
+# Vercel web app
+VERCEL_TEAM_ID
+VERCEL_PROJECT_ID
+
+# Modal
+MODAL_WORKSPACE
+MODAL_ENVIRONMENT
+MODAL_ENVIRONMENT_WEB_SUFFIX
+
+# Application IDs and bot configuration
+GH_OAUTH_CLIENT_ID
+GOOGLE_CLIENT_ID
+GH_APP_ID
+GH_APP_INSTALLATION_ID
+ENABLE_SLACK_BOT
+ENABLE_GITHUB_BOT
+GH_BOT_USERNAME
+ENABLE_LINEAR_BOT
+LINEAR_CLIENT_ID
+
+# Access control and branding
+ALLOWED_USERS
+ALLOWED_EMAIL_DOMAINS
+ALLOWED_EMAILS
+ALLOWED_GITHUB_ORGS
+APP_NAME
+APP_ICON_URL
+
+# Daytona
+DAYTONA_API_URL
+DAYTONA_BASE_SNAPSHOT
+DAYTONA_TARGET
+
+# Vercel Sandbox
+VERCEL_SANDBOX_PROJECT_ID
+VERCEL_SANDBOX_TEAM_ID
+VERCEL_SANDBOX_API_BASE_URL
+VERCEL_BASE_SNAPSHOT_ID
+VERCEL_SANDBOX_RUNTIME
+VERCEL_SNAPSHOT_EXPIRATION_MS
+
+# OpenComputer
+OPENCOMPUTER_API_URL
+OPENCOMPUTER_TEMPLATE
+OPENCOMPUTER_PROJECT_ID
+OPENCOMPUTER_TARGET
+
+# E2B
+E2B_TEMPLATE_ID
+E2B_API_URL
+E2B_SANDBOX_TIMEOUT_SECONDS
+E2B_AUTO_PAUSE
+E2B_TEMPLATE_CPU
+E2B_TEMPLATE_MEMORY_MB
+```
+
+These settings resolve as **non-empty variable → same-named secret → existing default**, where a
+workflow default exists. Existing secret-only deployments need no migration. If both are set, the
+variable wins; delete it to return to the secret. An empty variable does not clear an existing
+secret. Values such as `false` and `0` are strings in Actions variables and are preserved.
+
+Keep credentials in the **Secrets** tab: API tokens/keys, OAuth client secrets, signing secrets,
+private keys, encryption keys, and both `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`. Allowlist values
+may contain personal information; leave them in secrets if you prefer masking in workflow logs.
+
+The table below describes deployment settings and credentials; use Variables for the names above and
+Secrets for credentials:
+
+| Setting Name                       | Value                                                                                       |
 | ---------------------------------- | ------------------------------------------------------------------------------------------- |
 | `CLOUDFLARE_API_TOKEN`             | Your Cloudflare API token                                                                   |
 | `CLOUDFLARE_ACCOUNT_ID`            | Your Cloudflare account ID                                                                  |
@@ -1080,13 +1159,22 @@ application in **Linear Settings → API → Applications**. This provider-side 
 by Terraform. Existing eligible single-workspace installations transition on their next request
 without uninstalling or reinstalling the app.
 
-**Bulk upload secrets with `gh` CLI:**
+**Bulk upload with `gh` CLI:**
 
-Instead of adding secrets one by one, create a `.secrets` file (don't commit this!):
+For non-secret settings, create a `.variables` file:
+
+```dotenv
+CLOUDFLARE_ACCOUNT_ID=your-account-id
+DEPLOYMENT_NAME=my-deployment
+WEB_PLATFORM=cloudflare
+ENABLE_SLACK_BOT=false
+```
+
+Upload it with `gh variable set -f .variables`. For credentials, create a `.secrets` file (don't
+commit this!):
 
 ```
 CLOUDFLARE_API_TOKEN=your-token
-CLOUDFLARE_ACCOUNT_ID=your-account-id
 ANTHROPIC_API_KEY=sk-ant-...
 DEEPSEEK_API_KEY=sk-...
 # ... add all secrets

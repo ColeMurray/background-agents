@@ -24,13 +24,15 @@ jobs:
     steps:
       - name: Check if secrets are configured
         id: check-secrets
+        env:
+          WEB_PLATFORM: ${{ vars.WEB_PLATFORM || secrets.WEB_PLATFORM }}
+          VERCEL_API_TOKEN: ${{ secrets.VERCEL_API_TOKEN }}
         run: |
           # Skip if web_platform is set to something other than vercel
-          WEB_PLATFORM="${{ vars.WEB_PLATFORM || secrets.WEB_PLATFORM }}"
           if [ -n "$WEB_PLATFORM" ] && [ "$WEB_PLATFORM" != "vercel" ]; then
             echo "Skipping Vercel deployment - web_platform is '${WEB_PLATFORM}'"
             echo "configured=false" >> $GITHUB_OUTPUT
-          elif [ -z "${{ secrets.VERCEL_API_TOKEN }}" ] || [ -z "${{ vars.VERCEL_PROJECT_ID || secrets.VERCEL_PROJECT_ID }}" ]; then
+          elif [ -z "$VERCEL_API_TOKEN" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
             echo "Skipping deployment - Vercel secrets not configured"
             echo "configured=false" >> $GITHUB_OUTPUT
           else

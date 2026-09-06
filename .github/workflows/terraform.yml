@@ -203,11 +203,13 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           terraform init \
             -backend-config="access_key=${{ secrets.R2_ACCESS_KEY_ID }}" \
             -backend-config="secret_key=${{ secrets.R2_SECRET_ACCESS_KEY }}" \
-            -backend-config='endpoints={s3="https://${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"}'
+            -backend-config="endpoints={s3=\"https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com\"}"
         working-directory: ${{ env.TF_WORKING_DIR }}
 
       - name: Stage SchedulerDO deletion migration
@@ -382,11 +384,13 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           terraform init \
             -backend-config="access_key=${{ secrets.R2_ACCESS_KEY_ID }}" \
             -backend-config="secret_key=${{ secrets.R2_SECRET_ACCESS_KEY }}" \
-            -backend-config='endpoints={s3="https://${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"}'
+            -backend-config="endpoints={s3=\"https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com\"}"
         working-directory: ${{ env.TF_WORKING_DIR }}
 
       - name: Stage SchedulerDO deletion migration

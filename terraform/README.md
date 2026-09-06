@@ -193,7 +193,16 @@ The GitHub Actions workflow (`.github/workflows/terraform.yml`) automates:
 | Pull Request  | `terraform plan` with PR comment |
 | Merge to main | `terraform apply` (auto-approve) |
 
-### Required GitHub Secrets
+### GitHub Actions Secrets and Variables
+
+Keep credentials in Actions **Secrets**. Non-secret configuration (account/application IDs, provider
+settings, feature flags, allowlists, and branding) can use Actions **Variables** instead. The
+workflows prefer a non-empty variable, then the same-named secret, then the existing default where
+one exists. Existing secret-only deployments continue to work; an empty variable falls back to the
+secret rather than clearing it. `CLASSIFICATION_MODEL` remains variable-only.
+
+See [the CI/CD setup guide](../docs/GETTING_STARTED.md#step-10-set-up-cicd-optional) for the
+complete variable list and bulk upload examples using `gh variable set` and `gh secret set`.
 
 Add these secrets to your repository settings:
 
