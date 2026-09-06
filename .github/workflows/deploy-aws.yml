@@ -1,0 +1,160 @@
+# Deploys the control-plane image to an AWS instance, and puts the previous one
+# back if the new one does not come up.
+#
+# The Cloudflare deploy is `terraform apply` from terraform.yml. This is the
+# equivalent for the AWS environments, and deliberately not the same shape: no
+# Terraform runs here. The image is built and pushed, the deployed-version SSM
+# parameter is moved, and the instance activates it over SSM Session Manager's
+# command channel. Infrastructure changes stay with `terraform apply`.
+#
+# Authentication is OIDC. The token's `sub` claim names the repository *and the
+# GitHub environment this job requested*, and the AWS role's trust policy pins
+# both -- so an environment's reviewers gate AWS access, not just the UI.
+# There is no AWS key in this repository.
+#
+# Configuration lives on the GitHub environment, all of it from
+# `terraform output` (see docs/AWS_BRING_UP.md):
+#
+#   AWS_DEPLOY_ROLE_ARN          github_deploy_role_arn
+#   AWS_REGION                   region
+#   AWS_ECR_REPOSITORY           ecr_repository_url
+#   AWS_INSTANCE_ID              instance_id
+#   AWS_DEPLOYED_IMAGE_PARAMETER deployed_image_parameter
+#   AWS_PUBLIC_URL               https://<hostname>
+name: Deploy (AWS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "GitHub environment to deploy"
+        type: choice
+        options:
+          - aws-staging
+          - aws-production
+        default: aws-staging
+  push:
+    branches: [main]
+    paths:
+      # What the control-plane image is built from.
+      - "packages/control-plane/**"
+      - "packages/shared/**"
+      - "packages/sandbox-runtime/src/sandbox_runtime/*.json"
+      - "terraform/d1/migrations/**"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/deploy-aws.sh"
+      - ".github/workflows/deploy-aws.yml"
+
+permissions:
+  contents: read
+  id-token: write # the OIDC token this exchanges for the deploy role
+
+concurrency:
+  # One deploy per environment at a time, and never cancelled: a cancelled
+  # deploy is one that has moved the parameter and not verified the result.
+  group: deploy-aws-${{ inputs.environment || vars.AWS_DEPLOY_ON_PUSH_ENVIRONMENT }}
+  cancel-in-progress: false
+
+jobs:
+  # Which environment, if any. Separate from the deploy job because it declares
+  # no `environment:` -- a repository that has never configured one should not
+  # need it to exist for this workflow to be green.
+  target:
+    name: Pick the target
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      environment: ${{ steps.pick.outputs.environment }}
+    steps:
+      - name: Pick the environment
+        id: pick
+        env:
+          DISPATCHED: ${{ inputs.environment }}
+          ON_PUSH: ${{ vars.AWS_DEPLOY_ON_PUSH_ENVIRONMENT }}
+        run: |
+          if [ -n "$DISPATCHED" ]; then
+            environment="$DISPATCHED"
+          else
+            environment="$ON_PUSH"
+          fi
+
+          echo "environment=$environment" >>"$GITHUB_OUTPUT"
+
+          if [ -z "$environment" ]; then
+            echo "::notice::No AWS deploy: set the repository variable AWS_DEPLOY_ON_PUSH_ENVIRONMENT to deploy on push, or run this workflow manually. See docs/AWS_BRING_UP.md."
+          else
+            echo "deploying to $environment"
+          fi
+
+  deploy:
+    name: Deploy
+    needs: [target]
+    if: needs.target.outputs.environment != ''
+    # Native arm64: the instance is Graviton and the image has no amd64 build,
+    # so an x86 runner would mean QEMU and a build several times longer.
+    runs-on: ubuntu-24.04-arm
+    environment:
+      name: ${{ needs.target.outputs.environment }}
+      url: ${{ vars.AWS_PUBLIC_URL }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check the environment's deploy configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ECR_REPOSITORY: ${{ vars.AWS_ECR_REPOSITORY }}
+          AWS_INSTANCE_ID: ${{ vars.AWS_INSTANCE_ID }}
+          AWS_DEPLOYED_IMAGE_PARAMETER: ${{ vars.AWS_DEPLOYED_IMAGE_PARAMETER }}
+          AWS_PUBLIC_URL: ${{ vars.AWS_PUBLIC_URL }}
+        run: |
+          missing=""
+          for name in AWS_DEPLOY_ROLE_ARN AWS_REGION AWS_ECR_REPOSITORY \
+            AWS_INSTANCE_ID AWS_DEPLOYED_IMAGE_PARAMETER AWS_PUBLIC_URL; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+
+          if [ -n "$missing" ]; then
+            echo "::error::Environment ${{ needs.target.outputs.environment }} is missing:$missing. Each is a \`terraform output\`; see docs/AWS_BRING_UP.md."
+            exit 1
+          fi
+
+      - name: Assume the deploy role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push the image
+        id: image
+        env:
+          REPOSITORY: ${{ vars.AWS_ECR_REPOSITORY }}
+        run: |
+          set -o pipefail
+          image="$REPOSITORY:$GITHUB_SHA"
+
+          docker build -f packages/control-plane/Dockerfile -t "$image" .
+          docker push "$image"
+
+          # `latest` is what a freshly applied module points a first boot at,
+          # before any deploy has moved the parameter. The deployed reference is
+          # always the immutable one above.
+          docker tag "$image" "$REPOSITORY:latest"
+          docker push "$REPOSITORY:latest"
+
+          echo "ref=$image" >>"$GITHUB_OUTPUT"
+
+      - name: Deploy, verify, and roll back if unhealthy
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          INSTANCE_ID: ${{ vars.AWS_INSTANCE_ID }}
+          DEPLOYED_IMAGE_PARAMETER: ${{ vars.AWS_DEPLOYED_IMAGE_PARAMETER }}
+          HEALTHCHECK_URL: ${{ vars.AWS_PUBLIC_URL }}/healthz
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: scripts/deploy-aws.sh

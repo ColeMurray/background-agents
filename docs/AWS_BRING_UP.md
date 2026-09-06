@@ -206,9 +206,90 @@ docker buildx build --platform linux/arm64 \
   -t "$REGISTRY:latest" --push .
 ```
 
-Once I-3 lands this is CI's job, and the deploy is a tag push plus step 6.
+That is the bootstrap: the module points a first boot at `:latest`, so one image has to exist before
+the stack can start. Every deploy after this is CI's, and the section below sets that up.
 
-## 6. Start it
+## 6. Deploys from CI
+
+`.github/workflows/deploy-aws.yml` builds the image, pushes it, moves the deployed version and
+verifies the result — rolling back on its own if the new image does not come up. It authenticates
+with an OIDC token rather than an access key, so no AWS credential is stored in the repository.
+
+Two things make that safe rather than merely convenient. The role's trust policy pins both the
+repository and the **GitHub environment** the job asked for, so the environment's reviewers are an
+AWS access gate and not a UI convention. And the role can reach exactly three things: push to the
+one ECR repository, read and write the one SSM parameter naming the deployed image, and run a
+command on the one instance. It cannot read the secrets sitting next to that parameter.
+
+Turn it on by setting `github_deploy` in `terraform.tfvars`:
+
+```hcl
+github_deploy = {
+  repository  = "your-org/your-repo"
+  environment = "aws-staging" # the GitHub environment the deploy job requests
+}
+```
+
+The OIDC provider is one per AWS account. Whichever environment you apply first creates it; give the
+other the first's ARN, or the second apply fails on a provider that already exists:
+
+```hcl
+github_deploy = {
+  repository        = "your-org/your-repo"
+  environment       = "aws-production"
+  oidc_provider_arn = "arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com"
+}
+```
+
+Then create that GitHub environment (Settings → Environments), add reviewers if it is production,
+and give it these **variables** — every one of them a `terraform output`:
+
+| Variable                       | From                                             |
+| ------------------------------ | ------------------------------------------------ |
+| `AWS_DEPLOY_ROLE_ARN`          | `terraform output -raw github_deploy_role_arn`   |
+| `AWS_REGION`                   | `terraform output -raw region`                   |
+| `AWS_ECR_REPOSITORY`           | `terraform output -raw ecr_repository_url`       |
+| `AWS_INSTANCE_ID`              | `terraform output -raw instance_id`              |
+| `AWS_DEPLOYED_IMAGE_PARAMETER` | `terraform output -raw deployed_image_parameter` |
+| `AWS_PUBLIC_URL`               | `https://` + `terraform output -raw hostname`    |
+
+None is a secret; they are all names and identifiers, which is why they are variables rather than
+secrets. To deploy on every push to `main`, set the **repository** variable
+`AWS_DEPLOY_ON_PUSH_ENVIRONMENT` to the environment name. Leave it unset and the workflow only runs
+when dispatched by hand, which is the right default for production.
+
+### What a deploy does
+
+1. Builds `packages/control-plane/Dockerfile` on a native arm64 runner and pushes it as
+   `<repo>:<commit sha>`, plus `:latest` for a future first boot.
+2. Reads the current value of the deployed-image parameter — before anything moves, because that is
+   what a rollback restores.
+3. Writes the new reference and runs `open-inspect-deploy` on the instance, which re-fetches the
+   stack files and `.env`, pulls, and `up -d --wait`s **without stopping the old stack first**. A
+   failure before the swap leaves the running deployment untouched.
+4. Polls `/healthz` until it answers six times in a row. One 200 proves the port is open, not that
+   the deployment works.
+5. On any failure: puts the previous reference back, activates it, and fails the job anyway. A
+   working rollback is not a successful deploy.
+
+`scripts/deploy-aws.sh` owns that sequence and is covered by `npm run test:deploy-aws`, which
+exercises the rollback against a stubbed AWS CLI — the path that only ever runs when something has
+already gone wrong.
+
+### Terraform stops owning the version
+
+`CONTROL_PLANE_IMAGE` is created by Terraform and then left alone (`ignore_changes`), the same
+boundary the secrets use. So after the first deploy, `control_plane_image_tag` no longer describes
+what is running; `terraform output deployed_image_parameter` names where that lives, and
+
+```bash
+aws ssm get-parameter --name "$(terraform output -raw deployed_image_parameter)" \
+  --query 'Parameter.Value' --output text
+```
+
+answers what is deployed right now.
+
+## 7. Start it
 
 Every restart re-fetches the compose files from S3, rebuilds `.env` from SSM and re-pulls the image,
 so this is also how a deploy and a configuration change take effect. It is never a new instance.
@@ -220,6 +301,14 @@ aws ssm start-session --target "$INSTANCE"
 # on the instance
 sudo systemctl restart open-inspect
 sudo systemctl status open-inspect
+```
+
+`restart` stops the stack before it fetches, so a failure in S3, SSM or ECR leaves nothing running
+until the unit's retry comes round. Once something is already serving, prefer the command a deploy
+uses, which fetches and pulls first and swaps only on success:
+
+```bash
+sudo /usr/local/bin/open-inspect-deploy
 ```
 
 Then, from anywhere:
@@ -329,8 +418,10 @@ variation rather than a requirement.
 
 ## Not here yet
 
-- **CI apply.** These environments are applied from a laptop today. I-3 moves them into the
-  pipeline.
+- **`terraform apply` from CI.** Deploys are automated (section 6), but infrastructure changes are
+  not: the workflow moves the image and restarts the stack, and never runs Terraform. Applying these
+  environments is still a laptop job, and a change to the compose files or to `config` needs that
+  apply before a deploy will pick it up.
 - **Alarms beyond the instance's status checks.** Disk and memory need the CloudWatch agent, and the
   alarms that describe the control plane itself need metrics the host does not publish yet; both are
   H-8.
