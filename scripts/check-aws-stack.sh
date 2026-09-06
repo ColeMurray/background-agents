@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# Static checks for the two AWS deployment artifacts nothing else parses.
+# Static checks for the AWS deployment artifacts nothing else parses.
 #
 # `terraform validate` reads the module's HCL but never renders its user-data
-# template, and the compose smoke boots docker-compose.smoke.yml rather than the
-# AWS overlay. A mistake in either would first be seen as a control plane that
+# template, the compose smoke boots docker-compose.smoke.yml rather than the AWS
+# overlay, and the deploy script only ever runs in a CI job against a live
+# instance. A mistake in any of them would first be seen as a control plane that
 # does not come up.
 #
 #   scripts/check-aws-stack.sh
@@ -44,15 +45,24 @@ rendered = reference.sub(lambda m: stubs[m.group(1)], source).replace("$${", "${
 open(sys.argv[2], "w").write(rendered)
 PY
 
-bash -n "$RENDERED"
+# shellcheck if it is installed, otherwise the same thing in a container --
+# the checks a CI runner and a laptop run should not differ.
+lint_shell() {
+  bash -n "$1"
+  if command -v shellcheck >/dev/null 2>&1; then
+    shellcheck "$1"
+  else
+    docker run --rm -v "$(dirname "$1")":/mnt koalaman/shellcheck:stable "/mnt/$(basename "$1")"
+  fi
+}
 
-if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck "$RENDERED"
-else
-  docker run --rm -v "$(dirname "$RENDERED")":/mnt koalaman/shellcheck:stable "/mnt/$(basename "$RENDERED")"
-fi
-
+lint_shell "$RENDERED"
 echo "user-data template: syntax and shellcheck clean"
+
+# The deploy script is the other thing here that only ever runs somewhere it is
+# hard to iterate on: a CI job, against a live instance.
+lint_shell "$REPO_ROOT/scripts/deploy-aws.sh"
+echo "deploy script: syntax and shellcheck clean"
 
 # ---------------------------------------------------------------------------
 # The AWS overlay resolves to the stack the instance is meant to run

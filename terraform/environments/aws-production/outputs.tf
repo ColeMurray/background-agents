@@ -32,3 +32,23 @@ output "secret_parameter_names" {
   description = "SecureString parameters that need real values before the stack boots."
   value       = module.control_plane.secret_parameter_names
 }
+
+output "region" {
+  description = "Region to configure CI credentials for."
+  value       = module.control_plane.region
+}
+
+output "deployed_image_parameter" {
+  description = "SSM parameter a deploy moves and a rollback restores."
+  value       = module.control_plane.deployed_image_parameter
+}
+
+output "github_deploy_role_arn" {
+  description = "Role the deploy workflow assumes over OIDC."
+  value       = module.control_plane.github_deploy_role_arn
+}
+
+output "github_oidc_provider_arn" {
+  description = "Pass to the other environment's `github_deploy.oidc_provider_arn`; the provider is one per account."
+  value       = module.control_plane.github_oidc_provider_arn
+}

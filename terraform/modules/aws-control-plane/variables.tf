@@ -158,6 +158,29 @@ variable "out_of_hours_stop" {
 }
 
 # ---------------------------------------------------------------------------
+# Deploys from GitHub Actions (optional)
+# ---------------------------------------------------------------------------
+
+variable "github_deploy" {
+  description = <<-EOT
+    Lets one GitHub Actions environment deploy this stack over OIDC, with no AWS access key anywhere. Null creates no role and no provider, and the environment is deployed by hand.
+
+    `repository` is "owner/name". `environment` is the GitHub environment the deploy job requests -- the trust policy pins both, so an environment's approval gate is also the AWS access gate. `oidc_provider_arn` reuses an existing account-wide provider; leave it null in the first environment and pass that one's `github_oidc_provider_arn` output to the second, because the provider is a singleton per account.
+  EOT
+  type = object({
+    repository        = string
+    environment       = string
+    oidc_provider_arn = optional(string)
+  })
+  default = null
+
+  validation {
+    condition     = var.github_deploy == null || can(regex("^[^/]+/[^/]+$", var.github_deploy.repository))
+    error_message = "github_deploy.repository must be \"owner/name\"."
+  }
+}
+
+# ---------------------------------------------------------------------------
 # DNS (optional; the module creates no records without a zone)
 # ---------------------------------------------------------------------------
 
