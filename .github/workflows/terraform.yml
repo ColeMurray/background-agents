@@ -98,12 +98,11 @@ jobs:
         run: terraform validate -no-color
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      # Unfiltered so a new tests/*.tftest.hcl file is gated the moment it lands;
+      # naming each file here silently left new ones unrun.
       - name: Terraform Tests
         id: test
-        run: |
-          terraform test \
-            -filter=tests/auth_provider_configuration.tftest.hcl \
-            -filter=tests/classifier_provider.tftest.hcl
+        run: terraform test
         working-directory: ${{ env.TF_WORKING_DIR }}
 
       - name: Post Validation Results

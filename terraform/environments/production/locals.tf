@@ -69,7 +69,7 @@ locals {
 
   # OpenComputer reads its sandbox credentials from the control plane rather than
   # from a provider-side secret, so its bindings are set together.
-  opencomputer_enabled = var.opencomputer_api_key != "" && trimspace(var.opencomputer_api_url) != ""
+  opencomputer_enabled = trimspace(var.opencomputer_api_key) != "" && trimspace(var.opencomputer_api_url) != ""
 
   # Host the Cloudflare web Worker is served from: custom domain when configured,
   # otherwise its default workers.dev hostname.

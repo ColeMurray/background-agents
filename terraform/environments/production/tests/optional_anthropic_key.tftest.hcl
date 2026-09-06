@@ -127,6 +127,27 @@ run "opencomputer_with_a_key_binds_it" {
   }
 }
 
+# Whitespace is not a credential here either. The provider's own validation only
+# guards sandbox_provider = "opencomputer", so a blank key on any other provider
+# would otherwise bind an unusable OPENCOMPUTER_API_KEY.
+run "a_blank_opencomputer_key_does_not_enable_its_bindings" {
+  command = plan
+
+  variables {
+    opencomputer_api_url = "https://api.opencomputer.example"
+    opencomputer_api_key = "   "
+    anthropic_api_key    = "test-anthropic-key"
+  }
+
+  assert {
+    condition = (
+      !contains(module.control_plane_worker.secret_binding_names, "OPENCOMPUTER_API_KEY") &&
+      !contains(module.control_plane_worker.secret_binding_names, "ANTHROPIC_API_KEY")
+    )
+    error_message = "A whitespace-only OpenComputer key must not enable its control plane bindings."
+  }
+}
+
 # The classifier bots have no per-repository fallback, so they keep their
 # requirement: this is the one place a key is still mandatory.
 run "an_anthropic_classifier_still_requires_the_key" {

@@ -1052,7 +1052,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `LINEAR_CLIENT_ID`                 | Linear OAuth application client ID (required if Linear enabled)                             |
 | `LINEAR_CLIENT_SECRET`             | Linear OAuth application client secret (required if Linear enabled)                         |
 | `LINEAR_WEBHOOK_SECRET`            | Linear webhook signing secret (required if Linear enabled)                                  |
-| `ANTHROPIC_API_KEY`                | Optional Anthropic API key injected into every sandbox                                      |
+| `ANTHROPIC_API_KEY`                | Optional; reaches Modal and OpenComputer sandboxes; required by an Anthropic classifier     |
 | `CLASSIFICATION_OPENAI_API_KEY`    | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                |
 | `OPENAI_API_KEY`                   | Optional OpenAI API key used when a session selects API-key authentication                  |
 | `XAI_API_KEY`                      | Optional xAI API key used when a session selects API-key authentication                     |
