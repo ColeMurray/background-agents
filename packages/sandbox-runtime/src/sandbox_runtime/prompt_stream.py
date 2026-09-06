@@ -26,6 +26,7 @@ from .opencode_client import (
     SSEStreamDisconnectedError,
 )
 from .opencode_identifier import OpenCodeIdentifier
+from .prompt_budget import PromptBudget, PromptBudgetExceeded, PromptLimits
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -61,6 +62,7 @@ class _PromptState:
     message_id: str
     opencode_message_id: str
     start_time: float
+    budget: PromptBudget = field(default_factory=lambda: PromptBudget(PromptLimits.from_env()))
     cumulative_text: dict[str, str] = field(default_factory=dict)
     emitted_tool_states: set[str] = field(default_factory=set)
     attribution: MessageAttribution = field(init=False)
@@ -230,6 +232,26 @@ class OpenCodePromptStream:
 
                 for event in self._flush_unassociated_child_activity(state):
                     yield event
+
+        except PromptBudgetExceeded as error:
+            reason = f"prompt_max_{error}"
+            self._log.error(
+                "bridge.prompt_limit_exceeded",
+                limit=reason,
+                turns=state.budget.turns,
+                tokens=state.budget.tokens,
+                cost_usd=state.budget.cost_usd,
+                message_id=message_id,
+            )
+            # Keep stop and final-state retrieval inside the snapshot cleanup reserve.
+            try:
+                async with asyncio.timeout(self._prompt_cleanup_timeout_seconds):
+                    await self._client.request_stop(opencode_session_id, reason=reason)
+                    async for final_event in self._fetch_final_message_state(state):
+                        yield final_event
+            except TimeoutError:
+                self._log.error("bridge.prompt_budget_cleanup_timeout", message_id=message_id)
+            raise RuntimeError(f"Prompt exceeded configured {error} budget.") from error
 
         except _PromptMaxDurationTimeout:
             elapsed = time.time() - state.start_time
@@ -649,6 +671,7 @@ class OpenCodePromptStream:
             )
 
         elif part_type == "step-finish":
+            state.budget.record(part)
             events.append(
                 {
                     "type": "step_finish",
