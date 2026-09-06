@@ -60,7 +60,7 @@ variable "source_hash" {
 }
 
 variable "secrets" {
-  description = "List of Modal secrets to create"
+  description = "Modal secrets this deployment owns. A secret with no values is deleted rather than created, since Modal cannot hold an empty secret."
   type = list(object({
     name   = string
     values = map(string)

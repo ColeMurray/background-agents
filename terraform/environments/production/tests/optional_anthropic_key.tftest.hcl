@@ -53,14 +53,16 @@ variables {
 run "a_deployment_with_no_anthropic_key_plans" {
   command = plan
 
+  # Empty values are what tell the module to delete the secret rather than
+  # create it, so clearing the key actually stops the injection.
   assert {
     condition     = local.modal_llm_secret_values == {}
     error_message = "An unset Anthropic key must leave no deployment-wide LLM keys to inject."
   }
 }
 
-# Modal rejects a secret with no keys, so an all-blank secret must be dropped
-# from the module input rather than sent as an empty map.
+# The module always declares llm-api-keys; the values decide whether it is
+# created or deleted, so a configured key must reach it as an actual value.
 run "a_configured_key_is_injected_into_modal" {
   command = plan
 

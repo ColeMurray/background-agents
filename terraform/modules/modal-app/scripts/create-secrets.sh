@@ -53,11 +53,17 @@ echo "${SECRETS_JSON}" | jq -c '.[]' | while IFS= read -r secret; do
         args+=("${key}=${value}")
     done < <(echo "${secret}" | jq -c '.values | to_entries | .[]')
 
-    # Modal rejects a secret with no keys, and an optional secret whose keys are
-    # all unset reaches this loop as an empty map. Skipping keeps that a no-op
-    # rather than a deploy failure.
+    # Modal cannot hold a secret with no keys, so an empty map means the
+    # deployment configured none and the secret must not exist. Deleting rather
+    # than skipping is what makes clearing a key take effect: a secret left
+    # behind keeps being injected into every new sandbox.
     if [[ ${#args[@]} -eq 0 ]]; then
-        echo "Skipping secret ${secret_name}: no keys configured"
+        echo "Deleting secret ${secret_name}: no keys configured"
+        if uv run --directory "${DEPLOY_PATH}" modal secret delete "${secret_name}" --allow-missing --yes; then
+            echo "Secret ${secret_name} absent"
+        else
+            echo "Warning: Failed to delete secret ${secret_name}"
+        fi
         continue
     fi
 
