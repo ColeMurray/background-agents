@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, ChevronRightIcon } from "@/components/ui/icons";
 import { formatRepoLabel } from "@/lib/repo-label";
 import { useEnvironments } from "@/hooks/use-environments";
+import { useLocalDateTime } from "@/hooks/use-local-date-time";
 import {
   AUTOMATION_INVOCATION_STATUS,
   type AutomationInvocationTone,
@@ -68,19 +69,14 @@ function invocationStartedAt(invocation: AutomationInvocation): number | null {
   return startTimes.length > 0 ? Math.min(...startTimes) : null;
 }
 
-function firedAtLabel(invocation: AutomationInvocation): string {
-  return new Date(invocation.scheduledAt ?? invocation.createdAt).toLocaleString();
-}
-
 /** A skipped firing: no child runs, only a reason. */
 function SkippedInvocationRow({ invocation }: { invocation: AutomationInvocation }) {
+  const firedAtLabel = useLocalDateTime(invocation.scheduledAt ?? invocation.createdAt);
   return (
     <div className="px-4 py-3">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2 min-w-0">{statusBadge(invocation.status)}</div>
-        <span className="text-xs text-muted-foreground flex-shrink-0">
-          {firedAtLabel(invocation)}
-        </span>
+        <span className="text-xs text-muted-foreground flex-shrink-0">{firedAtLabel}</span>
       </div>
       {invocation.skipReason && (
         <p className="mt-1 text-xs text-warning">{formatSkipReason(invocation.skipReason)}</p>
@@ -93,6 +89,7 @@ function SkippedInvocationRow({ invocation }: { invocation: AutomationInvocation
 function SingleRunRow({ invocation }: { invocation: AutomationInvocation }) {
   const run = invocation.runs[0];
   const duration = formatDuration(run.startedAt, run.completedAt);
+  const firedAtLabel = useLocalDateTime(invocation.scheduledAt ?? invocation.createdAt);
   return (
     <div className="px-4 py-3">
       <div className="flex items-center justify-between gap-4">
@@ -107,7 +104,7 @@ function SingleRunRow({ invocation }: { invocation: AutomationInvocation }) {
           )}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-xs text-muted-foreground">{firedAtLabel(invocation)}</span>
+          <span className="text-xs text-muted-foreground">{firedAtLabel}</span>
           {run.sessionId && (
             <Link
               href={`/session/${run.sessionId}`}
@@ -186,6 +183,7 @@ function FanOutInvocationRow({
   environmentName: (environmentId: string) => string;
 }) {
   const duration = formatDuration(invocationStartedAt(invocation), invocation.completedAt);
+  const firedAtLabel = useLocalDateTime(invocation.scheduledAt ?? invocation.createdAt);
   return (
     <div className="px-4 py-3">
       <button
@@ -209,9 +207,7 @@ function FanOutInvocationRow({
           <span className="text-xs text-muted-foreground">{formatRunCounts(invocation.runs)}</span>
           {duration && <span className="text-xs text-muted-foreground">{duration}</span>}
         </div>
-        <span className="text-xs text-muted-foreground flex-shrink-0">
-          {firedAtLabel(invocation)}
-        </span>
+        <span className="text-xs text-muted-foreground flex-shrink-0">{firedAtLabel}</span>
       </button>
       {expanded && (
         <div className="mt-3 space-y-1 border-t border-border-muted pt-3">
