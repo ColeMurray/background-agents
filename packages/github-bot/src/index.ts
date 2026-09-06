@@ -73,6 +73,11 @@ app.post("/webhooks/github", async (c) => {
         event_type: event,
         dedupe_status: existing,
       });
+      // A processing lease is not proof of durable delivery. Retry after it
+      // completes or expires, including when failed-delivery cleanup lost KV.
+      if (existing === DELIVERY_STATUS_PROCESSING) {
+        return c.json({ error: "Delivery still processing" }, 503);
+      }
       return c.json({ ok: true, duplicate: true });
     }
 
@@ -118,7 +123,16 @@ app.post("/webhooks/github", async (c) => {
       });
       // Acknowledging this delivery would mark it processed with no queued revision.
       // Release the receipt so the sender can retry the same delivery identity.
-      if (dedupeKey) await cacheStore.delete(dedupeKey);
+      if (dedupeKey) {
+        try {
+          await cacheStore.delete(dedupeKey);
+        } catch (deleteErr) {
+          log.warn("webhook.dedupe_clear_failed", {
+            delivery_id: deliveryId,
+            error: deleteErr instanceof Error ? deleteErr : new Error(String(deleteErr)),
+          });
+        }
+      }
       return c.json({ error: "Autofix queue unavailable" }, 503);
     }
   }
