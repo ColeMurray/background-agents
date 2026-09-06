@@ -239,6 +239,13 @@ ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.aws.yml
 # host the way a deploy does rather than pulling the power on SQLite.
 TimeoutStopSec=180
 TimeoutStartSec=600
+# A start drains the old stack before it fetches the new one, and the fetch
+# reaches S3, SSM and ECR -- so a transient failure there takes the deployment
+# down and, without this, leaves it down until someone notices. Retrying the
+# whole start recovers on its own once the dependency comes back. Making the
+# staging and activation atomic instead is COL-138.
+Restart=on-failure
+RestartSec=30s
 
 [Install]
 WantedBy=multi-user.target

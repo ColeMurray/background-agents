@@ -101,8 +101,14 @@ put() { # value on stdin
       {"Name": sys.argv[1], "Value": sys.stdin.read().rstrip("\n"),
        "Type": "SecureString", "Overwrite": True}, open(sys.argv[2], "w"))' \
     "$PREFIX/$1" "$request"
-  aws ssm put-parameter --cli-input-json "file://$request" >/dev/null && echo "set $1"
+  local status=0
+  aws ssm put-parameter --cli-input-json "file://$request" >/dev/null || status=$?
   rm -f "$request"
+  if [ "$status" -ne 0 ]; then
+    echo "FAILED to set $1" >&2
+    return "$status"
+  fi
+  echo "set $1"
 }
 ```
 
