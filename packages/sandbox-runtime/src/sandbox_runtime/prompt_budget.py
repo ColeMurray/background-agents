@@ -29,8 +29,8 @@ class PromptLimits:
     @classmethod
     def from_env(cls) -> PromptLimits:
         return cls(
-            turns=int(_env_limit("BRIDGE_MAX_PROMPT_TURNS", DEFAULT_MAX_PROMPT_TURNS)),
-            tokens=int(_env_limit("BRIDGE_MAX_PROMPT_TOKENS", DEFAULT_MAX_PROMPT_TOKENS)),
+            turns=math.ceil(_env_limit("BRIDGE_MAX_PROMPT_TURNS", DEFAULT_MAX_PROMPT_TURNS)),
+            tokens=math.ceil(_env_limit("BRIDGE_MAX_PROMPT_TOKENS", DEFAULT_MAX_PROMPT_TOKENS)),
             cost_usd=_env_limit("BRIDGE_MAX_PROMPT_COST_USD", DEFAULT_MAX_PROMPT_COST_USD),
         )
 

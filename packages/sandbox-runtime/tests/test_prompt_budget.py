@@ -118,3 +118,11 @@ async def test_stream_aborts_opencode_and_fails_on_budget(monkeypatch):
             emitted.append(event)
     stream._client.request_stop.assert_awaited_once_with("parent", reason="prompt_max_turns")
     assert emitted == [{"type": "token", "content": "final state"}]
+
+
+def test_fractional_positive_limits_cannot_disable_guard(monkeypatch):
+    monkeypatch.setenv("BRIDGE_MAX_PROMPT_TURNS", "0.5")
+    monkeypatch.setenv("BRIDGE_MAX_PROMPT_TOKENS", "0.1")
+    limits = PromptLimits.from_env()
+    assert limits.turns == 1
+    assert limits.tokens == 1
