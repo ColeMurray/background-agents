@@ -181,9 +181,9 @@ Create an R2 API Token:
 
 The control plane calls the Daytona REST API directly — no shim service to deploy.
 
-> **Important**: Unlike Modal, the Daytona provider does not automatically inject LLM API keys into
-> sandboxes. If you plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in
-> Settings > Secrets after deploying. See [Secrets Management](SECRETS.md) for details.
+> **Important**: the Daytona provider has no fleet-wide key of its own. Add the key for the models
+> you plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets
+> after deploying. See [Secrets Management](SECRETS.md) for details.
 
 ### Vercel Sandboxes
 
@@ -210,9 +210,9 @@ the latest created Vercel snapshot at sandbox creation time. The `vercel_base_sn
 is still available as a manual override. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md)
 for the full runtime, snapshot, and resource configuration model.
 
-> **Important**: Unlike Modal, the Vercel provider does not automatically inject LLM API keys into
-> sandboxes. If you plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in
-> Settings > Secrets after deploying. See [Secrets Management](SECRETS.md) for details.
+> **Important**: the Vercel provider has no fleet-wide key of its own. Add the key for the models
+> you plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets
+> after deploying. See [Secrets Management](SECRETS.md) for details.
 
 ### OpenComputer
 
@@ -256,11 +256,17 @@ instead.
 For the full runtime, lifecycle, and configuration model, see
 [E2B Sandbox Provider](E2B_SANDBOX_PROVIDER.md).
 
-> **Important**: The E2B provider does not automatically inject LLM API keys into sandboxes. If you
-> plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in Settings > Secrets
-> after deploying. See [Secrets Management](SECRETS.md) for details.
+> **Important**: the E2B provider has no fleet-wide key of its own. Add the key for the models you
+> plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets after
+> deploying. See [Secrets Management](SECRETS.md) for details.
 
 ### Anthropic
+
+Required by the default configuration: the Slack bot is enabled by default and its classifier runs
+on Claude, so `terraform apply` fails without this key. You can skip it only if you set both
+`enable_slack_bot = false` and `enable_linear_bot = false`, or point `classification_model` at an
+OpenAI model. Coding sessions themselves need no key here — those model credentials can be added as
+secrets in the web app after deploying.
 
 1. Go to [Anthropic Console](https://console.anthropic.com)
 2. Create an API key
@@ -578,7 +584,8 @@ linear_client_id       = ""          # From Step 4b (required if enabled)
 linear_client_secret   = ""          # From Step 4b (required if enabled)
 linear_webhook_secret  = ""          # From Step 4b (required if enabled)
 
-# API Keys
+# API Keys. Optional: leave blank to add model credentials as secrets in the web
+# app instead. Required only when the Slack/Linear classifier runs on Anthropic.
 anthropic_api_key = "sk-ant-..."
 
 # Slack/Linear classifier provider, chosen by classification_model.
@@ -1048,7 +1055,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `LINEAR_CLIENT_ID`                 | Linear OAuth application client ID (required if Linear enabled)                             |
 | `LINEAR_CLIENT_SECRET`             | Linear OAuth application client secret (required if Linear enabled)                         |
 | `LINEAR_WEBHOOK_SECRET`            | Linear webhook signing secret (required if Linear enabled)                                  |
-| `ANTHROPIC_API_KEY`                | Anthropic API key                                                                           |
+| `ANTHROPIC_API_KEY`                | Optional; reaches Modal and OpenComputer sandboxes; required by an Anthropic classifier     |
 | `CLASSIFICATION_OPENAI_API_KEY`    | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                |
 | `OPENAI_API_KEY`                   | Optional OpenAI API key used when a session selects API-key authentication                  |
 | `XAI_API_KEY`                      | Optional xAI API key used when a session selects API-key authentication                     |
@@ -1274,11 +1281,10 @@ If the bot doesn't see the original message when tagged in a thread reply:
 5. For PR reviews, ensure auto-review is enabled for the repository and the PR is not a draft
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
 
-### "Model not found" errors (Daytona or Vercel provider)
+### "Model not found" errors
 
-If sessions fail with "Model not found" when using `sandbox_provider = "daytona"` or
-`sandbox_provider = "vercel"`, the required LLM API key is likely missing. Unlike Modal (which
-injects keys automatically), these providers require you to add them as global secrets:
+If sessions fail with "Model not found", the API key for the selected model is missing. Deployments
+that set no fleet-wide key in Terraform supply model credentials as secrets instead:
 
 1. Go to **Settings > Secrets** in the web app
 2. Select **All Repositories (Global)** from the scope dropdown
