@@ -26,10 +26,18 @@ Once per account. The bucket name has to be globally unique, so it is not in the
 
 ```bash
 REGION=us-west-2   # must match the `region` variable in terraform.tfvars
+BUCKET=open-inspect-terraform-state-$ACCOUNT_ID
 
-aws s3api create-bucket --bucket open-inspect-terraform-state-$ACCOUNT_ID \
-  --region "$REGION" --create-bucket-configuration LocationConstraint="$REGION"
-aws s3api put-bucket-versioning --bucket open-inspect-terraform-state-$ACCOUNT_ID \
+# us-east-1 is the one region that rejects an explicit LocationConstraint: it is
+# the API's default, and naming it returns InvalidLocationConstraint.
+if [ "$REGION" = us-east-1 ]; then
+  aws s3api create-bucket --bucket "$BUCKET" --region "$REGION"
+else
+  aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" \
+    --create-bucket-configuration LocationConstraint="$REGION"
+fi
+
+aws s3api put-bucket-versioning --bucket "$BUCKET" \
   --versioning-configuration Status=Enabled
 ```
 
@@ -184,7 +192,14 @@ Graviton, and there is no amd64 fallback.
 
 ```bash
 REGISTRY=$(terraform output -raw ecr_repository_url)
-aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "${REGISTRY%%/*}"
+
+# <account>.dkr.ecr.<region>.amazonaws.com/<repo>. The region comes from the
+# registry rather than from $REGION, which was set four sections ago and is
+# probably not in this shell -- and get-login-password must name the region the
+# registry is in.
+REGISTRY_HOST=${REGISTRY%%/*}
+aws ecr get-login-password --region "$(echo "$REGISTRY_HOST" | cut -d. -f4)" |
+  docker login --username AWS --password-stdin "$REGISTRY_HOST"
 
 docker buildx build --platform linux/arm64 \
   -f packages/control-plane/Dockerfile \
