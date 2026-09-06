@@ -270,7 +270,7 @@ LINEAR_CLIENT_SECRET
 LINEAR_WEBHOOK_SECRET
 
 # API Keys
-ANTHROPIC_API_KEY
+ANTHROPIC_API_KEY # Optional; required only when classification_model is an Anthropic model and the Slack or Linear bot is enabled
 CLASSIFICATION_OPENAI_API_KEY # Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled
 
 # Security Secrets

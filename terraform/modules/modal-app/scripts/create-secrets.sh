@@ -53,6 +53,14 @@ echo "${SECRETS_JSON}" | jq -c '.[]' | while IFS= read -r secret; do
         args+=("${key}=${value}")
     done < <(echo "${secret}" | jq -c '.values | to_entries | .[]')
 
+    # Modal rejects a secret with no keys, and an optional secret whose keys are
+    # all unset reaches this loop as an empty map. Skipping keeps that a no-op
+    # rather than a deploy failure.
+    if [[ ${#args[@]} -eq 0 ]]; then
+        echo "Skipping secret ${secret_name}: no keys configured"
+        continue
+    fi
+
     # Create or update the secret using array expansion
     # The --force flag will update if it exists
     if uv run --directory "${DEPLOY_PATH}" modal secret create "${secret_name}" "${args[@]}" --force; then

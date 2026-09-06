@@ -76,7 +76,8 @@ snapshot, terminate, and delete provider operations.
 3. Create secrets via Modal CLI:
 
 ```bash
-# LLM API keys
+# Optional fleet-wide LLM API keys. Skip this secret entirely to have sandboxes
+# take their model credentials from the control plane's secret store instead.
 modal secret create llm-api-keys ANTHROPIC_API_KEY="sk-ant-..."
 
 # GitHub App credentials (for repo access)
@@ -169,7 +170,7 @@ Set via Modal secrets:
 
 | Variable | Secret | Description |
 |----------|--------|-------------|
-| `ANTHROPIC_API_KEY` | `llm-api-keys` | Anthropic API key for Claude |
+| `ANTHROPIC_API_KEY` | `llm-api-keys` | Optional Anthropic API key for Claude; the `llm-api-keys` secret may be absent |
 | `GITHUB_APP_ID` | `github-app` | GitHub App ID for repo access |
 | `GITHUB_APP_PRIVATE_KEY` | `github-app` | GitHub App private key (PKCS#8) |
 | `GITHUB_APP_INSTALLATION_ID` | `github-app` | GitHub App installation ID |

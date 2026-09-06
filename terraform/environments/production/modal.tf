@@ -36,27 +36,33 @@ module "modal_app" {
   deploy_module                = "deploy"
   source_hash                  = data.external.modal_source_hash[0].result.hash
 
-  secrets = [
-    {
-      name = "llm-api-keys"
-      values = {
-        ANTHROPIC_API_KEY = var.anthropic_api_key
+  # The LLM secret is only created when the deployment configured a key for it.
+  # Note that dropping the last key stops Terraform managing the secret; it does
+  # not delete one Modal already holds — run `modal secret delete llm-api-keys`
+  # to stop injecting it.
+  secrets = concat(
+    length(local.modal_llm_secret_values) > 0 ? [
+      {
+        name   = "llm-api-keys"
+        values = local.modal_llm_secret_values
       }
-    },
-    {
-      name = "github-app"
-      values = {
-        GITHUB_APP_ID              = var.github_app_id
-        GITHUB_APP_PRIVATE_KEY     = var.github_app_private_key
-        GITHUB_APP_INSTALLATION_ID = var.github_app_installation_id
+    ] : [],
+    [
+      {
+        name = "github-app"
+        values = {
+          GITHUB_APP_ID              = var.github_app_id
+          GITHUB_APP_PRIVATE_KEY     = var.github_app_private_key
+          GITHUB_APP_INSTALLATION_ID = var.github_app_installation_id
+        }
+      },
+      {
+        name = "internal-api"
+        values = {
+          MODAL_API_SECRET            = var.modal_api_secret
+          ALLOWED_CONTROL_PLANE_HOSTS = local.control_plane_host
+        }
       }
-    },
-    {
-      name = "internal-api"
-      values = {
-        MODAL_API_SECRET            = var.modal_api_secret
-        ALLOWED_CONTROL_PLANE_HOSTS = local.control_plane_host
-      }
-    }
-  ]
+    ]
+  )
 }

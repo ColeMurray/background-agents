@@ -218,7 +218,10 @@ linear_webhook_secret = ""   # Webhook Signing Secret from the application confi
 # API Keys
 # =============================================================================
 
-# Anthropic API key for Claude
+# Anthropic API key for Claude, injected into every sandbox. Optional: leave it
+# blank to have sessions take their model credentials from the secret store in
+# the web app instead. Required only when classification_model names an Anthropic
+# model AND at least one of the Slack or Linear bots is enabled.
 # From: https://console.anthropic.com/
 anthropic_api_key = ""
 

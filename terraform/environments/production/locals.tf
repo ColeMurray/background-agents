@@ -58,6 +58,19 @@ locals {
     : [{ name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key }]
   )
 
+  # Deployment-wide LLM keys injected into every Modal sandbox. Blank keys are
+  # dropped and the secret is omitted entirely when none remain: Modal rejects a
+  # secret with no keys, and a sandbox with no deployment-wide secret takes its
+  # model credentials from the per-repository secret store instead.
+  modal_llm_secret_values = {
+    for name, value in { ANTHROPIC_API_KEY = var.anthropic_api_key } :
+    name => value if trimspace(value) != ""
+  }
+
+  # OpenComputer reads its sandbox credentials from the control plane rather than
+  # from a provider-side secret, so its bindings are set together.
+  opencomputer_enabled = var.opencomputer_api_key != "" && trimspace(var.opencomputer_api_url) != ""
+
   # Host the Cloudflare web Worker is served from: custom domain when configured,
   # otherwise its default workers.dev hostname.
   web_cloudflare_host = (local.web_custom_domain_enabled

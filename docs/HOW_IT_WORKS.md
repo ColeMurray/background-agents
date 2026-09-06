@@ -633,8 +633,9 @@ operators may remove legacy keys after legacy-bound sessions are no longer neede
 [Using OpenAI Models](./OPENAI_MODELS.md) and
 [Using Grok with a SuperGrok Subscription](./GROK_MODELS.md).
 
-> **Daytona and Vercel users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
-> added as global secrets. Modal injects these automatically via its own secrets mechanism.
+> **LLM API keys** (e.g., `ANTHROPIC_API_KEY` for Claude models) are added as global secrets. A
+> Modal deployment can instead configure `anthropic_api_key` in Terraform to inject one fleet-wide
+> key into every sandbox; a global secret of the same name takes precedence over it.
 >
 > **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, and Z.AI Coding Plan
 > models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider. SuperGrok models

@@ -286,14 +286,24 @@ variable "linear_api_key" {
 # =============================================================================
 
 variable "anthropic_api_key" {
-  description = "Anthropic API key for Claude"
+  description = "Anthropic API key injected into every sandbox, and used by the Slack and Linear bot classifiers when classification_model is an Anthropic model. Optional: leave blank when sandboxes get their model credentials from the per-repository secret store instead."
   type        = string
   sensitive   = true
+  default     = ""
   nullable    = false
 
+  # Sandboxes tolerate a blank key — they fall back to the secret store — but a
+  # deployed Anthropic classifier has no such fallback. CI renders an unset
+  # secret as an empty string, which would otherwise deploy a credential-less
+  # classifier that rejects every message.
   validation {
-    condition     = trimspace(var.anthropic_api_key) != ""
-    error_message = "anthropic_api_key must be non-blank."
+    condition = (
+      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
+      startswith(var.classification_model, "openai/") ||
+      startswith(var.classification_model, "gpt-") ||
+      trimspace(var.anthropic_api_key) != ""
+    )
+    error_message = "anthropic_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an Anthropic model."
   }
 }
 
