@@ -12,6 +12,7 @@ import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { UserStore } from "../../src/db/user-store";
 import { REPOS_CACHE_KEY, reposCacheIdentity } from "../../src/routes/repos";
 import { cleanD1Tables } from "./cleanup";
+import { initNamedSession, seedSandboxAuth } from "./helpers";
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
   web: "test-service-secret-web",
@@ -139,6 +140,33 @@ describe("sig1 service-credential authentication", () => {
       url: "https://test.local/sessions",
     });
     expect(response.status).toBe(401);
+  });
+
+  it("does not downgrade a failed service credential to a valid sandbox bearer", async () => {
+    const sessionName = `sig1-no-sandbox-downgrade-${crypto.randomUUID()}`;
+    const sandboxToken = `sandbox-${crypto.randomUUID()}`;
+    const { stub } = await initNamedSession(sessionName);
+    await seedSandboxAuth(stub, {
+      authToken: sandboxToken,
+      sandboxId: "sandbox-no-downgrade",
+    });
+    const url = `https://test.local/sessions/${sessionName}/tunnel-urls`;
+
+    const sandbox = await SELF.fetch(url, {
+      headers: { Authorization: `Bearer ${sandboxToken}` },
+    });
+    expect(sandbox.status).toBe(200);
+
+    const failedService = await signedFetch({
+      service: "linear-bot",
+      method: "GET",
+      url,
+      mutateHeaders(headers) {
+        headers.Authorization = `Bearer ${sandboxToken}`;
+        headers[SERVICE_SIGNATURE_HEADER] = "sig1.invalid";
+      },
+    });
+    expect(failedService.status).toBe(401);
   });
 
   it("accepts a signed request with a query string regardless of param order", async () => {
