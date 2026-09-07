@@ -30,6 +30,7 @@ export {
   webhookAutomationEventSchema,
   slackAutomationEventSchema,
   triggerConfigSchema,
+  jsonPathFilterSchema,
 } from "./types";
 
 // Condition system

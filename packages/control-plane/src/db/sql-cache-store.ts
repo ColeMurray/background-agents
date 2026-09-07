@@ -64,8 +64,8 @@ export class SqlCacheStore implements CacheStore {
   }
 
   get(key: string): Promise<string | null>;
-  get<T>(key: string, type: "json"): Promise<T | null>;
-  async get<T>(key: string, type?: "json"): Promise<string | T | null> {
+  get(key: string, type: "json"): Promise<unknown | null>;
+  async get(key: string, type?: "json"): Promise<string | unknown | null> {
     const row = await this.db
       .prepare("SELECT value, expires_at FROM cache_entries WHERE key = ?")
       .bind(key)
@@ -74,7 +74,7 @@ export class SqlCacheStore implements CacheStore {
     // Deliberately no delete here. Cleaning up on read would put a write in
     // the read path and race the refresh this miss is about to trigger.
     if (row.expires_at !== null && row.expires_at <= this.now()) return null;
-    return type === "json" ? (JSON.parse(row.value) as T) : row.value;
+    return type === "json" ? JSON.parse(row.value) : row.value;
   }
 
   async put(key: string, value: string, opts?: CacheStorePutOptions): Promise<void> {

@@ -17,11 +17,25 @@ export const automationTriggerTypeSchema = z.enum([
 
 export type AutomationTriggerType = z.infer<typeof automationTriggerTypeSchema>;
 
-const jsonPathFilterSchema = z.object({
-  path: z.string(),
-  comparison: z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "contains", "exists"]),
-  value: z.union([z.string(), z.number(), z.boolean()]).optional(),
-});
+const jsonPathFilterValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+const jsonPathFilterBaseSchema = z.object({ path: z.string() });
+
+export const jsonPathFilterSchema = z.discriminatedUnion("comparison", [
+  jsonPathFilterBaseSchema.extend({
+    comparison: z.literal("eq"),
+    value: jsonPathFilterValueSchema.optional(),
+  }),
+  jsonPathFilterBaseSchema.extend({
+    comparison: z.literal("neq"),
+    value: jsonPathFilterValueSchema.optional(),
+  }),
+  jsonPathFilterBaseSchema.extend({ comparison: z.literal("gt"), value: z.number() }),
+  jsonPathFilterBaseSchema.extend({ comparison: z.literal("gte"), value: z.number() }),
+  jsonPathFilterBaseSchema.extend({ comparison: z.literal("lt"), value: z.number() }),
+  jsonPathFilterBaseSchema.extend({ comparison: z.literal("lte"), value: z.number() }),
+  jsonPathFilterBaseSchema.extend({ comparison: z.literal("contains"), value: z.string() }),
+  jsonPathFilterBaseSchema.extend({ comparison: z.literal("exists") }),
+]);
 
 export type JsonPathFilter = z.infer<typeof jsonPathFilterSchema>;
 

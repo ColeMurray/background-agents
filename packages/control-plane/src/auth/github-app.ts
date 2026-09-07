@@ -41,11 +41,13 @@ function resolveUserAgent(env: InstallationTokenCacheBindings | undefined): stri
   return value && value.length > 0 ? value : DEFAULT_APP_NAME;
 }
 
-interface CachedInstallationToken {
-  token: string;
-  expiresAtEpochMs: number;
-  cachedAtEpochMs: number;
-}
+const cachedInstallationTokenSchema = z.object({
+  token: z.string(),
+  expiresAtEpochMs: z.number(),
+  cachedAtEpochMs: z.number(),
+});
+
+type CachedInstallationToken = z.infer<typeof cachedInstallationTokenSchema>;
 
 interface GitHubHttpError extends Error {
   status?: number;
@@ -306,8 +308,10 @@ async function readInstallationTokenFromCache(
   }
 
   try {
-    const cached = await env.cacheStore.get<CachedInstallationToken>(cacheKey, "json");
-    return cached ?? null;
+    const result = cachedInstallationTokenSchema.safeParse(
+      await env.cacheStore.get(cacheKey, "json")
+    );
+    return result.success ? result.data : null;
   } catch {
     return null;
   }

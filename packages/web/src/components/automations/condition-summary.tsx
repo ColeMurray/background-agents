@@ -29,7 +29,7 @@ function formatConditionValue(
     }
     case "jsonpath":
       return condition.value
-        .map((f) => `${f.path} ${f.comparison}${f.value === undefined ? "" : ` ${f.value}`}`)
+        .map((f) => `${f.path} ${f.comparison}${"value" in f ? ` ${f.value}` : ""}`)
         .join(", ");
     default:
       return Array.isArray(condition.value) ? condition.value.join(", ") : String(condition.value);

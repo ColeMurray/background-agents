@@ -64,15 +64,15 @@ export function evaluateJsonPathFilter(filter: JsonPathFilter, body: unknown): b
     case "neq":
       return value !== filter.value;
     case "gt":
-      return typeof value === "number" && value > (filter.value as number);
+      return typeof value === "number" && value > filter.value;
     case "gte":
-      return typeof value === "number" && value >= (filter.value as number);
+      return typeof value === "number" && value >= filter.value;
     case "lt":
-      return typeof value === "number" && value < (filter.value as number);
+      return typeof value === "number" && value < filter.value;
     case "lte":
-      return typeof value === "number" && value <= (filter.value as number);
+      return typeof value === "number" && value <= filter.value;
     case "contains":
-      return typeof value === "string" && value.includes(filter.value as string);
+      return typeof value === "string" && value.includes(filter.value);
     default:
       return false;
   }

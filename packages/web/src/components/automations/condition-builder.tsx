@@ -35,9 +35,53 @@ interface ConditionBuilderProps {
 }
 
 const TEXT_MATCH_MODES = ["contains", "exact", "regex"] as const;
+type NumericJsonPathComparison = Extract<JsonPathFilter["comparison"], "gt" | "gte" | "lt" | "lte">;
 
 const SENTRY_LEVELS = ["warning", "error", "fatal"];
 const DEFAULT_WORKFLOW_NAME = "";
+
+function coerceJsonPathTextValue(value: string): string | number {
+  const numberValue = Number(value);
+  return !Number.isNaN(numberValue) && value !== "" ? numberValue : value;
+}
+
+function coerceJsonPathNumberValue(value: unknown): number {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+}
+
+function isJsonPathNumericComparison(
+  comparison: JsonPathFilter["comparison"]
+): comparison is NumericJsonPathComparison {
+  return comparison === "gt" || comparison === "gte" || comparison === "lt" || comparison === "lte";
+}
+
+function withJsonPathComparison(
+  filter: JsonPathFilter,
+  comparison: JsonPathFilter["comparison"]
+): JsonPathFilter {
+  const value = "value" in filter ? filter.value : "";
+  if (comparison === "exists") return { path: filter.path, comparison };
+  if (comparison === "contains")
+    return { path: filter.path, comparison, value: String(value ?? "") };
+  if (isJsonPathNumericComparison(comparison)) {
+    return { path: filter.path, comparison, value: coerceJsonPathNumberValue(value) };
+  }
+  return { path: filter.path, comparison, value };
+}
+
+function withJsonPathTextValue(filter: JsonPathFilter, value: string): JsonPathFilter {
+  if (filter.comparison === "exists") return filter;
+  if (filter.comparison === "contains") return { ...filter, value };
+  if (isJsonPathNumericComparison(filter.comparison)) {
+    return { ...filter, value: coerceJsonPathNumberValue(value) };
+  }
+  return {
+    path: filter.path,
+    comparison: filter.comparison,
+    value: coerceJsonPathTextValue(value),
+  };
+}
 
 export function ConditionBuilder({
   conditions,
@@ -599,7 +643,7 @@ function JsonPathEditor({
           <Select
             value={filter.comparison}
             onValueChange={(v) =>
-              updateFilter(index, { ...filter, comparison: v as JsonPathFilter["comparison"] })
+              updateFilter(index, withJsonPathComparison(filter, v as JsonPathFilter["comparison"]))
             }
           >
             <SelectTrigger className="w-24 text-xs">
@@ -621,12 +665,7 @@ function JsonPathEditor({
               type="text"
               value={String(filter.value ?? "")}
               onChange={(e) => {
-                const val = e.target.value;
-                const numVal = Number(val);
-                updateFilter(index, {
-                  ...filter,
-                  value: !isNaN(numVal) && val !== "" ? numVal : val,
-                });
+                updateFilter(index, withJsonPathTextValue(filter, e.target.value));
               }}
               placeholder="value"
               className="text-xs w-32"
