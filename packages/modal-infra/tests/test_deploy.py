@@ -130,7 +130,12 @@ def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tm
 
     monkeypatch.setattr(deploy.modal.App, "lookup", lookup)
     monkeypatch.setattr(deploy, "base_image", Mock(build=build, object_id="im-verified"))
-    identity = {"target": "modal", "recipeDigest": "a" * 64}
+    identity = {
+        "schemaVersion": 1,
+        "runtimeVersion": "v62-test",
+        "target": "modal",
+        "recipeDigest": "a" * 64,
+    }
     identity["inventoryDigest"] = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()

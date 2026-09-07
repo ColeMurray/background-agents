@@ -215,9 +215,6 @@ const RUNTIME_CA_EXPORTS =
   `NPM_CONFIG_CAFILE=${OPENSANDBOX_PROXY_CA} ` +
   `GIT_SSL_CAINFO=${OPENSANDBOX_PROXY_CA}`;
 const LOCAL_NO_PROXY = "localhost,127.0.0.1,::1";
-function shellQuote(value: string): string {
-  return "'" + value.replace(/'/g, "'\\''") + "'";
-}
 const RUNTIME_HOSTS_BOOTSTRAP =
   "grep -Eq '^[[:space:]]*127\\.0\\.0\\.1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
   "printf '%s\\n' '127.0.0.1 localhost' | sudo tee -a /etc/hosts >/dev/null; " +
