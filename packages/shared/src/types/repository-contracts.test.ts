@@ -10,6 +10,7 @@ import {
   serverMessageSchema,
   sessionRepositoriesInputSchema,
   toRepositoryRef,
+  validateRepositoryPathSegments,
 } from "./index";
 import { sandboxEventSchema } from "./sandbox-events";
 import { createSessionRequestSchema } from "./session-api";
@@ -40,6 +41,28 @@ describe("repository full names", () => {
     ["group%ZZsubgroup", "web"],
   ])("rejects a non-canonical repository API path (%s/%s)", (owner, name) => {
     expect(decodeRepositoryPathSegments(owner, name)).toBeNull();
+  });
+
+  it("validates already-decoded segments with the same rules the decoder applies", () => {
+    expect(validateRepositoryPathSegments("group/subgroup", "web app")).toEqual({
+      repoOwner: "group/subgroup",
+      repoName: "web app",
+    });
+    // A once-decoded escape is data, not a separator.
+    expect(validateRepositoryPathSegments("acme", "web%2Fapp")).toEqual({
+      repoOwner: "acme",
+      repoName: "web%2Fapp",
+    });
+  });
+
+  it.each([
+    ["group", "web/api"],
+    ["group//subgroup", "web"],
+    ["", "web"],
+    ["group", ""],
+    ["/group", "web"],
+  ])("rejects a non-canonical decoded pair (%j/%j)", (owner, name) => {
+    expect(validateRepositoryPathSegments(owner, name)).toBeNull();
   });
 });
 

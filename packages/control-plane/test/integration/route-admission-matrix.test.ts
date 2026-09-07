@@ -12,11 +12,15 @@ import { SELF, env } from "cloudflare:test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { createExecutionContext } from "cloudflare:test";
-import { createControlPlaneHttpHandler } from "../../src/routing/hono-app";
-import type { Env } from "../../src/types";
+import { cloudflareHost, createControlPlaneHttpHandler } from "../../src/cloudflare/http-host";
+import { createControlPlaneApp } from "../../src/routing/hono-app";
+import { listRouteContracts, type RouteContract } from "../../src/routing/route-contracts";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
-import { routes } from "../../src/routes/catalog";
-import type { Route } from "../../src/routes/shared";
+import { catalog } from "../../src/routes/catalog";
+import { Hono } from "hono";
+import { admit } from "../../src/routing/admit";
+import type { ControlPlaneHonoEnv } from "../../src/routing/hono-env";
 import { cleanD1Tables } from "./cleanup";
 import {
   initSession,
@@ -36,6 +40,10 @@ const ROUTE_MISS_BODY = JSON.stringify({ error: "Not found" });
 // mutating session route, so the default per-test budget is too small under
 // full-suite load.
 const MATRIX_TIMEOUT_MS = 60_000;
+/** Every production route with its policy, in precedence order, as Hono registered it. */
+const routes: readonly RouteContract[] = listRouteContracts(
+  createControlPlaneApp(catalog, cloudflareHost)
+);
 
 interface MatrixFixtures {
   readonlySessionId: string;
@@ -74,17 +82,17 @@ const PARAMETER_VALUES: Record<string, string> = {
   key: "MATRIX_KEY",
 };
 
-function materialize(route: Route, values: Record<string, string>): string {
+function materialize(route: RouteContract, values: Record<string, string>): string {
   return route.path.replace(/:(\w+)/g, (_parameter, parameter: string) => {
     return values[parameter] ?? PARAMETER_VALUES[parameter] ?? `matrix-${parameter}`;
   });
 }
 
-function isSessionRoute(route: Route): boolean {
+function isSessionRoute(route: RouteContract): boolean {
   return route.path.startsWith("/sessions/:id");
 }
 
-function isAutomationRoute(route: Route): boolean {
+function isAutomationRoute(route: RouteContract): boolean {
   return route.path.startsWith("/automations/:id");
 }
 
@@ -95,7 +103,7 @@ async function createAutomation(): Promise<string> {
   return id;
 }
 
-function isMutation(route: Route): boolean {
+function isMutation(route: RouteContract): boolean {
   return route.method !== "GET";
 }
 
@@ -296,14 +304,30 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     expect(observed).toMatchSnapshot();
   });
 
-  it("passes percent-encoded path segments through undecoded", async () => {
-    // Session ids are looked up by the raw segment, so an encoded letter misses.
+  it("rejects a parameter Hono could not decode, on every route, before admission", async () => {
+    // Hono leaves an undecodable segment as it arrived; admission refuses it
+    // uniformly rather than letting each handler discover it as data.
+    const malformed = [
+      `${BASE}/sessions/%E0%A4%A`,
+      `${BASE}/sessions/%E0%A4%A/events`,
+      `${BASE}/automations/%E0%A4%A`,
+      `${BASE}/roles/%E0%A4%A`,
+      `${BASE}/repos/acme/%E0%A4%A/secrets`,
+    ];
+    for (const url of malformed) {
+      const response = await serviceFetch(url);
+      expect(response.status, url).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid path encoding" });
+    }
+  });
+
+  it("decodes percent-encoded path segments exactly once", async () => {
+    // Session ids are decoded exactly once, by Hono, before the lookup and
+    // before the sandbox binding, so an encoded letter still names the session.
     const encodedSessionId = `%74${fixtures.readonlySessionId.slice(1)}`;
     const session = await serviceFetch(`${BASE}/sessions/${encodedSessionId}`);
-    expect(session.status).toBe(404);
-    await expect(session.json()).resolves.toEqual({ error: "Session not found" });
+    expect(session.status).toBe(200);
 
-    // The sandbox binding verifies the token against the same raw segment.
     const sandboxInit = { headers: { Authorization: `Bearer ${SANDBOX_TOKEN}` } };
     const encodedSandboxId = `%74${fixtures.sandboxSessionId.slice(1)}`;
     const plain = await SELF.fetch(
@@ -315,7 +339,7 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
       `${BASE}/sessions/${encodedSandboxId}/tunnel-urls`,
       sandboxInit
     );
-    expect(encoded.status).toBe(401);
+    expect(encoded.status).toBe(200);
 
     // Repository segments decode exactly once in the handler: a nested owner
     // arrives as one segment, a slash in the name is refused after that one
@@ -360,11 +384,15 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     sandboxSessionId: "",
     automationId: "",
   };
-  const shadow: Route[] = routes.map((route) => ({
-    ...route,
-    handler: async () => Response.json({ sentinel: `${route.method} ${route.path}` }),
-  }));
-  const handle = createControlPlaneHttpHandler(shadow);
+  // Every production contract, admitted by its own policy, in front of a
+  // sentinel handler.
+  const shadow = new Hono<ControlPlaneHonoEnv>();
+  for (const route of routes) {
+    shadow.on(route.method, route.path, admit(route), () =>
+      Response.json({ sentinel: `${route.method} ${route.path}` })
+    );
+  }
+  const handle = createControlPlaneHttpHandler([shadow]);
 
   beforeAll(async () => {
     await cleanD1Tables();
@@ -404,7 +432,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
   function send(url: string, method: string, headers: Record<string, string>): Promise<Response> {
     return handle(
       new Request(url, { method, headers }),
-      env as unknown as Env,
+      createCloudflareEnv(env),
       createExecutionContext()
     );
   }
@@ -489,27 +517,31 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     }
   });
 
-  it("delivers raw path segments to handlers", async () => {
-    const echo: Route[] = routes.map((route) => ({
-      ...route,
-      handler: async (_request, _env, match) => Response.json({ groups: { ...match.groups } }),
-    }));
-    const handleEcho = createControlPlaneHttpHandler(echo);
+  it("delivers path segments to handlers decoded exactly once", async () => {
+    // Every production contract, admitted by its own policy, in front of a
+    // handler that echoes the parameters Hono decoded.
+    const echo = new Hono<ControlPlaneHonoEnv>();
+    for (const route of routes) {
+      echo.on(route.method, route.path, admit(route), (c) =>
+        Response.json({ groups: c.req.param() })
+      );
+    }
+    const handleEcho = createControlPlaneHttpHandler([echo]);
     const cases: Array<{ method: string; url: string; groups: Record<string, string> }> = [
       {
         method: "GET",
         url: `${BASE}/sessions/abc%2Fdef`,
-        groups: { id: "abc%2Fdef" },
+        groups: { id: "abc/def" },
       },
       {
         method: "GET",
         url: `${BASE}/repos/group%2Fsubgroup/web%252Fapp/secrets`,
-        groups: { owner: "group%2Fsubgroup", name: "web%252Fapp" },
+        groups: { owner: "group/subgroup", name: "web%2Fapp" },
       },
       {
         method: "PUT",
         url: `${BASE}/members/${"1".repeat(31)}%2531/role`,
-        groups: { id: `${"1".repeat(31)}%2531` },
+        groups: { id: `${"1".repeat(31)}%31` },
       },
     ];
 
@@ -517,7 +549,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       const headers = await serviceRequestHeaders(url, { method });
       const response = await handleEcho(
         new Request(url, { method, headers }),
-        env as unknown as Env,
+        createCloudflareEnv(env),
         createExecutionContext()
       );
       expect(response.status, url).toBe(200);

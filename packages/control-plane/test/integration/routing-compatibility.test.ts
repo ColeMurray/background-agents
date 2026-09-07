@@ -76,6 +76,22 @@ describe("Worker routing compatibility", () => {
     await expectJsonNotFound(encodedResponse, "Session not found");
   });
 
+  it("prefers the literal legacy-credentials route but validates its encoded alias as an account id", async () => {
+    const literalResponse = await serviceFetch(
+      "https://test.local/model-provider-accounts/legacy-credentials"
+    );
+    expect(literalResponse.status).toBe(200);
+    await expect(literalResponse.json()).resolves.toEqual({ legacyKeys: [] });
+
+    const encodedResponse = await serviceFetch(
+      "https://test.local/model-provider-accounts/%6cegacy-credentials"
+    );
+    expect(encodedResponse.status).toBe(400);
+    await expect(encodedResponse.json()).resolves.toEqual({
+      error: "Invalid provider account ID",
+    });
+  });
+
   it.each(["/health/", "//health", "/Health"])(
     "does not normalize the strict path %s",
     async (path) => {
@@ -83,10 +99,11 @@ describe("Worker routing compatibility", () => {
     }
   );
 
-  it("passes a malformed percent escape through raw dynamic matching", async () => {
+  it("rejects a malformed percent escape before the route runs", async () => {
     const response = await serviceFetch("https://test.local/sessions/%E0%A4%A");
 
-    await expectJsonNotFound(response, "Session not found");
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid path encoding" });
   });
 
   it("returns the universal preflight response for an unknown path", async () => {

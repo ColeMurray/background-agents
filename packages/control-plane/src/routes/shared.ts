@@ -2,10 +2,9 @@
  * Shared route primitives used by all route modules.
  */
 
-import { decodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
 import type { Principal } from "../auth/principal";
 import type { RequestContext } from "../http/request-context";
-import { error, HttpError } from "../http/responses";
+import { HttpError } from "../http/responses";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { PermissionId, ScopedPermissionStem } from "@open-inspect/shared/rbac";
@@ -36,23 +35,6 @@ export interface ServiceActorProfileClaims {
 export type ServiceActorClaimsResult =
   | { kind: "claims"; claims: ServiceActorProfileClaims }
   | { kind: "rejected"; response: Response };
-
-/** Route matching, authorization, and handler configuration. */
-export interface RouteDefinition<Context extends RequestContext = RequestContext> {
-  method: string;
-  path: string;
-  /** Authorization policy enforced before the handler runs. */
-  authorization: RouteAuthorization;
-  /**
-   * Extract profile claims asserted by the trusted service that owns this
-   * route. Authentication has already verified the exact request body before
-   * this hook runs. Invalid route input returns the route's own rejection so
-   * admission stops before any identity is written.
-   */
-  serviceActorClaims?: (request: Request, ctx: RequestContext) => Promise<ServiceActorClaimsResult>;
-  cacheControl?: "no-store" | "private, no-store";
-  handler: (request: Request, env: Env, match: RegExpMatchArray, ctx: Context) => Promise<Response>;
-}
 
 /** One permission or resource-admission requirement for an active user. */
 export type RouteAuthorizationRequirement =
@@ -245,8 +227,11 @@ type ServicePrincipal = Extract<Principal, { kind: "service" }>;
 type WebServicePrincipal = Omit<ServicePrincipal, "service"> & { service: "web" };
 type UserOrServicePrincipal = Exclude<Principal, SandboxPrincipal>;
 
+/** Raw path parameters of the selected route, keyed by parameter name. */
+export type RouteParams = Readonly<Record<string, string>>;
+
 type SandboxSessionBinding = {
-  getSessionId(match: RegExpMatchArray): string | null;
+  getSessionId(params: RouteParams): string | null;
 };
 
 export type RouteAuthentication =
@@ -283,19 +268,21 @@ export interface RoutePolicy {
   supportedScmProviders: "all" | readonly SourceControlProviderName[];
 }
 
-/** Fully resolved route, including the raw-path matcher compiled from its canonical path. */
-export interface Route extends RouteDefinition, RoutePolicy {
-  pattern: RegExp;
+/** Framework-neutral policy consumed by request admission. */
+export interface RouteAdmissionPolicy extends RoutePolicy {
+  /** Authorization policy enforced before the handler runs. */
+  authorization: RouteAuthorization;
+  /**
+   * Extract profile claims asserted by the trusted service that owns this
+   * route. Authentication has already verified the exact request body before
+   * this hook runs. Invalid route input returns the route's own rejection so
+   * admission stops before any identity is written.
+   */
+  serviceActorClaims?: (request: Request, ctx: RequestContext) => Promise<ServiceActorClaimsResult>;
 }
 
-/** Framework-neutral policy consumed by request admission. */
-export type RouteAdmissionPolicy = Pick<
-  Route,
-  "authentication" | "authorization" | "serviceActorClaims" | "supportedScmProviders"
->;
-
 const SESSION_ID_BINDING: SandboxSessionBinding = {
-  getSessionId: (match) => match.groups?.id ?? null,
+  getSessionId: (params) => params.id ?? null,
 };
 
 export const GITHUB_USER_OR_SERVICE_ROUTE = {
@@ -348,35 +335,6 @@ export const SCM_AGNOSTIC_SANDBOX_ROUTE = {
   supportedScmProviders: "all",
 } as const satisfies RoutePolicy;
 
-export function defineRoutes<const Policy extends RoutePolicy>(
-  policy: Policy,
-  routes: RouteDefinition<RouteContext<Policy["authentication"]>>[]
-): Route[] {
-  return routes.map((route) => defineRoute(policy, route));
-}
-
-export function defineRoute<const Policy extends RoutePolicy>(
-  policy: Policy,
-  route: RouteDefinition<RouteContext<Policy["authentication"]>>
-): Route {
-  const handler: Route["handler"] = (request, env, match, ctx) =>
-    route.handler(request, env, match, ctx as RouteContext<Policy["authentication"]>);
-  return {
-    ...route,
-    ...policy,
-    pattern: parsePattern(route.path),
-    handler,
-  };
-}
-
-/**
- * Parse route pattern into regex.
- */
-export function parsePattern(pattern: string): RegExp {
-  const regexPattern = pattern.replace(/:(\w+)/g, "(?<$1>[^/]+)");
-  return new RegExp(`^${regexPattern}$`);
-}
-
 /**
  * Create a SourceControlProvider for use in Worker-level route handlers.
  * Cheap to construct (no I/O), so creating per-request is fine.
@@ -392,42 +350,6 @@ export async function resolveInstalledRepo(
 ): Promise<RepositoryAccessResult | null> {
   const result = await provider.checkRepositoryAccess({ owner: repoOwner, name: repoName });
   return result;
-}
-
-/**
- * Parse the request body as JSON, returning the typed result or an error Response.
- *
- * Usage:
- * ```ts
- * const body = await parseJsonBody<{ secrets: Record<string, string> }>(request);
- * if (body instanceof Response) return body;
- * ```
- */
-export async function parseJsonBody<T>(request: Request): Promise<T | Response> {
-  try {
-    return (await request.json()) as T;
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
-}
-
-/**
- * Extract `owner` and `name` named groups from a route match, returning
- * the pair or an error Response when either is missing.
- */
-export function extractRepoParams(
-  match: RegExpMatchArray
-): { owner: string; name: string } | Response {
-  const encodedOwner = match.groups?.owner;
-  const encodedName = match.groups?.name;
-  if (!encodedOwner || !encodedName) {
-    return error("Owner and name are required", 400);
-  }
-  const repository = decodeRepositoryPathSegments(encodedOwner, encodedName);
-  if (!repository) {
-    return error("Owner and name must be valid repository path segments", 400);
-  }
-  return { owner: repository.repoOwner, name: repository.repoName };
 }
 
 /**

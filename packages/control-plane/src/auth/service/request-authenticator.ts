@@ -1,6 +1,7 @@
 import {
   ACTOR_HEADER,
   SERVICE_HEADER,
+  SERVICE_REQUEST_MAX_BODY_BYTES,
   isServiceName,
   parseServiceSignatureHeader,
   sha256Hex,
@@ -18,13 +19,6 @@ import type { AuthResult } from "../result";
 import { serviceAuthSecret } from "./config";
 
 const logger = createLogger("auth");
-
-/**
- * Hard cap on a service-signed request body. The signature covers the body
- * hash, so the body must be buffered and hashed before verification can
- * finish. The largest legitimate signed body is a session attachment upload.
- */
-export const SERVICE_REQUEST_MAX_BODY_BYTES = 16 * 1024 * 1024;
 
 /** Parse `<namespace>:<id>` into a typed actor reference; null when malformed. */
 function parseActor(actor: string): { provider: ActorNamespace; providerUserId: string } | null {

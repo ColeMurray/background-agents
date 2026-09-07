@@ -1,4 +1,4 @@
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import {
   createEarliestAlarmScheduler,
@@ -7,21 +7,11 @@ import {
   type AlarmDeadlineStore,
 } from "./scheduler";
 import { initSchema } from "../schema";
-import type { SqlResult, SqlStorage } from "../sql-storage";
+import type { SqlStorage } from "../sql-storage";
+import { createNodeSqlStorage } from "../../node/sqlite-storage";
 
 function createDatabaseSql(db: DatabaseSync): SqlStorage {
-  return {
-    exec(query: string, ...params: unknown[]): SqlResult {
-      const sqliteParams = params as SQLInputValue[];
-      if (/^\s*(?:PRAGMA|SELECT)\b/i.test(query)) {
-        const rows = db.prepare(query).all(...sqliteParams);
-        return { toArray: () => rows, one: () => rows[0] ?? null };
-      }
-      if (params.length > 0) db.prepare(query).run(...sqliteParams);
-      else db.exec(query);
-      return { toArray: () => [], one: () => null };
-    },
-  };
+  return createNodeSqlStorage(db).sql;
 }
 
 function createDeadlineStore(

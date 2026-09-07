@@ -196,6 +196,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   tunnel_urls TEXT,                                 -- JSON mapping of port -> tunnel URL for extra ports
   ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
+  active_socket_id TEXT,                            -- Bridge socket the session dispatches to (socket:<id> tag)
   created_at INTEGER NOT NULL
 );
 
@@ -658,6 +659,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 48,
+    description: "Add active_socket_id to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN active_socket_id TEXT`,
+  },
+  {
+    id: 49,
     description: "Add session budget state, message reported cost, and client capabilities",
     run: (sql) => {
       runMigration(sql, `ALTER TABLE session ADD COLUMN max_cost_usd REAL`);
@@ -724,7 +730,7 @@ export function applyMigrations(sql: SqlStorage): void {
     }
 
     sql.exec(
-      `INSERT OR IGNORE INTO _schema_migrations (id, applied_at) VALUES (?, ?)`,
+      `INSERT INTO _schema_migrations (id, applied_at) VALUES (?, ?) ON CONFLICT DO NOTHING`,
       migration.id,
       Date.now()
     );

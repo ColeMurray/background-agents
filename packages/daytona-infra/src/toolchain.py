@@ -16,11 +16,11 @@ if TYPE_CHECKING:
 #
 # Never pin below 1.18.15 — see packages/modal-infra/src/images/base.py for why
 # (OpenCode's message-ID counter wraps and earlier releases order by ID string).
-OPENCODE_VERSION = "1.18.18"
+OPENCODE_VERSION = "1.18.29"
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
 # Bump when changing image contents to invalidate the Daytona snapshot.
-SANDBOX_VERSION = "daytona-v6-vnc-opencode-1-18-18"
+SANDBOX_VERSION = "v62-gpt6-astra"
 
 
 def build_base_image(repo_root: Path) -> Image:

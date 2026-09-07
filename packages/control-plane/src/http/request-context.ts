@@ -3,7 +3,7 @@ import type { AuthenticationContext, Principal } from "../auth/principal";
 import type { AuthenticationRequestServices } from "../auth/request-services";
 import type { UserAuthRuntime } from "../auth/user/runtime";
 import type { AutomationRow } from "../db/automation-store";
-import type { RequestMetrics } from "../db/instrumented-d1";
+import type { RequestMetrics } from "../db/instrumented-sql-database";
 import type { BackgroundTasks } from "../platform-ports";
 
 /** Automation resource admitted for the current mutation. */

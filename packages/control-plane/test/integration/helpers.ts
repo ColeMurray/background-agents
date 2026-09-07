@@ -1,10 +1,12 @@
 import { SELF, env } from "cloudflare:test";
+import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
+import { handleControlPlaneHttp } from "../../src/cloudflare/http-host";
 import { runInSessionDO } from "./session-do-access";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import { BUILT_IN_ROLE_REGISTRY, type BuiltInRoleKey } from "@open-inspect/shared/rbac";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
-import type { SessionDO } from "../../src/session/durable-object";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { hashToken } from "../../src/auth/crypto";
 import type { SqlDatabase } from "../../src/db/sql-database";
 import { SessionIndexStore } from "../../src/db/session-index";
@@ -18,6 +20,18 @@ import type { SessionModelProviderAuthInput } from "../../src/model-provider-acc
  */
 export function sqlDatabase(db: D1Database): SqlDatabase {
   return db;
+}
+
+/**
+ * The ordinary HTTP entrypoint over the Worker's bindings, as `index.ts`
+ * calls it: for tests that route a request without going through `SELF`.
+ */
+export function routeRequest(
+  request: Request,
+  bindings: WorkerBindings,
+  executionCtx: ExecutionContext
+): Promise<Response> {
+  return handleControlPlaneHttp(request, createCloudflareEnv(bindings), executionCtx);
 }
 
 /**

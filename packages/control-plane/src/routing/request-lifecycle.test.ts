@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal";
 import type { RequestContext } from "../http/request-context";
-import type { Route } from "../routes/shared";
+import type { AdmissionPolicy } from "./admit";
 import {
   logPrincipal,
   logRequest,
@@ -14,7 +14,7 @@ function requestContext(metrics: Record<string, unknown> = {}): RequestContext {
     request_id: "request-123",
     trace_id: "trace-456",
     metrics: {
-      d1Queries: [],
+      sqlQueries: [],
       spans: {},
       time: async <T>(_name: string, operation: () => Promise<T>): Promise<T> => operation(),
       summarize: () => metrics,
@@ -22,8 +22,10 @@ function requestContext(metrics: Record<string, unknown> = {}): RequestContext {
   } as unknown as RequestContext;
 }
 
-function route(cacheControl?: Route["cacheControl"]): Route {
-  return { cacheControl } as Route;
+function route(
+  cacheControl?: AdmissionPolicy["cacheControl"]
+): Pick<AdmissionPolicy, "cacheControl"> {
+  return { cacheControl };
 }
 
 function loggedEvents(spy: ReturnType<typeof vi.spyOn>): Array<Record<string, unknown>> {
@@ -137,7 +139,7 @@ describe("request lifecycle logging", () => {
 
     logRequest(
       new Response(null, { status }),
-      requestContext({ d1_query_count: 2, d1_total_ms: 7 }),
+      requestContext({ sql_query_count: 2, sql_total_ms: 7 }),
       "POST",
       "/sessions",
       1_000
@@ -153,8 +155,8 @@ describe("request lifecycle logging", () => {
         http_status: status,
         duration_ms: 250,
         outcome,
-        d1_query_count: 2,
-        d1_total_ms: 7,
+        sql_query_count: 2,
+        sql_total_ms: 7,
       })
     );
   });

@@ -55,8 +55,10 @@ module "control_plane_worker" {
     }
   ]
 
-  # These bindings provide read-only queue metrics to the operator health
-  # check. Autofix production remains owned by the GitHub bot.
+  # One producer binding per job kind (packages/control-plane/src/jobs.ts;
+  # the mapping lives in src/cloudflare/job-queue.ts). The autofix bindings
+  # also feed the operator health check its read-only queue metrics; autofix
+  # production itself remains with the GitHub bot.
   queue_bindings = concat(
     [
       {
@@ -194,8 +196,13 @@ module "control_plane_worker" {
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_KEY", value = var.daytona_api_key },
     ] : [],
-    var.opencomputer_api_key != "" && trimspace(var.opencomputer_api_url) != "" ? [
+    local.opencomputer_enabled ? [
       { name = "OPENCOMPUTER_API_KEY", value = var.opencomputer_api_key },
+    ] : [],
+    # OpenComputer sandboxes take the deployment-wide Anthropic key from the
+    # control plane. It is optional, and an unset one must not shadow the key a
+    # repository supplies through the secret store.
+    local.opencomputer_enabled && trimspace(var.anthropic_api_key) != "" ? [
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
     ] : [],
     var.vercel_sandbox_token != "" && trimspace(var.vercel_sandbox_project_id) != "" ? [

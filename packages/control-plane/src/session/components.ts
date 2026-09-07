@@ -50,6 +50,7 @@ import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../e
 import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
+import type { SessionPlatform } from "./platform";
 import { SessionCoreRepository } from "./session-core-repository";
 import { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
@@ -80,7 +81,6 @@ import { CallbackNotificationService } from "./callback-notification-service";
 import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
 import { Scheduler } from "../scheduler/scheduler";
-import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionBudgetService } from "./budget-service";
@@ -120,7 +120,10 @@ import { SessionHttpDispatcher } from "./http/dispatcher";
 import { SessionMessageRouter } from "./message-router";
 import { SessionDisconnectHandler } from "./disconnect-handler";
 import type { Clock, SandboxDisconnectMonitor, SessionBroadcaster, SocketRegistry } from "./ports";
-import { SessionConnectionAuthenticator } from "./connection-authenticator";
+import {
+  SessionConnectionAuthenticator,
+  type SessionUpgradeAdmission,
+} from "./connection-authenticator";
 import { SessionSnapshotReader } from "./snapshot-reader";
 import { SessionAccessReader } from "./sandbox-access-reader";
 import { createSessionScopedLogger } from "./session-logger";
@@ -129,9 +132,11 @@ import { SessionDiffService } from "./diffs/service";
 import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
 import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
+import { createSessionRuntimeClientForTrace } from "./runtime-client";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
+import type { SessionWebSocket } from "../platform-ports";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -141,13 +146,6 @@ import { AuthorizationError, AuthorizationService } from "../authorization/servi
  */
 const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
 
-/** The platform surface the session graph is built over. */
-export interface SessionPlatform {
-  ctx: DurableObjectState;
-  sql: SqlStorage;
-  db: SqlDatabase | null;
-}
-
 /**
  * What the platform adapter (SessionDO) is allowed to touch. Everything else
  * stays inside the factory; `internals` exists for integration tests that
@@ -156,7 +154,9 @@ export interface SessionPlatform {
  */
 export interface SessionRuntime {
   readonly log: Logger;
-  readonly server: SessionServer<WebSocket, ClientInfo>;
+  readonly server: SessionServer<SessionWebSocket, ClientInfo>;
+  /** Admission of WebSocket upgrades; the host completes the handshake and attaches its socket. */
+  readonly upgrades: SessionUpgradeAdmission;
   readonly alarms: {
     /** Expire stale authorization leases and re-arm persisted deadlines after a cold start. */
     rehydrate(): void;
@@ -173,6 +173,7 @@ export interface SessionRuntime {
  */
 export interface SessionComponents {
   sandboxRepository: SandboxRepository;
+  wsManager: SessionWebSocketManager;
   /**
    * Assignable — the setter swaps the underlying cell for tests. Substitution
    * swaps operations only: the provider NAME was captured at construction and
@@ -214,9 +215,16 @@ function resolveExecutionTimeoutMs(
 
 /** Build the session runtime, including authorization verification and lease expiry handling. */
 export function createSessionRuntime(platform: SessionPlatform, env: Env): SessionRuntime {
-  const { ctx, sql, db } = platform;
-  const durableObjectId = ctx.id.toString();
-  const transaction = <T>(closure: () => T): T => ctx.storage.transactionSync(closure);
+  const {
+    id: durableObjectId,
+    storage,
+    db,
+    alarmStore,
+    sockets: socketHost,
+    createBackgroundTasks,
+  } = platform;
+  const { sql } = storage;
+  const transaction = <T>(closure: () => T): T => storage.transactionSync(closure);
 
   // Tier 1 — repositories and alarm persistence (leaves over SqlStorage).
   const attachmentRepository = new SessionAttachmentRepository(sql);
@@ -252,29 +260,27 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL)),
     getPublicSessionId
   );
-  const backgroundTasks = createCloudflareBackgroundTasks(ctx, log);
+  const backgroundTasks = createBackgroundTasks(log);
   // The sandbox repository validates the status it reads and warns on anything
   // unmodelled, so it needs the session logger — and it owns encrypt-at-rest
   // for access secrets, so it takes the key.
   const sandboxRepository = new SandboxRepository(sql, log, repoSecretsEncryptionKey);
 
   // Tier 2 — sockets and alarm scheduling.
-  const alarmScheduler = createEarliestAlarmScheduler(ctx.storage, alarmDeadlines);
+  const alarmScheduler = createEarliestAlarmScheduler(alarmStore, alarmDeadlines);
   const wsManager: SessionWebSocketManager = new SessionWebSocketManagerImpl(
-    ctx,
+    socketHost,
     sandboxRepository,
     wsClientMappingRepository,
     alarmScheduler,
     log,
     { authTimeoutMs: WS_AUTH_TIMEOUT_MS }
   );
-  // Hibernation-level ping/pong: the runtime answers keepalives without
-  // waking the Durable Object. Platform-global wiring, so it lives here.
-  ctx.setWebSocketAutoResponse(
-    new WebSocketRequestResponsePair(
-      JSON.stringify({ type: "ping" }),
-      JSON.stringify({ type: "pong", timestamp: Date.now() })
-    )
+  // Platform-level ping/pong: keepalives are answered without waking the
+  // runtime. Session-wide wiring, so it lives here.
+  socketHost.setAutoResponse(
+    JSON.stringify({ type: "ping" }),
+    JSON.stringify({ type: "pong", timestamp: Date.now() })
   );
 
   // Tier 3 — outbound delivery over the socket registry.
@@ -291,8 +297,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   // Shared single instances/closures — every consumer below takes these
   // rather than re-deriving its own copy.
-  const sessionIndexStore = db ? new SessionIndexStore(db) : null;
-  const sessionPullRequestStore = db ? new SessionPullRequestStore(db) : null;
+  const sessionIndexStore = new SessionIndexStore(db);
+  const sessionPullRequestStore = new SessionPullRequestStore(db);
   const resolveRepoId = (sessionRow: SessionRow) =>
     resolveSessionRepoId(sessionRow, sessionCoreRepository, sourceControlProvider);
 
@@ -335,7 +341,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       terminalMessageCompletedAt: completedAt,
     });
 
-  const userScmTokenStore = db ? new UserScmTokenStore(db, tokenEncryptionKey) : null;
+  const userScmTokenStore = new UserScmTokenStore(db, tokenEncryptionKey);
   const participantService = new ParticipantService({
     repository: participantRepository,
     getProcessingMessageAuthor: () => messageRepository.getProcessingMessageAuthor(),
@@ -345,14 +351,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     userScmTokenStore,
   });
 
-  const scheduler = db ? new Scheduler(db, env, backgroundTasks) : undefined;
+  const scheduler = new Scheduler(db, env, backgroundTasks);
   const callbackService = new CallbackNotificationService({
     repository: sessionCoreRepository,
     messageRepository,
     env,
-    completeAutomationRun: scheduler
-      ? (completion) => scheduler.runComplete(completion)
-      : undefined,
+    completeAutomationRun: (completion) => scheduler.runComplete(completion),
     log,
     getSessionId: () => resolvePublicSessionId(sessionCoreRepository.getSession(), durableObjectId),
   });
@@ -365,7 +369,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     artifactRepository,
     messenger,
     sessionIndexStore,
-    env.SESSION ?? null
+    // Parent notifications have no request of their own: each is one hop
+    // under this child's trace, with its own request id.
+    createSessionRuntimeClientForTrace(env, durableObjectId)
   );
 
   const titleService = new SessionTitleService({
@@ -589,7 +595,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // service around the request-scoped log, so these stay functions.
   const refreshOpenAIToken = async (sessionRow: SessionRow, requestLog: Logger) => {
     const service = new OpenAITokenRefreshService(
-      db!,
+      db,
       repoSecretsEncryptionKey,
       resolveRepoId,
       requestLog
@@ -598,7 +604,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   };
   const refreshXaiToken = async (sessionRow: SessionRow, requestLog: Logger) => {
     const service = new XaiTokenRefreshService(
-      db!,
+      db,
       repoSecretsEncryptionKey,
       resolveRepoId,
       requestLog
@@ -616,7 +622,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sandboxRepository,
     sandboxEventProcessor,
     messenger,
-    Boolean(db),
     refreshOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
@@ -680,7 +685,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         pushBranchToRemote: (pushSpec) => pushService.pushBranchToRemote(pushSpec),
         messenger,
         appName: resolveAppName(env),
-        sessionPullRequests: sessionPullRequestStore ?? undefined,
+        sessionPullRequests: sessionPullRequestStore,
         resolveScmSettings: (repo) => resolveScmSettings(db, repo),
       });
 
@@ -728,7 +733,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     schedulePullRequestRefresh,
     scmProviderName,
     resolveAuthorization: async (userId) => {
-      if (!db) return { kind: "unavailable" };
       try {
         const authorization = await new AuthorizationService(db).getEffectiveAuthorization(userId);
         return authorization.suspendedAt === null
@@ -803,11 +807,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     nowMs: () => Date.now(),
     monotonicNowMs: () => performance.now(),
   };
-  const sockets: SocketRegistry<WebSocket, ClientInfo> = {
+  const sockets: SocketRegistry<SessionWebSocket, ClientInfo> = {
     classify: (ws) => wsManager.classify(ws),
     send: (ws, message) => wsManager.send(ws, message),
     getClient: (ws) => connectionAuthenticator.getClientInfo(ws),
     close: (ws, code, reason) => wsManager.close(ws, code, reason),
+    isActiveSandbox: (ws) => wsManager.isActiveSandboxSocket(ws),
     clearSandboxIfMatch: (ws) => wsManager.clearSandboxSocketIfMatch(ws),
     removeClient: (ws) => wsManager.removeClient(ws),
     hasParticipant: (participantId) =>
@@ -831,14 +836,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     broadcast: (message) => messenger.broadcast(message),
   };
 
-  const server = new SessionServer<WebSocket, ClientInfo>({
-    http: new SessionHttpDispatcher({
-      log,
-      routes,
-      handleWebSocketUpgrade: (request, url, requestLog) =>
-        connectionAuthenticator.handleWebSocketUpgrade(request, url, requestLog),
-      clock,
-    }),
+  const server = new SessionServer<SessionWebSocket, ClientInfo>({
+    http: new SessionHttpDispatcher({ log, routes, clock }),
     messages: new SessionMessageRouter({
       log,
       sockets,
@@ -865,6 +864,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   const components: SessionComponents = {
     sandboxRepository,
+    wsManager,
     // Accessor pair over the local cell: production reads never go through
     // this property; the setter is the live-DO integration seam.
     get sourceControlProvider() {
@@ -885,6 +885,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   return {
     log,
     server,
+    upgrades: connectionAuthenticator,
     alarms: {
       rehydrate: () =>
         backgroundTasks.submit(
@@ -904,7 +905,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
 interface LifecycleManagerDeps {
   env: Env;
-  db: SqlDatabase | null;
+  db: SqlDatabase;
   /** The latched public-session-id resolver shared with the session logger. */
   getSessionId: () => string;
   /** The repository, satisfying the manager's storage port structurally. */
@@ -949,34 +950,27 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     env.WORKER_URL ||
     `https://open-inspect-control-plane.${env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
 
-  // Create D1-backed lookups if database is available
-  let mcpServerLookup: McpServerLookup | undefined;
-  if (db) {
-    const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
-    mcpServerLookup = {
-      getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
-    };
-  }
+  const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
+  const mcpServerLookup: McpServerLookup = {
+    getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
+  };
 
   // Session-scoped gate: resolved from the primary member (the scalar mirror
   // this lookup is called with) — see resolveSessionScopedSettings for the
   // per-feature scope rules. Token absence short-circuits to false so a
   // misconfigured deployment never installs a tool that would 503 on every call.
-  let slackAgentNotifyLookup: SlackAgentNotifyLookup | undefined;
-  if (db) {
-    const tokenPresent = !!env.SLACK_BOT_TOKEN;
-    const settingsStore = new IntegrationSettingsStore(db);
-    slackAgentNotifyLookup = {
-      isEnabledForRepo: async (repoOwner, repoName) => {
-        if (!tokenPresent) return false;
-        const settings =
-          repoOwner && repoName
-            ? (await settingsStore.getResolvedConfig("slack", `${repoOwner}/${repoName}`)).settings
-            : ((await settingsStore.getGlobal("slack"))?.defaults ?? {});
-        return resolveSlackSettings(settings).agentNotificationsEnabled;
-      },
-    };
-  }
+  const tokenPresent = !!env.SLACK_BOT_TOKEN;
+  const settingsStore = new IntegrationSettingsStore(db);
+  const slackAgentNotifyLookup: SlackAgentNotifyLookup = {
+    isEnabledForRepo: async (repoOwner, repoName) => {
+      if (!tokenPresent) return false;
+      const settings =
+        repoOwner && repoName
+          ? (await settingsStore.getResolvedConfig("slack", `${repoOwner}/${repoName}`)).settings
+          : ((await settingsStore.getGlobal("slack"))?.defaults ?? {});
+      return resolveSlackSettings(settings).agentNotificationsEnabled;
+    },
+  };
 
   const sandboxDashboardUrlBuilder =
     sandboxBackend === "modal"
@@ -1002,13 +996,11 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     sandboxDashboardUrlBuilder,
   };
 
-  // Create the image lookup if D1 is available and the provider supports
-  // prebuilt images.
-  let imageBuildLookup: ImageBuildLookup | undefined;
+  // The image lookup exists only for providers that support prebuilt images.
   const imageBuildProvider = resolveImageBuildProvider(sandboxBackend);
-  if (db && imageBuildProvider) {
-    imageBuildLookup = createImageBuildLookup(db, imageBuildProvider);
-  }
+  const imageBuildLookup: ImageBuildLookup | undefined = imageBuildProvider
+    ? createImageBuildLookup(db, imageBuildProvider)
+    : undefined;
 
   return new SandboxLifecycleManager(
     provider,

@@ -1,11 +1,18 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { routes } from "../../src/routes/catalog";
-import { NO_AUTHORIZATION, type Route } from "../../src/routes/shared";
-import { createControlPlaneHttpHandler } from "../../src/routing/hono-app";
-import type { Env } from "../../src/types";
+import { catalog } from "../../src/routes/catalog";
+import { Hono } from "hono";
+import { NO_AUTHORIZATION } from "../../src/routes/shared";
+import { admit } from "../../src/routing/admit";
+import type { ControlPlaneHonoEnv } from "../../src/routing/hono-env";
+import { rawRouteParams } from "../../src/routing/route-params";
+import { cloudflareHost, createControlPlaneHttpHandler } from "../../src/cloudflare/http-host";
+import { createControlPlaneApp } from "../../src/routing/hono-app";
+import { listRouteContracts } from "../../src/routing/route-contracts";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
 const PARAMETER = /:(\w+)/g;
+const routes = listRouteContracts(createControlPlaneApp(catalog, cloudflareHost));
 
 function materializePath(
   routePath: string,
@@ -14,7 +21,7 @@ function materializePath(
   const groups: Record<string, string> = {};
   const pathname = routePath.replace(PARAMETER, (_parameter, name: string) => {
     // An encoded slash remains one raw URL.pathname segment. It detects any
-    // decoding before Hono selection or before the legacy-compatible regex.
+    // decoding before Hono selection or in the raw parameter read-back.
     const value = `fixture-${routeIndex}-${name}%2Fraw`;
     groups[name] = value;
     return value;
@@ -30,7 +37,6 @@ describe("Hono route catalog conformance", () => {
         identity: `${route.method} ${route.path}`,
         pathname,
         groups,
-        pattern: route.pattern.source,
         authentication: route.authentication.kind,
         authorization: route.authorization,
         supportedScmProviders: route.supportedScmProviders,
@@ -44,25 +50,30 @@ describe("Hono route catalog conformance", () => {
     // without thousands of snapshot-only formatting lines.
     expect(manifest.map((entry) => JSON.stringify(entry))).toMatchSnapshot();
 
-    // A shadow catalog keeps the production method/path/order and replaces
-    // each policy with a public echo handler, so selection and raw captures
-    // are observed without mutating the production route objects.
-    const shadow: Route[] = routes.map((route, routeIndex) => ({
-      ...route,
+    // A shadow module keeps the production method/path/order and replaces
+    // each policy with a public echo handler, so selection and the raw
+    // parameter read-back are observed without the production policies.
+    const shadow = new Hono<ControlPlaneHonoEnv>();
+    const ECHO = admit({
       authentication: { kind: "public" },
-      authorization: NO_AUTHORIZATION,
-      serviceActorClaims: undefined,
       supportedScmProviders: "all",
-      handler: async (_request, _env, match) =>
-        Response.json({ identity: manifest[routeIndex].identity, groups: match.groups ?? {} }),
-    }));
-    const handle = createControlPlaneHttpHandler(shadow);
+      authorization: NO_AUTHORIZATION,
+    });
+    for (const [routeIndex, route] of routes.entries()) {
+      shadow.on(route.method, route.path, ECHO, (c) =>
+        Response.json({
+          identity: manifest[routeIndex].identity,
+          groups: rawRouteParams(c.req.routePath, c.req.path),
+        })
+      );
+    }
+    const handle = createControlPlaneHttpHandler([shadow]);
 
     for (const [routeIndex, route] of routes.entries()) {
       const { identity: expectedIdentity, pathname, groups } = manifest[routeIndex];
       const response = await handle(
         new Request(`https://test.local${pathname}`, { method: route.method }),
-        env as unknown as Env,
+        createCloudflareEnv(env),
         createExecutionContext()
       );
 
