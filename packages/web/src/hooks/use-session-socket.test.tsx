@@ -179,7 +179,7 @@ describe("useSessionSocket", () => {
                 {
                   eventId: "hidden",
                   timelineSequence: 3,
-                  event: { type: "heartbeat", sandboxId: "sandbox-1", timestamp: 3 },
+                  event: { type: "ready", sandboxId: "sandbox-1", timestamp: 3 },
                 },
               ],
         hasMore: true,
