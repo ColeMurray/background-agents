@@ -22,6 +22,7 @@ verification = runpy.run_path(str(Path(__file__).parents[1] / "verify/image.py")
             "4.109.5",
         ),
         ("ttyd", "ttyd version 1.7.7", "1.7.7"),
+        ("ttyd", "ttyd version 1.7.7-40e79c7", "1.7.7"),
         ("google-chrome", "Google Chrome for Testing 152.0.7977.82", "152.0.7977.82"),
     ],
 )

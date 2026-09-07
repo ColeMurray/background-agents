@@ -239,7 +239,9 @@ def observed_tool_version(command: str, expected: str, output: str) -> str:
         "ttyd": r"ttyd version\s+",
         "google-chrome": r"Google Chrome(?: for Testing)?\s+",
     }
-    pattern = prefixes[command] + r"(\d+(?:\.\d+){2,3})(?=\s|$)"
+    # ttyd's pinned release appends its source commit, not a prerelease label.
+    suffix = r"(?:-[a-f0-9]{7,40})?" if command == "ttyd" else ""
+    pattern = prefixes[command] + r"(\d+(?:\.\d+){2,3})" + suffix + r"(?=\s|$)"
     matches = [
         match.group(1) for line in output.splitlines() if (match := re.match(pattern, line.strip()))
     ]

@@ -71,7 +71,7 @@ def test_candidate_rejects_invalid_artifact_fields(field, value):
         ("runtimeVersion", None),
         ("runtimeVersion", ""),
         ("runtimeVersion", "invalid"),
-        ("runtimeVersion", "v١"),
+        ("runtimeVersion", "v\u0661"),
         ("target", "unknown"),
         ("recipeDigest", None),
     ],
