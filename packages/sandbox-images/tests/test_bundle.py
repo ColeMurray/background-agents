@@ -43,6 +43,13 @@ def test_binary_checksum_and_minimum_tool_version_are_required():
         validate_toolchain(tools)
 
 
+def test_debian_installs_disable_recommended_packages():
+    script = (REPO_ROOT / "packages/sandbox-images/install/os/debian.sh").read_text()
+    install_commands = [line for line in script.splitlines() if line.startswith("apt-get install ")]
+    assert install_commands
+    assert all("--no-install-recommends" in command for command in install_commands)
+
+
 @pytest.mark.parametrize("provider", PROVIDERS)
 def test_pack_rejects_stale_locks_before_creating_context(checkout, tmp_path, provider):
     path = checkout / "packages/sandbox-images/locks/runtime.txt"
