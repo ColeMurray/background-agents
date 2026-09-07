@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useLocalDateTime } from "@/hooks/use-local-date-time";
 
 const SETTINGS_KEY = "/api/commit-signing";
 
@@ -45,6 +46,7 @@ export function CommitSigningSettings() {
   const [committerEmail, setCommitterEmail] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [saving, setSaving] = useState(false);
+  const updatedAtLabel = useLocalDateTime(data?.updatedAt);
 
   useEffect(() => {
     if (!data?.enabled) return;
@@ -141,7 +143,7 @@ export function CommitSigningSettings() {
           </div>
           <div>
             <dt className="inline text-muted-foreground">Updated: </dt>
-            <dd className="inline">{new Date(data.updatedAt).toLocaleString()}</dd>
+            <dd className="inline">{updatedAtLabel}</dd>
           </div>
         </dl>
       )}
