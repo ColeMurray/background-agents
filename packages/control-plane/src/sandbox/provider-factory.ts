@@ -20,6 +20,7 @@ import { createVercelSandboxClient } from "./providers/vercel/client";
 import { createVercelProvider, type VercelSandboxProvider } from "./providers/vercel/provider";
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
+import { selectedBaseRelease } from "./base-release";
 
 function createModalProviderFromEnv(env: Env): ModalSandboxProvider {
   if (!env.MODAL_API_SECRET || !env.MODAL_WORKSPACE) {
@@ -55,7 +56,8 @@ function createVercelProviderFromEnv(env: Env): VercelSandboxProvider {
     token: env.VERCEL_TOKEN,
     teamId: env.VERCEL_TEAM_ID,
     apiBaseUrl: env.VERCEL_SANDBOX_API_BASE_URL,
-    baseSnapshotId: env.VERCEL_BASE_SNAPSHOT_ID,
+    baseSnapshotId:
+      selectedBaseRelease(env, "vercel")?.artifact.reference || env.VERCEL_BASE_SNAPSHOT_ID,
     baseSnapshotName: env.VERCEL_BASE_SNAPSHOT_NAME,
     runtime: env.VERCEL_RUNTIME,
     snapshotExpirationMs: parseNumericEnv(
@@ -76,14 +78,16 @@ function createOpenComputerProviderFromEnv(
       "OPENCOMPUTER_API_URL and OPENCOMPUTER_API_KEY are required when SANDBOX_PROVIDER=opencomputer"
     );
   }
-  if (options.requireOpenComputerTemplate && !env.OPENCOMPUTER_TEMPLATE) {
+  const template =
+    selectedBaseRelease(env, "opencomputer")?.artifact.reference || env.OPENCOMPUTER_TEMPLATE;
+  if (options.requireOpenComputerTemplate && !template) {
     throw new Error("OPENCOMPUTER_TEMPLATE is required to start OpenComputer sandboxes");
   }
 
   const client = createOpenComputerRestClient({
     apiUrl: env.OPENCOMPUTER_API_URL,
     apiKey: env.OPENCOMPUTER_API_KEY,
-    template: env.OPENCOMPUTER_TEMPLATE,
+    template,
   });
 
   return createOpenComputerProvider(client, {
@@ -96,7 +100,9 @@ function createOpenComputerProviderFromEnv(
 }
 
 function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
-  if (!env.DAYTONA_API_URL || !env.DAYTONA_API_KEY || !env.DAYTONA_BASE_SNAPSHOT) {
+  const snapshot =
+    selectedBaseRelease(env, "daytona")?.artifact.reference || env.DAYTONA_BASE_SNAPSHOT;
+  if (!env.DAYTONA_API_URL || !env.DAYTONA_API_KEY || !snapshot) {
     throw new Error(
       "DAYTONA_API_URL, DAYTONA_API_KEY, and DAYTONA_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=daytona"
     );
@@ -106,7 +112,7 @@ function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
     apiUrl: env.DAYTONA_API_URL,
     apiKey: env.DAYTONA_API_KEY,
     target: env.DAYTONA_TARGET,
-    baseSnapshot: env.DAYTONA_BASE_SNAPSHOT,
+    baseSnapshot: snapshot,
     autoStopIntervalMinutes: parseNumericEnv(
       "DAYTONA_AUTO_STOP_INTERVAL_MINUTES",
       env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES,
@@ -127,14 +133,15 @@ function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
 }
 
 function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
-  if (!env.E2B_API_KEY || !env.E2B_TEMPLATE_ID) {
+  const template = selectedBaseRelease(env, "e2b")?.artifact.reference || env.E2B_TEMPLATE_ID;
+  if (!env.E2B_API_KEY || !template) {
     throw new Error("E2B_API_KEY and E2B_TEMPLATE_ID are required when SANDBOX_PROVIDER=e2b");
   }
 
   const client = createE2BRestClient({
     apiUrl: env.E2B_API_URL || "https://api.e2b.app",
     apiKey: env.E2B_API_KEY,
-    templateId: env.E2B_TEMPLATE_ID,
+    templateId: template,
   });
 
   return createE2BProvider(client, {

@@ -13,6 +13,7 @@ import modal
 
 import sandbox_runtime
 
+from .images.base import deployed_image_environment
 from .log_config import get_logger
 
 # Path to sandbox_runtime source — bundled into function_image so shims can resolve
@@ -36,6 +37,7 @@ function_image = (
     )
     # Bundle sandbox_runtime so modal-infra shims can import from it at runtime
     .add_local_dir(str(_SANDBOX_RUNTIME_DIR), remote_path="/root/sandbox_runtime")
+    .env(deployed_image_environment())
 )
 
 # Deployment-wide LLM API keys, injected into sandboxes but never stored in

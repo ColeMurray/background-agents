@@ -1,3 +1,5 @@
+import imageEnvironments from "../../../../sandbox-images/runtime-environments.json";
+import { IMAGE_RUNTIME_ENTRYPOINT } from "../runtime-entrypoint";
 /**
  * E2B sandbox provider — calls the E2B REST API directly.
  *
@@ -39,7 +41,6 @@ import {
   REPO_IMAGE_CALLBACK_ENV,
   scmCloneIdentity,
 } from "../sandbox-env";
-import { SANDBOX_RUNTIME_VERSION } from "../runtime-manifest";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import type { SourceControlProviderName } from "../../source-control";
 import type { E2BRestClient, E2BSandboxCreated, E2BSandboxDetail } from "../e2b-rest-client";
@@ -69,19 +70,6 @@ export const DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS = DEFAULT_SANDBOX_TIMEOUT_SECON
 export const DEFAULT_E2B_AUTO_PAUSE = true;
 
 /**
- * Runtime version reported by E2B sandboxes (sessions and image builds), so
- * spawn-time selection can gate on the compatibility floor
- * (MIN_COMPATIBLE_RUNTIME_VERSION). E2B does not propagate the Dockerfile's
- * SANDBOX_VERSION to the runtime process, so it is injected via the sandbox env
- * instead.
- *
- * Derived from the manifest rather than pinned, exactly as VERCEL_SANDBOX_VERSION
- * is: a literal here silently drifts below the floor when the manifest bumps, and
- * every image built under it is then rejected as runtime_below_floor.
- */
-export const E2B_SANDBOX_VERSION = SANDBOX_RUNTIME_VERSION;
-
-/**
  * TTL for the brief quiet resume between the sanitizing pause and createSnapshot
  * during an image build. Only needs to outlive the snapshot call; the build
  * sandbox is killed immediately afterwards.
@@ -103,7 +91,7 @@ const E2B_SUPERVISOR_LOG_PATH = "/tmp/oi-supervisor.log";
  * create-time envVars (applied by envd, inherited through nohup) — never on
  * this command line, which E2B platform-logs.
  */
-const E2B_ENTRYPOINT_COMMAND = `nohup python -m sandbox_runtime.entrypoint >${E2B_SUPERVISOR_LOG_PATH} 2>&1 &`;
+const E2B_ENTRYPOINT_COMMAND = `nohup python -c '${IMAGE_RUNTIME_ENTRYPOINT}' >${E2B_SUPERVISOR_LOG_PATH} 2>&1 &`;
 
 /**
  * Env the provider pins on every E2B sandbox (sessions and image builds),
@@ -111,17 +99,9 @@ const E2B_ENTRYPOINT_COMMAND = `nohup python -m sandbox_runtime.entrypoint >${E2
  * clobber a key the boot depends on.
  */
 const E2B_SANDBOX_ENV: Record<string, string> = {
-  // E2B runs the runtime as non-root `user`; the Dockerfile's HOME=/root would
-  // EACCES everything under ~.
-  HOME: "/home/user",
-  // The staged runtime and the global node modules — E2B propagates neither.
-  PYTHONPATH: "/app",
-  NODE_PATH: "/usr/lib/node_modules",
-  // /run is a root-owned tmpfs, so the git credential helper cannot create its
-  // default cache dir (/run/oi) and would fail before brokering a token.
-  OI_SCM_CRED_CACHE_DIR: "/tmp/oi",
-  // So the runtime reports a version (spawn-time image selection gates on it).
-  SANDBOX_VERSION: E2B_SANDBOX_VERSION,
+  // Retained for old runtime code; new images report their baked manifest.
+  SANDBOX_VERSION: "",
+  ...imageEnvironments.e2b,
 };
 
 /**

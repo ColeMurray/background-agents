@@ -1,3 +1,5 @@
+import imageEnvironments from "../../../../../sandbox-images/runtime-environments.json";
+import { IMAGE_RUNTIME_ENTRYPOINT } from "../../runtime-entrypoint";
 /**
  * Vercel Sandbox provider implementation.
  */
@@ -41,7 +43,7 @@ import type {
   VercelVcpus,
 } from "./client";
 import { VercelSandboxApiError } from "./client";
-import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN, VERCEL_SANDBOX_VERSION } from "./bootstrap";
+import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN } from "./bootstrap";
 
 const log = createLogger("vercel-provider");
 
@@ -383,15 +385,11 @@ export class VercelSandboxProvider implements SandboxProvider {
   /** Vercel base-image paths layered on top of the canonical sandbox env. */
   private buildPlatformEnvVars(): Record<string, string> {
     return {
-      // The base snapshot bakes no SANDBOX_VERSION, so without this every
-      // sandbox reports an unknown runtime and its snapshots are unrestorable.
-      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
-      HOME: "/root",
-      NODE_ENV: "development",
-      PATH: buildVercelRuntimePath(this.providerConfig.runtime),
-      PYTHONPATH: "/app",
+      // Compatibility label for old runtime code, not new image evidence.
+      SANDBOX_VERSION: "",
       PYTHONUNBUFFERED: "1",
-      NODE_PATH: "/usr/lib/node_modules:/usr/local/lib/node_modules",
+      ...imageEnvironments.vercel,
+      PATH: buildVercelRuntimePath(this.providerConfig.runtime),
     };
   }
 
@@ -551,7 +549,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       {
         sessionId,
         command: "sudo",
-        args: ["-E", VERCEL_PYTHON_BIN, "-m", "sandbox_runtime.entrypoint"],
+        args: ["-E", VERCEL_PYTHON_BIN, "-c", IMAGE_RUNTIME_ENTRYPOINT],
         cwd: "/workspace",
         env,
       },
@@ -656,7 +654,7 @@ function routeToUrl(route: VercelSandboxRoute | undefined): string | undefined {
 
 function buildVercelRuntimePath(runtime?: string): string {
   const resolvedRuntime = runtime || DEFAULT_VERCEL_RUNTIME;
-  return `/root/.bun/bin:/usr/local/bin:/usr/bin:/bin:/vercel/runtimes/${resolvedRuntime}/bin`;
+  return `${imageEnvironments.vercel.PATH}:/vercel/runtimes/${resolvedRuntime}/bin`;
 }
 
 export function createVercelProvider(

@@ -1,18 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildVercelBootstrapScript } from "./bootstrap";
+import { buildVercelBootstrapScript } from "../../../../../vercel-infra/src/bootstrap";
 
 describe("buildVercelBootstrapScript", () => {
-  it.each(["fluxbox.tar.xz", "libvncserver.tar.gz", "x11vnc.tar.gz", "novnc.tar.gz"])(
-    "verifies %s before extraction",
-    (archive) => {
-      const script = buildVercelBootstrapScript();
-      const verification = `/${archive}" | sha256sum -c -`;
-      const extraction = `tar -x`;
-
-      expect(script).toContain(verification);
-      expect(script.indexOf(verification)).toBeLessThan(
-        script.indexOf(extraction, script.indexOf(verification))
-      );
-    }
-  );
+  it("delegates installation to the staged, provider-neutral bundle", () => {
+    const script = buildVercelBootstrapScript();
+    expect(script).toContain("sudo -E bash");
+    expect(script).toContain("/packages/sandbox-images/install/install.sh");
+    expect(script).not.toContain("npm install");
+  });
 });

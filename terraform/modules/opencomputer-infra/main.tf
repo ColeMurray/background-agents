@@ -25,10 +25,12 @@ resource "null_resource" "opencomputer_base_snapshot" {
     interpreter = ["bash"]
 
     environment = {
-      PROJECT_ROOT          = var.project_root
-      OPENCOMPUTER_API_URL  = var.api_url
-      OPENCOMPUTER_API_KEY  = var.api_key
-      OPENCOMPUTER_TEMPLATE = local.snapshot_name
+      PROJECT_ROOT                = var.project_root
+      OPENCOMPUTER_API_URL        = var.api_url
+      OPENCOMPUTER_API_KEY        = var.api_key
+      OPENCOMPUTER_TEMPLATE       = local.snapshot_name
+      OPENINSPECT_IMAGE_CANDIDATE = local.snapshot_name
+      OPENINSPECT_IMAGE_RESULT    = "${var.project_root}/.cache/sandbox-image-candidates/opencomputer.json"
     }
   }
 }

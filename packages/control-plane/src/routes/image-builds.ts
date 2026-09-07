@@ -65,19 +65,39 @@ const toggleRepoImageBuildsBodySchema = z.object({ enabled: z.boolean() });
  * reports repository_shas and runtime_version — an unversioned image must
  * never be registered, or it could pass spawn selection's floor check.
  */
-const buildCompleteBodySchema = z.object({
-  build_id: z.string().min(1),
-  provider_session_id: z.string().min(1),
-  repository_shas: z.array(repositoryShaEntrySchema).min(1),
-  runtime_version: z.string().refine((value) => parseRuntimeVersionNumber(value) !== null, {
-    error: "must start with v<number>",
-  }),
-  // Must stay finite: Infinity would be canonicalized to null by
-  // JSON.stringify inside the completion hash and the persisted row. Capped
-  // at MAX_SAFE_INTEGER so an absurd duration cannot lose integer precision
-  // in the persisted row or the completion-hash canonicalization.
-  build_duration_seconds: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER),
-});
+const buildCompleteBodySchema = z
+  .object({
+    base_recipe_digest: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+    base_inventory_digest: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+    image_target: z.enum(["modal", "daytona", "e2b", "vercel", "opencomputer"]).optional(),
+    build_id: z.string().min(1),
+    provider_session_id: z.string().min(1),
+    repository_shas: z.array(repositoryShaEntrySchema).min(1),
+    runtime_version: z.string().refine((value) => parseRuntimeVersionNumber(value) !== null, {
+      error: "must start with v<number>",
+    }),
+    // Must stay finite: Infinity would be canonicalized to null by
+    // JSON.stringify inside the completion hash and the persisted row. Capped
+    // at MAX_SAFE_INTEGER so an absurd duration cannot lose integer precision
+    // in the persisted row or the completion-hash canonicalization.
+    build_duration_seconds: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  })
+  .refine(
+    (body) => {
+      const identity = [body.base_recipe_digest, body.base_inventory_digest, body.image_target];
+      return (
+        identity.every((value) => value === undefined) ||
+        identity.every((value) => value !== undefined)
+      );
+    },
+    { message: "base image identity fields must be supplied together" }
+  );
 
 const buildFailedBodySchema = z.object({
   build_id: z.string().min(1),
@@ -189,6 +209,13 @@ async function handleBuildComplete(
     repositoryShas: parsed.repository_shas,
     runtimeVersion: parsed.runtime_version,
     buildDurationSeconds: parsed.build_duration_seconds,
+    ...(parsed.base_recipe_digest
+      ? {
+          baseRecipeDigest: parsed.base_recipe_digest,
+          baseInventoryDigest: parsed.base_inventory_digest,
+          imageTarget: parsed.image_target,
+        }
+      : {}),
   };
 
   try {

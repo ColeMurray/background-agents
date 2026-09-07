@@ -1,5 +1,7 @@
 """Deployment contract tests for the Modal sandbox image."""
 
+import hashlib
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -8,18 +10,33 @@ from unittest.mock import Mock
 import deploy
 
 
-def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch) -> None:
+def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tmp_path) -> None:
     deployed_app = object()
     lookup = Mock(return_value=deployed_app)
     build = Mock()
 
     monkeypatch.setattr(deploy.modal.App, "lookup", lookup)
-    monkeypatch.setattr(deploy, "base_image", Mock(build=build))
+    monkeypatch.setattr(deploy, "base_image", Mock(build=build, object_id="im-verified"))
+    identity = {"target": "modal", "recipeDigest": "a" * 64}
+    identity["inventoryDigest"] = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    process = Mock(returncode=0)
+    process.stdout.read.return_value = json.dumps(
+        {"passed": True, "servicesVerified": True, "identity": identity}
+    )
+    sandbox = Mock()
+    sandbox.exec.return_value = process
+    monkeypatch.setattr(deploy.modal.Sandbox, "create", Mock(return_value=sandbox))
+    monkeypatch.setattr(deploy, "image_reference_path", lambda: tmp_path / "selected.json")
+    monkeypatch.setenv("OPENINSPECT_IMAGE_RESULT", str(tmp_path / "candidate.json"))
 
     deploy.build_sandbox_image()
 
     lookup.assert_called_once_with(deploy.app.name, create_if_missing=True)
     build.assert_called_once_with(deployed_app)
+    sandbox.terminate.assert_called_once()
+    assert json.loads((tmp_path / "selected.json").read_text())["imageId"] == "im-verified"
 
 
 def _run_deploy_script(
@@ -102,5 +119,10 @@ def test_modal_deployment_hash_includes_deployment_entrypoints() -> None:
         Path(__file__).parents[3] / "terraform/environments/production/modal.tf"
     ).read_text()
 
-    assert "packages/modal-infra/deploy.py" in modal_tf
-    assert "terraform/modules/modal-app/scripts/deploy.sh" in modal_tf
+    assert "sandbox-images/cli.py" in modal_tf
+    assert '"--deployment"' in modal_tf
+    from sandbox_images.bundle import plan_image
+
+    inputs = {entry["path"] for entry in plan_image(Path(__file__).parents[3], "modal")["inputs"]}
+    assert "packages/modal-infra/deploy.py" in inputs
+    assert "terraform/modules/modal-app/scripts/deploy.sh" in inputs

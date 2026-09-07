@@ -13,14 +13,19 @@ export type ImageBuildRebuildDecision =
   | { type: "skip"; reason: "building" }
   | {
       type: "rebuild";
-      reason: "missing_image" | "runtime_incompatible" | "invalid_provenance";
+      reason:
+        | "missing_image"
+        | "runtime_incompatible"
+        | "invalid_provenance"
+        | "base_release_changed";
     }
   | { type: "check_branches"; recordedShas: Map<string, string> };
 
 export function evaluateImageBuildRebuildPolicy(
   unit: EnabledScopeUnit,
   rows: ImageBuildRecordView[],
-  provider: ImageBuildProvider
+  provider: ImageBuildProvider,
+  selectedReleaseId?: string
 ): ImageBuildRebuildDecision {
   const providerRows = rows.filter((row) => row.provider === provider);
   if (providerRows.some((row) => row.status === "building")) {
@@ -31,6 +36,9 @@ export function evaluateImageBuildRebuildPolicy(
     (row) => row.status === "ready" && row.repositoriesFingerprint === unit.repositoriesFingerprint
   );
   if (!ready) return { type: "rebuild", reason: "missing_image" };
+  if (selectedReleaseId && ready.baseReleaseId !== selectedReleaseId) {
+    return { type: "rebuild", reason: "base_release_changed" };
+  }
 
   const runtimeVersion = parseRuntimeVersionNumber(ready.runtimeVersion);
   // Rebuild old images to the current toolchain without invalidating images

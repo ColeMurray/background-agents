@@ -74,3 +74,14 @@ variable "fetch_app_info" {
   type        = bool
   default     = false
 }
+
+variable "selected_image_id" {
+  description = "Verified immutable Modal image selected by the release lock; empty builds the current recipe"
+  type        = string
+  default     = ""
+}
+
+variable "selected_recipe_digest" {
+  type    = string
+  default = ""
+}

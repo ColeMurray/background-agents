@@ -10,26 +10,7 @@
 data "external" "e2b_source_hash" {
   count = local.use_e2b_backend ? 1 : 0
 
-  program = ["bash", "-c", <<-EOF
-    cd ${var.project_root}
-    if command -v sha256sum &> /dev/null; then
-      hash=$(find packages/e2b-infra packages/sandbox-runtime/src \
-        -type f \
-        -not -path 'packages/e2b-infra/.venv/*' -not -path 'packages/e2b-infra/sandbox_runtime/*' \
-        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
-        -not -name '*.pyc' -not -name '.DS_Store' \
-        -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
-    else
-      hash=$(find packages/e2b-infra packages/sandbox-runtime/src \
-        -type f \
-        -not -path 'packages/e2b-infra/.venv/*' -not -path 'packages/e2b-infra/sandbox_runtime/*' \
-        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
-        -not -name '*.pyc' -not -name '.DS_Store' \
-        -exec shasum -a 256 {} \; | sort | shasum -a 256 | cut -d' ' -f1)
-    fi
-    echo "{\"hash\": \"$hash\"}"
-  EOF
-  ]
+  program = ["python3", "${var.project_root}/packages/sandbox-images/cli.py", "hash", "--root", var.project_root, "--provider", "e2b"]
 }
 
 module "e2b_infra" {

@@ -17,6 +17,8 @@ on:
       - "packages/linear-bot/**"
       - "packages/opencomputer-infra/**"
       - "packages/sandbox-runtime/**"
+      - "packages/sandbox-images/**"
+      - "packages/vercel-infra/**"
       - "packages/shared/**"
       - "packages/slack-bot/**"
       - "packages/web/**"
@@ -27,6 +29,8 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      - "packages/sandbox-runtime/src/**"
+      - "packages/sandbox-images/**"
       # Re-included after the exclusion above, which later patterns override: a
       # unit test holds this document's quick start to the required variables.
       - "docs/CONTROL_PLANE_CONTAINER.md"
@@ -46,6 +50,8 @@ on:
       - "packages/linear-bot/**"
       - "packages/opencomputer-infra/**"
       - "packages/sandbox-runtime/**"
+      - "packages/sandbox-images/**"
+      - "packages/vercel-infra/**"
       - "packages/shared/**"
       - "packages/slack-bot/**"
       - "packages/web/**"
@@ -56,6 +62,8 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      - "packages/sandbox-runtime/src/**"
+      - "packages/sandbox-images/**"
       # Re-included after the exclusion above, which later patterns override: a
       # unit test holds this document's quick start to the required variables.
       - "docs/CONTROL_PLANE_CONTAINER.md"

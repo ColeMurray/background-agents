@@ -7,20 +7,7 @@
 data "external" "daytona_source_hash" {
   count = local.use_daytona_backend ? 1 : 0
 
-  program = ["bash", "-c", <<-EOF
-    cd ${var.project_root}
-    if command -v sha256sum &> /dev/null; then
-      hash=$(find packages/daytona-infra/src packages/sandbox-runtime/src \
-        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) \
-        -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
-    else
-      hash=$(find packages/daytona-infra/src packages/sandbox-runtime/src \
-        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) \
-        -exec shasum -a 256 {} \; | sort | shasum -a 256 | cut -d' ' -f1)
-    fi
-    echo "{\"hash\": \"$hash\"}"
-  EOF
-  ]
+  program = ["python3", "${var.project_root}/packages/sandbox-images/cli.py", "hash", "--root", var.project_root, "--provider", "daytona"]
 }
 
 module "daytona_infra" {

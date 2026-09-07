@@ -20,12 +20,6 @@ cd "${DEPLOY_PATH}" || {
     exit 1
 }
 
-# Install Daytona SDK (the only runtime dependency for bootstrap).
-# Pin the version to avoid surprise breakage from SDK changes.
-pip install --user -q 'daytona==0.161.0'
-
-# --force deletes the existing snapshot before rebuilding,
-# ensuring the create call succeeds even if the name is taken.
-python -m src.bootstrap --force
+uv run --frozen python -m src.bootstrap
 
 echo "Daytona snapshot ${DAYTONA_BASE_SNAPSHOT} built successfully"

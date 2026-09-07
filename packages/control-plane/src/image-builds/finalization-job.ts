@@ -55,6 +55,14 @@ export async function createImageBuildFinalizationJob(
           // wire callback hashes identically across deploys and refactors —
           // change it only with an explicit hash-schema version bump.
           buildDurationMs: result.completion.buildDurationSeconds * 1000,
+          // Conditional extension preserves the exact persisted hash for legacy callbacks.
+          ...(result.completion.baseRecipeDigest
+            ? {
+                baseRecipeDigest: result.completion.baseRecipeDigest,
+                baseInventoryDigest: result.completion.baseInventoryDigest,
+                imageTarget: result.completion.imageTarget,
+              }
+            : {}),
         }
       : {
           buildId,

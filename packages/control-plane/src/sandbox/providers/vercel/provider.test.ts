@@ -1,3 +1,4 @@
+import { IMAGE_RUNTIME_ENTRYPOINT } from "../../runtime-entrypoint";
 /**
  * Unit tests for VercelSandboxProvider.
  */
@@ -15,11 +16,7 @@ import type {
 } from "./client";
 import { VercelSandboxApiError } from "./client";
 import { RequestDeadlineError } from "../../request-deadline";
-import {
-  MIN_COMPATIBLE_RUNTIME_VERSION,
-  parseRuntimeVersionNumber,
-} from "../../../image-builds/model";
-import { VERCEL_SANDBOX_VERSION } from "./bootstrap";
+import {} from "../../../image-builds/model";
 
 function createSessionResponse(
   sessionId = "vercel-session-1",
@@ -205,7 +202,7 @@ describe("VercelSandboxProvider", () => {
         // The base snapshot bakes none, so the sandbox can only report a
         // runtime version — and so keep its snapshots restorable — if the
         // provider exports it here.
-        SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
+        SANDBOX_VERSION: "",
         PATH: expect.stringContaining("/vercel/runtimes/node24/bin"),
         CONTROL_PLANE_URL: "https://control-plane.test",
         SANDBOX_AUTH_TOKEN: "auth-token",
@@ -232,7 +229,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "sudo",
-        args: ["-E", "/usr/bin/python3.12", "-m", "sandbox_runtime.entrypoint"],
+        args: ["-E", "/usr/local/bin/python3", "-c", IMAGE_RUNTIME_ENTRYPOINT],
         cwd: "/workspace",
       }),
       undefined
@@ -471,7 +468,7 @@ describe("VercelSandboxProvider", () => {
         sessionId: "vercel-session-1",
         command: "sudo",
         args: expect.arrayContaining([
-          "/usr/bin/python3.12",
+          "/usr/local/bin/python3",
           "-c",
           // Tagged with the logical sandbox ID (first line) so the supervisor's
           // stale-file cleanup keeps this write, then the port URLs.
@@ -672,7 +669,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         USER_SECRET: "value",
         IMAGE_BUILD_MODE: "true",
-        SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
+        SANDBOX_VERSION: "",
         VCS_CLONE_TOKEN: "clone-token",
       })
     );
@@ -689,7 +686,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "sudo",
-        args: ["-E", "/usr/bin/python3.12", "-m", "sandbox_runtime.entrypoint"],
+        args: ["-E", "/usr/local/bin/python3", "-c", IMAGE_RUNTIME_ENTRYPOINT],
         cwd: "/workspace",
         env: {
           OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS: "1800",
@@ -703,13 +700,6 @@ describe("VercelSandboxProvider", () => {
       }),
       { trace_id: "trace-1", request_id: "request-1" }
     );
-  });
-
-  it("reports a compatible authoritative runtime version for image builds", () => {
-    const version = parseRuntimeVersionNumber(VERCEL_SANDBOX_VERSION);
-
-    expect(version).not.toBeNull();
-    expect(version).toBeGreaterThanOrEqual(MIN_COMPATIBLE_RUNTIME_VERSION);
   });
 
   it("starts environment image builds with a repositories-bearing SESSION_CONFIG", async () => {
