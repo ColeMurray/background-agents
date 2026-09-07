@@ -15,6 +15,7 @@ import {
   VERCEL_RUNTIME_WORKDIR,
   buildVercelBootstrapScript,
 } from "./bootstrap";
+import { VERCEL_PYTHON_BIN } from "../../control-plane/src/sandbox/providers/vercel/bootstrap";
 import type { VercelSandboxClient } from "../../control-plane/src/sandbox/providers/vercel/client";
 
 const log = createLogger("vercel-base-snapshot");
@@ -191,7 +192,7 @@ export async function verifyVercelSnapshot(
       {
         sessionId: restored.session.id,
         command: "bash",
-        args: ["-lc", `/opt/openinspect/python/bin/python /app/verify/smoke_test.py verify`],
+        args: ["-lc", `${VERCEL_PYTHON_BIN} /app/verify/smoke_test.py verify`],
         sudo: true,
         timeoutMs: 240_000,
       },

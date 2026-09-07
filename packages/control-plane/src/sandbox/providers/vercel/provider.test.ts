@@ -232,7 +232,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "sudo",
-        args: ["-E", "/usr/local/bin/python3", "-m", "sandbox_runtime.entrypoint"],
+        args: ["-E", "/opt/openinspect/python/bin/python", "-m", "sandbox_runtime.entrypoint"],
         cwd: "/workspace",
       }),
       undefined
@@ -471,7 +471,7 @@ describe("VercelSandboxProvider", () => {
         sessionId: "vercel-session-1",
         command: "sudo",
         args: expect.arrayContaining([
-          "/usr/local/bin/python3",
+          "/opt/openinspect/python/bin/python",
           "-c",
           // Tagged with the logical sandbox ID (first line) so the supervisor's
           // stale-file cleanup keeps this write, then the port URLs.
@@ -689,7 +689,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "sudo",
-        args: ["-E", "/usr/local/bin/python3", "-m", "sandbox_runtime.entrypoint"],
+        args: ["-E", "/opt/openinspect/python/bin/python", "-m", "sandbox_runtime.entrypoint"],
         cwd: "/workspace",
         env: {
           OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS: "1800",
