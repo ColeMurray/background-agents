@@ -12,6 +12,13 @@ from sandbox_images.bundle import pack_bundle, plan_image, validate_toolchain
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.mark.parametrize("provider", ["modal", "daytona", "e2b", "vercel", "opencomputer"])
+def test_runtime_user_global_pnpm_commands_are_on_path(provider):
+    environment = plan_image(REPO_ROOT, provider)["runtimeEnv"]
+    assert environment["PNPM_HOME"] in environment["PATH"].split(":")
+    assert "VIRTUAL_ENV" not in environment
+
+
 def test_agent_browser_native_binary_requires_a_repository_checksum():
     tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
     validate_toolchain(tools)

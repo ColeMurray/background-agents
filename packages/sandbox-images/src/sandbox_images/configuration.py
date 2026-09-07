@@ -22,7 +22,7 @@ def runtime_environment(target: dict[str, str]) -> dict[str, str]:
         "NODE_ENV": "development",
         "PYTHONPATH": "/app",
         "NODE_PATH": f"/opt/openinspect/tools/node_modules:{prefix}/lib/node_modules:/usr/lib/node_modules:/usr/local/lib/node_modules",
-        "PATH": f"/opt/openinspect/python/bin:/opt/openinspect/node/bin:/opt/openinspect/tools/node_modules/.bin:{home}/.venv/bin:{user_bin}:{home}/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:{prefix}/bin",
+        "PATH": f"/opt/openinspect/python/bin:/opt/openinspect/node/bin:/opt/openinspect/tools/node_modules/.bin:{home}/.venv/bin:{user_bin}:{home}/.local/share/pnpm:{home}/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:{prefix}/bin",
         "npm_config_prefix": prefix,
         "npm_config_cache": f"{home}/.npm-cache",
         "PNPM_HOME": f"{home}/.local/share/pnpm",

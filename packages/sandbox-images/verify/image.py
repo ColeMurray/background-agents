@@ -22,6 +22,33 @@ from typing import Any
 
 IMAGE_PATH = Path("/app/openinspect-image.json")
 
+PNPM_GLOBAL_PROBE = r"""
+import json, os, pathlib, shutil, subprocess, tempfile, uuid
+name = "oi-image-probe-" + uuid.uuid4().hex
+home = pathlib.Path(os.environ["PNPM_HOME"])
+assert str(home) in os.environ["PATH"].split(":")
+with tempfile.TemporaryDirectory(prefix="openinspect-pnpm-") as directory:
+    root = pathlib.Path(directory)
+    package = root / "package"
+    package.mkdir()
+    (package / "package.json").write_text(json.dumps({
+        "name": name, "version": "1.0.0", "bin": {name: "command.js"}
+    }))
+    executable = package / "command.js"
+    executable.write_text('#!/usr/bin/env node\nconsole.log("global-bin-ok")\n')
+    executable.chmod(0o755)
+    try:
+        subprocess.run([
+            "pnpm", "add", "--global", "--offline", "--ignore-scripts",
+            "--global-dir", str(root / "global"), "--store-dir", str(root / "store"),
+            str(package),
+        ], check=True, timeout=60, capture_output=True)
+        assert shutil.which(name) == str(home / name)
+        assert subprocess.check_output([name], text=True, timeout=10).strip() == "global-bin-ok"
+    finally:
+        (home / name).unlink(missing_ok=True)
+"""
+
 
 def canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -30,6 +57,7 @@ def canonical(value: Any) -> str:
 class Probe:
     def __init__(self, plan: dict[str, Any]) -> None:
         self.environment = os.environ | plan["runtimeEnv"]
+        self.environment.pop("VIRTUAL_ENV", None)
         self.user = pwd.getpwnam(plan["target"]["user"])
         self.options: dict[str, Any] = {"env": self.environment, "cwd": "/workspace", "text": True}
         if os.geteuid() == 0:
@@ -274,6 +302,7 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
     if not video and plan["provider"] != "vercel":
         raise RuntimeError("Required video encoder missing")
     if services:
+        probe.run(["python3", "-c", PNPM_GLOBAL_PROBE])
         probe.desktop()
         probe.service(
             ["opencode", "serve", "--hostname", "127.0.0.1", "--port", "{port}"], "/global/health"
