@@ -20,6 +20,23 @@ def test_agent_browser_native_binary_requires_a_repository_checksum():
         validate_toolchain(tools)
 
 
+@pytest.mark.parametrize("extra", [".env", ".cache/credentials", "node_modules/secret", "empty/"])
+def test_published_bundle_rejects_all_unmanifested_entries(tmp_path, extra):
+    from sandbox_images.bundle import _assert_same_bundle
+
+    expected, existing = tmp_path / "expected", tmp_path / "existing"
+    expected.mkdir()
+    existing.mkdir()
+    path = existing / extra
+    if extra.endswith("/"):
+        path.mkdir()
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("must not be uploaded")
+    with pytest.raises(RuntimeError, match="modified"):
+        _assert_same_bundle(expected, existing)
+
+
 @pytest.mark.parametrize("provider", ["modal", "daytona", "e2b", "vercel", "opencomputer"])
 @pytest.mark.parametrize("stale", ["runtime-environments.json", "locks/runtime.txt"])
 def test_canonical_pack_rejects_stale_generated_inputs(tmp_path, provider, stale):

@@ -298,8 +298,20 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> Path:
 
 
 def _assert_same_bundle(expected: Path, existing: Path) -> None:
-    left = [_inventory_entry(expected, path) for path in _walk(expected)]
-    right = [_inventory_entry(existing, path) for path in _walk(existing)]
+    def inventory(root: Path) -> list[dict[str, Any]]:
+        entries = []
+        for path in sorted(root.rglob("*")):
+            mode = path.lstat().st_mode
+            if stat.S_ISDIR(mode):
+                entries.append({"path": path.relative_to(root).as_posix(), "kind": "directory"})
+            elif stat.S_ISREG(mode) or stat.S_ISLNK(mode):
+                entries.append(_inventory_entry(root, path))
+            else:
+                raise RuntimeError(f"Unexpected special file in image bundle: {path}")
+        return entries
+
+    left = inventory(expected)
+    right = inventory(existing)
     if left != right:
         raise RuntimeError(
             f"Existing image bundle was modified; remove only this bundle and retry: {existing}"
