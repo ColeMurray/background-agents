@@ -17,6 +17,7 @@ import {
   MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   type SlackGlobalConfig,
+  type SlackGlobalSettingsResponse,
   type SlackMentionsPolicy,
   type SlackRepoSettings,
   type SlackRoutingRule,
@@ -82,10 +83,6 @@ const MENTIONS_POLICY_OPTIONS: {
   },
 ];
 
-interface GlobalResponse {
-  settings: SlackGlobalConfig | null;
-}
-
 interface RepoSettingsEntry {
   repo: string;
   settings: SlackRepoSettings;
@@ -106,13 +103,16 @@ export function SlackIntegrationSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManageGlobal = hasPermission("integrations.manage");
   const canManageRepos = hasPermission("repositories.settings.manage");
-  const { data: globalData, isLoading: globalLoading } =
-    useSWR<GlobalResponse>(SLACK_GLOBAL_SETTINGS_KEY);
+  const {
+    data: globalData,
+    isLoading: globalLoading,
+    mutate: mutateGlobalSettings,
+  } = useSWR<SlackGlobalSettingsResponse>(SLACK_GLOBAL_SETTINGS_KEY);
   const { data: repoSettingsData, isLoading: repoSettingsLoading } =
     useSWR<RepoListResponse>(REPO_SETTINGS_KEY);
   const { data: reposData } = useSWR<ReposResponse>("/api/repos");
   const { data: environmentsData } = useSWR<ListEnvironmentsResponse>(ENVIRONMENTS_KEY);
-  const globalSettingsEditor = useSlackGlobalSettingsEditor(globalData?.settings);
+  const globalSettingsEditor = useSlackGlobalSettingsEditor(mutateGlobalSettings);
 
   if (globalLoading || repoSettingsLoading) {
     return <IntegrationSettingsSkeleton />;
@@ -146,17 +146,11 @@ export function SlackIntegrationSettings() {
         </p>
       </SettingsCardSection>
 
-      <fieldset
-        disabled={!canManageGlobal || globalSettingsEditor.savingDefaults}
-        className="min-w-0"
-      >
+      <fieldset disabled={!canManageGlobal || globalSettingsEditor.saving} className="min-w-0">
         <GlobalSettingsSection settings={settings} editor={globalSettingsEditor} />
       </fieldset>
 
-      <fieldset
-        disabled={!canManageGlobal || globalSettingsEditor.savingRoutingRules}
-        className="min-w-0"
-      >
+      <fieldset disabled={!canManageGlobal || globalSettingsEditor.saving} className="min-w-0">
         <RoutingRulesSection
           settings={settings}
           availableRepos={availableRepos}

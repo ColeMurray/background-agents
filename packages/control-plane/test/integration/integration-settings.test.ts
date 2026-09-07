@@ -3,6 +3,7 @@ import { SELF, env } from "cloudflare:test";
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+  type SlackGlobalConfig,
 } from "@open-inspect/shared/types/integrations";
 import { EnvironmentStore } from "../../src/db/environments";
 import { cleanD1Tables } from "./cleanup";
@@ -87,6 +88,105 @@ describe("Integration settings API", () => {
       }>();
       expect(body.settings.defaults.autoReviewOnOpen).toBe(false);
       expect(body.settings.enabledRepos).toEqual(["acme/widgets"]);
+    });
+  });
+
+  describe("PATCH /integration-settings/slack", () => {
+    const url = "https://test.local/integration-settings/slack";
+
+    async function patch(body: unknown) {
+      return serviceFetch(url, { method: "PATCH", body: JSON.stringify(body) });
+    }
+
+    async function getSettings(): Promise<SlackGlobalConfig | null> {
+      const response = await serviceFetch(url);
+      return (await response.json<{ settings: SlackGlobalConfig | null }>()).settings;
+    }
+
+    it("atomically preserves concurrent defaults and routing-rule updates", async () => {
+      const [defaultsResponse, routingResponse] = await Promise.all([
+        patch({
+          section: "defaults",
+          defaults: { agentNotificationsEnabled: true, mentionsPolicy: "strip" },
+        }),
+        patch({
+          section: "routingRules",
+          routingRules: [{ keyword: " FrontEnd ", target: "Acme/Web" }],
+        }),
+      ]);
+
+      expect(defaultsResponse.status).toBe(200);
+      expect(routingResponse.status).toBe(200);
+      expect(await getSettings()).toEqual({
+        defaults: {
+          agentNotificationsEnabled: true,
+          mentionsPolicy: "strip",
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        },
+      });
+    });
+
+    it("preserves a concurrent routing update when defaults are reset", async () => {
+      await patch({
+        section: "defaults",
+        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "strip" },
+      });
+
+      const [resetResponse, routingResponse] = await Promise.all([
+        patch({ section: "defaults", defaults: {} }),
+        patch({
+          section: "routingRules",
+          routingRules: [{ keyword: "backend", target: "acme/api" }],
+        }),
+      ]);
+
+      expect(resetResponse.status).toBe(200);
+      expect(routingResponse.status).toBe(200);
+      expect(await getSettings()).toEqual({
+        defaults: { routingRules: [{ keyword: "backend", target: "acme/api" }] },
+      });
+    });
+
+    it("returns the normalized saved document", async () => {
+      const response = await patch({
+        section: "routingRules",
+        routingRules: [{ keyword: " FrontEnd ", target: "Acme/Web" }],
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        integrationId: "slack",
+        settings: {
+          defaults: { routingRules: [{ keyword: "frontend", target: "acme/web" }] },
+        },
+      });
+    });
+
+    it("returns null after clearing the only configured section", async () => {
+      await patch({
+        section: "routingRules",
+        routingRules: [{ keyword: "frontend", target: "acme/web" }],
+      });
+      const response = await patch({ section: "routingRules", routingRules: [] });
+
+      await expect(response.json()).resolves.toEqual({ integrationId: "slack", settings: null });
+      expect(await getSettings()).toBeNull();
+    });
+
+    it("rejects routing rules in the defaults section", async () => {
+      const response = await patch({ section: "defaults", defaults: { routingRules: [] } });
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects whole-document Slack replacement and deletion", async () => {
+      const putResponse = await serviceFetch(url, {
+        method: "PUT",
+        body: JSON.stringify({ settings: {} }),
+      });
+      const deleteResponse = await serviceFetch(url, { method: "DELETE" });
+
+      expect(putResponse.status).toBe(405);
+      expect(deleteResponse.status).toBe(405);
     });
   });
 

@@ -20,6 +20,8 @@ import {
   type CodeServerSettings,
   type VncSettings,
   type SlackGlobalSettings,
+  type SlackGlobalConfig,
+  type SlackGlobalSettingsUpdate,
   type SlackMentionsPolicy,
   type SlackRoutingRule,
 } from "@open-inspect/shared/types/integrations";
@@ -158,6 +160,76 @@ export class IntegrationSettingsStore {
       .prepare("DELETE FROM integration_settings WHERE integration_id = ?")
       .bind(integrationId)
       .run();
+  }
+
+  /** Atomically replace one Slack editor section while preserving the other. */
+  async updateSlackGlobal(update: SlackGlobalSettingsUpdate): Promise<SlackGlobalConfig | null> {
+    for (;;) {
+      const row = await this.db
+        .prepare("SELECT settings FROM integration_settings WHERE integration_id = ?")
+        .bind("slack")
+        .first<{ settings: string }>();
+      const current = row
+        ? this.normalizeStoredGlobalSettings(
+            "slack",
+            parseStoredSettings(
+              getIntegrationGlobalSettingsSchema("slack"),
+              row.settings,
+              "Stored global integration settings"
+            )
+          )
+        : null;
+      const currentDefaults = current?.defaults ?? {};
+      const { routingRules: currentRoutingRules, ...otherDefaults } = currentDefaults;
+      const defaults: SlackGlobalSettings =
+        update.section === "defaults"
+          ? {
+              ...update.defaults,
+              ...(currentRoutingRules?.length ? { routingRules: currentRoutingRules } : {}),
+            }
+          : {
+              ...otherDefaults,
+              ...(update.routingRules.length > 0 ? { routingRules: update.routingRules } : {}),
+            };
+      const normalizedDefaults = this.validateAndNormalizeSettings("slack", defaults, "global");
+      const next: SlackGlobalConfig = { ...current };
+      if (Object.keys(normalizedDefaults).length > 0) next.defaults = normalizedDefaults;
+      else delete next.defaults;
+      const nextSettings = Object.keys(next).length > 0 ? next : null;
+
+      let changes: number;
+      if (row) {
+        const result = nextSettings
+          ? await this.db
+              .prepare(
+                `UPDATE integration_settings
+                 SET settings = ?, updated_at = ?
+                 WHERE integration_id = ? AND settings = ?`
+              )
+              .bind(JSON.stringify(nextSettings), Date.now(), "slack", row.settings)
+              .run()
+          : await this.db
+              .prepare("DELETE FROM integration_settings WHERE integration_id = ? AND settings = ?")
+              .bind("slack", row.settings)
+              .run();
+        changes = result.meta.changes;
+      } else if (nextSettings) {
+        const now = Date.now();
+        const result = await this.db
+          .prepare(
+            `INSERT INTO integration_settings (integration_id, settings, created_at, updated_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(integration_id) DO NOTHING`
+          )
+          .bind("slack", JSON.stringify(nextSettings), now, now)
+          .run();
+        changes = result.meta.changes;
+      } else {
+        return null;
+      }
+
+      if (changes > 0) return nextSettings;
+    }
   }
 
   async getRepoSettings<K extends keyof IntegrationSettingsMap>(

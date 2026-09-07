@@ -1,35 +1,17 @@
-import { useEffect, useRef, useState } from "react";
-import { mutate } from "swr";
+import { useState } from "react";
+import type { KeyedMutator } from "swr";
 import { toast } from "sonner";
 import type {
-  SlackGlobalConfig,
   SlackGlobalSettings,
+  SlackGlobalSettingsResponse,
+  SlackGlobalSettingsUpdate,
   SlackRoutingRule,
 } from "@open-inspect/shared/types/integrations";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 export const SLACK_GLOBAL_SETTINGS_KEY = "/api/integration-settings/slack";
 
-type MutationKind = "defaults" | "routingRules";
-
-function mergeDefaults(
-  current: SlackGlobalConfig | null | undefined,
-  patch: Partial<SlackGlobalSettings>
-): SlackGlobalConfig {
-  const defaults: SlackGlobalSettings = { ...current?.defaults, ...patch };
-  for (const key of Object.keys(defaults) as (keyof SlackGlobalSettings)[]) {
-    if (defaults[key] === undefined) delete defaults[key];
-  }
-  return { ...current, defaults };
-}
-
-function resetDefaults(current: SlackGlobalConfig | null | undefined): SlackGlobalConfig | null {
-  const { defaults, ...rest } = current ?? {};
-  const next: SlackGlobalConfig = defaults?.routingRules?.length
-    ? { ...rest, defaults: { routingRules: defaults.routingRules } }
-    : rest;
-  return Object.keys(next).length > 0 ? next : null;
-}
+type MutationKind = SlackGlobalSettingsUpdate["section"];
 
 async function errorMessage(response: Response, fallback: string): Promise<string> {
   try {
@@ -40,90 +22,63 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
   }
 }
 
-export function useSlackGlobalSettingsEditor(settings: SlackGlobalConfig | null | undefined) {
-  const acceptedSettings = useRef(settings);
-  const queue = useRef(Promise.resolve());
-  const queuedMutationCount = useRef(0);
-  const [pending, setPending] = useState<Record<MutationKind, number>>({
-    defaults: 0,
-    routingRules: 0,
-  });
-
-  useEffect(() => {
-    if (settings !== undefined && queuedMutationCount.current === 0) {
-      acceptedSettings.current = settings;
-    }
-  }, [settings]);
+export function useSlackGlobalSettingsEditor(
+  mutateSettings: KeyedMutator<SlackGlobalSettingsResponse>
+) {
+  const [pendingKind, setPendingKind] = useState<MutationKind | null>(null);
 
   const runMutation = async (
     kind: MutationKind,
-    update: (current: SlackGlobalConfig | null | undefined) => SlackGlobalConfig | null,
+    update: SlackGlobalSettingsUpdate,
     successMessage: string,
     failureMessage: string
   ): Promise<boolean> => {
-    queuedMutationCount.current += 1;
-    setPending((current) => ({ ...current, [kind]: current[kind] + 1 }));
-
-    const operation = queue.current.then(async () => {
-      const next = update(acceptedSettings.current);
-      try {
-        const response = next
-          ? await browserApiFetch(SLACK_GLOBAL_SETTINGS_KEY, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ settings: next }),
-            })
-          : await browserApiFetch(SLACK_GLOBAL_SETTINGS_KEY, { method: "DELETE" });
-
-        if (!response.ok) {
-          toast.error(await errorMessage(response, failureMessage));
-          return false;
-        }
-
-        acceptedSettings.current = next;
-        void mutate(SLACK_GLOBAL_SETTINGS_KEY, { settings: next }, { revalidate: false }).catch(
-          () => undefined
-        );
-        toast.success(successMessage);
-        return true;
-      } catch {
-        toast.error(failureMessage);
+    setPendingKind(kind);
+    try {
+      const response = await browserApiFetch(SLACK_GLOBAL_SETTINGS_KEY, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(update),
+      });
+      if (!response.ok) {
+        toast.error(await errorMessage(response, failureMessage));
         return false;
       }
-    });
 
-    queue.current = operation.then(() => undefined);
-    const succeeded = await operation;
-
-    queuedMutationCount.current -= 1;
-    setPending((current) => ({ ...current, [kind]: current[kind] - 1 }));
-    if (queuedMutationCount.current === 0) {
-      void mutate(SLACK_GLOBAL_SETTINGS_KEY);
+      const saved = (await response.json()) as SlackGlobalSettingsResponse;
+      await mutateSettings(saved, { revalidate: false });
+      toast.success(successMessage);
+      return true;
+    } catch {
+      toast.error(failureMessage);
+      return false;
+    } finally {
+      setPendingKind(null);
     }
-    return succeeded;
   };
 
   return {
-    savingDefaults: pending.defaults > 0,
-    savingRoutingRules: pending.routingRules > 0,
-    saveDefaults: (patch: Partial<SlackGlobalSettings>) =>
+    saving: pendingKind !== null,
+    savingDefaults: pendingKind === "defaults",
+    savingRoutingRules: pendingKind === "routingRules",
+    saveDefaults: (defaults: Omit<SlackGlobalSettings, "routingRules">) =>
       runMutation(
         "defaults",
-        (current) => mergeDefaults(current, patch),
+        { section: "defaults", defaults },
         "Settings saved.",
         "Failed to save settings"
       ),
     resetDefaults: () =>
       runMutation(
         "defaults",
-        resetDefaults,
+        { section: "defaults", defaults: {} },
         "Settings reset to defaults.",
         "Failed to reset settings"
       ),
-    saveRoutingRules: (rules: SlackRoutingRule[]) =>
+    saveRoutingRules: (routingRules: SlackRoutingRule[]) =>
       runMutation(
         "routingRules",
-        (current) => mergeDefaults(current, { routingRules: rules.length > 0 ? rules : undefined }),
+        { section: "routingRules", routingRules },
         "Routing rules saved.",
         "Failed to save routing rules"
       ),

@@ -17,6 +17,7 @@ import {
   scmSettingsSchema,
   integrationSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
+  slackGlobalSettingsUpdateSchema,
   type SlackRoutingRule,
 } from "./integrations";
 
@@ -98,6 +99,45 @@ describe("SCM settings schemas", () => {
     );
     expect(scmSettingsSchema.safeParse({ alwaysUseDraftMode: "yes" }).success).toBe(false);
     expect(scmSettingsSchema.safeParse({ pullRequestLabel: "release,agent" }).success).toBe(false);
+  });
+});
+
+describe("Slack global settings update schema", () => {
+  it("accepts typed defaults and routing-rule section updates", () => {
+    expect(
+      slackGlobalSettingsUpdateSchema.parse({
+        section: "defaults",
+        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "strip" },
+      })
+    ).toEqual({
+      section: "defaults",
+      defaults: { agentNotificationsEnabled: true, mentionsPolicy: "strip" },
+    });
+    expect(
+      slackGlobalSettingsUpdateSchema.parse({
+        section: "routingRules",
+        routingRules: [{ keyword: "frontend", target: "acme/web" }],
+      })
+    ).toEqual({
+      section: "routingRules",
+      routingRules: [{ keyword: "frontend", target: "acme/web" }],
+    });
+  });
+
+  it("rejects routing rules in defaults and unknown section fields", () => {
+    expect(
+      slackGlobalSettingsUpdateSchema.safeParse({
+        section: "defaults",
+        defaults: { routingRules: [] },
+      }).success
+    ).toBe(false);
+    expect(
+      slackGlobalSettingsUpdateSchema.safeParse({
+        section: "routingRules",
+        routingRules: [],
+        defaults: {},
+      }).success
+    ).toBe(false);
   });
 });
 

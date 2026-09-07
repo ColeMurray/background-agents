@@ -21,7 +21,7 @@ function streamingMutationRequest(size: number, cookie?: string): NextRequest {
 }
 
 describe("settingsProxy", () => {
-  const { DELETE, GET, POST, PUT } = settingsProxy(() => "/settings", "settings");
+  const { DELETE, GET, PATCH, POST } = settingsProxy(() => "/settings", "settings");
   const context = { params: Promise.resolve(undefined) };
 
   beforeEach(() => vi.resetAllMocks());
@@ -47,7 +47,7 @@ describe("settingsProxy", () => {
       Response.json({ error: "Revision conflict" }, { status: 412 })
     );
     const request = new NextRequest("http://localhost/api/settings", {
-      method: "PUT",
+      method: "PATCH",
       headers: {
         Cookie: "__Secure-openinspect.session_token=session.signature",
         "If-Match": 'W/"revision-2"',
@@ -55,10 +55,10 @@ describe("settingsProxy", () => {
       body: JSON.stringify({ enabled: true }),
     });
 
-    const response = await PUT(request, context);
+    const response = await PATCH(request, context);
 
     expect(controlPlaneUserFetch).toHaveBeenCalledWith("/settings", {
-      method: "PUT",
+      method: "PATCH",
       headers: { "If-Match": 'W/"revision-2"' },
       body: JSON.stringify({ enabled: true }),
     });
