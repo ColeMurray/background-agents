@@ -38,14 +38,6 @@ def test_rejects_version_substrings_and_nonrelease_versions(output):
         verification["observed_tool_version"]("node", "22.23.2", output)
 
 
-@pytest.mark.parametrize("os_family", ["debian", "amazon-linux"])
-def test_package_inventory_is_independent_of_query_order(os_family):
-    probe = Mock()
-    probe.run.side_effect = ["zlib=1\nalpha=2", "alpha=2\nzlib=1"]
-    collect = verification["installed_os_packages"]
-    assert collect(probe, os_family) == collect(probe, os_family) == ["alpha=2", "zlib=1"]
-
-
 @pytest.mark.parametrize(
     "banner,security,valid",
     [

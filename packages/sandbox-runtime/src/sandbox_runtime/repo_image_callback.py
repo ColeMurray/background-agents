@@ -115,15 +115,6 @@ class RepoImageBuildCallback:
             "runtime_version": runtime_version,
             "provider_session_id": self.provider_session_id,
         }
-        from sandbox_runtime.image_identity import read_image_identity
-
-        identity = read_image_identity()
-        if identity:
-            payload.update(
-                base_recipe_digest=identity["recipeDigest"],
-                base_inventory_digest=identity["inventoryDigest"],
-                image_target=identity["target"],
-            )
         return await self._post_with_retry(self.callback_url, payload)
 
     async def report_failure(self, error: str) -> bool:

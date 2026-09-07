@@ -71,18 +71,17 @@ def test_bundled_skill_change_invalidates_every_provider_and_is_packed(tmp_path:
     )
     skill = "packages/sandbox-runtime/src/sandbox_runtime/skills/agent-browser/SKILL.md"
     before = {
-        p: plan_image(checkout, p)["recipeDigest"]
+        p: plan_image(checkout, p)["inputHash"]
         for p in ("modal", "daytona", "e2b", "vercel", "opencomputer")
     }
     (checkout / skill).write_text("A changed bundled skill.\n")
     for provider, digest in before.items():
         plan = plan_image(checkout, provider)
-        assert plan["recipeDigest"] != digest
+        assert plan["inputHash"] != digest
         bundle = pack_bundle(checkout, provider, tmp_path / "bundles")
         assert (bundle / skill).read_text() == "A changed bundled skill.\n"
         assert (
-            json.loads((bundle / "image-plan.json").read_text())["recipeDigest"]
-            == plan["recipeDigest"]
+            json.loads((bundle / "image-plan.json").read_text())["inputHash"] == plan["inputHash"]
         )
 
 
@@ -97,7 +96,7 @@ def test_modal_cache_buster_changes_recipe_and_copied_bundle(tmp_path: Path) -> 
     original = (checkout / base_path).read_text()
     assert "CACHE_BUSTER = RUNTIME_VERSION" in original
     before = plan_image(checkout, "modal")
-    other_before = plan_image(checkout, "e2b")["recipeDigest"]
+    other_before = plan_image(checkout, "e2b")["inputHash"]
     old_bundle = pack_bundle(checkout, "modal", tmp_path / "bundles")
 
     changed = original.replace(
@@ -107,9 +106,9 @@ def test_modal_cache_buster_changes_recipe_and_copied_bundle(tmp_path: Path) -> 
     after = plan_image(checkout, "modal")
     new_bundle = pack_bundle(checkout, "modal", tmp_path / "bundles")
 
-    assert after["recipeDigest"] != before["recipeDigest"]
+    assert after["inputHash"] != before["inputHash"]
     assert after["runtimeVersion"] == before["runtimeVersion"]
-    assert plan_image(checkout, "e2b")["recipeDigest"] == other_before
+    assert plan_image(checkout, "e2b")["inputHash"] == other_before
     assert new_bundle != old_bundle
     assert not (new_bundle / base_path).exists()
     assert (
@@ -143,7 +142,7 @@ def test_unrelated_docs_and_caches_do_not_change_the_recipe(tmp_path: Path) -> N
 @pytest.mark.parametrize(
     "build_path",
     [
-        "packages/sandbox-images/src/sandbox_images/releases.py",
+        "packages/sandbox-images/src/sandbox_images/native.py",
         "package-lock.json",
         "packages/control-plane/src/logger.ts",
         "packages/control-plane/src/sandbox/request-deadline.ts",
@@ -164,12 +163,12 @@ def test_build_inputs_invalidate_orchestration_without_changing_image(tmp_path, 
     path = checkout / build_path
     path.write_text(path.read_text() + "\n")
     after = plan_image(checkout, "vercel")
-    assert after["recipeDigest"] == before["recipeDigest"]
-    assert after["buildDigest"] != before["buildDigest"]
+    assert after["inputHash"] == before["inputHash"]
+    assert after["buildHash"] != before["buildHash"]
     assert pack_bundle(checkout, "vercel", tmp_path / "bundles") == original_bundle
     assert not (original_bundle / build_path).exists()
     baked = json.loads((original_bundle / "image-plan.json").read_text())
-    assert "buildInputs" not in baked and "buildDigest" not in baked
+    assert "buildInputs" not in baked and "buildHash" not in baked
 
 
 def test_incomplete_declared_input_cannot_be_silently_omitted(tmp_path: Path) -> None:

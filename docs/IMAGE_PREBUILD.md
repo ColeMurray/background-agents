@@ -268,6 +268,10 @@ For an **environment** session, verify that:
 
 ### Image seems stale
 
+Updating the shared sandbox toolchain does not automatically refresh prepared repository or
+environment images. Use the refresh button below after a dependency-only update when those images
+must pick up the new tools. Existing compatible saved sessions remain usable.
+
 Pre-built images are rebuilt every 30 minutes when new commits are detected. If you just pushed code
 and want the image updated immediately, trigger a manual rebuild — the refresh button next to the
 repository in Settings > Images, or next to the environment in Settings > Environments.

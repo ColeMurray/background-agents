@@ -58,9 +58,6 @@ export class ImageBuildFinalizationStore {
     completionHash: string;
     repositoryShas: RepositoryShaEntry[];
     runtimeVersion: string;
-    baseRecipeDigest?: string;
-    baseInventoryDigest?: string;
-    imageTarget?: string;
     buildDurationSeconds: number;
     now: number;
   }): Promise<ImageBuildCompletionAcceptance> {
@@ -70,38 +67,24 @@ export class ImageBuildFinalizationStore {
          SET completion_hash = ?,
              repository_shas = ?,
              runtime_version = ?,
-             base_recipe_digest = COALESCE(base_recipe_digest, ?),
-             base_inventory_digest = COALESCE(base_inventory_digest, ?),
-             image_target = COALESCE(image_target, ?),
              build_duration_seconds = ?,
              callback_token_used_at = ?
          WHERE id = ? AND provider = ? AND provider_session_id = ? AND status = 'building'
            AND callback_token_hash = ?
            AND callback_token_expires_at >= ?
-           AND callback_token_used_at IS NULL
-           AND (base_recipe_digest IS NULL OR base_recipe_digest = ?)
-           AND (base_inventory_digest IS NULL OR base_inventory_digest = ?)
-           AND (image_target IS NULL OR image_target = ?)
-           AND (base_release_id IS NULL OR runtime_version = ?)`
+           AND callback_token_used_at IS NULL`
       )
       .bind(
         params.completionHash,
         JSON.stringify(params.repositoryShas),
         params.runtimeVersion,
-        params.baseRecipeDigest ?? null,
-        params.baseInventoryDigest ?? null,
-        params.imageTarget ?? null,
         params.buildDurationSeconds,
         params.now,
         params.buildId,
         params.provider,
         params.providerSessionId,
         params.tokenHash,
-        params.now,
-        params.baseRecipeDigest ?? null,
-        params.baseInventoryDigest ?? null,
-        params.imageTarget ?? null,
-        params.runtimeVersion
+        params.now
       )
       .run();
 

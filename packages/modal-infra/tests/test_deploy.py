@@ -1,6 +1,5 @@
 """Deployment contract tests for the Modal sandbox image."""
 
-import hashlib
 import json
 import os
 import subprocess
@@ -17,7 +16,6 @@ def test_deployment_rejects_missing_image_without_opt_in(monkeypatch, tmp_path) 
 
     monkeypatch.setattr(base.modal, "is_local", lambda: True)
     monkeypatch.setattr(base, "image_reference_path", lambda: tmp_path / "missing.json")
-    monkeypatch.delenv("OPENINSPECT_DEPLOY_IMAGE_ID", raising=False)
     monkeypatch.delenv("OPENINSPECT_REQUIRE_BUILT_IMAGE", raising=False)
 
     with pytest.raises(RuntimeError, match="Build the Modal sandbox image"):
@@ -38,13 +36,12 @@ def test_deployment_rejects_invalid_record_without_opt_in(
     from src.images import base
 
     record_path = tmp_path / "built.json"
-    record_path.write_text(json.dumps({"recipeDigest": recipe, "imageId": image_id}))
+    record_path.write_text(json.dumps({"inputHash": recipe, "imageId": image_id}))
     monkeypatch.setattr(base.modal, "is_local", lambda: True)
     monkeypatch.setattr(base, "image_reference_path", lambda: record_path)
     monkeypatch.setattr(
-        base, "local_image_plan", lambda: (tmp_path, {"recipeDigest": "current-recipe"})
+        base, "local_image_plan", lambda: (tmp_path, {"inputHash": "current-recipe"})
     )
-    monkeypatch.delenv("OPENINSPECT_DEPLOY_IMAGE_ID", raising=False)
     monkeypatch.delenv("OPENINSPECT_REQUIRE_BUILT_IMAGE", raising=False)
 
     with pytest.raises(RuntimeError, match=error):
@@ -55,25 +52,14 @@ def test_deployment_uses_matching_verified_record(monkeypatch, tmp_path) -> None
     from src.images import base
 
     record_path = tmp_path / "built.json"
-    record_path.write_text(json.dumps({"recipeDigest": "current-recipe", "imageId": "im-built"}))
+    record_path.write_text(json.dumps({"inputHash": "current-recipe", "imageId": "im-built"}))
     monkeypatch.setattr(base.modal, "is_local", lambda: True)
     monkeypatch.setattr(base, "image_reference_path", lambda: record_path)
     monkeypatch.setattr(
-        base, "local_image_plan", lambda: (tmp_path, {"recipeDigest": "current-recipe"})
+        base, "local_image_plan", lambda: (tmp_path, {"inputHash": "current-recipe"})
     )
-    monkeypatch.delenv("OPENINSPECT_DEPLOY_IMAGE_ID", raising=False)
 
     assert base.deployed_image_environment() == {base.IMAGE_ID_ENV: "im-built"}
-
-
-def test_deployment_preserves_explicit_release_selection(monkeypatch, tmp_path) -> None:
-    from src.images import base
-
-    monkeypatch.setattr(base.modal, "is_local", lambda: True)
-    monkeypatch.setattr(base, "image_reference_path", lambda: tmp_path / "missing.json")
-    monkeypatch.setenv("OPENINSPECT_DEPLOY_IMAGE_ID", "im-selected")
-
-    assert base.deployed_image_environment() == {base.IMAGE_ID_ENV: "im-selected"}
 
 
 @pytest.mark.parametrize("image_id", [None, "im-deployed"])
@@ -92,7 +78,6 @@ def test_deployed_environment_requires_image_reference(monkeypatch, image_id) ->
 
 def test_eager_build_does_not_register_functions_before_image_exists() -> None:
     environment = dict(os.environ)
-    environment.pop("OPENINSPECT_DEPLOY_IMAGE_ID", None)
     environment.pop("OPENINSPECT_MODAL_BASE_IMAGE_ID", None)
     environment["OPENINSPECT_REQUIRE_BUILT_IMAGE"] = "true"
     script = """
@@ -130,19 +115,8 @@ def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tm
 
     monkeypatch.setattr(deploy.modal.App, "lookup", lookup)
     monkeypatch.setattr(deploy, "base_image", Mock(build=build, object_id="im-verified"))
-    identity = {
-        "schemaVersion": 1,
-        "runtimeVersion": "v62-test",
-        "target": "modal",
-        "recipeDigest": "a" * 64,
-    }
-    identity["inventoryDigest"] = hashlib.sha256(
-        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
     process = Mock(returncode=0)
-    process.stdout.read.return_value = json.dumps(
-        {"passed": True, "servicesVerified": True, "identity": identity}
-    )
+    process.stdout.read.return_value = '{"passed": true, "servicesVerified": true}'
     sandbox = Mock()
     sandbox.exec.return_value = process
     monkeypatch.setattr(deploy.modal.Sandbox, "create", Mock(return_value=sandbox))

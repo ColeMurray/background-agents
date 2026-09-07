@@ -28,8 +28,8 @@ templates baked by the image-build workflow) boot the same way.
 
 ## Manual build
 
-Use the repository-root [build, verify, and promotion commands](../sandbox-images/README.md). Native
-builds create unique candidates and never overwrite the selected template alias. Select the verified
+Use the repository-root [build and verify commands](../sandbox-images/README.md). Native builds
+create unique candidates and never overwrite the selected template alias. Select the verified
 candidate's native template ID before directing traffic to it.
 
 ```bash

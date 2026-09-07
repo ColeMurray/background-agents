@@ -267,36 +267,6 @@ export class VercelSandboxClient {
     );
   }
 
-  /** Build tooling uses this to retrieve the bounded verification report. */
-  async readTextFile(sessionId: string, path: string): Promise<string> {
-    return this.send(
-      `/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/fs/read`,
-      { method: "POST", body: JSON.stringify({ path }) },
-      undefined,
-      "readTextFile",
-      async (response) => {
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error("Vercel file response has no body");
-        const decoder = new TextDecoder();
-        let result = "";
-        let bytes = 0;
-        try {
-          while (true) {
-            const chunk = await reader.read();
-            if (chunk.done) break;
-            bytes += chunk.value.byteLength;
-            if (bytes > 1024 * 1024) throw new Error("Vercel image report exceeds 1 MiB");
-            result += decoder.decode(chunk.value, { stream: true });
-          }
-          return result + decoder.decode();
-        } finally {
-          await reader.cancel();
-        }
-      },
-      VERCEL_API_REQUEST_DEADLINE_MS
-    );
-  }
-
   async writeFileArchive(
     request: VercelWriteFileArchiveRequest,
     correlation?: CorrelationContext

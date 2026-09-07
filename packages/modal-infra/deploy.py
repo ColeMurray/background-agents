@@ -34,14 +34,12 @@ else:
 def build_sandbox_image() -> None:
     """Build the image used by dynamic sandboxes before requests can create them."""
     deployed_app = modal.App.lookup(APP_NAME, create_if_missing=True)
-    existing = os.environ.get("OPENINSPECT_VERIFY_REFERENCE") or os.environ.get(
-        "OPENINSPECT_DEPLOY_IMAGE_ID"
-    )
+    existing = os.environ.get("OPENINSPECT_VERIFY_REFERENCE")
     if not existing:
         with modal.enable_output():
             base_image.build(deployed_app)
     _bundle, plan = local_image_plan()
-    from sandbox_images.releases import candidate_record, write_candidate
+    from sandbox_images.native import write_build_result
 
     # Verify the concrete baked artifact, without local source mounts.
     sandbox = modal.Sandbox.create(
@@ -57,18 +55,16 @@ def build_sandbox_image() -> None:
             "/opt/openinspect/python/bin/python",
             "/app/verify/image.py",
             "verify",
-            "--expected-recipe",
-            os.environ.get("OPENINSPECT_EXPECTED_RECIPE") or plan["recipeDigest"],
+            "--expected-input-hash",
+            plan["inputHash"],
             timeout=240,
         )
         report_text = process.stdout.read()
         process.wait()
         if process.returncode != 0:
             raise RuntimeError(f"Modal image verification failed: {process.stderr.read()}")
-        report = json.loads(report_text.strip().splitlines()[-1])
-        write_candidate(
-            candidate_record("modal", APP_NAME, existing or base_image.object_id, report)
-        )
+        json.loads(report_text.strip().splitlines()[-1])
+        write_build_result(existing or base_image.object_id)
     finally:
         sandbox.terminate()
     # Publish the function image reference only after fresh-artifact verification.
@@ -76,7 +72,7 @@ def build_sandbox_image() -> None:
         return
     record = {
         "imageId": existing or base_image.object_id,
-        "recipeDigest": os.environ.get("OPENINSPECT_EXPECTED_RECIPE") or plan["recipeDigest"],
+        "inputHash": plan["inputHash"],
     }
     path = image_reference_path()
     path.parent.mkdir(parents=True, exist_ok=True)

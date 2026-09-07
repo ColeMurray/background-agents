@@ -6,7 +6,6 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { hashImageBuildCallbackToken, type ImageBuildCallbackAuthFailure } from "./callback-auth";
 import { createImageBuildFinalizationJob } from "./finalization-job";
-import { selectedBaseRelease } from "../sandbox/base-release";
 import {
   errorMessage,
   ImageBuildCallbackAuthRejectedError,
@@ -211,8 +210,7 @@ export class ImageBuildWorkflow {
         (await this.store.hasReadyImageForFingerprint(
           scope,
           provider,
-          target.repositoriesFingerprint,
-          selectedBaseRelease(this.env, provider)?.baseReleaseId
+          target.repositoriesFingerprint
         ))
       ) {
         return { type: "up_to_date" };
@@ -245,7 +243,6 @@ export class ImageBuildWorkflow {
         scope,
         provider,
         repositoriesFingerprint: target.repositoriesFingerprint,
-        baseRelease: selectedBaseRelease(this.env, provider),
         ...callbackAuthRegistration(callbackAuth),
       });
       if (!registered) {
@@ -347,14 +344,6 @@ export class ImageBuildWorkflow {
       outcome: "success",
       completion,
     });
-    if (
-      completion.baseRecipeDigest &&
-      (!completion.baseInventoryDigest || completion.imageTarget !== authenticated.build.provider)
-    ) {
-      throw new ImageBuildCompletionNotAcceptedError(
-        "Incomplete or mismatched base image identity"
-      );
-    }
 
     const acceptance = await this.store.finalization.acceptSuccessfulCompletion({
       buildId: authenticated.build.id,
@@ -365,9 +354,6 @@ export class ImageBuildWorkflow {
       repositoryShas: completion.repositoryShas,
       runtimeVersion: completion.runtimeVersion,
       buildDurationSeconds: completion.buildDurationSeconds,
-      baseRecipeDigest: completion.baseRecipeDigest,
-      baseInventoryDigest: completion.baseInventoryDigest,
-      imageTarget: completion.imageTarget,
       now: Date.now(),
     });
     if (acceptance === "rejected") {

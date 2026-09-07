@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "packages/sandbox-images/src"))
 
 from sandbox_images.bundle import pack_bundle, plan_image  # noqa: E402
-from sandbox_images.releases import candidate_record, write_candidate  # noqa: E402
+from sandbox_images.native import write_build_result  # noqa: E402
 
 START_CMD = "sleep infinity"
 READY_CMD = "/opt/openinspect/python/bin/python -I -c 'import sandbox_runtime'"
@@ -33,7 +33,7 @@ def main() -> None:
     plan = plan_image(ROOT, "e2b")
     name = (
         os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
-        or f"{name}-{plan['recipeDigest'][:12]}-{time.time_ns()}"
+        or f"{name}-{plan['inputHash'][:12]}-{time.time_ns()}"
     )
     bundle = pack_bundle(ROOT, "e2b", ROOT / ".cache/sandbox-images")
     template = (
@@ -51,9 +51,7 @@ def main() -> None:
     if not existing and Template.exists(
         name, api_key=api_key, api_url=os.environ.get("E2B_API_URL")
     ):
-        raise RuntimeError(
-            "E2B candidate already exists; choose a new name instead of overwriting it"
-        )
+        existing = name
     build = (
         None
         if existing
@@ -76,26 +74,20 @@ def main() -> None:
         envs=plan["runtimeEnv"],
         metadata={
             "purpose": "openinspect-image-verification",
-            "recipeDigest": plan["recipeDigest"],
+            "inputHash": plan["inputHash"],
         },
     )
     try:
         result = sandbox.commands.run(
-            "/opt/openinspect/python/bin/python /app/verify/image.py verify --expected-recipe "
-            + os.environ.get("OPENINSPECT_EXPECTED_RECIPE", plan["recipeDigest"]),
+            "/opt/openinspect/python/bin/python /app/verify/image.py verify --expected-input-hash "
+            + plan["inputHash"],
             timeout=240,
             user="root",
         )
         if result.exit_code != 0:
             raise RuntimeError("E2B image verification failed")
-        report = json.loads(result.stdout.strip().splitlines()[-1])
-        record = candidate_record(
-            "e2b",
-            os.environ.get("E2B_API_URL", "https://api.e2b.app"),
-            existing or build.template_id,
-            report,
-        )
-        write_candidate(record)
+        json.loads(result.stdout.strip().splitlines()[-1])
+        write_build_result(existing or build.template_id)
     finally:
         sandbox.kill()
 

@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""Executable image contract. Installation records identity; verification never rewrites it."""
+"""Build-time image contract: check required tools and services before use."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
-import importlib.metadata
 import json
 import os
-import platform
 import pwd
 import re
 import signal
@@ -19,8 +16,6 @@ import time
 import urllib.request
 from pathlib import Path
 from typing import Any
-
-IMAGE_PATH = Path("/app/openinspect-image.json")
 
 PNPM_GLOBAL_PROBE = r"""
 import json, os, pathlib, shutil, subprocess, tempfile, uuid
@@ -48,10 +43,6 @@ with tempfile.TemporaryDirectory(prefix="openinspect-pnpm-") as directory:
     finally:
         (home / name).unlink(missing_ok=True)
 """
-
-
-def canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 class Probe:
@@ -217,16 +208,6 @@ def stop_process(process: subprocess.Popen) -> None:
             process.wait()
 
 
-def installed_os_packages(probe: Probe, os_family: str) -> list[str]:
-    """Normalize package-manager output before recording or comparing inventory."""
-    command = (
-        ["dpkg-query", "-W", "-f=${Package}=${Version}\\n"]
-        if os_family == "debian"
-        else ["rpm", "-qa", "--qf", "%{NAME}=%{VERSION}-%{RELEASE}.%{ARCH}\\n"]
-    )
-    return sorted(probe.run(command).splitlines())
-
-
 def observed_tool_version(command: str, expected: str, output: str) -> str:
     """Normalize the command's leading version, not an expected substring."""
     prefixes = {
@@ -342,26 +323,7 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
             probe.run(["agent-browser", "--session", "openinspect-image-verify", "close"])
             Path("/tmp/openinspect-image-verify.png").unlink(missing_ok=True)
     return {
-        "schemaVersion": 1,
-        "runtimeVersion": plan["runtimeVersion"],
-        "recipeDigest": plan["recipeDigest"],
-        "target": plan["provider"],
-        "architecture": platform.machine(),
-        "pythonVersion": platform.python_version(),
-        "os": platform.freedesktop_os_release(),
         "toolVersions": versions,
-        "pythonPackages": sorted(
-            f"{dist.metadata['Name']}=={dist.version}"
-            for dist in importlib.metadata.distributions()
-        ),
-        "osPackages": installed_os_packages(probe, plan["target"]["os"]),
-        "runtimeEnv": plan["runtimeEnv"],
-        "runtimeUser": {
-            "name": probe.user.pw_name,
-            "uid": probe.user.pw_uid,
-            "gid": probe.user.pw_gid,
-            "home": probe.user.pw_dir,
-        },
         "capabilities": {
             "agent": True,
             "editor": True,
@@ -376,27 +338,17 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("install", "verify"))
-    parser.add_argument("--bundle", type=Path)
-    parser.add_argument("--expected-recipe")
+    parser.add_argument("--expected-input-hash")
     args = parser.parse_args()
     plan = json.loads(Path("/app/openinspect-image-plan.json").read_text())
     tools = json.loads(Path("/app/openinspect-toolchain.json").read_text())
-    if args.expected_recipe and plan["recipeDigest"] != args.expected_recipe:
-        raise RuntimeError("The provider artifact does not match the selected recipe")
-    inventory = inspect_image(plan, tools, services=args.command == "verify")
-    digest = hashlib.sha256(canonical(inventory).encode()).hexdigest()
-    identity = inventory | {"inventoryDigest": digest}
-    if args.command == "install":
-        IMAGE_PATH.write_text(canonical(identity) + "\n")
-    else:
-        baked = json.loads(IMAGE_PATH.read_text())
-        if baked != identity:
-            raise RuntimeError("Installed image contents differ from the baked inventory")
-    print(
-        json.dumps(
-            {"passed": True, "identity": identity, "servicesVerified": args.command == "verify"}
-        )
-    )
+    if args.expected_input_hash and plan["inputHash"] != args.expected_input_hash:
+        raise RuntimeError("The provider artifact does not match the requested installation inputs")
+    environment = json.loads(Path("/app/openinspect-runtime-environment.json").read_text())
+    if environment != plan["runtimeEnv"]:
+        raise RuntimeError("Baked launch environment does not match build configuration")
+    report = inspect_image(plan, tools, services=args.command == "verify")
+    print(json.dumps({"passed": True, **report, "servicesVerified": args.command == "verify"}))
 
 
 if __name__ == "__main__":

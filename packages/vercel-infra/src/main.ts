@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { packImage, recordCandidate } from "../../sandbox-images/src/node";
+import { packImage, writeBuildResult } from "../../sandbox-images/src/node";
 import { buildVercelBaseSnapshot, verifyVercelSnapshot } from "./base-snapshot";
 import { createVercelSandboxClient } from "../../control-plane/src/sandbox/providers/vercel/client";
 
@@ -41,37 +41,21 @@ export async function main(): Promise<void> {
       }
     }
     if (existing) {
-      const report = await verifyVercelSnapshot(
-        client,
-        existing,
-        process.env.OPENINSPECT_EXPECTED_RECIPE || packed.plan.recipeDigest
-      );
-      recordCandidate(
-        root,
-        "vercel",
-        `${process.env.VERCEL_TEAM_ID || "personal"}/${projectId}`,
-        existing,
-        report
-      );
+      await verifyVercelSnapshot(client, existing, packed.plan.inputHash);
+      writeBuildResult(existing);
       writeReference(existing);
       return;
     }
     const archive = join(temporary, "bundle.tar.gz");
     execFileSync("tar", ["-czf", archive, "-C", packed.directory, "."], { stdio: "inherit" });
     const result = await buildVercelBaseSnapshot(client, {
-      recipeDigest: packed.plan.recipeDigest,
+      inputHash: packed.plan.inputHash,
       runtimeArchive: readFileSync(archive),
-      sourceVersion: packed.plan.recipeDigest,
+      sourceVersion: packed.plan.inputHash,
       namePrefix: process.env.VERCEL_BASE_SNAPSHOT_NAME || "openinspect-base",
       sandboxName: process.env.OPENINSPECT_IMAGE_CANDIDATE,
     });
-    recordCandidate(
-      root,
-      "vercel",
-      `${process.env.VERCEL_TEAM_ID || "personal"}/${projectId}`,
-      result.snapshotId,
-      result.verification
-    );
+    writeBuildResult(result.snapshotId);
     writeReference(result.snapshotId);
   } finally {
     rmSync(temporary, { recursive: true, force: true });

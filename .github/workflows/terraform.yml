@@ -136,10 +136,6 @@ jobs:
         run: terraform test
         working-directory: ${{ env.TF_WORKING_DIR }}
 
-      - name: Sandbox release configuration contract
-        run: terraform init -backend=false -input=false && terraform test
-        working-directory: terraform/modules/sandbox-image-selection
-
       - name: Post Validation Results
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v8
@@ -490,15 +486,6 @@ jobs:
           TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-
-      - name: Preserve verified sandbox image candidates
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sandbox-image-candidates-${{ github.sha }}
-          path: .cache/sandbox-image-candidates/*.json
-          if-no-files-found: ignore
-          retention-days: 30
 
       - name: Post Apply Results
         if: always()

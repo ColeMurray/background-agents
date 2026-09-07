@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Image, Sandbox, Snapshots } from "@opencomputer/sdk/node";
-import { packImage, recordCandidate } from "../../sandbox-images/src/node";
+import { packImage, writeBuildResult } from "../../sandbox-images/src/node";
 const SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
 const OPENSANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/opensandbox-proxy.crt";
 const providerEnvironment = {
@@ -70,7 +70,7 @@ export async function main(): Promise<void> {
   const name =
     existing ||
     process.env.OPENINSPECT_IMAGE_CANDIDATE ||
-    `${process.env.OPENCOMPUTER_TEMPLATE || "openinspect-runtime"}-${packed.plan.recipeDigest.slice(0, 12)}-${Date.now()}`;
+    `${process.env.OPENCOMPUTER_TEMPLATE || "openinspect-runtime"}-${packed.plan.inputHash.slice(0, 12)}-${Date.now()}`;
   const snapshots = new Snapshots({ apiUrl, apiKey });
   const retained = existing || (await snapshots.list()).some((snapshot) => snapshot.name === name);
   const artifact = retained
@@ -81,18 +81,12 @@ export async function main(): Promise<void> {
   const sandbox = await Sandbox.create({ apiUrl, apiKey, snapshot: name });
   try {
     const report = await sandbox.exec.run(
-      `sudo -E /opt/openinspect/python/bin/python /app/verify/image.py verify --expected-recipe ${process.env.OPENINSPECT_EXPECTED_RECIPE || packed.plan.recipeDigest}`,
+      `sudo -E /opt/openinspect/python/bin/python /app/verify/image.py verify --expected-input-hash ${packed.plan.inputHash}`,
       { env: providerEnvironment, timeout: 240, timeoutMs: 250_000 }
     );
     if (report.exitCode !== 0)
       throw new Error(`OpenComputer verification failed: ${report.stderr}`);
-    recordCandidate(
-      root,
-      "opencomputer",
-      apiUrl,
-      name,
-      JSON.parse(report.stdout.trim().split("\n").at(-1)!)
-    );
+    writeBuildResult(name);
   } finally {
     await sandbox.kill();
   }

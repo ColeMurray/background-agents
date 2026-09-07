@@ -7,7 +7,6 @@ import type { ImageBuildProvider } from "./model";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
 import { DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS, DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
-import { selectedBaseRelease } from "../sandbox/base-release";
 import { ImageBuildReaper } from "./reaper";
 import { listEnabledScopes, resolveScopeTarget } from "./scope";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
@@ -201,8 +200,7 @@ export class ImageBuildScheduler {
             repositoriesFingerprint: target.repositoriesFingerprint,
           },
           rows,
-          provider,
-          selectedBaseRelease(this.env, provider)?.baseReleaseId
+          provider
         );
 
         let rebuild = decision.type === "rebuild";

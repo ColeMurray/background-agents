@@ -23,9 +23,9 @@ const mocks = vi.hoisted(() => {
 vi.mock("../../../sandbox-images/src/node", () => ({
   packImage: () => ({
     directory: "/unused",
-    plan: { recipeDigest: "a".repeat(64), inputs: [], runtimeEnv: {}, runtimeVersion: "v1" },
+    plan: { inputHash: "a".repeat(64), inputs: [], runtimeEnv: {}, runtimeVersion: "v1" },
   }),
-  recordCandidate: mocks.record,
+  writeBuildResult: mocks.record,
 }));
 vi.mock("./providers/vercel/client", () => ({
   createVercelSandboxClient: () => ({ listSnapshots: mocks.listVercel }),
@@ -49,7 +49,6 @@ beforeEach(() => {
   vi.stubEnv("OPENINSPECT_REPO_ROOT", "/unused");
   vi.stubEnv("OPENINSPECT_IMAGE_CANDIDATE", "candidate");
   vi.stubEnv("OPENINSPECT_VERIFY_REFERENCE", "");
-  vi.stubEnv("OPENINSPECT_EXPECTED_RECIPE", "");
   vi.stubEnv("VERCEL_TOKEN", "test");
   vi.stubEnv("VERCEL_PROJECT_ID", "project");
   vi.stubEnv("OPENCOMPUTER_API_KEY", "test");
@@ -66,13 +65,7 @@ describe("native candidate retry", () => {
   it("reverifies an existing Vercel candidate and regenerates its record", async () => {
     await vercelMain();
     expect(mocks.verify).toHaveBeenCalledWith(expect.anything(), "snap-retained", "a".repeat(64));
-    expect(mocks.record).toHaveBeenCalledWith(
-      "/unused",
-      "vercel",
-      expect.any(String),
-      "snap-retained",
-      { passed: true }
-    );
+    expect(mocks.record).toHaveBeenCalledWith("snap-retained");
     expect(mocks.build).not.toHaveBeenCalled();
   });
   it("does not publish a Vercel candidate with mismatched recipe evidence", async () => {
@@ -85,16 +78,10 @@ describe("native candidate retry", () => {
     await opencomputerMain();
     expect(mocks.get).toHaveBeenCalledWith("candidate");
     expect(mocks.exec).toHaveBeenCalledWith(
-      expect.stringContaining(`--expected-recipe ${"a".repeat(64)}`),
+      expect.stringContaining(`--expected-input-hash ${"a".repeat(64)}`),
       expect.anything()
     );
-    expect(mocks.record).toHaveBeenCalledWith(
-      "/unused",
-      "opencomputer",
-      expect.any(String),
-      "candidate",
-      { passed: true }
-    );
+    expect(mocks.record).toHaveBeenCalledWith("candidate");
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.kill).toHaveBeenCalledOnce();
   });

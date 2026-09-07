@@ -26,8 +26,6 @@ module "modal_app" {
   deploy_path                  = "${var.project_root}/packages/modal-infra"
   deploy_module                = "deploy"
   source_hash                  = data.external.modal_source_hash[0].result.hash
-  selected_image_id            = try(local.sandbox_base_releases.modal.artifact.reference, "")
-  selected_recipe_digest       = try(local.sandbox_base_releases.modal.identity.recipeDigest, "")
 
   secrets = [
     {

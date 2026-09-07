@@ -26,7 +26,8 @@ uv run --frozen python -m src.bootstrap
 
 Re-run `bootstrap` whenever `packages/sandbox-runtime` or the sandbox toolchain changes. The script
 creates a uniquely named candidate and verifies a fresh restore. It never deletes the selected
-snapshot. Follow the shared package's build/promote/rollback workflow to select it.
+snapshot. The command returns a verified reference; deployment selects it through the existing
+provider settings. See the [shared build workflow](../sandbox-images/README.md).
 
 > **Note**: Snapshot builds are automated via Terraform when `sandbox_provider = "daytona"`. The
 > `daytona-infra` Terraform module triggers a rebuild whenever source files change. Manual runs are

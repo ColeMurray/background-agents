@@ -63,9 +63,6 @@ export interface ImageBuildStartCallbacks {
  * an unversioned image must never pass the floor check.
  */
 export interface CompleteImageBuildCallback {
-  baseRecipeDigest?: string;
-  baseInventoryDigest?: string;
-  imageTarget?: string;
   buildId: string;
   providerSessionId: string;
   repositoryShas: RepositoryShaEntry[];

@@ -83,26 +83,4 @@ describe("image build finalization jobs", () => {
 
     expect(reordered).toEqual(ordered);
   });
-
-  it("binds additive image identity into the completion hash", async () => {
-    const completion = {
-      buildId: "build-1",
-      providerSessionId: "session-1",
-      repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "sha" }],
-      runtimeVersion: "v62",
-      buildDurationSeconds: 1,
-      baseRecipeDigest: "a".repeat(64),
-      baseInventoryDigest: "b".repeat(64),
-      imageTarget: "e2b",
-    };
-    const first = await createImageBuildFinalizationJob({ outcome: "success", completion });
-    const changed = await createImageBuildFinalizationJob({
-      outcome: "success",
-      completion: {
-        ...completion,
-        baseInventoryDigest: "c".repeat(64),
-      },
-    });
-    expect(changed.completionHash).not.toBe(first.completionHash);
-  });
 });

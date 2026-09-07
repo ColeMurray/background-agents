@@ -43,8 +43,8 @@ variable "source_hash" {
   type        = string
 }
 
-variable "recipe_hash" {
-  description = "Installed-image identity, separate from build orchestration invalidation"
+variable "image_input_hash" {
+  description = "Installation-input cache key, separate from the build-tooling trigger"
   type        = string
   default     = ""
 }

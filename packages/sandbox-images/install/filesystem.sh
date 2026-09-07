@@ -21,3 +21,5 @@ cp "$OI_BUNDLE/packages/sandbox-images/toolchain.json" /app/openinspect-toolchai
 chown -R "$OI_RUNTIME_USER:$(id -gn "$OI_RUNTIME_USER")" /workspace /tmp/opencode /app/plugins \
   "$OI_RUNTIME_HOME/.local" "$OI_RUNTIME_HOME/.npm-global" "$OI_RUNTIME_HOME/.npm-cache" \
   "$OI_RUNTIME_HOME/.config" "$OI_RUNTIME_HOME/.cache" "$OI_RUNTIME_HOME/.agent-browser"
+
+/opt/openinspect/python/bin/python -c 'import json; from pathlib import Path; plan = json.loads(Path("/app/openinspect-image-plan.json").read_text()); Path("/app/openinspect-runtime-environment.json").write_text(json.dumps(plan["runtimeEnv"]))'

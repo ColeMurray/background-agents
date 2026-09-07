@@ -13,7 +13,6 @@ import type {
 import { ImageBuildFinalizationStore } from "./image-build-finalization";
 import type { SqlDatabase } from "./sql-database";
 import { parseRepositoryShasJson } from "../image-builds/provenance";
-import type { BaseRelease } from "../sandbox/base-release";
 
 /** D1 caps bound parameters per statement; IN-list queries chunk below it. */
 const MAX_SCOPE_IDS_PER_QUERY = 50;
@@ -38,10 +37,6 @@ const STATUS_VIEW_KEYS = [
   "repositories_fingerprint",
   "repository_shas",
   "runtime_version",
-  "base_release_id",
-  "base_recipe_digest",
-  "base_inventory_digest",
-  "image_target",
   "build_duration_seconds",
   "error_message",
   "created_at",
@@ -61,7 +56,6 @@ const STALE_BUILD_TIMEOUT_MESSAGE = "build timed out (no callback received)";
 
 /** Registration input for a new building row. */
 export interface ImageBuildRegistration {
-  baseRelease?: BaseRelease;
   id: string;
   scope: ImageBuildScope;
   provider: ImageBuildProvider;
@@ -72,10 +66,6 @@ export interface ImageBuildRegistration {
 
 /** Public-safe D1 projection retained in storage encoding inside persistence. */
 interface ImageBuildStatusRow {
-  base_release_id?: string | null;
-  base_recipe_digest?: string | null;
-  base_inventory_digest?: string | null;
-  image_target?: string | null;
   id: string;
   scope_kind: ImageBuildScopeKind;
   scope_id: string;
@@ -99,14 +89,6 @@ function toImageBuildRecordView(row: ImageBuildStatusRow): ImageBuildRecordView 
     repositoriesFingerprint: row.repositories_fingerprint,
     repositoryShas: parseRepositoryShasJson(row.repository_shas),
     runtimeVersion: row.runtime_version,
-    ...(row.base_recipe_digest
-      ? {
-          baseReleaseId: row.base_release_id ?? null,
-          baseRecipeDigest: row.base_recipe_digest,
-          baseInventoryDigest: row.base_inventory_digest ?? null,
-          imageTarget: row.image_target ?? null,
-        }
-      : {}),
     buildDurationSeconds: row.build_duration_seconds,
     errorMessage: row.error_message,
     createdAt: row.created_at,
@@ -255,10 +237,9 @@ export class ImageBuildStore {
            status,
            callback_token_hash,
            callback_token_expires_at,
-           base_release_id, base_recipe_digest, base_inventory_digest, image_target,
            created_at
          )
-         SELECT ?, ?, ?, ?, ?, '[]', ?, 'building', ?, ?, ?, ?, ?, ?, ?
+         SELECT ?, ?, ?, ?, ?, '[]', '', 'building', ?, ?, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM image_builds
            WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'building'
@@ -270,13 +251,8 @@ export class ImageBuildStore {
         build.scope.id,
         build.provider,
         build.repositoriesFingerprint,
-        build.baseRelease?.identity.runtimeVersion ?? "",
         build.callbackTokenHash ?? null,
         build.callbackTokenExpiresAt ?? null,
-        build.baseRelease?.baseReleaseId ?? null,
-        build.baseRelease?.identity.recipeDigest ?? null,
-        build.baseRelease?.identity.inventoryDigest ?? null,
-        build.baseRelease?.identity.target ?? null,
         Date.now(),
         build.scope.kind,
         build.scope.id,
@@ -324,25 +300,16 @@ export class ImageBuildStore {
   async hasReadyImageForFingerprint(
     scope: ImageBuildScope,
     provider: ImageBuildProvider,
-    repositoriesFingerprint: string,
-    baseReleaseId?: string
+    repositoriesFingerprint: string
   ): Promise<boolean> {
     const row = await this.db
       .prepare(
         `SELECT 1 AS present FROM image_builds
          WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'ready'
            AND repositories_fingerprint = ?
-           AND (? IS NULL OR base_release_id = ?)
          LIMIT 1`
       )
-      .bind(
-        scope.kind,
-        scope.id,
-        provider,
-        repositoriesFingerprint,
-        baseReleaseId ?? null,
-        baseReleaseId ?? null
-      )
+      .bind(scope.kind, scope.id, provider, repositoriesFingerprint)
       .first<{ present: number }>();
     return row !== null;
   }

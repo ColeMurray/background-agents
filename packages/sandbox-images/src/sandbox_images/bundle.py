@@ -222,10 +222,10 @@ def plan_image(root: Path, provider: str) -> dict[str, Any]:
     build_inputs = _collect_inputs(root, build_paths)
     return {
         **identity,
-        "recipeDigest": recipe,
+        "inputHash": recipe,
         "buildInputs": build_inputs,
-        "buildDigest": hashlib.sha256(
-            canonical_json({"recipeDigest": recipe, "inputs": build_inputs}).encode()
+        "buildHash": hashlib.sha256(
+            canonical_json({"inputHash": recipe, "inputs": build_inputs}).encode()
         ).hexdigest(),
     }
 
@@ -235,7 +235,7 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> Path:
     update_locks(root, check=True)
     plan = plan_image(root, provider)
     output_root.mkdir(parents=True, exist_ok=True)
-    destination = output_root / f"{provider}-{plan['recipeDigest']}"
+    destination = output_root / f"{provider}-{plan['inputHash']}"
     # Never mutate an existing bundle: native builders may still be reading it.
     staging = Path(tempfile.mkdtemp(prefix=f"{provider}-", dir=output_root))
     try:
@@ -249,7 +249,7 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> Path:
                 shutil.copyfile(source, target)
                 target.chmod(entry["mode"])
         image_plan = {
-            key: value for key, value in plan.items() if key not in ("buildInputs", "buildDigest")
+            key: value for key, value in plan.items() if key not in ("buildInputs", "buildHash")
         }
         (staging / "image-plan.json").write_text(canonical_json(image_plan) + "\n")
         toolchain = read_json(root / IMAGE_PACKAGE / "toolchain.json")

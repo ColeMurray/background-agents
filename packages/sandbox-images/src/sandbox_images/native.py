@@ -9,23 +9,23 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .bundle import PROVIDERS
 from .locks import update_locks
-from .releases import validate_record
 
 
-def native_operation(
-    root: Path, provider: str, candidate: dict[str, Any] | None = None
-) -> dict[str, Any]:
+def native_operation(root: Path, provider: str, reference: str | None = None) -> dict[str, Any]:
+    if provider not in PROVIDERS:
+        raise ValueError("Unknown image provider")
+    if reference is not None and (not isinstance(reference, str) or not reference.strip()):
+        raise ValueError("Verification requires a non-empty artifact reference")
     update_locks(root, check=True)
     environment = dict(os.environ)
-    if candidate is not None:
-        validate_record(candidate)
-        if candidate["artifact"]["provider"] != provider:
-            raise ValueError("Candidate provider mismatch")
-        environment["OPENINSPECT_VERIFY_REFERENCE"] = candidate["artifact"]["reference"]
-        environment["OPENINSPECT_EXPECTED_RECIPE"] = candidate["identity"]["recipeDigest"]
-        environment.setdefault("DAYTONA_BASE_SNAPSHOT", candidate["artifact"]["reference"])
-        environment.setdefault("E2B_TEMPLATE_ID", candidate["artifact"]["reference"])
+    # A build must not accidentally inherit a verification-only operation.
+    environment.pop("OPENINSPECT_VERIFY_REFERENCE", None)
+    if reference is not None:
+        environment["OPENINSPECT_VERIFY_REFERENCE"] = reference
+        environment.setdefault("DAYTONA_BASE_SNAPSHOT", reference)
+        environment.setdefault("E2B_TEMPLATE_ID", reference)
     commands = {
         "modal": (
             root / "packages/modal-infra",
@@ -47,14 +47,27 @@ def native_operation(
         subprocess.run(
             ["npm", "run", "build", "-w", f"@open-inspect/{provider}-infra"], cwd=root, check=True
         )
-    with tempfile.TemporaryDirectory(prefix="openinspect-candidate-") as directory:
-        output = Path(directory) / "candidate.json"
+    with tempfile.TemporaryDirectory(prefix="openinspect-image-") as directory:
+        output = Path(directory) / "result.json"
         environment["OPENINSPECT_IMAGE_RESULT"] = str(output)
         environment["OPENINSPECT_REPO_ROOT"] = str(root)
         cwd, command = commands[provider]
         subprocess.run(command, cwd=cwd, env=environment, check=True)
-        record = json.loads(output.read_text())
-        validate_record(record)
-        if candidate is not None and record["baseReleaseId"] != candidate["baseReleaseId"]:
-            raise ValueError("Restored artifact no longer matches its recorded release")
-        return record
+        result = json.loads(output.read_text())
+        if not isinstance(result.get("reference"), str) or not result["reference"].strip():
+            raise ValueError("Build did not return an artifact reference")
+        if reference is not None and result["reference"] != reference:
+            raise ValueError("Verification returned a different artifact")
+        return result
+
+
+def write_build_result(reference: str) -> None:
+    """Return a verified native reference; deployment owns its selection."""
+    result = {"reference": reference}
+    output = os.environ.get("OPENINSPECT_IMAGE_RESULT")
+    if output:
+        path = Path(output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result) + "\n")
+    else:
+        print(json.dumps(result))

@@ -28,26 +28,6 @@ function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordVie
 }
 
 describe("evaluateImageBuildRebuildPolicy", () => {
-  it("rebuilds release drift without changing the runtime compatibility floor", () => {
-    const legacy = row();
-    expect(evaluateImageBuildRebuildPolicy(unit, [legacy], "modal", "new-release")).toEqual({
-      type: "rebuild",
-      reason: "base_release_changed",
-    });
-    expect(evaluateImageBuildRebuildPolicy(unit, [legacy], "modal").type).toBe("check_branches");
-    expect(
-      evaluateImageBuildRebuildPolicy(
-        unit,
-        [row({ baseReleaseId: "new-release" })],
-        "modal",
-        "new-release"
-      ).type
-    ).toBe("check_branches");
-    expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ status: "building" })], "modal", "new-release")
-        .type
-    ).toBe("skip");
-  });
   it("skips an active build for the active provider", () => {
     expect(evaluateImageBuildRebuildPolicy(unit, [row({ status: "building" })], "modal")).toEqual({
       type: "skip",

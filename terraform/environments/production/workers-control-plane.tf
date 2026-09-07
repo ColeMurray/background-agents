@@ -108,7 +108,6 @@ module "control_plane_worker" {
       { name = "APP_NAME", value = var.app_name },
       { name = "GITHUB_BOT_USERNAME", value = var.github_bot_username },
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
-      { name = "SANDBOX_BASE_RELEASES", value = module.sandbox_image_selection.json },
       { name = "SANDBOX_INACTIVITY_TIMEOUT_MS", value = tostring(var.sandbox_inactivity_timeout_ms) },
     ],
     local.github_oauth_enabled ? [
@@ -124,7 +123,7 @@ module "control_plane_worker" {
     ] : [],
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_URL", value = var.daytona_api_url },
-      { name = "DAYTONA_BASE_SNAPSHOT", value = var.daytona_base_snapshot },
+      { name = "DAYTONA_BASE_SNAPSHOT", value = module.daytona_infra[0].snapshot_name },
     ] : [],
     local.use_daytona_backend && var.daytona_target != "" ? [
       { name = "DAYTONA_TARGET", value = var.daytona_target },
@@ -158,7 +157,7 @@ module "control_plane_worker" {
     ] : [],
     local.use_e2b_backend ? [
       { name = "E2B_API_URL", value = var.e2b_api_url },
-      { name = "E2B_TEMPLATE_ID", value = var.e2b_template_id },
+      { name = "E2B_TEMPLATE_ID", value = module.e2b_infra[0].template_id },
       { name = "E2B_SANDBOX_TIMEOUT_SECONDS", value = tostring(var.e2b_sandbox_timeout_seconds) },
       { name = "E2B_AUTO_PAUSE", value = tostring(var.e2b_auto_pause) },
     ] : []
@@ -237,15 +236,14 @@ module "control_plane_worker" {
   # and the draft sweep ABANDONED_DRAFT_SWEEP_CRON in abandoned-draft-sweep.ts.
   cron_triggers = ["* * * * *", "7,37 * * * *", "23 * * * *"]
 
-  # module.e2b_infra is deliberately absent: its template build depends on THIS
-  # worker instead (see e2b.tf), so control-plane deploys land before template
-  # rebuilds — the compatible order for E2B boots.
+  # Base artifacts are verified before the Worker switches its provider references.
   depends_on = [
     null_resource.control_plane_build,
     module.session_index_kv,
     null_resource.d1_migrations,
     module.linear_bot_worker,
     module.daytona_infra,
+    module.e2b_infra,
     module.vercel_sandbox_infra,
     module.opencomputer_infra,
     module.modal_app,

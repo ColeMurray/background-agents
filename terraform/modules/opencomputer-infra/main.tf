@@ -6,7 +6,7 @@
 locals {
   # OpenComputer references templates by exact name (createSandbox sends `snapshot: <name>`),
   # Keep names tied to installed inputs. Orchestration changes re-verify the same candidate.
-  snapshot_name = "openinspect-runtime-${substr(var.recipe_hash != "" ? var.recipe_hash : var.source_hash, 0, 16)}"
+  snapshot_name = "openinspect-runtime-${substr(var.image_input_hash != "" ? var.image_input_hash : var.source_hash, 0, 16)}"
 }
 
 resource "null_resource" "opencomputer_base_snapshot" {
@@ -29,7 +29,6 @@ resource "null_resource" "opencomputer_base_snapshot" {
       OPENCOMPUTER_API_KEY        = var.api_key
       OPENCOMPUTER_TEMPLATE       = local.snapshot_name
       OPENINSPECT_IMAGE_CANDIDATE = local.snapshot_name
-      OPENINSPECT_IMAGE_RESULT    = "${var.project_root}/.cache/sandbox-image-candidates/opencomputer.json"
     }
   }
 }

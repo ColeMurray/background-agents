@@ -169,14 +169,9 @@ Create an R2 API Token:
    - **Sandboxes**: Read, Write (runtime sandbox management and preview URLs)
    - **Snapshots**: Read, Write, Delete (automated snapshot builds via Terraform)
 2. Note the **API URL** (e.g., `https://app.daytona.io/api`) and optional **target**
-3. Build and verify a base snapshot candidate before pointing traffic at Daytona:
-   ```bash
-   npm run sandbox:images -- build --provider daytona --output /tmp/daytona-candidate.json
-   npm run sandbox:images -- promote --candidate /tmp/daytona-candidate.json \
-     --store terraform/environments/production/sandbox-images.lock.json
-   ```
-   Review and commit the selection before deployment. See the
-   [sandbox image workflow](../packages/sandbox-images/README.md) for updates and rollback.
+3. Terraform builds and verifies a new base snapshot before switching the Worker to it. See the
+   [sandbox image workflow](../packages/sandbox-images/README.md) for dependency updates and manual
+   builds.
 4. Set `sandbox_provider = "daytona"` in `terraform.tfvars`
 5. Set `daytona_api_url`, `daytona_api_key`, and `daytona_base_snapshot` in `terraform.tfvars`
 

@@ -36,9 +36,7 @@ resource "null_resource" "modal_secrets" {
 resource "null_resource" "modal_deploy" {
   triggers = {
     # Re-deploy when source files change
-    source_hash            = var.source_hash
-    selected_image_id      = var.selected_image_id
-    selected_recipe_digest = var.selected_recipe_digest
+    source_hash = var.source_hash
     # Re-deploy when app name changes
     app_name = var.app_name
     # Re-deploy when Modal environment changes
@@ -52,15 +50,12 @@ resource "null_resource" "modal_deploy" {
     interpreter = ["bash"]
 
     environment = {
-      MODAL_TOKEN_ID              = var.modal_token_id
-      MODAL_TOKEN_SECRET          = var.modal_token_secret
-      MODAL_ENVIRONMENT           = var.modal_environment
-      APP_NAME                    = var.app_name
-      DEPLOY_PATH                 = var.deploy_path
-      DEPLOY_MODULE               = var.deploy_module
-      OPENINSPECT_DEPLOY_IMAGE_ID = var.selected_image_id
-      OPENINSPECT_EXPECTED_RECIPE = var.selected_recipe_digest
-      OPENINSPECT_IMAGE_RESULT    = "${var.deploy_path}/../../.cache/sandbox-image-candidates/modal.json"
+      MODAL_TOKEN_ID     = var.modal_token_id
+      MODAL_TOKEN_SECRET = var.modal_token_secret
+      MODAL_ENVIRONMENT  = var.modal_environment
+      APP_NAME           = var.app_name
+      DEPLOY_PATH        = var.deploy_path
+      DEPLOY_MODULE      = var.deploy_module
     }
   }
 

@@ -1,128 +1,86 @@
 # Sandbox images
 
 One build-only package owns platform dependencies for Modal, Daytona, E2B, Vercel, and OpenComputer.
-Provider adapters own native creation, environment overlays, snapshots, verification restores, and
-cleanup. Repository setup hooks and session lifecycle remain in their existing packages.
+Provider adapters own native creation, uploads, snapshots, restores, provider overlays, and cleanup.
+The control plane does not consume build hashes or dependency inventories.
 
-## Updating dependencies
+## Update dependencies
 
 From the repository root, with Python 3.12+, uv 0.9.7, Node 22+, and npm installed:
 
 ```bash
-# Change toolchain.json for platform tools, or sandbox-runtime/pyproject.toml for runtime Python dependencies.
-# When changing Python requirements, first run: uv lock --project packages/sandbox-runtime
+# Edit toolchain.json, or sandbox-runtime/pyproject.toml for runtime dependencies.
+# For changed runtime Python requirements, first run:
+uv lock --project packages/sandbox-runtime
 npm run sandbox:images -- lock
 npm run sandbox:images -- lock --check
 npm run sandbox:images -- plan --provider all
 ```
 
-`toolchain.json` owns exact tool versions and downloaded archive checksums. `targets.json` owns
-native substrate and runtime-user differences. `locks/` contains frozen npm closures and
-hash-checked Python exports. `runtime-environments.json` is generated build configuration. Each
-image bakes its own launch environment; its runtime applies those paths before starting services,
-without activating the infrastructure Python venv for project commands. Workers retain legacy
-bootstrap defaults for old images and do not import this build configuration. Do not edit generated
-files directly. Ordinary builds never resolve new versions. To intentionally refresh distro packages
-without changing language dependencies, change `osRefresh` in the toolchain manifest.
+`toolchain.json` owns tool versions and archive checksums. `targets.json` owns native substrate and
+runtime-user differences. `locks/` contains frozen npm closures and hash-checked Python exports.
+`runtime-environments.json` is generated build configuration, not Worker configuration. Ordinary
+builds do not resolve new dependency versions. To intentionally refresh distro packages, change
+`osRefresh`. OS packages remain substrate-dependent; builds are not byte-for-byte attestations.
 
-The runtime wheel is built from staged source in an isolated, frozen build-tool venv, then installed
-without dependency resolution into its separate runtime venv. OS package versions remain
-substrate-dependent and are recorded in the inventory. Vercel's Amazon Linux target records video
-encoding as unavailable when its repositories lack ffmpeg; agent, browser, desktop, editor,
-terminal, and SCM tools are mandatory. Platform installs are image-build-only, never session startup
-work.
+Each image owns its launch paths. Infrastructure Python is private and is not activated as the
+project virtualenv. Existing images retain their legacy launch environment.
 
-## Build, verify, promote
+## Build and verify
 
-Install workspace packages with `npm ci` for the Node-based adapters. Provide the same provider
-credentials used by the existing infrastructure scripts:
+Install workspace dependencies with `npm ci` for Node adapters. Native operations require provider
+credentials and create billable temporary sandboxes; they do not deploy the control plane.
 
-| Provider     | Required configuration                                                                 |
-| ------------ | -------------------------------------------------------------------------------------- |
-| Modal        | Modal CLI credentials and the intended Modal environment                               |
-| Daytona      | `DAYTONA_API_KEY`, `DAYTONA_BASE_SNAPSHOT` (candidate prefix); optional API URL/target |
-| E2B          | `E2B_API_KEY`, `E2B_TEMPLATE_ID` (candidate prefix); optional API URL/CPU/memory       |
-| Vercel       | `VERCEL_TOKEN`, `VERCEL_PROJECT_ID`; optional team/API URL                             |
-| OpenComputer | `OPENCOMPUTER_API_KEY`; optional API URL/template prefix                               |
-
-Native operations create billable temporary sandboxes. They do not deploy the control plane or
-replace the selected image. Failed verification exits nonzero without publishing a candidate record.
-Temporary verification sandboxes are terminated; candidates remain available for investigation and
-explicit cleanup.
+| Provider     | Configuration                                                               |
+| ------------ | --------------------------------------------------------------------------- |
+| Modal        | Modal CLI credentials and intended environment                              |
+| Daytona      | DAYTONA_API_KEY, DAYTONA_BASE_SNAPSHOT name prefix; optional API URL/target |
+| E2B          | E2B_API_KEY, E2B_TEMPLATE_ID name prefix; optional API URL/CPU/memory       |
+| Vercel       | VERCEL_TOKEN, VERCEL_PROJECT_ID; optional team/API URL                      |
+| OpenComputer | OPENCOMPUTER_API_KEY; optional API URL/template prefix                      |
 
 ```bash
-npm run sandbox:images -- build --provider e2b --output /tmp/e2b-candidate.json
-npm run sandbox:images -- verify --provider e2b --candidate /tmp/e2b-candidate.json
-npm run sandbox:images -- promote --candidate /tmp/e2b-candidate.json \
-  --store terraform/environments/production/sandbox-images.lock.json
+npm run sandbox:images -- build --provider e2b --output /tmp/e2b-image.json
+# Output is {"reference":"<verified-native-reference>"}.
+npm run sandbox:images -- verify --provider e2b --reference '<verified-native-reference>'
 ```
 
-Review and **commit** the release lock before deploying. It retains immutable release records, the
-selected release, and the previous selection. Keep a separate lock per deployment/account. Candidate
-JSON contains no credentials but includes native references and dependency inventory; treat it as
-operational metadata. CI candidate artifacts expire and are only a transport into the durable Git
-lock.
+Verification checks against the current checkout's installation inputs. To verify an older artifact,
+use the checkout that built it. There are no candidate record schemas, release IDs, inventory
+digests, promotion commands, or release locks.
 
-Terraform projects selected records into compact `SANDBOX_BASE_RELEASES` configuration; Node hosts
-can set the same JSON map. Each entry contains `schemaVersion`, `baseReleaseId`, `artifact`
-(provider/scope/reference), and `identity` (recipeDigest/inventoryDigest/target/runtimeVersion).
-Full inventories and verification evidence stay in the release lock, not Worker bindings. Terraform
-rejects configuration larger than 5,000 UTF-8 bytes. Modal additionally deploys its function
-environment with the selected native image ID. Recipe changes alone never advance a compatibility
-floor.
+Every build verifies a fresh native restore before returning the reference. Checks include isolated
+Python imports, exact pinned tool versions, plugin loading, writable user paths, SCM helpers,
+OpenCode health, code-server, ttyd, Chromium screenshots, user-global pnpm execution, and the full
+desktop WebSocket/RFB chain. Vercel may lack the optional ffmpeg encoder.
 
-### Staged first rollout
+Manual builds use unique names. Terraform supplies deterministic names; retries re-verify retained
+artifacts instead of overwriting them. Temporary verification sandboxes are terminated, including on
+failure. Failed native artifacts remain for investigation and explicit cleanup.
 
-1. Apply migration 0075 before deploying the new control plane.
-2. Deploy the compatible launch/readers, retaining existing provider settings. E2B's
-   worker-before-template dependency is preserved.
-3. Build and verify a candidate for each enabled provider, review and commit its selection, then
-   deploy. Daytona/E2B candidate creation no longer overwrites their old configured
-   snapshot/template names. A first installation must select the new candidate before it can serve
-   sessions.
-4. Allow prepared repository images to rebuild. Registration captures the selected base release;
-   callbacks must match its recipe, inventory, and target.
-5. Test fresh sessions, repository-image creation, restore/pause, and services in the deployment's
-   real account before retiring old artifacts.
+## Deployment and refresh
 
-With an empty selection lock, existing provider configuration remains the legacy fallback. Existing
-managed Modal/Vercel/OpenComputer Terraform builds still use their verified managed artifacts;
-adding a release-lock selection makes promotion explicit and enables release-aware repository-image
-refresh. Saved session snapshots are not invalidated merely because a base release changes.
+Terraform uses the shared build-input hash for change detection and the existing provider bindings
+for artifact selection. Modal passes the verified native image ID to function deployment; other
+providers use verified template/snapshot references. E2B and Daytona now build distinct names before
+switching their existing Worker bindings. The configured E2B/Daytona base names act as prefixes.
+Vercel/OpenComputer retain their existing manual-reference overrides.
 
-### Rollback
+For manual deployment, use the returned reference in the provider's existing configuration; do not
+assume building alone redirects sessions. Roll back using a previous known-good configuration and
+retained artifact. Do not delete artifacts still referenced by sessions or prepared images.
 
-```bash
-npm run sandbox:images -- rollback --provider e2b \
-  --store terraform/environments/production/sandbox-images.lock.json
-```
+**Prepared repository images do not automatically refresh when the base toolchain changes.** Use the
+existing repository/environment image-build workflow to rebuild them after dependency-only updates
+when needed. Runtime compatibility floors and saved-session behavior are unchanged. This package
+adds no database columns or callback fields.
 
-Review/commit and redeploy. Rollback changes selection, not image contents. Retain old native
-artifacts while they are selected, previous, or referenced by saved sessions/prepared images. There
-is intentionally no automatic artifact deletion. Re-verify an old candidate before rollback if its
-provider may have expired it.
+## Build implementation and local validation
 
-## Verification and local development
-
-`plan` separates installed `inputs`/`recipeDigest` from orchestration `buildInputs`/`buildDigest`.
-`pack` stages only installation inputs: runtime skills/assets, installers, verification, and locks.
-Provider adapters and build tooling stay outside the image. `hash` returns the build trigger as
-`hash` and installed identity as `recipe`; Terraform uses recipe-based candidate names so changes to
-orchestration can re-verify existing artifacts. The root npm lock is conservatively tracked in Node
-builders' build inputs, never their installed recipe. Modal's explicit `CACHE_BUSTER` remains an
-installed recipe input. Missing inputs and escaping symlinks fail closed, and existing bundles are
-never overwritten while a native build may still be reading them.
-
-The baked `/app/openinspect-image.json` separates recipe digest, measured inventory, and runtime
-compatibility generation. A release ID additionally includes the native reference and provider
-scope. Runtime ready events and image-build callbacks read installed files; a launch-time version
-label cannot attest to an image. Legacy launch shims read the legacy image's adjacent runtime
-manifest.
-
-Every candidate must pass service verification after a fresh native restore: isolated Python
-imports, pinned tool execution, plugin loading, writable user paths, SCM wrapper/helper, OpenCode
-health, code-server, ttyd, Chromium screenshots, and the Xvfb/Fluxbox/VNC/noVNC chain. Optional
-missing capabilities are recorded.
+`pack` stages installation inputs only. The installation-input hash names isolated bundles and
+checks retained artifacts during native build retries. The build-trigger hash additionally covers
+provider orchestration. Both stay private to build tooling. Extra files in cached bundles are
+rejected rather than accidentally uploaded.
 
 ```bash
 uv run --frozen --project packages/sandbox-images --extra dev pytest packages/sandbox-images/tests
@@ -131,6 +89,8 @@ docker build --platform linux/amd64 -f packages/sandbox-images/Dockerfile -t ope
 docker run --rm --platform linux/amd64 openinspect-image-contract
 ```
 
-The reference image supports an Amazon Linux substrate via `--build-arg BASE_IMAGE=amazonlinux:2023`
-with a Vercel bundle. Native-amd64 CI checks both OS families; Chromium can trap under QEMU amd64
-emulation on ARM Macs. Reference-container success does not replace provider-native verification.
+For Amazon Linux, use a Vercel bundle and `--build-arg BASE_IMAGE=amazonlinux:2023`. Native-amd64 CI
+tests both OS families. Chromium may trap under amd64 emulation on ARM Macs. Reference-container
+success does not replace provider-native verification.
+
+See [design scope](../../docs/plans/sandbox-image-dependency-consolidation.md).

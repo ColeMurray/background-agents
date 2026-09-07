@@ -456,12 +456,7 @@ describe("ImageBuildWorkflow", () => {
       const result = await workflow.triggerBuildIfStale(ENV_SCOPE, ctx);
 
       expect(result).toEqual({ type: "up_to_date" });
-      expect(store.hasReadyImageForFingerprint).toHaveBeenCalledWith(
-        ENV_SCOPE,
-        "modal",
-        "fp-1",
-        undefined
-      );
+      expect(store.hasReadyImageForFingerprint).toHaveBeenCalledWith(ENV_SCOPE, "modal", "fp-1");
       expect(store.registerBuild).not.toHaveBeenCalled();
       // A no-op save must not decrypt secrets or mint clone tokens.
       expect(planBuild).not.toHaveBeenCalled();

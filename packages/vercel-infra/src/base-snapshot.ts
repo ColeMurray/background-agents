@@ -25,7 +25,7 @@ const PREPARE_RUNTIME_UPLOAD_TIMEOUT_MS = 30_000;
 const BOOTSTRAP_TIMEOUT_MS = 20 * 60 * 1000;
 
 export interface BuildVercelBaseSnapshotConfig {
-  recipeDigest: string;
+  inputHash: string;
   runtime?: string;
   runtimeArchive: Uint8Array;
   runtimeExtractDir?: string;
@@ -37,7 +37,6 @@ export interface BuildVercelBaseSnapshotConfig {
 }
 
 export interface BuildVercelBaseSnapshotResult {
-  verification: unknown;
   snapshotId: string;
   sandboxName: string;
   sessionId: string;
@@ -47,7 +46,7 @@ export async function buildVercelBaseSnapshot(
   client: VercelSandboxClient,
   config: BuildVercelBaseSnapshotConfig
 ): Promise<BuildVercelBaseSnapshotResult> {
-  if (!/^[a-f0-9]{64}$/.test(config.recipeDigest)) throw new Error("Invalid image recipe digest");
+  if (!/^[a-f0-9]{64}$/.test(config.inputHash)) throw new Error("Invalid image recipe digest");
   const runtimeExtractDir = config.runtimeExtractDir || VERCEL_LOCAL_RUNTIME_EXTRACT_DIR;
   const runtimeSourceRef = config.sourceVersion || "local-checkout";
   const sandboxName =
@@ -128,12 +127,7 @@ export async function buildVercelBaseSnapshot(
       throw new Error(`Vercel base snapshot status was ${snapshot.snapshot.status}`);
     }
 
-    const verification = await verifyVercelSnapshot(
-      client,
-      snapshot.snapshot.id,
-      config.recipeDigest,
-      sandboxName
-    );
+    await verifyVercelSnapshot(client, snapshot.snapshot.id, config.inputHash, sandboxName);
 
     log.info("vercel_base_snapshot.created", {
       snapshot_id: snapshot.snapshot.id,
@@ -144,7 +138,6 @@ export async function buildVercelBaseSnapshot(
     });
 
     return {
-      verification,
       snapshotId: snapshot.snapshot.id,
       sandboxName,
       sessionId,
@@ -184,10 +177,10 @@ function shellQuote(value: string): string {
 export async function verifyVercelSnapshot(
   client: VercelSandboxClient,
   snapshotId: string,
-  recipeDigest: string,
+  inputHash: string,
   name = "openinspect-verify"
-): Promise<unknown> {
-  if (!/^[a-f0-9]{64}$/.test(recipeDigest)) throw new Error("Invalid image recipe digest");
+): Promise<void> {
+  if (!/^[a-f0-9]{64}$/.test(inputHash)) throw new Error("Invalid image recipe digest");
   const restored = await client.createSandbox(
     {
       name: `${name}-verify`,
@@ -197,7 +190,6 @@ export async function verifyVercelSnapshot(
     },
     undefined
   );
-  let verification: unknown;
   try {
     const verified = await client.runCommandAndWait(
       {
@@ -205,7 +197,7 @@ export async function verifyVercelSnapshot(
         command: "bash",
         args: [
           "-lc",
-          `/opt/openinspect/python/bin/python /app/verify/image.py verify --expected-recipe ${recipeDigest} > /tmp/openinspect-image-report.json`,
+          `/opt/openinspect/python/bin/python /app/verify/image.py verify --expected-input-hash ${inputHash}`,
         ],
         sudo: true,
         timeoutMs: 240_000,
@@ -213,12 +205,7 @@ export async function verifyVercelSnapshot(
       undefined
     );
     if (verified.exitCode !== 0) throw new Error("Vercel fresh-artifact verification failed");
-    verification = JSON.parse(
-      await client.readTextFile(restored.session.id, "/tmp/openinspect-image-report.json")
-    );
   } finally {
     await client.stopSession(restored.session.id, undefined);
   }
-
-  return verification;
 }
