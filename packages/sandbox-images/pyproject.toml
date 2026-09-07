@@ -17,4 +17,3 @@ packages = ["src/sandbox_images"]
 
 [tool.ruff]
 extend = "../../ruff.toml"
-
