@@ -50,7 +50,7 @@ export function SessionTimeline({
   isProcessing,
   promptQueue = EMPTY_PROMPT_QUEUE,
   activePrompt,
-  hasMoreHistory = false,
+  hasMoreHistory,
   loadingHistory,
   showSkeleton,
   onLoadOlder,
