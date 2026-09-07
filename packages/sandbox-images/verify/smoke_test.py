@@ -232,9 +232,8 @@ def observed_tool_version(command: str, expected: str, output: str) -> str:
     return observed
 
 
-def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool) -> dict[str, Any]:
+def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool) -> None:
     probe = Probe(plan)
-    versions = {}
     for command, version in (
         ("node", tools["node"][plan["target"]["node"]]["version"]),
         ("opencode", tools["opencode"]),
@@ -246,7 +245,7 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
         ("google-chrome", tools["chrome"]["version"]),
     ):
         observed = probe.run([command, "--version"])
-        versions[command] = observed_tool_version(command, version, observed)
+        observed_tool_version(command, version, observed)
     installed_runtime = probe.run(
         [
             "python3",
@@ -322,17 +321,6 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
         finally:
             probe.run(["agent-browser", "--session", "openinspect-image-verify", "close"])
             Path("/tmp/openinspect-image-verify.png").unlink(missing_ok=True)
-    return {
-        "toolVersions": versions,
-        "capabilities": {
-            "agent": True,
-            "editor": True,
-            "terminal": True,
-            "browser": True,
-            "desktop": True,
-            "videoEncoding": video,
-        },
-    }
 
 
 def main() -> None:
@@ -344,8 +332,7 @@ def main() -> None:
     environment = json.loads(Path("/app/openinspect-runtime-environment.json").read_text())
     if environment != plan["runtimeEnv"]:
         raise RuntimeError("Baked launch environment does not match build configuration")
-    report = inspect_image(plan, tools, services=args.command == "verify")
-    print(json.dumps({"passed": True, **report, "servicesVerified": args.command == "verify"}))
+    inspect_image(plan, tools, services=args.command == "verify")
 
 
 if __name__ == "__main__":

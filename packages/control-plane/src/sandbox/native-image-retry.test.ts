@@ -78,7 +78,7 @@ describe("native candidate retry", () => {
     await opencomputerMain();
     expect(mocks.get).toHaveBeenCalledWith("candidate");
     expect(mocks.exec).toHaveBeenCalledWith(
-      expect.stringContaining("/app/verify/image.py verify"),
+      expect.stringContaining("/app/verify/smoke_test.py verify"),
       expect.anything()
     );
     expect(mocks.record).toHaveBeenCalledWith("candidate");

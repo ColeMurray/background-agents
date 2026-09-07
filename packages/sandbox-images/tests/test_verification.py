@@ -7,7 +7,55 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
-verification = runpy.run_path(str(Path(__file__).parents[1] / "verify/image.py"))
+verification = runpy.run_path(str(Path(__file__).parents[1] / "verify/smoke_test.py"))
+
+
+@pytest.mark.parametrize("command", ["install", "verify"])
+def test_smoke_test_uses_exit_status_without_success_report(monkeypatch, capsys, command):
+    main = verification["main"]
+    inspect = Mock()
+    monkeypatch.setitem(main.__globals__, "inspect_image", inspect)
+    monkeypatch.setattr(sys, "argv", ["smoke_test.py", command])
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        Mock(
+            side_effect=[
+                '{"runtimeEnv": {}}',
+                "{}",
+                "{}",
+            ]
+        ),
+    )
+
+    main()
+
+    inspect.assert_called_once_with({"runtimeEnv": {}}, {}, services=command == "verify")
+    assert capsys.readouterr().out == ""
+
+
+def test_smoke_test_preserves_failures(monkeypatch):
+    main = verification["main"]
+    monkeypatch.setitem(
+        main.__globals__,
+        "inspect_image",
+        Mock(side_effect=RuntimeError("Image service readiness timeout: opencode")),
+    )
+    monkeypatch.setattr(sys, "argv", ["smoke_test.py", "verify"])
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        Mock(
+            side_effect=[
+                '{"runtimeEnv": {}}',
+                "{}",
+                "{}",
+            ]
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Image service readiness timeout: opencode"):
+        main()
 
 
 @pytest.mark.parametrize(

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time
@@ -40,12 +39,11 @@ def main() -> None:
     )
     try:
         result = sandbox.process.exec(
-            "/opt/openinspect/python/bin/python /app/verify/image.py verify",
+            "/opt/openinspect/python/bin/python /app/verify/smoke_test.py verify",
             timeout=240,
         )
         if result.exit_code != 0:
             raise RuntimeError(f"Daytona image verification failed: {result.result}")
-        json.loads(result.result.strip().splitlines()[-1])
         write_build_result(name)
     finally:
         sandbox.delete()

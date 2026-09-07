@@ -50,15 +50,14 @@ def build_sandbox_image() -> None:
     try:
         process = sandbox.exec(
             "/opt/openinspect/python/bin/python",
-            "/app/verify/image.py",
+            "/app/verify/smoke_test.py",
             "verify",
             timeout=240,
         )
-        report_text = process.stdout.read()
+        process.stdout.read()
         process.wait()
         if process.returncode != 0:
             raise RuntimeError(f"Modal image verification failed: {process.stderr.read()}")
-        json.loads(report_text.strip().splitlines()[-1])
         write_build_result(base_image.object_id)
     finally:
         sandbox.terminate()

@@ -191,7 +191,7 @@ export async function verifyVercelSnapshot(
       {
         sessionId: restored.session.id,
         command: "bash",
-        args: ["-lc", `/opt/openinspect/python/bin/python /app/verify/image.py verify`],
+        args: ["-lc", `/opt/openinspect/python/bin/python /app/verify/smoke_test.py verify`],
         sudo: true,
         timeoutMs: 240_000,
       },

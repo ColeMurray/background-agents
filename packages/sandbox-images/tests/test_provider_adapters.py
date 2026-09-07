@@ -40,9 +40,7 @@ def test_e2b_retry_never_overwrites_existing_template(monkeypatch, build_mocks, 
     template_class.exists.return_value = retained
     template_class.build.return_value = SimpleNamespace(template_id="retained-name")
     sandbox = Mock()
-    sandbox.commands.run.return_value = SimpleNamespace(
-        exit_code=1 if failed else 0, stdout='{"passed":true}'
-    )
+    sandbox.commands.run.return_value = SimpleNamespace(exit_code=1 if failed else 0, stdout="")
     sandbox_class = Mock()
     sandbox_class.create.return_value = sandbox
     monkeypatch.setitem(
@@ -62,7 +60,7 @@ def test_e2b_retry_never_overwrites_existing_template(monkeypatch, build_mocks, 
         build_mocks.assert_called_once_with("retained-name")
     assert template_class.build.call_count == (0 if retained else 1)
     assert sandbox_class.create.call_args.kwargs["template"] == "retained-name"
-    assert sandbox.commands.run.call_args.args[0].endswith("/app/verify/image.py verify")
+    assert sandbox.commands.run.call_args.args[0].endswith("/app/verify/smoke_test.py verify")
     sandbox.kill.assert_called_once()
 
 
@@ -75,9 +73,7 @@ def test_daytona_retry_never_recreates_existing_snapshot(
     if not retained:
         client.snapshot.get.side_effect = FileNotFoundError("not found")
     sandbox = Mock()
-    sandbox.process.exec.return_value = SimpleNamespace(
-        exit_code=1 if failed else 0, result='{"passed":true}'
-    )
+    sandbox.process.exec.return_value = SimpleNamespace(exit_code=1 if failed else 0, result="")
     client.create.return_value = sandbox
     monkeypatch.setitem(
         sys.modules,
@@ -121,5 +117,5 @@ def test_daytona_retry_never_recreates_existing_snapshot(
         build_mocks.assert_called_once_with("retained-name")
     client.snapshot.get.assert_called_once_with("retained-name")
     assert create.call_count == (0 if retained else 1)
-    assert sandbox.process.exec.call_args.args[0].endswith("/app/verify/image.py verify")
+    assert sandbox.process.exec.call_args.args[0].endswith("/app/verify/smoke_test.py verify")
     sandbox.delete.assert_called_once()

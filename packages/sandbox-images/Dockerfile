@@ -12,6 +12,6 @@ COPY packages/sandbox-images/locks/plugins /tmp/openinspect-image/packages/sandb
 COPY packages/sandbox-images/install/tools.sh /tmp/openinspect-image/packages/sandbox-images/install/tools.sh
 RUN bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh tools
 COPY . /tmp/openinspect-image
-RUN bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh runtime filesystem && /opt/openinspect/python/bin/python /tmp/openinspect-image/packages/sandbox-images/verify/image.py install
+RUN bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh runtime filesystem && /opt/openinspect/python/bin/python /tmp/openinspect-image/packages/sandbox-images/verify/smoke_test.py install
 WORKDIR /workspace
-CMD ["/opt/openinspect/python/bin/python", "/app/verify/image.py", "verify"]
+CMD ["/opt/openinspect/python/bin/python", "/app/verify/smoke_test.py", "verify"]

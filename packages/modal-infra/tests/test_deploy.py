@@ -116,7 +116,7 @@ def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tm
     monkeypatch.setattr(deploy.modal.App, "lookup", lookup)
     monkeypatch.setattr(deploy, "base_image", Mock(build=build, object_id="im-verified"))
     process = Mock(returncode=0)
-    process.stdout.read.return_value = '{"passed": true, "servicesVerified": true}'
+    process.stdout.read.return_value = ""
     sandbox = Mock()
     sandbox.exec.return_value = process
     monkeypatch.setattr(deploy.modal.Sandbox, "create", Mock(return_value=sandbox))

@@ -15,7 +15,7 @@ printf '%s\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_crede
 chmod 0755 /usr/local/bin/oi-git-credentials
 git config --system credential.helper /usr/local/bin/oi-git-credentials
 git config --system credential.useHttpPath true
-cp "$OI_BUNDLE/packages/sandbox-images/verify/image.py" /app/verify/image.py
+cp "$OI_BUNDLE/packages/sandbox-images/verify/smoke_test.py" /app/verify/smoke_test.py
 cp "$OI_BUNDLE/build-config.json" /app/openinspect-build-config.json
 cp "$OI_BUNDLE/packages/sandbox-images/toolchain.json" /app/openinspect-toolchain.json
 chown -R "$OI_RUNTIME_USER:$(id -gn "$OI_RUNTIME_USER")" /workspace /tmp/opencode /app/plugins \

@@ -72,7 +72,7 @@ export async function main(): Promise<void> {
   const sandbox = await Sandbox.create({ apiUrl, apiKey, snapshot: name });
   try {
     const report = await sandbox.exec.run(
-      `sudo -E /opt/openinspect/python/bin/python /app/verify/image.py verify`,
+      `sudo -E /opt/openinspect/python/bin/python /app/verify/smoke_test.py verify`,
       { env: providerEnvironment, timeout: 240, timeoutMs: 250_000 }
     );
     if (report.exitCode !== 0)

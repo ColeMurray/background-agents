@@ -18,5 +18,5 @@ for OI_PHASE in "${phases[@]}"; do
   bash "$OI_INSTALL_DIR/$OI_PHASE.sh"
 done
 if (( $# == 0 )); then
-  /opt/openinspect/python/bin/python "$OI_BUNDLE/packages/sandbox-images/verify/image.py" install
+  /opt/openinspect/python/bin/python "$OI_BUNDLE/packages/sandbox-images/verify/smoke_test.py" install
 fi

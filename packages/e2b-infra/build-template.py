@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time
@@ -76,13 +75,12 @@ def main() -> None:
     )
     try:
         result = sandbox.commands.run(
-            "/opt/openinspect/python/bin/python /app/verify/image.py verify",
+            "/opt/openinspect/python/bin/python /app/verify/smoke_test.py verify",
             timeout=240,
             user="root",
         )
         if result.exit_code != 0:
             raise RuntimeError("E2B image verification failed")
-        json.loads(result.stdout.strip().splitlines()[-1])
         write_build_result(existing or build.template_id)
     finally:
         sandbox.kill()
