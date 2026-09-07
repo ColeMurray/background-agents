@@ -53,7 +53,7 @@ Create accounts on these services before continuing:
 ### Required Tools
 
 ```bash
-# Terraform (1.9.0+)
+# Terraform (1.14.0+; see terraform/environments/production/versions.tf)
 brew install terraform
 
 # Node.js (22+)
