@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { KeyedMutator } from "swr";
 import { toast } from "sonner";
 import type {
@@ -25,7 +25,11 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
 export function useSlackGlobalSettingsEditor(
   mutateSettings: KeyedMutator<SlackGlobalSettingsResponse>
 ) {
-  const [pendingKind, setPendingKind] = useState<MutationKind | null>(null);
+  const pendingMutationCount = useRef(0);
+  const [pending, setPending] = useState<Record<MutationKind, number>>({
+    defaults: 0,
+    routingRules: 0,
+  });
 
   const runMutation = async (
     kind: MutationKind,
@@ -33,7 +37,8 @@ export function useSlackGlobalSettingsEditor(
     successMessage: string,
     failureMessage: string
   ): Promise<boolean> => {
-    setPendingKind(kind);
+    pendingMutationCount.current += 1;
+    setPending((current) => ({ ...current, [kind]: current[kind] + 1 }));
     try {
       const response = await browserApiFetch(SLACK_GLOBAL_SETTINGS_KEY, {
         method: "PATCH",
@@ -53,14 +58,18 @@ export function useSlackGlobalSettingsEditor(
       toast.error(failureMessage);
       return false;
     } finally {
-      setPendingKind(null);
+      pendingMutationCount.current -= 1;
+      if (pendingMutationCount.current === 0) {
+        await mutateSettings().catch(() => undefined);
+      }
+      setPending((current) => ({ ...current, [kind]: current[kind] - 1 }));
     }
   };
 
   return {
-    saving: pendingKind !== null,
-    savingDefaults: pendingKind === "defaults",
-    savingRoutingRules: pendingKind === "routingRules",
+    saving: pending.defaults + pending.routingRules > 0,
+    savingDefaults: pending.defaults > 0,
+    savingRoutingRules: pending.routingRules > 0,
     saveDefaults: (defaults: Omit<SlackGlobalSettings, "routingRules">) =>
       runMutation(
         "defaults",

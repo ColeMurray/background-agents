@@ -99,4 +99,67 @@ describe("useSlackGlobalSettingsEditor", () => {
     });
     expect(result.current.data).toEqual(saved);
   });
+
+  it("revalidates after out-of-order responses finish", async () => {
+    const initial: SlackGlobalSettingsResponse = {
+      integrationId: "slack",
+      settings: null,
+    };
+    const older: SlackGlobalSettingsResponse = {
+      integrationId: "slack",
+      settings: { defaults: { agentNotificationsEnabled: true } },
+    };
+    const authoritative: SlackGlobalSettingsResponse = {
+      integrationId: "slack",
+      settings: {
+        defaults: {
+          agentNotificationsEnabled: true,
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        },
+      },
+    };
+    const defaultsResponse = deferred<Response>();
+    const routingResponse = deferred<Response>();
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => defaultsResponse.promise)
+      .mockImplementationOnce(() => routingResponse.promise);
+    const settingsFetcher = vi.fn().mockResolvedValue(authoritative);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(
+      () => {
+        const settings = useSWR<SlackGlobalSettingsResponse>(
+          SLACK_GLOBAL_SETTINGS_KEY,
+          settingsFetcher,
+          { fallbackData: initial }
+        );
+        return {
+          data: settings.data,
+          editor: useSlackGlobalSettingsEditor(settings.mutate),
+        };
+      },
+      { wrapper }
+    );
+
+    let defaultsSave!: Promise<boolean>;
+    let routingSave!: Promise<boolean>;
+    act(() => {
+      defaultsSave = result.current.editor.saveDefaults({ agentNotificationsEnabled: true });
+      routingSave = result.current.editor.saveRoutingRules([
+        { keyword: "frontend", target: "acme/web" },
+      ]);
+    });
+
+    routingResponse.resolve(Response.json(authoritative));
+    await act(() => routingSave);
+    expect(settingsFetcher).not.toHaveBeenCalled();
+
+    defaultsResponse.resolve(Response.json(older));
+    await act(() => defaultsSave);
+
+    expect(settingsFetcher).toHaveBeenCalledTimes(1);
+    expect(result.current.data).toEqual(authoritative);
+    expect(result.current.editor.saving).toBe(false);
+  });
 });
