@@ -458,7 +458,7 @@ function HomeContent({
     handleDragOver,
     handleDragLeave,
   } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
-  const { sessionTarget, selectedRepo, repos, loadingRepos, isLaunchable } = picker;
+  const { sessionTarget, selectedRepo, repos, reposStatus, isLaunchable } = picker;
   const selectedProvider = getSubscriptionProviderForModel(selectedModel);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -653,7 +653,7 @@ function HomeContent({
                 </div>
               )}
 
-              {repos.length === 0 && !loadingRepos && (
+              {repos.length === 0 && reposStatus === "ready" && (
                 <p className="mt-3 text-sm text-muted-foreground text-center">
                   No repositories found. You can start without a repository or grant repository
                   access in settings.

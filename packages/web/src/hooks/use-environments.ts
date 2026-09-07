@@ -19,17 +19,16 @@ export function useEnvironments(): {
   const { data, isLoading, error } = useSWR<ListEnvironmentsResponse>(
     session ? ENVIRONMENTS_KEY : null
   );
+  const resourceStatus = getPrerequisiteStatus(
+    session ? data : undefined,
+    status === "loading" || isLoading,
+    error
+  );
 
   return {
     environments: data?.environments ?? [],
-    status: getPrerequisiteStatus(
-      session ? data : undefined,
-      status === "loading" || isLoading,
-      error
-    ),
-    // The fetch is gated on the auth session, so the list is still loading
-    // while the session itself resolves — don't report an authoritative [].
-    loading: status === "loading" || isLoading,
+    status: resourceStatus,
+    loading: resourceStatus === "loading",
     error,
   };
 }

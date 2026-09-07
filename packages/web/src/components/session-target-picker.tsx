@@ -22,9 +22,10 @@ export function SessionTargetPicker({
   branches,
   loadingBranches,
   repos,
-  loadingRepos,
+  reposStatus,
   disabled,
 }: SessionTargetPickerProps & { disabled: boolean }) {
+  const loadingRepos = reposStatus === "loading";
   return (
     <>
       {/* Target selector */}
@@ -57,7 +58,7 @@ export function SessionTargetPicker({
           loadingRepos={loadingRepos}
           selected={sessionTarget.repoFullNames}
           onChange={onMultiSelectionChange}
-          disabled={disabled || loadingRepos}
+          disabled={disabled || reposStatus !== "ready"}
           triggerLabel={
             sessionTarget.repoFullNames.length === 0
               ? "Choose repositories"

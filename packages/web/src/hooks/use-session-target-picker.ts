@@ -15,6 +15,7 @@ import {
   repoImageBuildScopeId,
 } from "@/lib/image-builds";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
+import type { PrerequisiteStatus } from "@/lib/prerequisite-status";
 import { useImageBuilds } from "@/hooks/use-image-builds";
 import {
   type SessionTarget,
@@ -107,7 +108,7 @@ export interface SessionTargetPickerProps {
   branches: { name: string }[];
   loadingBranches: boolean;
   repos: Repo[];
-  loadingRepos: boolean;
+  reposStatus: PrerequisiteStatus;
 }
 
 /** Launch-facing selection state for the page: warming identity and request construction. */
@@ -115,7 +116,7 @@ export interface SessionTargetSelection {
   sessionTarget: SessionTarget | null;
   selectedBranch: string;
   repos: Repo[];
-  loadingRepos: boolean;
+  reposStatus: PrerequisiteStatus;
   /** The selected repository's metadata when the target is a single repo. */
   selectedRepo: Repo | undefined;
   isLaunchable: boolean;
@@ -134,7 +135,7 @@ export interface SessionTargetSelection {
  * via `pickerProps`; the page keeps model, prompt, and warming.
  */
 export function useSessionTargetPicker(): SessionTargetSelection {
-  const { repos, loading: loadingRepos, status: reposStatus } = useRepos();
+  const { repos, status: reposStatus } = useRepos();
   const { environments, status: environmentsStatus } = useEnvironments();
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedBranch, setSelectedBranch] = useState<string>("");
@@ -290,7 +291,7 @@ export function useSessionTargetPicker(): SessionTargetSelection {
     sessionTarget,
     selectedBranch,
     repos,
-    loadingRepos,
+    reposStatus,
     selectedRepo,
     isLaunchable: isSessionTargetLaunchable(sessionTarget),
     configKey: getTargetConfigKey(sessionTarget),
@@ -307,7 +308,7 @@ export function useSessionTargetPicker(): SessionTargetSelection {
       branches,
       loadingBranches,
       repos,
-      loadingRepos,
+      reposStatus,
     },
   };
 }

@@ -25,17 +25,16 @@ export function useRepos(enabled = true) {
   const { data, isLoading, error } = useSWR<ReposResponse>(
     enabled && session ? "/api/repos" : null
   );
+  const resourceStatus = getPrerequisiteStatus(
+    enabled && session ? data : undefined,
+    enabled && (status === "loading" || isLoading),
+    error
+  );
 
   return {
     repos: data?.repos ?? [],
-    status: getPrerequisiteStatus(
-      enabled && session ? data : undefined,
-      enabled && (status === "loading" || isLoading),
-      error
-    ),
-    // The fetch is gated on the auth session, so the list is still loading
-    // while the session itself resolves — don't report an authoritative [].
-    loading: enabled && (status === "loading" || isLoading),
+    status: resourceStatus,
+    loading: resourceStatus === "loading",
     error,
   };
 }
