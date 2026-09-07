@@ -113,6 +113,7 @@ class Probe:
                         f"127.0.0.1:{port}",
                     ],
                     "/vnc.html",
+                    websocket_rfb=True,
                 )
             except Exception as error:
                 output.seek(0)
@@ -121,7 +122,7 @@ class Probe:
                 for process in reversed(processes):
                     stop_process(process)
 
-    def service(self, command: list[str], path: str = "/") -> None:
+    def service(self, command: list[str], path: str = "/", *, websocket_rfb: bool = False) -> None:
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
@@ -143,6 +144,8 @@ class Probe:
                             f"http://127.0.0.1:{port}{path}", timeout=1
                         ) as response:
                             if response.status == 200:
+                                if websocket_rfb:
+                                    verify_rfb_proxy(port)
                                 return
                     except OSError:
                         pass
@@ -150,6 +153,26 @@ class Probe:
                 raise RuntimeError(f"Image service readiness timeout: {command[0]}")
             finally:
                 stop_process(process)
+
+
+def verify_rfb_proxy(port: int) -> None:
+    """Require the WebSocket proxy to exchange RFB with its VNC backend."""
+    from websockets.sync.client import connect
+
+    with connect(
+        f"ws://127.0.0.1:{port}/websockify",
+        subprotocols=["binary"],
+        open_timeout=5,
+        close_timeout=1,
+        proxy=None,
+    ) as connection:
+        banner = connection.recv(timeout=5)
+        if not isinstance(banner, bytes) or not banner.startswith(b"RFB ") or len(banner) != 12:
+            raise RuntimeError("Desktop WebSocket proxy did not deliver an RFB banner")
+        connection.send(banner)
+        security = connection.recv(timeout=5)
+        if not isinstance(security, bytes) or len(security) < 2 or security[0] == 0:
+            raise RuntimeError("Desktop WebSocket proxy did not complete the RFB version exchange")
 
 
 def stop_process(process: subprocess.Popen) -> None:
