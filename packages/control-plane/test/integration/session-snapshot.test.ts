@@ -15,6 +15,8 @@ import {
   waitForSandboxStatus,
 } from "./helpers";
 
+const HISTORY_PAGE_REQUEST_DELAY_MS = 210;
+
 describe("session snapshot synchronization", () => {
   beforeEach(cleanD1Tables);
 
@@ -170,7 +172,7 @@ describe("session snapshot synchronization", () => {
       const ids = snapshot.timeline.events.map((row) => row.eventId);
       let { cursor, hasMore } = snapshot.timeline;
       while (hasMore) {
-        await new Promise((resolve) => setTimeout(resolve, 210));
+        await new Promise((resolve) => setTimeout(resolve, HISTORY_PAGE_REQUEST_DELAY_MS));
         const pending = collectMessages(ws, {
           until: (message) => message.type === "history_page",
         });
