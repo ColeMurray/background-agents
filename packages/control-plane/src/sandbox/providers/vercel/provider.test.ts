@@ -770,6 +770,29 @@ describe("VercelSandboxProvider", () => {
     );
   });
 
+  it("sanitizes repo scope ids for Vercel sandbox names", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.triggerImageBuild({
+      ...environmentBuildConfig(),
+      scopeKind: "repo",
+      scopeId: "acme/web.app",
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.name).toMatch(/^build-env-acme-web-app-\d+$/);
+    expect(createCall.env).toEqual(
+      expect.objectContaining({ SANDBOX_ID: "build-env-acme/web.app" })
+    );
+    expect(createCall.tags).toEqual(
+      expect.objectContaining({
+        openinspect_scope_kind: "repo",
+        openinspect_scope_id: "acme/web.app",
+      })
+    );
+  });
+
   it("honors an explicit build timeout below the Vercel limit for image builds", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
