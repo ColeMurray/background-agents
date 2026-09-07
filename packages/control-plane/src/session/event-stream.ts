@@ -46,6 +46,13 @@ export interface SessionEventListRequest {
 export class SessionEventStream {
   constructor(private readonly repository: EventRepository) {}
 
+  /** Read the persisted prompt without inserting it into the paginated suffix. */
+  getActivePrompt(messageId: string) {
+    const row = this.repository.getEventById(`user_message:${messageId}`);
+    const event = row ? parseSessionTimelineEvents([row])[0]?.event : undefined;
+    return event?.type === "user_message" && event.messageId === messageId ? event : null;
+  }
+
   getReplay(limit = DEFAULT_REPLAY_LIMIT): SessionTimeline {
     const page = boundTimelinePage(
       this.repository.getEventTimelinePage({

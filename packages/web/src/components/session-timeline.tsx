@@ -49,6 +49,7 @@ export function SessionTimeline({
   participantProfiles,
   isProcessing,
   promptQueue = EMPTY_PROMPT_QUEUE,
+  activePrompt,
   hasMoreHistory = false,
   loadingHistory,
   showSkeleton,
@@ -61,6 +62,7 @@ export function SessionTimeline({
   participantProfiles: Record<string, SessionParticipantProfile>;
   isProcessing: boolean;
   promptQueue?: PromptQueueItem[];
+  activePrompt?: Extract<SandboxEvent, { type: "user_message" }> | null;
   hasMoreHistory?: boolean;
   loadingHistory: boolean;
   showSkeleton: boolean;
@@ -78,15 +80,16 @@ export function SessionTimeline({
     () => buildSessionTimelineItems(events, pendingMessageIds),
     [events, pendingMessageIds]
   );
-  // A bounded replay may start after the running user_message. Keep its text
-  // available without fabricating an event, timestamp, or author attribution.
-  const currentPrompt = promptQueue.find((item) => item.status === "processing");
+  // Use the canonical event projection without changing history pagination.
   const omittedCurrentPrompt =
-    currentPrompt &&
+    activePrompt &&
+    promptQueue.some(
+      (item) => item.status === "processing" && item.messageId === activePrompt.messageId
+    ) &&
     !events.some(
-      (event) => event.type === "user_message" && event.messageId === currentPrompt.messageId
+      (event) => event.type === "user_message" && event.messageId === activePrompt.messageId
     )
-      ? currentPrompt
+      ? activePrompt
       : undefined;
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set());
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
@@ -279,12 +282,14 @@ export function SessionTimeline({
         return renderTimelineItem(row.item);
       case "current_prompt":
         return (
-          <section
-            aria-label="Current prompt"
-            className="rounded-lg border border-border bg-card p-4"
-          >
-            <div className="mb-2 text-xs text-muted-foreground">Current prompt</div>
-            <div className="whitespace-pre-wrap break-words text-sm">{row.content}</div>
+          <section aria-label="Current prompt">
+            <EventItem
+              event={row.event}
+              sessionId={sessionId}
+              currentParticipantId={currentParticipantId}
+              participantProfiles={participantProfiles}
+              onOpenMedia={onOpenMedia}
+            />
           </section>
         );
     }

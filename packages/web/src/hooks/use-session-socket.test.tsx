@@ -255,6 +255,13 @@ describe("useSessionSocket", () => {
     const fetchMock = vi.mocked(fetch);
     const snapshot = createSnapshot();
     snapshot.session.title = "Read-only snapshot";
+    snapshot.activePrompt = {
+      type: "user_message",
+      content: "",
+      messageId: "active",
+      timestamp: 1,
+      attachments: [{ attachmentId: "image-1", name: "design.png", mimeType: "image/png" }],
+    };
 
     const { result } = renderHook(() =>
       useSessionSocket("session-1", snapshot, {
@@ -268,7 +275,16 @@ describe("useSessionSocket", () => {
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
 
     expect(result.current.sessionState?.title).toBe("Read-only snapshot");
+    expect(result.current.activePrompt).toEqual(snapshot.activePrompt);
     expect(result.current.connected).toBe(false);
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].receive({
+        ...createSubscribedMessage(),
+        activePrompt: snapshot.activePrompt,
+      });
+    });
+    expect(result.current.activePrompt).toEqual(snapshot.activePrompt);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/sessions/session-1/ws-token",
       expect.objectContaining({ method: "POST" })

@@ -33,6 +33,7 @@ export interface SessionSocketState {
   loadingHistory: boolean;
   cursor: HistoryCursor | null;
   promptQueue: PromptQueueItem[];
+  activePrompt: SessionSnapshot["activePrompt"];
   /**
    * Why the sandbox last failed, as reported by the control plane — the
    * provider's own message (quota, rate limit, bad config), not a status label.
@@ -55,6 +56,7 @@ export const initialSessionSocketState: SessionSocketState = {
   loadingHistory: false,
   cursor: null,
   promptQueue: [],
+  activePrompt: null,
   sandboxError: null,
 };
 
@@ -102,6 +104,7 @@ export function createSessionSocketState(snapshot: SessionSnapshot): SessionSock
     hasMoreHistory: snapshot.timeline.hasMore,
     cursor: snapshot.timeline.cursor,
     promptQueue: snapshot.promptQueue,
+    activePrompt: snapshot.activePrompt ?? null,
     sandboxError: snapshot.spawnError ?? null,
   };
 }
@@ -197,6 +200,7 @@ function reduceServerMessage(
         // stuck true and block loadOlderEvents after the reconnect.
         loadingHistory: false,
         promptQueue: message.promptQueue,
+        activePrompt: message.activePrompt ?? null,
         sandboxError: message.spawnError ?? null,
       };
     }

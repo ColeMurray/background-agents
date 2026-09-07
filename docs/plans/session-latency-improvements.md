@@ -10,8 +10,9 @@
    UTF-8 stored-event budget. Existing count limits, response schemas, and cursor formats remain.
    One oversized storage row is allowed so pagination progresses. Malformed rows still advance the
    cursor even when they do not yield a visible event. HTTP snapshots and WS subscriptions use the
-   same synchronous projection. The web timeline displays the current prompt from the existing queue
-   when its original event is outside the window, without inventing event identity or attribution.
+   same synchronous projection. A separate canonical active-prompt projection preserves attachments,
+   attribution, and PR-feedback origin outside the window without changing the paginated suffix. An
+   explicit load-older control keeps empty or non-renderable pages traversable without scrolling.
 3. **Event cursor seeks:** use `(created_at, timeline_sequence)` tuple comparison and a matching
    index. Preserve the old timestamp/id cursor branches and index for compatibility. `initSchema`
    creates indexes after migrations, so both fresh sessions and existing sessions receive the new

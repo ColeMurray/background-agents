@@ -70,11 +70,16 @@ export class SessionSnapshotReader {
     return this.deps.transaction(() => {
       const local = this.readSessionState(enrichment);
       if (!local) return null;
+      const promptQueue = this.deps.messageRepository.listPromptQueue();
+      const processing = promptQueue.find((item) => item.status === "processing");
       return {
         session: local.session,
         artifacts: this.deps.messageService.listArtifacts().artifacts,
         timeline: this.deps.eventStream.getReplay(),
-        promptQueue: this.deps.messageRepository.listPromptQueue(),
+        promptQueue,
+        activePrompt: processing
+          ? this.deps.eventStream.getActivePrompt(processing.messageId)
+          : null,
         spawnError: local.sandbox?.last_spawn_error ?? null,
       };
     });

@@ -227,28 +227,47 @@ const baseTimelineProps = {
 } as const;
 
 describe("prompt queue status", () => {
-  it("keeps an out-of-window running prompt visible until its original event is loaded", () => {
-    const props = {
-      ...baseTimelineProps,
-      promptQueue: [
-        { messageId: "running", content: "Current task", status: "processing" as const },
-      ],
-    };
-    const { rerender } = render(<SessionTimeline {...props} events={[]} />);
-    expect(screen.getByRole("region", { name: "Current prompt" })).toHaveTextContent(
-      "Current task"
-    );
-    rerender(
-      <SessionTimeline
-        {...props}
-        events={[{ ...event(), messageId: "running", content: "Current task" }]}
-      />
-    );
-    expect(screen.queryByRole("region", { name: "Current prompt" })).not.toBeInTheDocument();
-    expect(screen.getAllByText("Current task")).toHaveLength(1);
-    rerender(<SessionTimeline {...baseTimelineProps} events={[]} />);
-    expect(screen.queryByText("Current task")).not.toBeInTheDocument();
-  });
+  it.each(["", "Current task"])(
+    "preserves canonical out-of-window prompt presentation for content %j",
+    (content) => {
+      const activePrompt = {
+        ...event(),
+        messageId: "running",
+        content,
+        attachments: [
+          { attachmentId: "image-1", name: "design.png", mimeType: "image/png" as const },
+        ],
+        origin: {
+          kind: "review" as const,
+          authorType: "bot" as const,
+          feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+        },
+      };
+      const props = {
+        ...baseTimelineProps,
+        activePrompt,
+        promptQueue: [{ messageId: "running", content, status: "processing" as const }],
+      };
+      const { rerender } = render(<SessionTimeline {...props} events={[]} />);
+      expect(screen.getByRole("region", { name: "Current prompt" })).toBeInTheDocument();
+      expect(screen.getByRole("img", { name: "design.png" })).toHaveAttribute(
+        "src",
+        "/api/sessions/session-1/attachments/image-1"
+      );
+      expect(screen.getByText("Historical Name")).toBeInTheDocument();
+      expect(screen.getByText("Resumed by PR feedback")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Open feedback" })).toHaveAttribute(
+        "href",
+        activePrompt.origin.feedbackUrl
+      );
+      rerender(<SessionTimeline {...props} events={[activePrompt]} />);
+      expect(screen.queryByRole("region", { name: "Current prompt" })).not.toBeInTheDocument();
+      expect(screen.getAllByRole("img", { name: "design.png" })).toHaveLength(1);
+      rerender(<SessionTimeline {...props} promptQueue={[]} events={[]} />);
+      expect(screen.queryByRole("region", { name: "Current prompt" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("img", { name: "design.png" })).not.toBeInTheDocument();
+    }
+  );
 
   it("hides pending messages and leaves the running message undecorated", () => {
     const events: SandboxEvent[] = [

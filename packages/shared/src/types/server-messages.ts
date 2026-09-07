@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
-import { sandboxEventSchema } from "./sandbox-events";
+import { sandboxEventSchema, userMessageEventSchema } from "./sandbox-events";
 import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
 import { clientRequestIdSchema } from "./prompts";
 
@@ -113,6 +113,9 @@ export const sessionSnapshotSchema = z.object({
   session: sessionSnapshotStateSchema,
   artifacts: z.array(sessionArtifactSchema),
   timeline: sessionTimelineSchema,
+  // Display-only projection, outside the contiguous paginated timeline. Optional
+  // for compatibility with servers predating bounded replay.
+  activePrompt: userMessageEventSchema.nullable().optional(),
   spawnError: z.string().nullable().optional(),
   promptQueue: z.array(promptQueueItemSchema),
 });

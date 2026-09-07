@@ -134,6 +134,30 @@ describe("session snapshot synchronization", () => {
     const { stub } = await initNamedSession(name);
     await waitForSandboxStatus(stub, "failed");
     const createdAt = Date.now();
+    const activePrompt = {
+      type: "user_message" as const,
+      content: "",
+      messageId: "active-message",
+      timestamp: createdAt / 1000,
+      author: { participantId: "author-1", userId: "user-1", name: "Prompt author" },
+      attachments: [
+        { attachmentId: "image-1", name: "design.png", mimeType: "image/png" as const },
+      ],
+      origin: {
+        kind: "review" as const,
+        authorType: "bot" as const,
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+      },
+    };
+    await seedEvents(stub, [
+      {
+        id: "user_message:active-message",
+        type: "user_message",
+        messageId: "active-message",
+        createdAt,
+        data: JSON.stringify(activePrompt),
+      },
+    ]);
     await seedEvents(
       stub,
       Array.from({ length: 30 }, (_, i) => ({
@@ -153,22 +177,25 @@ describe("session snapshot synchronization", () => {
     await queryDO(
       stub,
       `INSERT INTO messages(id,author_id,content,source,status,created_at)
-      SELECT 'active-message',id,'Active prompt','web','processing',? FROM participants LIMIT 1`,
+      SELECT 'active-message',id,'','web','processing',? FROM participants LIMIT 1`,
       createdAt
     );
     const response = await stub.fetch("http://internal/internal/snapshot");
     const snapshot = sessionSnapshotSchema.parse(await response.json());
     expect(snapshot.timeline.events.length).toBeLessThan(10);
     expect(snapshot.timeline.hasMore).toBe(true);
+    expect(snapshot.activePrompt).toEqual(activePrompt);
+    expect(snapshot.timeline.events.some((row) => row.event.type === "user_message")).toBe(false);
     expect(snapshot.promptQueue).toContainEqual({
       messageId: "active-message",
-      content: "Active prompt",
+      content: "",
       status: "processing",
     });
     const { ws, messages } = await openClientWs(name, { subscribe: true });
     try {
       expect(messages![0].timeline).toEqual(snapshot.timeline);
       expect(messages![0].promptQueue).toEqual(snapshot.promptQueue);
+      expect(messages![0].activePrompt).toEqual(snapshot.activePrompt);
       const ids = snapshot.timeline.events.map((row) => row.eventId);
       let { cursor, hasMore } = snapshot.timeline;
       while (hasMore) {
@@ -191,6 +218,10 @@ describe("session snapshot synchronization", () => {
       expect(ids.filter((id) => id.startsWith("heavy-"))).toEqual(
         Array.from({ length: 30 }, (_, i) => `heavy-${i}`)
       );
+      expect(ids.filter((id) => id === "user_message:active-message")).toHaveLength(1);
+      await queryDO(stub, "UPDATE messages SET status = 'completed' WHERE id = 'active-message'");
+      const completed = await stub.fetch("http://internal/internal/snapshot");
+      expect(sessionSnapshotSchema.parse(await completed.json()).activePrompt).toBeNull();
     } finally {
       ws.close();
     }

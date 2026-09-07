@@ -1,8 +1,9 @@
 import type { SessionTimelineItem } from "./timeline-items";
+import type { SandboxEvent } from "@/types/session";
 
 export type TimelineVirtualRow =
   | { type: "item"; id: string; item: SessionTimelineItem }
-  | { type: "current_prompt"; id: string; content: string }
+  | { type: "current_prompt"; id: string; event: Extract<SandboxEvent, { type: "user_message" }> }
   | { type: "loading"; id: string }
   | { type: "thinking"; id: string };
 
@@ -35,7 +36,7 @@ export function buildTimelineVirtualRows({
   items: SessionTimelineItem[];
   loadingHistory: boolean;
   isProcessing: boolean;
-  currentPrompt?: { messageId: string; content: string };
+  currentPrompt?: Extract<SandboxEvent, { type: "user_message" }>;
 }): TimelineVirtualRow[] {
   const rows: TimelineVirtualRow[] = [];
   if (loadingHistory) rows.push({ type: "loading", id: "history-loading" });
@@ -43,7 +44,7 @@ export function buildTimelineVirtualRows({
     rows.push({
       type: "current_prompt",
       id: `current-prompt:${currentPrompt.messageId}`,
-      content: currentPrompt.content,
+      event: currentPrompt,
     });
   for (const item of items) rows.push({ type: "item", id: `item:${item.id}`, item });
   if (isProcessing) rows.push({ type: "thinking", id: "thinking" });

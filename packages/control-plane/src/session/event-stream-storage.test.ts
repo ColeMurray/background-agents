@@ -152,4 +152,16 @@ describe("bounded timeline replay over SQLite", () => {
     expect(page.items).toHaveLength(2);
     expect(page.hasMore).toBe(false);
   });
+
+  it("does not synthesize active prompts from missing or malformed events", () => {
+    expect(stream.getActivePrompt("missing")).toBeNull();
+    repository.createEvent({
+      id: "user_message:bad",
+      type: "user_message",
+      data: "{",
+      messageId: "bad",
+      createdAt: 1,
+    });
+    expect(stream.getActivePrompt("bad")).toBeNull();
+  });
 });

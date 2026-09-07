@@ -134,6 +134,11 @@ export class EventRepository {
     return this.queryEventPage(options);
   }
 
+  getEventById(id: string): EventRow | null {
+    const rows = this.sql.exec("SELECT * FROM events WHERE id = ?", id).toArray() as EventRow[];
+    return rows[0] ?? null;
+  }
+
   getEventTimelinePage(options: ListEventTimelinePageOptions): EventPage {
     const page = this.queryEventPage(options);
     return { ...page, events: [...page.events].reverse() };

@@ -58,6 +58,7 @@ interface UseSessionSocketReturn {
   currentParticipantId: string | null;
   isProcessing: boolean;
   promptQueue: PromptQueueItem[];
+  activePrompt: SessionSnapshot["activePrompt"];
   hasMoreHistory: boolean;
   loadingHistory: boolean;
   sendPrompt: (
@@ -430,6 +431,7 @@ export function useSessionSocket(
     currentParticipantId: state.currentParticipantId,
     isProcessing,
     promptQueue: state.promptQueue,
+    activePrompt: state.activePrompt,
     hasMoreHistory,
     loadingHistory,
     sendPrompt,

@@ -4,6 +4,24 @@ import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 import { githubAutofixOriginSchema } from "./github-autofix";
 
 const recordSchema = z.record(z.string(), z.unknown());
+export const userMessageEventSchema = z.object({
+  type: z.literal("user_message"),
+  content: z.string(),
+  messageId: z.string(),
+  timestamp: z.number(),
+  ackId: z.string().optional(),
+  author: z
+    .object({
+      participantId: z.string(),
+      userId: z.string().optional(),
+      name: z.string(),
+      avatar: z.string().optional(),
+    })
+    .optional(),
+  // References only; attachment content is served separately.
+  attachments: resolvedSessionAttachmentsSchema.optional(),
+  origin: githubAutofixOriginSchema.optional(),
+});
 const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
 export type GitSyncStatus = z.infer<typeof gitSyncStatusSchema>;
 
@@ -166,25 +184,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     type: z.literal("session_title"),
     title: z.string(),
   }),
-  z.object({
-    type: z.literal("user_message"),
-    content: z.string(),
-    messageId: z.string(),
-    timestamp: z.number(),
-    ackId: z.string().optional(),
-    author: z
-      .object({
-        participantId: z.string(),
-        userId: z.string().optional(),
-        name: z.string(),
-        avatar: z.string().optional(),
-      })
-      .optional(),
-    // Attachment metadata only — never inline content, which would bloat the
-    // events table and every broadcast. attachmentId lets clients stream attachments.
-    attachments: resolvedSessionAttachmentsSchema.optional(),
-    origin: githubAutofixOriginSchema.optional(),
-  }),
+  userMessageEventSchema,
 ]);
 
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;

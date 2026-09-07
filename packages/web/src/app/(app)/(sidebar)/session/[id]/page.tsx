@@ -89,6 +89,7 @@ export default function SessionPage() {
     currentParticipantId,
     isProcessing,
     promptQueue,
+    activePrompt,
     hasMoreHistory,
     loadingHistory,
     sendPrompt,
@@ -321,6 +322,7 @@ export default function SessionPage() {
               participantProfiles={profiles}
               isProcessing={isProcessing}
               promptQueue={promptQueue}
+              activePrompt={activePrompt}
               hasMoreHistory={hasMoreHistory}
               loadingHistory={loadingHistory}
               showSkeleton={false}
