@@ -58,7 +58,7 @@ export class SessionBudgetService {
       const delta = this.observeReportedCost(event, messageId);
       if (delta > 0) {
         const totalCost = this.repository.addSessionCost(delta, now);
-        transition = this.applyObservedCost(totalCost, messageId, now);
+        transition = { ...this.applyObservedCost(totalCost, messageId, now), statusChanged: true };
       } else if (event.cost == null) {
         // A reported cost of 0 (unpriced or free models) is a real observation
         // and never latches the warning. Only an absent cost is "not tracked".
@@ -68,8 +68,9 @@ export class SessionBudgetService {
     await this.deliverTransition(transition);
   }
 
-  async ingestExecutionComplete(event: ExecutionCompleteEvent, now: number): Promise<void> {
-    if (typeof event.messageCostUsd !== "number") return;
+  /** Synchronous so completion and cost can share the caller's storage transaction. */
+  observeExecutionCost(event: ExecutionCompleteEvent, now: number): BudgetTransition {
+    if (typeof event.messageCostUsd !== "number") return NO_BUDGET_TRANSITION;
     let transition = NO_BUDGET_TRANSITION;
     this.repository.transaction(() => {
       const delta = this.messageRepository.raiseReportedCost(
@@ -78,9 +79,12 @@ export class SessionBudgetService {
       );
       if (delta <= 0) return;
       const totalCost = this.repository.addSessionCost(delta, now);
-      transition = this.applyObservedCost(totalCost, event.messageId, now);
+      transition = {
+        ...this.applyObservedCost(totalCost, event.messageId, now),
+        statusChanged: true,
+      };
     });
-    await this.deliverTransition(transition);
+    return transition;
   }
 
   async updateLimit(maxCostUsd: number | null, now: number): Promise<void> {
@@ -235,7 +239,8 @@ export class SessionBudgetService {
     };
   }
 
-  private async deliverTransition(transition: BudgetTransition): Promise<void> {
+  /** Deliver only after the transaction containing the observation has committed. */
+  async deliverTransition(transition: BudgetTransition): Promise<void> {
     if (transition.warningEvent) {
       this.messenger.broadcast({ type: "sandbox_event", event: transition.warningEvent });
     }

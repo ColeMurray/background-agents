@@ -19,6 +19,8 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
+import { MessageFailureService } from "./message-failure-service";
+import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import type { SessionStatusService } from "./session-status-service";
 import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
 
@@ -242,16 +244,22 @@ function buildQueue() {
     { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
     alarmDeadlines
   );
-  const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
+  const messageFailures = new MessageFailureService(
     backgroundTasks,
+    log,
+    repository as unknown as MessageRepository,
+    messenger,
+    callbackService as unknown as CallbackNotificationService,
+    projectTerminalMessage
+  );
+  const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
     repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
     wsManager as unknown as SessionWebSocketManager,
     messenger,
-    callbackService as unknown as CallbackNotificationService,
     sessionStatus as unknown as SessionStatusService,
-    projectTerminalMessage,
+    messageFailures,
     sandboxLifecycle,
     alarmScheduler,
     alarmDeadlines,
@@ -271,7 +279,7 @@ function buildQueue() {
     callbackService as unknown as CallbackNotificationService,
     sessionStatus as unknown as SessionStatusService,
     getProviderAuthenticationError,
-    projectTerminalMessage,
+    messageFailures,
     sandboxLifecycle,
     sessionIndex,
     "github",
@@ -306,6 +314,76 @@ function buildQueue() {
 }
 
 describe("SessionMessageQueue", () => {
+  it("cannot dispatch while final-cost settlement waits for terminal projection", async () => {
+    const h = buildQueue();
+    const session = createSession({ total_cost: 9, max_cost_usd: 10 });
+    h.repository.getSession.mockReturnValue(session);
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-finishing" });
+    h.repository.recordMessageCompletion.mockImplementation((event, completedAt) => {
+      h.repository.getProcessingMessage.mockReturnValue(null);
+      return {
+        messageId: event.messageId,
+        messageCreatedAt: 1000,
+        messageStartedAt: 1100,
+        completedAt,
+        status: "failed",
+      };
+    });
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    let release!: () => void;
+    h.projectTerminalMessage.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+    const budget = {
+      observeExecutionCost: vi.fn(() => {
+        session.budget_exhausted = 1;
+        session.total_cost = 10;
+        return { warningEvent: null, stopPreparation: null, statusChanged: true };
+      }),
+      deliverTransition: vi.fn(async () => {}),
+    };
+    const handler = new SandboxExecutionEventHandler(
+      h.backgroundTasks,
+      h.log,
+      h.repository as unknown as MessageRepository,
+      h.callbackService as unknown as CallbackNotificationService,
+      { broadcast: h.broadcast, sendToSandbox: async () => {} },
+      h.projectTerminalMessage,
+      h.sessionStatus as unknown as SessionStatusService,
+      async () => {},
+      () => {},
+      async () => {},
+      () => h.queue.processMessageQueue(),
+      () => h.queue.broadcastPromptQueue(),
+      budget,
+      (closure) => closure()
+    );
+    const finishing = handler.handleExecutionComplete(
+      {
+        type: "execution_complete",
+        messageId: "msg-finishing",
+        success: true,
+        messageCostUsd: 1,
+        sandboxId: "sb",
+        timestamp: 2,
+      },
+      { now: 2000, messageId: "msg-finishing", processingMessage: { id: "msg-finishing" } }
+    );
+    await h.queue.processMessageQueue();
+    try {
+      expect(budget.observeExecutionCost).toHaveBeenCalledOnce();
+      expect(h.projectTerminalMessage).toHaveBeenCalledOnce();
+      expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await finishing;
+    }
+  });
+
   it("admits Autofix feedback through the message repository", async () => {
     const h = buildQueue();
     const command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }> = {

@@ -37,6 +37,7 @@ import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
+import type { MessageFailureService } from "./message-failure-service";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -48,7 +49,6 @@ import type {
   EnqueuedPrompt,
   EnqueuePromptCoreData,
   PromptMessageData,
-  RecordedMessageFailure,
 } from "./message-queue-types";
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
@@ -142,11 +142,7 @@ export class SessionMessageQueue {
     private readonly callbackService: CallbackNotificationService,
     private readonly sessionStatus: SessionStatusService,
     private readonly getProviderAuthenticationError: (model: string) => Promise<string | null>,
-    private readonly projectTerminalMessage: (
-      messageId: string,
-      messageCreatedAt: number,
-      completedAt: number
-    ) => Promise<void>,
+    private readonly messageFailures: MessageFailureService,
     private readonly sandboxLifecycle: SandboxLifecycle,
     private readonly sessionIndex: Pick<SessionIndexStore, "touchUpdatedAt">,
     private readonly scmProvider: SourceControlProviderName,
@@ -575,61 +571,10 @@ export class SessionMessageQueue {
     completedAt: number,
     expectedStatus: "pending" | "processing"
   ): boolean {
-    const failure = this.recordMessageFailure(message, error, completedAt, expectedStatus);
+    const failure = this.messageFailures.record(message.id, error, completedAt, expectedStatus);
     if (!failure) return false;
-    this.projectMessageFailure(failure);
+    this.messageFailures.deliver(failure);
     return true;
-  }
-
-  private recordMessageFailure(
-    message: { id: string; created_at: number },
-    error: string,
-    completedAt: number,
-    expectedStatus: "pending" | "processing"
-  ): RecordedMessageFailure | null {
-    const event: Extract<SandboxEvent, { type: "execution_complete" }> = {
-      type: "execution_complete",
-      messageId: message.id,
-      success: false,
-      error,
-      sandboxId: "",
-      timestamp: completedAt / 1000,
-    };
-    const completion = this.messageRepository.recordMessageCompletion(
-      event,
-      completedAt,
-      expectedStatus
-    );
-    return completion ? { event, completion } : null;
-  }
-
-  private projectMessageFailure({ event, completion }: RecordedMessageFailure): void {
-    this.backgroundTasks.submit(
-      () =>
-        this.projectTerminalMessage(
-          completion.messageId,
-          completion.messageCreatedAt,
-          completion.completedAt
-        )
-          .catch((projectionError) => {
-            this.log.error("terminal_message.projection_failed", {
-              message_id: completion.messageId,
-              error: projectionError,
-            });
-          })
-          .then(() => this.messenger.broadcast({ type: "sandbox_event", event })),
-      {
-        name: "terminal_message.project",
-        context: { message_id: completion.messageId },
-      }
-    );
-    this.backgroundTasks.submit(
-      () => this.callbackService.notifyComplete(completion.messageId, false, event.error),
-      {
-        name: "callback.notify_complete",
-        context: { message_id: completion.messageId },
-      }
-    );
   }
 
   private createUserMessageEvent(

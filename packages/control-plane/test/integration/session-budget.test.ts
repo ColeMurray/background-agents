@@ -3,6 +3,7 @@ import { cleanD1Tables } from "./cleanup";
 import {
   initNamedSession,
   initNamedSessionDO,
+  openClientWs,
   queryDO,
   seedMessage,
   serviceFetch,
@@ -13,6 +14,32 @@ const BROWSER_USER_ID = "11111111111111111111111111111111";
 
 describe("session budgets", () => {
   beforeEach(cleanD1Tables);
+
+  it("lets the canonical owner manage a bot-created session from the browser", async () => {
+    const name = `budget-bot-owner-${Date.now()}`;
+    await initNamedSession(name, {
+      userId: "slack:integration-actor",
+      canonicalUserId: BROWSER_USER_ID,
+      sandboxSettings: { maxSessionCostUsd: 10 },
+    });
+    const response = await serviceFetch(`https://test.local/sessions/${name}/budget`, {
+      method: "PATCH",
+      body: JSON.stringify({ maxCostUsd: 20 }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(response.status).toBe(200);
+    const { ws, messages } = await openClientWs(name, {
+      subscribe: true,
+      userId: BROWSER_USER_ID,
+      canonicalUserId: BROWSER_USER_ID,
+    });
+    ws.close();
+    expect(messages[0].canManageBudget).toBe(true);
+
+    const member = await openClientWs(name, { subscribe: true, userId: "another-user" });
+    member.ws.close();
+    expect(member.messages[0].canManageBudget).toBe(false);
+  });
 
   it("persists resolved budget settings in the session snapshot", async () => {
     const name = `budget-snapshot-${Date.now()}`;

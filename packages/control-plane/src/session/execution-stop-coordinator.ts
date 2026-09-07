@@ -1,20 +1,14 @@
-import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../logger";
-import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
+import type { AlarmScheduler } from "../platform-ports";
 import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
 import type { AlarmDeadlineStore } from "./alarm/scheduler";
-import type { CallbackNotificationService } from "./callback-notification-service";
-import type { MessageRepository, RecordedMessageCompletion } from "./message-repository";
+import type { MessageRepository } from "./message-repository";
+import type { MessageFailureService, RecordedMessageFailure } from "./message-failure-service";
 import { STOP_CONFIRMATION_TIMEOUT_MS } from "./message-repository";
 import type { SessionMessenger } from "./messenger";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
-
-interface RecordedMessageFailure {
-  event: Extract<SandboxEvent, { type: "execution_complete" }>;
-  completion: RecordedMessageCompletion;
-}
 
 export interface ExecutionStopPreparation {
   stopped: boolean;
@@ -25,19 +19,13 @@ export interface ExecutionStopPreparation {
 
 export class ExecutionStopCoordinator {
   constructor(
-    private readonly backgroundTasks: BackgroundTasks,
     private readonly log: Logger,
     private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,
     private readonly wsManager: SessionWebSocketManager,
     private readonly messenger: SessionMessenger,
-    private readonly callbackService: CallbackNotificationService,
     private readonly sessionStatus: SessionStatusService,
-    private readonly projectTerminalMessage: (
-      messageId: string,
-      messageCreatedAt: number,
-      completedAt: number
-    ) => Promise<void>,
+    private readonly messageFailures: MessageFailureService,
     private readonly sandboxLifecycle: SandboxLifecycle,
     private readonly alarmScheduler: AlarmScheduler,
     private readonly alarmDeadlines: AlarmDeadlineStore,
@@ -61,7 +49,7 @@ export class ExecutionStopCoordinator {
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
     const failure = processingMessage
-      ? this.recordMessageFailure(processingMessage, reason, now)
+      ? this.messageFailures.record(processingMessage.id, reason, now, "processing")
       : null;
     if (processingMessage && failure) {
       this.messageRepository.markMessageAwaitingStopConfirmation(
@@ -86,7 +74,7 @@ export class ExecutionStopCoordinator {
     ) {
       return;
     }
-    this.projectMessageFailure(preparation.failure);
+    this.messageFailures.deliver(preparation.failure);
     this.broadcastPromptQueue();
     this.log.info("prompt.stopped", {
       event: "prompt.stopped",
@@ -136,49 +124,5 @@ export class ExecutionStopCoordinator {
       this.messageRepository.clearMessageAwaitingStopConfirmation(awaitingStop.id);
     }
     await this.processMessageQueue();
-  }
-
-  private recordMessageFailure(
-    message: { id: string; created_at: number },
-    error: string,
-    completedAt: number
-  ): RecordedMessageFailure | null {
-    const event: Extract<SandboxEvent, { type: "execution_complete" }> = {
-      type: "execution_complete",
-      messageId: message.id,
-      success: false,
-      error,
-      sandboxId: "",
-      timestamp: completedAt / 1000,
-    };
-    const completion = this.messageRepository.recordMessageCompletion(
-      event,
-      completedAt,
-      "processing"
-    );
-    return completion ? { event, completion } : null;
-  }
-
-  private projectMessageFailure({ event, completion }: RecordedMessageFailure): void {
-    this.backgroundTasks.submit(
-      () =>
-        this.projectTerminalMessage(
-          completion.messageId,
-          completion.messageCreatedAt,
-          completion.completedAt
-        )
-          .catch((error) => {
-            this.log.error("terminal_message.projection_failed", {
-              message_id: completion.messageId,
-              error,
-            });
-          })
-          .then(() => this.messenger.broadcast({ type: "sandbox_event", event })),
-      { name: "terminal_message.project", context: { message_id: completion.messageId } }
-    );
-    this.backgroundTasks.submit(
-      () => this.callbackService.notifyComplete(completion.messageId, false, event.error),
-      { name: "callback.notify_complete", context: { message_id: completion.messageId } }
-    );
   }
 }

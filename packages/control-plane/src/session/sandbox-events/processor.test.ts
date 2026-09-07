@@ -92,7 +92,12 @@ function createProcessor() {
   const backgroundTasks = createTestBackgroundTasks();
   const budgetService = {
     ingestStepFinish: vi.fn(async () => {}),
-    ingestExecutionComplete: vi.fn(async (_event: unknown, _now: number) => {}),
+    observeExecutionCost: vi.fn((_event: unknown, _now: number) => ({
+      warningEvent: null,
+      stopPreparation: null,
+      statusChanged: false,
+    })),
+    deliverTransition: vi.fn(async () => {}),
   };
 
   // The real family composition, mirroring components.ts, so the suite keeps
@@ -129,7 +134,8 @@ function createProcessor() {
       scheduleInactivityCheck,
       processMessageQueue,
       broadcastPromptQueue,
-      (event, now) => budgetService.ingestExecutionComplete(event, now)
+      budgetService,
+      (closure) => closure()
     ),
     new SandboxRuntimeEventHandler(
       repository as unknown as SessionCoreRepository,

@@ -338,6 +338,9 @@ export function sessionSocketReducer(
 
     case "events_appended": {
       let next: SessionSocketState = { ...state, events: [...state.events, ...action.events] };
+      // Budget-aware servers publish committed totals, including cumulative
+      // repairs. Raw step costs are only a display fallback for older servers.
+      if (next.sessionState?.maxSessionCostUsd !== undefined) return next;
       for (const event of action.events) {
         if (
           event.type === "step_finish" &&

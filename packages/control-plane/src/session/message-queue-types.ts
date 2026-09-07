@@ -1,7 +1,5 @@
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
-import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { MessageSource } from "@open-inspect/shared/types/sessions";
-import type { RecordedMessageCompletion } from "./message-repository";
 import type { ParticipantRow } from "./types";
 
 export interface PromptMessageData {
@@ -10,11 +8,6 @@ export interface PromptMessageData {
   model?: string;
   reasoningEffort?: string;
   attachments?: SessionAttachmentReference[];
-}
-
-export interface RecordedMessageFailure {
-  event: Extract<SandboxEvent, { type: "execution_complete" }>;
-  completion: RecordedMessageCompletion;
 }
 
 export interface EnqueuePromptCoreData {

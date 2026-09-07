@@ -108,6 +108,49 @@ function createService(row = session()) {
 }
 
 describe("SessionBudgetService", () => {
+  it.each([null, 100])("publishes repaired costs below the limit (%s)", async (maxCostUsd) => {
+    const h = createService(session({ total_cost: 0, max_cost_usd: maxCostUsd }));
+    await h.service.ingestStepFinish(
+      {
+        type: "step_finish",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+        cost: 0.5,
+        messageCostUsd: 1.5,
+      },
+      "message-1",
+      1000
+    );
+    expect(h.broadcast).toHaveBeenLastCalledWith({
+      type: "budget_status",
+      totalCost: 1.5,
+      maxSessionCostUsd: maxCostUsd,
+      budgetExhausted: false,
+      costTrackingUnavailable: false,
+    });
+
+    const transition = h.service.observeExecutionCost(
+      {
+        type: "execution_complete",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 2,
+        success: true,
+        messageCostUsd: 2,
+      },
+      2000
+    );
+    await h.service.deliverTransition(transition);
+    expect(h.broadcast).toHaveBeenLastCalledWith({
+      type: "budget_status",
+      totalCost: 2,
+      maxSessionCostUsd: maxCostUsd,
+      budgetExhausted: false,
+      costTrackingUnavailable: false,
+    });
+  });
+
   it("applies a cumulative report once and repairs a dropped one", async () => {
     const h = createService(session({ total_cost: 0, max_cost_usd: 100 }));
     const event = {
@@ -174,7 +217,7 @@ describe("SessionBudgetService", () => {
     const h = createService(session({ total_cost: 9 }));
     h.prepareBudgetStop.mockReturnValueOnce({ stopped: false } as ExecutionStopPreparation);
 
-    await h.service.ingestExecutionComplete(
+    const transition = h.service.observeExecutionCost(
       {
         type: "execution_complete",
         messageId: "message-1",
@@ -186,6 +229,7 @@ describe("SessionBudgetService", () => {
       1000
     );
 
+    await h.service.deliverTransition(transition);
     expect(h.repository.addSessionCost).toHaveBeenCalledWith(1.5, 1000);
     expect(h.repository.markBudgetExhausted).toHaveBeenCalledWith(1000);
     expect(h.eventRepository.createEvent).toHaveBeenCalledWith(
@@ -197,7 +241,7 @@ describe("SessionBudgetService", () => {
   it("ignores execution_complete without a cumulative report", async () => {
     const h = createService();
 
-    await h.service.ingestExecutionComplete(
+    h.service.observeExecutionCost(
       {
         type: "execution_complete",
         messageId: "message-1",

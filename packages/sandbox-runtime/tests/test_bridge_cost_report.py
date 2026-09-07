@@ -1,6 +1,7 @@
 """The turn's final cumulative cost rides on execution_complete."""
 
-from unittest.mock import AsyncMock
+import asyncio
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -36,6 +37,38 @@ def _completion(bridge: AgentBridge) -> dict:
 
 
 class TestExecutionCompleteCostReport:
+    @pytest.mark.asyncio
+    async def test_stopped_turn_reports_cost_once(self, bridge: AgentBridge):
+        reported = asyncio.Event()
+
+        async def stream(*_args, **_kwargs):
+            yield {"type": "step_finish", "messageId": "msg-1", "cost": 0.5, "messageCostUsd": 0.5}
+            reported.set()
+            await asyncio.Event().wait()
+
+        bridge._stream_opencode_response_sse = stream
+        bridge._request_opencode_stop = AsyncMock()
+        bridge.diff_refresh = Mock()
+        await bridge._handle_command({"type": "prompt", **_prompt_command()})
+        await asyncio.wait_for(reported.wait(), timeout=1)
+        task = bridge._current_prompt_task
+        assert task is not None
+        await bridge._handle_stop()
+        await task
+        await asyncio.sleep(0)  # Let the done callback run as well.
+
+        events = [call.args[0] for call in bridge._send_event.await_args_list]
+        completions = [event for event in events if event["type"] == "execution_complete"]
+        assert completions == [
+            {
+                "type": "execution_complete",
+                "messageId": "msg-1",
+                "success": False,
+                "error": "Task was cancelled",
+                "messageCostUsd": 0.5,
+            }
+        ]
+
     @pytest.mark.asyncio
     async def test_carries_the_last_cumulative_report(self, bridge: AgentBridge):
         async def stream(*_args, **_kwargs):

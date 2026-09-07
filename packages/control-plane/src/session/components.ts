@@ -85,6 +85,7 @@ import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionBudgetService } from "./budget-service";
 import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
+import { MessageFailureService } from "./message-failure-service";
 import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import { SessionSandboxEventProcessor } from "./sandbox-events/processor";
@@ -409,16 +410,22 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   // Tier 6 — the message queue.
   const getExecutionTimeoutMs = () => resolveExecutionTimeoutMs(sessionCoreRepository, env, log);
-  const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
+  const messageFailures = new MessageFailureService(
     backgroundTasks,
+    log,
+    messageRepository,
+    messenger,
+    callbackService,
+    recordTerminalMessage
+  );
+  const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
     sessionCoreRepository,
     messageRepository,
     wsManager,
     messenger,
-    callbackService,
     statusService,
-    recordTerminalMessage,
+    messageFailures,
     lifecycleManager,
     alarmScheduler,
     alarmDeadlines,
@@ -438,7 +445,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     statusService,
     (model) => userEnvResolver.getProviderAuthenticationError(model),
-    recordTerminalMessage,
+    messageFailures,
     lifecycleManager,
     sessionIndexStore,
     scmProviderName,
@@ -505,7 +512,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     () => lifecycleManager.scheduleInactivityCheck(),
     () => messageQueue.processMessageQueue(),
     () => messageQueue.broadcastPromptQueue(),
-    (event, now) => budgetService.ingestExecutionComplete(event, now)
+    budgetService,
+    transaction
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,
@@ -720,6 +728,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
 
   const connectionAuthenticator = new SessionConnectionAuthenticator({
+    getSessionOwnerId: async () =>
+      (await sessionIndexStore.get(getPublicSessionId()))?.userId ?? null,
     wsManager,
     sessionCoreRepository,
     sandboxRepository,

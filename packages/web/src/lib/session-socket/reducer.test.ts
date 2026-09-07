@@ -86,6 +86,45 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
+  it("uses authoritative totals for duplicate steps and final cost repairs", () => {
+    const event = {
+      type: "step_finish" as const,
+      messageId: "message-1",
+      cost: 0.5,
+      messageCostUsd: 0.5,
+      sandboxId: "sb",
+      timestamp: 1,
+    };
+    let state = subscribedState({
+      session: createSessionState({ totalCost: 0, maxSessionCostUsd: null }),
+    });
+    state = reduce(
+      state,
+      { type: "events_appended", events: [event] },
+      serverMessage({
+        type: "budget_status",
+        totalCost: 0.5,
+        maxSessionCostUsd: null,
+        budgetExhausted: false,
+        costTrackingUnavailable: false,
+      })
+    );
+    state = reduce(state, { type: "events_appended", events: [event] });
+    expect(state.sessionState?.totalCost).toBe(0.5);
+    // A final cumulative report repairs steps the browser never received.
+    state = reduce(
+      state,
+      serverMessage({
+        type: "budget_status",
+        totalCost: 2,
+        maxSessionCostUsd: null,
+        budgetExhausted: false,
+        costTrackingUnavailable: false,
+      })
+    );
+    expect(state.sessionState?.totalCost).toBe(2);
+  });
+
   describe("snapshot", () => {
     it("hydrates the authoritative prompt queue", () => {
       const promptQueue = [

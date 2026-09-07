@@ -29,6 +29,7 @@ import type { SessionSnapshotReader } from "./snapshot-reader";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import { parseClientCapabilities } from "./ws-client-mapping-repository";
 import { WS_AUTHORIZATION_LEASE_MS } from "./authorization-lease";
+import { canManageSessionBudget } from "./budget-authorization";
 
 /**
  * Maximum age of a WebSocket authentication token (in milliseconds).
@@ -53,6 +54,7 @@ export interface SessionConnectionAuthenticatorDeps {
   scmProviderName: SourceControlProviderName;
   /** Resolve a user's current authorization at the start of a subscription or command. */
   resolveAuthorization: (userId: string) => Promise<AuthorizationResolution>;
+  getSessionOwnerId: () => Promise<string | null>;
   /** The session-scoped logger; upgrade/subscribe paths also receive request-scoped children. */
   log: Logger;
 }
@@ -348,7 +350,10 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
         return;
       }
 
-      const enrichment = await this.deps.snapshotReader.resolveSessionSnapshotEnrichment();
+      const [enrichment, ownerUserId] = await Promise.all([
+        this.deps.snapshotReader.resolveSessionSnapshotEnrichment(),
+        this.deps.getSessionOwnerId(),
+      ]);
       const clientInfo: ClientInfo = {
         participantId: participant.id,
         userId: participant.canonical_user_id ?? participant.user_id,
@@ -368,7 +373,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
             clientInfo,
             enrichment,
             authorization.authorization.permissions.includes("sessions.sandbox_access"),
-            participant.role === "owner"
+            canManageSessionBudget(ownerUserId, authorization.authorization)
           )
         );
         if (!activated) {

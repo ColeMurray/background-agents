@@ -32,6 +32,7 @@ import {
 } from "./shared";
 import { parseBody, parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
+import { canManageSessionBudget } from "../session/budget-authorization";
 
 const participantsResponseSchema = z.object({
   participants: z.array(
@@ -291,7 +292,7 @@ async function handleBudgetUpdate(
 
   const session = await new SessionIndexStore(ctx.db).get(sessionId);
   if (!session) return error("Session not found", 404);
-  if (!ctx.authorization?.userId || session.userId !== ctx.authorization.userId) {
+  if (!canManageSessionBudget(session.userId, ctx.authorization)) {
     return error("Only the session owner can change the cost limit", 403);
   }
 
