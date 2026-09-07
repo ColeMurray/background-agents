@@ -10,8 +10,7 @@
  * spawn attempts within the same request.
  */
 
-import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
-import { extractProviderAndModel } from "@open-inspect/shared/models";
+import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import {
@@ -50,7 +49,11 @@ import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
 import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
-import { parsePersistedSandboxSettings } from "../settings";
+import {
+  parseSandboxSettings,
+  resolveLaunchInputs,
+  resolveSandboxTimeoutSeconds,
+} from "./launch-inputs";
 import {
   evaluateImageBuildForSpawn,
   type ImageBuildLookup,
@@ -276,22 +279,6 @@ function buildSandboxIdForSession(session: SessionRow, now: number): string {
     ? `${session.repo_owner}-${session.repo_name}`
     : session.id;
   return `sandbox-${sandboxName}-${now}`;
-}
-
-/**
- * Multi-repo additions to a spawn/restore config. Single-repo sessions keep
- * the scalar wire form untouched (the runtime synthesizes its one-entry
- * list from repo_owner/repo_name/branch), so nothing changes for them.
- * Working-branch names stay lazily derived at PR-creation time
- * (pull-request-service) and reach the sandbox via per-repo push specs,
- * never via spawn config.
- */
-function multiRepoSpawnFields(
-  repositories: SessionRepositoryInfo[]
-): Pick<CreateSandboxConfig, "repositories"> {
-  return repositories.length > 1 || repositories.some((repository) => repository.baseSha)
-    ? { repositories }
-    : {};
 }
 
 // ==================== MCP Server Lookup ====================
@@ -556,7 +543,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.storage.setLastSpawnError(null, null);
 
       const now = Date.now();
-      const sessionId = session.session_name || session.id;
       const hasRepository = sessionHasRepository(session);
       let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(session, now, {
         preserveProviderObjectId: true,
@@ -565,10 +551,13 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       await this.stopPriorProviderSandbox();
 
-      const userEnvVars = await this.sessionContext.getUserEnvVars();
-      const { provider, model: modelId } = this.resolveProviderAndModel(session);
-      const repositories = this.sessionContext.getSessionRepositories();
-      const multiRepoFields = multiRepoSpawnFields(repositories);
+      const { repositories, inputs } = await resolveLaunchInputs(
+        session,
+        this.sessionContext,
+        this.config,
+        this.provider,
+        this.log
+      );
 
       // Prebuilt-image selection: an environment session matches its
       // environment's image against the session's own repository snapshot
@@ -595,33 +584,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
       const prebuiltImageSha: string | null = selectedImage?.primaryBaseSha ?? null;
 
-      const mcpServers = await this.loadMcpServers(repositories);
-
-      const codeServerEnabled = session.code_server_enabled === 1;
-      const vncEnabled = session.vnc_enabled === 1;
-      const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-      const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       const createConfig: CreateSandboxConfig = {
-        sessionId,
+        ...inputs,
         sandboxId: expectedSandboxId,
-        repoOwner: session.repo_owner,
-        repoName: session.repo_name,
-        controlPlaneUrl: this.config.controlPlaneUrl,
         sandboxAuthToken,
-        provider,
-        model: modelId,
-        userEnvVars,
         prebuiltImageId,
         prebuiltImageSha,
-        timeoutSeconds,
-        branch: session.base_branch,
-        codeServerEnabled,
-        vncEnabled,
-        agentSlackNotifyEnabled,
-        mcpServers,
-        sandboxSettings,
-        ...multiRepoFields,
       };
 
       let result: CreateSandboxResult;
@@ -661,19 +629,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         });
       }
 
-      if (result.providerObjectId) {
-        this.storeAndBroadcastProviderObjectId(result.providerObjectId);
-      }
-      if (result.codeServerUrl && result.codeServerPassword) {
-        await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
-      }
-      if (result.vncAccess) {
-        await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
-      }
-      await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
-      if (result.ttydUrl) {
-        await this.storeTtyd(result.ttydUrl, sandboxAuthToken, sessionId, expectedSandboxId);
-      }
+      await this.publishStartupAccess(
+        result,
+        inputs.sessionId,
+        expectedSandboxId,
+        sandboxAuthToken
+      );
 
       await this.finishProviderStartup(generation);
 
@@ -797,49 +758,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
   }
 
-  private async resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean> {
-    if (!this.config.slackAgentNotifyLookup) return false;
-    try {
-      return await this.config.slackAgentNotifyLookup.isEnabledForRepo(
-        sessionHasRepository(session) ? session.repo_owner : null,
-        sessionHasRepository(session) ? session.repo_name : null
-      );
-    } catch (err) {
-      this.log.warn("Failed to resolve agent slack-notify gate; treating as disabled", {
-        event: "slack_notify.gate_resolve_failed",
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return false;
-    }
-  }
-
-  /**
-   * Load MCP servers applicable to the current session's repository.
-   * Returns undefined if none are found or DB is not configured.
-   */
-  private async loadMcpServers(
-    repositories: SessionRepositoryInfo[]
-  ): Promise<McpServerConfig[] | undefined> {
-    try {
-      if (!this.config.mcpServerLookup) return undefined;
-      const servers = await this.config.mcpServerLookup.getDecryptedForSession(
-        repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
-      );
-      this.log.info("MCP servers loaded", {
-        event: "mcp.loaded",
-        count: servers?.length ?? 0,
-        names: servers?.map((s) => s.name) ?? [],
-      });
-      return servers?.length ? servers : undefined;
-    } catch (err) {
-      this.log.warn("Failed to load MCP servers", {
-        event: "mcp.load_failed",
-        error: String(err),
-      });
-      return undefined;
-    }
-  }
-
   /**
    * Report why the sandbox failed: broadcast it to connected clients and
    * persist it, as one step.
@@ -945,56 +863,27 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       await this.stopPriorProviderSandbox();
 
-      const userEnvVars = await this.sessionContext.getUserEnvVars();
-      const { provider, model: modelId } = this.resolveProviderAndModel(session);
-
-      const repositories = this.sessionContext.getSessionRepositories();
-      const codeServerEnabled = session.code_server_enabled === 1;
-      const vncEnabled = session.vnc_enabled === 1;
-      const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-      const mcpServers = await this.loadMcpServers(repositories);
-      const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
+      const { inputs } = await resolveLaunchInputs(
+        session,
+        this.sessionContext,
+        this.config,
+        this.provider,
+        this.log
+      );
       const result = await this.provider.restoreFromSnapshot({
+        ...inputs,
         snapshotImageId,
-        sessionId: session.session_name || session.id,
         sandboxId: expectedSandboxId,
         sandboxAuthToken,
-        controlPlaneUrl: this.config.controlPlaneUrl,
-        repoOwner: session.repo_owner,
-        repoName: session.repo_name,
-        provider,
-        model: modelId,
-        userEnvVars,
-        timeoutSeconds,
-        branch: session.base_branch,
-        codeServerEnabled,
-        vncEnabled,
-        agentSlackNotifyEnabled,
-        mcpServers,
-        sandboxSettings,
-        ...multiRepoSpawnFields(repositories),
       });
 
       if (result.success) {
-        if (result.providerObjectId) {
-          this.storeAndBroadcastProviderObjectId(result.providerObjectId);
-        }
-        if (result.codeServerUrl && result.codeServerPassword) {
-          await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
-        }
-        if (result.vncAccess) {
-          await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
-        }
-        await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
-        if (result.ttydUrl) {
-          await this.storeTtyd(
-            result.ttydUrl,
-            sandboxAuthToken,
-            session.session_name || session.id,
-            expectedSandboxId
-          );
-        }
+        await this.publishStartupAccess(
+          result,
+          inputs.sessionId,
+          expectedSandboxId,
+          sandboxAuthToken
+        );
 
         await this.finishProviderStartup(generation);
 
@@ -1080,8 +969,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         })
       );
 
-      const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
+      const sandboxSettings = parseSandboxSettings(session, this.log);
+      const timeoutSeconds = resolveSandboxTimeoutSeconds(sandboxSettings, this.provider);
 
       const result = await this.provider.resumeSandbox({
         providerObjectId,
@@ -1659,14 +1548,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   /**
-   * Resolve the provider and model ID from the session or config default.
-   * e.g., "openai/gpt-5.3-codex" -> { provider: "openai", model: "gpt-5.3-codex" }
-   */
-  private resolveProviderAndModel(session: SessionRow): { provider: string; model: string } {
-    return extractProviderAndModel(session.model || this.config.model);
-  }
-
-  /**
    * Get the count of connected client WebSockets.
    */
   private getConnectedClientCount(): number {
@@ -1702,27 +1583,33 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     await this.storage.updateSandboxAccess("vnc", url, password);
   }
 
-  private parseSandboxSettings(session: SessionRow): SandboxSettings {
-    try {
-      return parsePersistedSandboxSettings(session.sandbox_settings);
-    } catch {
-      this.log.warn("Failed to parse sandbox_settings, using defaults");
-      return {};
+  private async publishStartupAccess(
+    result: Pick<
+      CreateSandboxResult,
+      | "providerObjectId"
+      | "codeServerUrl"
+      | "codeServerPassword"
+      | "vncAccess"
+      | "tunnelUrls"
+      | "ttydUrl"
+    >,
+    sessionId: string,
+    sandboxId: string,
+    sandboxAuthToken: string
+  ): Promise<void> {
+    if (result.providerObjectId) {
+      this.storeAndBroadcastProviderObjectId(result.providerObjectId);
     }
-  }
-
-  private resolveSandboxTimeoutSeconds(sandboxSettings: SandboxSettings): number | undefined {
-    if (!this.provider.capabilities.supportsSandboxTimeout) {
-      if (sandboxSettings.sandboxTimeoutMs !== undefined) {
-        throw new SandboxProviderError(
-          `${this.provider.name} does not support configurable sandbox timeouts`,
-          "permanent"
-        );
-      }
-      return undefined;
+    if (result.codeServerUrl && result.codeServerPassword) {
+      await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
     }
-    const timeoutMs = sandboxSettings.sandboxTimeoutMs;
-    return timeoutMs === undefined ? undefined : timeoutMs / 1000;
+    if (result.vncAccess) {
+      await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
+    }
+    await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
+    if (result.ttydUrl) {
+      await this.storeTtyd(result.ttydUrl, sandboxAuthToken, sessionId, sandboxId);
+    }
   }
 
   private async storeAndBroadcastTunnelUrls(
