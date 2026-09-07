@@ -2,10 +2,10 @@
 
 ## Selected changes
 
-1. **Creator-filtered inbox query:** materialize `eligible_sessions` only for a nonempty creator
-   filter. This lets SQLite index parent links during recursive rerooting instead of repeatedly
-   scanning the creator's sessions. Snapshot and category pages share the fix. Global queries retain
-   their existing plan; unconditional materialization regressed them in the experiment.
+1. **Creator-filtered inbox query:** materialize only `(id, parent_session_id)` links in the
+   recursive child traversal. Seed detection and the full eligible projection remain inline, so
+   dense all-visible lineages do not build the temporary relation. Snapshot and category pages share
+   the fix. The hint remains limited to nonempty creator filters.
 2. **Replay and history payloads:** retain a contiguous newest suffix under an estimated 256 KiB
    UTF-8 stored-event budget. Existing count limits, response schemas, and cursor formats remain.
    One oversized storage row is allowed so pagination progresses. Malformed rows still advance the
@@ -26,7 +26,8 @@
 
 Base: `265a5997cf5d2a929344bdecd671ce9972349b36`. Local workerd, real D1 and DO SQLite, generated
 credentials and synthetic data, mocked Modal. Thirty sequential warm samples after five warmups. The
-candidate measurements below use the actual production sources, with no experiment transforms.
+candidate measurements below used production sources at `69945bf61`, before review follow-ups, with
+no experiment transforms. They have not been remeasured with the active-prompt projection.
 
 | Operation                                               | Baseline p50 / p95 | Candidate p50 / p95 |
 | ------------------------------------------------------- | -----------------: | ------------------: |
@@ -40,14 +41,31 @@ confirms one removed user lookup; the original generic-cache experiment's three-
 **not** claimed for this implementation. Injection is a sensitivity test, not a measurement of
 regional D1 latency.
 
-The preceding filtered-inbox experiment at 100k sessions measured a 60.9-second baseline probe (only
+The original filtered-inbox experiment at 100k sessions measured a 60.9-second baseline probe (only
 one, deliberately bounded) versus a 253 ms candidate median over 30 samples, with identical results.
+That wide-materialization candidate was superseded after review reproduced a dense-case regression.
+The final query materializes only links, and only when recursive traversal runs. A schema-migrated
+Node SQLite comparison (one warmup, five warm samples, identical snapshot/list results) verified
+both dense all-owned sessions with visible parents and sparse sessions with hidden parents. Dense
+queries remain near the original inline plan, while sparse traversal retains its improvement. These
+timings come from a separate local-only comparison harness, not the committed regression suites.
+
+| Fixture / operation | Original inline p50 | Final narrow-links p50 |
+| ------------------- | ------------------: | ---------------------: |
+| Dense 100k snapshot |           194.51 ms |              193.48 ms |
+| Dense 100k list     |           126.05 ms |              126.86 ms |
+| Sparse 4k snapshot  |            52.74 ms |                7.31 ms |
+| Sparse 4k list      |            49.67 ms |                5.94 ms |
+
 The committed real-workerd regression fixture checks work rather than wall time:
 
 - A 50-event deep page over 10k rows read 5,402 rows before the fix; now required to read fewer
   than 200.
-- A 4k creator-filtered inbox fixture read 384,806 rows before the fix; now required to read fewer
-  than 160,000. It includes hidden parents and checks snapshot/category cursor disjointness.
+- Dense and sparse 4k creator-filtered inbox fixtures require fewer than 160,000 rows read for both
+  snapshot and category pagination. The original sparse fixture read 384,806 rows before the fix.
+  Both backends share wide synthetic rows and check snapshot/category cursor disjointness.
+- Node adapter tests use all production migrations and verify identical snapshot/category results,
+  hidden-parent rerooting, and query plans that index narrow links without materializing wide rows.
 - Existing inbox integration tests cover rerooting, unread classification, automation visibility,
   tied timestamps, and repository/PR decoration. Additional tests constrain the hint to nonempty
   creator filters, preserve legacy schema initialization, and reconstruct heavy replay over HTTP/WS.

@@ -194,12 +194,12 @@ export class SessionInboxStore {
     >
   ): { sql: string; params: unknown[] } {
     const { conditions, params } = this.eligibility(options);
-    // With a creator filter, inlining this CTE can repeatedly scan all of that
-    // creator's sessions in the recursive child join. Materialization lets SQLite
-    // index the eligible parent links. Leave the faster unfiltered plan alone.
+    // Only recursive child traversal needs transient parent-link indexes. Keep
+    // the seed and full projection inline so dense, all-visible lineages never
+    // build a temporary table. Unfiltered links retain their existing plan.
     const materialization = options.createdByUserIds?.length ? "MATERIALIZED " : "";
     return {
-      sql: `WITH RECURSIVE eligible_sessions AS ${materialization}(
+      sql: `WITH RECURSIVE eligible_sessions AS (
               SELECT sessions.*, ${unreadSql("sessions")} AS unread
               FROM sessions
               LEFT JOIN users viewer ON viewer.id = ?
@@ -207,6 +207,9 @@ export class SessionInboxStore {
                 ON read_state.session_id = sessions.id
                AND read_state.user_id = viewer.id
               WHERE ${conditions.join(" AND ")}
+            ),
+            eligible_session_links AS ${materialization}(
+              SELECT id, parent_session_id FROM eligible_sessions
             ),
             -- Filtering can hide an ancestor. Re-root each resulting visible subtree
             -- while retaining the persisted root for uninterrupted lineages.
@@ -221,7 +224,7 @@ export class SessionInboxStore {
               UNION
               SELECT child.id, rerooted_sessions.effective_root_session_id
               FROM rerooted_sessions
-              JOIN eligible_sessions child ON child.parent_session_id = rerooted_sessions.id
+              JOIN eligible_session_links child ON child.parent_session_id = rerooted_sessions.id
             ),
             effective_sessions AS (
               SELECT eligible_sessions.*,
