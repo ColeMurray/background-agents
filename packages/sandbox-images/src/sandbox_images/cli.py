@@ -102,7 +102,6 @@ def main() -> None:
     if args.command == "pack":
         if len(providers) != 1:
             parser.error("pack requires one provider")
-        update_locks(args.root, check=True)
         print(
             pack_bundle(
                 args.root, args.provider, args.output or args.root / ".cache/sandbox-images"
