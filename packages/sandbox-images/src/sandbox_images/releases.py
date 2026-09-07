@@ -8,10 +8,12 @@ import json
 import os
 import re
 import tempfile
-from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 from .bundle import canonical_json
 
