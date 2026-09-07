@@ -53,21 +53,24 @@ isolated worktree was created from freshly fetched upstream; neither the active 
 nor `prod/` was modified. This describes upstream source behavior, **not an audit of currently
 deployed artifacts**. No provider builds, deployment changes, or paid smoke tests were run.
 
-### Current provider build paths
+### Provider build paths at the reviewed baseline
+
+The evidence below describes the pre-consolidation baseline. The implementation now replaces
+duplicated installers with the shared bundle; the Vercel builder moved to
+`packages/vercel-infra/src/base-snapshot.ts`, and E2B's legacy Dockerfile was removed.
 
 | Provider     | Image construction in this checkout                                                                                                                                                                                                                                                                    | Important differences to retain                                                                                                                                                     | Repository/environment prebuilds                                                                  |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Modal        | [Python image chain](../../packages/modal-infra/src/images/base.py); eager build through [deploy.py](../../packages/modal-infra/deploy.py)                                                                                                                                                             | Debian slim/Python 3.12; root runtime; native Modal image construction and deployment                                                                                               | Supported through the existing image-build workflow                                               |
 | Daytona      | [Python toolchain builder](../../packages/daytona-infra/src/toolchain.py) and [bootstrap CLI](../../packages/daytona-infra/src/bootstrap.py)                                                                                                                                                           | `python:3.12-slim-bookworm`; root-oriented paths; named snapshot; current forced rebuild deletes the old name first                                                                 | Not supported by current image-build policy; ordinary sessions use persistent lifecycle semantics |
 | E2B          | Legacy Dockerfile plus [Template SDK builder](../../packages/e2b-infra/build-template.py)                                                                                                                                                                                                              | Debian/Python 3.12; non-root `user`; build-time environment is not sufficient for the current launch integration; inert template start command and explicit runtime launch via envd | Supported, including provider-specific snapshot sanitization                                      |
-| Vercel       | [TypeScript-generated shell bootstrap](../../packages/control-plane/src/sandbox/providers/vercel/bootstrap.ts), [temporary-sandbox builder](../../packages/control-plane/src/sandbox/providers/vercel/base-snapshot.ts), and [CLI](../../packages/control-plane/scripts/build-vercel-base-snapshot.ts) | Current integration uses `node24`, `dnf`, Python 3.12, source-built desktop tools, and privileged runtime launch                                                                    | Supported through filesystem snapshots                                                            |
+| Vercel       | [TypeScript-generated shell bootstrap](../../packages/control-plane/src/sandbox/providers/vercel/bootstrap.ts), [temporary-sandbox builder](../../packages/vercel-infra/src/base-snapshot.ts), and [CLI](../../packages/control-plane/scripts/build-vercel-base-snapshot.ts) | Current integration uses `node24`, `dnf`, Python 3.12, source-built desktop tools, and privileged runtime launch                                                                    | Supported through filesystem snapshots                                                            |
 | OpenComputer | [TypeScript image builder](../../packages/opencomputer-infra/src/build-template.ts)                                                                                                                                                                                                                    | Provider base image; `/home/sandbox`, user-owned Python/npm prefixes, `/app` symlink, proxy CA and network setup                                                                    | Supported through provider checkpoints                                                            |
 
 The authoritative prebuild capability list is
 [provider-policy.ts](../../packages/control-plane/src/image-builds/provider-policy.ts), which
-includes Modal, Vercel, OpenComputer, and E2B. [IMAGE_PREBUILD.md](../IMAGE_PREBUILD.md) still
-describes E2B prebuilds as disabled; use executable policy for this design and correct that
-documentation during implementation.
+includes Modal, Vercel, OpenComputer, and E2B. [IMAGE_PREBUILD.md](../IMAGE_PREBUILD.md) has been
+updated to match that executable policy.
 
 ### What is already consolidated
 
