@@ -136,6 +136,10 @@ jobs:
         run: terraform test
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      - name: Sandbox release configuration contract
+        run: terraform init -backend=false -input=false && terraform test
+        working-directory: terraform/modules/sandbox-image-selection
+
       - name: Post Validation Results
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v8

@@ -61,8 +61,11 @@ JSON contains no credentials but includes native references and dependency inven
 operational metadata. CI candidate artifacts expire and are only a transport into the durable Git
 lock.
 
-Terraform consumes the selected records as `SANDBOX_BASE_RELEASES`; Node hosts can set the same JSON
-map (provider to the corresponding full release record). Modal additionally deploys its function
+Terraform projects selected records into compact `SANDBOX_BASE_RELEASES` configuration; Node hosts
+can set the same JSON map. Each entry contains `schemaVersion`, `baseReleaseId`, `artifact`
+(provider/scope/reference), and `identity` (recipeDigest/inventoryDigest/target/runtimeVersion).
+Full inventories and verification evidence stay in the release lock, not Worker bindings. Terraform
+rejects configuration larger than 5,000 UTF-8 bytes. Modal additionally deploys its function
 environment with the selected native image ID. Recipe changes alone never advance a compatibility
 floor.
 
