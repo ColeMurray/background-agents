@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Image, Sandbox, Snapshots } from "@opencomputer/sdk/node";
 import { packImage, recordCandidate } from "../../sandbox-images/src/node";
 const SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
@@ -23,7 +24,7 @@ const DNS_BOOTSTRAP =
   "sudo rm -f /etc/resolv.conf; " +
   "printf '%s\\n' 'nameserver 8.8.8.8' 'nameserver 1.1.1.1' | sudo tee /etc/resolv.conf >/dev/null";
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const root =
     process.env.OPENINSPECT_REPO_ROOT ||
     execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
@@ -71,12 +72,8 @@ async function main(): Promise<void> {
     process.env.OPENINSPECT_IMAGE_CANDIDATE ||
     `${process.env.OPENCOMPUTER_TEMPLATE || "openinspect-runtime"}-${packed.plan.recipeDigest.slice(0, 12)}-${Date.now()}`;
   const snapshots = new Snapshots({ apiUrl, apiKey });
-  if (!existing && (await snapshots.list()).some((snapshot) => snapshot.name === name)) {
-    throw new Error(
-      "OpenComputer candidate already exists; choose a new name instead of overwriting it"
-    );
-  }
-  const artifact = existing
+  const retained = existing || (await snapshots.list()).some((snapshot) => snapshot.name === name);
+  const artifact = retained
     ? await snapshots.get(name)
     : await snapshots.create({ name, image, onBuildLogs: (log) => console.log(log) });
   if (artifact.status !== "ready")
@@ -100,7 +97,9 @@ async function main(): Promise<void> {
     await sandbox.kill();
   }
 }
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
