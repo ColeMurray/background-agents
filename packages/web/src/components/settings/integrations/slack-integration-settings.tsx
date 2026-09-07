@@ -146,11 +146,17 @@ export function SlackIntegrationSettings() {
         </p>
       </SettingsCardSection>
 
-      <fieldset disabled={!canManageGlobal} className="min-w-0">
+      <fieldset
+        disabled={!canManageGlobal || globalSettingsEditor.savingDefaults}
+        className="min-w-0"
+      >
         <GlobalSettingsSection settings={settings} editor={globalSettingsEditor} />
       </fieldset>
 
-      <fieldset disabled={!canManageGlobal} className="min-w-0">
+      <fieldset
+        disabled={!canManageGlobal || globalSettingsEditor.savingRoutingRules}
+        className="min-w-0"
+      >
         <RoutingRulesSection
           settings={settings}
           availableRepos={availableRepos}

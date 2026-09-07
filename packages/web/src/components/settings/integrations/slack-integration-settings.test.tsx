@@ -573,6 +573,8 @@ describe("SlackIntegrationSettings", () => {
       );
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByLabelText(/session instructions/i)).toBeDisabled();
+      expect(within(routingSection()).getByRole("textbox", { name: /keyword/i })).toBeDisabled();
       firstResponse.resolve(okJson({}));
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
