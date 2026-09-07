@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import pwd
+import re
 import signal
 import socket
 import subprocess
@@ -198,6 +199,25 @@ def installed_os_packages(probe: Probe, os_family: str) -> list[str]:
     return sorted(probe.run(command).splitlines())
 
 
+def observed_tool_version(command: str, expected: str, output: str) -> str:
+    """Normalize the command's leading version, not an expected substring."""
+    prefixes = {
+        "node": r"v",
+        "opencode": r"",
+        "bun": r"",
+        "pnpm": r"",
+        "agent-browser": r"agent-browser\s+",
+        "code-server": r"",
+        "ttyd": r"ttyd version\s+",
+        "google-chrome": r"Google Chrome(?: for Testing)?\s+",
+    }
+    match = re.match(prefixes[command] + r"(\d+(?:\.\d+){2,3})(?=\s|$)", output.strip())
+    observed = match.group(1) if match else None
+    if observed != expected:
+        raise RuntimeError(f"{command} version mismatch: expected {expected}, got {output}")
+    return observed
+
+
 def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool) -> dict[str, Any]:
     probe = Probe(plan)
     versions = {}
@@ -212,9 +232,7 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
         ("google-chrome", tools["chrome"]["version"]),
     ):
         observed = probe.run([command, "--version"])
-        if version not in observed:
-            raise RuntimeError(f"{command} version mismatch: expected {version}, got {observed}")
-        versions[command] = version
+        versions[command] = observed_tool_version(command, version, observed)
     installed_runtime = probe.run(
         [
             "python3",
