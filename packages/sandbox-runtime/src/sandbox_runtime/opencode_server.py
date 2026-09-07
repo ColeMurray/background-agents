@@ -5,7 +5,6 @@ import contextlib
 import filecmp
 import json
 import os
-import re
 import shutil
 import time
 from pathlib import Path
@@ -19,6 +18,7 @@ from .constants import (
     OPENCODE_PORT,
 )
 from .git_excludes import install_runtime_git_excludes
+from .mcp_packages import McpPackageInstaller
 from .process_output import iter_process_lines
 
 if TYPE_CHECKING:
@@ -44,8 +44,6 @@ def resolve_opencode_global_config_dir() -> Path:
 
 class OpenCodeServer:
     HEALTH_CHECK_TIMEOUT = 30.0
-    MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
-    _NPM_PKG_RE = re.compile(r"^(@[\w.-]+/)?[\w][\w.-]*(@[\w.-]+)?$")
 
     def __init__(
         self,
@@ -62,6 +60,7 @@ class OpenCodeServer:
         self.provider = config.provider
         self.model = config.model
         self.mcp_servers = config.mcp_servers
+        self._mcp_packages = McpPackageInstaller(log)
         self._opencode_process: asyncio.subprocess.Process | None = None
 
     def _assemble_workspace_opencode(self, repositories: Sequence[RepoEntry]) -> None:
@@ -387,72 +386,7 @@ class OpenCodeServer:
         return list(self.mcp_servers)
 
     async def _install_mcp_packages(self, servers: list[Mapping[str, Any]]) -> None:
-        """Pre-install npm packages for local MCP servers that use npx."""
-        packages: list[str] = []
-        for server in servers:
-            if server.get("type") == "remote":
-                continue
-            cmd = server.get("command", [])
-            if not cmd:
-                continue
-            parts = [c for c in cmd if isinstance(c, str)]
-            if not parts or parts[0] != "npx":
-                continue
-            # Extract package name: prefer -p/--package flag, else first non-flag arg
-            pkg: str | None = None
-            for i, part in enumerate(parts):
-                if part in ("-p", "--package") and i + 1 < len(parts):
-                    pkg = parts[i + 1]
-                    break
-            if pkg is None:
-                non_flags = [p for p in parts[1:] if not p.startswith("-")]
-                pkg = non_flags[0] if non_flags else None
-
-            if pkg:
-                if self._NPM_PKG_RE.match(pkg):
-                    packages.append(pkg)
-                else:
-                    self.log.warn(
-                        "mcp.invalid_package_name",
-                        package=pkg,
-                        note="package skipped — npx will attempt download at runtime",
-                    )
-
-        packages = list(dict.fromkeys(packages))  # deduplicate, preserve order
-        if not packages:
-            return
-
-        self.log.info("mcp.install_packages", packages=packages)
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "npm",
-                "install",
-                "-g",
-                *packages,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=self.MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS
-            )
-            if proc.returncode == 0:
-                self.log.info("mcp.packages_installed", packages=packages)
-            else:
-                self.log.warn(
-                    "mcp.packages_install_failed",
-                    packages=packages,
-                    stderr=(stderr or b"").decode()[:500],
-                )
-        except TimeoutError:
-            self.log.warn(
-                "mcp.packages_install_timeout",
-                packages=packages,
-                timeout_seconds=self.MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS,
-            )
-            proc.kill()
-            await proc.wait()
-        except Exception as e:
-            self.log.warn("mcp.packages_install_error", packages=packages, exc=str(e))
+        await self._mcp_packages.install(servers)
 
     def _build_mcp_config(self, servers: list[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
         """Convert MCP server list to OpenCode mcp config format."""

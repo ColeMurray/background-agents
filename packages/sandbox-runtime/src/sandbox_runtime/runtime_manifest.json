@@ -1,6 +1,6 @@
 {
-  "runtimeVersion": "v62-gpt6-astra",
-  "generation": 62,
+  "runtimeVersion": "v63-mcp-package-cache",
+  "generation": 63,
   "minimumCompatibleGeneration": 62,
-  "minimumRebuildGeneration": 62
+  "minimumRebuildGeneration": 63
 }
