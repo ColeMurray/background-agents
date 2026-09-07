@@ -58,6 +58,18 @@ describe("ImageBuildStore finalization state", () => {
       baseInventoryDigest: "b".repeat(64),
       imageTarget: "e2b",
     };
+    expect((await getRow("identity-build"))?.runtime_version).toBe("v62-test");
+    expect(
+      await store.finalization.acceptSuccessfulCompletion({
+        ...completion,
+        ...metadata,
+        runtimeVersion: "v999",
+      })
+    ).toBe("rejected");
+    expect(await getRow("identity-build")).toMatchObject({
+      runtime_version: "v62-test",
+      callback_token_used_at: null,
+    });
     expect(
       await store.finalization.acceptSuccessfulCompletion({
         ...completion,

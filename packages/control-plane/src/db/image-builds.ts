@@ -258,7 +258,7 @@ export class ImageBuildStore {
            base_release_id, base_recipe_digest, base_inventory_digest, image_target,
            created_at
          )
-         SELECT ?, ?, ?, ?, ?, '[]', '', 'building', ?, ?, ?, ?, ?, ?, ?
+         SELECT ?, ?, ?, ?, ?, '[]', ?, 'building', ?, ?, ?, ?, ?, ?, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM image_builds
            WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'building'
@@ -270,6 +270,7 @@ export class ImageBuildStore {
         build.scope.id,
         build.provider,
         build.repositoriesFingerprint,
+        build.baseRelease?.identity.runtimeVersion ?? "",
         build.callbackTokenHash ?? null,
         build.callbackTokenExpiresAt ?? null,
         build.baseRelease?.baseReleaseId ?? null,

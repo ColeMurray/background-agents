@@ -81,7 +81,8 @@ export class ImageBuildFinalizationStore {
            AND callback_token_used_at IS NULL
            AND (base_recipe_digest IS NULL OR base_recipe_digest = ?)
            AND (base_inventory_digest IS NULL OR base_inventory_digest = ?)
-           AND (image_target IS NULL OR image_target = ?)`
+           AND (image_target IS NULL OR image_target = ?)
+           AND (base_release_id IS NULL OR runtime_version = ?)`
       )
       .bind(
         params.completionHash,
@@ -99,7 +100,8 @@ export class ImageBuildFinalizationStore {
         params.now,
         params.baseRecipeDigest ?? null,
         params.baseInventoryDigest ?? null,
-        params.imageTarget ?? null
+        params.imageTarget ?? null,
+        params.runtimeVersion
       )
       .run();
 
