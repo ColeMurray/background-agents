@@ -239,6 +239,7 @@ ON messages(autofix_pr_key, created_at) WHERE autofix_pr_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
+CREATE INDEX IF NOT EXISTS idx_events_created_sequence ON events(created_at, timeline_sequence);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_timeline_sequence ON events(timeline_sequence);
 CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;

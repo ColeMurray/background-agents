@@ -194,8 +194,12 @@ export class SessionInboxStore {
     >
   ): { sql: string; params: unknown[] } {
     const { conditions, params } = this.eligibility(options);
+    // With a creator filter, inlining this CTE can repeatedly scan all of that
+    // creator's sessions in the recursive child join. Materialization lets SQLite
+    // index the eligible parent links. Leave the faster unfiltered plan alone.
+    const materialization = options.createdByUserIds?.length ? "MATERIALIZED " : "";
     return {
-      sql: `WITH RECURSIVE eligible_sessions AS (
+      sql: `WITH RECURSIVE eligible_sessions AS ${materialization}(
               SELECT sessions.*, ${unreadSql("sessions")} AS unread
               FROM sessions
               LEFT JOIN users viewer ON viewer.id = ?

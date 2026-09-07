@@ -91,9 +91,10 @@ describe("session prompt identity enrichment", () => {
   });
 
   it("enriches a web prompt from the canonical linked GitHub identity", async () => {
+    const getUserById = vi.fn(async () => ({ id: "relinked-user", displayName: "Other User" }));
     vi.mocked(UserStore).mockImplementation(function () {
       return {
-        getUserById: async () => ({ id: "user-1", displayName: "Trusted Ada" }),
+        getUserById,
       } as never;
     });
     vi.mocked(resolveGitHubEnrichmentForRequest).mockResolvedValue({
@@ -106,6 +107,7 @@ describe("session prompt identity enrichment", () => {
       const body = (await request.json()) as Record<string, unknown>;
       expect(body).toMatchObject({
         authorId: "user-1",
+        canonicalUserId: "user-1",
         scmEnrichment: {
           userId: "1001",
           login: "ada",
@@ -126,16 +128,18 @@ describe("session prompt identity enrichment", () => {
 
     expect(response.status).toBe(200);
     expect(sessionFetch).toHaveBeenCalledOnce();
+    expect(getUserById).not.toHaveBeenCalled();
+    expect(resolveGitHubEnrichmentForRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      "user-1",
+      expect.anything()
+    );
   });
 
   it("preserves stored enrichment when the GitHub identity lookup is unavailable", async () => {
-    vi.mocked(UserStore).mockImplementation(function () {
-      return {
-        getUserById: async () => {
-          throw new Error("D1 unavailable");
-        },
-      } as never;
-    });
+    vi.mocked(resolveGitHubEnrichmentForRequest).mockRejectedValue(new Error("D1 unavailable"));
     const sessionFetch = vi.fn(async (request: Request) => {
       const body = (await request.json()) as Record<string, unknown>;
       expect(body.authorId).toBe("user-1");
@@ -153,11 +157,6 @@ describe("session prompt identity enrichment", () => {
   });
 
   it("leaves stored enrichment unchanged when no linked GitHub identity exists", async () => {
-    vi.mocked(UserStore).mockImplementation(function () {
-      return {
-        getUserById: async () => ({ id: "user-1", displayName: "Unlinked User" }),
-      } as never;
-    });
     vi.mocked(resolveGitHubEnrichmentForRequest).mockResolvedValue(null);
     const sessionFetch = vi.fn(async (request: Request) => {
       const body = (await request.json()) as Record<string, unknown>;
@@ -187,6 +186,64 @@ describe("session prompt identity enrichment", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Field 'authorId' is not accepted from verified callers",
     });
+    expect(sessionFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["slack-bot", "slack:U123"],
+    ["github-bot", "github:123"],
+    ["linear-bot", "linear:actor-123"],
+  ] as const)(
+    "keeps the admitted %s actor when a later identity lookup would relink it",
+    async (service, actor) => {
+      const getIdentity = vi
+        .fn()
+        .mockResolvedValueOnce({ userId: "user-1" })
+        .mockResolvedValue({ userId: "relinked-user" });
+      vi.mocked(UserStore).mockImplementation(function () {
+        return { getIdentity } as never;
+      });
+      vi.mocked(resolveGitHubEnrichmentForRequest).mockResolvedValue(null);
+      const sessionFetch = vi.fn(async (request: Request) => {
+        expect(await request.json()).toMatchObject({ authorId: actor, canonicalUserId: "user-1" });
+        return Response.json({ status: "queued" });
+      });
+      const response = await handleRequest(
+        await signedServiceRequest("https://test.local/sessions/session-1/prompt", {
+          method: "POST",
+          service,
+          actor,
+          body: JSON.stringify({ content: "Continue" }),
+        }),
+        createEnv(sessionFetch) as never,
+        TEST_BACKGROUND_TASK_CONTEXT
+      );
+      expect(response.status).toBe(200);
+      expect(getIdentity).toHaveBeenCalledOnce();
+      expect(resolveGitHubEnrichmentForRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        "user-1",
+        expect.anything()
+      );
+      expect(sessionFetch).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("continues rejecting actorless bot prompts before credential enrichment", async () => {
+    const sessionFetch = vi.fn(async () => Response.json({ status: "queued" }));
+    const response = await handleRequest(
+      await signedServiceRequest("https://test.local/sessions/session-1/prompt", {
+        method: "POST",
+        service: "github-bot",
+        body: JSON.stringify({ content: "Continue" }),
+      }),
+      createEnv(sessionFetch) as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+    expect(response.status).toBe(403);
+    expect(resolveGitHubEnrichmentForRequest).not.toHaveBeenCalled();
     expect(sessionFetch).not.toHaveBeenCalled();
   });
 });

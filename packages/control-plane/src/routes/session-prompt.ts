@@ -21,11 +21,7 @@ import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
-import {
-  parseAuthorId,
-  resolveGitHubEnrichmentForRequest,
-  type GitHubEnrichment,
-} from "../session/identity";
+import { resolveGitHubEnrichmentForRequest, type GitHubEnrichment } from "../session/identity";
 import type { Env } from "../types";
 import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
 import { parseJsonBody } from "./body";
@@ -85,7 +81,7 @@ export async function handleSessionPrompt(
   // anonymous. callbackContext is a completion notification channel — only
   // the bots that own callbacks may attach one.
   const authorId = enforcement.enforced.participantUserId ?? "anonymous";
-  let canonicalUserId = enforcement.enforced.canonicalUserId ?? undefined;
+  const canonicalUserId = enforcement.enforced.canonicalUserId ?? undefined;
   if (callbackContext === undefined && body.callbackContext !== undefined) {
     logger.warn("Dropped callbackContext from unauthorized principal", {
       event: "identity.callback_context_dropped",
@@ -95,28 +91,19 @@ export async function handleSessionPrompt(
   }
 
   let enrichment: GitHubEnrichment | undefined;
-  const parsed = parseAuthorId(authorId);
-  if (authorId !== "anonymous") {
+  if (canonicalUserId) {
     try {
       const userStore = new UserStore(ctx.db);
-      let userId: string | undefined;
-      if (parsed) {
-        const identity = await userStore.getIdentity(parsed.provider, parsed.providerUserId);
-        userId = identity?.userId;
-      } else {
-        userId = (await userStore.getUserById(authorId))?.id;
-      }
-      if (userId) {
-        canonicalUserId = userId;
-        enrichment =
-          (await resolveGitHubEnrichmentForRequest(
-            env,
-            ctx.db,
-            userStore,
-            userId,
-            await resolveGitHubCredentialAuthority(ctx, request.headers)
-          )) ?? undefined;
-      }
+      // Admission already resolved and authorized this identity. Re-resolving an
+      // actor here costs a read and could switch users after an identity relink.
+      enrichment =
+        (await resolveGitHubEnrichmentForRequest(
+          env,
+          ctx.db,
+          userStore,
+          canonicalUserId,
+          await resolveGitHubCredentialAuthority(ctx, request.headers)
+        )) ?? undefined;
     } catch (e) {
       logger.warn("Failed to enrich prompt with GitHub identity", {
         error: e instanceof Error ? e : String(e),

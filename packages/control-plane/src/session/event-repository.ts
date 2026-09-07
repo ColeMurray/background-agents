@@ -160,8 +160,8 @@ export class EventRepository {
     const cursor = options.cursor;
     if (cursor?.kind === "timeline") {
       if (cursor.sequence !== undefined) {
-        conditions.push(`((created_at < ?) OR (created_at = ? AND timeline_sequence < ?))`);
-        params.push(cursor.createdAt, cursor.createdAt, cursor.sequence);
+        conditions.push(`(created_at, timeline_sequence) < (?, ?)`);
+        params.push(cursor.createdAt, cursor.sequence);
       } else {
         conditions.push(`((created_at < ?) OR (created_at = ? AND id < ?))`);
         params.push(cursor.createdAt, cursor.createdAt, cursor.id);

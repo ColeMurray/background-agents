@@ -227,6 +227,29 @@ const baseTimelineProps = {
 } as const;
 
 describe("prompt queue status", () => {
+  it("keeps an out-of-window running prompt visible until its original event is loaded", () => {
+    const props = {
+      ...baseTimelineProps,
+      promptQueue: [
+        { messageId: "running", content: "Current task", status: "processing" as const },
+      ],
+    };
+    const { rerender } = render(<SessionTimeline {...props} events={[]} />);
+    expect(screen.getByRole("region", { name: "Current prompt" })).toHaveTextContent(
+      "Current task"
+    );
+    rerender(
+      <SessionTimeline
+        {...props}
+        events={[{ ...event(), messageId: "running", content: "Current task" }]}
+      />
+    );
+    expect(screen.queryByRole("region", { name: "Current prompt" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("Current task")).toHaveLength(1);
+    rerender(<SessionTimeline {...baseTimelineProps} events={[]} />);
+    expect(screen.queryByText("Current task")).not.toBeInTheDocument();
+  });
+
   it("hides pending messages and leaves the running message undecorated", () => {
     const events: SandboxEvent[] = [
       { ...event(), messageId: "running", content: "First" },

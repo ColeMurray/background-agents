@@ -6,11 +6,12 @@ import {
 } from "@open-inspect/shared/types/sandbox-events";
 import {
   encodeEventTimelineCursor,
+  eventTimelineCursorFromRow,
   type EventListCursor,
   type EventTimelineCursor,
 } from "./event-cursor";
 import type { EventRow } from "./types";
-import type { EventRepository } from "./event-repository";
+import type { EventPage, EventRepository } from "./event-repository";
 import {
   sessionTimelineEventSchema,
   type ServerMessage,
@@ -18,6 +19,10 @@ import {
 } from "@open-inspect/shared/types/server-messages";
 
 export const DEFAULT_REPLAY_LIMIT = 500;
+// Estimated UTF-8 stored-event payload, not a strict final response-size limit.
+// A single oversized event is allowed so history always makes progress.
+const MAX_TIMELINE_PAGE_BYTES = 256 * 1024;
+const EVENT_ENVELOPE_ESTIMATE_BYTES = 100;
 const DEFAULT_HISTORY_LIMIT = 200;
 const MIN_HISTORY_LIMIT = 1;
 const MAX_HISTORY_LIMIT = 500;
@@ -42,10 +47,12 @@ export class SessionEventStream {
   constructor(private readonly repository: EventRepository) {}
 
   getReplay(limit = DEFAULT_REPLAY_LIMIT): SessionTimeline {
-    const page = this.repository.getEventTimelinePage({
-      excludeTypes: HISTORY_EXCLUDED_TYPES,
-      limit,
-    });
+    const page = boundTimelinePage(
+      this.repository.getEventTimelinePage({
+        excludeTypes: HISTORY_EXCLUDED_TYPES,
+        limit,
+      })
+    );
 
     return {
       events: parseSessionTimelineEvents(page.events),
@@ -55,16 +62,18 @@ export class SessionEventStream {
   }
 
   getHistoryPage(input: { cursor: EventStreamCursor; limit?: number }): SessionHistoryPage {
-    const page = this.repository.getEventTimelinePage({
-      cursor: {
-        kind: "timeline",
-        createdAt: input.cursor.timestamp,
-        id: input.cursor.id,
-        sequence: input.cursor.sequence,
-      },
-      excludeTypes: HISTORY_EXCLUDED_TYPES,
-      limit: clampHistoryLimit(input.limit),
-    });
+    const page = boundTimelinePage(
+      this.repository.getEventTimelinePage({
+        cursor: {
+          kind: "timeline",
+          createdAt: input.cursor.timestamp,
+          id: input.cursor.id,
+          sequence: input.cursor.sequence,
+        },
+        excludeTypes: HISTORY_EXCLUDED_TYPES,
+        limit: clampHistoryLimit(input.limit),
+      })
+    );
 
     return {
       items: parseSessionTimelineEvents(page.events),
@@ -87,6 +96,31 @@ export class SessionEventStream {
       hasMore: page.hasMore,
     };
   }
+}
+
+/** Keep a contiguous newest suffix; older rows remain reachable through the cursor. */
+function boundTimelinePage(page: EventPage): EventPage {
+  const encoder = new TextEncoder();
+  let bytes = 0;
+  let first = page.events.length;
+  while (first > 0) {
+    const row = page.events[first - 1];
+    const size =
+      encoder.encode(row.data).byteLength +
+      encoder.encode(JSON.stringify(row.id)).byteLength +
+      EVENT_ENVELOPE_ESTIMATE_BYTES;
+    if (first < page.events.length && bytes + size > MAX_TIMELINE_PAGE_BYTES) break;
+    bytes += size;
+    first--;
+  }
+  if (first === 0) return page;
+  const events = page.events.slice(first);
+  return {
+    events,
+    hasMore: true,
+    // Storage order, not parsed events: even malformed rows must advance history.
+    nextCursor: eventTimelineCursorFromRow(events[0]),
+  };
 }
 
 function parseSessionTimelineEvents(rows: EventRow[]): SessionTimelineEvent[] {

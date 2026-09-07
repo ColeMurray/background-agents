@@ -397,6 +397,30 @@ describe("applyMigrations", () => {
     }
   });
 
+  it("indexes timeline seeks after backfilling legacy event sequences", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec(`CREATE TABLE events (
+        id TEXT PRIMARY KEY, type TEXT NOT NULL, data TEXT NOT NULL,
+        message_id TEXT, created_at INTEGER NOT NULL
+      ); INSERT INTO events VALUES ('legacy', 'token', '{}', NULL, 1000)`);
+      initSchema(sql);
+      initSchema(sql);
+      expect(db.prepare("SELECT id,timeline_sequence FROM events").all()).toEqual([
+        { id: "legacy", timeline_sequence: 1 },
+      ]);
+      expect(
+        db
+          .prepare("PRAGMA index_info(idx_events_created_sequence)")
+          .all()
+          .map((row) => row.name)
+      ).toEqual(["created_at", "timeline_sequence"]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("initializes a legacy messages table before creating indexes for new columns", () => {
     expect(SCHEMA_SQL).not.toMatch(/\bCREATE (?:UNIQUE )?INDEX\b/);
 

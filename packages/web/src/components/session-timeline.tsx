@@ -76,6 +76,16 @@ export function SessionTimeline({
     () => buildSessionTimelineItems(events, pendingMessageIds),
     [events, pendingMessageIds]
   );
+  // A bounded replay may start after the running user_message. Keep its text
+  // available without fabricating an event, timestamp, or author attribution.
+  const currentPrompt = promptQueue.find((item) => item.status === "processing");
+  const omittedCurrentPrompt =
+    currentPrompt &&
+    !events.some(
+      (event) => event.type === "user_message" && event.messageId === currentPrompt.messageId
+    )
+      ? currentPrompt
+      : undefined;
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set());
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Set<string>>(new Set());
@@ -90,8 +100,9 @@ export function SessionTimeline({
         items: timelineItems,
         loadingHistory,
         isProcessing,
+        currentPrompt: omittedCurrentPrompt,
       }),
-    [isProcessing, loadingHistory, timelineItems]
+    [isProcessing, loadingHistory, timelineItems, omittedCurrentPrompt]
   );
   const getVirtualRowKey = useCallback(
     (index: number) => virtualRows[index]?.id ?? index,
@@ -264,6 +275,16 @@ export function SessionTimeline({
         return <ThinkingIndicator />;
       case "item":
         return renderTimelineItem(row.item);
+      case "current_prompt":
+        return (
+          <section
+            aria-label="Current prompt"
+            className="rounded-lg border border-border bg-card p-4"
+          >
+            <div className="mb-2 text-xs text-muted-foreground">Current prompt</div>
+            <div className="whitespace-pre-wrap break-words text-sm">{row.content}</div>
+          </section>
+        );
     }
   };
 

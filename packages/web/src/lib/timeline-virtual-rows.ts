@@ -2,6 +2,7 @@ import type { SessionTimelineItem } from "./timeline-items";
 
 export type TimelineVirtualRow =
   | { type: "item"; id: string; item: SessionTimelineItem }
+  | { type: "current_prompt"; id: string; content: string }
   | { type: "loading"; id: string }
   | { type: "thinking"; id: string };
 
@@ -29,19 +30,28 @@ export function buildTimelineVirtualRows({
   items,
   loadingHistory,
   isProcessing,
+  currentPrompt,
 }: {
   items: SessionTimelineItem[];
   loadingHistory: boolean;
   isProcessing: boolean;
+  currentPrompt?: { messageId: string; content: string };
 }): TimelineVirtualRow[] {
   const rows: TimelineVirtualRow[] = [];
   if (loadingHistory) rows.push({ type: "loading", id: "history-loading" });
+  if (currentPrompt)
+    rows.push({
+      type: "current_prompt",
+      id: `current-prompt:${currentPrompt.messageId}`,
+      content: currentPrompt.content,
+    });
   for (const item of items) rows.push({ type: "item", id: `item:${item.id}`, item });
   if (isProcessing) rows.push({ type: "thinking", id: "thinking" });
   return rows;
 }
 
 export function estimateTimelineRowSize(row: TimelineVirtualRow): number {
+  if (row.type === "current_prompt") return TIMELINE_ROW_SIZE_ESTIMATES.userMessage;
   if (row.type === "loading" || row.type === "thinking") {
     return TIMELINE_ROW_SIZE_ESTIMATES.status;
   }
