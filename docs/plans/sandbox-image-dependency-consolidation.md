@@ -479,20 +479,24 @@ metadata does not authorize redirecting old session handles to another provider.
 
 ### Repository-root workflow
 
-Proposed commands below are interfaces to implement, **not commands available today**:
+The shared release commands are implemented. From the repository root, update the locks, inspect the
+plan, build and verify a candidate, then explicitly select it for deployment:
 
 ```bash
 npm run sandbox:images -- lock
 npm run sandbox:images -- plan --provider all
-npm run sandbox:images -- build --provider e2b
-npm run sandbox:images -- verify --artifact release-candidate.json
+npm run sandbox:images -- build --provider e2b --output /tmp/e2b-candidate.json
+npm run sandbox:images -- verify --provider e2b --candidate /tmp/e2b-candidate.json
+npm run sandbox:images -- promote --candidate /tmp/e2b-candidate.json \
+  --store terraform/environments/production/sandbox-images.lock.json
 ```
 
-`plan` is local and credential-free; `build` provisions only the selected provider. `all` on a build
-must mean an explicitly configured build matrix, not silently provisioning every vendor. The plan
-reports target, dependency diff, recipe digest, affected input paths, and whether the operation
-builds, reuses, or requires manual-artifact verification. Build logs separate phase durations,
-verification failures, provider handles, and cleanup status.
+`plan` is local and credential-free and reports each target's recipe digest, runtime version,
+environment, and input inventory. `build` and `verify` require one explicit provider; they do not
+accept `all`. Native operations require provider credentials and create billable temporary
+sandboxes. `promote` updates the local release lock without deploying or changing provider
+artifacts. Review and commit that lock before deployment. See the
+[operator guide](../../packages/sandbox-images/README.md) for prerequisites and rollback commands.
 
 The first implementation should produce release records as durable deployment/CI artifacts, not
 introduce a database-backed base-image service. Each record includes exact provider scope/reference,
