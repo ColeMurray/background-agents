@@ -137,7 +137,6 @@ export function SessionRightSidebarContent({
           sessionId={sessionId}
           totalCost={sessionState.totalCost ?? 0}
           maxSessionCostUsd={sessionState.maxSessionCostUsd}
-          costTrackingUnavailable={sessionState.costTrackingUnavailable}
           canManageBudget={canManageBudget}
         />
       </div>

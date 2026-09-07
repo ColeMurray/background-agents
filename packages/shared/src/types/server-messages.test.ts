@@ -240,7 +240,6 @@ describe("session view contracts", () => {
         totalCost: 8.25,
         maxSessionCostUsd: 10,
         budgetExhausted: false,
-        costTrackingUnavailable: true,
       },
       artifacts: [],
       promptQueue: [],
@@ -255,7 +254,6 @@ describe("session view contracts", () => {
         totalCost: 8.25,
         maxSessionCostUsd: 10,
         budgetExhausted: false,
-        costTrackingUnavailable: true,
       },
     });
   });
@@ -267,14 +265,12 @@ describe("session view contracts", () => {
         totalCost: 10.25,
         maxSessionCostUsd: 10,
         budgetExhausted: true,
-        costTrackingUnavailable: false,
       })
     ).toEqual({
       type: "budget_status",
       totalCost: 10.25,
       maxSessionCostUsd: 10,
       budgetExhausted: true,
-      costTrackingUnavailable: false,
     });
   });
 });

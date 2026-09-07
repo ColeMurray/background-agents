@@ -1,5 +1,4 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import { hasPositiveTokenUsage } from "./budget";
 import type { EventRepository } from "./event-repository";
 import type {
   ExecutionStopCoordinator,
@@ -56,10 +55,6 @@ export class SessionBudgetService {
       if (delta > 0) {
         const totalCost = this.repository.addSessionCost(delta, now);
         transition = { ...this.applyObservedCost(totalCost, messageId, now), statusChanged: true };
-      } else if (event.cost == null) {
-        // A reported cost of 0 (unpriced or free models) is a real observation
-        // and never latches the warning. Only an absent cost is "not tracked".
-        transition = this.applyCostTrackingUnavailable(event.tokens, messageId, now);
       }
     });
     await this.deliverTransition(transition);
@@ -128,7 +123,6 @@ export class SessionBudgetService {
       totalCost: session.total_cost,
       maxSessionCostUsd: session.max_cost_usd,
       budgetExhausted: session.budget_exhausted === 1,
-      costTrackingUnavailable: session.cost_tracking_unavailable === 1,
     });
   }
 
@@ -170,27 +164,6 @@ export class SessionBudgetService {
         now
       ),
       stopPreparation,
-      statusChanged: true,
-    };
-  }
-
-  private applyCostTrackingUnavailable(
-    tokens: unknown,
-    messageId: string | null,
-    now: number
-  ): BudgetTransition {
-    const session = this.repository.getSession();
-    if (!session || session.cost_tracking_unavailable === 1 || !hasPositiveTokenUsage(tokens)) {
-      return NO_BUDGET_TRANSITION;
-    }
-    this.repository.markCostTrackingUnavailable(now);
-    return {
-      warningEvent: this.persistWarning(
-        "Cost tracking was unavailable for a positive-token step; the session cost limit may be incomplete.",
-        messageId,
-        now
-      ),
-      stopPreparation: null,
       statusChanged: true,
     };
   }

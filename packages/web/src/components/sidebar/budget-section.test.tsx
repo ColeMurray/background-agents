@@ -20,18 +20,19 @@ afterEach(() => {
 });
 
 describe("BudgetSection", () => {
-  it("shows observed cost, limit, and incomplete tracking", () => {
+  it("shows observed cost and limit with a static reported-usage note", () => {
     render(
       <BudgetSection
         sessionId="session-1"
         totalCost={3.42}
         maxSessionCostUsd={10}
-        costTrackingUnavailable
         canManageBudget={false}
       />
     );
     expect(screen.getByText("Session cost: $3.42 of $10.00 limit")).toBeInTheDocument();
-    expect(screen.getByText(/Cost tracking was unavailable/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Costs and limits reflect reported model usage only.")
+    ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit limit" })).not.toBeInTheDocument();
   });
 

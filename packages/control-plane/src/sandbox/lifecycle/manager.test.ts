@@ -90,7 +90,6 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     total_cost: 0,
     max_cost_usd: null,
     budget_exhausted: 0,
-    cost_tracking_unavailable: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: Date.now() - 60000,

@@ -476,7 +476,7 @@ describe("applyMigrations", () => {
     expect(sessionTable).toContain("max_cost_usd REAL");
     expect(sessionTable).not.toContain("cost_warning_sent");
     expect(sessionTable).toContain("budget_exhausted INTEGER NOT NULL DEFAULT 0");
-    expect(sessionTable).toContain("cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0");
+    expect(sessionTable).not.toContain("cost_tracking_unavailable");
 
     expect(SCHEMA_SQL).toContain("reported_cost_usd REAL NOT NULL DEFAULT 0");
     expect(SCHEMA_SQL).not.toContain("capabilities TEXT");
@@ -499,7 +499,6 @@ describe("applyMigrations", () => {
         expect.arrayContaining([
           expect.objectContaining({ name: "max_cost_usd", type: "REAL" }),
           expect.objectContaining({ name: "budget_exhausted", type: "INTEGER" }),
-          expect.objectContaining({ name: "cost_tracking_unavailable", type: "INTEGER" }),
         ])
       );
       expect(db.prepare("PRAGMA table_info(ws_client_mapping)").all()).not.toEqual(
@@ -507,6 +506,9 @@ describe("applyMigrations", () => {
       );
       expect(db.prepare("PRAGMA table_info(session)").all()).not.toEqual(
         expect.arrayContaining([expect.objectContaining({ name: "cost_warning_sent" })])
+      );
+      expect(db.prepare("PRAGMA table_info(session)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "cost_tracking_unavailable" })])
       );
       expect(db.prepare("PRAGMA table_info(messages)").all()).toEqual(
         expect.arrayContaining([

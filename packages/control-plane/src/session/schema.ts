@@ -82,7 +82,6 @@ CREATE TABLE IF NOT EXISTS session (
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
   max_cost_usd REAL,                                -- Mutable effective session cost limit; NULL = unlimited
   budget_exhausted INTEGER NOT NULL DEFAULT 0,      -- Pauses prompt admission and dispatch
-  cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0, -- At least one positive-token step omitted cost
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -666,10 +665,6 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       runMigration(
         sql,
         `ALTER TABLE session ADD COLUMN budget_exhausted INTEGER NOT NULL DEFAULT 0`
-      );
-      runMigration(
-        sql,
-        `ALTER TABLE session ADD COLUMN cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0`
       );
       runMigration(
         sql,

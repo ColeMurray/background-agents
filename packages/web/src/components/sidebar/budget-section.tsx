@@ -8,17 +8,13 @@ interface BudgetSectionProps {
   sessionId: string;
   totalCost: number;
   maxSessionCostUsd?: number | null;
-  costTrackingUnavailable?: boolean;
   canManageBudget: boolean;
 }
-
-const DEFAULT_COST_TRACKING_UNAVAILABLE = false;
 
 export function BudgetSection({
   sessionId,
   totalCost,
   maxSessionCostUsd,
-  costTrackingUnavailable = DEFAULT_COST_TRACKING_UNAVAILABLE,
   canManageBudget,
 }: BudgetSectionProps) {
   const [editing, setEditing] = useState(false);
@@ -26,7 +22,7 @@ export function BudgetSection({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!canManageBudget && maxSessionCostUsd == null && totalCost <= 0 && !costTrackingUnavailable) {
+  if (!canManageBudget && maxSessionCostUsd == null && totalCost <= 0) {
     return null;
   }
 
@@ -127,12 +123,9 @@ export function BudgetSection({
         </div>
       )}
 
-      {costTrackingUnavailable && (
-        <p className="text-xs text-warning">
-          Cost tracking was unavailable for part of this session. Observed cost and limit
-          enforcement may be incomplete.
-        </p>
-      )}
+      <p className="text-xs text-muted-foreground">
+        Costs and limits reflect reported model usage only.
+      </p>
       {error && (
         <p role="alert" className="text-xs text-destructive">
           {error}

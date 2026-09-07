@@ -43,7 +43,6 @@ describe("SessionMessengerImpl", () => {
       totalCost: 5,
       maxSessionCostUsd: 10,
       budgetExhausted: false,
-      costTrackingUnavailable: false,
     } as const;
 
     messenger.broadcast(message);

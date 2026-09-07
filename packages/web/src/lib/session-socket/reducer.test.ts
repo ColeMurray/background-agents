@@ -106,7 +106,6 @@ describe("sessionSocketReducer", () => {
         totalCost: 0.5,
         maxSessionCostUsd: null,
         budgetExhausted: false,
-        costTrackingUnavailable: false,
       })
     );
     state = reduce(state, { type: "events_appended", events: [event] });
@@ -119,7 +118,6 @@ describe("sessionSocketReducer", () => {
         totalCost: 2,
         maxSessionCostUsd: null,
         budgetExhausted: false,
-        costTrackingUnavailable: false,
       })
     );
     expect(state.sessionState?.totalCost).toBe(2);
@@ -288,7 +286,6 @@ describe("sessionSocketReducer", () => {
           totalCost: 10.5,
           maxSessionCostUsd: 10,
           budgetExhausted: true,
-          costTrackingUnavailable: false,
         })
       );
 
@@ -297,7 +294,6 @@ describe("sessionSocketReducer", () => {
         totalCost: 10.5,
         maxSessionCostUsd: 10,
         budgetExhausted: true,
-        costTrackingUnavailable: false,
       });
     });
 

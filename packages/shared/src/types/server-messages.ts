@@ -32,7 +32,6 @@ const sessionStateSchema = z.object({
   totalCost: z.number().optional(),
   maxSessionCostUsd: z.number().nullable().optional(),
   budgetExhausted: z.boolean().optional(),
-  costTrackingUnavailable: z.boolean().optional(),
   codeServerUrl: z.string().nullable().optional(),
   codeServerPassword: z.string().nullable().optional(),
   vncUrl: z.string().nullable().optional(),
@@ -189,7 +188,6 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
     totalCost: z.number(),
     maxSessionCostUsd: z.number().nullable(),
     budgetExhausted: z.boolean(),
-    costTrackingUnavailable: z.boolean(),
   }),
   z.object({
     type: z.literal("diff_state_changed"),

@@ -261,13 +261,6 @@ describe("SessionCoreRepository", () => {
       expect(mock.calls[0].query).toContain("budget_exhausted = ?");
       expect(mock.calls[0].params).toEqual([20, 0, 5000]);
     });
-
-    it("latches unavailable cost tracking", () => {
-      repo.markCostTrackingUnavailable(5000);
-
-      expect(mock.calls[0].query).toContain("cost_tracking_unavailable = 1");
-      expect(mock.calls[0].params).toEqual([5000]);
-    });
   });
 
   describe("upsertSession against real storage", () => {

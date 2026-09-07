@@ -50,7 +50,6 @@ export interface SessionRow {
   sandbox_settings: string | null; // JSON blob of SandboxSettings
   max_cost_usd: number | null; // Mutable effective session cost limit; NULL = unlimited
   budget_exhausted: number; // 0 = promptable by budget, 1 = paused
-  cost_tracking_unavailable: number; // 1 when a positive-token step omitted cost
   environment_id: string | null; // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at: number;
   updated_at: number;

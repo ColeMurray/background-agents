@@ -31,7 +31,6 @@ function session(overrides: Partial<SessionRow> = {}): SessionRow {
     sandbox_settings: null,
     max_cost_usd: 10,
     budget_exhausted: 0,
-    cost_tracking_unavailable: 0,
     environment_id: null,
     created_at: 1,
     updated_at: 1,
@@ -47,9 +46,6 @@ function createService(row = session()) {
     addSessionCost: vi.fn((cost: number) => {
       current = { ...current, total_cost: current.total_cost + cost };
       return current.total_cost;
-    }),
-    markCostTrackingUnavailable: vi.fn(() => {
-      current = { ...current, cost_tracking_unavailable: 1 };
     }),
     markBudgetExhausted: vi.fn(() => {
       current = { ...current, budget_exhausted: 1 };
@@ -120,7 +116,6 @@ describe("SessionBudgetService", () => {
       totalCost: 1.5,
       maxSessionCostUsd: maxCostUsd,
       budgetExhausted: false,
-      costTrackingUnavailable: false,
     });
 
     const transition = h.service.observeExecutionCost(
@@ -140,7 +135,6 @@ describe("SessionBudgetService", () => {
       totalCost: 2,
       maxSessionCostUsd: maxCostUsd,
       budgetExhausted: false,
-      costTrackingUnavailable: false,
     });
   });
 
@@ -299,7 +293,7 @@ describe("SessionBudgetService", () => {
     );
   });
 
-  it("latches omitted cost only for positive token usage", async () => {
+  it("ignores unreported costs without producing warnings or stop effects", async () => {
     const h = createService();
 
     const event = {
@@ -312,14 +306,13 @@ describe("SessionBudgetService", () => {
     await h.service.ingestStepFinish(event, "message-1", 1000);
     await h.service.ingestStepFinish(event, "message-1", 1001);
 
-    expect(h.repository.markCostTrackingUnavailable).toHaveBeenCalledOnce();
-    expect(h.eventRepository.createEvent).toHaveBeenCalledOnce();
-    expect(h.broadcast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "budget_status", costTrackingUnavailable: true })
-    );
+    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
+    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.prepareBudgetStop).not.toHaveBeenCalled();
   });
 
-  it("treats a reported cost of zero as observed, not untracked", async () => {
+  it("does not charge or stop work for a reported cost of zero", async () => {
     const h = createService();
 
     await h.service.ingestStepFinish(
@@ -336,7 +329,6 @@ describe("SessionBudgetService", () => {
     );
 
     expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.repository.markCostTrackingUnavailable).not.toHaveBeenCalled();
     expect(h.repository.markBudgetExhausted).not.toHaveBeenCalled();
     expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalledWith(

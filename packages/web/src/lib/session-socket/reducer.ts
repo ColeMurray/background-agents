@@ -311,7 +311,6 @@ function reduceServerMessage(
         totalCost: message.totalCost,
         maxSessionCostUsd: message.maxSessionCostUsd,
         budgetExhausted: message.budgetExhausted,
-        costTrackingUnavailable: message.costTrackingUnavailable,
       }));
 
     case "prompt_queue_updated":

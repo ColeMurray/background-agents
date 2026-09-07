@@ -9,7 +9,6 @@ function createHandler() {
     total_cost: 8,
     max_cost_usd: 10,
     budget_exhausted: 0,
-    cost_tracking_unavailable: 0,
   };
   const repository = { getSession: vi.fn(() => session) };
   const budgetService = {

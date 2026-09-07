@@ -202,15 +202,6 @@ export class SessionCoreRepository {
     );
   }
 
-  markCostTrackingUnavailable(updatedAt: number): void {
-    this.sql.exec(
-      `UPDATE session
-       SET cost_tracking_unavailable = 1, updated_at = ?
-       WHERE id = (SELECT id FROM session LIMIT 1)`,
-      updatedAt
-    );
-  }
-
   markBudgetExhausted(updatedAt: number): void {
     this.sql.exec(
       `UPDATE session SET budget_exhausted = 1, updated_at = ?

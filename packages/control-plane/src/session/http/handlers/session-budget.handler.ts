@@ -25,7 +25,6 @@ export class SessionBudgetHandler {
       totalCost: updated.total_cost,
       maxSessionCostUsd: updated.max_cost_usd,
       budgetExhausted: updated.budget_exhausted === 1,
-      costTrackingUnavailable: updated.cost_tracking_unavailable === 1,
     });
   }
 }

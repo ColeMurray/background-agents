@@ -104,7 +104,6 @@ export class SessionSnapshotReader {
       totalCost: session.total_cost ?? 0,
       maxSessionCostUsd: session.max_cost_usd,
       budgetExhausted: session.budget_exhausted === 1,
-      costTrackingUnavailable: session.cost_tracking_unavailable === 1,
       codeServerUrl: sandbox?.code_server_url ?? null,
       vncUrl: sandbox?.vnc_url ?? null,
       tunnelUrls: sandbox?.tunnel_urls

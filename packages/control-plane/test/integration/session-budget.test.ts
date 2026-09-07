@@ -55,7 +55,6 @@ describe("session budgets", () => {
       totalCost: 0,
       maxSessionCostUsd: 10,
       budgetExhausted: false,
-      costTrackingUnavailable: false,
     });
 
     const rows = await queryDO<{ max_cost_usd: number | null }>(
@@ -113,7 +112,7 @@ describe("session budgets", () => {
       stub,
       `UPDATE session
        SET total_cost = 12, max_cost_usd = 15,
-           budget_exhausted = 1, cost_tracking_unavailable = 1`
+           budget_exhausted = 1`
     );
     await queryDO(
       stub,
@@ -126,7 +125,7 @@ describe("session budgets", () => {
       await queryDO(
         stub,
         `SELECT total_cost, max_cost_usd,
-                budget_exhausted, cost_tracking_unavailable
+                budget_exhausted
          FROM session`
       )
     ).toEqual([
@@ -134,7 +133,6 @@ describe("session budgets", () => {
         total_cost: 12,
         max_cost_usd: 15,
         budget_exhausted: 1,
-        cost_tracking_unavailable: 1,
       },
     ]);
     expect(
@@ -156,7 +154,7 @@ describe("session budgets", () => {
     ]);
   });
 
-  it("latches unavailable cost tracking for a token-using unpriced step", async () => {
+  it("accepts unpriced steps without changing the budget or emitting warnings", async () => {
     const name = `budget-unpriced-${Date.now()}`;
     const { stub } = await initNamedSession(name, {
       sandboxSettings: { maxSessionCostUsd: 10 },
@@ -174,9 +172,10 @@ describe("session budgets", () => {
       }),
     });
     expect(response.status).toBe(200);
-    expect(await queryDO(stub, "SELECT cost_tracking_unavailable FROM session")).toEqual([
-      { cost_tracking_unavailable: 1 },
+    expect(await queryDO(stub, "SELECT total_cost, budget_exhausted FROM session")).toEqual([
+      { total_cost: 0, budget_exhausted: 0 },
     ]);
+    expect(await queryDO(stub, "SELECT id FROM events WHERE type = 'warning'")).toEqual([]);
   });
 
   it("exhausts active work without an advance warning, preserves pending work, and clears on a raised limit", async () => {
