@@ -102,5 +102,6 @@ npm run typecheck -w @open-inspect/web
 
 Performance tests use real storage metadata rather than timing assertions. Smaller tests cover UTF-8
 accounting, oversized/malformed rows, contiguous paging, HTTP/WS equality, current-prompt fallback
-removal, and retaining the admitted identity for browser and bot prompts. Boundary schema
-validation, authorization, callback rules, and the synchronous subscription handoff remain intact.
+behavior (including removal when the original message loads), and retaining the admitted identity
+for browser and bot prompts. Boundary schema validation, authorization, callback rules, and the
+synchronous subscription handoff remain intact.
