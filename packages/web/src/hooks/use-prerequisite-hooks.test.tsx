@@ -2,7 +2,7 @@
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { SWRConfig, useSWRConfig } from "swr";
+import { SWRConfig, useSWRConfig, type Cache } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import { useEnvironments } from "./use-environments";
@@ -44,12 +44,13 @@ describe.each([
   const emptyResponse = field === "repos" ? { repos: [] } : { environments: [], total: 0 };
   const populatedResponse = { [field]: items, ...(field === "environments" ? { total: 1 } : {}) };
   let fetcher: ReturnType<typeof vi.fn<(key: string) => Promise<unknown>>>;
+  let cache: Cache;
 
   function wrapper({ children }: { children: ReactNode }) {
     return (
       <SWRConfig
         value={{
-          provider: () => new Map(),
+          provider: () => cache,
           fetcher,
           dedupingInterval: 0,
           shouldRetryOnError: false,
@@ -65,6 +66,7 @@ describe.each([
   beforeEach(() => {
     mocks.useAuthSession.mockReturnValue({ data: { user: {} }, status: "authenticated" });
     fetcher = vi.fn().mockResolvedValue(emptyResponse);
+    cache = new Map();
   });
   afterEach(cleanup);
 
@@ -147,6 +149,48 @@ describe.each([
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+  it("does not authorize cached data on remount until revalidation succeeds", async () => {
+    const first = renderHook(() => useHook(), { wrapper });
+    await waitFor(() => expect(first.result.current.status).toBe("ready"));
+    first.unmount();
+
+    let reject!: (error: Error) => void;
+    fetcher.mockReturnValueOnce(
+      new Promise((_, fail) => {
+        reject = fail;
+      })
+    );
+    const statuses: string[] = [];
+    const { result } = renderHook(
+      () => {
+        const value = useHook();
+        statuses.push(value.status);
+        return { value, mutate: useSWRConfig().mutate };
+      },
+      { wrapper }
+    );
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(result.current.value.status).toBe("loading");
+    expect(statuses).not.toContain("ready");
+
+    const error = new Error("Remount revalidation failed");
+    await act(async () => reject(error));
+    await waitFor(() => expect(result.current.value.status).toBe("unavailable"));
+    expect(statuses).not.toContain("ready");
+
+    fetcher.mockResolvedValueOnce(populatedResponse);
+    await act(async () => {
+      await result.current.mutate(key);
+    });
+    expect(result.current.value).toEqual({
+      [field]: items,
+      status: "ready",
+      loading: false,
+      error: undefined,
+    });
+  });
+
   it("retains cached data but becomes unavailable when revalidation fails", async () => {
     fetcher.mockResolvedValueOnce(populatedResponse);
     const { result } = renderHook(() => ({ value: useHook(), mutate: useSWRConfig().mutate }), {
@@ -162,9 +206,20 @@ describe.each([
     );
 
     const error = new Error("Revalidation failed");
-    fetcher.mockRejectedValueOnce(error);
+    let reject!: (error: Error) => void;
+    fetcher.mockReturnValueOnce(
+      new Promise((_, fail) => {
+        reject = fail;
+      })
+    );
+    let refresh!: Promise<unknown>;
+    act(() => {
+      refresh = result.current.mutate(key);
+    });
+    expect(result.current.value.status).toBe("loading");
     await act(async () => {
-      await result.current.mutate(key);
+      reject(error);
+      await refresh;
     });
     await waitFor(() =>
       expect(result.current.value).toEqual({

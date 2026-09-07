@@ -1,5 +1,5 @@
-import useSWR from "swr";
-import { getPrerequisiteStatus, type PrerequisiteStatus } from "@/lib/prerequisite-status";
+import { usePrerequisiteResource } from "@/hooks/use-prerequisite-resource";
+import type { PrerequisiteStatus } from "@/lib/prerequisite-status";
 import { useAuthSession } from "@/lib/auth-session";
 import type {
   Environment,
@@ -16,14 +16,12 @@ export function useEnvironments(): {
 } {
   const { data: session, status } = useAuthSession();
 
-  const { data, isLoading, error } = useSWR<ListEnvironmentsResponse>(
-    session ? ENVIRONMENTS_KEY : null
-  );
-  const resourceStatus = getPrerequisiteStatus(
-    session ? data : undefined,
-    status === "loading" || isLoading,
-    error
-  );
+  const {
+    data,
+    status: requestStatus,
+    error,
+  } = usePrerequisiteResource<ListEnvironmentsResponse>(session ? ENVIRONMENTS_KEY : null);
+  const resourceStatus = status === "loading" ? "loading" : requestStatus;
 
   return {
     environments: data?.environments ?? [],

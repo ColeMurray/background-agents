@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import { getPrerequisiteStatus } from "@/lib/prerequisite-status";
+import { usePrerequisiteResource } from "@/hooks/use-prerequisite-resource";
 import { z, type ZodType } from "zod";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
@@ -92,7 +92,7 @@ async function requestProviderResourceWithoutContent(
 export function useProviderAccounts() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canRead = hasPermission("provider_accounts.read");
-  const accounts = useSWR(canRead ? ACCOUNTS_KEY : null, async (path) => {
+  const accounts = usePrerequisiteResource(canRead ? ACCOUNTS_KEY : null, async (path) => {
     return (await requestProviderResource(path, modelProviderAccountsResponseSchema)).accounts;
   });
   const defaults = useSWR(canRead ? DEFAULTS_KEY : null, async (path) => {
@@ -107,12 +107,8 @@ export function useProviderAccounts() {
     })),
     accounts: (accounts.data ?? []) as ModelProviderAccount[],
     defaults: (defaults.data ?? []) as ModelProviderAccountDefault[],
-    loading: accounts.isLoading || defaults.isLoading,
-    accountsStatus: getPrerequisiteStatus(
-      canRead ? accounts.data : undefined,
-      accounts.isLoading,
-      accounts.error
-    ),
+    loading: accounts.status === "loading" || defaults.isLoading,
+    accountsStatus: accounts.status,
     error: accounts.error ?? defaults.error,
     refresh: async () => Promise.all([accounts.mutate(), defaults.mutate()]),
   };
