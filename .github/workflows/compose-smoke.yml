@@ -1,11 +1,9 @@
 # The container's deployment gate: boot the control-plane image the way a
 # deployment does and round-trip one session through it.
 #
-# Deliberately unfiltered by path, unlike CI (TypeScript). This check is meant
-# to be required for merge, and a required check that a path filter can skip
-# leaves those pull requests pending forever. Every pull request pays about
-# two and a half minutes for a check that is always present and always means
-# the same thing.
+# Keep the workflow unfiltered so this check can be required for merge without
+# leaving documentation-only pull requests pending. Those changes still report
+# success, but skip the dependency install, image build and container smoke.
 name: Compose smoke
 
 on:
@@ -35,20 +33,44 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes beyond documentation
+        id: changes
+        env:
+          # PRs compare from the merge base; pushes compare the complete push.
+          DIFF_RANGE: ${{ github.event_name == 'pull_request' && format('{0}...{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
+        run: |
+          # Only exclude prose outside runtime packages. A new/unknown path,
+          # or an unavailable comparison (for example a force push), runs smoke.
+          if git diff --quiet --no-renames "$DIFF_RANGE" -- . \
+            ':(exclude,glob)*.md' \
+            ':(exclude,glob)docs/**/*.md' \
+            ':(exclude,glob)docs/**/*.html'; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Documentation-only change: container smoke is not needed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node.js
+        if: steps.changes.outputs.run == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: "npm"
 
       - name: Install dependencies
+        if: steps.changes.outputs.run == 'true'
         run: npm ci
 
       - name: Build shared package
+        if: steps.changes.outputs.run == 'true'
         run: npm run build -w @open-inspect/shared
 
       - name: Boot the container and round-trip a session
+        if: steps.changes.outputs.run == 'true'
         run: scripts/compose-smoke.sh
 
       - name: Upload container logs
