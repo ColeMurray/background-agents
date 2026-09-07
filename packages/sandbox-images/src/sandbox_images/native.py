@@ -18,7 +18,7 @@ def native_operation(
 ) -> dict[str, Any]:
     update_locks(root, check=True)
     environment = dict(os.environ)
-    if candidate:
+    if candidate is not None:
         validate_record(candidate)
         if candidate["artifact"]["provider"] != provider:
             raise ValueError("Candidate provider mismatch")
@@ -55,6 +55,6 @@ def native_operation(
         subprocess.run(command, cwd=cwd, env=environment, check=True)
         record = json.loads(output.read_text())
         validate_record(record)
-        if candidate and record["baseReleaseId"] != candidate["baseReleaseId"]:
+        if candidate is not None and record["baseReleaseId"] != candidate["baseReleaseId"]:
             raise ValueError("Restored artifact no longer matches its recorded release")
         return record
