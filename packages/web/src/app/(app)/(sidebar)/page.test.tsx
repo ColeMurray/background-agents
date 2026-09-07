@@ -475,47 +475,57 @@ describe("Home", () => {
     expect(body).not.toHaveProperty("branch");
   });
 
-  it("launches an ad-hoc set sending only repositories, seeded from the selected repo", async () => {
-    mocks.reposValue = [
-      repo,
-      {
-        id: 2,
-        fullName: "open-inspect/docs",
-        owner: "open-inspect",
-        name: "docs",
-        description: null,
-        private: false,
-        defaultBranch: "main",
-      },
-    ];
-    const user = userEvent.setup();
-    render(<Home />);
+  it.each(["ready", "unavailable"] as const)(
+    "edits and launches an ad-hoc set with cached repositories (status: %s)",
+    async (status) => {
+      mocks.reposValue = [
+        repo,
+        {
+          id: 2,
+          fullName: "open-inspect/docs",
+          owner: "open-inspect",
+          name: "docs",
+          description: null,
+          private: false,
+          defaultBranch: "main",
+        },
+      ];
+      const user = userEvent.setup();
+      const view = render(<Home />);
 
-    await screen.findByRole("button", { name: /background-agents/i });
-    await user.click(screen.getByRole("button", { name: /background-agents/i }));
-    const listbox = screen.getByRole("listbox");
-    await user.click(within(listbox).getByRole("option", { name: /multiple repositories/i }));
+      await screen.findByRole("button", { name: /background-agents/i });
+      await user.click(screen.getByRole("button", { name: /background-agents/i }));
+      const listbox = screen.getByRole("listbox");
+      await user.click(within(listbox).getByRole("option", { name: /multiple repositories/i }));
 
-    // The multi-select opens seeded with the previously selected repo; add docs.
-    await user.click(screen.getByRole("button", { name: /repository selection/i }));
-    await user.click(screen.getByRole("checkbox", { name: /open-inspect\/docs/i }));
-    await user.click(screen.getByRole("button", { name: /done/i }));
+      mocks.reposStatus = "loading";
+      view.rerender(<Home />);
+      expect(screen.getByRole("button", { name: /repository selection/i })).toBeDisabled();
+      mocks.reposStatus = status;
+      view.rerender(<Home />);
+      expect(screen.getByRole("button", { name: /repository selection/i })).toBeEnabled();
 
-    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Sync the docs");
-    await user.click(screen.getByRole("button", { name: /send/i }));
+      // The multi-select opens seeded with the previously selected repo; add docs.
+      await user.click(screen.getByRole("button", { name: /repository selection/i }));
+      await user.click(screen.getByRole("checkbox", { name: /open-inspect\/docs/i }));
+      await user.click(screen.getByRole("button", { name: /done/i }));
 
-    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
-    const body = sessionCreateBody();
-    expect(body).toMatchObject({
-      repositories: [
-        { repoOwner: "open-inspect", repoName: "background-agents" },
-        { repoOwner: "open-inspect", repoName: "docs" },
-      ],
-    });
-    expect(body).not.toHaveProperty("repoOwner");
-    expect(body).not.toHaveProperty("environmentId");
-    expect(body).not.toHaveProperty("branch");
-  });
+      await user.type(screen.getByPlaceholderText("What do you want to build?"), "Sync the docs");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+
+      await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+      const body = sessionCreateBody();
+      expect(body).toMatchObject({
+        repositories: [
+          { repoOwner: "open-inspect", repoName: "background-agents" },
+          { repoOwner: "open-inspect", repoName: "docs" },
+        ],
+      });
+      expect(body).not.toHaveProperty("repoOwner");
+      expect(body).not.toHaveProperty("environmentId");
+      expect(body).not.toHaveProperty("branch");
+    }
+  );
 
   const environment = {
     id: "env-1",
