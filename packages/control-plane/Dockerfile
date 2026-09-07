@@ -21,6 +21,7 @@ COPY packages/shared/ packages/shared/
 COPY packages/control-plane/ packages/control-plane/
 # Contracts the control plane shares with the sandbox runtime, imported by path.
 COPY packages/sandbox-runtime/src/sandbox_runtime/*.json packages/sandbox-runtime/src/sandbox_runtime/
+COPY packages/sandbox-images/runtime-environments.json packages/sandbox-images/
 RUN npm run build -w @open-inspect/shared \
     && npm run build:node -w @open-inspect/control-plane
 

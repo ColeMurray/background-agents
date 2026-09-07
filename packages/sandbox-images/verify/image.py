@@ -114,6 +114,9 @@ class Probe:
                     ],
                     "/vnc.html",
                 )
+            except Exception as error:
+                output.seek(0)
+                raise RuntimeError(f"{error}: {output.read()[-4000:]}") from error
             finally:
                 for process in reversed(processes):
                     stop_process(process)
