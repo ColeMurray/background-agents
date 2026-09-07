@@ -119,7 +119,10 @@ function boundTimelinePage(page: EventPage): EventPage {
     events,
     hasMore: true,
     // Storage order, not parsed events: even malformed rows must advance history.
-    nextCursor: eventTimelineCursorFromRow(events[0]),
+    nextCursor: eventTimelineCursorFromRow(
+      events[0],
+      page.nextCursor?.sequence === undefined ? "id" : "timeline_sequence"
+    ),
   };
 }
 

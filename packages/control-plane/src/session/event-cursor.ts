@@ -19,13 +19,16 @@ export type ParseEventCursorResult<TCursor> =
   | { ok: false; error: string };
 
 export function eventTimelineCursorFromRow(
-  event: Pick<EventRow, "created_at" | "id" | "timeline_sequence">
+  event: Pick<EventRow, "created_at" | "id" | "timeline_sequence">,
+  tieBreaker: "id" | "timeline_sequence" = "timeline_sequence"
 ): EventTimelineCursor {
   return {
     kind: "timeline",
     createdAt: event.created_at,
     id: event.id,
-    ...(event.timeline_sequence === undefined ? {} : { sequence: event.timeline_sequence }),
+    ...(tieBreaker === "id" || event.timeline_sequence === undefined
+      ? {}
+      : { sequence: event.timeline_sequence }),
   };
 }
 

@@ -181,7 +181,9 @@ export class EventRepository {
     const rows = this.sql.exec(query, ...params).toArray() as EventRow[];
     const hasMore = rows.length > options.limit;
     const events = hasMore ? rows.slice(0, options.limit) : rows;
-    const nextCursor = events.length ? eventTimelineCursorFromRow(events[events.length - 1]) : null;
+    const nextCursor = events.length
+      ? eventTimelineCursorFromRow(events[events.length - 1], tieBreaker)
+      : null;
     return { events, hasMore, nextCursor };
   }
 }

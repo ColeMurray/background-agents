@@ -4,6 +4,7 @@ import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { EventRepository } from "./event-repository";
 import { SessionEventStream, type EventStreamCursor } from "./event-stream";
 import { initSchema } from "./schema";
+import { parseEventListCursor } from "./event-cursor";
 
 describe("bounded timeline replay over SQLite", () => {
   let db: DatabaseSync;
@@ -83,6 +84,56 @@ describe("bounded timeline replay over SQLite", () => {
     seed(10, "😀".repeat(16384));
     expect(stream.getReplay().events).toHaveLength(3);
   });
+
+  it.each([5, 150000])(
+    "preserves legacy ID order across history and event-list pages (payload length %i)",
+    (contentLength) => {
+      const content = "x".repeat(contentLength);
+      for (const id of ["y", "a", "w", "x"]) {
+        repository.createEvent({
+          id,
+          type: "token",
+          messageId: "message-1",
+          createdAt: 1000,
+          data: JSON.stringify({
+            type: "token",
+            content,
+            messageId: "message-1",
+            sandboxId: "s",
+            timestamp: 1000,
+          }),
+        });
+      }
+      let cursor: EventStreamCursor | null = { timestamp: 1000, id: "z" };
+      const historyIds: string[] = [];
+      for (let remaining = 4; cursor && remaining > 0; remaining--) {
+        const page = stream.getHistoryPage({ cursor, limit: 2 });
+        historyIds.unshift(...page.items.map((item) => item.eventId));
+        expect(page.cursor).not.toHaveProperty("sequence");
+        cursor = page.hasMore ? page.cursor : null;
+      }
+      expect(cursor).toBeNull();
+      expect(historyIds).toEqual(["a", "w", "x", "y"]);
+
+      let rawCursor: string | undefined = "1000:z";
+      const listIds: string[] = [];
+      for (let remaining = 4; rawCursor && remaining > 0; remaining--) {
+        const parsed = parseEventListCursor(rawCursor);
+        if (!parsed.ok) throw new Error(parsed.error);
+        const page = stream.listEvents({
+          cursor: parsed.cursor,
+          limit: 2,
+          type: null,
+          messageId: null,
+        });
+        listIds.push(...page.events.map((event) => event.id));
+        expect(page.cursor).toMatch(/^1000:[a-z]$/);
+        rawCursor = page.hasMore ? page.cursor : undefined;
+      }
+      expect(rawCursor).toBeUndefined();
+      expect(listIds).toEqual(["y", "x", "w", "a"]);
+    }
+  );
 
   it("advances past oversized malformed storage rows even when the visible page is empty", () => {
     seed(2, "small");
