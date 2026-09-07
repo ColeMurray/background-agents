@@ -256,7 +256,9 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> Path:
         else:
             try:
                 staging.rename(destination)
-            except FileExistsError:
+            except OSError:
+                if not destination.exists():
+                    raise
                 _assert_same_bundle(staging, destination)
         return destination
     finally:

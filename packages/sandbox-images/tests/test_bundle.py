@@ -1,5 +1,6 @@
 """Exercise the same plan/pack boundary used by native builders and Terraform."""
 
+import errno
 import json
 import shutil
 from pathlib import Path
@@ -131,6 +132,27 @@ def test_packing_is_immutable_and_rejects_tampered_reuse(tmp_path: Path) -> None
     with pytest.raises(RuntimeError, match="modified"):
         pack_bundle(REPO_ROOT, "e2b", tmp_path)
     assert (bundle / "image-config.sh").read_text() == "tampered"
+
+
+@pytest.mark.parametrize("error_number", [errno.ENOTEMPTY, errno.EEXIST])
+def test_packing_accepts_identical_concurrent_publication(monkeypatch, tmp_path, error_number):
+    def concurrent_rename(source, destination):
+        shutil.copytree(source, destination)
+        raise OSError(error_number, "Concurrent publisher")
+
+    monkeypatch.setattr(Path, "rename", concurrent_rename)
+    bundle = pack_bundle(REPO_ROOT, "modal", tmp_path)
+    assert (bundle / "image-plan.json").is_file()
+
+
+def test_packing_preserves_rename_error_without_destination(monkeypatch, tmp_path):
+    def failed_rename(source, destination):
+        raise OSError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(Path, "rename", failed_rename)
+    with pytest.raises(OSError) as failure:
+        pack_bundle(REPO_ROOT, "modal", tmp_path)
+    assert failure.value.errno == errno.EACCES
 
 
 def test_relative_symlinks_and_executable_modes_survive_pack(tmp_path: Path) -> None:
