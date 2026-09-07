@@ -3,7 +3,6 @@
  */
 
 import type { CacheStore } from "@open-inspect/shared/cache-store";
-import type { ClientCapability } from "@open-inspect/shared/types/websocket";
 import type { SqlDatabase } from "./db/sql-database";
 import type { Jobs } from "./jobs";
 import type { FetchClient, QueueMetricsSource } from "./platform-ports";
@@ -141,6 +140,5 @@ export interface ClientInfo {
   clientId: string;
   /** Wall-clock time when this connection's authorization lease expires. */
   authorizationExpiresAt: number;
-  capabilities?: ClientCapability[];
   lastFetchHistoryAtMs?: number;
 }

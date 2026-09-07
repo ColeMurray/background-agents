@@ -12,9 +12,7 @@ describe("useSessionCostSettings", () => {
       <SessionCostSettingsFields
         isGlobal={false}
         maxSessionCostUsd=""
-        costWarningThresholdPct=""
         onMaxSessionCostUsdChange={() => undefined}
-        onCostWarningThresholdPctChange={() => undefined}
       />
     );
 
@@ -22,29 +20,25 @@ describe("useSessionCostSettings", () => {
     expect(screen.getByLabelText("Cost limit (USD)")).toHaveAttribute("placeholder", "Inherit");
   });
 
-  it("clears a scoped warning threshold back to inheritance", () => {
+  it("clears a scoped limit back to inheritance", () => {
     const { result } = renderHook(() =>
-      useSessionCostSettings(
-        { costWarningThresholdPct: 75 },
-        { costWarningThresholdPct: 80 },
-        false
-      )
+      useSessionCostSettings({ maxSessionCostUsd: 75 }, { maxSessionCostUsd: 80 }, false)
     );
 
-    act(() => result.current.setThreshold(""));
+    act(() => result.current.setMaxCost(""));
     const payload: SandboxSettings = {};
     result.current.apply(payload);
 
     expect(result.current.validate()).toBeNull();
-    expect(payload).not.toHaveProperty("costWarningThresholdPct");
+    expect(payload).not.toHaveProperty("maxSessionCostUsd");
   });
 
-  it("ignores threshold whitespace when detecting changes", () => {
+  it("ignores limit whitespace when detecting changes", () => {
     const { result } = renderHook(() =>
-      useSessionCostSettings({ costWarningThresholdPct: 75 }, undefined, false)
+      useSessionCostSettings({ maxSessionCostUsd: 75 }, undefined, false)
     );
 
-    act(() => result.current.setThreshold("75 "));
+    act(() => result.current.setMaxCost("75 "));
 
     expect(result.current.hasChanges).toBe(false);
   });

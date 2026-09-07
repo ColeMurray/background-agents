@@ -7,7 +7,6 @@ import {
   type ServerMessage,
 } from "@open-inspect/shared/types/server-messages";
 import {
-  SESSION_BUDGET_CAPABILITY,
   WS_CLOSE_AUTHORIZATION_REVOKED,
   WS_CLOSE_GOING_AWAY,
   WS_CLOSE_INTERNAL_ERROR,
@@ -252,7 +251,6 @@ export function useSessionTransport(
         type: "subscribe",
         token: wsTokenRef.current,
         clientId: crypto.randomUUID(),
-        capabilities: [SESSION_BUDGET_CAPABILITY],
       })
     );
   }, []);

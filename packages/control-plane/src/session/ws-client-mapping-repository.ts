@@ -1,8 +1,4 @@
 import type { SqlStorage } from "./sql-storage";
-import {
-  clientCapabilitySchema,
-  type ClientCapability,
-} from "@open-inspect/shared/types/websocket";
 
 /** WS client mapping result for hibernation recovery. */
 export interface WsClientMappingResult {
@@ -14,7 +10,6 @@ export interface WsClientMappingResult {
   scm_login: string | null;
   /** Dormant legacy column may still be present on older mapping fixtures. */
   auth_name?: string | null;
-  capabilities?: string;
   /** Wall-clock time when the persisted authorization lease expires. */
   authorization_expires_at: number;
 }
@@ -25,7 +20,6 @@ export interface WsClientMappingData {
   participantId: string;
   clientId: string;
   createdAt: number;
-  capabilities?: ClientCapability[];
   /** Wall-clock time when the persisted authorization lease expires. */
   authorizationExpiresAt: number;
 }
@@ -38,18 +32,16 @@ export class WsClientMappingRepository {
   upsertWsClientMapping(data: WsClientMappingData): void {
     this.sql.exec(
       `INSERT INTO ws_client_mapping
-         (ws_id, participant_id, client_id, capabilities, created_at, authorization_expires_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+         (ws_id, participant_id, client_id, created_at, authorization_expires_at)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT (ws_id) DO UPDATE SET
          participant_id = excluded.participant_id,
          client_id = excluded.client_id,
-         capabilities = excluded.capabilities,
          created_at = excluded.created_at,
          authorization_expires_at = excluded.authorization_expires_at`,
       data.wsId,
       data.participantId,
       data.clientId,
-      JSON.stringify(data.capabilities ?? []),
       data.createdAt,
       data.authorizationExpiresAt
     );
@@ -60,7 +52,7 @@ export class WsClientMappingRepository {
     // Keep this indexed JOIN in one query: both tables share the session-local store,
     // and this read is on the hibernation-recovery hot path.
     const result = this.sql.exec(
-      `SELECT m.participant_id, m.client_id, m.capabilities, m.authorization_expires_at,
+      `SELECT m.participant_id, m.client_id, m.authorization_expires_at,
               p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
        FROM ws_client_mapping m
        JOIN participants p ON m.participant_id = p.id
@@ -94,19 +86,5 @@ export class WsClientMappingRepository {
       .exec(`SELECT MIN(authorization_expires_at) AS expires_at FROM ws_client_mapping`)
       .toArray() as Array<{ expires_at: number | null }>;
     return rows[0]?.expires_at ?? null;
-  }
-}
-
-/** Decode a persisted capabilities column; malformed or unknown entries are dropped. */
-export function parseClientCapabilities(raw: string | null | undefined): ClientCapability[] {
-  try {
-    const parsed: unknown = JSON.parse(raw ?? "[]");
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((entry) => {
-      const result = clientCapabilitySchema.safeParse(entry);
-      return result.success ? [result.data] : [];
-    });
-  } catch {
-    return [];
   }
 }

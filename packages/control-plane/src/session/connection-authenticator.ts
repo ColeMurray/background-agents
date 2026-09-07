@@ -27,7 +27,6 @@ import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionSnapshotReader } from "./snapshot-reader";
 import type { SessionWebSocketManager } from "./websocket-manager";
-import { parseClientCapabilities } from "./ws-client-mapping-repository";
 import { WS_AUTHORIZATION_LEASE_MS } from "./authorization-lease";
 import { canManageSessionBudget } from "./budget-authorization";
 
@@ -262,7 +261,6 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     data: {
       token: string;
       clientId: string;
-      capabilities?: ClientInfo["capabilities"];
     }
   ): Promise<void> {
     const { wsManager, participantService, presenceService, log } = this.deps;
@@ -362,7 +360,6 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
         status: "active",
         lastSeen: Date.now(),
         clientId: data.clientId,
-        capabilities: data.capabilities ?? [],
         authorizationExpiresAt,
       };
 
@@ -477,7 +474,6 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
-      capabilities: parseClientCapabilities(mapping.capabilities),
       authorizationExpiresAt: mapping.authorization_expires_at,
     };
 

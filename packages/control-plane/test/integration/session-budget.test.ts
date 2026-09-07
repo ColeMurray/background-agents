@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { cleanD1Tables } from "./cleanup";
 import {
+  collectMessages,
   initNamedSession,
   initNamedSessionDO,
   openClientWs,
@@ -44,7 +45,7 @@ describe("session budgets", () => {
   it("persists resolved budget settings in the session snapshot", async () => {
     const name = `budget-snapshot-${Date.now()}`;
     const { stub } = await initNamedSession(name, {
-      sandboxSettings: { maxSessionCostUsd: 10, costWarningThresholdPct: 75 },
+      sandboxSettings: { maxSessionCostUsd: 10 },
     });
 
     const response = await stub.fetch("http://internal/internal/snapshot");
@@ -83,6 +84,26 @@ describe("session budgets", () => {
     expect(rows).toEqual([{ max_cost_usd: 20 }]);
   });
 
+  it("delivers live budget status to a client subscribing without capabilities", async () => {
+    const name = `budget-broadcast-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const { ws } = await openClientWs(name, { subscribe: true });
+    try {
+      const updates = collectMessages(ws, { until: (message) => message.type === "budget_status" });
+      const response = await stub.fetch("http://internal/internal/budget", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxCostUsd: 20 }),
+      });
+      expect(response.status).toBe(200);
+      expect(await updates).toContainEqual(
+        expect.objectContaining({ type: "budget_status", maxSessionCostUsd: 20 })
+      );
+    } finally {
+      ws.close();
+    }
+  });
+
   it("preserves live budget state when initialization is retried", async () => {
     const name = `budget-reinit-${Date.now()}`;
     const { stub } = await initNamedSession(name, {
@@ -91,7 +112,7 @@ describe("session budgets", () => {
     await queryDO(
       stub,
       `UPDATE session
-       SET total_cost = 12, max_cost_usd = 15, cost_warning_sent = 1,
+       SET total_cost = 12, max_cost_usd = 15,
            budget_exhausted = 1, cost_tracking_unavailable = 1`
     );
     await queryDO(
@@ -104,7 +125,7 @@ describe("session budgets", () => {
     expect(
       await queryDO(
         stub,
-        `SELECT total_cost, max_cost_usd, cost_warning_sent,
+        `SELECT total_cost, max_cost_usd,
                 budget_exhausted, cost_tracking_unavailable
          FROM session`
       )
@@ -112,7 +133,6 @@ describe("session budgets", () => {
       {
         total_cost: 12,
         max_cost_usd: 15,
-        cost_warning_sent: 1,
         budget_exhausted: 1,
         cost_tracking_unavailable: 1,
       },
@@ -159,10 +179,10 @@ describe("session budgets", () => {
     ]);
   });
 
-  it("warns, exhausts active work, preserves pending work, and clears on a raised limit", async () => {
+  it("exhausts active work without an advance warning, preserves pending work, and clears on a raised limit", async () => {
     const name = `budget-enforcement-${Date.now()}`;
     const { stub } = await initNamedSession(name, {
-      sandboxSettings: { maxSessionCostUsd: 10, costWarningThresholdPct: 80 },
+      sandboxSettings: { maxSessionCostUsd: 10 },
     });
     await waitForSandboxStatus(stub, "failed");
     const [{ id: ownerId }] = await queryDO<{ id: string }>(
@@ -207,15 +227,15 @@ describe("session budgets", () => {
     expect((await sendCost(7, 7)).status).toBe(200);
     expect(await queryDO(stub, "SELECT id FROM events WHERE type = 'warning'")).toEqual([]);
     expect((await sendCost(1, 8)).status).toBe(200);
+    expect(await queryDO(stub, "SELECT id FROM events WHERE type = 'warning'")).toEqual([]);
     // The 9 report was lost; the next cumulative repairs it.
     expect((await sendCost(1, 10)).status).toBe(200);
 
     const [session] = await queryDO<{
       total_cost: number;
       budget_exhausted: number;
-      cost_warning_sent: number;
-    }>(stub, "SELECT total_cost, budget_exhausted, cost_warning_sent FROM session");
-    expect(session).toEqual({ total_cost: 10, budget_exhausted: 1, cost_warning_sent: 1 });
+    }>(stub, "SELECT total_cost, budget_exhausted FROM session");
+    expect(session).toEqual({ total_cost: 10, budget_exhausted: 1 });
     expect(
       await queryDO(stub, "SELECT reported_cost_usd FROM messages WHERE id = 'message-active'")
     ).toEqual([{ reported_cost_usd: 10 }]);
@@ -232,7 +252,7 @@ describe("session budgets", () => {
     const warningsBody = await warningsResponse.json<{
       events: Array<{ data: { scope?: string } }>;
     }>();
-    expect(warningsBody.events.filter((item) => item.data.scope === "budget")).toHaveLength(2);
+    expect(warningsBody.events.filter((item) => item.data.scope === "budget")).toHaveLength(1);
 
     const raised = await stub.fetch("http://internal/internal/budget", {
       method: "POST",
@@ -240,9 +260,9 @@ describe("session budgets", () => {
       body: JSON.stringify({ maxCostUsd: 20 }),
     });
     expect(raised.status).toBe(200);
-    expect(
-      await queryDO(stub, "SELECT max_cost_usd, budget_exhausted, cost_warning_sent FROM session")
-    ).toEqual([{ max_cost_usd: 20, budget_exhausted: 0, cost_warning_sent: 0 }]);
+    expect(await queryDO(stub, "SELECT max_cost_usd, budget_exhausted FROM session")).toEqual([
+      { max_cost_usd: 20, budget_exhausted: 0 },
+    ]);
   });
 
   it("applies the final cumulative report carried on execution_complete", async () => {

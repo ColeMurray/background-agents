@@ -474,12 +474,12 @@ describe("applyMigrations", () => {
   it("adds session budget fields for fresh and migrated sessions", () => {
     const sessionTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS session")[1]?.split(");")[0];
     expect(sessionTable).toContain("max_cost_usd REAL");
-    expect(sessionTable).toContain("cost_warning_sent INTEGER NOT NULL DEFAULT 0");
+    expect(sessionTable).not.toContain("cost_warning_sent");
     expect(sessionTable).toContain("budget_exhausted INTEGER NOT NULL DEFAULT 0");
     expect(sessionTable).toContain("cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0");
 
     expect(SCHEMA_SQL).toContain("reported_cost_usd REAL NOT NULL DEFAULT 0");
-    expect(SCHEMA_SQL).toContain("capabilities TEXT NOT NULL DEFAULT '[]'");
+    expect(SCHEMA_SQL).not.toContain("capabilities TEXT");
 
     const migration = MIGRATIONS.find((entry) => entry.id === 49);
     expect(typeof migration?.run).toBe("function");
@@ -498,13 +498,15 @@ describe("applyMigrations", () => {
       expect(db.prepare("PRAGMA table_info(session)").all()).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ name: "max_cost_usd", type: "REAL" }),
-          expect.objectContaining({ name: "cost_warning_sent", type: "INTEGER" }),
           expect.objectContaining({ name: "budget_exhausted", type: "INTEGER" }),
           expect.objectContaining({ name: "cost_tracking_unavailable", type: "INTEGER" }),
         ])
       );
-      expect(db.prepare("PRAGMA table_info(ws_client_mapping)").all()).toEqual(
+      expect(db.prepare("PRAGMA table_info(ws_client_mapping)").all()).not.toEqual(
         expect.arrayContaining([expect.objectContaining({ name: "capabilities", type: "TEXT" })])
+      );
+      expect(db.prepare("PRAGMA table_info(session)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "cost_warning_sent" })])
       );
       expect(db.prepare("PRAGMA table_info(messages)").all()).toEqual(
         expect.arrayContaining([

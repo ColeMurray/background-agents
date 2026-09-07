@@ -28,9 +28,8 @@ function session(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 8,
-    sandbox_settings: JSON.stringify({ costWarningThresholdPct: 80 }),
+    sandbox_settings: null,
     max_cost_usd: 10,
-    cost_warning_sent: 0,
     budget_exhausted: 0,
     cost_tracking_unavailable: 0,
     environment_id: null,
@@ -49,25 +48,19 @@ function createService(row = session()) {
       current = { ...current, total_cost: current.total_cost + cost };
       return current.total_cost;
     }),
-    markCostWarningSent: vi.fn(() => {
-      current = { ...current, cost_warning_sent: 1 };
-    }),
     markCostTrackingUnavailable: vi.fn(() => {
       current = { ...current, cost_tracking_unavailable: 1 };
     }),
     markBudgetExhausted: vi.fn(() => {
       current = { ...current, budget_exhausted: 1 };
     }),
-    setSessionBudget: vi.fn(
-      (maxCostUsd: number | null, state: { warningSent: boolean; exhausted: boolean }) => {
-        current = {
-          ...current,
-          max_cost_usd: maxCostUsd,
-          cost_warning_sent: state.warningSent ? 1 : 0,
-          budget_exhausted: state.exhausted ? 1 : 0,
-        };
-      }
-    ),
+    setSessionBudget: vi.fn((maxCostUsd: number | null, exhausted: boolean) => {
+      current = {
+        ...current,
+        max_cost_usd: maxCostUsd,
+        budget_exhausted: exhausted ? 1 : 0,
+      };
+    }),
   };
   const eventRepository = {
     createEvent: vi.fn(),
@@ -256,7 +249,7 @@ describe("SessionBudgetService", () => {
     expect(h.repository.addSessionCost).not.toHaveBeenCalled();
   });
 
-  it("persists and broadcasts one threshold warning", async () => {
+  it("publishes cost updates near the limit without a threshold warning", async () => {
     const h = createService(session({ total_cost: 7 }));
 
     await h.service.ingestStepFinish(
@@ -272,16 +265,9 @@ describe("SessionBudgetService", () => {
     );
 
     expect(h.repository.transaction).toHaveBeenCalledOnce();
-    expect(h.repository.markCostWarningSent).toHaveBeenCalledWith(1000);
-    expect(h.eventRepository.createEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "budget-event-1", type: "warning", messageId: "message-1" })
-    );
-    expect(h.broadcast).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "sandbox_event",
-        event: expect.objectContaining({ scope: "budget" }),
-      })
-    );
+    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
+    expect(h.prepareBudgetStop).not.toHaveBeenCalled();
+    expect(h.broadcast).toHaveBeenCalledOnce();
     expect(h.broadcast).toHaveBeenCalledWith(
       expect.objectContaining({ type: "budget_status", totalCost: 8, budgetExhausted: false })
     );
@@ -358,32 +344,56 @@ describe("SessionBudgetService", () => {
     );
   });
 
-  it("updates the live limit and resumes queued work when permitted", async () => {
+  it.each([20, null])("updates the live limit to %s and resumes queued work", async (limit) => {
     const h = createService(session({ max_cost_usd: 10, budget_exhausted: 1, total_cost: 10 }));
 
-    await h.service.updateLimit(20, 1000);
+    await h.service.updateLimit(limit, 1000);
 
-    expect(h.repository.setSessionBudget).toHaveBeenCalledWith(
-      20,
-      { warningSent: false, exhausted: false },
-      1000
-    );
+    expect(h.repository.setSessionBudget).toHaveBeenCalledWith(limit, false, 1000);
     expect(h.processMessageQueue).toHaveBeenCalledOnce();
     expect(h.prepareBudgetStop).not.toHaveBeenCalled();
   });
 
-  it("evaluates a lower live limit immediately", async () => {
+  it("does not warn when a lower live limit remains above observed cost", async () => {
     const h = createService(session({ max_cost_usd: 20, total_cost: 8 }));
 
     await h.service.updateLimit(9, 1000);
 
-    expect(h.repository.setSessionBudget).toHaveBeenCalledWith(
-      9,
-      { warningSent: true, exhausted: false },
+    expect(h.repository.setSessionBudget).toHaveBeenCalledWith(9, false, 1000);
+    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
+    expect(h.prepareBudgetStop).not.toHaveBeenCalled();
+  });
+
+  it("immediately exhausts when a lowered limit equals observed cost", async () => {
+    const h = createService(session({ max_cost_usd: 20, total_cost: 8 }));
+
+    await h.service.updateLimit(8, 1000);
+
+    expect(h.repository.setSessionBudget).toHaveBeenCalledWith(8, true, 1000);
+    expect(h.prepareBudgetStop).toHaveBeenCalledOnce();
+    expect(h.deliverBudgetStop).toHaveBeenCalledOnce();
+    expect(h.processMessageQueue).not.toHaveBeenCalled();
+  });
+
+  it("keeps accounting after exhaustion without repeating stop effects", async () => {
+    const h = createService(session({ total_cost: 10, budget_exhausted: 1 }));
+
+    await h.service.ingestStepFinish(
+      {
+        type: "step_finish",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+        cost: 1,
+      },
+      "message-1",
       1000
     );
-    expect(h.eventRepository.createEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.stringContaining("reached 80%") })
+
+    expect(h.prepareBudgetStop).not.toHaveBeenCalled();
+    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
+    expect(h.broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "budget_status", totalCost: 11, budgetExhausted: true })
     );
   });
 
@@ -401,11 +411,7 @@ describe("SessionBudgetService", () => {
 
     await h.service.updateLimit(11, 1000);
 
-    expect(h.repository.setSessionBudget).toHaveBeenCalledWith(
-      11,
-      { warningSent: false, exhausted: true },
-      1000
-    );
+    expect(h.repository.setSessionBudget).toHaveBeenCalledWith(11, true, 1000);
     expect(h.prepareBudgetStop).not.toHaveBeenCalled();
     expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
   });

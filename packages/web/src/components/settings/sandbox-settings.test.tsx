@@ -46,7 +46,6 @@ function globalSettings(
     maxConcurrentChildSessions?: number;
     maxTotalChildSessions?: number;
     maxSessionCostUsd?: number;
-    costWarningThresholdPct?: number;
   }
 ) {
   return {
@@ -89,11 +88,9 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
   const user = userEvent.setup();
 
   it("renders configured session cost controls", () => {
-    renderWithSWR(
-      globalSettings([], undefined, { maxSessionCostUsd: 25, costWarningThresholdPct: 75 })
-    );
+    renderWithSWR(globalSettings([], undefined, { maxSessionCostUsd: 25 }));
     expect(screen.getByLabelText("Cost limit (USD)")).toHaveValue(25);
-    expect(screen.getByLabelText("Warning threshold (%)")).toHaveValue(75);
+    expect(screen.queryByLabelText("Warning threshold (%)")).not.toBeInTheDocument();
   });
 
   it("shows empty state when no ports configured", () => {

@@ -159,19 +159,6 @@ export function normalizeSandboxSettings(
     result.maxSessionCostUsd = maxSessionCostUsd;
   }
 
-  const costWarningThresholdPct = normalizePositiveIntegerSetting(
-    settings.costWarningThresholdPct,
-    "costWarningThresholdPct",
-    reject
-  );
-  if (costWarningThresholdPct !== undefined) {
-    if (costWarningThresholdPct > 99) {
-      reject("costWarningThresholdPct must be an integer between 1 and 99");
-    } else {
-      result.costWarningThresholdPct = costWarningThresholdPct;
-    }
-  }
-
   checkPortCollisions(result, reject);
 
   return result;

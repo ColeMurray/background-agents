@@ -17,7 +17,6 @@ function harness(overrides: { sandboxSocket?: WebSocket | null; sendResult?: boo
     ),
     getSandboxSocket: vi.fn(() => sandbox),
     send: vi.fn(() => overrides.sendResult ?? true),
-    supportsClientCapability: vi.fn((_ws: WebSocket, _capability: "session_budget") => true),
   };
   return { messenger: new SessionMessengerImpl(wsManager), wsManager, clientA, clientB, sandbox };
 }
@@ -37,9 +36,8 @@ describe("SessionMessengerImpl", () => {
     expect(wsManager.send).toHaveBeenCalledWith(clientB, message);
   });
 
-  it("only broadcasts budget protocol messages to capable clients", () => {
+  it("broadcasts budget status to every authenticated client without negotiation", () => {
     const { messenger, wsManager, clientA, clientB } = harness();
-    wsManager.supportsClientCapability.mockImplementation((ws) => ws === clientA);
     const message = {
       type: "budget_status",
       totalCost: 5,
@@ -51,7 +49,20 @@ describe("SessionMessengerImpl", () => {
     messenger.broadcast(message);
 
     expect(wsManager.send).toHaveBeenCalledWith(clientA, message);
-    expect(wsManager.send).not.toHaveBeenCalledWith(clientB, message);
+    expect(wsManager.send).toHaveBeenCalledWith(clientB, message);
+  });
+
+  it("broadcasts budget warnings to every authenticated client without negotiation", () => {
+    const { messenger, wsManager, clientA, clientB } = harness();
+    const message = {
+      type: "sandbox_event",
+      event: { type: "warning", scope: "budget", message: "Work paused.", timestamp: 1 },
+    } as const;
+
+    messenger.broadcast(message);
+
+    expect(wsManager.send).toHaveBeenCalledWith(clientA, message);
+    expect(wsManager.send).toHaveBeenCalledWith(clientB, message);
   });
 
   it("sends a command to the connected sandbox socket", async () => {

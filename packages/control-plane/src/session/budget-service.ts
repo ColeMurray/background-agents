@@ -1,7 +1,5 @@
-import { DEFAULT_COST_WARNING_THRESHOLD_PCT } from "@open-inspect/shared/types/integrations";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import { parsePersistedSandboxSettings } from "../sandbox/settings";
-import { evaluateBudget, hasPositiveTokenUsage } from "./budget";
+import { hasPositiveTokenUsage } from "./budget";
 import type { EventRepository } from "./event-repository";
 import type {
   ExecutionStopCoordinator,
@@ -10,7 +8,6 @@ import type {
 import type { MessageRepository } from "./message-repository";
 import type { SessionMessenger } from "./messenger";
 import type { SessionCoreRepository } from "./session-core-repository";
-import type { SessionRow } from "./types";
 
 interface BudgetTransition {
   warningEvent: Extract<SandboxEvent, { type: "warning" }> | null;
@@ -94,27 +91,18 @@ export class SessionBudgetService {
     const remainsExhausted =
       session.budget_exhausted === 1 && maxCostUsd !== null && session.total_cost >= maxCostUsd;
     if (remainsExhausted) {
-      this.repository.setSessionBudget(maxCostUsd, { warningSent: false, exhausted: true }, now);
+      this.repository.setSessionBudget(maxCostUsd, true, now);
       this.broadcastStatus();
       return;
     }
 
-    const action = evaluateBudget({
-      totalCost: session.total_cost,
-      maxCostUsd,
-      warningThresholdPct: this.warningThreshold(session),
-      warningSent: false,
-      exhausted: false,
-    });
-    let warningEvent: Extract<SandboxEvent, { type: "warning" }> | null = null;
-
-    if (action === "exhaust" && maxCostUsd !== null) {
+    if (maxCostUsd !== null && session.total_cost >= maxCostUsd) {
       const reason = `Session cost limit reached: ${formatCost(session.total_cost)} of ${formatCost(maxCostUsd)}`;
       let preparation!: ExecutionStopPreparation;
       let exhaustionEvent!: Extract<SandboxEvent, { type: "warning" }>;
       this.repository.transaction(() => {
         preparation = this.executionStop.prepare(reason, now);
-        this.repository.setSessionBudget(maxCostUsd, { warningSent: false, exhausted: true }, now);
+        this.repository.setSessionBudget(maxCostUsd, true, now);
         exhaustionEvent = this.persistWarning(
           `${reason}. ${preparation.stopped ? "Execution stopped." : "Work paused."}`,
           null,
@@ -125,26 +113,9 @@ export class SessionBudgetService {
       this.broadcastStatus();
       await this.executionStop.deliver(preparation);
       return;
-    } else {
-      this.repository.transaction(() => {
-        this.repository.setSessionBudget(
-          maxCostUsd,
-          { warningSent: action === "warn", exhausted: false },
-          now
-        );
-        if (action === "warn" && maxCostUsd !== null) {
-          warningEvent = this.persistWarning(
-            `Session cost ${formatCost(session.total_cost)} reached ${this.warningThreshold(session)}% of the ${formatCost(maxCostUsd)} limit.`,
-            null,
-            now
-          );
-        }
-      });
     }
 
-    if (warningEvent) {
-      this.messenger.broadcast({ type: "sandbox_event", event: warningEvent });
-    }
+    this.repository.setSessionBudget(maxCostUsd, false, now);
     this.broadcastStatus();
     await this.processMessageQueue();
   }
@@ -179,31 +150,16 @@ export class SessionBudgetService {
     now: number
   ): BudgetTransition {
     const session = this.repository.getSession();
-    if (!session || session.max_cost_usd === null) return NO_BUDGET_TRANSITION;
-    const limit = session.max_cost_usd;
-    const threshold = this.warningThreshold(session);
-    const action = evaluateBudget({
-      totalCost,
-      maxCostUsd: limit,
-      warningThresholdPct: threshold,
-      warningSent: session.cost_warning_sent === 1,
-      exhausted: session.budget_exhausted === 1,
-    });
-    if (action === "none") return NO_BUDGET_TRANSITION;
-
-    if (action === "warn") {
-      this.repository.markCostWarningSent(now);
-      return {
-        warningEvent: this.persistWarning(
-          `Session cost ${formatCost(totalCost)} reached ${threshold}% of the ${formatCost(limit)} limit.`,
-          messageId,
-          now
-        ),
-        stopPreparation: null,
-        statusChanged: true,
-      };
+    if (
+      !session ||
+      session.max_cost_usd === null ||
+      session.budget_exhausted === 1 ||
+      totalCost < session.max_cost_usd
+    ) {
+      return NO_BUDGET_TRANSITION;
     }
 
+    const limit = session.max_cost_usd;
     const reason = `Session cost limit reached: ${formatCost(totalCost)} of ${formatCost(limit)}`;
     const stopPreparation = this.executionStop.prepare(reason, now);
     this.repository.markBudgetExhausted(now);
@@ -247,17 +203,6 @@ export class SessionBudgetService {
     if (transition.statusChanged) this.broadcastStatus();
     if (transition.stopPreparation) {
       await this.executionStop.deliver(transition.stopPreparation);
-    }
-  }
-
-  private warningThreshold(session: SessionRow): number {
-    try {
-      return (
-        parsePersistedSandboxSettings(session.sandbox_settings).costWarningThresholdPct ??
-        DEFAULT_COST_WARNING_THRESHOLD_PCT
-      );
-    } catch {
-      return DEFAULT_COST_WARNING_THRESHOLD_PCT;
     }
   }
 

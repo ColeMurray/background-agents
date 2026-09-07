@@ -254,13 +254,12 @@ describe("SessionCoreRepository", () => {
   });
 
   describe("budget state", () => {
-    it("updates the live limit and clears latches", () => {
-      repo.setSessionBudget(20, { warningSent: false, exhausted: false }, 5000);
+    it("updates the live limit and clears exhaustion", () => {
+      repo.setSessionBudget(20, false, 5000);
 
       expect(mock.calls[0].query).toContain("max_cost_usd = ?");
-      expect(mock.calls[0].query).toContain("cost_warning_sent = ?");
       expect(mock.calls[0].query).toContain("budget_exhausted = ?");
-      expect(mock.calls[0].params).toEqual([20, 0, 0, 5000]);
+      expect(mock.calls[0].params).toEqual([20, 0, 5000]);
     });
 
     it("latches unavailable cost tracking", () => {
@@ -332,7 +331,7 @@ describe("SessionCoreRepository", () => {
         realRepo.upsertSession(base);
         expect(realRepo.getSession()).toMatchObject({ max_cost_usd: 10 });
 
-        realRepo.setSessionBudget(20, { warningSent: false, exhausted: false }, 2000);
+        realRepo.setSessionBudget(20, false, 2000);
         realRepo.upsertSession({ ...base, maxCostUsd: 10, updatedAt: 3000 });
 
         expect(realRepo.getSession()).toMatchObject({ max_cost_usd: 20, updated_at: 3000 });

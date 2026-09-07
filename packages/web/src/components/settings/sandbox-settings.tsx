@@ -754,9 +754,7 @@ export function SandboxSettingsEditor({
       <SessionCostSettingsFields
         isGlobal={isGlobal}
         maxSessionCostUsd={sessionCostSettings.maxCost}
-        costWarningThresholdPct={sessionCostSettings.threshold}
         onMaxSessionCostUsdChange={sessionCostSettings.setMaxCost}
-        onCostWarningThresholdPctChange={sessionCostSettings.setThreshold}
       />
 
       <fieldset className="min-w-0">

@@ -233,9 +233,6 @@ export const DEFAULT_BUILD_TIMEOUT_SECONDS = 1800;
  */
 export const MAX_BUILD_TIMEOUT_SECONDS = 3600;
 
-/** Default pre-limit warning threshold as a percentage of the session cost limit. */
-export const DEFAULT_COST_WARNING_THRESHOLD_PCT = 80;
-
 /**
  * Sandbox environment settings. Provider-agnostic: describes what the user
  * wants, not how it's done. Resource fields (`cpuCores`, `memoryMib`) are
@@ -270,8 +267,6 @@ export const sandboxSettingsSchema = z.strictObject({
   buildTimeoutSeconds: z.number().optional(),
   /** Maximum OpenCode-reported session cost in USD. */
   maxSessionCostUsd: z.number().finite().positive().optional(),
-  /** Percentage of the cost limit that emits the one-time warning. */
-  costWarningThresholdPct: z.number().int().min(1).max(99).optional(),
 });
 
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;

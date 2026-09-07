@@ -191,18 +191,13 @@ export class SessionCoreRepository {
     return row.total_cost;
   }
 
-  setSessionBudget(
-    maxCostUsd: number | null,
-    state: { warningSent: boolean; exhausted: boolean },
-    updatedAt: number
-  ): void {
+  setSessionBudget(maxCostUsd: number | null, exhausted: boolean, updatedAt: number): void {
     this.sql.exec(
       `UPDATE session
-       SET max_cost_usd = ?, cost_warning_sent = ?, budget_exhausted = ?, updated_at = ?
+       SET max_cost_usd = ?, budget_exhausted = ?, updated_at = ?
        WHERE id = (SELECT id FROM session LIMIT 1)`,
       maxCostUsd,
-      state.warningSent ? 1 : 0,
-      state.exhausted ? 1 : 0,
+      exhausted ? 1 : 0,
       updatedAt
     );
   }
@@ -211,14 +206,6 @@ export class SessionCoreRepository {
     this.sql.exec(
       `UPDATE session
        SET cost_tracking_unavailable = 1, updated_at = ?
-       WHERE id = (SELECT id FROM session LIMIT 1)`,
-      updatedAt
-    );
-  }
-
-  markCostWarningSent(updatedAt: number): void {
-    this.sql.exec(
-      `UPDATE session SET cost_warning_sent = 1, updated_at = ?
        WHERE id = (SELECT id FROM session LIMIT 1)`,
       updatedAt
     );

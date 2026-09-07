@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
-  DEFAULT_COST_WARNING_THRESHOLD_PCT,
   INTERNAL_TTYD_PORT,
   INTERNAL_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
@@ -289,7 +288,6 @@ describe("integration settings schemas", () => {
     expect(
       integrationSettingsSchemas.sandbox.repo.safeParse({
         maxSessionCostUsd: 12.5,
-        costWarningThresholdPct: DEFAULT_COST_WARNING_THRESHOLD_PCT,
       }).success
     ).toBe(true);
   });
@@ -298,9 +296,6 @@ describe("integration settings schemas", () => {
     { maxSessionCostUsd: 0 },
     { maxSessionCostUsd: -1 },
     { maxSessionCostUsd: Number.POSITIVE_INFINITY },
-    { costWarningThresholdPct: 0 },
-    { costWarningThresholdPct: 99.5 },
-    { costWarningThresholdPct: 100 },
   ])("rejects invalid session cost settings %#", (settings) => {
     expect(integrationSettingsSchemas.sandbox.repo.safeParse(settings).success).toBe(false);
   });

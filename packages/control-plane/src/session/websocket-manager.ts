@@ -14,17 +14,15 @@
  */
 
 import type { Logger } from "../logger";
-import type { ClientCapability } from "@open-inspect/shared/types/websocket";
 import { isSocketOpen, type AlarmScheduler, type SessionWebSocket } from "../platform-ports";
 import type { ClientInfo } from "../types";
 import type { SessionWebSocketHost } from "./platform";
 import type { ConnectionClassification } from "./ports";
 import type { SandboxRepository } from "./sandbox-repository";
 import type { SandboxRow } from "./types";
-import {
-  parseClientCapabilities,
-  type WsClientMappingRepository,
-  type WsClientMappingResult,
+import type {
+  WsClientMappingRepository,
+  WsClientMappingResult,
 } from "./ws-client-mapping-repository";
 import {
   WS_AUTHORIZATION_REVOKED_REASON,
@@ -90,7 +88,6 @@ export interface SessionWebSocketManager {
     synchronize: () => boolean
   ): Promise<boolean>;
 
-  supportsClientCapability(ws: SessionWebSocket, capability: ClientCapability): boolean;
   /** Return a live client or its persisted hibernation mapping, rejecting expired leases. */
   lookupClient(ws: SessionWebSocket): ClientLookup;
 
@@ -363,7 +360,6 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       wsId: parsed.wsId,
       participantId: info.participantId,
       clientId: info.clientId,
-      capabilities: info.capabilities,
       createdAt: Date.now(),
       authorizationExpiresAt: info.authorizationExpiresAt,
     });
@@ -388,15 +384,6 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     this.wsClientMappingRepository.deleteExpiredMappings(now);
     const nextExpiry = this.wsClientMappingRepository.getNextAuthorizationExpiry();
     if (nextExpiry !== null) await this.alarmScheduler.schedule(nextExpiry);
-  }
-
-  supportsClientCapability(ws: SessionWebSocket, capability: ClientCapability): boolean {
-    const lookup = this.lookupClient(ws);
-    if (lookup.kind === "cached") {
-      return lookup.client.capabilities?.includes(capability) ?? false;
-    }
-    if (lookup.kind !== "recovered") return false;
-    return parseClientCapabilities(lookup.mapping.capabilities).includes(capability);
   }
 
   setClientSynchronizing(ws: SessionWebSocket, synchronizing: boolean): void {
