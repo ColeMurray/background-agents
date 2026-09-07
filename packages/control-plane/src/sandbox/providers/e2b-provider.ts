@@ -1,4 +1,3 @@
-import imageEnvironments from "../../../../sandbox-images/runtime-environments.json";
 import { IMAGE_RUNTIME_ENTRYPOINT } from "../runtime-entrypoint";
 /**
  * E2B sandbox provider — calls the E2B REST API directly.
@@ -101,7 +100,11 @@ const E2B_ENTRYPOINT_COMMAND = `nohup python -c '${IMAGE_RUNTIME_ENTRYPOINT}' >$
 const E2B_SANDBOX_ENV: Record<string, string> = {
   // Retained for old runtime code; new images report their baked manifest.
   SANDBOX_VERSION: "",
-  ...imageEnvironments.e2b,
+  // Legacy bootstrap defaults. Consolidated images apply their own baked env.
+  HOME: "/home/user",
+  PYTHONPATH: "/app",
+  NODE_PATH: "/usr/lib/node_modules",
+  OI_SCM_CRED_CACHE_DIR: "/tmp/oi",
 };
 
 /**

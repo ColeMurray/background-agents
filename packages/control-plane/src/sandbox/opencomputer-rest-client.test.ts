@@ -48,6 +48,8 @@ describe("OpenComputerRestClient runtime SANDBOX_VERSION export", () => {
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.args[1]).toContain('importlib.import_module("sandbox_runtime.runtime_manifest")');
     expect(body.args[1]).not.toContain(`SANDBOX_VERSION=${SANDBOX_RUNTIME_VERSION}`);
+    expect(body.args[1]).toContain("VIRTUAL_ENV=/home/sandbox/.venv ");
+    expect(body.args[1]).not.toContain("/opt/openinspect/python");
   });
 
   it("runRuntimeForeground (image build path) exports SANDBOX_VERSION", async () => {

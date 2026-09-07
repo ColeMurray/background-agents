@@ -122,7 +122,6 @@ def runtime_environment(target: dict[str, str]) -> dict[str, str]:
         "HOME": home,
         "XDG_CONFIG_HOME": f"{home}/.config",
         "NODE_ENV": "development",
-        "VIRTUAL_ENV": "/opt/openinspect/python",
         "PYTHONPATH": "/app",
         "NODE_PATH": f"/opt/openinspect/tools/node_modules:{prefix}/lib/node_modules:/usr/lib/node_modules:/usr/local/lib/node_modules",
         "PATH": f"/opt/openinspect/python/bin:/opt/openinspect/node/bin:/opt/openinspect/tools/node_modules/.bin:{home}/.venv/bin:{user_bin}:{home}/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:{prefix}/bin",

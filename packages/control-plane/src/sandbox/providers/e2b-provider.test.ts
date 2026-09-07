@@ -153,9 +153,8 @@ describe("E2BSandboxProvider", () => {
     expect(createEnv(client)).toMatchObject({
       HOME: "/home/user",
       PYTHONPATH: "/app",
-      NODE_PATH:
-        "/opt/openinspect/tools/node_modules:/home/user/.npm-global/lib/node_modules:/usr/lib/node_modules:/usr/local/lib/node_modules",
-      OI_SCM_CRED_CACHE_DIR: "/home/user/.cache/openinspect/scm",
+      NODE_PATH: "/usr/lib/node_modules",
+      OI_SCM_CRED_CACHE_DIR: "/tmp/oi",
       SANDBOX_VERSION: "",
     });
   });
@@ -164,6 +163,7 @@ describe("E2BSandboxProvider", () => {
     const client = mockClient();
     await new E2BSandboxProvider(client, providerConfig).createSandbox(baseCreateConfig);
     expect(createEnv(client).SANDBOX_VERSION).toBe("");
+    expect(createEnv(client)).not.toHaveProperty("VIRTUAL_ENV");
   });
 
   it("maps bitbucket to the Bitbucket clone identity", async () => {

@@ -1,4 +1,3 @@
-import imageEnvironments from "../../../../../sandbox-images/runtime-environments.json";
 import { IMAGE_RUNTIME_ENTRYPOINT } from "../../runtime-entrypoint";
 /**
  * Vercel Sandbox provider implementation.
@@ -388,7 +387,10 @@ export class VercelSandboxProvider implements SandboxProvider {
       // Compatibility label for old runtime code, not new image evidence.
       SANDBOX_VERSION: "",
       PYTHONUNBUFFERED: "1",
-      ...imageEnvironments.vercel,
+      HOME: "/root",
+      NODE_ENV: "development",
+      PYTHONPATH: "/app",
+      NODE_PATH: "/usr/lib/node_modules:/usr/local/lib/node_modules",
       PATH: buildVercelRuntimePath(this.providerConfig.runtime),
     };
   }
@@ -654,7 +656,7 @@ function routeToUrl(route: VercelSandboxRoute | undefined): string | undefined {
 
 function buildVercelRuntimePath(runtime?: string): string {
   const resolvedRuntime = runtime || DEFAULT_VERCEL_RUNTIME;
-  return `${imageEnvironments.vercel.PATH}:/vercel/runtimes/${resolvedRuntime}/bin`;
+  return `/root/.bun/bin:/usr/local/bin:/usr/bin:/bin:/vercel/runtimes/${resolvedRuntime}/bin`;
 }
 
 export function createVercelProvider(

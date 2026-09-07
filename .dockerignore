@@ -6,7 +6,6 @@
 !packages/shared/
 !packages/control-plane/
 !packages/sandbox-runtime/src/sandbox_runtime/*.json
-!packages/sandbox-images/runtime-environments.json
 !terraform/d1/migrations/
 packages/**/node_modules/
 packages/**/dist/

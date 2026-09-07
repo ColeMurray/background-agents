@@ -1,4 +1,3 @@
-import imageEnvironments from "../../../sandbox-images/runtime-environments.json";
 import { IMAGE_RUNTIME_ENTRYPOINT } from "./runtime-entrypoint";
 /**
  * Direct REST client for OpenComputer sandboxes.
@@ -225,11 +224,14 @@ const RUNTIME_HOSTS_BOOTSTRAP =
   "grep -Eq '^[[:space:]]*::1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
   "printf '%s\\n' '::1 localhost ip6-localhost ip6-loopback' | sudo tee -a /etc/hosts >/dev/null";
 const RUNTIME_ENV_EXPORTS =
-  "export " +
-  Object.entries(imageEnvironments.opencomputer)
-    .map(([key, value]) => `${key}=${shellQuote(value)}`)
-    .join(" ") +
-  " " +
+  // Retained images use this legacy venv. New runtimes apply image-local env.
+  "export HOME=/home/sandbox " +
+  "VIRTUAL_ENV=/home/sandbox/.venv " +
+  "XDG_CONFIG_HOME=/home/sandbox/.config " +
+  "PYTHONPATH=/app " +
+  "NODE_PATH=/home/sandbox/.npm-global/lib/node_modules:/usr/lib/node_modules " +
+  "OPENINSPECT_BIN_INSTALL_DIR=/home/sandbox/.local/bin " +
+  "PATH=/home/sandbox/.venv/bin:/home/sandbox/.npm-global/bin:/home/sandbox/.local/bin:/home/sandbox/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin " +
   `NO_PROXY=${LOCAL_NO_PROXY} ` +
   `no_proxy=${LOCAL_NO_PROXY} ` +
   "SANDBOX_VERSION='' " +
