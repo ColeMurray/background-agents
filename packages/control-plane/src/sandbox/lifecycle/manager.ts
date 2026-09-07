@@ -10,7 +10,6 @@
  * spawn attempts within the same request.
  */
 
-import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import {
@@ -24,6 +23,7 @@ import {
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
+  type SandboxStartupAccess,
   type SessionRepositoryInfo,
 } from "../provider";
 import {
@@ -53,6 +53,8 @@ import {
   parseSandboxSettings,
   resolveLaunchInputs,
   resolveSandboxTimeoutSeconds,
+  type LaunchInputContext,
+  type LaunchInputConfig,
 } from "./launch-inputs";
 import {
   evaluateImageBuildForSpawn,
@@ -63,6 +65,7 @@ import type { AlarmScheduler, SessionWebSocket } from "../../platform-ports";
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
 
 export type { ImageBuildLookup } from "./image-selection";
+export type { McpServerLookup, SlackAgentNotifyLookup } from "./launch-inputs";
 export type { AlarmScheduler } from "../../platform-ports";
 
 const log = createLogger("lifecycle-manager");
@@ -104,18 +107,9 @@ interface SandboxCircuitBreakerInfo {
  * contract, these reads belong to others, and conflating them forced every
  * implementer to bridge unrelated objects.
  */
-export interface SessionContextReader {
+export interface SessionContextReader extends LaunchInputContext {
   /** Get current session */
   getSession(): SessionRow | null;
-  /**
-   * Get the session's member repositories in position order. Pre-list
-   * sessions get a one-entry list synthesized from the scalar columns
-   * (buildSessionRepositories owns the rule); empty only for repo-less
-   * sessions.
-   */
-  getSessionRepositories(): SessionRepositoryInfo[];
-  /** Get user env vars for sandbox injection */
-  getUserEnvVars(): Promise<Record<string, string> | undefined>;
 }
 
 /**
@@ -239,15 +233,12 @@ export interface IdGenerator {
 /**
  * Complete lifecycle configuration.
  */
-export interface SandboxLifecycleConfig {
+export interface SandboxLifecycleConfig extends LaunchInputConfig {
   circuitBreaker: CircuitBreakerConfig;
   spawn: SpawnConfig;
   inactivity: InactivityConfig;
   heartbeat: HeartbeatConfig;
   connectingTimeout: ConnectingTimeoutConfig;
-  controlPlaneUrl: string;
-  /** Default model ID used when the session has no model override. */
-  model: string;
   /**
    * Session ID for log correlation, resolved per use. Optional — logs will
    * omit sessionId if not provided. A thunk rather than a value because the
@@ -255,10 +246,6 @@ export interface SandboxLifecycleConfig {
    * row (and its public id) exists.
    */
   getSessionId?: () => string;
-  /** MCP server lookup for injecting servers into sandboxes. */
-  mcpServerLookup?: McpServerLookup;
-  /** Resolves the spawn-time agent-slack-notify gate. */
-  slackAgentNotifyLookup?: SlackAgentNotifyLookup;
   /** Builds a provider dashboard URL for a persisted provider object ID. */
   sandboxDashboardUrlBuilder?: (providerObjectId: string) => string | null;
 }
@@ -279,31 +266,6 @@ function buildSandboxIdForSession(session: SessionRow, now: number): string {
     ? `${session.repo_owner}-${session.repo_name}`
     : session.id;
   return `sandbox-${sandboxName}-${now}`;
-}
-
-// ==================== MCP Server Lookup ====================
-
-/**
- * Lookup interface for MCP servers applicable to a session.
- * Keeps the lifecycle manager free of direct D1Database dependencies.
- * Receives the session's member repositories (empty for repo-less sessions);
- * a scoped server applies when any member matches one of its scopes.
- */
-export interface McpServerLookup {
-  getDecryptedForSession(
-    repositories: Array<{ repoOwner: string; repoName: string }>
-  ): Promise<McpServerConfig[]>;
-}
-
-// ==================== Slack Agent-Notify Lookup ====================
-
-/**
- * Resolves the spawn-time agent-slack-notify gate for a repository or the
- * global no-repository scope.
- * False (or throwing) means do not install the tool in this sandbox.
- */
-export interface SlackAgentNotifyLookup {
-  isEnabledForRepo(repoOwner: string | null, repoName: string | null): Promise<boolean>;
 }
 
 // ==================== Manager ====================
@@ -551,7 +513,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       await this.stopPriorProviderSandbox();
 
-      const { repositories, inputs } = await resolveLaunchInputs(
+      const { sessionId, repositories, inputs } = await resolveLaunchInputs(
         session,
         this.sessionContext,
         this.config,
@@ -586,6 +548,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       const createConfig: CreateSandboxConfig = {
         ...inputs,
+        sessionId,
         sandboxId: expectedSandboxId,
         sandboxAuthToken,
         prebuiltImageId,
@@ -629,12 +592,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         });
       }
 
-      await this.publishStartupAccess(
-        result,
-        inputs.sessionId,
-        expectedSandboxId,
-        sandboxAuthToken
-      );
+      await this.publishStartupAccess(result, sessionId, expectedSandboxId, sandboxAuthToken);
 
       await this.finishProviderStartup(generation);
 
@@ -863,7 +821,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       await this.stopPriorProviderSandbox();
 
-      const { inputs } = await resolveLaunchInputs(
+      const { sessionId, inputs } = await resolveLaunchInputs(
         session,
         this.sessionContext,
         this.config,
@@ -872,18 +830,14 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       );
       const result = await this.provider.restoreFromSnapshot({
         ...inputs,
+        sessionId,
         snapshotImageId,
         sandboxId: expectedSandboxId,
         sandboxAuthToken,
       });
 
       if (result.success) {
-        await this.publishStartupAccess(
-          result,
-          inputs.sessionId,
-          expectedSandboxId,
-          sandboxAuthToken
-        );
+        await this.publishStartupAccess(result, sessionId, expectedSandboxId, sandboxAuthToken);
 
         await this.finishProviderStartup(generation);
 
@@ -1584,15 +1538,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   private async publishStartupAccess(
-    result: Pick<
-      CreateSandboxResult,
-      | "providerObjectId"
-      | "codeServerUrl"
-      | "codeServerPassword"
-      | "vncAccess"
-      | "tunnelUrls"
-      | "ttydUrl"
-    >,
+    result: SandboxStartupAccess,
     sessionId: string,
     sandboxId: string,
     sandboxAuthToken: string

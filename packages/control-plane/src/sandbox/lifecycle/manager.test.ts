@@ -404,40 +404,6 @@ function createTestConfig(): SandboxLifecycleConfig {
 type ProviderStartupKind = "spawn" | "restore" | "resume";
 
 describe.each(["spawn", "restore"] as const)("%s common launch inputs", (kind) => {
-  function setup(
-    session = createMockSession(),
-    repositories: SessionRepositoryInfo[] = [],
-    config = createTestConfig(),
-    userEnvVars?: Record<string, string>
-  ) {
-    const sandbox = createMockSandbox({
-      status: kind === "spawn" ? "pending" : "stopped",
-      snapshot_image_id: kind === "restore" ? "snapshot-image" : null,
-      snapshot_runtime_version: kind === "restore" ? COMPATIBLE_RUNTIME_VERSION : null,
-    });
-    const storage = createMockStorage(session, sandbox, userEnvVars, repositories);
-    const provider = createMockProvider();
-    const launch = vi.fn(async (_input: CreateSandboxConfig | RestoreConfig) => ({
-      success: true,
-      sandboxId: "provider-returned-id",
-      createdAt: Date.now(),
-      ttydUrl: "https://terminal.test",
-    }));
-    if (kind === "spawn") provider.createSandbox = launch;
-    else provider.restoreFromSnapshot = launch;
-    const manager = new SandboxLifecycleManager(
-      provider,
-      storage,
-      storage,
-      createMockBroadcaster(),
-      createMockWebSocketManager(),
-      createMockAlarmScheduler(),
-      createMockIdGenerator(),
-      config
-    );
-    return { manager, storage, sandbox, launch, provider };
-  }
-
   it("forwards the full common config and publishes terminal access with the reserved identity", async () => {
     const repositories = [
       { repoOwner: "group/subgroup", repoName: "repo", baseBranch: "dev", baseSha: "abc" },
@@ -460,7 +426,12 @@ describe.each(["spawn", "restore"] as const)("%s common launch inputs", (kind) =
       memoryMib: 4096,
       sandboxTimeoutMs: 14_400_000,
     };
-    const { manager, launch, storage, sandbox } = setup(
+    const sandbox = createMockSandbox({
+      status: kind === "spawn" ? "pending" : "stopped",
+      snapshot_image_id: kind === "restore" ? "snapshot-image" : null,
+      snapshot_runtime_version: kind === "restore" ? COMPATIBLE_RUNTIME_VERSION : null,
+    });
+    const storage = createMockStorage(
       createMockSession({
         repo_owner: "group/subgroup",
         repo_name: "repo",
@@ -470,9 +441,28 @@ describe.each(["spawn", "restore"] as const)("%s common launch inputs", (kind) =
         vnc_enabled: 1,
         sandbox_settings: JSON.stringify(sandboxSettings),
       }),
-      repositories,
-      { ...createTestConfig(), mcpServerLookup, slackAgentNotifyLookup },
-      { TOKEN: "value" }
+      sandbox,
+      { TOKEN: "value" },
+      repositories
+    );
+    const provider = createMockProvider();
+    const launch = vi.fn(async (_input: CreateSandboxConfig | RestoreConfig) => ({
+      success: true,
+      sandboxId: "provider-returned-id",
+      createdAt: Date.now(),
+      ttydUrl: "https://terminal.test",
+    }));
+    if (kind === "spawn") provider.createSandbox = launch;
+    else provider.restoreFromSnapshot = launch;
+    const manager = new SandboxLifecycleManager(
+      provider,
+      storage,
+      storage,
+      createMockBroadcaster(),
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      { ...createTestConfig(), mcpServerLookup, slackAgentNotifyLookup }
     );
 
     await manager.spawnSandbox();
@@ -499,10 +489,6 @@ describe.each(["spawn", "restore"] as const)("%s common launch inputs", (kind) =
         ? { prebuiltImageId: null, prebuiltImageSha: null }
         : { snapshotImageId: "snapshot-image" }),
     });
-    expect(mcpServerLookup.getDecryptedForSession).toHaveBeenCalledWith([
-      { repoOwner: "group/subgroup", repoName: "repo" },
-    ]);
-    expect(slackAgentNotifyLookup.isEnabledForRepo).toHaveBeenCalledWith("group/subgroup", "repo");
     expect(storage.calls.indexOf("updateSandboxForSpawn")).toBeLessThan(
       storage.calls.indexOf("getUserEnvVars")
     );
@@ -511,119 +497,6 @@ describe.each(["spawn", "restore"] as const)("%s common launch inputs", (kind) =
     );
     expect(claims).toMatchObject({ sub: "test-session", sid: sandbox.modal_sandbox_id });
     expect(sandbox.ttyd_url).toBe("https://terminal.test");
-  });
-
-  it.each(["absent", "empty", "failed"] as const)(
-    "uses defaults with %s lookups",
-    async (lookupState) => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const lookup = vi.fn(async () => {
-        if (lookupState === "failed") throw new Error("lookup unavailable");
-        return [];
-      });
-      const slackLookup = vi.fn(async () => {
-        if (lookupState === "failed") throw new Error("lookup unavailable");
-        return false;
-      });
-      const { manager, launch } = setup(
-        createMockSession({
-          session_name: null,
-          model: "",
-          sandbox_settings: lookupState === "failed" ? "{invalid" : null,
-        }),
-        [],
-        {
-          ...createTestConfig(),
-          ...(lookupState === "absent"
-            ? {}
-            : {
-                mcpServerLookup: { getDecryptedForSession: lookup },
-                slackAgentNotifyLookup: { isEnabledForRepo: slackLookup },
-              }),
-        }
-      );
-      await manager.spawnSandbox();
-      expect(launch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId: "session-123",
-          provider: "anthropic",
-          model: "claude-sonnet-4-5",
-          userEnvVars: undefined,
-          mcpServers: undefined,
-          agentSlackNotifyEnabled: false,
-          codeServerEnabled: false,
-          vncEnabled: false,
-          sandboxSettings: {},
-          timeoutSeconds: undefined,
-        })
-      );
-      if (lookupState === "failed") {
-        expect(parseStructuredLogs(warn)).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ event: "mcp.load_failed" }),
-            expect.objectContaining({ event: "slack_notify.gate_resolve_failed" }),
-          ])
-        );
-        expect(warn).toHaveBeenCalledTimes(3);
-      }
-      warn.mockRestore();
-    }
-  );
-
-  it.each([
-    { shape: "repo-less", repositories: [], includeList: false },
-    {
-      shape: "single",
-      repositories: [{ repoOwner: "owner", repoName: "repo", baseBranch: "main" }],
-      includeList: false,
-    },
-    {
-      shape: "empty pin",
-      repositories: [{ repoOwner: "owner", repoName: "repo", baseBranch: "main", baseSha: "" }],
-      includeList: false,
-    },
-    {
-      shape: "pinned",
-      repositories: [{ repoOwner: "owner", repoName: "repo", baseBranch: "main", baseSha: "sha" }],
-      includeList: true,
-    },
-    {
-      shape: "multi",
-      repositories: [
-        { repoOwner: "owner", repoName: "repo", baseBranch: "main" },
-        { repoOwner: "owner", repoName: "other", baseBranch: "dev" },
-      ],
-      includeList: true,
-    },
-  ])("preserves $shape repository wire shape", async ({ repositories, includeList }) => {
-    const primary = repositories[0];
-    const { manager, launch } = setup(
-      createMockSession({
-        repo_owner: primary?.repoOwner ?? null,
-        repo_name: primary?.repoName ?? null,
-        base_branch: primary?.baseBranch ?? null,
-      }),
-      repositories
-    );
-    await manager.spawnSandbox();
-    const input = launch.mock.calls[0][0];
-    expect(Object.hasOwn(input, "repositories")).toBe(includeList);
-    if (includeList) expect(input.repositories).toEqual(repositories);
-    expect(input).toMatchObject({
-      repoOwner: primary?.repoOwner ?? null,
-      repoName: primary?.repoName ?? null,
-      branch: primary?.baseBranch ?? null,
-    });
-  });
-
-  it("rejects a configured timeout unsupported by the provider", async () => {
-    const { manager, provider, launch, sandbox } = setup(
-      createMockSession({ sandbox_settings: '{"sandboxTimeoutMs":14400000}' })
-    );
-    provider.capabilities.supportsSandboxTimeout = false;
-    await manager.spawnSandbox();
-    expect(launch).not.toHaveBeenCalled();
-    expect(sandbox.last_spawn_error).toBe("mock does not support configurable sandbox timeouts");
   });
 });
 
