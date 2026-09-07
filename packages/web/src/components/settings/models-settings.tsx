@@ -1,28 +1,25 @@
 "use client";
 
-import { useState } from "react";
-import { useSWRConfig } from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared/models";
+import { MODEL_OPTIONS } from "@open-inspect/shared/models";
 import { MODEL_PREFERENCES_KEY, useEnabledModels } from "@/hooks/use-enabled-models";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 
-export function ModelsSettings() {
-  const { mutate } = useSWRConfig();
-  const { enabledModels: storedEnabledModels, loading } = useEnabledModels();
-  const [enabledModels, setEnabledModels] = useState<Set<string>>(
-    () => new Set(DEFAULT_ENABLED_MODELS)
-  );
-  const [initialized, setInitialized] = useState(false);
-  const [saving, setSaving] = useState(false);
+const PENDING_MODELS_KEY = "model-preferences:pending";
 
-  // Sync SWR data into local state once on initial load
-  if (!loading && !initialized) {
-    setEnabledModels(new Set(storedEnabledModels));
-    setInitialized(true);
-  }
+export function ModelsSettings() {
+  const { cache, mutate } = useSWRConfig();
+  const { enabledModels: storedEnabledModels, loading } = useEnabledModels();
+  // Keep the selection and write lock across settings-panel unmounts.
+  const { data: pendingModels, mutate: setPendingModels } = useSWR<string[] | null>(
+    PENDING_MODELS_KEY,
+    null
+  );
+  const enabledModels = new Set(pendingModels ?? storedEnabledModels);
+  const saving = !!pendingModels;
 
   const toggleModel = (modelId: string) => {
     const next = new Set(enabledModels);
@@ -49,10 +46,8 @@ export function ModelsSettings() {
   };
 
   const savePreferences = async (next: Set<string>) => {
-    if (saving) return;
-    const previous = enabledModels;
-    setEnabledModels(next);
-    setSaving(true);
+    if (cache.get(PENDING_MODELS_KEY)?.data) return;
+    await setPendingModels(Array.from(next), { revalidate: false });
 
     try {
       const res = await browserApiFetch("/api/model-preferences", {
@@ -72,10 +67,9 @@ export function ModelsSettings() {
         throw new Error(data.error || "Failed to save preferences");
       }
     } catch (error) {
-      setEnabledModels(previous);
       toast.error(error instanceof Error ? error.message : "Failed to save preferences");
     } finally {
-      setSaving(false);
+      await setPendingModels(null, { revalidate: false });
     }
   };
 

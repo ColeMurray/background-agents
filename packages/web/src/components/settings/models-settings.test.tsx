@@ -2,6 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useState, type ReactNode } from "react";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
@@ -26,7 +27,22 @@ function CachedModels() {
   return <span data-testid="cached-models">{JSON.stringify(enabledModels)}</span>;
 }
 
-function renderSettings(enabledModels = ["openai/gpt-5.4"]) {
+function NavigableSettings() {
+  const [showModels, setShowModels] = useState(true);
+  return (
+    <>
+      <button onClick={() => setShowModels(!showModels)}>
+        {showModels ? "Other settings" : "Models"}
+      </button>
+      {showModels && <ModelsSettings />}
+    </>
+  );
+}
+
+function renderSettings(
+  enabledModels = ["openai/gpt-5.4"],
+  children: ReactNode = <ModelsSettings />
+) {
   return render(
     <SWRConfig
       value={{
@@ -39,7 +55,7 @@ function renderSettings(enabledModels = ["openai/gpt-5.4"]) {
         revalidateIfStale: false,
       }}
     >
-      <ModelsSettings />
+      {children}
       <CachedModels />
     </SWRConfig>
   );
@@ -156,6 +172,53 @@ describe("ModelsSettings", () => {
       await waitFor(() => expect(toggle).toBeEnabled());
       expect(toggle).toBeChecked();
       expect(fetchMock).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each([true, false])(
+    "preserves the pending selection and lock across navigation (success: %s)",
+    async (ok) => {
+      let resolve!: (response: { ok: boolean; json: () => Promise<{ error: string }> }) => void;
+      const fetchMock = vi
+        .fn()
+        .mockReturnValueOnce(
+          new Promise((done) => {
+            resolve = done;
+          })
+        )
+        .mockResolvedValue({ ok: true });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      renderSettings(undefined, <NavigableSettings />);
+
+      await user.click(screen.getByRole("switch", { name: /Claude Haiku 4.5/ }));
+      await user.click(screen.getByRole("button", { name: "Other settings" }));
+      expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Models" }));
+
+      expect(screen.getByRole("switch", { name: /Claude Haiku 4.5/ })).toBeChecked();
+      expect(screen.getByRole("status")).toHaveTextContent("Saving...");
+      for (const control of screen.getAllByRole("switch")) {
+        expect(control).toBeDisabled();
+      }
+      await user.click(screen.getByRole("switch", { name: /GPT 5.4/ }));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => resolve({ ok, json: async () => ({ error: "Save denied" }) }));
+      expect(screen.getByRole("status")).toBeEmptyDOMElement();
+      const haiku = screen.getByRole("switch", { name: /Claude Haiku 4.5/ });
+      expect(haiku).toBeEnabled();
+      expect(haiku).toHaveAttribute("aria-checked", String(ok));
+
+      await user.click(screen.getByRole("switch", { name: /Claude Sonnet 4.6/ }));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual({
+        enabledModels: [
+          "openai/gpt-5.4",
+          ...(ok ? ["anthropic/claude-haiku-4-5"] : []),
+          "anthropic/claude-sonnet-4-6",
+        ],
+      });
     }
   );
 });
