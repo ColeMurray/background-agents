@@ -6,7 +6,7 @@ import { useState, type ReactNode } from "react";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { SWRConfig } from "swr";
+import { SWRConfig, useSWRConfig } from "swr";
 import { toast } from "sonner";
 import { MODEL_OPTIONS } from "@open-inspect/shared/models";
 import { MODEL_PREFERENCES_KEY, useEnabledModels } from "@/hooks/use-enabled-models";
@@ -21,6 +21,10 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+async function saveResponse(_url: unknown, init: RequestInit) {
+  return { ok: true, json: async () => JSON.parse(init.body as string) };
+}
 
 function CachedModels() {
   const { enabledModels } = useEnabledModels();
@@ -63,7 +67,7 @@ function renderSettings(
 
 describe("ModelsSettings", () => {
   it("automatically saves toggles and updates other model selectors", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    const fetchMock = vi.fn(saveResponse);
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     renderSettings(["openai/gpt-5.2", "openai/gpt-5.4"]);
@@ -91,7 +95,7 @@ describe("ModelsSettings", () => {
   });
 
   it("automatically saves category actions", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    const fetchMock = vi.fn(saveResponse);
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     renderSettings();
@@ -122,7 +126,7 @@ describe("ModelsSettings", () => {
   });
 
   it("prevents overlapping saves while showing the new selection immediately", async () => {
-    let resolve!: (response: { ok: boolean }) => void;
+    let resolve!: (response: { ok: boolean; json: () => Promise<unknown> }) => void;
     const fetchMock = vi.fn().mockReturnValue(
       new Promise((done) => {
         resolve = done;
@@ -133,13 +137,19 @@ describe("ModelsSettings", () => {
     renderSettings();
     await user.click(screen.getByRole("switch", { name: /Claude Haiku 4.5/ }));
     expect(screen.getByRole("switch", { name: /Claude Haiku 4.5/ })).toBeChecked();
+    expect(screen.getByTestId("cached-models")).toHaveTextContent("anthropic/claude-haiku-4-5");
     expect(screen.getByRole("status")).toHaveTextContent("Saving...");
     for (const control of [...screen.getAllByRole("switch"), ...screen.getAllByRole("button")]) {
       expect(control).toBeDisabled();
     }
     await user.click(screen.getByRole("switch", { name: /GPT 5.4/ }));
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    await act(async () => resolve({ ok: true }));
+    await act(async () =>
+      resolve({
+        ok: true,
+        json: async () => ({ enabledModels: ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"] }),
+      })
+    );
     expect(screen.getByRole("switch", { name: /GPT 5.4/ })).toBeEnabled();
     expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
@@ -156,7 +166,7 @@ describe("ModelsSettings", () => {
       } else {
         fetchMock.mockRejectedValueOnce(new Error("Network unavailable"));
       }
-      fetchMock.mockResolvedValue({ ok: true });
+      fetchMock.mockImplementation(saveResponse);
       vi.stubGlobal("fetch", fetchMock);
       const user = userEvent.setup();
       renderSettings();
@@ -178,7 +188,7 @@ describe("ModelsSettings", () => {
   it.each([true, false])(
     "preserves the pending selection and lock across navigation (success: %s)",
     async (ok) => {
-      let resolve!: (response: { ok: boolean; json: () => Promise<{ error: string }> }) => void;
+      let resolve!: (response: { ok: boolean; json: () => Promise<unknown> }) => void;
       const fetchMock = vi
         .fn()
         .mockReturnValueOnce(
@@ -186,7 +196,7 @@ describe("ModelsSettings", () => {
             resolve = done;
           })
         )
-        .mockResolvedValue({ ok: true });
+        .mockImplementation(saveResponse);
       vi.stubGlobal("fetch", fetchMock);
       const user = userEvent.setup();
       renderSettings(undefined, <NavigableSettings />);
@@ -204,7 +214,15 @@ describe("ModelsSettings", () => {
       await user.click(screen.getByRole("switch", { name: /GPT 5.4/ }));
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      await act(async () => resolve({ ok, json: async () => ({ error: "Save denied" }) }));
+      await act(async () =>
+        resolve({
+          ok,
+          json: async () =>
+            ok
+              ? { enabledModels: ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"] }
+              : { error: "Save denied" },
+        })
+      );
       expect(screen.getByRole("status")).toBeEmptyDOMElement();
       const haiku = screen.getByRole("switch", { name: /Claude Haiku 4.5/ });
       expect(haiku).toBeEnabled();
@@ -221,4 +239,45 @@ describe("ModelsSettings", () => {
       });
     }
   );
+
+  it("uses external cache updates for both the switches and the next save", async () => {
+    let updateCache!: ReturnType<typeof useSWRConfig>["mutate"];
+    function CacheAccess() {
+      updateCache = useSWRConfig().mutate;
+      return <ModelsSettings />;
+    }
+    const fetchMock = vi.fn(saveResponse);
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderSettings(undefined, <CacheAccess />);
+    await act(async () => {
+      await updateCache(
+        MODEL_PREFERENCES_KEY,
+        {
+          enabledModels: ["anthropic/claude-sonnet-4-6"],
+        },
+        { revalidate: false }
+      );
+    });
+    expect(screen.getByRole("switch", { name: /GPT 5.4/ })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: /Claude Sonnet 4.6/ })).toBeChecked();
+    await user.click(screen.getByRole("switch", { name: /Claude Haiku 4.5/ }));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+      enabledModels: ["anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5"],
+    });
+  });
+
+  it("does not offer writable defaults after an initial read failure", async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error("Unavailable"));
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <SWRConfig value={{ provider: () => new Map(), fetcher, shouldRetryOnError: false }}>
+        <ModelsSettings />
+      </SWRConfig>
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load model preferences");
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

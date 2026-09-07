@@ -1,25 +1,20 @@
 "use client";
 
-import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import { MODEL_OPTIONS } from "@open-inspect/shared/models";
-import { MODEL_PREFERENCES_KEY, useEnabledModels } from "@/hooks/use-enabled-models";
+import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { browserApiFetch } from "@/lib/browser-api-fetch";
-
-const PENDING_MODELS_KEY = "model-preferences:pending";
 
 export function ModelsSettings() {
-  const { cache, mutate } = useSWRConfig();
-  const { enabledModels: storedEnabledModels, loading } = useEnabledModels();
-  // Keep the selection and write lock across settings-panel unmounts.
-  const { data: pendingModels, mutate: setPendingModels } = useSWR<string[] | null>(
-    PENDING_MODELS_KEY,
-    null
-  );
-  const enabledModels = new Set(pendingModels ?? storedEnabledModels);
-  const saving = !!pendingModels;
+  const {
+    enabledModels: storedEnabledModels,
+    loading,
+    error,
+    saving,
+    saveEnabledModels,
+  } = useEnabledModels();
+  const enabledModels = new Set(storedEnabledModels);
 
   const toggleModel = (modelId: string) => {
     const next = new Set(enabledModels);
@@ -46,30 +41,10 @@ export function ModelsSettings() {
   };
 
   const savePreferences = async (next: Set<string>) => {
-    if (cache.get(PENDING_MODELS_KEY)?.data) return;
-    await setPendingModels(Array.from(next), { revalidate: false });
-
     try {
-      const res = await browserApiFetch("/api/model-preferences", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabledModels: Array.from(next) }),
-      });
-
-      if (res.ok) {
-        await mutate(
-          MODEL_PREFERENCES_KEY,
-          { enabledModels: Array.from(next) },
-          { revalidate: false }
-        );
-      } else {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to save preferences");
-      }
+      await saveEnabledModels(Array.from(next));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to save preferences");
-    } finally {
-      await setPendingModels(null, { revalidate: false });
     }
   };
 
@@ -79,6 +54,14 @@ export function ModelsSettings() {
         <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
         Loading model preferences...
       </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        Unable to load model preferences. Please reload to try again.
+      </p>
     );
   }
 
