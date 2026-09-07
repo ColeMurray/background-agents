@@ -49,12 +49,35 @@ def process(returncode=0):
     return result
 
 
-async def test_prebuilt_pinned_package_needs_no_npm_process(installer):
-    installed(installer._root)
+@pytest.mark.parametrize("bins", [{"mcp": "cli.js"}, "cli.js"])
+async def test_prebuilt_pinned_package_needs_no_npm_process(installer, bins):
+    package = installed(installer._root)
+    manifest_path = package / "package.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["bin"] = bins
+    manifest_path.write_text(json.dumps(manifest))
     with patch("asyncio.create_subprocess_exec") as spawn:
         await installer.install(servers("@scope/mcp@1.2.3"))
     spawn.assert_not_called()
     assert not (installer._root / ".openinspect-mcp-installing.json").exists()
+
+
+@pytest.mark.parametrize("missing_bin", [True, False], ids=["missing-bin", "empty-bin"])
+async def test_missing_executable_metadata_is_reinstalled(installer, missing_bin):
+    package = installed(installer._root)
+    manifest_path = package / "package.json"
+    manifest = json.loads(manifest_path.read_text())
+    if missing_bin:
+        del manifest["bin"]
+    else:
+        manifest["bin"] = {}
+    manifest_path.write_text(json.dumps(manifest))
+
+    with patch("asyncio.create_subprocess_exec", return_value=process()) as spawn:
+        await installer.install(servers("@scope/mcp@1.2.3"))
+
+    spawn.assert_called_once()
+    assert spawn.call_args.args == ("npm", "install", "-g", "@scope/mcp@1.2.3")
 
 
 @pytest.mark.parametrize("damage", ["version", "manifest", "binary", "link", "executable"])

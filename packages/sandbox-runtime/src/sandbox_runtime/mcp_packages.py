@@ -114,10 +114,10 @@ class McpPackageInstaller:
             version = manifest.get("version")
             if not isinstance(version, str) or not _EXACT_VERSION_RE.fullmatch(version):
                 return None
-            bins = manifest.get("bin", {})
+            bins = manifest.get("bin")
             if isinstance(bins, str):
                 bins = {name.rsplit("/", 1)[-1]: bins}
-            if not isinstance(bins, dict):
+            if not isinstance(bins, dict) or not bins:
                 return None
             # npm's Unix global layout is {prefix}/lib/node_modules and {prefix}/bin.
             for binary, relative_path in bins.items():
