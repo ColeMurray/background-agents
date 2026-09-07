@@ -269,6 +269,21 @@ export const sandboxSettingsSchema = z.strictObject({
 
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
 
+/** Validate the relationship only when both child-session limits are provided. */
+export function validateSandboxChildSessionLimits(
+  settings: Pick<SandboxSettings, "maxConcurrentChildSessions" | "maxTotalChildSessions">
+): string | undefined {
+  const { maxConcurrentChildSessions, maxTotalChildSessions } = settings;
+  if (
+    maxConcurrentChildSessions !== undefined &&
+    maxTotalChildSessions !== undefined &&
+    maxConcurrentChildSessions > maxTotalChildSessions
+  ) {
+    return "maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions";
+  }
+  return undefined;
+}
+
 /**
  * Resolve the effective repo-image build timeout (seconds) from sandbox
  * settings: the default when unset, otherwise capped at

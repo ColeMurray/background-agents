@@ -186,13 +186,16 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     expect(screen.getByText("Add port").closest("button")).toBeDisabled();
   });
 
-  it("keeps Save disabled when only invalid input is entered", async () => {
-    renderWithSWR({ integrationId: "sandbox", settings: null });
+  it("allows Save to surface validation when only invalid input is entered", async () => {
+    const { fetchMock } = renderWithSWR({ integrationId: "sandbox", settings: null });
     await user.click(screen.getByText("Add port"));
 
     await user.type(screen.getByPlaceholderText("e.g. 3000"), "abc");
 
-    expect(screen.getByText("Save Settings").closest("button")).toBeDisabled();
+    expect(screen.getByText("Save Settings").closest("button")).toBeEnabled();
+    await user.click(screen.getByText("Save Settings"));
+    expect(screen.getByText("Invalid port numbers: abc")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("shows validation error for mixed valid and invalid ports", async () => {

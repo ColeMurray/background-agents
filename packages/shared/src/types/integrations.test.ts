@@ -17,6 +17,7 @@ import {
   scmSettingsSchema,
   integrationSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
+  validateSandboxChildSessionLimits,
   type SlackRoutingRule,
 } from "./integrations";
 
@@ -42,6 +43,36 @@ describe("isValidSandboxTimeoutMs", () => {
       expect(isValidSandboxTimeoutMs(value)).toBe(false);
     }
   );
+});
+
+describe("validateSandboxChildSessionLimits", () => {
+  it.each([4, 5])("accepts concurrent limit %i at or below the total", (concurrent) => {
+    expect(
+      validateSandboxChildSessionLimits({
+        maxConcurrentChildSessions: concurrent,
+        maxTotalChildSessions: 5,
+      })
+    ).toBeUndefined();
+  });
+
+  it("rejects a concurrent limit above the total with the existing message", () => {
+    expect(
+      validateSandboxChildSessionLimits({
+        maxConcurrentChildSessions: 6,
+        maxTotalChildSessions: 5,
+      })
+    ).toBe("maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions");
+  });
+
+  it.each([
+    {},
+    { maxConcurrentChildSessions: 100 },
+    { maxTotalChildSessions: 1 },
+    { maxConcurrentChildSessions: 100, maxTotalChildSessions: undefined },
+    { maxConcurrentChildSessions: undefined, maxTotalChildSessions: 1 },
+  ])("accepts sparse limits %j without applying defaults", (settings) => {
+    expect(validateSandboxChildSessionLimits(settings)).toBeUndefined();
+  });
 });
 
 describe("resolveBuildTimeoutSeconds", () => {

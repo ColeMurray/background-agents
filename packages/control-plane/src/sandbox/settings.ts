@@ -2,6 +2,7 @@ import {
   findSandboxPortConflict,
   isValidSandboxTimeoutMs,
   MAX_TUNNEL_PORTS,
+  validateSandboxChildSessionLimits,
   type ConfiguredSandboxPort,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
@@ -88,12 +89,12 @@ export function normalizeSandboxSettings(
     reject
   );
 
-  if (
-    maxConcurrentChildSessions !== undefined &&
-    maxTotalChildSessions !== undefined &&
-    maxConcurrentChildSessions > maxTotalChildSessions
-  ) {
-    reject("maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions");
+  const childSessionLimitsError = validateSandboxChildSessionLimits({
+    maxConcurrentChildSessions,
+    maxTotalChildSessions,
+  });
+  if (childSessionLimitsError !== undefined) {
+    reject(childSessionLimitsError);
     maxConcurrentChildSessions = undefined;
   }
 

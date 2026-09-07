@@ -200,10 +200,52 @@ describe("resolveSandboxSettingsDraft", () => {
     expect(resolve({}).hasChanges).toBe(false);
   });
 
-  it("retains the existing dirty behavior of ignoring invalid tunnel rows", () => {
+  it("marks invalid edited tunnel rows dirty even when valid ports are unchanged", () => {
     const resolved = resolve({ tunnelPorts: ["3000", "5173", "bad"] });
-    expect(resolved.hasChanges).toBe(false);
+    expect(resolved.hasChanges).toBe(true);
     expect(resolved.result).toEqual({ error: "Invalid port numbers: bad" });
+  });
+
+  it("marks an invalid-only tunnel edit dirty", () => {
+    const resolved = resolveSandboxSettingsDraft({
+      isGlobal: true,
+      draft: { tunnelPorts: ["bad"] },
+    });
+    expect(resolved.hasChanges).toBe(true);
+    expect(resolved.result).toEqual({ error: "Invalid port numbers: bad" });
+  });
+
+  it.each([
+    { isGlobal: true, draft: { maxConcurrentChildSessions: "5", maxTotalChildSessions: "2" } },
+    {
+      isGlobal: false,
+      baseDefaults: { maxConcurrentChildSessions: 5 },
+      draft: { maxTotalChildSessions: "2" },
+    },
+    {
+      isGlobal: false,
+      ownSettings: { maxConcurrentChildSessions: 5 },
+      draft: { maxTotalChildSessions: "2" },
+    },
+    {
+      isGlobal: false,
+      baseDefaults: { maxTotalChildSessions: 2 },
+      draft: { maxConcurrentChildSessions: "5" },
+    },
+  ])("rejects conflicting effective child limits: %j", (input) => {
+    expect(resolveSandboxSettingsDraft(input).result).toEqual({
+      error: "maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions",
+    });
+  });
+
+  it("accepts equal effective child limits without pinning inheritance", () => {
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: false,
+        baseDefaults: { maxConcurrentChildSessions: 5 },
+        draft: { maxTotalChildSessions: "5" },
+      }).result
+    ).toEqual({ settings: { maxTotalChildSessions: 5 } });
   });
 
   it.each<[SandboxSettingsDraft, string]>([

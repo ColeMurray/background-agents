@@ -6,6 +6,7 @@ import {
   DEFAULT_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
   findSandboxPortConflict,
+  validateSandboxChildSessionLimits,
   type ConfiguredSandboxPort,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
@@ -35,8 +36,7 @@ type Field<K extends keyof SandboxSettings> = {
     value: SandboxSettingsDraftValues[DraftKey<K>],
     current: SandboxSettingsDraftValues[DraftKey<K>]
   ) => boolean;
-  clearNull?: boolean;
-  servicePort?: { port: number; label: string };
+  clearValue?: SandboxSettings[K];
 };
 
 const positiveInteger = (value: string) => /^\d+$/.test(value) && Number(value) >= 1;
@@ -114,27 +114,24 @@ const fields: FieldRegistry = {
       (value) => /^\d*\.?\d+$/.test(value) && Number.isFinite(Number(value)) && Number(value) > 0,
       "CPU cores must be a positive number."
     ),
-    clearNull: true,
+    clearValue: null,
   },
   memoryMib: {
     draftKey: "memoryMib",
     ...numberField(positiveInteger, "Memory must be a positive whole number of MiB."),
-    clearNull: true,
+    clearValue: null,
   },
   codeServerPort: {
     draftKey: "codeServerPort",
     ...numberField(validPort, "Code server port must be a whole number between 1 and 65535."),
-    servicePort: { port: DEFAULT_CODE_SERVER_PORT, label: "code server port" },
   },
   vncPort: {
     draftKey: "vncPort",
     ...numberField(validPort, "VNC port must be a whole number between 1 and 65535."),
-    servicePort: { port: DEFAULT_VNC_PORT, label: "VNC port" },
   },
   terminalPort: {
     draftKey: "terminalPort",
     ...numberField(validPort, "Terminal port must be a whole number between 1 and 65535."),
-    servicePort: { port: DEFAULT_TERMINAL_PORT, label: "terminal port" },
   },
   buildTimeoutSeconds: {
     draftKey: "buildTimeoutSeconds",
@@ -174,7 +171,7 @@ export function resolveSandboxSettingsDraft({
 } {
   const values = {} as SandboxSettingsDraftValues;
   const settings: SandboxSettings = {};
-  const configuredPorts: ConfiguredSandboxPort[] = [];
+  const effective: SandboxSettings = {};
   let hasChanges = false;
   let error: string | undefined;
 
@@ -186,29 +183,30 @@ export function resolveSandboxSettingsDraft({
     const edit = draft[field.draftKey];
     const value = edit ?? current;
     values[field.draftKey] = value;
-    hasChanges ||= edit !== undefined && field.isChanged(edit, current);
     const parsed = field.parse(value);
+    hasChanges ||=
+      edit !== undefined && (parsed.error !== undefined || field.isChanged(edit, current));
     error ??= parsed.error;
 
     const payload =
       isGlobal || edit !== undefined
-        ? (parsed.value ?? (!isGlobal && field.clearNull ? null : undefined))
+        ? (parsed.value ?? (!isGlobal ? field.clearValue : undefined))
         : prior;
-    if (payload !== undefined) settings[key] = payload as SandboxSettings[K];
-
-    if (field.servicePort) {
-      configuredPorts.push({
-        port: Number(parsed.value ?? baseDefaults?.[key] ?? field.servicePort.port),
-        label: field.servicePort.label,
-      });
-    } else if (Array.isArray(parsed.value)) {
-      configuredPorts.push(...parsed.value.map((port) => ({ port, label: "tunnel port" })));
-    }
+    if (payload !== undefined) settings[key] = payload;
+    effective[key] = payload !== undefined ? payload : (parsed.value ?? baseDefaults?.[key]);
   }
 
   for (const key of Object.keys(fields) as (keyof SandboxSettings)[]) resolveField(key);
 
+  error ??= validateSandboxChildSessionLimits(effective);
+
   if (!error) {
+    const configuredPorts: ConfiguredSandboxPort[] = [
+      ...(effective.tunnelPorts ?? []).map((port) => ({ port, label: "tunnel port" })),
+      { port: effective.codeServerPort ?? DEFAULT_CODE_SERVER_PORT, label: "code server port" },
+      { port: effective.terminalPort ?? DEFAULT_TERMINAL_PORT, label: "terminal port" },
+      { port: effective.vncPort ?? DEFAULT_VNC_PORT, label: "VNC port" },
+    ];
     const conflict = findSandboxPortConflict(configuredPorts);
     if (conflict) {
       error =
