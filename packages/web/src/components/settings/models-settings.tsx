@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { mutate } from "swr";
+import { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared/models";
 import { MODEL_PREFERENCES_KEY, useEnabledModels } from "@/hooks/use-enabled-models";
@@ -10,13 +10,13 @@ import { Switch } from "@/components/ui/switch";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 export function ModelsSettings() {
+  const { mutate } = useSWRConfig();
   const { enabledModels: storedEnabledModels, loading } = useEnabledModels();
   const [enabledModels, setEnabledModels] = useState<Set<string>>(
     () => new Set(DEFAULT_ENABLED_MODELS)
   );
   const [initialized, setInitialized] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
 
   // Sync SWR data into local state once on initial load
   if (!loading && !initialized) {
@@ -25,55 +25,55 @@ export function ModelsSettings() {
   }
 
   const toggleModel = (modelId: string) => {
-    setEnabledModels((prev) => {
-      const next = new Set(prev);
-      if (next.has(modelId)) {
-        if (next.size <= 1) return prev;
-        next.delete(modelId);
-      } else {
-        next.add(modelId);
-      }
-      return next;
-    });
-    setDirty(true);
+    const next = new Set(enabledModels);
+    if (next.has(modelId)) {
+      if (next.size <= 1) return;
+      next.delete(modelId);
+    } else {
+      next.add(modelId);
+    }
+    void savePreferences(next);
   };
 
   const toggleCategory = (category: (typeof MODEL_OPTIONS)[number], enable: boolean) => {
-    setEnabledModels((prev) => {
-      const next = new Set(prev);
-      for (const model of category.models) {
-        if (enable) {
-          next.add(model.id);
-        } else {
-          next.delete(model.id);
-        }
+    const next = new Set(enabledModels);
+    for (const model of category.models) {
+      if (enable) {
+        next.add(model.id);
+      } else {
+        next.delete(model.id);
       }
-      if (next.size === 0) return prev;
-      return next;
-    });
-    setDirty(true);
+    }
+    if (next.size === 0) return;
+    void savePreferences(next);
   };
 
-  const handleSave = async () => {
+  const savePreferences = async (next: Set<string>) => {
+    if (saving) return;
+    const previous = enabledModels;
+    setEnabledModels(next);
     setSaving(true);
 
     try {
       const res = await browserApiFetch("/api/model-preferences", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabledModels: Array.from(enabledModels) }),
+        body: JSON.stringify({ enabledModels: Array.from(next) }),
       });
 
       if (res.ok) {
-        mutate(MODEL_PREFERENCES_KEY);
-        toast.success("Model preferences saved.");
-        setDirty(false);
+        await mutate(
+          MODEL_PREFERENCES_KEY,
+          { enabledModels: Array.from(next) },
+          { revalidate: false }
+        );
       } else {
         const data = await res.json();
-        toast.error(data.error || "Failed to save preferences");
+        throw new Error(data.error || "Failed to save preferences");
       }
-    } catch {
-      toast.error("Failed to save preferences");
+    } catch (error) {
+      setEnabledModels(previous);
+      toast.error(error instanceof Error ? error.message : "Failed to save preferences");
     } finally {
       setSaving(false);
     }
@@ -92,7 +92,8 @@ export function ModelsSettings() {
     <div>
       <h2 className="text-xl font-semibold text-foreground mb-1">Enabled Models</h2>
       <p className="text-sm text-muted-foreground mb-6">
-        Choose which models appear in the model selector across the web UI and Slack bot.
+        Choose which models appear in the model selector across the web UI and Slack bot. Changes
+        are saved automatically.
       </p>
 
       <div className="space-y-6">
@@ -109,6 +110,7 @@ export function ModelsSettings() {
                   type="button"
                   variant="subtle"
                   size="xs"
+                  disabled={saving}
                   onClick={() => toggleCategory(group, !allEnabled)}
                   className="text-accent hover:text-accent/80"
                 >
@@ -133,6 +135,7 @@ export function ModelsSettings() {
                       <Switch
                         id={`model-toggle-${model.id}`}
                         checked={isEnabled}
+                        disabled={saving}
                         onCheckedChange={() => toggleModel(model.id)}
                       />
                     </label>
@@ -144,11 +147,9 @@ export function ModelsSettings() {
         })}
       </div>
 
-      <div className="mt-6">
-        <Button onClick={handleSave} disabled={saving || !dirty}>
-          {saving ? "Saving..." : "Save"}
-        </Button>
-      </div>
+      <p role="status" className="mt-6 text-sm text-muted-foreground">
+        {saving ? "Saving..." : ""}
+      </p>
     </div>
   );
 }
