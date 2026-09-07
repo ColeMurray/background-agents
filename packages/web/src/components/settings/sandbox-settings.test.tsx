@@ -296,24 +296,23 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         SETTINGS_KEY,
-        expect.objectContaining({
-          method: "PUT",
-          body: JSON.stringify({
-            settings: {
-              defaults: {
-                tunnelPorts: [],
-                terminalEnabled: false,
-                codeServerPort: 8081,
-                vncPort: DEFAULT_VNC_PORT + 1,
-                terminalPort: 7000,
-                maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
-                maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
-              },
-              enabledRepos: ["acme/app"],
-            },
-          }),
-        })
+        expect.objectContaining({ method: "PUT" })
       );
+      const request = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")?.[1];
+      expect(JSON.parse(request?.body as string)).toEqual({
+        settings: {
+          defaults: {
+            tunnelPorts: [],
+            terminalEnabled: false,
+            codeServerPort: 8081,
+            vncPort: DEFAULT_VNC_PORT + 1,
+            terminalPort: 7000,
+            maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+            maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+          },
+          enabledRepos: ["acme/app"],
+        },
+      });
     });
   });
 
@@ -442,22 +441,21 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         SETTINGS_KEY,
-        expect.objectContaining({
-          method: "PUT",
-          body: JSON.stringify({
-            settings: {
-              defaults: {
-                tunnelPorts: [8080],
-                terminalEnabled: false,
-                codeServerPort: 8081,
-                maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
-                maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
-              },
-              enabledRepos: ["acme/app"],
-            },
-          }),
-        })
+        expect.objectContaining({ method: "PUT" })
       );
+      const request = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")?.[1];
+      expect(JSON.parse(request?.body as string)).toEqual({
+        settings: {
+          defaults: {
+            tunnelPorts: [8080],
+            terminalEnabled: false,
+            codeServerPort: 8081,
+            maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+            maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+          },
+          enabledRepos: ["acme/app"],
+        },
+      });
     });
   });
 
