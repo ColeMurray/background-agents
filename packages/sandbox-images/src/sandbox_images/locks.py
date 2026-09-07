@@ -6,7 +6,7 @@ import json
 import subprocess
 from typing import TYPE_CHECKING
 
-from .bundle import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json, runtime_environment
+from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json, runtime_environment
 
 if TYPE_CHECKING:
     from pathlib import Path

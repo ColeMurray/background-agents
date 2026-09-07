@@ -13,8 +13,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-IMAGE_PACKAGE = Path("packages/sandbox-images")
-RUNTIME_PACKAGE = Path("packages/sandbox-runtime")
+from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json, runtime_environment
+from .locks import update_locks
+
 PROVIDERS = ("modal", "daytona", "e2b", "vercel", "opencomputer")
 EXCLUDED = {
     ".git",
@@ -74,10 +75,6 @@ PROVIDER_INPUTS = {
 }
 
 
-def read_json(path: Path) -> Any:
-    return json.loads(path.read_text())
-
-
 def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -112,25 +109,6 @@ def validate_toolchain(tools: dict[str, Any]) -> None:
         version(pin["version"])
         if not re.fullmatch(r"[a-f0-9]{64}", pin["sha256"]):
             raise ValueError("Downloaded image tools must have a SHA-256 pin")
-
-
-def runtime_environment(target: dict[str, str]) -> dict[str, str]:
-    home = target["home"]
-    prefix = f"{home}/.npm-global"
-    user_bin = f"{home}/.local/bin"
-    return {
-        "HOME": home,
-        "XDG_CONFIG_HOME": f"{home}/.config",
-        "NODE_ENV": "development",
-        "PYTHONPATH": "/app",
-        "NODE_PATH": f"/opt/openinspect/tools/node_modules:{prefix}/lib/node_modules:/usr/lib/node_modules:/usr/local/lib/node_modules",
-        "PATH": f"/opt/openinspect/python/bin:/opt/openinspect/node/bin:/opt/openinspect/tools/node_modules/.bin:{home}/.venv/bin:{user_bin}:{home}/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:{prefix}/bin",
-        "npm_config_prefix": prefix,
-        "npm_config_cache": f"{home}/.npm-cache",
-        "PNPM_HOME": f"{home}/.local/share/pnpm",
-        "OPENINSPECT_BIN_INSTALL_DIR": user_bin,
-        "OI_SCM_CRED_CACHE_DIR": f"{home}/.cache/openinspect/scm",
-    }
 
 
 def _walk(path: Path) -> list[Path]:
@@ -252,6 +230,7 @@ def plan_image(root: Path, provider: str) -> dict[str, Any]:
 
 def pack_bundle(root: Path, provider: str, output_root: Path) -> Path:
     root = root.resolve()
+    update_locks(root, check=True)
     plan = plan_image(root, provider)
     output_root.mkdir(parents=True, exist_ok=True)
     destination = output_root / f"{provider}-{plan['recipeDigest']}"

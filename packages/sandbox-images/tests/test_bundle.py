@@ -12,6 +12,24 @@ from sandbox_images.bundle import pack_bundle, plan_image
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.mark.parametrize("provider", ["modal", "daytona", "e2b", "vercel", "opencomputer"])
+@pytest.mark.parametrize("stale", ["runtime-environments.json", "locks/runtime.txt"])
+def test_canonical_pack_rejects_stale_generated_inputs(tmp_path, provider, stale):
+    checkout = tmp_path / "checkout"
+    shutil.copytree(
+        REPO_ROOT,
+        checkout,
+        ignore=shutil.ignore_patterns(
+            ".git", "node_modules", ".venv", ".cache", "__pycache__", ".terraform"
+        ),
+    )
+    path = checkout / "packages/sandbox-images" / stale
+    path.write_text(path.read_text() + "\n")
+    with pytest.raises(ValueError, match="stale"):
+        pack_bundle(checkout, provider, tmp_path / "bundles")
+    assert not (tmp_path / "bundles").exists()
+
+
 def test_bundled_skill_change_invalidates_every_provider_and_is_packed(tmp_path: Path) -> None:
     checkout = tmp_path / "checkout"
     shutil.copytree(
