@@ -186,20 +186,22 @@ export interface SpawnConfig {
  * How long a sandbox may sit in "spawning"/"connecting" before it is treated as dead.
  *
  * Single source of truth for two decisions that must agree: the initial-connect watchdog
- * (DEFAULT_CONNECTING_TIMEOUT_CONFIG) that fails a sandbox, and the staleness bound
- * (DEFAULT_SPAWN_CONFIG.spawningTimeoutMs) that lets a replacement spawn. If the staleness bound
- * were the shorter of the two, a healthy sandbox still inside the watchdog window would be judged
- * dead and a second sandbox spawned alongside it.
+ * (DEFAULT_CONNECTING_TIMEOUT_CONFIG) that fails the sandbox, and the staleness bound
+ * (DEFAULT_SPAWN_CONFIG.spawningTimeoutMs) that lets a replacement spawn. Stating the bound
+ * independently is what let them drift: whenever the staleness bound is the shorter of the two, a
+ * healthy sandbox still inside the watchdog window is judged dead and a second sandbox is spawned
+ * alongside it.
  *
  * The boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) typically takes
- * 30–90 seconds, but large repos with real setup scripts land close to the previous two-minute
- * limit. Overrunning it is not a soft failure: `clearSandboxAccessState` locks out the sandbox that
- * does eventually come up, the queued prompt is never re-driven, and the documented recovery ("it
- * will be retried on your next message") cannot fire for bot-triggered sessions, which only ever
- * send one prompt. Sessions were being stranded by boots that overran by under five seconds.
+ * 30–90 seconds, but large repos with real setup scripts run far longer, and overrunning the
+ * watchdog is not a soft failure: `clearSandboxAccessState` locks out the sandbox that does
+ * eventually come up, the queued prompt is never re-driven, and the documented recovery ("it will
+ * be retried on your next message") cannot fire for bot-triggered sessions, which only ever send
+ * one prompt. Boots that overran by a few seconds were stranding their sessions permanently, so
+ * the bound sits well clear of the observed boot spread rather than at its edge.
  *
- * Widened to give slow boots real headroom. This is a mitigation, not the fix — see
- * ColeMurray/background-agents#1363 for the underlying recovery gap.
+ * Widening it is a mitigation, not the fix — see ColeMurray/background-agents#1363 for the
+ * underlying recovery gap.
  */
 const CONNECT_WATCHDOG_MS = 240_000;
 

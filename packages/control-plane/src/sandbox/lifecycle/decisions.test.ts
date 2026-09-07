@@ -17,6 +17,7 @@ import {
   isSandboxReconnectBlockedStatus,
   isSnapshotRuntimeCompatible,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+  DEFAULT_SPAWN_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   type CircuitBreakerState,
   type CircuitBreakerConfig,
@@ -911,6 +912,44 @@ describe("evaluateConnectingTimeout", () => {
       const result = evaluateConnectingTimeout(status, old, config, now);
       expect(result.isTimedOut).toBe(false);
     }
+  });
+});
+
+describe("connect watchdog and spawn staleness defaults", () => {
+  it("does not spawn a replacement while a sandbox is still inside the connect watchdog window", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "connecting",
+      createdAt: now - (DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs - 1),
+      snapshotImageId: null,
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, DEFAULT_SPAWN_CONFIG, now, false);
+
+    expect(decision.action).toBe("skip");
+  });
+
+  it("spawns a replacement once the connect watchdog has failed the sandbox", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "connecting",
+      createdAt: now - DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs,
+      snapshotImageId: null,
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    expect(
+      evaluateConnectingTimeout(
+        "connecting",
+        state.createdAt,
+        DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+        now
+      ).isTimedOut
+    ).toBe(true);
+    expect(evaluateSpawnDecision(state, DEFAULT_SPAWN_CONFIG, now, false).action).toBe("spawn");
   });
 });
 

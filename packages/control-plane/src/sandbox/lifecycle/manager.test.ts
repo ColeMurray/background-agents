@@ -2349,7 +2349,7 @@ describe("SandboxLifecycleManager", () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
         status: "connecting" as SandboxStatus,
-        created_at: now - 30_000, // 30s ago, well within 120s timeout
+        created_at: now - DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs / 2,
         last_heartbeat: null,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
