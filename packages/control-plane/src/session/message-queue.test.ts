@@ -138,6 +138,7 @@ function buildQueue() {
   // dispatch time — the thunk exists because settings can be persisted after
   // the queue is constructed.
   let executionTimeoutMs = EXECUTION_TIMEOUT_MS;
+  let awaitingStop: { id: string; deadline: number } | null = null;
   const log = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -162,10 +163,10 @@ function buildQueue() {
     listUnfinishedMessages: vi.fn((): MessageRow[] => []),
     listPromptQueue: vi.fn(() => []),
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
-    getMessageAwaitingStopConfirmation: vi.fn(
-      () => null as { id: string; deadline: number } | null
-    ),
-    clearMessageAwaitingStopConfirmation: vi.fn(),
+    getMessageAwaitingStopConfirmation: vi.fn(() => awaitingStop),
+    clearMessageAwaitingStopConfirmation: vi.fn((messageId: string) => {
+      if (awaitingStop?.id === messageId) awaitingStop = null;
+    }),
     getProcessingMessageWithCreatedAt: vi.fn(
       () => null as { id: string; created_at: number } | null
     ),
@@ -183,7 +184,9 @@ function buildQueue() {
       completedAt,
       status: "failed" as const,
     })),
-    markMessageAwaitingStopConfirmation: vi.fn(),
+    markMessageAwaitingStopConfirmation: vi.fn((id: string, deadline: number) => {
+      awaitingStop = { id, deadline };
+    }),
     listPendingMessagesWithCreatedAt: vi.fn((): Array<{ id: string; created_at: number }> => []),
   };
 
@@ -1532,6 +1535,88 @@ describe("SessionMessageQueue", () => {
     );
   });
 
+  it.each(["alarm", "send"] as const)(
+    "does not terminate the next prompt after a confirmed stop and delayed %s failure",
+    async (failure) => {
+      const h = buildQueue();
+      const sandboxWs = { readyState: 1 } as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+      h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+        id: "msg-stopped",
+        created_at: 900,
+      });
+      if (failure === "alarm") {
+        h.setAlarm.mockRejectedValueOnce(new Error("alarm unavailable"));
+      } else {
+        h.wsManager.send.mockReturnValueOnce(false);
+      }
+      let releaseStatus!: () => void;
+      h.sessionStatus.reconcileAfterExecution.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseStatus = resolve;
+        })
+      );
+
+      const stopping = h.executionStop.stop();
+      try {
+        await vi.waitFor(() => expect(h.setAlarm).toHaveBeenCalledOnce());
+        // Completion (including a natural completion after a failed send) releases
+        // the stop fence while the original handler still waits on projection.
+        h.repository.clearMessageAwaitingStopConfirmation("msg-stopped");
+        h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
+        await h.queue.processMessageQueue();
+        expect(h.wsManager.send).toHaveBeenCalledWith(
+          sandboxWs,
+          expect.objectContaining({ type: "prompt", messageId: "msg-next" })
+        );
+        h.repository.getProcessingMessage.mockReturnValue({ id: "msg-next" });
+        h.repository.clearMessageAwaitingStopConfirmation.mockClear();
+      } finally {
+        releaseStatus();
+        await stopping;
+      }
+
+      expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
+      expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["message", "deadline"] as const)(
+    "does not terminate for an alarm failure after the stop %s changes",
+    async (changed) => {
+      const h = buildQueue();
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+      h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+        id: "msg-stopped",
+        created_at: 900,
+      });
+      h.setAlarm.mockRejectedValueOnce(new Error("alarm unavailable"));
+      let releaseStatus!: () => void;
+      h.sessionStatus.reconcileAfterExecution.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseStatus = resolve;
+        })
+      );
+
+      const stopping = h.executionStop.stop();
+      const original = h.repository.getMessageAwaitingStopConfirmation();
+      try {
+        expect(original).not.toBeNull();
+        if (!original) throw new Error("Expected a pending stop");
+        h.repository.markMessageAwaitingStopConfirmation(
+          changed === "message" ? "msg-next" : original.id,
+          changed === "deadline" ? original.deadline + 1 : original.deadline
+        );
+      } finally {
+        releaseStatus();
+        await stopping;
+      }
+
+      expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
+      expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
+    }
+  );
+
   it("delegates stop finalization before broadcasting idle and stopping the sandbox", async () => {
     const h = buildQueue();
     const sandboxWs = { readyState: 1 } as WebSocket;
@@ -1632,7 +1717,7 @@ describe("SessionMessageQueue", () => {
       "stop_send_failed"
     );
     expect(h.repository.getNextPendingMessage).toHaveBeenCalled();
-    expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
+    expect(h.repository.clearMessageAwaitingStopConfirmation).toHaveBeenCalledWith("msg-running");
   });
 
   it("terminates the sandbox when the connected socket rejects the stop send", async () => {

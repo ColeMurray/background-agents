@@ -78,6 +78,15 @@ export class ExecutionStopCoordinator {
       if (alarm.status === "rejected") {
         this.log.error("Stop confirmation alarm failed", { error: alarm.reason });
       }
+      // Stop confirmation can release the queue while reconciliation is pending.
+      // A stale delivery must not terminate work started after that stop.
+      const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
+      if (
+        awaitingStop?.id !== preparation.failure.completion.messageId ||
+        awaitingStop.deadline !== preparation.stopConfirmationDeadline
+      ) {
+        return;
+      }
       await this.sandboxLifecycle.terminateUnresponsiveSandbox(reason);
       await this.resumeAfterSandboxTermination();
     }
