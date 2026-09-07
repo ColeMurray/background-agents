@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from sandbox_images.bundle import canonical_json
-from sandbox_images.releases import candidate_record, promote, rollback
+from sandbox_images.releases import candidate_record, promote, rollback, validate_record
 
 
 def record(reference: str, provider: str = "e2b") -> dict:
@@ -45,6 +45,49 @@ def test_promotion_and_rollback_preserve_immutable_release_history(tmp_path: Pat
 def test_failed_verification_cannot_be_a_candidate() -> None:
     with pytest.raises(ValueError, match="verification"):
         candidate_record("e2b", "test", "template-1", {"passed": False})
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("provider", "unknown"),
+        ("scope", ""),
+        ("reference", ""),
+        ("reference", " "),
+    ],
+)
+def test_candidate_rejects_invalid_artifact_fields(field, value):
+    candidate = record("template")
+    candidate["artifact"][field] = value
+    with pytest.raises(ValueError):
+        validate_record(candidate)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("schemaVersion", 2),
+        ("schemaVersion", True),
+        ("runtimeVersion", None),
+        ("runtimeVersion", ""),
+        ("runtimeVersion", "invalid"),
+        ("target", "unknown"),
+        ("recipeDigest", None),
+    ],
+)
+def test_invalid_identity_cannot_be_promoted(tmp_path, field, value):
+    candidate = record("template")
+    candidate["verification"]["identity"][field] = value
+    with pytest.raises(ValueError):
+        promote(tmp_path / "releases.json", candidate)
+    assert not (tmp_path / "releases.json").exists()
+
+
+def test_missing_runtime_version_is_rejected():
+    candidate = record("template")
+    del candidate["verification"]["identity"]["runtimeVersion"]
+    with pytest.raises(ValueError, match="runtimeVersion"):
+        validate_record(candidate)
 
 
 def test_concurrent_provider_promotions_preserve_every_selection(tmp_path, monkeypatch):

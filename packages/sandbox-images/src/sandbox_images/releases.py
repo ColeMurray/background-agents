@@ -15,19 +15,38 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-from .bundle import canonical_json
+from .bundle import PROVIDERS, canonical_json
 
 
 def candidate_record(
     provider: str, scope: str, reference: str, report: dict[str, Any]
 ) -> dict[str, Any]:
-    if report.get("passed") is not True or report.get("servicesVerified") is not True:
+    if provider not in PROVIDERS:
+        raise ValueError("Invalid candidate provider")
+    if any(not isinstance(value, str) or not value.strip() for value in (scope, reference)):
+        raise ValueError("Candidate scope and reference must be non-empty strings")
+    if (
+        not isinstance(report, dict)
+        or report.get("passed") is not True
+        or report.get("servicesVerified") is not True
+    ):
         raise ValueError("A release requires successful fresh-artifact service verification")
-    identity = report["identity"]
-    if identity["target"] != provider:
+    identity = report.get("identity")
+    if (
+        not isinstance(identity, dict)
+        or type(identity.get("schemaVersion")) is not int
+        or identity["schemaVersion"] != 1
+    ):
+        raise ValueError("Unsupported candidate identity schema")
+    runtime_version = identity.get("runtimeVersion")
+    if not isinstance(runtime_version, str) or not re.match(r"^v\d+", runtime_version):
+        raise ValueError("Invalid candidate runtimeVersion")
+    if identity.get("target") != provider:
         raise ValueError("Verification target does not match provider")
     for key in ("recipeDigest", "inventoryDigest"):
-        if not re.fullmatch(r"[a-f0-9]{64}", identity.get(key, "")):
+        if not isinstance(identity.get(key), str) or not re.fullmatch(
+            r"[a-f0-9]{64}", identity[key]
+        ):
             raise ValueError(f"Invalid image {key}")
     inventory = {key: value for key, value in identity.items() if key != "inventoryDigest"}
     if (
@@ -80,9 +99,20 @@ def _read_store(path: Path) -> dict[str, Any]:
 
 
 def validate_record(record: dict[str, Any]) -> None:
-    artifact = record["artifact"]
+    if (
+        not isinstance(record, dict)
+        or type(record.get("schemaVersion")) is not int
+        or record["schemaVersion"] != 1
+    ):
+        raise ValueError("Unsupported candidate record schema")
+    artifact = record.get("artifact")
+    if not isinstance(artifact, dict):
+        raise ValueError("Invalid candidate artifact")
     expected = candidate_record(
-        artifact["provider"], artifact["scope"], artifact["reference"], record["verification"]
+        artifact.get("provider"),
+        artifact.get("scope"),
+        artifact.get("reference"),
+        record.get("verification"),
     )
     if any(record.get(key) != value for key, value in expected.items()):
         raise ValueError("Candidate record integrity check failed")

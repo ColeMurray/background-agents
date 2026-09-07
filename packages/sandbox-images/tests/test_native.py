@@ -12,6 +12,6 @@ def test_empty_candidate_never_invokes_provider_commands(tmp_path, monkeypatch, 
     monkeypatch.setattr(native, "update_locks", Mock())
     run = Mock()
     monkeypatch.setattr(native.subprocess, "run", run)
-    with pytest.raises((KeyError, ValueError)):
+    with pytest.raises(ValueError):
         native.native_operation(tmp_path, provider, {})
     run.assert_not_called()
