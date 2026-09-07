@@ -1470,6 +1470,16 @@ describe("SessionMessageQueue", () => {
     });
   });
 
+  it("returns no stop preparation when there is no processing prompt", () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(null);
+
+    expect(h.executionStop.prepare("Session cost limit reached", 1000)).toBeNull();
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    expect(h.repository.markMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
+    expect(h.alarmDeadlines.setPendingEarliest).not.toHaveBeenCalled();
+  });
+
   it("atomically establishes budget stop intent before delivery", async () => {
     const h = buildQueue();
     const sandboxWs = { readyState: 1 } as WebSocket;
@@ -1479,9 +1489,10 @@ describe("SessionMessageQueue", () => {
       created_at: 900,
     });
     const preparation = h.executionStop.prepare("Session cost limit reached", 1000);
+    expect(preparation).not.toBeNull();
+    if (!preparation) throw new Error("Expected a prepared stop");
     await h.executionStop.deliver(preparation);
 
-    expect(preparation.stopped).toBe(true);
     expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ error: "Session cost limit reached" }),
       expect.any(Number),
@@ -1506,6 +1517,8 @@ describe("SessionMessageQueue", () => {
     h.setAlarm.mockRejectedValue(new Error("alarm unavailable"));
 
     const preparation = h.executionStop.prepare("Session cost limit reached", 1000);
+    expect(preparation).not.toBeNull();
+    if (!preparation) throw new Error("Expected a prepared stop");
     await expect(h.executionStop.deliver(preparation)).resolves.toBeUndefined();
 
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);

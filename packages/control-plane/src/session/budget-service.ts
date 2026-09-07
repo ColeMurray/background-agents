@@ -83,36 +83,16 @@ export class SessionBudgetService {
     const session = this.repository.getSession();
     if (!session || Object.is(session.max_cost_usd, maxCostUsd)) return;
 
-    const remainsExhausted =
-      session.budget_exhausted === 1 && maxCostUsd !== null && session.total_cost >= maxCostUsd;
-    if (remainsExhausted) {
-      this.repository.setSessionBudget(maxCostUsd, true, now);
-      this.broadcastStatus();
-      return;
-    }
-
-    if (maxCostUsd !== null && session.total_cost >= maxCostUsd) {
-      const reason = `Session cost limit reached: ${formatCost(session.total_cost)} of ${formatCost(maxCostUsd)}`;
-      let preparation!: ExecutionStopPreparation;
-      let exhaustionEvent!: Extract<SandboxEvent, { type: "warning" }>;
-      this.repository.transaction(() => {
-        preparation = this.executionStop.prepare(reason, now);
-        this.repository.setSessionBudget(maxCostUsd, true, now);
-        exhaustionEvent = this.persistWarning(
-          `${reason}. ${preparation.stopped ? "Execution stopped." : "Work paused."}`,
-          null,
-          now
-        );
-      });
-      this.messenger.broadcast({ type: "sandbox_event", event: exhaustionEvent });
-      this.broadcastStatus();
-      await this.executionStop.deliver(preparation);
-      return;
-    }
-
-    this.repository.setSessionBudget(maxCostUsd, false, now);
-    this.broadcastStatus();
-    await this.processMessageQueue();
+    const exhausted = maxCostUsd !== null && session.total_cost >= maxCostUsd;
+    const transition = this.repository.transaction(() => {
+      this.repository.setSessionBudget(maxCostUsd, exhausted, now);
+      if (exhausted && session.budget_exhausted !== 1) {
+        return this.prepareExhaustion(session.total_cost, maxCostUsd, null, now);
+      }
+      return { ...NO_BUDGET_TRANSITION, statusChanged: true };
+    });
+    await this.deliverTransition(transition);
+    if (!exhausted) await this.processMessageQueue();
   }
 
   broadcastStatus(): void {
@@ -153,13 +133,22 @@ export class SessionBudgetService {
       return NO_BUDGET_TRANSITION;
     }
 
-    const limit = session.max_cost_usd;
+    this.repository.markBudgetExhausted(now);
+    return this.prepareExhaustion(totalCost, session.max_cost_usd, messageId, now);
+  }
+
+  /** Prepare the same exhaustion effects for cost reports and live limit edits. */
+  private prepareExhaustion(
+    totalCost: number,
+    limit: number,
+    messageId: string | null,
+    now: number
+  ): BudgetTransition {
     const reason = `Session cost limit reached: ${formatCost(totalCost)} of ${formatCost(limit)}`;
     const stopPreparation = this.executionStop.prepare(reason, now);
-    this.repository.markBudgetExhausted(now);
     return {
       warningEvent: this.persistWarning(
-        `${reason}. ${stopPreparation.stopped ? "Execution stopped." : "Work paused."}`,
+        `${reason}. ${stopPreparation ? "Execution stopped." : "Work paused."}`,
         messageId,
         now
       ),

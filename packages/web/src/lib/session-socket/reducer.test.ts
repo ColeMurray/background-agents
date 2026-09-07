@@ -419,7 +419,7 @@ describe("sessionSocketReducer", () => {
       expect(state.events).toEqual(events);
     });
 
-    it("accumulates step_finish cost onto the session total", () => {
+    it("leaves totals to server updates even when budget fields are absent", () => {
       const base = subscribedState({ session: createSessionState({ totalCost: 1 }) });
       const state = reduce(base, {
         type: "events_appended",
@@ -427,7 +427,7 @@ describe("sessionSocketReducer", () => {
           { type: "step_finish", cost: 0.5, messageId: "msg-1", sandboxId: "sb-1", timestamp: 1 },
         ],
       });
-      expect(state.sessionState?.totalCost).toBe(1.5);
+      expect(state.sessionState?.totalCost).toBe(1);
     });
 
     it("ignores missing, non-finite, and non-positive costs", () => {

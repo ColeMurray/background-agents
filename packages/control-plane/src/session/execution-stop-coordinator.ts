@@ -11,10 +11,8 @@ import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
 export interface ExecutionStopPreparation {
-  stopped: boolean;
-  processingMessageId: string | null;
-  stopConfirmationDeadline: number | null;
-  failure: RecordedMessageFailure | null;
+  stopConfirmationDeadline: number;
+  failure: RecordedMessageFailure;
 }
 
 export class ExecutionStopCoordinator {
@@ -34,51 +32,35 @@ export class ExecutionStopCoordinator {
   ) {}
 
   async stop(reason = "Execution was stopped"): Promise<void> {
-    let preparation!: ExecutionStopPreparation;
-    this.repository.transaction(() => {
-      preparation = this.prepare(reason, Date.now());
-    });
-    if (!preparation.stopped) {
+    const preparation = this.repository.transaction(() => this.prepare(reason, Date.now()));
+    if (!preparation) {
       this.messenger.broadcast({ type: "processing_status", isProcessing: false });
       return;
     }
     await this.deliver(preparation);
   }
 
-  prepare(reason: string, now: number): ExecutionStopPreparation {
+  prepare(reason: string, now: number): ExecutionStopPreparation | null {
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
     const failure = processingMessage
       ? this.messageFailures.record(processingMessage.id, reason, now, "processing")
       : null;
-    if (processingMessage && failure) {
-      this.messageRepository.markMessageAwaitingStopConfirmation(
-        processingMessage.id,
-        stopConfirmationDeadline
-      );
-      this.alarmDeadlines.setPendingEarliest(stopConfirmationDeadline);
-    }
-    return {
-      stopped: failure !== null,
-      processingMessageId: failure ? (processingMessage?.id ?? null) : null,
-      stopConfirmationDeadline: failure ? stopConfirmationDeadline : null,
-      failure,
-    };
+    if (!failure) return null;
+    this.messageRepository.markMessageAwaitingStopConfirmation(
+      failure.completion.messageId,
+      stopConfirmationDeadline
+    );
+    this.alarmDeadlines.setPendingEarliest(stopConfirmationDeadline);
+    return { stopConfirmationDeadline, failure };
   }
 
   async deliver(preparation: ExecutionStopPreparation): Promise<void> {
-    if (
-      !preparation.failure ||
-      !preparation.processingMessageId ||
-      preparation.stopConfirmationDeadline === null
-    ) {
-      return;
-    }
     this.messageFailures.deliver(preparation.failure);
     this.broadcastPromptQueue();
     this.log.info("prompt.stopped", {
       event: "prompt.stopped",
-      message_id: preparation.processingMessageId,
+      message_id: preparation.failure.completion.messageId,
     });
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
 

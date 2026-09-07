@@ -71,8 +71,27 @@ function createService(row = session()) {
     }),
   };
   const broadcast = vi.fn();
-  const preparation = { stopped: true } as ExecutionStopPreparation;
-  const prepareBudgetStop = vi.fn(() => preparation);
+  const preparation: ExecutionStopPreparation = {
+    stopConfirmationDeadline: 16_000,
+    failure: {
+      event: {
+        type: "execution_complete",
+        messageId: "message-1",
+        success: false,
+        error: "Session cost limit reached",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+      },
+      completion: {
+        messageId: "message-1",
+        messageCreatedAt: 1,
+        messageStartedAt: 1,
+        completedAt: 1000,
+        status: "failed",
+      },
+    },
+  };
+  const prepareBudgetStop = vi.fn((): ExecutionStopPreparation | null => preparation);
   const deliverBudgetStop = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
   const service = new SessionBudgetService(
@@ -97,6 +116,53 @@ function createService(row = session()) {
 }
 
 describe("SessionBudgetService", () => {
+  it.each(["cost report", "limit edit"] as const)(
+    "commits exhaustion before delivering effects for a %s",
+    async (source) => {
+      const h = createService(session({ total_cost: 9, max_cost_usd: 10 }));
+      let inTransaction = false;
+      h.repository.transaction.mockImplementation((closure) => {
+        inTransaction = true;
+        try {
+          return closure();
+        } finally {
+          inTransaction = false;
+        }
+      });
+      h.eventRepository.createEvent.mockImplementation(() => {
+        expect(inTransaction).toBe(true);
+      });
+      h.broadcast.mockImplementation(() => {
+        expect(inTransaction).toBe(false);
+        expect(h.repository.getSession().budget_exhausted).toBe(1);
+      });
+      h.deliverBudgetStop.mockImplementation(async () => {
+        expect(inTransaction).toBe(false);
+        expect(h.repository.getSession().budget_exhausted).toBe(1);
+      });
+
+      if (source === "limit edit") {
+        await h.service.updateLimit(9, 1000);
+      } else {
+        await h.service.ingestStepFinish(
+          {
+            type: "step_finish",
+            messageId: "message-1",
+            sandboxId: "sandbox-1",
+            timestamp: 1,
+            messageCostUsd: 1,
+          },
+          "message-1",
+          1000
+        );
+      }
+
+      expect(h.eventRepository.createEvent).toHaveBeenCalledOnce();
+      expect(h.broadcast).toHaveBeenCalledTimes(2);
+      expect(h.deliverBudgetStop).toHaveBeenCalledOnce();
+    }
+  );
+
   it.each([null, 100])("publishes repaired costs below the limit (%s)", async (maxCostUsd) => {
     const h = createService(session({ total_cost: 0, max_cost_usd: maxCostUsd }));
     await h.service.ingestStepFinish(
@@ -202,7 +268,7 @@ describe("SessionBudgetService", () => {
 
   it("applies the final report on execution_complete and pauses without a stop", async () => {
     const h = createService(session({ total_cost: 9 }));
-    h.prepareBudgetStop.mockReturnValueOnce({ stopped: false } as ExecutionStopPreparation);
+    h.prepareBudgetStop.mockReturnValueOnce(null);
 
     const transition = h.service.observeExecutionCost(
       {
@@ -222,7 +288,7 @@ describe("SessionBudgetService", () => {
     expect(h.eventRepository.createEvent).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.stringContaining("Work paused") })
     );
-    expect(h.deliverBudgetStop).toHaveBeenCalledOnce();
+    expect(h.deliverBudgetStop).not.toHaveBeenCalled();
   });
 
   it("ignores execution_complete without a cumulative report", async () => {
@@ -364,6 +430,20 @@ describe("SessionBudgetService", () => {
     expect(h.repository.setSessionBudget).toHaveBeenCalledWith(8, true, 1000);
     expect(h.prepareBudgetStop).toHaveBeenCalledOnce();
     expect(h.deliverBudgetStop).toHaveBeenCalledOnce();
+    expect(h.processMessageQueue).not.toHaveBeenCalled();
+  });
+
+  it("pauses an idle session when its limit is lowered without delivering a stop", async () => {
+    const h = createService(session({ max_cost_usd: 20, total_cost: 8 }));
+    h.prepareBudgetStop.mockReturnValueOnce(null);
+
+    await h.service.updateLimit(8, 1000);
+
+    expect(h.repository.setSessionBudget).toHaveBeenCalledWith(8, true, 1000);
+    expect(h.eventRepository.createEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.stringContaining("Work paused") })
+    );
+    expect(h.deliverBudgetStop).not.toHaveBeenCalled();
     expect(h.processMessageQueue).not.toHaveBeenCalled();
   });
 
