@@ -22,4 +22,5 @@ module "vercel_sandbox_infra" {
   manual_snapshot_id = var.vercel_base_snapshot_id
   project_root       = var.project_root
   source_hash        = data.external.vercel_source_hash[0].result.hash
+  recipe_hash        = try(data.external.vercel_source_hash[0].result.recipe, data.external.vercel_source_hash[0].result.hash)
 }

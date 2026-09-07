@@ -236,6 +236,8 @@ def test_modal_deployment_hash_includes_deployment_entrypoints() -> None:
     assert '"--deployment"' in modal_tf
     from sandbox_images.bundle import plan_image
 
-    inputs = {entry["path"] for entry in plan_image(Path(__file__).parents[3], "modal")["inputs"]}
+    inputs = {
+        entry["path"] for entry in plan_image(Path(__file__).parents[3], "modal")["buildInputs"]
+    }
     assert "packages/modal-infra/deploy.py" in inputs
     assert "terraform/modules/modal-app/scripts/deploy.sh" in inputs

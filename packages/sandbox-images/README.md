@@ -102,10 +102,14 @@ provider may have expired it.
 
 ## Verification and local development
 
-`plan`, `hash`, and `pack` share one deterministic file inventory, including runtime skill Markdown,
-companion assets, locks, executable bits, and adapters. Missing inputs and symlinks outside the
-staged set fail closed. Existing bundles are never overwritten while a native build may still be
-reading them.
+`plan` separates installed `inputs`/`recipeDigest` from orchestration `buildInputs`/`buildDigest`.
+`pack` stages only installation inputs: runtime skills/assets, installers, verification, and locks.
+Provider adapters and build tooling stay outside the image. `hash` returns the build trigger as
+`hash` and installed identity as `recipe`; Terraform uses recipe-based candidate names so changes to
+orchestration can re-verify existing artifacts. The root npm lock is conservatively tracked in Node
+builders' build inputs, never their installed recipe. Modal's explicit `CACHE_BUSTER` remains an
+installed recipe input. Missing inputs and escaping symlinks fail closed, and existing bundles are
+never overwritten while a native build may still be reading them.
 
 The baked `/app/openinspect-image.json` separates recipe digest, measured inventory, and runtime
 compatibility generation. A release ID additionally includes the native reference and provider

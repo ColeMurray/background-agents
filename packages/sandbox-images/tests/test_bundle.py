@@ -61,8 +61,14 @@ def test_modal_cache_buster_changes_recipe_and_copied_bundle(tmp_path: Path) -> 
     assert after["runtimeVersion"] == before["runtimeVersion"]
     assert plan_image(checkout, "e2b")["recipeDigest"] == other_before
     assert new_bundle != old_bundle
-    assert (new_bundle / base_path).read_text() == changed
-    assert (old_bundle / base_path).read_text() == original
+    assert not (new_bundle / base_path).exists()
+    assert (
+        json.loads((new_bundle / "image-plan.json").read_text())["cacheBuster"] == "manual-refresh"
+    )
+    assert (
+        json.loads((old_bundle / "image-plan.json").read_text())["cacheBuster"]
+        == before["cacheBuster"]
+    )
     assert (new_bundle / "image-plan.json").read_bytes() != (
         old_bundle / "image-plan.json"
     ).read_bytes()
@@ -82,6 +88,38 @@ def test_unrelated_docs_and_caches_do_not_change_the_recipe(tmp_path: Path) -> N
     ).write_bytes(b"cache")
     (checkout / "README.md").write_text("Unrelated documentation")
     assert plan_image(checkout, "e2b") == before
+
+
+@pytest.mark.parametrize(
+    "build_path",
+    [
+        "packages/sandbox-images/src/sandbox_images/releases.py",
+        "package-lock.json",
+        "packages/control-plane/src/logger.ts",
+        "packages/control-plane/src/sandbox/request-deadline.ts",
+        "packages/shared/src/logger.ts",
+    ],
+)
+def test_build_inputs_invalidate_orchestration_without_changing_image(tmp_path, build_path):
+    checkout = tmp_path / "checkout"
+    shutil.copytree(
+        REPO_ROOT,
+        checkout,
+        ignore=shutil.ignore_patterns(
+            ".git", "node_modules", ".venv", ".cache", "__pycache__", ".terraform"
+        ),
+    )
+    before = plan_image(checkout, "vercel")
+    original_bundle = pack_bundle(checkout, "vercel", tmp_path / "bundles")
+    path = checkout / build_path
+    path.write_text(path.read_text() + "\n")
+    after = plan_image(checkout, "vercel")
+    assert after["recipeDigest"] == before["recipeDigest"]
+    assert after["buildDigest"] != before["buildDigest"]
+    assert pack_bundle(checkout, "vercel", tmp_path / "bundles") == original_bundle
+    assert not (original_bundle / build_path).exists()
+    baked = json.loads((original_bundle / "image-plan.json").read_text())
+    assert "buildInputs" not in baked and "buildDigest" not in baked
 
 
 def test_incomplete_declared_input_cannot_be_silently_omitted(tmp_path: Path) -> None:

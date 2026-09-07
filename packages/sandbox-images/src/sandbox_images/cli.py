@@ -85,7 +85,8 @@ def main() -> None:
     if args.command == "hash":
         if len(providers) != 1:
             parser.error("hash requires one provider")
-        digest = plan_image(args.root, args.provider)["recipeDigest"]
+        plan = plan_image(args.root, args.provider)
+        digest = plan["buildDigest"]
         if args.deployment:
             if args.provider != "modal":
                 parser.error("--deployment is only for Modal functions")
@@ -96,7 +97,7 @@ def main() -> None:
             digest = hashlib.sha256(
                 canonical_json({"recipe": digest, "functions": inventory}).encode()
             ).hexdigest()
-        print(json.dumps({"hash": digest}))
+        print(json.dumps({"hash": digest, "recipe": plan["recipeDigest"]}))
         return
     if args.command == "pack":
         if len(providers) != 1:

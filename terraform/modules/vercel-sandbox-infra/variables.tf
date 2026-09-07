@@ -42,3 +42,9 @@ variable "source_hash" {
   description = "Hash of source files that should trigger a managed base snapshot rebuild"
   type        = string
 }
+
+variable "recipe_hash" {
+  description = "Installed-image identity, separate from build orchestration invalidation"
+  type        = string
+  default     = ""
+}

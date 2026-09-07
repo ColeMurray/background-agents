@@ -3,7 +3,7 @@
 # Mirrors the null_resource/script pattern used by Modal and Daytona.
 
 locals {
-  snapshot_name = "openinspect-base-${substr(var.source_hash, 0, 16)}"
+  snapshot_name = "openinspect-base-${substr(var.recipe_hash != "" ? var.recipe_hash : var.source_hash, 0, 16)}"
 }
 
 resource "null_resource" "vercel_base_snapshot" {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -32,6 +33,7 @@ EXCLUDED = {
 PROVIDER_INPUTS = {
     "modal": (
         "packages/modal-infra/src/images",
+        "packages/modal-infra/src/app_config.py",
         "packages/modal-infra/pyproject.toml",
         "packages/modal-infra/uv.lock",
         "packages/modal-infra/deploy.py",
@@ -54,6 +56,12 @@ PROVIDER_INPUTS = {
         "packages/vercel-infra/package.json",
         "packages/control-plane/scripts/build-vercel-base-snapshot.ts",
         "packages/control-plane/src/sandbox/providers/vercel/client.ts",
+        "packages/control-plane/src/logger.ts",
+        "packages/control-plane/src/sandbox/request-deadline.ts",
+        "packages/shared/src/logger.ts",
+        "packages/shared/package.json",
+        "packages/shared/tsconfig.json",
+        "packages/vercel-infra/tsconfig.json",
         "terraform/modules/vercel-sandbox-infra/scripts/build-base-snapshot.sh",
         "package-lock.json",
     ),
@@ -152,6 +160,35 @@ def _inventory_entry(root: Path, path: Path) -> dict[str, Any]:
     }
 
 
+def _collect_inputs(root: Path, paths: list[Path]) -> list[dict[str, Any]]:
+    """Inventory declared source roots, rejecting missing and escaping inputs."""
+    for part in paths:
+        if not (root / part).exists():
+            raise FileNotFoundError(root / part)
+    files = sorted({p for part in paths for p in _walk(root / part)})
+    for path in files:
+        if path.is_symlink() and (path.readlink().is_absolute() or path.resolve() not in files):
+            raise ValueError(
+                f"Image symlink must reference another bundled file: {path.relative_to(root)}"
+            )
+    return [_inventory_entry(root, path) for path in files]
+
+
+def _modal_cache_buster(root: Path, runtime_version: str) -> str:
+    """Read the explicit refresh input without importing provider application code."""
+    source = root / "packages/modal-infra/src/images/base.py"
+    for node in ast.parse(source.read_text()).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "CACHE_BUSTER" for target in node.targets
+        ):
+            if isinstance(node.value, ast.Name) and node.value.id == "RUNTIME_VERSION":
+                return runtime_version
+            value = ast.literal_eval(node.value)
+            if isinstance(value, str):
+                return value
+    raise ValueError("Modal CACHE_BUSTER must be a string literal or RUNTIME_VERSION")
+
+
 def plan_image(root: Path, provider: str) -> dict[str, Any]:
     root = root.resolve()
     if provider not in PROVIDERS:
@@ -171,37 +208,46 @@ def plan_image(root: Path, provider: str) -> dict[str, Any]:
     paths.extend(
         IMAGE_PACKAGE / part
         for part in (
-            "src",
             "install",
             "verify",
             "locks",
             "toolchain.json",
-            "targets.json",
-            "runtime-environments.json",
-            "pyproject.toml",
-            "uv.lock",
-            "cli.py",
         )
     )
-    paths.extend(Path(part) for part in PROVIDER_INPUTS[provider])
-    for part in paths:
-        if not (root / part).exists():
-            raise FileNotFoundError(root / part)
-    files = sorted({p for part in paths for p in _walk(root / part)})
+    inventory = _collect_inputs(root, paths)
     other_os = "amazon-linux.sh" if target["os"] == "debian" else "debian.sh"
-    files = [p for p in files if not (p.parent.name == "os" and p.name == other_os)]
-    for path in files:
-        if path.is_symlink() and (path.readlink().is_absolute() or path.resolve() not in files):
-            raise ValueError(
-                f"Image symlink must reference another bundled file: {path.relative_to(root)}"
-            )
-    inventory = [_inventory_entry(root, p) for p in files]
-    identity = {"schemaVersion": 1, "provider": provider, "target": target, "inputs": inventory}
-    return {
-        **identity,
-        "recipeDigest": hashlib.sha256(canonical_json(identity).encode()).hexdigest(),
+    inventory = [entry for entry in inventory if not entry["path"].endswith(f"/os/{other_os}")]
+    identity = {
+        "schemaVersion": 1,
+        "provider": provider,
+        "target": target,
+        "inputs": inventory,
         "runtimeVersion": manifest["runtimeVersion"],
         "runtimeEnv": runtime_environment(target),
+    }
+    if provider == "modal":
+        identity["cacheBuster"] = _modal_cache_buster(root, manifest["runtimeVersion"])
+    recipe = hashlib.sha256(canonical_json(identity).encode()).hexdigest()
+    build_paths = [Path(part) for part in PROVIDER_INPUTS[provider]]
+    build_paths.extend(
+        IMAGE_PACKAGE / part
+        for part in (
+            "src",
+            "cli.py",
+            "pyproject.toml",
+            "uv.lock",
+            "targets.json",
+            "runtime-environments.json",
+        )
+    )
+    build_inputs = _collect_inputs(root, build_paths)
+    return {
+        **identity,
+        "recipeDigest": recipe,
+        "buildInputs": build_inputs,
+        "buildDigest": hashlib.sha256(
+            canonical_json({"recipeDigest": recipe, "inputs": build_inputs}).encode()
+        ).hexdigest(),
     }
 
 
@@ -222,7 +268,10 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> Path:
             else:
                 shutil.copyfile(source, target)
                 target.chmod(entry["mode"])
-        (staging / "image-plan.json").write_text(canonical_json(plan) + "\n")
+        image_plan = {
+            key: value for key, value in plan.items() if key not in ("buildInputs", "buildDigest")
+        }
+        (staging / "image-plan.json").write_text(canonical_json(image_plan) + "\n")
         toolchain = read_json(root / IMAGE_PACKAGE / "toolchain.json")
         variables = {
             "OI_PROVIDER": provider,
