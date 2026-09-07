@@ -18,13 +18,12 @@ npm run sandbox:images -- plan --provider all
 
 `toolchain.json` owns exact tool versions and downloaded archive checksums. `targets.json` owns
 native substrate and runtime-user differences. `locks/` contains frozen npm closures and
-hash-checked Python exports. `runtime-environments.json` is generated build configuration.
-Each image bakes its own launch environment; its runtime applies those paths before starting
-services, without activating the infrastructure Python venv for project commands. Workers retain
-legacy bootstrap defaults for old images and do not import this build configuration.
-Do not edit generated files directly. Ordinary builds never resolve new versions. To
-intentionally refresh distro packages without changing language dependencies, change `osRefresh` in
-the toolchain manifest.
+hash-checked Python exports. `runtime-environments.json` is generated build configuration. Each
+image bakes its own launch environment; its runtime applies those paths before starting services,
+without activating the infrastructure Python venv for project commands. Workers retain legacy
+bootstrap defaults for old images and do not import this build configuration. Do not edit generated
+files directly. Ordinary builds never resolve new versions. To intentionally refresh distro packages
+without changing language dependencies, change `osRefresh` in the toolchain manifest.
 
 The runtime wheel is built from staged source in an isolated, frozen build-tool venv, then installed
 without dependency resolution into its separate runtime venv. OS package versions remain
