@@ -9,6 +9,7 @@
   "opencodeMinimum": "1.18.15",
   "opencodeMinimumReason": "Earlier releases order turns by wrapped message IDs rather than creation time.",
   "agentBrowser": "0.21.2",
+  "agentBrowserSha256": "ca955ea19bcf1e600ea594a2a7ad65ca1df13955211470d82abb6bb357ef8078",
   "pnpm": "10.34.5",
   "bun": "1.4.2",
   "zod": "4.4.3",

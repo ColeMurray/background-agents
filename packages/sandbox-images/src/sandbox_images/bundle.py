@@ -91,6 +91,8 @@ def validate_toolchain(tools: dict[str, Any]) -> None:
         raise ValueError("OpenCode is below the image toolchain minimum")
     for name in ("agentBrowser", "pnpm", "bun", "zod", "python"):
         version(tools[name])
+    if not re.fullmatch(r"[a-f0-9]{64}", tools.get("agentBrowserSha256", "")):
+        raise ValueError("agent-browser native binary must have a SHA-256 pin")
     archives = [
         tools[name]
         for name in (
@@ -257,6 +259,8 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> Path:
             "OI_RUNTIME_USER": plan["target"]["user"],
             "OI_RUNTIME_HOME": plan["target"]["home"],
             "PYTHON_VERSION": toolchain["python"],
+            "AGENT_BROWSER_VERSION": toolchain["agentBrowser"],
+            "AGENT_BROWSER_SHA256": toolchain["agentBrowserSha256"],
         }
         for name, key in (
             ("NODE", "node"),

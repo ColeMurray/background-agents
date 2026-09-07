@@ -7,9 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from sandbox_images.bundle import pack_bundle, plan_image
+from sandbox_images.bundle import pack_bundle, plan_image, validate_toolchain
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_agent_browser_native_binary_requires_a_repository_checksum():
+    tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
+    validate_toolchain(tools)
+    del tools["agentBrowserSha256"]
+    with pytest.raises(ValueError, match="agent-browser native binary"):
+        validate_toolchain(tools)
 
 
 @pytest.mark.parametrize("provider", ["modal", "daytona", "e2b", "vercel", "opencomputer"])
