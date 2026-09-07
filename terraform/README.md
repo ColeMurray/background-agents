@@ -204,6 +204,10 @@ CLOUDFLARE_ACCOUNT_ID
 CLOUDFLARE_WORKER_SUBDOMAIN
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
+CLOUDFLARE_ZONE_ID # Optional; required only with CLOUDFLARE_CUSTOM_DOMAIN
+CLOUDFLARE_CUSTOM_DOMAIN # Optional; custom hostname for the Cloudflare web Worker
+R2_MEDIA_LOCATION # Optional; defaults to ENAM
+R2_MEDIA_BUCKET_NAME # Optional; set when the media bucket is pre-created out-of-band
 WEB_PLATFORM # Optional; defaults to vercel
 
 # Vercel web app (only if WEB_PLATFORM=vercel)
@@ -221,6 +225,7 @@ MODAL_API_SECRET
 
 # Sandbox provider
 SANDBOX_PROVIDER
+SANDBOX_INACTIVITY_TIMEOUT_MS # Optional; defaults to 600000
 
 # Daytona (only if SANDBOX_PROVIDER=daytona)
 DAYTONA_API_URL
@@ -265,6 +270,7 @@ ENABLE_LINEAR_BOT # Optional; defaults to false
 LINEAR_CLIENT_ID
 LINEAR_CLIENT_SECRET
 LINEAR_WEBHOOK_SECRET
+LINEAR_API_KEY # Optional; fallback comment posting
 
 # API Keys
 ANTHROPIC_API_KEY # Optional; required only when classification_model is an Anthropic model and the Slack or Linear bot is enabled
@@ -279,7 +285,11 @@ NEXTAUTH_SECRET # Browser-auth secret; legacy Actions secret name
 # Access control
 ALLOWED_USERS
 ALLOWED_EMAIL_DOMAINS
+UNSAFE_ALLOW_ALL_USERS # Optional; defaults to false
+
+# Two-phase first deployment (see "Durable Objects" below)
 ENABLE_DURABLE_OBJECT_BINDINGS # Optional; defaults to true
+ENABLE_SERVICE_BINDINGS # Optional; defaults to true
 
 # Branding
 APP_NAME # Optional; defaults to Open-Inspect
