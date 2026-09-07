@@ -39,7 +39,7 @@ def candidate_record(
     ):
         raise ValueError("Unsupported candidate identity schema")
     runtime_version = identity.get("runtimeVersion")
-    if not isinstance(runtime_version, str) or not re.match(r"^v\d+", runtime_version):
+    if not isinstance(runtime_version, str) or not re.match(r"^v[0-9]+", runtime_version):
         raise ValueError("Invalid candidate runtimeVersion")
     if identity.get("target") != provider:
         raise ValueError("Verification target does not match provider")
