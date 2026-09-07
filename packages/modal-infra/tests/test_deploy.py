@@ -4,10 +4,123 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import Mock
 
 import deploy
+import pytest
+
+
+def test_deployment_rejects_missing_image_without_opt_in(monkeypatch, tmp_path) -> None:
+    from src.images import base
+
+    monkeypatch.setattr(base.modal, "is_local", lambda: True)
+    monkeypatch.setattr(base, "image_reference_path", lambda: tmp_path / "missing.json")
+    monkeypatch.delenv("OPENINSPECT_DEPLOY_IMAGE_ID", raising=False)
+    monkeypatch.delenv("OPENINSPECT_REQUIRE_BUILT_IMAGE", raising=False)
+
+    with pytest.raises(RuntimeError, match="Build the Modal sandbox image"):
+        base.deployed_image_environment()
+
+
+@pytest.mark.parametrize(
+    ("recipe", "image_id", "error"),
+    [
+        ("old-recipe", "im-built", "stale"),
+        ("current-recipe", "", "missing its verified"),
+        ("current-recipe", None, "missing its verified"),
+    ],
+)
+def test_deployment_rejects_invalid_record_without_opt_in(
+    monkeypatch, tmp_path, recipe, image_id, error
+) -> None:
+    from src.images import base
+
+    record_path = tmp_path / "built.json"
+    record_path.write_text(json.dumps({"recipeDigest": recipe, "imageId": image_id}))
+    monkeypatch.setattr(base.modal, "is_local", lambda: True)
+    monkeypatch.setattr(base, "image_reference_path", lambda: record_path)
+    monkeypatch.setattr(
+        base, "local_image_plan", lambda: (tmp_path, {"recipeDigest": "current-recipe"})
+    )
+    monkeypatch.delenv("OPENINSPECT_DEPLOY_IMAGE_ID", raising=False)
+    monkeypatch.delenv("OPENINSPECT_REQUIRE_BUILT_IMAGE", raising=False)
+
+    with pytest.raises(RuntimeError, match=error):
+        base.deployed_image_environment()
+
+
+def test_deployment_uses_matching_verified_record(monkeypatch, tmp_path) -> None:
+    from src.images import base
+
+    record_path = tmp_path / "built.json"
+    record_path.write_text(json.dumps({"recipeDigest": "current-recipe", "imageId": "im-built"}))
+    monkeypatch.setattr(base.modal, "is_local", lambda: True)
+    monkeypatch.setattr(base, "image_reference_path", lambda: record_path)
+    monkeypatch.setattr(
+        base, "local_image_plan", lambda: (tmp_path, {"recipeDigest": "current-recipe"})
+    )
+    monkeypatch.delenv("OPENINSPECT_DEPLOY_IMAGE_ID", raising=False)
+
+    assert base.deployed_image_environment() == {base.IMAGE_ID_ENV: "im-built"}
+
+
+def test_deployment_preserves_explicit_release_selection(monkeypatch, tmp_path) -> None:
+    from src.images import base
+
+    monkeypatch.setattr(base.modal, "is_local", lambda: True)
+    monkeypatch.setattr(base, "image_reference_path", lambda: tmp_path / "missing.json")
+    monkeypatch.setenv("OPENINSPECT_DEPLOY_IMAGE_ID", "im-selected")
+
+    assert base.deployed_image_environment() == {base.IMAGE_ID_ENV: "im-selected"}
+
+
+@pytest.mark.parametrize("image_id", [None, "im-deployed"])
+def test_deployed_environment_requires_image_reference(monkeypatch, image_id) -> None:
+    from src.images import base
+
+    monkeypatch.setattr(base.modal, "is_local", lambda: False)
+    monkeypatch.delenv(base.IMAGE_ID_ENV, raising=False)
+    if image_id:
+        monkeypatch.setenv(base.IMAGE_ID_ENV, image_id)
+        assert base.deployed_image_environment() == {base.IMAGE_ID_ENV: image_id}
+    else:
+        with pytest.raises(RuntimeError, match="missing its verified"):
+            base.deployed_image_environment()
+
+
+def test_eager_build_does_not_register_functions_before_image_exists() -> None:
+    environment = dict(os.environ)
+    environment.pop("OPENINSPECT_DEPLOY_IMAGE_ID", None)
+    environment.pop("OPENINSPECT_MODAL_BASE_IMAGE_ID", None)
+    environment["OPENINSPECT_REQUIRE_BUILT_IMAGE"] = "true"
+    script = """
+import runpy
+import sys
+from unittest.mock import patch
+import modal
+
+sys.argv = ['deploy.py', '--build-sandbox-image']
+with patch.object(modal.App, 'lookup', side_effect=RuntimeError('image-build-entry')) as lookup:
+    try:
+        runpy.run_path('deploy.py', run_name='__main__')
+    except RuntimeError as error:
+        assert str(error) == 'image-build-entry', str(error)
+    else:
+        raise AssertionError('Eager image build was not entered')
+    lookup.assert_called_once_with('open-inspect', create_if_missing=True)
+assert 'src.app' not in sys.modules
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(deploy.__file__).parent,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tmp_path) -> None:

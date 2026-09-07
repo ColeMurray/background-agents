@@ -19,16 +19,21 @@ import modal
 # Add src to path so imports work
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-# Import the app
-# Import modules to register functions with the app
-# This makes all web endpoints and functions available
-from src.app import app
-from src.images.base import base_image, image_reference_path, local_image_plan
+if __name__ == "__main__":
+    # The eager builder must run before a verified image reference exists. Import
+    # only build modules, without src.__init__ registering deployable functions.
+    from app_config import APP_NAME
+    from images.base import base_image, image_reference_path, local_image_plan
+else:
+    # Modal imports this module to discover the fully registered application.
+    from src.app import app
+    from src.app_config import APP_NAME
+    from src.images.base import base_image, image_reference_path, local_image_plan
 
 
 def build_sandbox_image() -> None:
     """Build the image used by dynamic sandboxes before requests can create them."""
-    deployed_app = modal.App.lookup(app.name, create_if_missing=True)
+    deployed_app = modal.App.lookup(APP_NAME, create_if_missing=True)
     existing = os.environ.get("OPENINSPECT_VERIFY_REFERENCE") or os.environ.get(
         "OPENINSPECT_DEPLOY_IMAGE_ID"
     )
@@ -62,7 +67,7 @@ def build_sandbox_image() -> None:
             raise RuntimeError(f"Modal image verification failed: {process.stderr.read()}")
         report = json.loads(report_text.strip().splitlines()[-1])
         write_candidate(
-            candidate_record("modal", app.name, existing or base_image.object_id, report)
+            candidate_record("modal", APP_NAME, existing or base_image.object_id, report)
         )
     finally:
         sandbox.terminate()

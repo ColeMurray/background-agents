@@ -34,21 +34,23 @@ def image_reference_path() -> Path:
 def deployed_image_environment() -> dict[str, str]:
     """Bridge the eager image build to function deployment; never upload build tools."""
     if not modal.is_local():
-        return {IMAGE_ID_ENV: os.environ[IMAGE_ID_ENV]} if IMAGE_ID_ENV in os.environ else {}
+        image_id = os.environ.get(IMAGE_ID_ENV)
+        if not image_id:
+            raise RuntimeError("Deployed Modal function is missing its verified sandbox image ID")
+        return {IMAGE_ID_ENV: image_id}
     if os.environ.get("OPENINSPECT_DEPLOY_IMAGE_ID"):
         return {IMAGE_ID_ENV: os.environ["OPENINSPECT_DEPLOY_IMAGE_ID"]}
     path = image_reference_path()
     if not path.is_file():
-        if os.environ.get("OPENINSPECT_REQUIRE_BUILT_IMAGE") == "true":
-            raise RuntimeError("Build the Modal sandbox image before deploying functions")
-        return {}
+        raise RuntimeError("Build the Modal sandbox image before deploying functions")
     record = json.loads(path.read_text())
     _bundle, plan = local_image_plan()
     if record["recipeDigest"] != plan["recipeDigest"]:
-        if os.environ.get("OPENINSPECT_REQUIRE_BUILT_IMAGE") == "true":
-            raise RuntimeError("Built Modal image is stale; rebuild before deploying functions")
-        return {}
-    return {IMAGE_ID_ENV: record["imageId"]}
+        raise RuntimeError("Built Modal image is stale; rebuild before deploying functions")
+    image_id = record.get("imageId")
+    if not isinstance(image_id, str) or not image_id.strip():
+        raise RuntimeError("Built Modal image record is missing its verified sandbox image ID")
+    return {IMAGE_ID_ENV: image_id}
 
 
 def _define_image() -> modal.Image:

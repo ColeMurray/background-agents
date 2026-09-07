@@ -13,6 +13,7 @@ import modal
 
 import sandbox_runtime
 
+from .app_config import APP_NAME
 from .images.base import deployed_image_environment
 from .log_config import get_logger
 
@@ -22,7 +23,7 @@ _SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 log = get_logger("app")
 
 # Main Modal application
-app = modal.App("open-inspect")
+app = modal.App(APP_NAME)
 
 # Image for Modal functions (not sandbox)
 # Includes all dependencies needed by the function modules at import time
