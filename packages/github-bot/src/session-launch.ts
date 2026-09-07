@@ -1,11 +1,13 @@
 import {
   createSessionResponseSchema,
   sendPromptResponseSchema,
+  type CreateSessionInput,
+  type SendPromptRequest,
 } from "@open-inspect/shared/types/session-api";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type { Logger } from "./logger";
 import { resolveSessionTarget } from "./session-target";
-import type { Env, ReviewRequestedPayload } from "./types";
+import type { Env } from "./types";
 import type { ResolvedGitHubConfig } from "./utils/integration-config";
 
 export type SessionLaunchResult = {
@@ -21,7 +23,7 @@ export async function launchSession(
   params: {
     owner: string;
     repoName: string;
-    sender: ReviewRequestedPayload["sender"];
+    sender: { login: string; id: number; avatar_url: string };
     config: ResolvedGitHubConfig;
     ghToken: string;
     traceId: string;
@@ -57,16 +59,14 @@ export async function launchSession(
     traceId,
   });
   const actor = `github:${sender.id}`;
-  const body: Record<string, unknown> = {
+  const body = {
     ...target,
     title,
     model: config.model,
     scmLogin: sender.login,
-    scmAvatarUrl: sender.avatar_url,
-  };
-  if (config.reasoningEffort) {
-    body.reasoningEffort = config.reasoningEffort;
-  }
+    actorAvatarUrl: sender.avatar_url,
+    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+  } satisfies CreateSessionInput;
   const sessionResponse = await signedControlPlaneFetch(env, {
     method: "POST",
     url: "https://internal/sessions",
@@ -90,7 +90,7 @@ export async function launchSession(
   const promptResponse = await signedControlPlaneFetch(env, {
     method: "POST",
     url: `https://internal/sessions/${sessionId}/prompt`,
-    body: JSON.stringify({ content: prompt, source: "github" }),
+    body: JSON.stringify({ content: prompt, source: "github" } satisfies SendPromptRequest),
     actor,
     traceId,
   });

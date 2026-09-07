@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createSessionInputSchema,
+  sendPromptRequestSchema,
+} from "@open-inspect/shared/types/session-api";
 import { signedControlPlaneFetch } from "../src/internal-auth";
 import { launchSession } from "../src/session-launch";
 import { resolveSessionTarget } from "../src/session-target";
@@ -113,18 +117,22 @@ describe("launchSession", () => {
           body: expect.any(String),
         },
       ]);
-      expect(JSON.parse(requests[0].body!)).toEqual({
+      const sessionBody = JSON.parse(requests[0].body!);
+      expect(sessionBody).toEqual({
         ...target,
         title: params.title,
         model: params.config.model,
         reasoningEffort: "high",
         scmLogin: "alice",
-        scmAvatarUrl: params.sender.avatar_url,
+        actorAvatarUrl: params.sender.avatar_url,
       });
-      expect(JSON.parse(requests[1].body!)).toEqual({
+      expect(createSessionInputSchema.parse(sessionBody)).toEqual(sessionBody);
+      const promptBody = JSON.parse(requests[1].body!);
+      expect(promptBody).toEqual({
         content: "Review this PR",
         source: "github",
       });
+      expect(sendPromptRequestSchema.parse(promptBody)).toEqual(promptBody);
       const meta = {
         trace_id: params.traceId,
         repo: "acme/widgets",
