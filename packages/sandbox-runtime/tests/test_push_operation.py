@@ -2,11 +2,14 @@
 
 import asyncio
 import json
+import signal
+from functools import partial
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from sandbox_runtime.process_output import communicate_owned_subprocess
 from sandbox_runtime.push_operation import PushOperation, PushRequest
 
 
@@ -74,6 +77,7 @@ async def test_success_uses_legacy_checkout(operation):
         cwd=operation.repo_path / "repo",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
     process.terminate.assert_not_called()
     process.kill.assert_not_called()
@@ -116,38 +120,97 @@ async def test_nonzero_exit_redacts_stderr(operation, stderr, expected):
 @pytest.mark.parametrize("escalate", [False, True])
 @pytest.mark.parametrize("already_exited", [False, True])
 async def test_timeout_terminates_then_kills_if_needed(operation, escalate, already_exited):
-    process = _fake_process(None)
-    if already_exited:
-        process.terminate.side_effect = ProcessLookupError
-        process.kill.side_effect = ProcessLookupError
-    timeouts = []
+    process = _fake_process(0 if already_exited else None)
+    process.pid = 123
+    group_signal = MagicMock()
+    reaped = asyncio.Event()
 
-    async def wait_for(coro, timeout):
-        timeouts.append(timeout)
-        if len(timeouts) == 1 or escalate:
-            coro.close()
-            raise TimeoutError
-        return await coro
+    async def communicate():
+        await asyncio.Future()
+
+    async def wait():
+        if escalate and process.wait.await_count == 1:
+            await asyncio.Future()
+        reaped.set()
+
+    process.communicate.side_effect = communicate
+    process.wait.side_effect = wait
 
     with (
         patch(
             "sandbox_runtime.push_operation.asyncio.create_subprocess_exec", return_value=process
         ),
-        patch("sandbox_runtime.push_operation.asyncio.wait_for", side_effect=wait_for),
-        patch("sandbox_runtime.push_operation.GIT_PUSH_TIMEOUT_SECONDS", 42.0),
-        patch("sandbox_runtime.push_operation.GIT_PUSH_TERMINATE_GRACE_SECONDS", 3.0),
+        patch(
+            "sandbox_runtime.push_operation.communicate_owned_subprocess",
+            partial(communicate_owned_subprocess, kill_process_group=group_signal),
+        ),
+        patch("sandbox_runtime.push_operation.GIT_PUSH_TIMEOUT_SECONDS", 0.01),
+        patch("sandbox_runtime.push_operation.GIT_PUSH_TERMINATE_GRACE_SECONDS", 0.01),
     ):
         result = await operation.execute(_push_spec())
-    assert timeouts == [42.0, 3.0]
-    assert result.error == "Push failed - git push timed out after 42s"
+    assert result.error == "Push failed - git push timed out after 0s"
     assert result.request.branch_name == "feature/test"
-    process.terminate.assert_called_once_with()
-    if escalate:
-        process.kill.assert_called_once_with()
-        assert process.wait.call_count == 2
-    else:
-        process.kill.assert_not_called()
-    process.wait.assert_awaited_once()
+    assert [call.args for call in group_signal.call_args_list] == [
+        (123, signal.SIGTERM),
+        (123, signal.SIGKILL),
+    ]
+    assert reaped.is_set()
+    assert process.wait.await_count == 2
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize("already_exited", [False, True])
+async def test_failure_waits_for_group_cleanup_and_reap(operation, cancel, already_exited):
+    process = _fake_process(0 if already_exited else None)
+    process.pid = 123
+    communicating = asyncio.Event()
+    cleaning = asyncio.Event()
+    release = asyncio.Event()
+    group_signal = MagicMock()
+
+    async def communicate():
+        communicating.set()
+        if cancel:
+            await asyncio.Future()
+        raise OSError("communication failed")
+
+    async def wait():
+        if process.wait.await_count == 2:
+            cleaning.set()
+            await release.wait()
+
+    process.communicate.side_effect = communicate
+    process.wait.side_effect = wait
+    with (
+        patch(
+            "sandbox_runtime.push_operation.asyncio.create_subprocess_exec", return_value=process
+        ),
+        patch(
+            "sandbox_runtime.push_operation.communicate_owned_subprocess",
+            partial(communicate_owned_subprocess, kill_process_group=group_signal),
+        ),
+    ):
+        task = asyncio.create_task(operation.execute(_push_spec()))
+        await communicating.wait()
+        if cancel:
+            task.cancel()
+        await cleaning.wait()
+        assert not task.done()
+        assert [call.args for call in group_signal.call_args_list] == [
+            (123, signal.SIGTERM),
+            (123, signal.SIGKILL),
+        ]
+        release.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            assert (await task).error == "communication failed"
+    assert [call.args for call in group_signal.call_args_list] == [
+        (123, signal.SIGTERM),
+        (123, signal.SIGKILL),
+    ]
+    assert process.wait.await_count == 2
 
 
 @pytest.mark.parametrize("owner,name", [("open-inspect", "backend"), ("Open-Inspect", "Backend")])
@@ -234,6 +297,7 @@ async def test_provider_url_refspec_and_force_pass_through(operation, force):
         cwd=operation.repo_path / "repo",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
 
 
@@ -262,17 +326,47 @@ async def test_invalid_fields(operation, spec, error):
         result = await operation.execute(spec)
     launch.assert_not_called()
     assert result.error == f"Push failed - {error}"
-    assert result.request == PushRequest.from_push_spec(spec)
+    assert result.request.branch_name == spec.get("targetBranch", "").strip()
 
 
-def test_normalization_preserves_existing_string_and_bool_coercion():
-    request = PushRequest.from_push_spec(
-        _push_spec(targetBranch=123, refspec=None, force="false", repoOwner=" owner ")
-    )
-    assert request.branch_name == "123"
-    assert request.refspec == "None"
-    assert request.force is True
-    assert request.repo_owner == "owner"
+@pytest.mark.parametrize(
+    "field", ["targetBranch", "refspec", "remoteUrl", "redactedRemoteUrl", "repoOwner", "repoName"]
+)
+@pytest.mark.parametrize("value", [None, [], {}, False, True, 0, 1, 123, "", "  "])
+async def test_invalid_strings_rejected_without_launch(operation, field, value):
+    spec = _push_spec(**{"repoOwner": " owner ", "repoName": " repo ", field: value})
+    with patch("sandbox_runtime.push_operation.asyncio.create_subprocess_exec") as launch:
+        result = await operation.execute(spec)
+    launch.assert_not_called()
+    assert result.error
+    assert result.request.branch_name == ("" if field == "targetBranch" else "feature/test")
+    assert result.request.repo_fields() == {
+        key: val for key, val in {"repoOwner": "owner", "repoName": "repo"}.items() if key != field
+    }
+
+
+@pytest.mark.parametrize("value", [None, [], {}, "false", "true", "", 0, 1])
+async def test_invalid_force_rejected_without_launch(operation, value):
+    with patch("sandbox_runtime.push_operation.asyncio.create_subprocess_exec") as launch:
+        result = await operation.execute(
+            _push_spec(force=value, repoOwner="owner", repoName="repo")
+        )
+    launch.assert_not_called()
+    assert result.error
+    assert result.request.branch_name == "feature/test"
+    assert result.request.repo_fields() == {"repoOwner": "owner", "repoName": "repo"}
+
+
+@pytest.mark.parametrize(
+    "field", ["targetBranch", "refspec", "remoteUrl", "redactedRemoteUrl", "force"]
+)
+async def test_missing_required_field_rejected(operation, field):
+    spec = _push_spec()
+    del spec[field]
+    with patch("sandbox_runtime.push_operation.asyncio.create_subprocess_exec") as launch:
+        result = await operation.execute(spec)
+    launch.assert_not_called()
+    assert result.error
 
 
 @pytest.mark.parametrize(

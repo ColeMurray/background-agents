@@ -174,6 +174,7 @@ class TestSetupScriptTimeout:
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=None)
         fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
+        fake_proc.wait.side_effect = lambda: setattr(fake_proc, "returncode", -9)
         fake_proc.stdout = MagicMock()
         fake_proc.stdout.read = AsyncMock(return_value=b"partial output\n")
 

@@ -1,13 +1,13 @@
 """Local Git push execution, independent of control-plane transport."""
 
 import asyncio
-import contextlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
 from .log_config import StructuredLogger
+from .process_output import communicate_owned_subprocess
 from .repo_config import find_repo_entry, load_repo_manifest
 
 GIT_PUSH_TIMEOUT_SECONDS = 300.0
@@ -16,7 +16,7 @@ GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
 
 @dataclass(frozen=True)
 class PushRequest:
-    """Provider-generated push spec with absent fields normalized to empty values."""
+    """Validated provider-generated push spec, or correlation data for a rejection."""
 
     branch_name: str
     repo_owner: str
@@ -31,17 +31,36 @@ class PushRequest:
         spec = push_spec if isinstance(push_spec, dict) else {}
 
         def field(key: str) -> str:
-            return str(spec.get(key, "")).strip()
+            value = spec.get(key)
+            return value.strip() if isinstance(value, str) else ""
 
-        return cls(
+        force = spec.get("force")
+        request = cls(
             branch_name=field("targetBranch"),
             repo_owner=field("repoOwner"),
             repo_name=field("repoName"),
             refspec=field("refspec"),
             push_url=field("remoteUrl"),
             redacted_push_url=field("redactedRemoteUrl"),
-            force=bool(spec.get("force", False)),
+            force=force if isinstance(force, bool) else False,
         )
+        error = None
+        if not isinstance(push_spec, dict):
+            error = "missing push specification"
+        elif ("repoOwner" in spec or "repoName" in spec) and not request.has_repo_identity:
+            error = "pushSpec must carry both repoOwner and repoName"
+        elif not request.branch_name:
+            error = "missing target branch"
+        elif (
+            not request.refspec
+            or not request.push_url
+            or not request.redacted_push_url
+            or not isinstance(force, bool)
+        ):
+            error = "invalid push specification"
+        if error:
+            raise PushRejected(f"Push failed - {error}", request)
+        return request
 
     @property
     def has_repo_identity(self) -> bool:
@@ -68,7 +87,11 @@ class PushResult:
 
 
 class PushRejected(Exception):
-    """A user-facing rejection, already logged at the raise site."""
+    """A user-facing rejection with optional parsed correlation metadata."""
+
+    def __init__(self, message: str, request: PushRequest | None = None):
+        super().__init__(message)
+        self.request = request
 
 
 class PushOperation:
@@ -78,7 +101,12 @@ class PushOperation:
         self.log = logger
 
     async def execute(self, push_spec: object) -> PushResult:
-        request = PushRequest.from_push_spec(push_spec)
+        try:
+            request = PushRequest.from_push_spec(push_spec)
+        except PushRejected as rejection:
+            assert rejection.request is not None
+            self.log.warn("git.push_error", reason="invalid_push_spec")
+            return PushResult(rejection.request, str(rejection))
         self.log.info(
             "git.push_start",
             branch_name=request.branch_name,
@@ -87,7 +115,6 @@ class PushOperation:
             mode="push_spec",
         )
         try:
-            self._validate_push_request(request, spec_present=isinstance(push_spec, dict))
             repo_dir = self._resolve_push_checkout(request)
             await self._run_git_push(request, repo_dir)
         except PushRejected as rejection:
@@ -107,30 +134,6 @@ class PushOperation:
     def _reject_push(self, *, reason: str, message: str, **log_fields: Any) -> NoReturn:
         self.log.warn("git.push_error", reason=reason, **log_fields)
         raise PushRejected(message)
-
-    def _validate_push_request(self, request: PushRequest, *, spec_present: bool) -> None:
-        if not spec_present:
-            self._reject_push(
-                reason="missing_push_spec",
-                message="Push failed - missing push specification",
-            )
-        if bool(request.repo_owner) != bool(request.repo_name):
-            self._reject_push(
-                reason="partial_repo_identity",
-                message="Push failed - pushSpec must carry both repoOwner and repoName",
-                repo_owner=request.repo_owner,
-                repo_name=request.repo_name,
-            )
-        if not request.branch_name:
-            self._reject_push(
-                reason="missing_target_branch",
-                message="Push failed - missing target branch",
-            )
-        if not request.refspec or not request.push_url:
-            self._reject_push(
-                reason="invalid_push_spec",
-                message="Push failed - invalid push specification",
-            )
 
     def _resolve_push_checkout(self, request: PushRequest) -> Path:
         if request.has_repo_identity:
@@ -185,10 +188,14 @@ class PushOperation:
             cwd=repo_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
         try:
             _stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=GIT_PUSH_TIMEOUT_SECONDS
+                communicate_owned_subprocess(
+                    process, terminate_grace_seconds=GIT_PUSH_TERMINATE_GRACE_SECONDS
+                ),
+                timeout=GIT_PUSH_TIMEOUT_SECONDS,
             )
         except TimeoutError:
             self.log.warn(
@@ -196,7 +203,6 @@ class PushOperation:
                 branch_name=request.branch_name,
                 timeout_ms=int(GIT_PUSH_TIMEOUT_SECONDS * 1000),
             )
-            await self._terminate_push_process(process, request.branch_name)
             raise PushRejected(
                 f"Push failed - git push timed out after {int(GIT_PUSH_TIMEOUT_SECONDS)}s"
             ) from None
@@ -214,23 +220,6 @@ class PushOperation:
                 if redacted_stderr_text
                 else "Push failed - unknown error"
             )
-
-    async def _terminate_push_process(
-        self, process: asyncio.subprocess.Process, branch_name: str
-    ) -> None:
-        with contextlib.suppress(ProcessLookupError):
-            process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=GIT_PUSH_TERMINATE_GRACE_SECONDS)
-        except TimeoutError:
-            self.log.warn(
-                "git.push_kill",
-                branch_name=branch_name,
-                timeout_ms=int(GIT_PUSH_TERMINATE_GRACE_SECONDS * 1000),
-            )
-            with contextlib.suppress(ProcessLookupError):
-                process.kill()
-            await process.wait()
 
     @staticmethod
     def _redact_git_stderr(stderr_text: str, push_url: str, redacted_push_url: str) -> str:

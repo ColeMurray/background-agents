@@ -23,7 +23,18 @@ async def test_push_dispatch_emits_one_result(metadata, error):
     bridge = AgentBridge("sandbox", "session", "http://localhost:8787", "token")
     bridge._send_event = AsyncMock()
     raw_spec = {"opaque": "passed unchanged"}
-    result = PushResult(PushRequest.from_push_spec(metadata), error)
+    result = PushResult(
+        PushRequest(
+            metadata.get("targetBranch", ""),
+            metadata.get("repoOwner", ""),
+            metadata.get("repoName", ""),
+            "",
+            "",
+            "",
+            False,
+        ),
+        error,
+    )
 
     with (
         patch("sandbox_runtime.bridge.PushOperation") as operation,
@@ -55,7 +66,7 @@ async def test_push_passes_missing_or_invalid_spec_to_operation(cmd):
     bridge._send_event = AsyncMock()
     with patch("sandbox_runtime.bridge.PushOperation") as operation:
         operation.return_value.execute = AsyncMock(
-            return_value=PushResult(PushRequest.from_push_spec(None), "missing spec")
+            return_value=PushResult(PushRequest("", "", "", "", "", "", False), "missing spec")
         )
         await bridge._handle_command(cmd)
     operation.return_value.execute.assert_awaited_once_with(cmd.get("pushSpec"))
