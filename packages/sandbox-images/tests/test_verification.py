@@ -16,6 +16,11 @@ verification = runpy.run_path(str(Path(__file__).parents[1] / "verify/image.py")
         ("node", "v22.23.2", "22.23.2"),
         ("agent-browser", "agent-browser 0.21.2", "0.21.2"),
         ("code-server", "4.109.5 commit with Code 1.109.0", "4.109.5"),
+        (
+            "code-server",
+            "i18next: initialized {}\ninfo Wrote default config\n4.109.5 commit with Code 1.109.5",
+            "4.109.5",
+        ),
         ("ttyd", "ttyd version 1.7.7", "1.7.7"),
         ("google-chrome", "Google Chrome for Testing 152.0.7977.82", "152.0.7977.82"),
     ],
@@ -24,7 +29,9 @@ def test_records_normalized_observed_tool_versions(command, output, expected):
     assert verification["observed_tool_version"](command, expected, output) == expected
 
 
-@pytest.mark.parametrize("output", ["v22.23.20", "v22.23.2-rc1", "unexpected v22.23.2"])
+@pytest.mark.parametrize(
+    "output", ["v22.23.20", "v22.23.2-rc1", "unexpected v22.23.2", "v22.23.2\nv22.23.20"]
+)
 def test_rejects_version_substrings_and_nonrelease_versions(output):
     with pytest.raises(RuntimeError, match="version mismatch"):
         verification["observed_tool_version"]("node", "22.23.2", output)

@@ -239,8 +239,11 @@ def observed_tool_version(command: str, expected: str, output: str) -> str:
         "ttyd": r"ttyd version\s+",
         "google-chrome": r"Google Chrome(?: for Testing)?\s+",
     }
-    match = re.match(prefixes[command] + r"(\d+(?:\.\d+){2,3})(?=\s|$)", output.strip())
-    observed = match.group(1) if match else None
+    pattern = prefixes[command] + r"(\d+(?:\.\d+){2,3})(?=\s|$)"
+    matches = [
+        match.group(1) for line in output.splitlines() if (match := re.match(pattern, line.strip()))
+    ]
+    observed = matches[0] if len(matches) == 1 else None
     if observed != expected:
         raise RuntimeError(f"{command} version mismatch: expected {expected}, got {output}")
     return observed
