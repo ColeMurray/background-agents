@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
@@ -10,6 +10,7 @@ import type { Environment } from "@open-inspect/shared/types/environments";
 import {
   MAX_SLACK_ROUTING_RULES,
   type SlackGlobalConfig,
+  type SlackGlobalSettingsUpdate,
   type SlackRepoSettings,
 } from "@open-inspect/shared/types/integrations";
 import { SlackIntegrationSettings } from "./slack-integration-settings";
@@ -58,8 +59,10 @@ function setupSWR(opts: {
   useSWRMock.mockImplementation((key: string) => {
     if (key === "/api/integration-settings/slack") {
       return {
-        data: opts.global === undefined ? undefined : { settings: opts.global },
+        data:
+          opts.global === undefined ? undefined : { integrationId: "slack", settings: opts.global },
         isLoading: opts.globalLoading ?? false,
+        mutate: mutateMock,
       };
     }
     if (key === "/api/integration-settings/slack/repos") {
@@ -127,6 +130,7 @@ beforeEach(() => {
   toastSuccess.mockReset();
   toastError.mockReset();
   mutateMock.mockReset();
+  mutateMock.mockResolvedValue(undefined);
   useSWRMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -141,6 +145,21 @@ function okJson(body: unknown) {
     ok: true,
     json: async () => body,
   } as Response;
+}
+
+function errorJson(error: string) {
+  return {
+    ok: false,
+    json: async () => ({ error }),
+  } as Response;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe("SlackIntegrationSettings", () => {
@@ -185,11 +204,11 @@ describe("SlackIntegrationSettings", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/integration-settings/slack");
-    expect(init.method).toBe("PUT");
-    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
-    expect(body.settings.defaults).toEqual({
-      agentNotificationsEnabled: true,
-      mentionsPolicy: "allow",
+    expect(init.method).toBe("PATCH");
+    const body = JSON.parse(init.body as string) as SlackGlobalSettingsUpdate;
+    expect(body).toEqual({
+      section: "defaults",
+      defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
     });
   });
 
@@ -204,8 +223,8 @@ describe("SlackIntegrationSettings", () => {
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     const [, init] = fetchMock.mock.calls[0];
-    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
-    expect(body.settings.defaults?.mentionsPolicy).toBe("escape");
+    const body = JSON.parse(init.body as string) as SlackGlobalSettingsUpdate;
+    expect(body).toMatchObject({ section: "defaults", defaults: { mentionsPolicy: "escape" } });
   });
 
   it("saving a selected default model includes the model in global defaults", async () => {
@@ -221,11 +240,14 @@ describe("SlackIntegrationSettings", () => {
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     const [, init] = fetchMock.mock.calls[0];
-    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
-    expect(body.settings.defaults?.model).toBe("openai/gpt-5.4");
+    const body = JSON.parse(init.body as string) as SlackGlobalSettingsUpdate;
+    expect(body).toMatchObject({
+      section: "defaults",
+      defaults: { model: "openai/gpt-5.4" },
+    });
   });
 
-  it("clearing the selected default model omits model while preserving other defaults", async () => {
+  it("clearing the selected default model omits model from the defaults update", async () => {
     const user = userEvent.setup();
     setupSWR({
       global: {
@@ -246,15 +268,14 @@ describe("SlackIntegrationSettings", () => {
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     const [, init] = fetchMock.mock.calls[0];
-    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
-    expect(body.settings.defaults).toEqual({
-      agentNotificationsEnabled: true,
-      mentionsPolicy: "strip",
-      routingRules: [{ keyword: "frontend", target: "acme/web" }],
+    const body = JSON.parse(init.body as string) as SlackGlobalSettingsUpdate;
+    expect(body).toEqual({
+      section: "defaults",
+      defaults: { agentNotificationsEnabled: true, mentionsPolicy: "strip" },
     });
   });
 
-  it("typing session instructions and saving sends them merged into the defaults", async () => {
+  it("typing session instructions includes them in the defaults update", async () => {
     const user = userEvent.setup();
     setupSWR({
       global: {
@@ -274,12 +295,14 @@ describe("SlackIntegrationSettings", () => {
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     const [, init] = fetchMock.mock.calls[0];
-    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
-    expect(body.settings.defaults).toEqual({
-      agentNotificationsEnabled: true,
-      mentionsPolicy: "strip",
-      routingRules: [{ keyword: "frontend", target: "acme/web" }],
-      sessionInstructions: "Prefer minimal diffs.",
+    const body = JSON.parse(init.body as string) as SlackGlobalSettingsUpdate;
+    expect(body).toEqual({
+      section: "defaults",
+      defaults: {
+        agentNotificationsEnabled: true,
+        mentionsPolicy: "strip",
+        sessionInstructions: "Prefer minimal diffs.",
+      },
     });
   });
 
@@ -291,24 +314,23 @@ describe("SlackIntegrationSettings", () => {
     expect(screen.getByLabelText(/session instructions/i)).toHaveAttribute("maxlength", "10000");
   });
 
-  // Regression: a save must seed the SWR cache with the saved blob. The other
-  // global section merges against this snapshot, so leaving the pre-save data
-  // in place would let a back-to-back save silently drop the new values.
-  it("seeds the SWR cache with the saved defaults on save", async () => {
+  it("caches the normalized settings returned by the server", async () => {
     const user = userEvent.setup();
     setupSWR({ global: null });
-    fetchMock.mockResolvedValue(okJson({}));
+    const saved = {
+      integrationId: "slack",
+      settings: {
+        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" as const },
+      },
+    };
+    fetchMock.mockResolvedValue(okJson(saved));
 
     render(<SlackIntegrationSettings />);
 
     await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
-    expect(mutateMock).toHaveBeenCalledWith("/api/integration-settings/slack", {
-      settings: {
-        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
-      },
-    });
+    expect(mutateMock).toHaveBeenCalledWith(saved, { revalidate: false });
   });
 
   it("clearing session instructions omits the key on save", async () => {
@@ -330,10 +352,10 @@ describe("SlackIntegrationSettings", () => {
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     const [, init] = fetchMock.mock.calls[0];
-    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
-    expect(body.settings.defaults).toEqual({
-      agentNotificationsEnabled: true,
-      mentionsPolicy: "strip",
+    const body = JSON.parse(init.body as string) as SlackGlobalSettingsUpdate;
+    expect(body).toEqual({
+      section: "defaults",
+      defaults: { agentNotificationsEnabled: true, mentionsPolicy: "strip" },
     });
   });
 
@@ -526,6 +548,81 @@ describe("SlackIntegrationSettings", () => {
       return screen.getByRole("heading", { name: /routing rules/i }).closest("section")!;
     }
 
+    async function addRoutingRule(user: ReturnType<typeof userEvent.setup>, keyword: string) {
+      const section = routingSection();
+      await user.click(within(section).getByRole("button", { name: /add rule/i }));
+      await user.type(within(section).getByRole("textbox", { name: /keyword/i }), keyword);
+      await user.click(within(section).getByRole("combobox", { name: /routing target/i }));
+      await user.click(await screen.findByRole("option", { name: "acme/web" }));
+    }
+
+    it("disables both global sections while a section update is pending", async () => {
+      const user = userEvent.setup();
+      const firstResponse = deferred<Response>();
+      setupSWR({
+        global: { defaults: { agentNotificationsEnabled: false, mentionsPolicy: "allow" } },
+        availableRepos: [repo("acme/web")],
+      });
+      fetchMock.mockImplementationOnce(() => firstResponse.promise);
+      render(<SlackIntegrationSettings />);
+
+      await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
+      await addRoutingRule(user, "frontend");
+      await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByLabelText(/session instructions/i)).toBeDisabled();
+      expect(within(routingSection()).getByRole("textbox", { name: /keyword/i })).toBeDisabled();
+      firstResponse.resolve(
+        okJson({
+          integrationId: "slack",
+          settings: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" } },
+        })
+      );
+      await waitFor(() => expect(screen.getByLabelText(/session instructions/i)).toBeEnabled());
+    });
+
+    it("resets defaults through the atomic defaults section update", async () => {
+      const user = userEvent.setup();
+      setupSWR({
+        global: {
+          defaults: {
+            agentNotificationsEnabled: true,
+            mentionsPolicy: "strip",
+            routingRules: [{ keyword: "frontend", target: "acme/web" }],
+          },
+        },
+        availableRepos: [repo("acme/web")],
+      });
+      fetchMock.mockResolvedValue(okJson({ integrationId: "slack", settings: null }));
+      render(<SlackIntegrationSettings />);
+
+      await user.click(screen.getByRole("button", { name: /reset to defaults/i }));
+      await user.click(
+        within(screen.getByRole("alertdialog")).getByRole("button", {
+          name: /^reset$/i,
+        })
+      );
+
+      const resetBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+      expect(resetBody).toEqual({ section: "defaults", defaults: {} });
+    });
+
+    it("keeps a section dirty after a failed save", async () => {
+      const user = userEvent.setup();
+      setupSWR({
+        global: { defaults: { agentNotificationsEnabled: false, mentionsPolicy: "allow" } },
+        availableRepos: [repo("acme/web")],
+      });
+      fetchMock.mockResolvedValue(errorJson("Write rejected"));
+      render(<SlackIntegrationSettings />);
+
+      await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
+      await user.click(screen.getByRole("button", { name: /^save$/i }));
+      expect(toastError).toHaveBeenCalledWith("Write rejected");
+      await waitFor(() => expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled());
+    });
+
     it("renders existing routing rules from settings", () => {
       setupSWR({
         global: {
@@ -546,7 +643,7 @@ describe("SlackIntegrationSettings", () => {
       expect(within(section).getByText("acme/web")).toBeInTheDocument();
     });
 
-    it("adds a routing rule and saves it merged into the defaults", async () => {
+    it("adds a routing rule and sends a routing-rules section update", async () => {
       const user = userEvent.setup();
       setupSWR({
         global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" } },
@@ -564,21 +661,20 @@ describe("SlackIntegrationSettings", () => {
 
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/integration-settings/slack",
-        expect.objectContaining({ method: "PUT" })
+        expect.objectContaining({ method: "PATCH" })
       );
-      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
-        settings: SlackGlobalConfig;
-      };
+      const body = JSON.parse(
+        fetchMock.mock.calls[0][1].body as string
+      ) as SlackGlobalSettingsUpdate;
       // The UI sends the keyword as-typed (trimmed); the control plane is the
       // sole normalizer that lowercases on write.
-      expect(body.settings.defaults).toEqual({
-        agentNotificationsEnabled: true,
-        mentionsPolicy: "allow",
+      expect(body).toEqual({
+        section: "routingRules",
         routingRules: [{ keyword: "Frontend", target: "acme/web" }],
       });
     });
 
-    it("preserves existing routing rules when the Defaults section is saved", async () => {
+    it("excludes routing rules from Defaults section updates", async () => {
       const user = userEvent.setup();
       setupSWR({
         global: {
@@ -596,13 +692,12 @@ describe("SlackIntegrationSettings", () => {
       await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
       await user.click(screen.getByRole("button", { name: /^save$/i }));
 
-      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
-        settings: SlackGlobalConfig;
-      };
-      expect(body.settings.defaults).toEqual({
-        agentNotificationsEnabled: true,
-        mentionsPolicy: "allow",
-        routingRules: [{ keyword: "frontend", target: "acme/web" }],
+      const body = JSON.parse(
+        fetchMock.mock.calls[0][1].body as string
+      ) as SlackGlobalSettingsUpdate;
+      expect(body).toEqual({
+        section: "defaults",
+        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
       });
     });
 
@@ -625,13 +720,10 @@ describe("SlackIntegrationSettings", () => {
       await user.click(within(section).getByRole("button", { name: /remove/i }));
       await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
 
-      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
-        settings: SlackGlobalConfig;
-      };
-      expect(body.settings.defaults).toEqual({
-        agentNotificationsEnabled: true,
-        mentionsPolicy: "allow",
-      });
+      const body = JSON.parse(
+        fetchMock.mock.calls[0][1].body as string
+      ) as SlackGlobalSettingsUpdate;
+      expect(body).toEqual({ section: "routingRules", routingRules: [] });
     });
 
     it("blocks save and shows an error when a rule has no target", async () => {
@@ -718,12 +810,13 @@ describe("SlackIntegrationSettings", () => {
       await user.click(await screen.findByRole("option", { name: "full-stack" }));
       await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
 
-      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
-        settings: SlackGlobalConfig;
-      };
-      expect(body.settings.defaults?.routingRules).toEqual([
-        { keyword: "fullstack", target: "env_abc123", targetType: "environment" },
-      ]);
+      const body = JSON.parse(
+        fetchMock.mock.calls[0][1].body as string
+      ) as SlackGlobalSettingsUpdate;
+      expect(body).toEqual({
+        section: "routingRules",
+        routingRules: [{ keyword: "fullstack", target: "env_abc123", targetType: "environment" }],
+      });
     });
 
     it("renders a stored environment rule showing the environment name", () => {

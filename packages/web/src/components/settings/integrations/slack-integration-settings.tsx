@@ -17,7 +17,7 @@ import {
   MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   type SlackGlobalConfig,
-  type SlackGlobalSettings,
+  type SlackGlobalSettingsResponse,
   type SlackMentionsPolicy,
   type SlackRepoSettings,
   type SlackRoutingRule,
@@ -54,8 +54,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import {
+  SLACK_GLOBAL_SETTINGS_KEY,
+  useSlackGlobalSettingsEditor,
+} from "./use-slack-global-settings-editor";
 
-const GLOBAL_SETTINGS_KEY = "/api/integration-settings/slack";
 const REPO_SETTINGS_KEY = "/api/integration-settings/slack/repos";
 
 const MENTIONS_POLICY_OPTIONS: {
@@ -80,10 +83,6 @@ const MENTIONS_POLICY_OPTIONS: {
   },
 ];
 
-interface GlobalResponse {
-  settings: SlackGlobalConfig | null;
-}
-
 interface RepoSettingsEntry {
   repo: string;
   settings: SlackRepoSettings;
@@ -98,36 +97,22 @@ interface ReposResponse {
 }
 
 /**
- * Merge a patch onto the current global defaults, dropping keys cleared to
- * `undefined`. The control plane replaces the whole settings blob on save, so
- * every section that writes it must preserve the others' fields; centralizing
- * the merge makes that a property of the data flow rather than per-section
- * discipline.
- */
-function mergedGlobalDefaults(
-  current: SlackGlobalConfig | null | undefined,
-  patch: Partial<SlackGlobalSettings>
-): SlackGlobalSettings {
-  const defaults: SlackGlobalSettings = { ...current?.defaults, ...patch };
-  for (const key of Object.keys(defaults) as (keyof SlackGlobalSettings)[]) {
-    if (defaults[key] === undefined) delete defaults[key];
-  }
-  return defaults;
-}
-
-/**
  * Displays Slack integration settings with global and repository edits gated by their respective permissions.
  */
 export function SlackIntegrationSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManageGlobal = hasPermission("integrations.manage");
   const canManageRepos = hasPermission("repositories.settings.manage");
-  const { data: globalData, isLoading: globalLoading } =
-    useSWR<GlobalResponse>(GLOBAL_SETTINGS_KEY);
+  const {
+    data: globalData,
+    isLoading: globalLoading,
+    mutate: mutateGlobalSettings,
+  } = useSWR<SlackGlobalSettingsResponse>(SLACK_GLOBAL_SETTINGS_KEY);
   const { data: repoSettingsData, isLoading: repoSettingsLoading } =
     useSWR<RepoListResponse>(REPO_SETTINGS_KEY);
   const { data: reposData } = useSWR<ReposResponse>("/api/repos");
   const { data: environmentsData } = useSWR<ListEnvironmentsResponse>(ENVIRONMENTS_KEY);
+  const globalSettingsEditor = useSlackGlobalSettingsEditor(mutateGlobalSettings);
 
   if (globalLoading || repoSettingsLoading) {
     return <IntegrationSettingsSkeleton />;
@@ -161,17 +146,18 @@ export function SlackIntegrationSettings() {
         </p>
       </SettingsCardSection>
 
-      <fieldset disabled={!canManageGlobal} className="min-w-0">
-        <GlobalSettingsSection settings={settings} />
+      <fieldset disabled={!canManageGlobal || globalSettingsEditor.saving} className="min-w-0">
+        <GlobalSettingsSection settings={settings} editor={globalSettingsEditor} />
       </fieldset>
 
-      <fieldset disabled={!canManageGlobal} className="min-w-0">
+      <fieldset disabled={!canManageGlobal || globalSettingsEditor.saving} className="min-w-0">
         <RoutingRulesSection
           settings={settings}
           availableRepos={availableRepos}
           availableEnvironments={availableEnvironments}
           reposLoaded={reposLoaded}
           environmentsLoaded={environmentsLoaded}
+          editor={globalSettingsEditor}
         />
       </fieldset>
 
@@ -187,7 +173,15 @@ export function SlackIntegrationSettings() {
   );
 }
 
-function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | null | undefined }) {
+type GlobalSettingsEditor = ReturnType<typeof useSlackGlobalSettingsEditor>;
+
+function GlobalSettingsSection({
+  settings,
+  editor,
+}: {
+  settings: SlackGlobalConfig | null | undefined;
+  editor: GlobalSettingsEditor;
+}) {
   const { enabledModels, enabledModelOptions, loading: modelsLoading } = useEnabledModels();
   const [agentNotificationsEnabled, setAgentNotificationsEnabled] = useState(
     settings?.defaults?.agentNotificationsEnabled ?? false
@@ -199,17 +193,16 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   const [sessionInstructions, setSessionInstructions] = useState(
     settings?.defaults?.sessionInstructions ?? ""
   );
-  const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
 
   useEffect(() => {
-    if (settings === undefined || dirty || saving) return;
+    if (settings === undefined || dirty || editor.savingDefaults) return;
     setAgentNotificationsEnabled(settings?.defaults?.agentNotificationsEnabled ?? false);
     setModel(settings?.defaults?.model ?? "");
     setMentionsPolicy(settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY);
     setSessionInstructions(settings?.defaults?.sessionInstructions ?? "");
-  }, [settings, dirty, saving]);
+  }, [settings, dirty, editor.savingDefaults]);
 
   const selectedModelEnabled = model ? enabledModels.includes(model) : true;
   const selectedModelLabel = model
@@ -219,76 +212,22 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   const isConfigured = settings !== null && settings !== undefined;
 
   const handleConfirmReset = async () => {
-    setSaving(true);
-    try {
-      // Reset only the notification/mention defaults. If routing rules exist,
-      // preserve them by writing a blob that keeps just the rules (rather than
-      // deleting the whole row); otherwise clear the row entirely.
-      const existingRules = settings?.defaults?.routingRules;
-      const resetBody: SlackGlobalConfig | null = existingRules?.length
-        ? { defaults: { routingRules: existingRules } }
-        : null;
-      const res = resetBody
-        ? await browserApiFetch(GLOBAL_SETTINGS_KEY, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ settings: resetBody }),
-          })
-        : await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
-      if (res.ok) {
-        // Seed the cache with the post-reset blob before revalidation (see
-        // handleSave for why).
-        mutate(GLOBAL_SETTINGS_KEY, { settings: resetBody });
-        setAgentNotificationsEnabled(false);
-        setModel("");
-        setMentionsPolicy(DEFAULT_MENTIONS_POLICY);
-        setSessionInstructions("");
-        setDirty(false);
-        toast.success("Settings reset to defaults.");
-      } else {
-        const data = await res.json();
-        toast.error(data.error || "Failed to reset settings");
-      }
-    } catch {
-      toast.error("Failed to reset settings");
-    } finally {
-      setSaving(false);
-    }
+    if (!(await editor.resetDefaults())) return;
+    setAgentNotificationsEnabled(false);
+    setModel("");
+    setMentionsPolicy(DEFAULT_MENTIONS_POLICY);
+    setSessionInstructions("");
+    setDirty(false);
   };
 
   const handleSave = async () => {
-    setSaving(true);
-    const body: SlackGlobalConfig = {
-      defaults: mergedGlobalDefaults(settings, {
-        agentNotificationsEnabled,
-        model: model || undefined,
-        mentionsPolicy,
-        sessionInstructions: sessionInstructions || undefined,
-      }),
-    };
-
-    try {
-      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: body }),
-      });
-      if (res.ok) {
-        // Seed the cache with the saved blob before revalidation: the other
-        // global sections merge against this snapshot, so a stale one would
-        // let a back-to-back save resurrect pre-save defaults.
-        mutate(GLOBAL_SETTINGS_KEY, { settings: body });
-        toast.success("Settings saved.");
-        setDirty(false);
-      } else {
-        const data = await res.json();
-        toast.error(data.error || "Failed to save settings");
-      }
-    } catch {
-      toast.error("Failed to save settings");
-    } finally {
-      setSaving(false);
-    }
+    const succeeded = await editor.saveDefaults({
+      agentNotificationsEnabled,
+      model: model || undefined,
+      mentionsPolicy,
+      sessionInstructions: sessionInstructions || undefined,
+    });
+    if (succeeded) setDirty(false);
   };
 
   return (
@@ -414,12 +353,16 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
       </div>
 
       <div className="flex items-center gap-2">
-        <Button onClick={handleSave} disabled={saving || !dirty}>
-          {saving ? "Saving..." : "Save"}
+        <Button onClick={handleSave} disabled={editor.savingDefaults || !dirty}>
+          {editor.savingDefaults ? "Saving..." : "Save"}
         </Button>
 
         {isConfigured && (
-          <Button variant="destructive" onClick={() => setShowResetDialog(true)} disabled={saving}>
+          <Button
+            variant="destructive"
+            onClick={() => setShowResetDialog(true)}
+            disabled={editor.savingDefaults}
+          >
             Reset to defaults
           </Button>
         )}
@@ -662,6 +605,7 @@ function RoutingRulesSection({
   availableEnvironments,
   reposLoaded,
   environmentsLoaded,
+  editor,
 }: {
   settings: SlackGlobalConfig | null | undefined;
   availableRepos: EnrichedRepository[];
@@ -669,17 +613,17 @@ function RoutingRulesSection({
   /** False while the list is loading — suppresses stale-target warnings. */
   reposLoaded: boolean;
   environmentsLoaded: boolean;
+  editor: GlobalSettingsEditor;
 }) {
   const [rules, setRules] = useState<DraftRoutingRule[]>(() =>
     toDraftRoutingRules(settings?.defaults?.routingRules)
   );
-  const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
-    if (settings === undefined || dirty || saving) return;
+    if (settings === undefined || dirty || editor.savingRoutingRules) return;
     setRules(toDraftRoutingRules(settings?.defaults?.routingRules));
-  }, [settings, dirty, saving]);
+  }, [settings, dirty, editor.savingRoutingRules]);
 
   const accessibleRepos = new Set(availableRepos.map((r) => r.fullName.toLowerCase()));
   const keywordCounts = new Map<string, number>();
@@ -717,37 +661,10 @@ function RoutingRulesSection({
       return;
     }
 
-    setSaving(true);
     // Send the validated draft as-is and let the control-plane validator be the
     // single canonical normalizer (lowercase/de-dupe) on write. The UI's job is
     // to validate and present, not to own the stored shape.
-    const body: SlackGlobalConfig = {
-      defaults: mergedGlobalDefaults(settings, {
-        routingRules: trimmed.length > 0 ? trimmed : undefined,
-      }),
-    };
-
-    try {
-      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: body }),
-      });
-      if (res.ok) {
-        // Seed the cache with the saved blob before revalidation (see the
-        // Defaults section save for why).
-        mutate(GLOBAL_SETTINGS_KEY, { settings: body });
-        toast.success("Routing rules saved.");
-        setDirty(false);
-      } else {
-        const data = await res.json();
-        toast.error(data.error || "Failed to save routing rules");
-      }
-    } catch {
-      toast.error("Failed to save routing rules");
-    } finally {
-      setSaving(false);
-    }
+    if (await editor.saveRoutingRules(trimmed)) setDirty(false);
   };
 
   const repoItems = availableRepos.map((r) => (
@@ -875,8 +792,8 @@ function RoutingRulesSection({
         <Button variant="outline" onClick={addRule}>
           Add rule
         </Button>
-        <Button onClick={handleSave} disabled={saving || !dirty}>
-          {saving ? "Saving..." : "Save routing rules"}
+        <Button onClick={handleSave} disabled={editor.savingRoutingRules || !dirty}>
+          {editor.savingRoutingRules ? "Saving..." : "Save routing rules"}
         </Button>
       </div>
 

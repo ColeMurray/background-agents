@@ -11,6 +11,7 @@ import {
   type IntegrationId,
   type LinearBotSettings,
   type SandboxSettings,
+  slackGlobalSettingsUpdateSchema,
   type VncSettings,
 } from "@open-inspect/shared/types/integrations";
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
@@ -35,7 +36,7 @@ import {
   error,
   requirePermission,
 } from "./shared";
-import { parseJsonBody } from "./body";
+import { parseBody, parseJsonBody } from "./body";
 
 const logger = createLogger("router:integration-settings");
 
@@ -98,6 +99,7 @@ async function handleSetIntegrationSettings(
 ): Promise<Response> {
   const id = integrationId(params.id);
   if (!id) return error(`Unknown integration: ${params.id}`, 404);
+  if (id === "slack") return error("Slack settings require section PATCH updates", 405);
 
   const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
   if (body instanceof Response) return body;
@@ -140,6 +142,7 @@ async function handleDeleteIntegrationSettings(
 ): Promise<Response> {
   const id = integrationId(params.id);
   if (!id) return error(`Unknown integration: ${params.id}`, 404);
+  if (id === "slack") return error("Slack settings require section PATCH updates", 405);
 
   const store = new IntegrationSettingsStore(ctx.db);
 
@@ -156,6 +159,29 @@ async function handleDeleteIntegrationSettings(
     return json({ status: "deleted", integrationId: id });
   } catch (e) {
     logger.error("Failed to delete integration settings", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Integration settings storage unavailable", 503);
+  }
+}
+
+async function handleUpdateSlackSettings(
+  request: Request,
+  _env: Env,
+  _params: Record<string, never>,
+  ctx: RequestContext
+): Promise<Response> {
+  const update = await parseBody(request, slackGlobalSettingsUpdateSchema);
+  if (update instanceof Response) return update;
+
+  try {
+    const settings = await new IntegrationSettingsStore(ctx.db).updateSlackGlobal(update);
+    return json({ integrationId: "slack", settings });
+  } catch (e) {
+    if (e instanceof IntegrationSettingsValidationError) return error(e.message, 400);
+    logger.error("Failed to update Slack integration settings", {
       error: e instanceof Error ? e.message : String(e),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
@@ -517,6 +543,9 @@ integrationSettingsRoutes.get(
 );
 integrationSettingsRoutes.put("/integration-settings/:id", INTEGRATIONS_MANAGE, (c) =>
   dispatch(c, handleSetIntegrationSettings)
+);
+integrationSettingsRoutes.patch("/integration-settings/slack", INTEGRATIONS_MANAGE, (c) =>
+  dispatch(c, handleUpdateSlackSettings)
 );
 integrationSettingsRoutes.delete("/integration-settings/:id", INTEGRATIONS_MANAGE, (c) =>
   dispatch(c, handleDeleteIntegrationSettings)

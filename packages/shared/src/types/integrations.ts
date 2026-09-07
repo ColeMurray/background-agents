@@ -354,6 +354,20 @@ export const slackGlobalSettingsSchema = slackRepoSettingsSchema.extend({
 
 export type SlackGlobalSettings = z.infer<typeof slackGlobalSettingsSchema>;
 
+/** Atomic update for one independently edited section of Slack global settings. */
+export const slackGlobalSettingsUpdateSchema = z.discriminatedUnion("section", [
+  z.strictObject({
+    section: z.literal("defaults"),
+    defaults: slackGlobalSettingsSchema.omit({ routingRules: true }),
+  }),
+  z.strictObject({
+    section: z.literal("routingRules"),
+    routingRules: z.array(slackRoutingRuleSchema.strict()),
+  }),
+]);
+
+export type SlackGlobalSettingsUpdate = z.infer<typeof slackGlobalSettingsUpdateSchema>;
+
 /**
  * Clean up raw routing rules for storage or use: trim and lowercase the keyword,
  * canonicalize the target (repository targets lowercase; environment ids are
@@ -502,6 +516,10 @@ export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["glob
 export type VncGlobalConfig = IntegrationSettingsMap["vnc"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
 export type SlackGlobalConfig = IntegrationSettingsMap["slack"]["global"];
+export interface SlackGlobalSettingsResponse {
+  integrationId: "slack";
+  settings: SlackGlobalConfig | null;
+}
 
 /** Full MCP server config with decrypted credentials. Internal use only. */
 export interface McpServerConfig {
