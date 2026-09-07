@@ -35,6 +35,38 @@ def test_bundled_skill_change_invalidates_every_provider_and_is_packed(tmp_path:
         )
 
 
+def test_modal_cache_buster_changes_recipe_and_copied_bundle(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    shutil.copytree(
+        REPO_ROOT,
+        checkout,
+        ignore=shutil.ignore_patterns(".git", "node_modules", ".venv", ".cache", "__pycache__"),
+    )
+    base_path = Path("packages/modal-infra/src/images/base.py")
+    original = (checkout / base_path).read_text()
+    assert "CACHE_BUSTER = RUNTIME_VERSION" in original
+    before = plan_image(checkout, "modal")
+    other_before = plan_image(checkout, "e2b")["recipeDigest"]
+    old_bundle = pack_bundle(checkout, "modal", tmp_path / "bundles")
+
+    changed = original.replace(
+        "CACHE_BUSTER = RUNTIME_VERSION", 'CACHE_BUSTER = "manual-refresh"', 1
+    )
+    (checkout / base_path).write_text(changed)
+    after = plan_image(checkout, "modal")
+    new_bundle = pack_bundle(checkout, "modal", tmp_path / "bundles")
+
+    assert after["recipeDigest"] != before["recipeDigest"]
+    assert after["runtimeVersion"] == before["runtimeVersion"]
+    assert plan_image(checkout, "e2b")["recipeDigest"] == other_before
+    assert new_bundle != old_bundle
+    assert (new_bundle / base_path).read_text() == changed
+    assert (old_bundle / base_path).read_text() == original
+    assert (new_bundle / "image-plan.json").read_bytes() != (
+        old_bundle / "image-plan.json"
+    ).read_bytes()
+
+
 def test_unrelated_docs_and_caches_do_not_change_the_recipe(tmp_path: Path) -> None:
     checkout = tmp_path / "checkout"
     shutil.copytree(
