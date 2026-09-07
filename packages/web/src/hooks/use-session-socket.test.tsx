@@ -2,7 +2,16 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { SessionTimeline } from "@/components/session-timeline";
 import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import type {
   ServerMessage,
@@ -144,8 +153,103 @@ describe("useSessionSocket", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
+
+  it.each(["empty", "non-renderable"])(
+    "loads older history without scrolling from a %s replay through empty pages",
+    async (replayKind) => {
+      vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(800);
+      vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(800);
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class {
+          observe() {}
+          disconnect() {}
+        }
+      );
+      const snapshot = createSnapshot();
+      snapshot.timeline = {
+        events:
+          replayKind === "empty"
+            ? []
+            : [
+                {
+                  eventId: "hidden",
+                  timelineSequence: 3,
+                  event: { type: "heartbeat", sandboxId: "sandbox-1", timestamp: 3 },
+                },
+              ],
+        hasMore: true,
+        cursor: { timestamp: 3, id: "hidden", sequence: 3 },
+      };
+      function HistoryView() {
+        const state = useSessionSocket("session-1", snapshot, FULL_CAPABILITIES);
+        return (
+          <SessionTimeline
+            events={state.events}
+            sessionId="session-1"
+            currentParticipantId={state.currentParticipantId}
+            participantProfiles={{}}
+            isProcessing={state.isProcessing}
+            hasMoreHistory={state.hasMoreHistory}
+            loadingHistory={state.loadingHistory}
+            showSkeleton={false}
+            onLoadOlder={state.loadOlderEvents}
+            onOpenMedia={() => {}}
+          />
+        );
+      }
+      render(<HistoryView />);
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0];
+      act(() => {
+        socket.open();
+        socket.receive({ ...createSubscribedMessage(), timeline: snapshot.timeline });
+      });
+      // No scroll event or intersection callback: the viewport cannot scroll.
+      fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+      expect(socket.sentMessages.at(-1)).toMatchObject({
+        type: "fetch_history",
+        cursor: snapshot.timeline.cursor,
+      });
+      expect(
+        screen.getByRole("button", { name: "Loading older messages..." }).hasAttribute("disabled")
+      ).toBe(true);
+      const nextCursor = { timestamp: 2, id: "malformed", sequence: 2 };
+      act(() =>
+        socket.receive({ type: "history_page", items: [], hasMore: true, cursor: nextCursor })
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+      expect(socket.sentMessages.at(-1)).toMatchObject({
+        type: "fetch_history",
+        cursor: nextCursor,
+      });
+      act(() =>
+        socket.receive({
+          type: "history_page",
+          items: [
+            {
+              eventId: "old-prompt",
+              timelineSequence: 1,
+              event: {
+                type: "user_message",
+                content: "Reachable older prompt",
+                messageId: "message-old",
+                timestamp: 1,
+              },
+            },
+          ],
+          hasMore: false,
+          cursor: null,
+        })
+      );
+      expect(screen.getByText("Reachable older prompt")).toBeDefined();
+      expect(screen.queryByRole("button", { name: "Load older messages" })).toBeNull();
+    }
+  );
 
   it("keeps read synchronization available without collaboration or sandbox access", async () => {
     const fetchMock = vi.mocked(fetch);

@@ -49,6 +49,7 @@ export function SessionTimeline({
   participantProfiles,
   isProcessing,
   promptQueue = EMPTY_PROMPT_QUEUE,
+  hasMoreHistory = false,
   loadingHistory,
   showSkeleton,
   onLoadOlder,
@@ -60,6 +61,7 @@ export function SessionTimeline({
   participantProfiles: Record<string, SessionParticipantProfile>;
   isProcessing: boolean;
   promptQueue?: PromptQueueItem[];
+  hasMoreHistory?: boolean;
   loadingHistory: boolean;
   showSkeleton: boolean;
   onLoadOlder: () => void;
@@ -300,6 +302,18 @@ export function SessionTimeline({
     >
       <div className="relative w-full min-w-0 max-w-3xl mx-auto">
         <div ref={topSentinelRef} className="absolute left-0 top-0 h-1 w-full" />
+        {!showSkeleton && hasMoreHistory && (
+          <div className="pb-3 text-center">
+            <button
+              type="button"
+              className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+              disabled={loadingHistory}
+              onClick={onLoadOlder}
+            >
+              {loadingHistory ? "Loading older messages..." : "Load older messages"}
+            </button>
+          </div>
+        )}
         {showSkeleton ? (
           <TimelineSkeleton />
         ) : (
