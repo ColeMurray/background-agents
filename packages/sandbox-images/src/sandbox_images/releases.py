@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import re
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -83,8 +86,26 @@ def validate_record(record: dict[str, Any]) -> None:
         raise ValueError("Candidate record integrity check failed")
 
 
+@contextmanager
+def _store_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Keep the inode stable: unlinking this sidecar would split waiting writers.
+    with path.with_name(path.name + ".writer-lock").open("a") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
 def promote(path: Path, record: dict[str, Any]) -> None:
-    """Update a Git-tracked selection lock; never mutate provider artifacts."""
+    """Serialize selection updates; never mutate provider artifacts."""
+    path = path.resolve()
+    with _store_lock(path):
+        _promote(path, record)
+
+
+def _promote(path: Path, record: dict[str, Any]) -> None:
     validate_record(record)
     store = _read_store(path)
     provider = record["artifact"]["provider"]
@@ -104,8 +125,10 @@ def promote(path: Path, record: dict[str, Any]) -> None:
 
 
 def rollback(path: Path, provider: str) -> None:
-    store = _read_store(path)
-    previous = store["previous"].get(provider)
-    if not previous:
-        raise ValueError(f"No previous release for {provider}")
-    promote(path, store["releases"][previous])
+    path = path.resolve()
+    with _store_lock(path):
+        store = _read_store(path)
+        previous = store["previous"].get(provider)
+        if not previous:
+            raise ValueError(f"No previous release for {provider}")
+        _promote(path, store["releases"][previous])
