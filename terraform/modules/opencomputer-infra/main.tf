@@ -5,8 +5,8 @@
 
 locals {
   # OpenComputer references templates by exact name (createSandbox sends `snapshot: <name>`),
-  # Keep names tied to installed inputs. Orchestration changes re-verify the same candidate.
-  snapshot_name = "openinspect-runtime-${substr(var.image_input_hash != "" ? var.image_input_hash : var.source_hash, 0, 16)}"
+  # One conservative source hash names each managed build.
+  snapshot_name = "openinspect-runtime-${substr(var.source_hash, 0, 16)}"
 }
 
 resource "null_resource" "opencomputer_base_snapshot" {

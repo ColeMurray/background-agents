@@ -36,15 +36,8 @@ export async function main(): Promise<void> {
       DNS_BOOTSTRAP,
       `[ ! -f ${OPENSANDBOX_PROXY_CA} ] || sudo update-ca-certificates`
     );
-  for (const input of [
-    ...packed.plan.inputs,
-    { path: "image-plan.json" },
-    { path: "image-config.sh" },
-  ]) {
-    image = image.addLocalFile(
-      join(packed.directory, input.path),
-      `/tmp/openinspect-image/${input.path}`
-    );
+  for (const file of packed.files) {
+    image = image.addLocalFile(join(packed.directory, file), `/tmp/openinspect-image/${file}`);
   }
   image = image
     .runCommands("sudo -E bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh")
@@ -66,13 +59,11 @@ export async function main(): Promise<void> {
     ""
   );
   const apiUrl = baseUrl.endsWith("/api") ? baseUrl : `${baseUrl}/api`;
-  const existing = process.env.OPENINSPECT_VERIFY_REFERENCE;
   const name =
-    existing ||
     process.env.OPENINSPECT_IMAGE_CANDIDATE ||
-    `${process.env.OPENCOMPUTER_TEMPLATE || "openinspect-runtime"}-${packed.plan.inputHash.slice(0, 12)}-${Date.now()}`;
+    `${process.env.OPENCOMPUTER_TEMPLATE || "openinspect-runtime"}-${packed.plan.buildHash.slice(0, 12)}-${Date.now()}`;
   const snapshots = new Snapshots({ apiUrl, apiKey });
-  const retained = existing || (await snapshots.list()).some((snapshot) => snapshot.name === name);
+  const retained = (await snapshots.list()).some((snapshot) => snapshot.name === name);
   const artifact = retained
     ? await snapshots.get(name)
     : await snapshots.create({ name, image, onBuildLogs: (log) => console.log(log) });
@@ -81,7 +72,7 @@ export async function main(): Promise<void> {
   const sandbox = await Sandbox.create({ apiUrl, apiKey, snapshot: name });
   try {
     const report = await sandbox.exec.run(
-      `sudo -E /opt/openinspect/python/bin/python /app/verify/image.py verify --expected-input-hash ${packed.plan.inputHash}`,
+      `sudo -E /opt/openinspect/python/bin/python /app/verify/image.py verify`,
       { env: providerEnvironment, timeout: 240, timeoutMs: 250_000 }
     );
     if (report.exitCode !== 0)

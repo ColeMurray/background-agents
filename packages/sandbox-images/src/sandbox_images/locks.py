@@ -6,7 +6,7 @@ import json
 import subprocess
 from typing import TYPE_CHECKING
 
-from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json, runtime_environment
+from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 def update_locks(root: Path, *, check: bool = False) -> None:
     package = root / IMAGE_PACKAGE
     tools = read_json(package / "toolchain.json")
-    targets = read_json(package / "targets.json")
     manifests = {
         "tools": {
             "opencode-ai": tools["opencode"],
@@ -27,12 +26,7 @@ def update_locks(root: Path, *, check: bool = False) -> None:
         },
         "plugins": {"@opencode-ai/plugin": tools["opencode"]},
     }
-    generated = {
-        package / "runtime-environments.json": json.dumps(
-            {key: runtime_environment(value) for key, value in targets.items()}, indent=2
-        )
-        + "\n"
-    }
+    generated = {}
     for name, dependencies in manifests.items():
         generated[package / "locks" / name / "package.json"] = (
             json.dumps(

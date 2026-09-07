@@ -36,11 +36,11 @@ def test_deployment_rejects_invalid_record_without_opt_in(
     from src.images import base
 
     record_path = tmp_path / "built.json"
-    record_path.write_text(json.dumps({"inputHash": recipe, "imageId": image_id}))
+    record_path.write_text(json.dumps({"buildHash": recipe, "imageId": image_id}))
     monkeypatch.setattr(base.modal, "is_local", lambda: True)
     monkeypatch.setattr(base, "image_reference_path", lambda: record_path)
     monkeypatch.setattr(
-        base, "local_image_plan", lambda: (tmp_path, {"inputHash": "current-recipe"})
+        base, "local_image_plan", lambda: (tmp_path, {"buildHash": "current-recipe"})
     )
     monkeypatch.delenv("OPENINSPECT_REQUIRE_BUILT_IMAGE", raising=False)
 
@@ -52,11 +52,11 @@ def test_deployment_uses_matching_verified_record(monkeypatch, tmp_path) -> None
     from src.images import base
 
     record_path = tmp_path / "built.json"
-    record_path.write_text(json.dumps({"inputHash": "current-recipe", "imageId": "im-built"}))
+    record_path.write_text(json.dumps({"buildHash": "current-recipe", "imageId": "im-built"}))
     monkeypatch.setattr(base.modal, "is_local", lambda: True)
     monkeypatch.setattr(base, "image_reference_path", lambda: record_path)
     monkeypatch.setattr(
-        base, "local_image_plan", lambda: (tmp_path, {"inputHash": "current-recipe"})
+        base, "local_image_plan", lambda: (tmp_path, {"buildHash": "current-recipe"})
     )
 
     assert base.deployed_image_environment() == {base.IMAGE_ID_ENV: "im-built"}
@@ -204,19 +204,3 @@ def test_src_modal_deploy_builds_sandbox_image_before_app_deploy(tmp_path: Path)
         "run python deploy.py --build-sandbox-image",
         "run modal deploy -m src",
     ]
-
-
-def test_modal_deployment_hash_includes_deployment_entrypoints() -> None:
-    modal_tf = (
-        Path(__file__).parents[3] / "terraform/environments/production/modal.tf"
-    ).read_text()
-
-    assert "sandbox-images/cli.py" in modal_tf
-    assert '"--deployment"' in modal_tf
-    from sandbox_images.bundle import plan_image
-
-    inputs = {
-        entry["path"] for entry in plan_image(Path(__file__).parents[3], "modal")["buildInputs"]
-    }
-    assert "packages/modal-infra/deploy.py" in inputs
-    assert "terraform/modules/modal-app/scripts/deploy.sh" in inputs

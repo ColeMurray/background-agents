@@ -9,7 +9,7 @@
 data "external" "modal_source_hash" {
   count = local.use_modal_backend ? 1 : 0
 
-  program = ["python3", "${var.project_root}/packages/sandbox-images/cli.py", "hash", "--root", var.project_root, "--provider", "modal", "--deployment"]
+  program = ["python3", "${var.project_root}/packages/sandbox-images/cli.py", "hash", "--root", var.project_root, "--provider", "modal"]
 }
 
 module "modal_app" {

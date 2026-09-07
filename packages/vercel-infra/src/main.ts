@@ -28,8 +28,8 @@ export async function main(): Promise<void> {
   });
   const temporary = mkdtempSync(join(tmpdir(), "openinspect-vercel-image-"));
   try {
-    let existing = process.env.OPENINSPECT_VERIFY_REFERENCE;
-    if (!existing && process.env.OPENINSPECT_IMAGE_CANDIDATE) {
+    let existing: string | undefined;
+    if (process.env.OPENINSPECT_IMAGE_CANDIDATE) {
       const candidates = await client.listSnapshots({
         name: process.env.OPENINSPECT_IMAGE_CANDIDATE,
         limit: 2,
@@ -41,7 +41,7 @@ export async function main(): Promise<void> {
       }
     }
     if (existing) {
-      await verifyVercelSnapshot(client, existing, packed.plan.inputHash);
+      await verifyVercelSnapshot(client, existing);
       writeBuildResult(existing);
       writeReference(existing);
       return;
@@ -49,9 +49,8 @@ export async function main(): Promise<void> {
     const archive = join(temporary, "bundle.tar.gz");
     execFileSync("tar", ["-czf", archive, "-C", packed.directory, "."], { stdio: "inherit" });
     const result = await buildVercelBaseSnapshot(client, {
-      inputHash: packed.plan.inputHash,
       runtimeArchive: readFileSync(archive),
-      sourceVersion: packed.plan.inputHash,
+      sourceVersion: packed.plan.buildHash,
       namePrefix: process.env.VERCEL_BASE_SNAPSHOT_NAME || "openinspect-base",
       sandboxName: process.env.OPENINSPECT_IMAGE_CANDIDATE,
     });

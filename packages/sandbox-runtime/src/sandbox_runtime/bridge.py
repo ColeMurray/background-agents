@@ -287,10 +287,10 @@ class AgentBridge:
 
     def _build_ready_event(self) -> dict[str, Any]:
         repositories = load_repo_manifest(self.repo_manifest_path)
-        # Launch-time labels cannot attest which runtime a saved image contains.
-        from sandbox_runtime.runtime_manifest import RUNTIME_VERSION
-
-        runtime_version = RUNTIME_VERSION
+        # The image bakes SANDBOX_VERSION; reporting it lets the control plane
+        # stamp snapshots with the runtime that produced them and retire the
+        # ones a later compatibility floor rules out.
+        runtime_version = os.environ.get("SANDBOX_VERSION", "")
         return {
             "type": "ready",
             "sandboxId": self.sandbox_id,

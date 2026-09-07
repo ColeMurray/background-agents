@@ -24,9 +24,3 @@ variable "source_hash" {
   description = "Hash of source files that should trigger a managed base snapshot rebuild"
   type        = string
 }
-
-variable "image_input_hash" {
-  description = "Installation-input cache key, separate from the build-tooling trigger"
-  type        = string
-  default     = ""
-}

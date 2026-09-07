@@ -1,4 +1,4 @@
-"""Invoke thin native adapters; builds and restores share the verification gate."""
+"""Run a provider builder and return its verified native artifact reference."""
 
 from __future__ import annotations
 
@@ -13,19 +13,11 @@ from .bundle import PROVIDERS
 from .locks import update_locks
 
 
-def native_operation(root: Path, provider: str, reference: str | None = None) -> dict[str, Any]:
+def build_image(root: Path, provider: str) -> dict[str, Any]:
     if provider not in PROVIDERS:
         raise ValueError("Unknown image provider")
-    if reference is not None and (not isinstance(reference, str) or not reference.strip()):
-        raise ValueError("Verification requires a non-empty artifact reference")
     update_locks(root, check=True)
     environment = dict(os.environ)
-    # A build must not accidentally inherit a verification-only operation.
-    environment.pop("OPENINSPECT_VERIFY_REFERENCE", None)
-    if reference is not None:
-        environment["OPENINSPECT_VERIFY_REFERENCE"] = reference
-        environment.setdefault("DAYTONA_BASE_SNAPSHOT", reference)
-        environment.setdefault("E2B_TEMPLATE_ID", reference)
     commands = {
         "modal": (
             root / "packages/modal-infra",
@@ -56,8 +48,6 @@ def native_operation(root: Path, provider: str, reference: str | None = None) ->
         result = json.loads(output.read_text())
         if not isinstance(result.get("reference"), str) or not result["reference"].strip():
             raise ValueError("Build did not return an artifact reference")
-        if reference is not None and result["reference"] != reference:
-            raise ValueError("Verification returned a different artifact")
         return result
 
 

@@ -386,9 +386,7 @@ class SandboxSupervisor:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
                 if self.shutdown_event.is_set():
                     raise ImageBuildExecutionCancelled
-                from sandbox_runtime.runtime_manifest import RUNTIME_VERSION
-
-                runtime_version = RUNTIME_VERSION
+                runtime_version = os.environ.get("SANDBOX_VERSION", "")
                 self.log.info(
                     "image_build.complete",
                     duration_ms=int((time.time() - startup_start) * 1000),

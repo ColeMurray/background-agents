@@ -33,7 +33,7 @@ def main() -> None:
     plan = plan_image(ROOT, "e2b")
     name = (
         os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
-        or f"{name}-{plan['inputHash'][:12]}-{time.time_ns()}"
+        or f"{name}-{plan['buildHash'][:12]}-{time.time_ns()}"
     )
     bundle = pack_bundle(ROOT, "e2b", ROOT / ".cache/sandbox-images")
     template = (
@@ -47,10 +47,8 @@ def main() -> None:
         .set_workdir("/workspace")
         .set_start_cmd(START_CMD, READY_CMD)
     )
-    existing = os.environ.get("OPENINSPECT_VERIFY_REFERENCE")
-    if not existing and Template.exists(
-        name, api_key=api_key, api_url=os.environ.get("E2B_API_URL")
-    ):
+    existing = None
+    if Template.exists(name, api_key=api_key, api_url=os.environ.get("E2B_API_URL")):
         existing = name
     build = (
         None
@@ -74,13 +72,11 @@ def main() -> None:
         envs=plan["runtimeEnv"],
         metadata={
             "purpose": "openinspect-image-verification",
-            "inputHash": plan["inputHash"],
         },
     )
     try:
         result = sandbox.commands.run(
-            "/opt/openinspect/python/bin/python /app/verify/image.py verify --expected-input-hash "
-            + plan["inputHash"],
+            "/opt/openinspect/python/bin/python /app/verify/image.py verify",
             timeout=240,
             user="root",
         )

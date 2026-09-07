@@ -15,7 +15,6 @@ from sandbox_runtime.diff_capture import (
 )
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.repo_config import RepoEntry, dump_repo_manifest
-from sandbox_runtime.runtime_manifest import RUNTIME_VERSION
 
 
 def _bridge() -> AgentBridge:
@@ -87,7 +86,6 @@ def test_ready_event_reports_fixed_baselines_without_a_capability_gate(tmp_path:
         "type": "ready",
         "sandboxId": "sandbox-1",
         "opencodeSessionId": None,
-        "runtimeVersion": RUNTIME_VERSION,
         "repositories": [
             {
                 "position": 0,
@@ -107,7 +105,7 @@ def test_ready_event_reports_the_image_runtime_version(tmp_path: Path) -> None:
     with patch.dict(os.environ, {"SANDBOX_VERSION": "v59-opencode-1-18-18"}, clear=False):
         event = bridge._build_ready_event()
 
-    assert event["runtimeVersion"] == RUNTIME_VERSION
+    assert event["runtimeVersion"] == "v59-opencode-1-18-18"
 
 
 @pytest.mark.asyncio

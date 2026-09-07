@@ -23,7 +23,8 @@ const mocks = vi.hoisted(() => {
 vi.mock("../../../sandbox-images/src/node", () => ({
   packImage: () => ({
     directory: "/unused",
-    plan: { inputHash: "a".repeat(64), inputs: [], runtimeEnv: {}, runtimeVersion: "v1" },
+    plan: { buildHash: "a".repeat(64), runtimeEnv: {}, runtimeVersion: "v1" },
+    files: [],
   }),
   writeBuildResult: mocks.record,
 }));
@@ -48,7 +49,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("OPENINSPECT_REPO_ROOT", "/unused");
   vi.stubEnv("OPENINSPECT_IMAGE_CANDIDATE", "candidate");
-  vi.stubEnv("OPENINSPECT_VERIFY_REFERENCE", "");
   vi.stubEnv("VERCEL_TOKEN", "test");
   vi.stubEnv("VERCEL_PROJECT_ID", "project");
   vi.stubEnv("OPENCOMPUTER_API_KEY", "test");
@@ -64,13 +64,13 @@ afterEach(() => vi.unstubAllEnvs());
 describe("native candidate retry", () => {
   it("reverifies an existing Vercel candidate and regenerates its record", async () => {
     await vercelMain();
-    expect(mocks.verify).toHaveBeenCalledWith(expect.anything(), "snap-retained", "a".repeat(64));
+    expect(mocks.verify).toHaveBeenCalledWith(expect.anything(), "snap-retained");
     expect(mocks.record).toHaveBeenCalledWith("snap-retained");
     expect(mocks.build).not.toHaveBeenCalled();
   });
-  it("does not publish a Vercel candidate with mismatched recipe evidence", async () => {
-    mocks.verify.mockRejectedValueOnce(new Error("recipe mismatch"));
-    await expect(vercelMain()).rejects.toThrow("recipe mismatch");
+  it("does not publish a Vercel candidate with failed service checks", async () => {
+    mocks.verify.mockRejectedValueOnce(new Error("service check failed"));
+    await expect(vercelMain()).rejects.toThrow("service check failed");
     expect(mocks.record).not.toHaveBeenCalled();
     expect(mocks.build).not.toHaveBeenCalled();
   });
@@ -78,7 +78,7 @@ describe("native candidate retry", () => {
     await opencomputerMain();
     expect(mocks.get).toHaveBeenCalledWith("candidate");
     expect(mocks.exec).toHaveBeenCalledWith(
-      expect.stringContaining(`--expected-input-hash ${"a".repeat(64)}`),
+      expect.stringContaining("/app/verify/image.py verify"),
       expect.anything()
     );
     expect(mocks.record).toHaveBeenCalledWith("candidate");
@@ -86,8 +86,8 @@ describe("native candidate retry", () => {
     expect(mocks.kill).toHaveBeenCalledOnce();
   });
   it("does not publish failed OpenComputer verification and releases the sandbox", async () => {
-    mocks.exec.mockResolvedValueOnce({ exitCode: 1, stderr: "recipe mismatch" });
-    await expect(opencomputerMain()).rejects.toThrow("recipe mismatch");
+    mocks.exec.mockResolvedValueOnce({ exitCode: 1, stderr: "service check failed" });
+    await expect(opencomputerMain()).rejects.toThrow("service check failed");
     expect(mocks.record).not.toHaveBeenCalled();
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.kill).toHaveBeenCalledOnce();

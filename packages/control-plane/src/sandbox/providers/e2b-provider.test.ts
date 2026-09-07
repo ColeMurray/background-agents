@@ -1,9 +1,11 @@
-import { IMAGE_RUNTIME_ENTRYPOINT } from "../runtime-entrypoint";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { deriveVncPassword } from "../sandbox-env";
-import { E2BSandboxProvider, type E2BProviderConfig } from "./e2b-provider";
-import {} from "../../image-builds/model";
+import { E2BSandboxProvider, E2B_SANDBOX_VERSION, type E2BProviderConfig } from "./e2b-provider";
+import {
+  MIN_COMPATIBLE_RUNTIME_VERSION,
+  parseRuntimeVersionNumber,
+} from "../../image-builds/model";
 import { SandboxProviderError } from "../provider";
 import {
   E2BNotFoundError,
@@ -25,7 +27,8 @@ const providerConfig: E2BProviderConfig = {
  * image, image build). Env arrives via create-time envVars — never on the
  * command line, which E2B platform-logs.
  */
-const ENTRYPOINT_COMMAND = `nohup python -c '${IMAGE_RUNTIME_ENTRYPOINT}' >/tmp/oi-supervisor.log 2>&1 &`;
+const ENTRYPOINT_COMMAND =
+  "nohup python -m sandbox_runtime.entrypoint >/tmp/oi-supervisor.log 2>&1 &";
 
 function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
   return {
@@ -155,15 +158,14 @@ describe("E2BSandboxProvider", () => {
       PYTHONPATH: "/app",
       NODE_PATH: "/usr/lib/node_modules",
       OI_SCM_CRED_CACHE_DIR: "/tmp/oi",
-      SANDBOX_VERSION: "",
+      SANDBOX_VERSION: E2B_SANDBOX_VERSION,
     });
   });
 
-  it("does not label old images with the worker current version", async () => {
+  it("injects SANDBOX_VERSION so sessions report a runtime version to the bridge", async () => {
     const client = mockClient();
     await new E2BSandboxProvider(client, providerConfig).createSandbox(baseCreateConfig);
-    expect(createEnv(client).SANDBOX_VERSION).toBe("");
-    expect(createEnv(client)).not.toHaveProperty("VIRTUAL_ENV");
+    expect(createEnv(client).SANDBOX_VERSION).toBe(E2B_SANDBOX_VERSION);
   });
 
   it("maps bitbucket to the Bitbucket clone identity", async () => {
@@ -526,6 +528,16 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     expect("restoreFromSnapshot" in provider).toBe(false);
   });
 
+  it("reports a runtime version at or above the image-selection floor", () => {
+    // A version below the floor makes evaluateImageBuildForSpawn reject every
+    // image this provider builds (runtime_below_floor), silently disabling
+    // prebuilt images. Mirrors the Vercel assertion.
+    const version = parseRuntimeVersionNumber(E2B_SANDBOX_VERSION);
+
+    expect(version).not.toBeNull();
+    expect(version).toBeGreaterThanOrEqual(MIN_COMPATIBLE_RUNTIME_VERSION);
+  });
+
   it("createSandbox with no prebuilt image uses the base template and no repo-image markers", async () => {
     const client = mockClient();
     await new E2BSandboxProvider(client, providerConfig).createSandbox(baseCreateConfig);
@@ -715,7 +727,7 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
 
     const env = createEnv(client);
     expect(env.IMAGE_BUILD_MODE).toBe("true");
-    expect(env.SANDBOX_VERSION).toBe("");
+    expect(env.SANDBOX_VERSION).toMatch(/^v\d+/);
     expect(env.OI_REPO_IMAGE_BUILD_ID).toBe("build-1");
     expect(env.OI_REPO_IMAGE_CALLBACK_URL).toBe("https://cp.test/cb");
     expect(env.OI_REPO_IMAGE_FAILURE_CALLBACK_URL).toBe("https://cp.test/cb/fail");

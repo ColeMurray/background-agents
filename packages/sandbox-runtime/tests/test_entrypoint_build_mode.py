@@ -15,7 +15,6 @@ from sandbox_runtime.repository_sync import (
     RepositorySyncStatus,
 )
 from sandbox_runtime.runtime_config import BootMode
-from sandbox_runtime.runtime_manifest import RUNTIME_VERSION
 from sandbox_runtime.supervisor import ImageBuildExecutionCancelled
 
 
@@ -441,7 +440,7 @@ class TestImageBuildMode:
             repository_shas=[
                 {"repoOwner": "acme", "repoName": "my-repo", "baseSha": "abc123def456"}
             ],
-            runtime_version=RUNTIME_VERSION,
+            runtime_version="v99-test",
         )
         callback.report_failure.assert_not_called()
 

@@ -1,8 +1,7 @@
-"""One inventory for rebuild planning and the bytes sent to every native builder."""
+"""Stage installation files and calculate one conservative build cache key."""
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import re
@@ -18,6 +17,7 @@ from .locks import update_locks
 
 PROVIDERS = ("modal", "daytona", "e2b", "vercel", "opencomputer")
 EXCLUDED = {
+    ".terraform",
     ".git",
     ".venv",
     ".env",
@@ -31,52 +31,19 @@ EXCLUDED = {
     "build",
     ".DS_Store",
 }
-PROVIDER_INPUTS = {
-    "modal": (
-        "packages/modal-infra/src/images",
-        "packages/modal-infra/src/app_config.py",
-        "packages/modal-infra/pyproject.toml",
-        "packages/modal-infra/uv.lock",
-        "packages/modal-infra/deploy.py",
-        "terraform/modules/modal-app/scripts/deploy.sh",
-    ),
-    "daytona": (
-        "packages/daytona-infra/src",
-        "packages/daytona-infra/pyproject.toml",
-        "packages/daytona-infra/uv.lock",
-        "terraform/modules/daytona-infra/scripts/build-snapshot.sh",
-    ),
-    "e2b": (
-        "packages/e2b-infra/build-template.py",
-        "packages/e2b-infra/pyproject.toml",
-        "packages/e2b-infra/uv.lock",
-        "terraform/modules/e2b-infra/scripts/build-template.sh",
-    ),
-    "vercel": (
-        "packages/vercel-infra/src",
-        "packages/vercel-infra/package.json",
-        "packages/control-plane/scripts/build-vercel-base-snapshot.ts",
-        "packages/control-plane/src/sandbox/providers/vercel/client.ts",
-        "packages/control-plane/src/logger.ts",
-        "packages/control-plane/src/sandbox/request-deadline.ts",
-        "packages/shared/src/logger.ts",
-        "packages/shared/package.json",
-        "packages/shared/tsconfig.json",
-        "packages/vercel-infra/tsconfig.json",
-        "terraform/modules/vercel-sandbox-infra/scripts/build-base-snapshot.sh",
-        "package-lock.json",
-    ),
-    "opencomputer": (
-        "packages/opencomputer-infra/src",
-        "packages/opencomputer-infra/package.json",
-        "package-lock.json",
-        "terraform/modules/opencomputer-infra/scripts/build-base-snapshot.sh",
-    ),
+PAYLOAD_ROOTS = (
+    RUNTIME_PACKAGE / "src",
+    RUNTIME_PACKAGE / "pyproject.toml",
+    RUNTIME_PACKAGE / "uv.lock",
+    *(IMAGE_PACKAGE / part for part in ("install", "verify", "locks", "toolchain.json")),
+)
+INFRA_MODULES = {
+    "modal": "modal-app",
+    "daytona": "daytona-infra",
+    "e2b": "e2b-infra",
+    "vercel": "vercel-sandbox-infra",
+    "opencomputer": "opencomputer-infra",
 }
-
-
-def canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def validate_toolchain(tools: dict[str, Any]) -> None:
@@ -113,59 +80,30 @@ def validate_toolchain(tools: dict[str, Any]) -> None:
             raise ValueError("Downloaded image tools must have a SHA-256 pin")
 
 
-def _walk(path: Path) -> list[Path]:
-    if path.is_symlink() or path.is_file():
-        return [path]
-    if not path.exists():
-        return []
-    result = []
-    for child in sorted(path.iterdir()):
-        if child.name not in EXCLUDED and child.suffix not in (".pyc", ".pyo"):
-            result.extend(_walk(child))
-    return result
+def source_files(root: Path, paths: tuple[Path, ...]) -> list[Path]:
+    """Only declared payload/source roots are eligible; reject escaping links."""
 
+    def walk(path: Path) -> list[Path]:
+        if path.is_symlink():
+            if path.readlink().is_absolute() or not path.resolve().is_relative_to(root):
+                raise ValueError(f"Source symlink escapes checkout: {path}")
+            return [path]
+        if path.is_file():
+            return [path]
+        if not path.is_dir():
+            raise FileNotFoundError(path)
+        return [
+            file
+            for child in sorted(path.iterdir())
+            if child.name not in EXCLUDED and child.suffix not in (".pyc", ".pyo")
+            for file in walk(child)
+        ]
 
-def _inventory_entry(root: Path, path: Path) -> dict[str, Any]:
-    relative = path.relative_to(root).as_posix()
-    if path.is_symlink():
-        destination = path.resolve()
-        if not destination.is_relative_to(root):
-            raise ValueError(f"Image input symlink escapes the checkout: {relative}")
-        return {"path": relative, "symlink": str(path.readlink()), "mode": 0o777}
-    return {
-        "path": relative,
-        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-        "mode": 0o755 if path.stat().st_mode & stat.S_IXUSR else 0o644,
-    }
-
-
-def _collect_inputs(root: Path, paths: list[Path]) -> list[dict[str, Any]]:
-    """Inventory declared source roots, rejecting missing and escaping inputs."""
-    for part in paths:
-        if not (root / part).exists():
-            raise FileNotFoundError(root / part)
-    files = sorted({p for part in paths for p in _walk(root / part)})
+    files = sorted({file for path in paths for file in walk(root / path)})
     for path in files:
-        if path.is_symlink() and (path.readlink().is_absolute() or path.resolve() not in files):
-            raise ValueError(
-                f"Image symlink must reference another bundled file: {path.relative_to(root)}"
-            )
-    return [_inventory_entry(root, path) for path in files]
-
-
-def _modal_cache_buster(root: Path, runtime_version: str) -> str:
-    """Read the explicit refresh input without importing provider application code."""
-    source = root / "packages/modal-infra/src/images/base.py"
-    for node in ast.parse(source.read_text()).body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "CACHE_BUSTER" for target in node.targets
-        ):
-            if isinstance(node.value, ast.Name) and node.value.id == "RUNTIME_VERSION":
-                return runtime_version
-            value = ast.literal_eval(node.value)
-            if isinstance(value, str):
-                return value
-    raise ValueError("Modal CACHE_BUSTER must be a string literal or RUNTIME_VERSION")
+        if path.is_symlink() and path.resolve() not in files:
+            raise ValueError(f"Source symlink must point to another included file: {path}")
+    return files
 
 
 def plan_image(root: Path, provider: str) -> dict[str, Any]:
@@ -173,87 +111,62 @@ def plan_image(root: Path, provider: str) -> dict[str, Any]:
     if provider not in PROVIDERS:
         raise ValueError(f"Unsupported sandbox image provider: {provider}")
     validate_toolchain(read_json(root / IMAGE_PACKAGE / "toolchain.json"))
-    targets = read_json(root / IMAGE_PACKAGE / "targets.json")
-    target = targets[provider]
-    manifest = read_json(root / RUNTIME_PACKAGE / "src/sandbox_runtime/runtime_manifest.json")
-    for required in ("pyproject.toml", "uv.lock"):
-        if not (root / RUNTIME_PACKAGE / required).is_file():
-            raise FileNotFoundError(root / RUNTIME_PACKAGE / required)
-    paths = [
-        RUNTIME_PACKAGE / "src",
-        RUNTIME_PACKAGE / "pyproject.toml",
-        RUNTIME_PACKAGE / "uv.lock",
-    ]
-    paths.extend(
-        IMAGE_PACKAGE / part
-        for part in (
-            "install",
-            "verify",
-            "locks",
-            "toolchain.json",
-        )
+    target = read_json(root / IMAGE_PACKAGE / "targets.json")[provider]
+    # Broad roots intentionally prefer an extra rebuild to missing a transitive input.
+    paths = (
+        *PAYLOAD_ROOTS,
+        IMAGE_PACKAGE / "src",
+        IMAGE_PACKAGE / "cli.py",
+        IMAGE_PACKAGE / "pyproject.toml",
+        IMAGE_PACKAGE / "uv.lock",
+        IMAGE_PACKAGE / "targets.json",
+        Path(f"packages/{provider}-infra"),
+        Path(f"terraform/modules/{INFRA_MODULES[provider]}"),
     )
-    inventory = _collect_inputs(root, paths)
-    other_os = "amazon-linux.sh" if target["os"] == "debian" else "debian.sh"
-    inventory = [entry for entry in inventory if not entry["path"].endswith(f"/os/{other_os}")]
-    identity = {
-        "schemaVersion": 1,
+    if provider in ("vercel", "opencomputer"):
+        paths += (Path("package-lock.json"),)
+    if provider == "vercel":
+        paths += (
+            Path("packages/control-plane/src"),
+            Path("packages/shared/src"),
+            Path("packages/control-plane/scripts/build-vercel-base-snapshot.ts"),
+            Path("packages/shared/package.json"),
+            Path("packages/shared/tsconfig.json"),
+        )
+    digest = hashlib.sha256(provider.encode())
+    for path in source_files(root, paths):
+        # Boundaries, executable bits and link destinations also affect the build.
+        content = str(path.readlink()).encode() if path.is_symlink() else path.read_bytes()
+        digest.update(path.relative_to(root).as_posix().encode() + b"\0")
+        digest.update(str(stat.S_IMODE(path.lstat().st_mode)).encode() + b"\0")
+        digest.update(hashlib.sha256(content).digest())
+    return {
         "provider": provider,
         "target": target,
-        "inputs": inventory,
-        "runtimeVersion": manifest["runtimeVersion"],
+        "runtimeVersion": read_json(
+            root / RUNTIME_PACKAGE / "src/sandbox_runtime/runtime_manifest.json"
+        )["runtimeVersion"],
         "runtimeEnv": runtime_environment(target),
-    }
-    if provider == "modal":
-        identity["cacheBuster"] = _modal_cache_buster(root, manifest["runtimeVersion"])
-    recipe = hashlib.sha256(canonical_json(identity).encode()).hexdigest()
-    build_paths = [Path(part) for part in PROVIDER_INPUTS[provider]]
-    build_paths.extend(
-        IMAGE_PACKAGE / part
-        for part in (
-            "src",
-            "cli.py",
-            "pyproject.toml",
-            "uv.lock",
-            "targets.json",
-            "runtime-environments.json",
-        )
-    )
-    build_inputs = _collect_inputs(root, build_paths)
-    return {
-        **identity,
-        "inputHash": recipe,
-        "buildInputs": build_inputs,
-        "buildHash": hashlib.sha256(
-            canonical_json({"inputHash": recipe, "inputs": build_inputs}).encode()
-        ).hexdigest(),
+        "buildHash": digest.hexdigest(),
     }
 
 
 def pack_bundle(root: Path, provider: str, output_root: Path) -> Path:
+    """Create a fresh context for each caller; no shared cache to reconcile."""
     root = root.resolve()
     update_locks(root, check=True)
     plan = plan_image(root, provider)
     output_root.mkdir(parents=True, exist_ok=True)
-    destination = output_root / f"{provider}-{plan['inputHash']}"
-    # Never mutate an existing bundle: native builders may still be reading it.
-    staging = Path(tempfile.mkdtemp(prefix=f"{provider}-", dir=output_root))
+    destination = Path(tempfile.mkdtemp(prefix=f"{provider}-", dir=output_root))
     try:
-        for entry in plan["inputs"]:
-            source = root / entry["path"]
-            target = staging / entry["path"]
+        for source in source_files(root, PAYLOAD_ROOTS):
+            target = destination / source.relative_to(root)
             target.parent.mkdir(parents=True, exist_ok=True)
-            if "symlink" in entry:
-                target.symlink_to(entry["symlink"])
-            else:
-                shutil.copyfile(source, target)
-                target.chmod(entry["mode"])
-        image_plan = {
-            key: value for key, value in plan.items() if key not in ("buildInputs", "buildHash")
-        }
-        (staging / "image-plan.json").write_text(canonical_json(image_plan) + "\n")
+            shutil.copy2(source, target, follow_symlinks=False)
+        (destination / "build-config.json").write_text(json.dumps(plan) + "\n")
         toolchain = read_json(root / IMAGE_PACKAGE / "toolchain.json")
         variables = {
+            "OI_BUILD_CACHE_KEY": plan["buildHash"],
             "OI_PROVIDER": provider,
             "OI_OS": plan["target"]["os"],
             "OI_RUNTIME_USER": plan["target"]["user"],
@@ -276,43 +189,12 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> Path:
             pin = toolchain[key][plan["target"]["node"]] if key == "node" else toolchain[key]
             variables[f"{name}_VERSION"] = pin["version"]
             variables[f"{name}_SHA256"] = pin["sha256"]
-        (staging / "image-config.sh").write_text(
+        (destination / "image-config.sh").write_text(
             "\n".join(f"export {key}={shlex.quote(value)}" for key, value in variables.items())
             + "\n"
         )
-        if plan_image(root, provider) != plan:
-            raise RuntimeError("Image inputs changed while staging; retry from a stable checkout")
-        if destination.exists():
-            _assert_same_bundle(staging, destination)
-        else:
-            try:
-                staging.rename(destination)
-            except OSError:
-                if not destination.exists():
-                    raise
-                _assert_same_bundle(staging, destination)
+
         return destination
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
-
-
-def _assert_same_bundle(expected: Path, existing: Path) -> None:
-    def inventory(root: Path) -> list[dict[str, Any]]:
-        entries = []
-        for path in sorted(root.rglob("*")):
-            mode = path.lstat().st_mode
-            if stat.S_ISDIR(mode):
-                entries.append({"path": path.relative_to(root).as_posix(), "kind": "directory"})
-            elif stat.S_ISREG(mode) or stat.S_ISLNK(mode):
-                entries.append(_inventory_entry(root, path))
-            else:
-                raise RuntimeError(f"Unexpected special file in image bundle: {path}")
-        return entries
-
-    left = inventory(expected)
-    right = inventory(existing)
-    if left != right:
-        raise RuntimeError(
-            f"Existing image bundle was modified; remove only this bundle and retry: {existing}"
-        )
+    except BaseException:
+        shutil.rmtree(destination)
+        raise

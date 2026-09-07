@@ -12,7 +12,7 @@ from sandbox_images import bundle, native
 
 ROOT = Path(__file__).parents[3]
 PLAN = {
-    "inputHash": "a" * 64,
+    "buildHash": "a" * 64,
     "runtimeEnv": {},
     "target": {"base": "test-base"},
 }
@@ -25,7 +25,6 @@ def build_mocks(monkeypatch, tmp_path):
     publish = Mock()
     monkeypatch.setattr(native, "write_build_result", publish)
     monkeypatch.setenv("OPENINSPECT_IMAGE_CANDIDATE", "retained-name")
-    monkeypatch.delenv("OPENINSPECT_VERIFY_REFERENCE", raising=False)
     return publish
 
 
@@ -63,7 +62,7 @@ def test_e2b_retry_never_overwrites_existing_template(monkeypatch, build_mocks, 
         build_mocks.assert_called_once_with("retained-name")
     assert template_class.build.call_count == (0 if retained else 1)
     assert sandbox_class.create.call_args.kwargs["template"] == "retained-name"
-    assert PLAN["inputHash"] in sandbox.commands.run.call_args.args[0]
+    assert sandbox.commands.run.call_args.args[0].endswith("/app/verify/image.py verify")
     sandbox.kill.assert_called_once()
 
 
@@ -122,5 +121,5 @@ def test_daytona_retry_never_recreates_existing_snapshot(
         build_mocks.assert_called_once_with("retained-name")
     client.snapshot.get.assert_called_once_with("retained-name")
     assert create.call_count == (0 if retained else 1)
-    assert PLAN["inputHash"] in sandbox.process.exec.call_args.args[0]
+    assert sandbox.process.exec.call_args.args[0].endswith("/app/verify/image.py verify")
     sandbox.delete.assert_called_once()

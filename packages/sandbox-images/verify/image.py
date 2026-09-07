@@ -338,12 +338,9 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("install", "verify"))
-    parser.add_argument("--expected-input-hash")
     args = parser.parse_args()
-    plan = json.loads(Path("/app/openinspect-image-plan.json").read_text())
+    plan = json.loads(Path("/app/openinspect-build-config.json").read_text())
     tools = json.loads(Path("/app/openinspect-toolchain.json").read_text())
-    if args.expected_input_hash and plan["inputHash"] != args.expected_input_hash:
-        raise RuntimeError("The provider artifact does not match the requested installation inputs")
     environment = json.loads(Path("/app/openinspect-runtime-environment.json").read_text())
     if environment != plan["runtimeEnv"]:
         raise RuntimeError("Baked launch environment does not match build configuration")

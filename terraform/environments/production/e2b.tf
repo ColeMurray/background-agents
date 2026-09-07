@@ -19,7 +19,7 @@ module "e2b_infra" {
 
   api_key            = var.e2b_api_key
   api_url            = var.e2b_api_url
-  template_id        = "${var.e2b_template_id}-${substr(sha256("${data.external.e2b_source_hash[0].result.image}:${var.e2b_template_cpu}:${var.e2b_template_memory_mb}"), 0, 16)}"
+  template_id        = "${var.e2b_template_id}-${substr(sha256("${data.external.e2b_source_hash[0].result.hash}:${var.e2b_template_cpu}:${var.e2b_template_memory_mb}"), 0, 16)}"
   template_cpu       = var.e2b_template_cpu
   template_memory_mb = var.e2b_template_memory_mb
   deploy_path        = "${var.project_root}/packages/e2b-infra"

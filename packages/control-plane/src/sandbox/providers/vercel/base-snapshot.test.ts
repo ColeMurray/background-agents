@@ -72,7 +72,6 @@ describe("buildVercelBaseSnapshot", () => {
     await expect(
       buildVercelBaseSnapshot(client, {
         runtimeArchive: new Uint8Array([1]),
-        inputHash: "a".repeat(64),
       })
     ).rejects.toThrow("verification failed");
     expect(client.createSandbox).toHaveBeenLastCalledWith(
@@ -91,7 +90,6 @@ describe("buildVercelBaseSnapshot", () => {
       runtime: "node24",
       runtimeArchive: new Uint8Array([1, 2, 3]),
       sourceVersion: "abcdef1234567890",
-      inputHash: "a".repeat(64),
       sandboxName: "openinspect-base-managed",
       now: 1780000000000,
     });
@@ -165,7 +163,6 @@ describe("buildVercelBaseSnapshot", () => {
     await expect(
       buildVercelBaseSnapshot(client, {
         runtimeArchive: new Uint8Array([1]),
-        inputHash: "a".repeat(64),
       })
     ).rejects.toThrow("Vercel base runtime bootstrap failed");
     expect(vi.mocked(client.stopSession)).toHaveBeenCalledWith("session-1", undefined);

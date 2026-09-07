@@ -20,22 +20,19 @@ def main() -> None:
     from sandbox_images.native import write_build_result
 
     plan = plan_image(config.repo_root, "daytona")
-    existing = os.environ.get("OPENINSPECT_VERIFY_REFERENCE")
     name = (
-        existing
-        or os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
-        or f"{config.base_snapshot}-{plan['inputHash'][:12]}-{time.time_ns()}"
+        os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
+        or f"{config.base_snapshot}-{plan['buildHash'][:12]}-{time.time_ns()}"
     )
     client = Daytona(
         DaytonaConfig(api_key=config.api_key, api_url=config.api_url, target=config.target)
     )
     # No delete/recreate of the selected snapshot, even on a failed build.
-    if not existing:
-        try:
-            client.snapshot.get(name)
-        except DaytonaNotFoundError:
-            create_base_snapshot(client, config.repo_root, name)
-    # A retained name must pass the same full input-hash and service checks.
+    try:
+        client.snapshot.get(name)
+    except DaytonaNotFoundError:
+        create_base_snapshot(client, config.repo_root, name)
+    # Retry a retained build by restoring it and checking required services.
 
     sandbox = client.create(
         CreateSandboxFromSnapshotParams(snapshot=name, env_vars=plan["runtimeEnv"], ephemeral=True),
@@ -43,8 +40,7 @@ def main() -> None:
     )
     try:
         result = sandbox.process.exec(
-            "/opt/openinspect/python/bin/python /app/verify/image.py verify --expected-input-hash "
-            + plan["inputHash"],
+            "/opt/openinspect/python/bin/python /app/verify/image.py verify",
             timeout=240,
         )
         if result.exit_code != 0:

@@ -8,7 +8,7 @@ and release-aware prepared-image refresh.
 
 The problem is duplicated tool versions, dependency resolution, installation scripts, and service
 checks across Modal, Daytona, E2B, Vercel, and OpenComputer. Updating one dependency should involve
-one manifest/lock change and a consistent build/verification workflow.
+one manifest/lock change and a consistent build workflow.
 
 ## Architecture
 
@@ -17,7 +17,7 @@ one manifest/lock change and a consistent build/verification workflow.
 | `packages/sandbox-images`                    | Tool pins, lockfiles, OS-specific installation phases, staged payload, build-input hashing, shared verification  |
 | Provider infrastructure packages             | Native image creation, upload, snapshot/restore, provider-specific overlays, retry and temporary sandbox cleanup |
 | Terraform and existing provider settings     | Build triggers and the artifact reference used for new sandboxes                                                 |
-| `packages/sandbox-runtime`                   | Installed runtime, artifact-owned launch paths, existing runtime compatibility version                           |
+| `packages/sandbox-runtime`                   | Installed runtime and artifact-owned launch paths; existing version reporting unchanged                          |
 | Existing control-plane image-build subsystem | Repository setup hooks, prepared images, callbacks, compatibility and rebuild policy, unchanged                  |
 
 Build flow:
@@ -47,22 +47,26 @@ package installation must remain writable and executable through the configured 
 OS packages remain substrate-dependent. This is not a promise of byte-for-byte reproducible builds.
 Explicitly changing `osRefresh` requests a new base build without changing tool versions.
 
-## Build-local hashes
+## One build cache key and a fresh payload
 
-The tooling uses an installation-input hash to name staged bundles and check that a retained native
-artifact belongs to the requested inputs. A separate build-trigger hash includes provider
-orchestration changes so Terraform reruns the adapter when its implementation changes.
+A single conservative source hash triggers Terraform and names managed provider builds. It covers
+the runtime payload, dependency locks, shared installer/build code, provider package, and deployment
+module. Vercel also covers broad control-plane/shared source roots to avoid maintaining a transitive
+file inventory by hand. An unrelated change in those roots can cause an extra build; that is an
+accepted tradeoff for simpler invalidation.
 
-These are implementation details of building and retrying, not public image identities:
+The hash is not an image identity or attestation. There is no separate installed-input hash,
+inventory digest, exact-hash restore comparison, or per-file manifest baked into the image.
 
-- They do not enter Worker configuration, callbacks, database records, or shared API types.
-- There is no installed-package inventory digest or release ID.
-- There is no registry of historical verification evidence.
-- Build hashes do not determine runtime compatibility.
+Each pack invocation stages a fresh directory from a short allowlist of payload roots. It never
+reuses another caller's directory, so no shared-cache comparison, rename race, or immutable-cache
+protocol is needed. Symlinks must stay within the included file set; modes are preserved. Missing
+inputs and stale dependency locks fail before building. Build from a stable checkout.
 
-Packaging and hashing use the same installation file set, including runtime assets and file modes.
-Cached bundles reject extra or altered files; caches, credentials, and unrelated source are not
-uploaded. Build-only sources stay outside the installed payload.
+The staged configuration contains target, launch paths, runtime version, and the cache key; it does
+not enumerate source files. Environment values are calculated directly from target configuration,
+without a separately generated environment map. Staging directories are disposable local build
+outputs under `.cache/sandbox-images`; remove them only when no native build is using them.
 
 ## Provider boundaries
 
@@ -74,10 +78,9 @@ Provider-specific CA/proxy configuration remains in the OpenComputer adapter. Ve
 Linux/node24 substrate. Runtime user and path differences belong to the image being built.
 
 Names supplied by Terraform are deterministic. A retry may restore and verify an existing named
-artifact against the current installation inputs; it must not overwrite it or silently accept a
-different build. Manual builds default to unique names. Temporary verification sandboxes are
-terminated even when checks fail. Native artifacts remain available for investigation and explicit
-operator cleanup.
+artifact using the artifact’s baked service checks; it must not overwrite an existing artifact.
+Manual builds default to unique names. Temporary verification sandboxes are terminated even when
+checks fail. Native artifacts remain available for investigation and explicit operator cleanup.
 
 ## Verification
 
@@ -100,12 +103,11 @@ verification remains necessary because reference containers cannot prove provide
 
 ## Runtime and compatibility
 
-Keep the existing runtime manifest and compatibility floors. Ready events and build completion use
-the installed runtime version, not a version label injected by a newer Worker.
-
-New images bake a small launch-environment file. The runtime applies only allowlisted build-owned
-paths before starting services, preserving session tokens and secrets. Legacy artifacts without this
-file retain their existing launch configuration.
+Keep the existing runtime manifest, compatibility floors, and version-reporting behavior. Improving
+how old images report their installed version is independent hardening and is deferred. New images
+bake a small launch-environment file. The runtime applies only allowlisted build-owned paths before
+starting services, preserving session tokens and secrets. Legacy artifacts without this file retain
+their existing launch configuration.
 
 There are no new D1 columns, callback fields, shared API fields, or base-release configuration. The
 existing callback authentication, replay handling, finalization, and provider ownership checks are
@@ -117,7 +119,7 @@ Terraform continues to own deployment:
 
 - Modal eagerly builds/verifies the sandbox image, then deploys functions using its native image ID.
 - Vercel and OpenComputer retain managed snapshot names and existing manual-reference overrides.
-- Daytona and E2B derive new names from installation inputs (E2B also includes CPU/memory settings).
+- Daytona and E2B derive new names from the source hash (E2B also includes CPU/memory settings).
   Their existing Worker bindings switch only after the new artifact is verified.
 
 Unlike the prior in-place E2B template rebuild, the consolidated build uses a distinct alias. This
@@ -126,9 +128,9 @@ upgrading from versions predating direct E2B boot should first deploy the curren
 launcher code before introducing these images.
 
 Rollback uses the previous known-good deployment/configuration and retained provider artifacts.
-There is no separate promote/rollback command or historical release lock. Failed builds do not
-delete or replace the currently configured image. Provider artifact retention is still an operator
-responsibility; never remove images referenced by saved sessions or prepared images.
+There is no standalone verification or promote/rollback command or historical release lock. Failed
+builds do not delete or replace the currently configured image. Provider artifact retention is still
+an operator responsibility; never remove images referenced by saved sessions or prepared images.
 
 ## Prepared repository images: deliberately unchanged
 
@@ -147,7 +149,7 @@ application contracts.
 
 1. Centralize dependency pins, frozen installation, and service checks.
 2. Route all five provider builders through the shared package.
-3. Preserve native retry/cleanup and artifact-owned launch behavior.
+3. Preserve native retry/cleanup and only the launch-path changes required by shared installation.
 4. Wire build triggers and verified references through existing deployment settings.
 5. Remove the earlier release/provenance subsystem and document explicit prepared-image refresh.
 

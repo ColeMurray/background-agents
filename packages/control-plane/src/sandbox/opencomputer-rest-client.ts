@@ -1,4 +1,3 @@
-import { IMAGE_RUNTIME_ENTRYPOINT } from "./runtime-entrypoint";
 /**
  * Direct REST client for OpenComputer sandboxes.
  *
@@ -9,6 +8,7 @@ import { IMAGE_RUNTIME_ENTRYPOINT } from "./runtime-entrypoint";
 
 import { createLogger } from "../logger";
 import { z } from "zod";
+import { SANDBOX_RUNTIME_VERSION } from "./runtime-manifest";
 
 const log = createLogger("opencomputer-rest-client");
 
@@ -207,6 +207,8 @@ const TIMEOUT_SECRET_STORE_MS = 30_000;
 const RUNTIME_ENTRYPOINT_EXEC_TIMEOUT_MS = 10_000;
 const SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
 const OPENSANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/opensandbox-proxy.crt";
+const PYTHON_VENV = "/home/sandbox/.venv";
+const USER_BIN = "/home/sandbox/.local/bin";
 const RUNTIME_CA_EXPORTS =
   `SSL_CERT_FILE=${SYSTEM_CA_BUNDLE} ` +
   `CURL_CA_BUNDLE=${SYSTEM_CA_BUNDLE} ` +
@@ -220,18 +222,23 @@ const RUNTIME_HOSTS_BOOTSTRAP =
   "printf '%s\\n' '127.0.0.1 localhost' | sudo tee -a /etc/hosts >/dev/null; " +
   "grep -Eq '^[[:space:]]*::1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
   "printf '%s\\n' '::1 localhost ip6-localhost ip6-loopback' | sudo tee -a /etc/hosts >/dev/null";
+// Runtime version the sandbox reports back to the image-build callback.
+// OpenComputer launches the runtime via `exec`, which does NOT inherit the
+// image's baked env, so SANDBOX_VERSION must be re-exported here — otherwise the
+// runtime reports an empty version and the build-complete callback is rejected
+// (runtime-version floor check).
+export const OPENCOMPUTER_SANDBOX_VERSION = SANDBOX_RUNTIME_VERSION;
 const RUNTIME_ENV_EXPORTS =
-  // Retained images use this legacy venv. New runtimes apply image-local env.
   "export HOME=/home/sandbox " +
-  "VIRTUAL_ENV=/home/sandbox/.venv " +
+  `VIRTUAL_ENV=${PYTHON_VENV} ` +
   "XDG_CONFIG_HOME=/home/sandbox/.config " +
   "PYTHONPATH=/app " +
   "NODE_PATH=/home/sandbox/.npm-global/lib/node_modules:/usr/lib/node_modules " +
-  "OPENINSPECT_BIN_INSTALL_DIR=/home/sandbox/.local/bin " +
-  "PATH=/home/sandbox/.venv/bin:/home/sandbox/.npm-global/bin:/home/sandbox/.local/bin:/home/sandbox/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin " +
+  `OPENINSPECT_BIN_INSTALL_DIR=${USER_BIN} ` +
   `NO_PROXY=${LOCAL_NO_PROXY} ` +
   `no_proxy=${LOCAL_NO_PROXY} ` +
-  "SANDBOX_VERSION='' " +
+  `PATH=${PYTHON_VENV}/bin:/home/sandbox/.npm-global/bin:${USER_BIN}:/home/sandbox/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin ` +
+  `SANDBOX_VERSION=${OPENCOMPUTER_SANDBOX_VERSION} ` +
   RUNTIME_CA_EXPORTS;
 const RUNTIME_CA_BOOTSTRAP =
   `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo update-ca-certificates >/tmp/openinspect-update-ca.log 2>&1 || true; ` +
@@ -415,7 +422,7 @@ export class OpenComputerRestClient {
         cmd: "sh",
         args: [
           "-c",
-          `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports}nohup python3 -c '${IMAGE_RUNTIME_ENTRYPOINT}' >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
+          `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports}nohup python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
         ],
         timeout: RUNTIME_ENTRYPOINT_EXEC_TIMEOUT_MS / 1000,
       },
@@ -438,7 +445,7 @@ export class OpenComputerRestClient {
           cmd: "sh",
           args: [
             "-c",
-            `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports} python3 -c '${IMAGE_RUNTIME_ENTRYPOINT}' >>${RUNTIME_LOG_PATH} 2>&1`,
+            `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports} python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1`,
           ],
           timeout: timeoutSeconds,
         },

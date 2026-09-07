@@ -23,7 +23,7 @@ def local_image_plan() -> tuple[Path, dict[str, Any]]:
     from sandbox_images.bundle import pack_bundle
 
     bundle = pack_bundle(root, "modal", root / ".cache/sandbox-images")
-    plan = json.loads((bundle / "image-plan.json").read_text())
+    plan = json.loads((bundle / "build-config.json").read_text())
     return bundle, plan
 
 
@@ -43,7 +43,7 @@ def deployed_image_environment() -> dict[str, str]:
         raise RuntimeError("Build the Modal sandbox image before deploying functions")
     record = json.loads(path.read_text())
     _bundle, plan = local_image_plan()
-    if record["inputHash"] != plan["inputHash"]:
+    if record["buildHash"] != plan["buildHash"]:
         raise RuntimeError("Built Modal image is stale; rebuild before deploying functions")
     image_id = record.get("imageId")
     if not isinstance(image_id, str) or not image_id.strip():

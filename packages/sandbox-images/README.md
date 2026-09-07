@@ -19,14 +19,14 @@ npm run sandbox:images -- plan --provider all
 
 `toolchain.json` owns tool versions and archive checksums. `targets.json` owns native substrate and
 runtime-user differences. `locks/` contains frozen npm closures and hash-checked Python exports.
-`runtime-environments.json` is generated build configuration, not Worker configuration. Ordinary
-builds do not resolve new dependency versions. To intentionally refresh distro packages, change
-`osRefresh`. OS packages remain substrate-dependent; builds are not byte-for-byte attestations.
+Runtime environments are calculated directly from target configuration. Ordinary builds do not
+resolve new dependency versions. To intentionally refresh distro packages, change `osRefresh`. OS
+packages remain substrate-dependent; builds are not byte-for-byte attestations.
 
 Each image owns its launch paths. Infrastructure Python is private and is not activated as the
 project virtualenv. Existing images retain their legacy launch environment.
 
-## Build and verify
+## Build
 
 Install workspace dependencies with `npm ci` for Node adapters. Native operations require provider
 credentials and create billable temporary sandboxes; they do not deploy the control plane.
@@ -42,12 +42,10 @@ credentials and create billable temporary sandboxes; they do not deploy the cont
 ```bash
 npm run sandbox:images -- build --provider e2b --output /tmp/e2b-image.json
 # Output is {"reference":"<verified-native-reference>"}.
-npm run sandbox:images -- verify --provider e2b --reference '<verified-native-reference>'
 ```
 
-Verification checks against the current checkout's installation inputs. To verify an older artifact,
-use the checkout that built it. There are no candidate record schemas, release IDs, inventory
-digests, promotion commands, or release locks.
+Verification is a build gate, not a separate CLI operation. There are no candidate record schemas,
+release IDs, inventory digests, promotion commands, or release locks.
 
 Every build verifies a fresh native restore before returning the reference. Checks include isolated
 Python imports, exact pinned tool versions, plugin loading, writable user paths, SCM helpers,
@@ -72,15 +70,20 @@ retained artifact. Do not delete artifacts still referenced by sessions or prepa
 
 **Prepared repository images do not automatically refresh when the base toolchain changes.** Use the
 existing repository/environment image-build workflow to rebuild them after dependency-only updates
-when needed. Runtime compatibility floors and saved-session behavior are unchanged. This package
-adds no database columns or callback fields.
+when needed. Runtime version reporting, compatibility floors, and saved-session behavior are
+unchanged. This package adds no database columns or callback fields.
 
 ## Build implementation and local validation
 
-`pack` stages installation inputs only. The installation-input hash names isolated bundles and
-checks retained artifacts during native build retries. The build-trigger hash additionally covers
-provider orchestration. Both stay private to build tooling. Extra files in cached bundles are
-rejected rather than accidentally uploaded.
+One conservative source hash covers installation and build/deployment tooling. Changes to broad
+provider or Vercel control-plane/shared source roots may trigger extra builds; there is no separate
+installed-image hash or exact-content attestation.
+
+`pack` creates a fresh staging directory from explicitly allowed payload roots. It preserves file
+modes and contained symlinks, rejects missing inputs, and never reuses another caller's directory.
+No detailed file manifest or shared staging-cache reconciliation remains. Build from a stable
+checkout. Staging directories under `.cache/sandbox-images` may be removed when no build is using
+them.
 
 ```bash
 uv run --frozen --project packages/sandbox-images --extra dev pytest packages/sandbox-images/tests
