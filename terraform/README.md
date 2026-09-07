@@ -31,8 +31,8 @@ terraform/
 The [production root module](environments/production/) is split across `.tf` files loaded together;
 there is no special entrypoint file. See [variables.tf](environments/production/variables.tf) for
 inputs, [outputs.tf](environments/production/outputs.tf) for outputs, and
-[terraform.tfvars.example](environments/production/terraform.tfvars.example) for configuration.
-For AWS deployment instructions, see [AWS staging](environments/aws-staging/) and
+[terraform.tfvars.example](environments/production/terraform.tfvars.example) for configuration. For
+AWS deployment instructions, see [AWS staging](environments/aws-staging/) and
 [AWS production](environments/aws-production/).
 
 ## Prerequisites
