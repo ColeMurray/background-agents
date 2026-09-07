@@ -94,7 +94,7 @@ class PushOperation:
             return PushResult(request, str(rejection))
         except Exception as e:
             self.log.error("git.push_error", exc=e, branch_name=request.branch_name)
-            return PushResult(request, str(e))
+            return PushResult(request, str(e) or "Push failed - unknown error")
 
         self.log.info(
             "git.push_complete",
@@ -178,9 +178,10 @@ class PushOperation:
         process = await asyncio.create_subprocess_exec(
             "git",
             "push",
+            *(["-f"] if request.force else []),
+            "--",
             request.push_url,
             request.refspec,
-            *(["-f"] if request.force else []),
             cwd=repo_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

@@ -68,6 +68,7 @@ async def test_success_uses_legacy_checkout(operation):
     launch.assert_awaited_once_with(
         "git",
         "push",
+        "--",
         spec["remoteUrl"],
         spec["refspec"],
         cwd=operation.repo_path / "repo",
@@ -226,9 +227,10 @@ async def test_provider_url_refspec_and_force_pass_through(operation, force):
     launch.assert_awaited_once_with(
         "git",
         "push",
+        *(["-f"] if force else []),
+        "--",
         spec["remoteUrl"],
         spec["refspec"],
-        *(["-f"] if force else []),
         cwd=operation.repo_path / "repo",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -274,12 +276,17 @@ def test_normalization_preserves_existing_string_and_bool_coercion():
 
 
 @pytest.mark.parametrize(
-    "error", [OSError("git unavailable"), RuntimeError("launch failed"), RuntimeError("")]
+    "error,expected",
+    [
+        (OSError("git unavailable"), "git unavailable"),
+        (RuntimeError("launch failed"), "launch failed"),
+        (RuntimeError(""), "Push failed - unknown error"),
+    ],
 )
-async def test_launch_exception_becomes_result(operation, error):
+async def test_launch_exception_becomes_result(operation, error, expected):
     with patch("sandbox_runtime.push_operation.asyncio.create_subprocess_exec", side_effect=error):
         result = await operation.execute(_push_spec())
-    assert result.error == str(error)
+    assert result.error == expected
     assert result.request.branch_name == "feature/test"
     operation.log.error.assert_called_once_with(
         "git.push_error", exc=error, branch_name="feature/test"
