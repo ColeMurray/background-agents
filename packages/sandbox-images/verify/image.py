@@ -165,6 +165,16 @@ def stop_process(process: subprocess.Popen) -> None:
             process.wait()
 
 
+def installed_os_packages(probe: Probe, os_family: str) -> list[str]:
+    """Normalize package-manager output before recording or comparing inventory."""
+    command = (
+        ["dpkg-query", "-W", "-f=${Package}=${Version}\\n"]
+        if os_family == "debian"
+        else ["rpm", "-qa", "--qf", "%{NAME}=%{VERSION}-%{RELEASE}.%{ARCH}\\n"]
+    )
+    return sorted(probe.run(command).splitlines())
+
+
 def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool) -> dict[str, Any]:
     probe = Probe(plan)
     versions = {}
@@ -269,13 +279,7 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
             f"{dist.metadata['Name']}=={dist.version}"
             for dist in importlib.metadata.distributions()
         ),
-        "osPackages": probe.run(["dpkg-query", "-W", "-f=${Package}=${Version}\\n"]).splitlines()
-        if plan["target"]["os"] == "debian"
-        else sorted(
-            probe.run(
-                ["rpm", "-qa", "--qf", "%{NAME}=%{VERSION}-%{RELEASE}.%{ARCH}\\n"]
-            ).splitlines()
-        ),
+        "osPackages": installed_os_packages(probe, plan["target"]["os"]),
         "runtimeEnv": plan["runtimeEnv"],
         "runtimeUser": {
             "name": probe.user.pw_name,
