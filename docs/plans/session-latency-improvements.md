@@ -70,7 +70,25 @@ The committed real-workerd regression fixture checks work rather than wall time:
 
 ## Reproduce regression validation
 
-From the repository root, after installing dependencies:
+The commands below validate only the committed regression suites. They do **not** reproduce the
+latency timing table above: those samples were collected with a separate local-only benchmark
+harness that is not included in this PR.
+
+From the repository root, install the lockfile dependencies and build the shared package. The
+integration configuration creates local workerd/D1 bindings, applies the checked-in migrations,
+generates test encryption keys, supplies fixture service/browser credentials, and mocks Modal. The
+tests seed their own synthetic data; no production credentials, deployed D1 database, or real Modal
+sandbox are required.
+
+To run just the committed storage-read and bounded-replay integration fixtures:
+
+```bash
+npm ci
+npm run build -w @open-inspect/shared
+npm run test:integration -w @open-inspect/control-plane -- test/integration/session-query-work.test.ts test/integration/session-snapshot.test.ts
+```
+
+For the complete regression validation after that setup:
 
 ```bash
 npm run build -w @open-inspect/shared
