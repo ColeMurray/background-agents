@@ -134,8 +134,8 @@ export interface SessionTargetSelection {
  * via `pickerProps`; the page keeps model, prompt, and warming.
  */
 export function useSessionTargetPicker(): SessionTargetSelection {
-  const { repos, loading: loadingRepos } = useRepos();
-  const { environments, loading: loadingEnvironments } = useEnvironments();
+  const { repos, loading: loadingRepos, status: reposStatus } = useRepos();
+  const { environments, status: environmentsStatus } = useEnvironments();
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedBranch, setSelectedBranch] = useState<string>("");
 
@@ -165,7 +165,7 @@ export function useSessionTargetPicker(): SessionTargetSelection {
   // Restore the last-selected target once data loads. This effect commits a
   // target exactly once (the guard blocks any later correction), so a stored
   // environment must not fall through to the repo default while environments
-  // are still loading — wait for the fetch to settle before deciding.
+  // are loading or unavailable — wait for a successful response before deciding.
   useEffect(() => {
     if (sessionTarget) return;
 
@@ -173,13 +173,15 @@ export function useSessionTargetPicker(): SessionTargetSelection {
     const storedTarget = storedValue ? parseTargetSelectValue(storedValue, null) : null;
 
     if (storedTarget?.kind === "environment") {
-      if (loadingEnvironments) return;
+      if (environmentsStatus !== "ready") return;
       if (environments.some((environment) => environment.id === storedTarget.environmentId)) {
         setSessionTarget(storedTarget);
         return;
       }
       // The stored environment was deleted — fall through to the repo default.
     }
+
+    if (reposStatus !== "ready") return;
 
     if (repos.length > 0) {
       // A stored `env:<id>` value never matches a fullName, so a deleted
@@ -192,10 +194,8 @@ export function useSessionTargetPicker(): SessionTargetSelection {
       return;
     }
 
-    if (!loadingRepos) {
-      setSessionTarget({ kind: "none" });
-    }
-  }, [loadingRepos, repos, loadingEnvironments, environments, sessionTarget]);
+    setSessionTarget({ kind: "none" });
+  }, [reposStatus, repos, environmentsStatus, environments, sessionTarget]);
 
   // Persist launchable, restorable selections: repos and environments. Ad-hoc
   // lists and "no repository" keep whatever was stored before them.

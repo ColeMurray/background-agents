@@ -156,14 +156,15 @@ export default function Home() {
     hasHydratedModelPreferencesRef.current = true;
   }, []);
 
-  const availableProviderSelections = providerAccounts.loading
-    ? providerSelections
-    : reconcileProviderSelections(providerSelections, providerAccounts.accounts);
+  const availableProviderSelections =
+    providerAccounts.accountsStatus === "ready"
+      ? reconcileProviderSelections(providerSelections, providerAccounts.accounts)
+      : providerSelections;
 
   useEffect(() => {
     if (
       !providerSelectionsHydrated ||
-      providerAccounts.loading ||
+      providerAccounts.accountsStatus !== "ready" ||
       availableProviderSelections === providerSelections
     ) {
       return;
@@ -176,7 +177,7 @@ export default function Home() {
     );
   }, [
     availableProviderSelections,
-    providerAccounts.loading,
+    providerAccounts.accountsStatus,
     providerSelections,
     providerSelectionsHydrated,
   ]);

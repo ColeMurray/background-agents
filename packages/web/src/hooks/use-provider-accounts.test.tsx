@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import type { ReactNode } from "react";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -109,7 +109,12 @@ describe("useProviderAccounts", () => {
     );
 
     expect(browserApiFetch).not.toHaveBeenCalled();
-    expect(result.current.accounts).toMatchObject({ accounts: [], defaults: [], loading: false });
+    expect(result.current.accounts).toMatchObject({
+      accounts: [],
+      defaults: [],
+      loading: false,
+      accountsStatus: "unavailable",
+    });
     expect(result.current.legacy).toMatchObject({ legacyKeys: [], loading: false });
   });
 
@@ -136,12 +141,52 @@ describe("useProviderAccounts", () => {
     const { result } = renderHook(() => useProviderAccounts(), { wrapper });
 
     await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.accountsStatus).toBe("ready");
     expect(result.current.providers).toEqual([
       { provider: "openai", displayName: "OpenAI", subscriptionName: "ChatGPT" },
       { provider: "xai", displayName: "xAI", subscriptionName: "SuperGrok" },
     ]);
     expect(browserApiFetch).toHaveBeenCalledTimes(2);
     expect(browserApiFetch).not.toHaveBeenCalledWith("/api/model-subscription-providers");
+  });
+
+  it("marks failed account loads unavailable and becomes ready after recovery", async () => {
+    let failed = true;
+    vi.mocked(browserApiFetch).mockImplementation(async (path) => {
+      if (path === "/api/model-provider-account-defaults") return Response.json({ defaults: [] });
+      return failed
+        ? Response.json({ error: "Service unavailable" }, { status: 503 })
+        : Response.json({ accounts: [account] });
+    });
+    const { result } = renderHook(() => useProviderAccounts(), { wrapper });
+    expect(result.current.accountsStatus).toBe("loading");
+    await waitFor(() => expect(result.current.accountsStatus).toBe("unavailable"));
+    expect(result.current.accounts).toEqual([]);
+
+    failed = false;
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.accountsStatus).toBe("ready");
+    expect(result.current.accounts).toEqual([account]);
+
+    failed = true;
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.accountsStatus).toBe("unavailable");
+    expect(result.current.accounts).toEqual([account]);
+  });
+
+  it("keeps successful accounts authoritative when only defaults fail", async () => {
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/model-provider-account-defaults"
+        ? Response.json({ error: "Service unavailable" }, { status: 503 })
+        : Response.json({ accounts: [] })
+    );
+    const { result } = renderHook(() => useProviderAccounts(), { wrapper });
+    await waitFor(() => expect(result.current.error).toBeInstanceOf(Error));
+    expect(result.current.accountsStatus).toBe("ready");
   });
 });
 

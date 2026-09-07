@@ -1,4 +1,5 @@
 import useSWR from "swr";
+import { getPrerequisiteStatus } from "@/lib/prerequisite-status";
 import { useAuthSession } from "@/lib/auth-session";
 
 export interface Repo {
@@ -27,6 +28,11 @@ export function useRepos(enabled = true) {
 
   return {
     repos: data?.repos ?? [],
+    status: getPrerequisiteStatus(
+      enabled && session ? data : undefined,
+      enabled && (status === "loading" || isLoading),
+      error
+    ),
     // The fetch is gated on the auth session, so the list is still loading
     // while the session itself resolves — don't report an authoritative [].
     loading: enabled && (status === "loading" || isLoading),

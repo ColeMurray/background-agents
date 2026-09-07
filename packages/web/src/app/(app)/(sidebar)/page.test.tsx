@@ -13,6 +13,7 @@ import {
 import Home from "./page";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
+import { getPrerequisiteStatus } from "@/lib/prerequisite-status";
 
 expect.extend(matchers);
 
@@ -29,6 +30,8 @@ const mocks = vi.hoisted(() => ({
     defaultBranch: string;
   }>,
   loadingReposValue: false,
+  reposError: undefined as Error | undefined,
+  environmentsError: undefined as Error | undefined,
   environmentsLoadingValue: false,
   environmentsValue: [] as Array<{
     id: string;
@@ -64,6 +67,7 @@ const mocks = vi.hoisted(() => ({
     archivedAt: null;
   }>,
   providerAccountsLoadingValue: false,
+  providerAccountsError: undefined as Error | undefined,
   skillPreview: {
     skills: [
       {
@@ -120,6 +124,11 @@ vi.mock("@/hooks/use-environments", () => ({
   useEnvironments: () => ({
     environments: mocks.environmentsValue,
     loading: mocks.environmentsLoadingValue,
+    status: getPrerequisiteStatus(
+      mocks.environmentsValue,
+      mocks.environmentsLoadingValue,
+      mocks.environmentsError
+    ),
   }),
 }));
 
@@ -136,7 +145,11 @@ vi.mock("@/components/model-reasoning-selector", () => ({
 }));
 
 vi.mock("@/hooks/use-repos", () => ({
-  useRepos: () => ({ repos: mocks.reposValue, loading: mocks.loadingReposValue }),
+  useRepos: () => ({
+    repos: mocks.reposValue,
+    loading: mocks.loadingReposValue,
+    status: getPrerequisiteStatus(mocks.reposValue, mocks.loadingReposValue, mocks.reposError),
+  }),
 }));
 
 vi.mock("@/hooks/use-branches", () => ({
@@ -170,7 +183,12 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
     accounts: mocks.providerAccountsValue,
     defaults: [],
     loading: mocks.providerAccountsLoadingValue,
-    error: undefined,
+    accountsStatus: getPrerequisiteStatus(
+      mocks.providerAccountsValue,
+      mocks.providerAccountsLoadingValue,
+      mocks.providerAccountsError
+    ),
+    error: mocks.providerAccountsError,
     refresh: vi.fn(),
   }),
 }));
@@ -192,6 +210,9 @@ beforeAll(() => {
 beforeEach(() => {
   mocks.reposValue = [repo];
   mocks.loadingReposValue = false;
+  mocks.reposError = undefined;
+  mocks.environmentsError = undefined;
+  mocks.providerAccountsError = undefined;
   mocks.environmentsLoadingValue = false;
   mocks.environmentsValue = [];
   mocks.enabledModelsValue = [DEFAULT_MODEL];
@@ -642,6 +663,75 @@ describe("Home", () => {
 
     await waitFor(() => expect(sessionCreateBody()).toMatchObject({ providerSelections: {} }));
     expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe("{}");
+  });
+
+  it.each([true, false])(
+    "preserves provider choices during failure and reconciles recovery (account exists: %s)",
+    async (exists) => {
+      const accountId = "a".repeat(32);
+      const selection = { openai: { mode: "provider_account", accountId } };
+      const stored = JSON.stringify(selection);
+      localStorage.setItem("open-inspect-last-provider-selections:v1", stored);
+      mocks.providerAccountsError = new Error("Service unavailable");
+      const view = render(<Home />);
+
+      expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe(stored);
+
+      mocks.providerAccountsError = undefined;
+      mocks.providerAccountsValue = exists ? [activeOpenAiAccount(accountId)] : [];
+      view.rerender(<Home />);
+      expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe(
+        exists ? stored : "{}"
+      );
+      const user = userEvent.setup();
+      await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() =>
+        expect(sessionCreateBody()).toMatchObject({
+          providerSelections: exists ? selection : {},
+        })
+      );
+    }
+  );
+
+  it.each([true, false])(
+    "preserves a stored environment during failure and restores after recovery (exists: %s)",
+    async (exists) => {
+      localStorage.setItem("open-inspect-last-selected-repo", "env:env-1");
+      mocks.environmentsError = new Error("Service unavailable");
+      const view = render(<Home />);
+
+      expect(screen.getByRole("button", { name: /select repo/i })).toBeInTheDocument();
+      expect(localStorage.getItem("open-inspect-last-selected-repo")).toBe("env:env-1");
+      fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+        target: { value: "Continue work" },
+      });
+      expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+      expect(fetch).not.toHaveBeenCalled();
+
+      mocks.environmentsError = undefined;
+      mocks.environmentsValue = exists ? [environment] : [];
+      view.rerender(<Home />);
+      await screen.findByRole("button", { name: exists ? /full-stack/i : /background-agents/i });
+      expect(localStorage.getItem("open-inspect-last-selected-repo")).toBe(
+        exists ? "env:env-1" : repo.fullName
+      );
+    }
+  );
+
+  it("restores a saved repository after a failed repository request recovers", async () => {
+    localStorage.setItem("open-inspect-last-selected-repo", repo.fullName);
+    mocks.reposValue = [];
+    mocks.reposError = new Error("Service unavailable");
+    const view = render(<Home />);
+
+    expect(screen.getByRole("button", { name: /select repo/i })).toBeInTheDocument();
+    expect(localStorage.getItem("open-inspect-last-selected-repo")).toBe(repo.fullName);
+
+    mocks.reposError = undefined;
+    mocks.reposValue = [repo];
+    view.rerender(<Home />);
+    await screen.findByRole("button", { name: /background-agents/i });
   });
 
   it("waits for environments to load before restoring a stored environment", async () => {

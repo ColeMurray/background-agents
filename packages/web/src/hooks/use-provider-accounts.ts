@@ -1,4 +1,5 @@
 import useSWR from "swr";
+import { getPrerequisiteStatus } from "@/lib/prerequisite-status";
 import { z, type ZodType } from "zod";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
@@ -107,6 +108,11 @@ export function useProviderAccounts() {
     accounts: (accounts.data ?? []) as ModelProviderAccount[],
     defaults: (defaults.data ?? []) as ModelProviderAccountDefault[],
     loading: accounts.isLoading || defaults.isLoading,
+    accountsStatus: getPrerequisiteStatus(
+      canRead ? accounts.data : undefined,
+      accounts.isLoading,
+      accounts.error
+    ),
     error: accounts.error ?? defaults.error,
     refresh: async () => Promise.all([accounts.mutate(), defaults.mutate()]),
   };
