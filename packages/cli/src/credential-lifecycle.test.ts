@@ -296,7 +296,7 @@ describe("CredentialLifecycle", () => {
     expect((await restarted.read()).pendingDeviceAuthorizations).toEqual([]);
   });
 
-  it("logout removes the active credential before draining pending and active credentials", async () => {
+  it("logout removes the active binding before draining pending and active credentials", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const localCredentials = memoryStore();
     const initial = new ConfigStore(directory, { credentialStore: localCredentials });
@@ -317,7 +317,7 @@ describe("CredentialLifecycle", () => {
     const seen: string[] = [];
     const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (_request, init) => {
       await expect(restarted.getActiveContext()).rejects.toThrow("Not logged in");
-      expect(localCredentials.values.has(activeCredentialRef)).toBe(false);
+      expect(localCredentials.values.has(activeCredentialRef)).toBe(true);
       seen.push(new Headers(init?.headers).get("Authorization") ?? "");
       return new Response(null, { status: 204 });
     });
@@ -343,7 +343,7 @@ describe("CredentialLifecycle", () => {
     expect((await restarted.read()).pendingRevocations).toEqual([]);
   });
 
-  it("logout removes the active context despite transient remote errors", async () => {
+  it("logout persists pending and active revocations across transient errors and restart", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     await seedOldContext(directory);
     const initial = new ConfigStore(directory);
@@ -363,10 +363,22 @@ describe("CredentialLifecycle", () => {
     await expect(new CredentialLifecycle(restarted, fetch).logout()).resolves.toMatchObject({
       name: "work",
       remoteRevocationComplete: false,
-      pendingRevocations: 1,
+      pendingRevocations: 2,
     });
-    expect(await restarted.getPendingRevocations()).toMatchObject([{ credential: oldCredential }]);
+    expect(await restarted.getPendingRevocations()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ credential: oldCredential }),
+        expect.objectContaining({ credential: newCredential }),
+      ])
+    );
     await expect(restarted.getActiveContext()).rejects.toThrow("Not logged in");
+
+    const retryFetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const afterRestart = new ConfigStore(directory);
+    await new CredentialLifecycle(afterRestart, retryFetch).prepareLogin();
+
+    expect(retryFetch).toHaveBeenCalledTimes(2);
+    expect((await afterRestart.read()).pendingRevocations).toEqual([]);
   });
 
   it("logout clears definitive-invalid pending and active handles after restart", async () => {

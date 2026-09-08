@@ -313,22 +313,29 @@ export class ConfigStore {
     if (!removedName) throw new CliError("auth", "Not logged in. Run `oi login --url <url>`.");
     const removedContext = ownContext(current, removedName);
     if (!removedContext) throw new Error(`Active context not found: ${removedName}`);
-    const credentials = await this.credentials;
-    const credential = await credentials.get(removedContext.credentialRef);
+    const credential = await (await this.credentials).get(removedContext.credentialRef);
     if (!credential) throw new Error(`Credential not found for context: ${removedName}`);
 
-    await credentials.delete(removedContext.credentialRef);
-    try {
-      await this.update((config) => {
-        if (config.contexts[removedName]?.credentialRef !== removedContext.credentialRef)
-          throw new Error(`Context changed while it was being removed: ${removedName}`);
-        delete config.contexts[removedName];
-        config.activeContext = Object.keys(config.contexts)[0] ?? null;
-      });
-    } catch (cause) {
-      await credentials.set(removedContext.credentialRef, credential);
-      throw cause;
-    }
+    await this.update((config) => {
+      if (config.contexts[removedName]?.credentialRef !== removedContext.credentialRef)
+        throw new Error(`Context changed while it was being removed: ${removedName}`);
+      delete config.contexts[removedName];
+      config.activeContext = Object.keys(config.contexts)[0] ?? null;
+      if (
+        !Object.values(config.contexts).some(
+          (candidate) => candidate.credentialRef === removedContext.credentialRef
+        ) &&
+        !config.pendingRevocations.some(
+          (candidate) => candidate.credentialRef === removedContext.credentialRef
+        )
+      ) {
+        config.pendingRevocations.push({
+          url: removedContext.url,
+          credentialRef: removedContext.credentialRef,
+          purpose: "replaced",
+        });
+      }
+    });
     return {
       name: removedName,
       url: removedContext.url,

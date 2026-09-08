@@ -89,18 +89,10 @@ export class CredentialLifecycle {
     }
     const deviceAuthorizations = await this.drainDeviceAuthorizations();
     const credentials = await this.drainPendingCredentials();
-    let activeRevoked = true;
-    try {
-      await this.revoke(removed);
-    } catch (cause) {
-      activeRevoked = isDefinitivelyInvalid(cause);
-    }
     return {
       ...removed,
       remoteRevocationComplete:
-        activeRevoked &&
-        credentials.failures.length === 0 &&
-        deviceAuthorizations.failures.length === 0,
+        credentials.failures.length === 0 && deviceAuthorizations.failures.length === 0,
       pendingRevocations: credentials.remaining,
       pendingDeviceAuthorizations: deviceAuthorizations.remaining,
     };

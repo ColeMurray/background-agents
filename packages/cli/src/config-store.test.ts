@@ -1,5 +1,5 @@
 import { seedContext } from "./config-store.test-helpers.js";
-import { chmod, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -145,7 +145,7 @@ describe("ConfigStore", () => {
     );
   });
 
-  it("does not remove metadata when credential deletion fails", async () => {
+  it("persists a revocation marker before removing the active context", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const credentials = memoryStore();
     const store = new ConfigStore(directory, { credentialStore: credentials });
@@ -154,48 +154,37 @@ describe("ConfigStore", () => {
       credential,
       expiresAt: 10,
     });
-    vi.spyOn(credentials, "delete").mockRejectedValueOnce(new Error("keychain locked"));
+    const reference = (await store.read()).contexts.work!.credentialRef;
 
-    await expect(store.removeActiveContext()).rejects.toThrow("keychain locked");
-    expect((await store.read()).activeContext).toBe("work");
-    expect(await store.getActiveContext()).toMatchObject({ credential });
+    await expect(store.removeActiveContext()).resolves.toMatchObject({ name: "work", credential });
+    expect(await store.read()).toMatchObject({
+      activeContext: null,
+      contexts: {},
+      pendingRevocations: [{ credentialRef: reference, url: "https://work.example.com" }],
+    });
+    expect(credentials.values.get(reference)).toBe(credential);
   });
 
-  it("restores a deleted credential when logout metadata removal loses a concurrency race", async () => {
+  it("leaves the active context and credential intact when removal persistence fails", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const credentials = memoryStore();
-    const store = new ConfigStore(directory, { credentialStore: credentials });
-    await seedContext(store, "work", {
+    const initial = new ConfigStore(directory, { credentialStore: credentials });
+    await seedContext(initial, "work", {
       url: "https://old.example.com",
       credential,
       expiresAt: 10,
     });
-    const current = await store.read();
-    const oldReference = current.contexts.work!.credentialRef;
-    const concurrentReference = referencesForTest(99);
-    credentials.values.set(concurrentReference, rotatedCredential);
-    vi.spyOn(credentials, "delete").mockImplementationOnce(async (reference) => {
-      credentials.values.delete(reference);
-      await writeFile(
-        store.filePath,
-        `${JSON.stringify({
-          activeContext: "work",
-          contexts: {
-            work: {
-              url: "https://new.example.com",
-              expiresAt: 20,
-              credentialRef: concurrentReference,
-            },
-          },
-        })}\n`
-      );
+    const reference = (await initial.read()).contexts.work!.credentialRef;
+    const store = new ConfigStore(directory, {
+      credentialStore: credentials,
+      updateConfigFile: vi.fn().mockRejectedValue(new Error("configuration locked")),
     });
 
-    await expect(store.removeActiveContext()).rejects.toThrow("Context changed");
-    expect(credentials.values.get(oldReference)).toBe(credential);
+    await expect(store.removeActiveContext()).rejects.toThrow("configuration locked");
+    expect(credentials.values.get(reference)).toBe(credential);
     expect(await store.getActiveContext()).toMatchObject({
-      url: "https://new.example.com",
-      credential: rotatedCredential,
+      url: "https://old.example.com",
+      credential,
     });
   });
 
@@ -392,7 +381,3 @@ describe("normalizeBaseUrl", () => {
     expect(() => normalizeBaseUrl(url)).toThrow()
   );
 });
-
-function referencesForTest(index: number): string {
-  return `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
-}
