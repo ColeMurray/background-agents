@@ -62,7 +62,7 @@ def test_smoke_test_preserves_failures(monkeypatch):
     "command,output,expected",
     [
         ("node", "v22.23.2", "22.23.2"),
-        ("agent-browser", "agent-browser 0.21.2", "0.21.2"),
+        ("agent-browser", "agent-browser 0.37.0", "0.37.0"),
         ("code-server", "4.109.5 commit with Code 1.109.0", "4.109.5"),
         (
             "code-server",
