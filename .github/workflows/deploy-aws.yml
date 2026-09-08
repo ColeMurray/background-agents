@@ -9,8 +9,13 @@
 #
 # Authentication is OIDC. The token's `sub` claim names the repository *and the
 # GitHub environment this job requested*, and the AWS role's trust policy pins
-# both -- so an environment's reviewers gate AWS access, not just the UI.
-# There is no AWS key in this repository.
+# both -- so an environment's rules gate AWS access, not just the UI. There is
+# no AWS key in this repository.
+#
+# The subject names no branch, and GitHub creates a referenced environment with
+# no protection rules if it does not already exist. So the environment has to
+# carry a deployment-branch rule for that pin to mean anything; setting one is a
+# step in docs/AWS_BRING_UP.md, not an optional hardening.
 #
 # Configuration lives on the GitHub environment, all of it from
 # `terraform output` (see docs/AWS_BRING_UP.md):

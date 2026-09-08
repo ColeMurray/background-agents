@@ -42,6 +42,13 @@ HEALTH_CONSECUTIVE="${HEALTH_CONSECUTIVE:-6}"
 # Only the tests move this; the deploy has no reason to poll faster.
 COMMAND_POLL_SECONDS="${COMMAND_POLL_SECONDS:-5}"
 
+# Bounds on one SSM read. The CLI would otherwise wait 60s to connect and 60s to
+# read, three attempts over, which can carry a single poll minutes past the
+# deadline the loop below checks -- the loop is the retry, so no one call has a
+# reason to take that long. It does not affect whether a rollback can overlap
+# the command it is rolling back: `executionTimeout` has already ended that.
+SSM_READ_TIMEOUT=(--cli-connect-timeout 5 --cli-read-timeout 10)
+
 log() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 
 read_deployed_image() {
@@ -95,7 +102,8 @@ activate() {
     # A just-sent command is briefly unknown to GetCommandInvocation.
     status="$(aws ssm get-command-invocation \
       --command-id "$command_id" --instance-id "$INSTANCE_ID" \
-      --region "$AWS_REGION" --query 'Status' --output text 2>/dev/null)" || continue
+      --region "$AWS_REGION" "${SSM_READ_TIMEOUT[@]}" \
+      --query 'Status' --output text 2>/dev/null)" || continue
     case "$status" in
       Pending | InProgress | Delayed) continue ;;
       Success)
@@ -120,6 +128,7 @@ print_command_output() {
   # would replace the reason the deploy failed with the reason the log fetch did.
   aws ssm get-command-invocation \
     --command-id "$1" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" \
+    "${SSM_READ_TIMEOUT[@]}" \
     --query '[StandardOutputContent,StandardErrorContent]' --output text 2>/dev/null ||
     log "could not read the command's output"
 }

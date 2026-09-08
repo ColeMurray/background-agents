@@ -216,10 +216,17 @@ verifies the result — rolling back on its own if the new image does not come u
 with an OIDC token rather than an access key, so no AWS credential is stored in the repository.
 
 Two things make that safe rather than merely convenient. The role's trust policy pins both the
-repository and the **GitHub environment** the job asked for, so the environment's reviewers are an
+repository and the **GitHub environment** the job asked for, so the environment's own rules are an
 AWS access gate and not a UI convention. And the role can reach exactly three things: push to the
 one ECR repository, read and write the one SSM parameter naming the deployed image, and run a
 command on the one instance. It cannot read the secrets sitting next to that parameter.
+
+The first of those is only as strong as the environment you configure, and the failure is quiet. The
+subject names the repository and the environment; it does not name a branch. GitHub also **creates a
+referenced environment on the fly, with no protection rules, if it does not exist** — so a workflow
+dispatched from any branch would present the same subject and assume the same role. The
+environment's own **deployment branch rule** is what makes the pin mean anything, which is why the
+next section treats it as a step rather than an option.
 
 Turn it on by setting `github_deploy` in `terraform.tfvars`:
 
@@ -241,8 +248,16 @@ github_deploy = {
 }
 ```
 
-Then create that GitHub environment (Settings → Environments), add reviewers if it is production,
-and give it these **variables** — every one of them a `terraform output`:
+Then create that GitHub environment under Settings → Environments — **before** the first apply, so
+it exists with rules rather than being created without any by the first run that names it — and set
+both of these on it:
+
+- **Deployment branches**: selected branches, `main` only. Without this the trust policy pins an
+  environment that any branch can ask for.
+- **Required reviewers**: at least one for production. This is the approval gate the trust policy
+  turns into an AWS access gate.
+
+Then give it these **variables** — every one of them a `terraform output`:
 
 | Variable                       | From                                             |
 | ------------------------------ | ------------------------------------------------ |

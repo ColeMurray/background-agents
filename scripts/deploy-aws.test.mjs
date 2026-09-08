@@ -35,6 +35,10 @@ case "$2" in
     done
     ;;
   send-command)
+    while [ $# -gt 0 ]; do
+      if [ "$1" = "--parameters" ]; then printf '%s' "$2" >"$STUB_DIR/parameters"; fi
+      shift
+    done
     echo sent >>"$STUB_DIR/activations"
     echo "command-$(wc -l <"$STUB_DIR/activations" | tr -d ' ')"
     ;;
@@ -94,6 +98,7 @@ function runDeploy({
   writeFileSync(join(dir, "command_status"), commandStatus);
   writeFileSync(join(dir, "activations"), "");
   writeFileSync(join(dir, "calls"), "");
+  writeFileSync(join(dir, "parameters"), "");
 
   for (const [name, body] of [
     ["aws", AWS_STUB],
@@ -133,6 +138,7 @@ function runDeploy({
     output: `${result.stdout}${result.stderr}`,
     deployed: readFileSync(join(dir, "deployed"), "utf8"),
     calls: readFileSync(join(dir, "calls"), "utf8"),
+    parameters: readFileSync(join(dir, "parameters"), "utf8"),
     activations: countLines("activations"),
     probes: countLines("probes"),
   };
@@ -204,18 +210,25 @@ test("a single failed check restarts the count rather than resuming it", () => {
 test("the remote command bounds its own execution and assumes nothing about the host", () => {
   const run = runDeploy({ previous: OLD, image: NEW });
   const sent = run.calls.split("\n").filter((line) => line.includes("send-command"));
-
   assert.equal(sent.length, 1);
 
-  // Without executionTimeout the document runs to completion whatever this
-  // script does, and the rollback below would pull and recreate containers
-  // underneath an activation still doing the same. `--timeout-seconds` does not
-  // cover it: that bounds delivery, not the shell.
-  assert.match(sent[0], /executionTimeout/);
+  // The whole payload, not a substring of it: a malformed parameters document
+  // reaches AWS looking much like a well-formed one from the outside.
+  const parameters = JSON.parse(run.parameters);
 
   // The instance ignores user_data_base64, so a host keeps whatever cloud-init
   // wrote at its first boot. Naming anything installed that way makes a deploy
-  // depend on how old the instance is; the fetch brings the rest down itself.
-  assert.match(sent[0], /open-inspect-fetch-config/);
-  assert.doesNotMatch(sent[0], /open-inspect-deploy/);
+  // depend on how old the instance is; the fetch brings the rest down itself,
+  // including the activation script the second command runs.
+  assert.deepEqual(parameters.commands, [
+    "/usr/local/bin/open-inspect-fetch-config",
+    "bash /opt/open-inspect/deploy.sh",
+  ]);
+
+  // Without executionTimeout the document runs to completion whatever this
+  // script does, and the rollback would pull and recreate containers underneath
+  // an activation still doing the same. `--timeout-seconds` does not cover it:
+  // that bounds delivery, not the shell. "30" rather than this run's 5-second
+  // budget because the document rejects anything lower, so the script floors it.
+  assert.deepEqual(parameters.executionTimeout, ["30"]);
 });
