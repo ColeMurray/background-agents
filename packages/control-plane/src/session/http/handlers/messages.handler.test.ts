@@ -4,6 +4,7 @@ import { MessagesHandler } from "./messages.handler";
 import { EventFeedCheckpointExpiredError } from "../../event-repository";
 import type { MessageService } from "../../services/message.service";
 import { encodeEventChangeCursor } from "../../event-stream";
+import { encodeCreatedAtIdCursor } from "../../list-cursor";
 
 function createHandler() {
   const messageService = {
@@ -318,6 +319,34 @@ describe("MessagesHandler", () => {
         },
       ],
     });
+    expect(messageService.listArtifacts).toHaveBeenCalledWith();
+  });
+
+  it("rejects an artifact cursor without a page limit", () => {
+    const { handler, messageService } = createHandler();
+    const cursor = encodeCreatedAtIdCursor({ createdAt: 1, id: "artifact-1" });
+
+    const response = handler.listArtifacts(
+      new URL(`http://internal/internal/artifacts?cursor=${encodeURIComponent(cursor)}`)
+    );
+
+    expect(response.status).toBe(400);
+    expect(messageService.listArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("applies a valid artifact cursor when a page limit is present", () => {
+    const { handler, messageService } = createHandler();
+    const cursor = { createdAt: 1, id: "artifact-1" };
+    vi.mocked(messageService.listArtifacts).mockReturnValue({ artifacts: [] });
+
+    const response = handler.listArtifacts(
+      new URL(
+        `http://internal/internal/artifacts?cursor=${encodeURIComponent(encodeCreatedAtIdCursor(cursor))}&limit=25`
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(messageService.listArtifacts).toHaveBeenCalledWith({ cursor, limit: 25 });
   });
 
   it("returns a single artifact when artifactId is provided", async () => {

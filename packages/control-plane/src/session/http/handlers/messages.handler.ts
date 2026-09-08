@@ -137,12 +137,22 @@ export class MessagesHandler {
       return Response.json(this.messageService.getArtifact(artifactId));
     }
 
-    const rawLimit = url.searchParams.get("limit");
-    if (rawLimit === null) return Response.json(this.messageService.listArtifacts());
-    const limit = Number(rawLimit);
     const rawCursor = url.searchParams.get("cursor");
     const cursor = parseCreatedAtIdCursor(rawCursor);
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || (rawCursor && !cursor)) {
+    const rawLimit = url.searchParams.get("limit");
+    if (rawLimit === null) {
+      if (rawCursor !== null) {
+        return Response.json({ error: "Invalid artifact pagination" }, { status: 400 });
+      }
+      return Response.json(this.messageService.listArtifacts());
+    }
+    const limit = Number(rawLimit);
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 100 ||
+      (rawCursor !== null && !cursor)
+    ) {
       return Response.json({ error: "Invalid artifact pagination" }, { status: 400 });
     }
     return Response.json(this.messageService.listArtifacts({ cursor, limit }));
