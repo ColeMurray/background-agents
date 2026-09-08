@@ -1,136 +1,33 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { isValidCron } from "@open-inspect/shared/cron";
-import {
-  dedupeConditionsBySemanticKey,
-  triggerSources,
-  isGitHubConditionCompatible,
-  TRIGGER_TYPE_TO_SOURCE,
-  type AutomationTriggerType,
-  type AutomationEventSource,
-  type TriggerCondition,
-  type TriggerConfig,
-} from "@open-inspect/shared/triggers";
-import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
-import type { AutomationRepositoryInput } from "@open-inspect/shared/types/automations";
-import {
-  DEFAULT_MODEL,
-  getReasoningConfig,
-  isValidReasoningEffort,
-  resolveEnabledModel,
-} from "@open-inspect/shared/models";
+import { useState, useMemo } from "react";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
-import { useBranches } from "@/hooks/use-branches";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
-import { formatModelNameLower } from "@/lib/format";
-import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  RepoIcon,
-  BranchIcon,
-  ModelIcon,
-  ChevronDownIcon,
-  CheckIcon,
-  FolderIcon,
-  BoxIcon,
-  SearchIcon,
-} from "@/components/ui/icons";
-import { CronPicker } from "./cron-picker";
-import { TriggerTypeSelector } from "./trigger-type-selector";
-import { ConditionBuilder } from "./condition-builder";
-import { CONDITION_LABELS } from "./condition-labels";
-import { useAutomationTargets } from "./use-automation-targets";
-import { cn } from "@/lib/utils";
-import { NO_REPOSITORY_LABEL, formatRepositoriesLabel } from "@/lib/repo-label";
-import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import { DEFAULT_MODEL, resolveEnabledModel } from "@open-inspect/shared/models";
 import { SUBSCRIPTION_PROVIDER_IDS } from "@open-inspect/shared/types/provider-accounts";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
-import { EMPTY_PROVIDER_SELECTIONS, setProviderSelection } from "@/lib/provider-selection";
+import { setProviderSelection } from "@/lib/provider-selection";
+import { FieldDescription } from "./automation-form-field";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useAutomationTargets } from "./use-automation-targets";
+import { AutomationAgentFields } from "./automation-agent-fields";
+import { AutomationTargetPicker } from "./automation-target-picker";
+import { AutomationInstructionsField } from "./automation-instructions-field";
+import {
+  AutomationTriggerConfigurationFields,
+  AutomationTriggerTypeField,
+} from "./automation-trigger-fields";
+import {
+  createAutomationFormDraft,
+  evaluateAutomationForm,
+  requiresRepositoryContext,
+  type AutomationFormValues,
+} from "./automation-form-policy";
 
-const COMMON_TIMEZONES = [
-  "UTC",
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "Europe/London",
-  "Europe/Berlin",
-  "Europe/Paris",
-  "Asia/Tokyo",
-  "Asia/Shanghai",
-  "Asia/Kolkata",
-  "Australia/Sydney",
-];
-const COMMON_SET = new Set(COMMON_TIMEZONES);
-const ALL_TIMEZONES = Intl.supportedValuesOf("timeZone");
-const DEFAULT_REASONING_VALUE = "__default__";
-
-// Keep in sync with MAX_INSTRUCTIONS_LENGTH in
-// packages/control-plane/src/routes/automations.ts.
-const INSTRUCTIONS_MAX_LENGTH = 15000;
-const INSTRUCTIONS_WARNING_THRESHOLD = Math.floor(INSTRUCTIONS_MAX_LENGTH * 0.9);
-const EMPTY_CONDITIONS: TriggerCondition[] = [];
-
-function requiresRepositoryContext(triggerType: AutomationTriggerType): boolean {
-  return triggerType === "github_event" || triggerType === "linear_event";
-}
-
-const toOption = (tz: string) => ({ value: tz, label: tz.replace(/_/g, " ") });
-
-const TIMEZONE_GROUPS: ComboboxGroup[] = [
-  { category: "Common", options: COMMON_TIMEZONES.map(toOption) },
-  {
-    category: "All Timezones",
-    options: ALL_TIMEZONES.filter((tz) => !COMMON_SET.has(tz)).map(toOption),
-  },
-];
-
-function FieldDescription({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <p className={cn("text-xs text-muted-foreground mt-1 leading-normal", className)}>{children}</p>
-  );
-}
-
-export interface AutomationFormValues {
-  name: string;
-  /** Full repository selection; submit always sends it (empty = repo-less). */
-  repositories?: AutomationRepositoryInput[];
-  /**
-   * Environment selection; submit always sends it (empty = none). Each firing
-   * opens one workspace session per selected environment, alongside the
-   * per-repository sessions.
-   */
-  environmentIds?: string[];
-  model: string;
-  reasoningEffort: string | null;
-  scheduleCron: string;
-  scheduleTz: string;
-  instructions: string;
-  triggerType: AutomationTriggerType;
-  eventType?: string;
-  triggerConfig?: TriggerConfig;
-  sentryClientSecret?: string;
-  providerSelections: ModelProviderSelections;
-}
+export type { AutomationFormValues } from "./automation-form-policy";
 
 interface AutomationFormProps {
   mode: "create" | "edit";
@@ -144,78 +41,32 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const { environments, loading: loadingEnvironments } = useEnvironments();
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
   const providerAccounts = useProviderAccounts();
+  const initialDraft = useMemo(() => createAutomationFormDraft(initialValues), [initialValues]);
   const initialRepositories = useMemo(
     () => initialValues?.repositories ?? [],
     [initialValues?.repositories]
   );
 
-  const [name, setName] = useState(initialValues?.name ?? "");
-  const [repoDropdownOpen, setRepoDropdownOpen] = useState(false);
-  const [repoQuery, setRepoQuery] = useState("");
-  const [model, setModel] = useState(initialValues?.model ?? DEFAULT_MODEL);
-  const [reasoningEffort, setReasoningEffort] = useState(initialValues?.reasoningEffort ?? "");
-  const [scheduleCron, setScheduleCron] = useState(initialValues?.scheduleCron ?? "0 9 * * *");
-  const [scheduleTz, setScheduleTz] = useState(
-    initialValues?.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone
-  );
-  const [instructions, setInstructions] = useState(initialValues?.instructions ?? "");
-  const [triggerType, setTriggerType] = useState<AutomationTriggerType>(
-    initialValues?.triggerType ?? "schedule"
-  );
-  const repositoryRequired = requiresRepositoryContext(triggerType);
-  const [eventType, setEventType] = useState(initialValues?.eventType ?? "");
-  const [eventTypeError, setEventTypeError] = useState("");
-  const [conditions, setConditions] = useState<TriggerCondition[]>(
-    initialValues?.triggerConfig?.conditions ?? EMPTY_CONDITIONS
-  );
-  const [droppedConditions, setDroppedConditions] = useState<TriggerCondition[]>(EMPTY_CONDITIONS);
-  const [sentryClientSecret, setSentryClientSecret] = useState("");
-  const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>(
-    initialValues?.providerSelections ?? EMPTY_PROVIDER_SELECTIONS
-  );
+  const [name, setName] = useState(initialDraft.name);
+  const [providerSelections, setProviderSelections] = useState(initialDraft.providerSelections);
+  const [agent, setAgent] = useState(initialDraft.agent);
+  const [instructions, setInstructions] = useState(initialDraft.instructions);
+  const [trigger, setTrigger] = useState(initialDraft.trigger);
+  const repositoryRequired = requiresRepositoryContext(trigger.type);
 
-  const isSchedule = triggerType === "schedule";
+  const isSchedule = trigger.type === "schedule";
   // Multi-repository selections are schedule-only (the server rejects them for
   // event triggers), so the mode toggle only exists there.
   const multiRepoAllowed = isSchedule;
 
-  const {
-    selectedRepoNames,
-    selectedEnvironmentIds,
-    targetCount,
-    usesSingleRepository,
-    selectedRepository,
-    multipleSelectionEnabled,
-    baseBranch,
-    setBaseBranch,
-    toggleRepository,
-    toggleEnvironment,
-    clearTargets,
-    toggleSelectionMode,
-    buildRepositoriesPayload,
-  } = useAutomationTargets({
+  const targets = useAutomationTargets({
     initialRepositories,
     initialEnvironmentIds: initialValues?.environmentIds ?? [],
     multiRepoAllowed,
     repositoryRequired,
     repos,
   });
-  // Branch options for the sole selected repository (the only branch-pickable shape).
-  const { branches, loading: loadingBranches } = useBranches(
-    selectedRepository?.repoOwner ?? "",
-    selectedRepository?.repoName ?? ""
-  );
-
-  const isSlack = triggerType === "slack_event";
-  const isScheduleValid = !isSchedule || isValidCron(scheduleCron);
-  const repositorySelectionDescription = repositoryRequired
-    ? "Repository-scoped triggers need exactly one repository."
-    : multipleSelectionEnabled
-      ? `Select up to ${MAX_AUTOMATION_REPOSITORIES} repositories and environments combined. Each firing works every selected repository in its own session and opens one session per selected environment's full workspace.`
-      : "Select no repository, one repository, or one environment.";
-  // Mirror the server rule: a slack_event needs a slack_channel. A text_match is
-  // optional — without one it fires on every message in the watched channel.
-  const slackConditionsValid = !isSlack || conditions.some((c) => c.type === "slack_channel");
+  const { selectedEnvironmentIds, buildRepositoriesPayload } = targets;
 
   // The model we display and submit. The selector only lists enabled models, so
   // a disabled default (blank create), a disabled saved model (edit), or a
@@ -226,212 +77,54 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const resolvedModel = useMemo(
     () =>
       loadingModels
-        ? model
-        : resolveEnabledModel({ model, enabledModels, fallbackModel: DEFAULT_MODEL }),
-    [loadingModels, model, enabledModels]
+        ? agent.model
+        : resolveEnabledModel({
+            model: agent.model,
+            enabledModels,
+            fallbackModel: DEFAULT_MODEL,
+          }),
+    [agent.model, enabledModels, loadingModels]
   );
 
-  const triggerMetadata = useMemo(
-    () => triggerSources.find((sourceDef) => sourceDef.triggerType === triggerType),
-    [triggerType]
-  );
-  const eventTypes = useMemo(() => triggerMetadata?.eventTypes ?? [], [triggerMetadata]);
-  const showEventTypeSelector = Boolean(
-    triggerMetadata?.supportsEventTypes && eventTypes.length > 0
-  );
-  const eventTypePlaceholder = triggerMetadata?.eventTypePlaceholder || "Select event type...";
-
-  // Reset eventType when it becomes invalid for the current trigger type
-  useEffect(() => {
-    if (!eventType) return;
-    const stillValid = eventTypes.some((et) => et.eventType === eventType);
-    if (!stillValid) setEventType("");
-  }, [eventType, eventTypes]);
-
-  useEffect(() => {
-    if (!showEventTypeSelector || eventType) {
-      setEventTypeError("");
-    }
-  }, [showEventTypeSelector, eventType]);
-
-  // Selection transitions live in useAutomationTargets; the form only adds the
-  // dropdown-close behavior (single-select picks close the picker).
-  const handleRepoToggle = (repoFullName: string) => {
-    toggleRepository(repoFullName);
-    if (!multipleSelectionEnabled) setRepoDropdownOpen(false);
-  };
-
-  const handleEnvironmentToggle = (environmentId: string) => {
-    toggleEnvironment(environmentId);
-    if (!multipleSelectionEnabled) setRepoDropdownOpen(false);
-  };
-
-  const handleTriggerTypeChange = (value: AutomationTriggerType) => {
-    setTriggerType(value);
-    setConditions(EMPTY_CONDITIONS);
-    setDroppedConditions(EMPTY_CONDITIONS);
-  };
-
-  const handleNoRepository = () => {
-    if (repositoryRequired) return;
-    clearTargets();
-    setRepoDropdownOpen(false);
-  };
-
-  useEffect(() => {
-    if (!repoDropdownOpen) {
-      setRepoQuery("");
-    }
-  }, [repoDropdownOpen]);
+  const formEvaluation = evaluateAutomationForm({
+    mode,
+    originalTrigger: initialDraft.trigger,
+    loadingModels,
+    resolvedModel,
+    draft: {
+      name,
+      instructions,
+      providerSelections,
+      agent,
+      trigger,
+    },
+    targets: {
+      repositories: buildRepositoriesPayload(),
+      environmentIds: selectedEnvironmentIds,
+    },
+  });
+  const conditionErrors =
+    !formEvaluation.valid && formEvaluation.reason === "invalid-conditions"
+      ? formEvaluation.conditionErrors
+      : [];
+  const eventTypeError =
+    !formEvaluation.valid && formEvaluation.reason === "event-type-required"
+      ? "Event type is required."
+      : "";
+  const slackChannelError =
+    !formEvaluation.valid && formEvaluation.reason === "slack-channel-required"
+      ? "Slack triggers require at least one Slack Channel condition."
+      : "";
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // Block until enabled models load: resolvedModel can't coerce against an
-    // unknown set, so submitting now could persist a disabled model.
-    if (loadingModels) return;
-    if (
-      !name.trim() ||
-      (repositoryRequired && selectedRepoNames.length === 0) ||
-      !instructions.trim() ||
-      !isScheduleValid
-    ) {
-      return;
-    }
-    if (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim()) return;
-    if (!slackConditionsValid) return;
-    if (showEventTypeSelector && !eventType) {
-      setEventTypeError("Event type is required.");
-      return;
-    }
-
-    const values: AutomationFormValues = {
-      name: name.trim(),
-      // Always send the full selection — an empty list means none.
-      environmentIds: selectedEnvironmentIds,
-      model: resolvedModel,
-      reasoningEffort:
-        reasoningEffort && isValidReasoningEffort(resolvedModel, reasoningEffort)
-          ? reasoningEffort
-          : null,
-      scheduleCron,
-      scheduleTz,
-      instructions: instructions.trim(),
-      triggerType,
-      // Always send the full selection — an empty list means repo-less.
-      repositories: buildRepositoriesPayload(),
-      providerSelections,
-    };
-
-    if (!isSchedule) {
-      // Don't send schedule fields for non-schedule types
-      delete (values as Partial<AutomationFormValues>).scheduleCron;
-      delete (values as Partial<AutomationFormValues>).scheduleTz;
-
-      if (eventType) values.eventType = eventType;
-      // Always send triggerConfig so clearing all conditions persists (PUT skips
-      // trigger_config when triggerConfig is omitted).
-      values.triggerConfig = { conditions };
-      if (triggerType === "sentry" && mode === "create" && sentryClientSecret.trim()) {
-        values.sentryClientSecret = sentryClientSecret.trim();
-      }
-    }
-
-    onSubmit(values);
+    if (!formEvaluation.valid) return;
+    onSubmit(formEvaluation.values);
   };
-
-  const filteredRepos = useMemo(() => {
-    const query = repoQuery.trim().toLowerCase();
-    if (!query) return repos;
-    return repos.filter(
-      (repo) =>
-        repo.fullName.toLowerCase().includes(query) ||
-        repo.name.toLowerCase().includes(query) ||
-        repo.owner.toLowerCase().includes(query)
-    );
-  }, [repos, repoQuery]);
-  const filteredEnvironments = useMemo(() => {
-    // Environments are hidden for repo-scoped triggers, which must stay bound
-    // to the webhook's repository.
-    if (repositoryRequired) return [];
-    const query = repoQuery.trim().toLowerCase();
-    if (!query) return environments;
-    return environments.filter((environment) => environment.name.toLowerCase().includes(query));
-  }, [environments, repositoryRequired, repoQuery]);
-  const environmentName = (environmentId: string) =>
-    environments.find((environment) => environment.id === environmentId)?.name ??
-    (loadingEnvironments ? "Loading..." : environmentId);
-  // Trigger-button label for the current selection, in the repos list's
-  // display casing (the selection stores lowercase keys).
-  const repositoryLabel = (() => {
-    if (targetCount === 0) return NO_REPOSITORY_LABEL;
-    if (selectedRepoNames.length === 1 && selectedEnvironmentIds.length === 0) {
-      const selectedRepoName = selectedRepoNames[0];
-      return (
-        repos.find((repo) => repo.fullName.toLowerCase() === selectedRepoName)?.fullName ??
-        selectedRepoName
-      );
-    }
-    if (selectedEnvironmentIds.length === 1 && selectedRepoNames.length === 0) {
-      return environmentName(selectedEnvironmentIds[0]);
-    }
-    const parts: string[] = [];
-    if (selectedRepoNames.length > 0) {
-      parts.push(
-        selectedRepoNames.length === 1 ? "1 repository" : `${selectedRepoNames.length} repositories`
-      );
-    }
-    if (selectedEnvironmentIds.length > 0) {
-      parts.push(
-        selectedEnvironmentIds.length === 1
-          ? "1 environment"
-          : `${selectedEnvironmentIds.length} environments`
-      );
-    }
-    return parts.join(" + ");
-  })();
-  const reasoningConfig = getReasoningConfig(resolvedModel);
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      {/* Trigger Type */}
-      {mode === "create" ? (
-        <div>
-          <div
-            id="automation-trigger-type-label"
-            className="block text-sm font-medium text-foreground mb-1.5"
-          >
-            Trigger Type
-          </div>
-          <FieldDescription className="my-1">
-            Scheduled automations run on a repeating timer. Other types run when the connected
-            service sends an event (for example a GitHub webhook or Sentry alert).
-          </FieldDescription>
-          <TriggerTypeSelector
-            value={triggerType}
-            onChange={handleTriggerTypeChange}
-            labelledBy="automation-trigger-type-label"
-          />
-        </div>
-      ) : (
-        <div>
-          <div className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</div>
-          <div className="text-sm text-muted-foreground px-3 py-2 border border-border-muted rounded-md bg-muted/30">
-            {{
-              schedule: "Schedule",
-              sentry: "Sentry Alert",
-              webhook: "Inbound Webhook",
-              github_event: "GitHub Event",
-              linear_event: "Linear Event",
-              slack_event: "Slack Message",
-            }[triggerType] || triggerType}
-            <span className="text-xs ml-2">(cannot be changed)</span>
-          </div>
-          <FieldDescription>
-            Trigger type is fixed after the automation is created. Create a new automation to use a
-            different trigger.
-          </FieldDescription>
-        </div>
-      )}
+      <AutomationTriggerTypeField mode={mode} value={trigger} onChange={setTrigger} />
 
       {/* Name */}
       <div>
@@ -452,331 +145,22 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         />
       </div>
 
-      {/* Repository Configuration */}
-      <div>
-        <label
-          id="automation-repository-configuration-label"
-          htmlFor="automation-repository-configuration"
-          className="block text-sm font-medium text-foreground mb-1.5"
-        >
-          Repository Configuration
-        </label>
-        <Popover open={repoDropdownOpen} onOpenChange={setRepoDropdownOpen}>
-          <PopoverTrigger asChild>
-            <button
-              id="automation-repository-configuration"
-              type="button"
-              className="flex w-full items-center gap-2 rounded-sm border border-border bg-input px-3 py-2 text-sm text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              aria-labelledby="automation-repository-configuration-label"
-            >
-              {selectedEnvironmentIds.length > 0 && selectedRepoNames.length === 0 ? (
-                <BoxIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-              ) : (
-                <RepoIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-              )}
-              <span className="min-w-0 flex-1 truncate text-left">
-                {loadingRepos && targetCount === 0 ? "Loading..." : repositoryLabel}
-              </span>
-              {multipleSelectionEnabled && targetCount > 1 && (
-                <span className="shrink-0 text-xs text-muted-foreground">
-                  {targetCount}/{MAX_AUTOMATION_REPOSITORIES}
-                </span>
-              )}
-              <ChevronDownIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent
-            align="start"
-            className="w-[min(34rem,calc(100vw-2rem))] p-0 sm:w-[var(--radix-popover-trigger-width)]"
-          >
-            <div className="border-b border-border-muted p-2">
-              <div className="relative">
-                <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={repoQuery}
-                  onChange={(event) => setRepoQuery(event.target.value)}
-                  placeholder={loadingRepos ? "Loading repositories..." : "Search repositories"}
-                  disabled={loadingRepos}
-                  autoFocus
-                  className="pl-8"
-                />
-              </div>
-            </div>
-            {filteredEnvironments.length > 0 && (
-              <>
-                <div className="border-b border-border-muted px-3 py-2">
-                  <span className="text-xs font-medium uppercase text-muted-foreground">
-                    Environments
-                  </span>
-                </div>
-                <div className="max-h-40 overflow-y-auto border-b border-border-muted py-1">
-                  {filteredEnvironments.map((environment) => {
-                    const selected = selectedEnvironmentIds.includes(environment.id);
-                    const disabled =
-                      multipleSelectionEnabled &&
-                      !selected &&
-                      targetCount >= MAX_AUTOMATION_REPOSITORIES;
+      <AutomationTargetPicker
+        targets={targets}
+        repos={repos}
+        environments={environments}
+        loadingRepos={loadingRepos}
+        loadingEnvironments={loadingEnvironments}
+        multiTargetAllowed={multiRepoAllowed}
+        repositoryRequired={repositoryRequired}
+      />
 
-                    return multipleSelectionEnabled ? (
-                      <label
-                        key={environment.id}
-                        className={cn(
-                          "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
-                          selected ? "bg-muted text-foreground" : "hover:bg-muted/60",
-                          disabled && "cursor-not-allowed opacity-50"
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          disabled={disabled}
-                          onChange={() => handleEnvironmentToggle(environment.id)}
-                          className="h-4 w-4 rounded border-border accent-accent"
-                        />
-                        <BoxIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate">{environment.name}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {formatRepositoriesLabel(environment.repositories)}
-                        </span>
-                      </label>
-                    ) : (
-                      <button
-                        type="button"
-                        key={environment.id}
-                        onClick={() => handleEnvironmentToggle(environment.id)}
-                        className={cn(
-                          "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
-                          selected ? "bg-muted text-foreground" : "hover:bg-muted/60"
-                        )}
-                      >
-                        <BoxIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate">{environment.name}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {formatRepositoriesLabel(environment.repositories)}
-                        </span>
-                        {selected && <CheckIcon className="h-4 w-4 shrink-0 text-accent" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-            <div className="flex items-center justify-between border-b border-border-muted px-3 py-2">
-              <span className="text-xs font-medium uppercase text-muted-foreground">
-                All repositories
-              </span>
-              {multiRepoAllowed && (
-                <Button type="button" variant="outline" size="xs" onClick={toggleSelectionMode}>
-                  {multipleSelectionEnabled ? "Select One" : "Select Multiple"}
-                </Button>
-              )}
-            </div>
-            <div className="max-h-72 overflow-y-auto py-1">
-              {multipleSelectionEnabled ? (
-                <label
-                  className={cn(
-                    "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
-                    targetCount === 0 ? "bg-muted text-foreground" : "hover:bg-muted/60",
-                    repositoryRequired && "cursor-not-allowed opacity-50"
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    checked={targetCount === 0}
-                    disabled={repositoryRequired}
-                    onChange={handleNoRepository}
-                    className="h-4 w-4 rounded border-border accent-accent"
-                  />
-                  <RepoIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span>{NO_REPOSITORY_LABEL}</span>
-                </label>
-              ) : (
-                <button
-                  type="button"
-                  disabled={repositoryRequired}
-                  onClick={handleNoRepository}
-                  className={cn(
-                    "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
-                    targetCount === 0 ? "bg-muted text-foreground" : "hover:bg-muted/60",
-                    repositoryRequired && "cursor-not-allowed opacity-50"
-                  )}
-                >
-                  <RepoIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">{NO_REPOSITORY_LABEL}</span>
-                  {targetCount === 0 && <CheckIcon className="h-4 w-4 text-accent" />}
-                </button>
-              )}
-              {filteredRepos.map((repo) => {
-                const checked = selectedRepoNames.includes(repo.fullName.toLowerCase());
-                const disabled =
-                  multipleSelectionEnabled &&
-                  !checked &&
-                  targetCount >= MAX_AUTOMATION_REPOSITORIES;
-
-                return multipleSelectionEnabled ? (
-                  <label
-                    key={repo.fullName}
-                    className={cn(
-                      "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
-                      checked ? "bg-muted text-foreground" : "hover:bg-muted/60",
-                      disabled && "cursor-not-allowed opacity-50"
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={disabled}
-                      onChange={() => handleRepoToggle(repo.fullName)}
-                      className="h-4 w-4 rounded border-border accent-accent"
-                    />
-                    <FolderIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate">
-                      {repo.owner}/{repo.name}
-                    </span>
-                    {repo.private && <span className="text-xs text-muted-foreground">private</span>}
-                  </label>
-                ) : (
-                  <button
-                    type="button"
-                    key={repo.fullName}
-                    onClick={() => handleRepoToggle(repo.fullName)}
-                    className={cn(
-                      "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
-                      checked ? "bg-muted text-foreground" : "hover:bg-muted/60"
-                    )}
-                  >
-                    <FolderIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate">
-                      {repo.owner}/{repo.name}
-                    </span>
-                    {repo.private && <span className="text-xs text-muted-foreground">private</span>}
-                    {checked && <CheckIcon className="h-4 w-4 shrink-0 text-accent" />}
-                  </button>
-                );
-              })}
-              {filteredRepos.length === 0 && (
-                <div className="px-3 py-3 text-sm text-muted-foreground">No repositories found</div>
-              )}
-            </div>
-          </PopoverContent>
-        </Popover>
-        <FieldDescription>{repositorySelectionDescription}</FieldDescription>
-      </div>
-
-      {/* Branch (single-repository selections only; multi-repo runs use each repo's default) */}
-      {usesSingleRepository && (
-        <div>
-          <label
-            id="automation-branch-label"
-            htmlFor="automation-branch"
-            className="block text-sm font-medium text-foreground mb-1.5"
-          >
-            Branch
-          </label>
-          <Combobox
-            id="automation-branch"
-            labelId="automation-branch-label"
-            value={baseBranch}
-            onChange={setBaseBranch}
-            items={branches.map((b) => ({
-              value: b.name,
-              label: b.name,
-            }))}
-            searchable
-            searchPlaceholder="Search branches..."
-            filterFn={(option, query) => option.label.toLowerCase().includes(query)}
-            dropdownWidth="w-56"
-            disabled={!selectedRepository || loadingBranches}
-            triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
-          >
-            <BranchIcon className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="truncate flex-1 text-left">
-              {loadingBranches ? "Loading..." : baseBranch || "Select branch"}
-            </span>
-            <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
-          </Combobox>
-          <FieldDescription>
-            Default branch checked out when a session run starts. Selecting a repository resets this
-            to that repo&apos;s default branch. To filter pull requests by merge target, add a
-            Target branch condition below; Head branch matches the PR source branch.
-          </FieldDescription>
-        </div>
-      )}
-
-      {/* Model */}
-      <div>
-        <label
-          id="automation-model-label"
-          htmlFor="automation-model"
-          className="block text-sm font-medium text-foreground mb-1.5"
-        >
-          Model
-        </label>
-        <Combobox
-          id="automation-model"
-          labelId="automation-model-label"
-          value={resolvedModel}
-          onChange={(nextModel) => {
-            setModel(nextModel);
-            if (reasoningEffort && !isValidReasoningEffort(nextModel, reasoningEffort)) {
-              setReasoningEffort("");
-            }
-          }}
-          items={
-            enabledModelOptions.map((group) => ({
-              category: group.category,
-              options: group.models.map((m) => ({
-                value: m.id,
-                label: m.name,
-                description: m.description,
-              })),
-            })) as ComboboxGroup[]
-          }
-          dropdownWidth="w-56"
-          triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
-        >
-          <ModelIcon className="w-3.5 h-3.5 text-muted-foreground" />
-          <span className="truncate flex-1 text-left">{formatModelNameLower(resolvedModel)}</span>
-          <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
-        </Combobox>
-        <FieldDescription>
-          Model used for the agent on each run of this automation.
-        </FieldDescription>
-      </div>
-
-      <div>
-        <label
-          htmlFor="automation-reasoning-effort"
-          className="block text-sm font-medium text-foreground mb-1.5"
-        >
-          Reasoning Effort
-        </label>
-        <Select
-          value={reasoningConfig ? reasoningEffort || DEFAULT_REASONING_VALUE : ""}
-          onValueChange={(value) =>
-            setReasoningEffort(value === DEFAULT_REASONING_VALUE ? "" : value)
-          }
-          disabled={!reasoningConfig}
-        >
-          <SelectTrigger id="automation-reasoning-effort" className="w-full">
-            <SelectValue
-              placeholder={reasoningConfig ? "Use model default" : "Not supported for this model"}
-            />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={DEFAULT_REASONING_VALUE}>Use model default</SelectItem>
-            {(reasoningConfig?.efforts ?? []).map((value) => (
-              <SelectItem key={value} value={value}>
-                {value}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <FieldDescription>
-          For models that support it, overrides how much chain-of-thought style reasoning is
-          allowed. &quot;Use model default&quot; leaves the choice to the model.
-        </FieldDescription>
-      </div>
+      <AutomationAgentFields
+        value={agent}
+        resolvedModel={resolvedModel}
+        enabledModelOptions={enabledModelOptions}
+        onChange={setAgent}
+      />
 
       <fieldset className="space-y-3 rounded-md border border-border-muted p-4">
         <legend className="px-1 text-sm font-medium text-foreground">
@@ -803,227 +187,25 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         ))}
       </fieldset>
 
-      {/* Schedule fields (only for schedule type) */}
-      {isSchedule && (
-        <>
-          <fieldset>
-            <legend className="block text-sm font-medium text-foreground mb-1.5">Schedule</legend>
-            <CronPicker value={scheduleCron} onChange={setScheduleCron} timezone={scheduleTz} />
-            <FieldDescription>
-              How often this automation runs. Use a preset or a five-field cron expression (minute,
-              hour, day of month, month, day of week).
-            </FieldDescription>
-          </fieldset>
-          <div>
-            <label
-              id="automation-timezone-label"
-              htmlFor="automation-timezone"
-              className="block text-sm font-medium text-foreground mb-1.5"
-            >
-              Timezone
-            </label>
-            <Combobox
-              id="automation-timezone"
-              labelId="automation-timezone-label"
-              value={scheduleTz}
-              onChange={setScheduleTz}
-              items={TIMEZONE_GROUPS}
-              maxDisplayed={20}
-              searchable
-              searchPlaceholder="Search timezones..."
-              filterFn={(option, query) =>
-                option.label.toLowerCase().includes(query) ||
-                String(option.value).toLowerCase().includes(query)
-              }
-              dropdownWidth="w-64"
-              triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
-            >
-              <span className="truncate flex-1 text-left">{scheduleTz.replace(/_/g, " ")}</span>
-              <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
-            </Combobox>
-            <FieldDescription>
-              The schedule is evaluated in this time zone (for example, &quot;9:00&quot; is 9:00
-              local time here).
-            </FieldDescription>
-          </div>
-        </>
-      )}
+      <AutomationTriggerConfigurationFields
+        key={trigger.type}
+        mode={mode}
+        value={trigger}
+        onChange={setTrigger}
+        eventTypeError={eventTypeError}
+        slackChannelError={slackChannelError}
+        conditionErrors={conditionErrors}
+      />
 
-      {/* Event type selector (for trigger sources with event type support) */}
-      {showEventTypeSelector && (
-        <div>
-          <label
-            htmlFor="automation-event-type"
-            className="block text-sm font-medium text-foreground mb-1.5"
-          >
-            Event Type
-          </label>
-          <Select
-            value={eventType}
-            onValueChange={(value) => {
-              setEventType(value);
-              if (eventTypeError) setEventTypeError("");
-              // A GitHub event can only be filtered on the fields its payload
-              // carries, so conditions the new event cannot answer come off
-              // rather than being saved as filters that could never match. Say
-              // which — a filter vanishing without a word reads as a bug.
-              if (TRIGGER_TYPE_TO_SOURCE[triggerType] !== "github") {
-                setDroppedConditions(EMPTY_CONDITIONS);
-                return;
-              }
-              const candidates = dedupeConditionsBySemanticKey([
-                ...conditions,
-                ...droppedConditions,
-              ]);
-              const kept = candidates.filter((condition) =>
-                isGitHubConditionCompatible(value, condition)
-              );
-              setDroppedConditions(candidates.filter((condition) => !kept.includes(condition)));
-              setConditions(kept);
-            }}
-          >
-            <SelectTrigger id="automation-event-type" className="w-full">
-              <SelectValue placeholder={eventTypePlaceholder} />
-            </SelectTrigger>
-            <SelectContent>
-              {eventTypes.map((et) => (
-                <SelectItem key={et.eventType} value={et.eventType}>
-                  {et.displayName}
-                  <span className="text-muted-foreground ml-2 text-xs">{et.description}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <FieldDescription>
-            Only events of this type on the selected repository can start a run for this automation.
-          </FieldDescription>
-          {eventTypeError && <p className="mt-1 text-xs text-destructive">{eventTypeError}</p>}
-        </div>
-      )}
-
-      {/* Sentry Client Secret (create mode only) */}
-      {triggerType === "sentry" && mode === "create" && (
-        <div>
-          <label
-            htmlFor="sentry-client-secret"
-            className="block text-sm font-medium text-foreground mb-1.5"
-          >
-            Sentry Client Secret
-          </label>
-          <Input
-            id="sentry-client-secret"
-            type="password"
-            value={sentryClientSecret}
-            onChange={(e) => setSentryClientSecret(e.target.value)}
-            placeholder="Paste your Sentry Custom Integration client secret"
-            required
-          />
-          <p className="text-xs text-muted-foreground mt-1">
-            Found in your Sentry Custom Integration settings. This will be encrypted and stored
-            securely.
-          </p>
-        </div>
-      )}
-
-      {/* Conditions (for non-schedule types) */}
-      {!isSchedule && TRIGGER_TYPE_TO_SOURCE[triggerType] && (
-        <fieldset className="m-0 min-w-0 border-0 p-0">
-          <legend className="block text-sm font-medium text-foreground mb-1.5">
-            Conditions
-            <span className="text-xs text-muted-foreground ml-1 font-normal">(optional)</span>
-          </legend>
-          <ConditionBuilder
-            conditions={conditions}
-            onChange={setConditions}
-            triggerSource={TRIGGER_TYPE_TO_SOURCE[triggerType] as AutomationEventSource}
-            eventType={eventType || undefined}
-          />
-          <FieldDescription>
-            Optional filters on incoming events. When you add conditions, every condition must pass
-            before a run starts.
-          </FieldDescription>
-          {droppedConditions.length > 0 && (
-            <FieldDescription>
-              <span role="status">
-                Removed{" "}
-                {droppedConditions.map(({ type }) => CONDITION_LABELS[type] || type).join(", ")} —
-                not available for this event type.
-              </span>
-            </FieldDescription>
-          )}
-          {isSlack && !slackConditionsValid && (
-            <p className="mt-1 text-xs text-destructive">
-              Slack triggers require at least one Slack Channel condition.
-            </p>
-          )}
-        </fieldset>
-      )}
-
-      {/* Instructions */}
-      <div>
-        <label
-          htmlFor="automation-instructions"
-          className="block text-sm font-medium text-foreground mb-1.5"
-        >
-          Instructions
-        </label>
-        <FieldDescription className="mb-1.5">
-          Main prompt for the agent when a run starts. For event-based triggers, a short summary of
-          the event is inserted above this text.
-        </FieldDescription>
-        <Textarea
-          id="automation-instructions"
-          value={instructions}
-          onChange={(e) => setInstructions(e.target.value)}
-          placeholder={
-            isSchedule
-              ? "Run the test suite and fix any failing tests. If all tests pass, look for TODO comments and address the most impactful one."
-              : triggerType === "sentry"
-                ? "Investigate this Sentry error. Find the root cause in the codebase, then open a PR with a fix."
-                : triggerType === "github_event"
-                  ? "Review this pull request and provide feedback. Check for code quality issues, potential bugs, and suggest improvements."
-                  : "Process this webhook payload and take the appropriate action."
-          }
-          maxLength={INSTRUCTIONS_MAX_LENGTH}
-          required
-          rows={6}
-          aria-describedby="instructions-counter"
-          className="resize-y"
-        />
-        <div
-          id="instructions-counter"
-          aria-live="polite"
-          className={`mt-1 text-xs text-right ${
-            instructions.length >= INSTRUCTIONS_MAX_LENGTH
-              ? "text-destructive"
-              : instructions.length >= INSTRUCTIONS_WARNING_THRESHOLD
-                ? "text-warning"
-                : "text-muted-foreground"
-          }`}
-        >
-          {instructions.length >= INSTRUCTIONS_MAX_LENGTH ? (
-            <span>Maximum length reached. </span>
-          ) : null}
-          {instructions.length.toLocaleString()} / {INSTRUCTIONS_MAX_LENGTH.toLocaleString()}
-        </div>
-      </div>
+      <AutomationInstructionsField
+        value={instructions}
+        triggerType={trigger.type}
+        onChange={setInstructions}
+      />
 
       {/* Submit */}
       <div className="flex justify-end gap-2">
-        <Button
-          type="submit"
-          disabled={
-            submitting ||
-            loadingModels ||
-            !name.trim() ||
-            (repositoryRequired && selectedRepoNames.length === 0) ||
-            !instructions.trim() ||
-            !isScheduleValid ||
-            !slackConditionsValid ||
-            (showEventTypeSelector && !eventType) ||
-            (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim())
-          }
-        >
+        <Button type="submit" disabled={submitting || !formEvaluation.valid}>
           {submitting
             ? mode === "create"
               ? "Creating..."

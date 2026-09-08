@@ -188,11 +188,13 @@ export type {
 } from "./audit-events";
 
 export {
+  MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
   MAX_AUTOMATION_REPOSITORIES,
   MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
+  validateAutomationTargetCounts,
   sentryClientSecretSchema,
   createAutomationRequestSchema,
   updateAutomationRequestSchema,

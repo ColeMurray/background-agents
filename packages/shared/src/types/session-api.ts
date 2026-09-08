@@ -154,6 +154,12 @@ export const sendPromptRequestSchema = z
 
 export type SendPromptRequest = z.infer<typeof sendPromptRequestSchema>;
 
+export const sessionBudgetUpdateSchema = z.strictObject({
+  maxCostUsd: z.number().finite().positive().nullable(),
+});
+
+export type SessionBudgetUpdate = z.infer<typeof sessionBudgetUpdateSchema>;
+
 /** Request body for POST /sessions/:parentId/children/:childId/prompt. */
 export const childFollowUpPromptRequestSchema = z.strictObject({
   content: z

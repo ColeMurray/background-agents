@@ -1,0 +1,8 @@
+{
+  "name": "openinspect-plugins",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.29"
+  }
+}

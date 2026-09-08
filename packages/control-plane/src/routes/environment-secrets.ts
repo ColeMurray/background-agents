@@ -236,7 +236,7 @@ async function handleImportEnvironmentSecrets(
   const environment = await store.getById(id);
   if (!environment) return error("Environment not found", 404);
 
-  const rawBody = await parseJsonBody<unknown>(request);
+  const rawBody = await parseJsonBody(request);
   if (rawBody instanceof Response) return rawBody;
   const parsedBody = environmentSecretsImportBodySchema.safeParse(rawBody);
   if (!parsedBody.success) {

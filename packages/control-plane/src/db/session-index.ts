@@ -725,15 +725,6 @@ export class SessionIndexStore {
     return row ? readStateFromRow(row) : null;
   }
 
-  async updateTitle(id: string, title: string): Promise<boolean> {
-    const result = await this.db
-      .prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
-      .bind(title, Date.now(), id)
-      .run();
-
-    return (result.meta.changes ?? 0) > 0;
-  }
-
   async updateTitleIfNewer(id: string, title: string, updatedAt: number): Promise<boolean> {
     const result = await this.db
       .prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ? AND updated_at <= ?")

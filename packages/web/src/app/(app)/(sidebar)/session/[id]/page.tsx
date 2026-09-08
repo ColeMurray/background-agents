@@ -56,6 +56,7 @@ import { useSessionDetailsSidebar } from "@/hooks/use-session-details-sidebar";
 import { findLatestTerminalMessageId } from "@/lib/session-read-state";
 import { useMarkSessionRead } from "@/hooks/use-mark-session-read";
 import { usePromptInput } from "@/hooks/use-prompt-input";
+import { formatSessionCost } from "@/lib/session-cost";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
@@ -87,6 +88,7 @@ export default function SessionPage() {
     participants,
     artifacts,
     currentParticipantId,
+    canManageBudget,
     isProcessing,
     promptQueue,
     loadingHistory,
@@ -146,7 +148,7 @@ export default function SessionPage() {
     reasoningEffort,
     loadingEnabledModels,
     sessionState?.status ?? DEFAULT_SESSION_STATUS,
-    ready && capabilities.collaborate,
+    ready && capabilities.collaborate && !sessionState?.budgetExhausted,
     shortcuts["send-prompt"]
   );
   const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
@@ -357,7 +359,12 @@ export default function SessionPage() {
             value: prompt,
             isProcessing: ready && isProcessing,
             draftLocked: isSubmitting || sessionAttachments.isUploading,
-            sendBlocked: !ready,
+            sendBlocked: !ready || Boolean(sessionState?.budgetExhausted),
+            blockedReason: sessionState?.budgetExhausted
+              ? canManageBudget
+                ? `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. Raise or remove the limit to continue.`
+                : `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. The session owner must raise or remove the limit to continue.`
+              : undefined,
             submitError,
             inputRef,
             onSubmit: handleSubmit,
@@ -451,6 +458,7 @@ export default function SessionPage() {
                 diffLoading={diffLoading}
                 selectedDiff={selectedDiff}
                 onOpenDiff={openDiff}
+                canManageBudget={canManageBudget}
                 capabilities={capabilities}
               />
             }
@@ -486,6 +494,7 @@ export default function SessionPage() {
               diffLoading={diffLoading}
               selectedDiff={selectedDiff}
               onOpenDiff={openDiff}
+              canManageBudget={canManageBudget}
               capabilities={capabilities}
             />
           </>
@@ -511,6 +520,7 @@ export default function SessionPage() {
           diffLoading={diffLoading}
           selectedDiff={selectedDiff}
           onOpenDiff={openDiff}
+          canManageBudget={canManageBudget}
           capabilities={capabilities}
         />
       )}

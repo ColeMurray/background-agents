@@ -11,12 +11,24 @@ type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete"
 
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
 
-interface RecordedMessageCompletion {
+export interface RecordedMessageCompletion {
   messageId: string;
   messageCreatedAt: number;
   messageStartedAt: number | null;
   completedAt: number;
   status: "completed" | "failed";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readRequiredNumberColumn(result: SqlResult, column: string): number {
+  const row = result.one();
+  if (!isRecord(row) || typeof row[column] !== "number") {
+    throw new Error(`Malformed numeric SQL result for ${column}`);
+  }
+  return row[column];
 }
 
 /** Data for creating a message. */
@@ -39,7 +51,7 @@ export interface CreateMessageData {
 }
 
 export interface AdmitAutofixMessageData {
-  message: CreateMessageData;
+  message: Omit<CreateMessageData, "authorId"> & { authorId: string | (() => string) };
   feedbackKey: string;
   pullRequestKey: string;
   originContext: string;
@@ -51,7 +63,10 @@ export interface AdmitAutofixMessageData {
 export type AutofixMessageAdmission =
   | { kind: "enqueued"; messageId: string }
   | { kind: "duplicate"; messageId: string }
-  | { kind: "rejected"; reason: "session_closed" | "queue_full" | "attempt_limit" };
+  | {
+      kind: "rejected";
+      reason: "session_closed" | "budget_exhausted" | "queue_full" | "attempt_limit";
+    };
 
 /** Options for listing messages. */
 export interface ListMessagesOptions {
@@ -91,7 +106,7 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT COUNT(*) as count FROM messages WHERE status IN ('pending', 'processing')`
     );
-    return (result.one() as { count: number }).count;
+    return readRequiredNumberColumn(result, "count");
   }
 
   getProcessingMessage(): { id: string } | null {
@@ -115,6 +130,29 @@ export class MessageRepository {
       deadline,
       messageId
     );
+  }
+
+  /**
+   * Record the runtime's cumulative cost report for a turn and return how much
+   * it exceeds the highest report already stored. Resends, out-of-order
+   * reports, and unknown messages return 0.
+   */
+  raiseReportedCost(messageId: string, reportedCostUsd: number): number {
+    if (!Number.isFinite(reportedCostUsd) || reportedCostUsd <= 0) return 0;
+    // Read-then-write: callers hold the storage transaction, and RETURNING
+    // would only expose the post-update value.
+    const rows = this.sql
+      .exec(`SELECT reported_cost_usd FROM messages WHERE id = ?`, messageId)
+      .toArray() as Array<{ reported_cost_usd: number }>;
+    if (rows.length !== 1) return 0;
+    const previous = rows[0].reported_cost_usd;
+    if (reportedCostUsd <= previous) return 0;
+    this.sql.exec(
+      `UPDATE messages SET reported_cost_usd = ? WHERE id = ?`,
+      reportedCostUsd,
+      messageId
+    );
+    return reportedCostUsd - previous;
   }
 
   clearMessageAwaitingStopConfirmation(messageId: string): void {
@@ -172,6 +210,14 @@ export class MessageRepository {
       if (existingMessageId) {
         return { kind: "duplicate", messageId: existingMessageId };
       }
+      const budget = (
+        this.sql.exec(`SELECT budget_exhausted FROM session LIMIT 1`).toArray() as Array<{
+          budget_exhausted: number;
+        }>
+      )[0];
+      if (budget?.budget_exhausted === 1) {
+        return { kind: "rejected", reason: "budget_exhausted" };
+      }
       if (data.sessionClosed) {
         return { kind: "rejected", reason: "session_closed" };
       }
@@ -180,21 +226,23 @@ export class MessageRepository {
       }
 
       if (data.attemptLimit !== null) {
-        const count = this.sql
-          .exec(
-            `SELECT COUNT(*) AS count FROM messages
+        const countResult = this.sql.exec(
+          `SELECT COUNT(*) AS count FROM messages
            WHERE autofix_pr_key = ? AND created_at >= ?`,
-            data.pullRequestKey,
-            data.windowStart
-          )
-          .one() as { count: number };
-        if (count.count >= data.attemptLimit) {
+          data.pullRequestKey,
+          data.windowStart
+        );
+        if (readRequiredNumberColumn(countResult, "count") >= data.attemptLimit) {
           return { kind: "rejected", reason: "attempt_limit" };
         }
       }
 
       this.createMessage({
         ...data.message,
+        authorId:
+          typeof data.message.authorId === "function"
+            ? data.message.authorId()
+            : data.message.authorId,
         autofixFeedbackKey: data.feedbackKey,
         autofixPrKey: data.pullRequestKey,
         originContext: data.originContext,

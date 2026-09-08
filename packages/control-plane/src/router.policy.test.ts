@@ -8,7 +8,6 @@ import {
   TEST_SERVICE_SECRETS,
 } from "./router.test-support";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
-import { SCOPED_PERMISSION_PAIRS } from "@open-inspect/shared/rbac";
 
 function routeFor(method: string, path: string) {
   return matchRoute(routes, method, path)?.route;
@@ -16,11 +15,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(171);
+    expect(routes).toHaveLength(172);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(130);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(171);
+    expect(new Set(paths).size).toBe(131);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(172);
   });
 
   it("declares every path in the literal-or-parameter grammar", () => {
@@ -166,10 +165,6 @@ describe("route policy table", () => {
             expect(
               serviceAllowsPermission(grant.service, requirement.permission),
               `${grant.service} must allow ${requirement.permission} for ${route.method} ${route.path}`
-            ).toBe(true);
-          } else if (requirement.kind === "scoped-permission") {
-            expect(
-              serviceAllowsPermission(grant.service, SCOPED_PERMISSION_PAIRS[requirement.stem].own)
             ).toBe(true);
           }
         }

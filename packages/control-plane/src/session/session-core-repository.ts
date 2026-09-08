@@ -22,6 +22,7 @@ export interface UpsertSessionData {
   codeServerEnabled?: boolean;
   vncEnabled?: boolean;
   sandboxSettings?: string | null;
+  maxCostUsd?: number | null;
   /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
   environmentId?: string | null;
   createdAt: number;
@@ -78,8 +79,11 @@ export class SessionCoreRepository {
     }
 
     this.sql.exec(
-      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      // max_cost_usd is seeded on insert but absent from the update clause: once
+      // setSessionBudget has written a live limit, it is working state like
+      // branch_name and total_cost, and a repeated init must not reset it.
+      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, max_cost_usd, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET
          session_name = excluded.session_name,
          title = excluded.title,
@@ -116,6 +120,7 @@ export class SessionCoreRepository {
       data.vncEnabled ? 1 : 0,
       data.sandboxSettings ?? null,
       data.environmentId ?? null,
+      data.maxCostUsd ?? null,
       data.createdAt,
       data.updatedAt
     );
@@ -172,12 +177,35 @@ export class SessionCoreRepository {
     );
   }
 
-  addSessionCost(cost: number, updatedAt: number): void {
+  addSessionCost(cost: number, updatedAt: number): number {
+    const row = this.sql
+      .exec(
+        `UPDATE session
+       SET total_cost = total_cost + ?, updated_at = ?
+       WHERE id = (SELECT id FROM session LIMIT 1)
+       RETURNING total_cost`,
+        cost,
+        updatedAt
+      )
+      .one() as { total_cost: number };
+    return row.total_cost;
+  }
+
+  setSessionBudget(maxCostUsd: number | null, exhausted: boolean, updatedAt: number): void {
     this.sql.exec(
       `UPDATE session
-       SET total_cost = total_cost + ?, updated_at = ?
+       SET max_cost_usd = ?, budget_exhausted = ?, updated_at = ?
        WHERE id = (SELECT id FROM session LIMIT 1)`,
-      cost,
+      maxCostUsd,
+      exhausted ? 1 : 0,
+      updatedAt
+    );
+  }
+
+  markBudgetExhausted(updatedAt: number): void {
+    this.sql.exec(
+      `UPDATE session SET budget_exhausted = 1, updated_at = ?
+       WHERE id = (SELECT id FROM session LIMIT 1)`,
       updatedAt
     );
   }

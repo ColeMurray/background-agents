@@ -1,6 +1,6 @@
 import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
 import type { SqlStorage } from "./sql-storage";
-import type { ArtifactRow } from "./types";
+import { artifactRowSchema, SessionStorageIntegrityError, type ArtifactRow } from "./types";
 
 /** Data for creating an artifact. */
 export interface CreateArtifactData {
@@ -48,12 +48,18 @@ export class ArtifactRepository {
 
   listArtifacts(): ArtifactRow[] {
     const result = this.sql.exec(`SELECT * FROM artifacts ORDER BY created_at DESC`);
-    return result.toArray() as ArtifactRow[];
+    return result.toArray().map((row) => parseArtifactRow(row));
   }
 
   getArtifactById(artifactId: string): ArtifactRow | null {
     const result = this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, artifactId);
-    const rows = result.toArray() as ArtifactRow[];
-    return rows[0] ?? null;
+    const row = result.toArray()[0];
+    return row === undefined ? null : parseArtifactRow(row);
   }
+}
+
+function parseArtifactRow(row: unknown): ArtifactRow {
+  const parsed = artifactRowSchema.safeParse(row);
+  if (parsed.success) return parsed.data;
+  throw new SessionStorageIntegrityError("Malformed persisted artifact row");
 }

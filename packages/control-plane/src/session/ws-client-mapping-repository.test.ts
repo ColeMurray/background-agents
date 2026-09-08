@@ -37,11 +37,25 @@ describe("WsClientMappingRepository", () => {
   });
 
   it("restores a mapping with joined participant data", () => {
-    mock.setRows([{ participant_id: "p-1", client_id: "client-1", user_id: "user-1" }]);
+    mock.setRows([
+      {
+        participant_id: "p-1",
+        client_id: "client-1",
+        user_id: "user-1",
+        canonical_user_id: "canonical-1",
+        scm_name: "Test User",
+        scm_login: "test-user",
+        authorization_expires_at: 2000,
+      },
+    ]);
     expect(repository.getWsClientMapping("ws-1")).toMatchObject({
       participant_id: "p-1",
       client_id: "client-1",
       user_id: "user-1",
+      canonical_user_id: "canonical-1",
+      scm_name: "Test User",
+      scm_login: "test-user",
+      authorization_expires_at: 2000,
     });
     expect(mock.calls[0].query).toContain("JOIN participants");
   });
@@ -50,9 +64,57 @@ describe("WsClientMappingRepository", () => {
     expect(repository.getWsClientMapping("unknown")).toBeNull();
   });
 
+  it("returns null for a malformed persisted mapping", () => {
+    mock.setRows([
+      {
+        participant_id: "p-1",
+        client_id: 42,
+        user_id: "user-1",
+        canonical_user_id: null,
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: 2000,
+      },
+    ]);
+    expect(repository.getWsClientMapping("ws-1")).toBeNull();
+  });
+
+  it("accepts nullable participant profile fields", () => {
+    mock.setRows([
+      {
+        participant_id: "p-1",
+        client_id: "client-1",
+        user_id: "user-1",
+        canonical_user_id: null,
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: 2000,
+      },
+    ]);
+    expect(repository.getWsClientMapping("ws-1")?.scm_name).toBeNull();
+  });
+
   it("checks whether a mapping exists", () => {
     expect(repository.hasWsClientMapping("unknown")).toBe(false);
     mock.setRows([{ participant_id: "p-1" }]);
     expect(repository.hasWsClientMapping("ws-1")).toBe(true);
   });
+
+  it.each([undefined, null, "2000", Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects a mapping with an invalid authorization expiration: %s",
+    (authorizationExpiresAt) => {
+      mock.setRows([
+        {
+          participant_id: "p-1",
+          client_id: "client-1",
+          user_id: "user-1",
+          canonical_user_id: "canonical-1",
+          scm_name: "Test User",
+          scm_login: "test-user",
+          authorization_expires_at: authorizationExpiresAt,
+        },
+      ]);
+      expect(repository.getWsClientMapping("ws-1")).toBeNull();
+    }
+  );
 });

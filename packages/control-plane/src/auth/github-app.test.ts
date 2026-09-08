@@ -16,8 +16,8 @@ class FakeCacheStore implements CacheStore {
   private readonly store = new Map<string, string>();
 
   async get(key: string): Promise<string | null>;
-  async get<T>(key: string, type: "json"): Promise<T | null>;
-  async get<T>(key: string, type?: "json"): Promise<string | T | null> {
+  async get(key: string, type: "json"): Promise<unknown | null>;
+  async get(key: string, type?: "json"): Promise<string | unknown | null> {
     const value = this.store.get(key);
     if (value == null) {
       return null;
@@ -25,7 +25,7 @@ class FakeCacheStore implements CacheStore {
     if (type !== "json") {
       return value;
     }
-    return JSON.parse(value) as T;
+    return JSON.parse(value);
   }
 
   async put(key: string, value: string): Promise<void> {
@@ -208,6 +208,35 @@ describe("github-app utilities", () => {
 
       expect(token).toBe("token-from-kv");
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("treats a malformed KV token as a cache miss", async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      const cacheStore = new FakeCacheStore();
+      const { privateKeyPem } = await generateTestKeyPair();
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      fetchMock.mockResolvedValue(
+        new Response(JSON.stringify({ token: "fresh-token", expires_at: expiresAt }), {
+          status: 201,
+        })
+      );
+
+      const config = {
+        appId: `app-kv-malformed-${Date.now()}`,
+        privateKey: privateKeyPem,
+        installationId: "installation-malformed-cache",
+      };
+      await cacheStore.put(
+        `github:installation-token:v1:${config.appId}:${config.installationId}`,
+        JSON.stringify({
+          token: 42,
+          expiresAtEpochMs: Date.parse(expiresAt),
+          cachedAtEpochMs: Date.now(),
+        })
+      );
+
+      await expect(getCachedInstallationToken(config, { cacheStore })).resolves.toBe("fresh-token");
+      expect(fetchMock).toHaveBeenCalledOnce();
     });
   });
 

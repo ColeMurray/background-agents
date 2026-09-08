@@ -17,6 +17,7 @@ export default tseslint.config(
       "**/coverage/**",
       "**/.venv/**",
       "**/venv/**",
+      ".cache/sandbox-images/**",
       "opencode-reference/**",
       "**/*.d.ts",
       // Bundled/generated files

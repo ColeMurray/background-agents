@@ -168,6 +168,22 @@ describe("repository list route", () => {
     expect(cached.scmIdentity).toBe(expectedIdentity);
   });
 
+  it("treats a malformed singleton cache entry as a miss", async () => {
+    const env = createEnv();
+    mockCacheGet.mockResolvedValue({
+      repos: [{ id: "not-a-number" }],
+      cachedAt: new Date().toISOString(),
+      scmIdentity: await reposCacheIdentity(env),
+      freshUntil: Date.now() + 60_000,
+    });
+
+    const response = await handleRequest(request("/repos"), env, createTestBackgroundTasks());
+
+    expect(response.status).toBe(200);
+    expect(mockListRepositories).toHaveBeenCalledOnce();
+    await expect(response.json()).resolves.toMatchObject({ cached: false });
+  });
+
   it("globally invalidates enriched metadata across SCM configuration changes", async () => {
     let cached: unknown = null;
     let description = "Original description";
