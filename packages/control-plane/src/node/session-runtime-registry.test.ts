@@ -6,13 +6,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
+import { WS_CLOSE_SERVICE_RESTART } from "@open-inspect/shared/types/websocket";
 import type { SqlDatabase } from "../db/sql-database";
 import type { AlarmScheduleStore } from "../session/alarm/scheduler";
 import type { SessionRuntime } from "../session/components";
 import type { SessionPlatform, SessionStorage } from "../session/platform";
 import type { BackgroundTasks } from "../platform-ports";
 import {
-  SERVICE_RESTART_CLOSE_CODE,
   SessionRuntimeRegistry,
   type ManagedSessionRuntime,
   type SessionRuntimeRegistryOptions,
@@ -21,6 +21,9 @@ import { createFileSessionStoreProvider, type SessionStoreProvider } from "./ses
 
 const GC_CHILD = "SESSION_REGISTRY_GC_CHILD";
 const GC_CHILD_TIMEOUT_MS = 60_000;
+/** The one test the child is spawned to run; everything else in this file would
+ *  otherwise run a second time inside it. */
+const GC_CHILD_TEST = "opens, reads, retires, and lets the collector run afterwards";
 const isGcChild = process.env[GC_CHILD] === "1";
 
 interface Deferred<T = void> {
@@ -565,8 +568,14 @@ describe("SessionRuntimeRegistry", () => {
       try {
         const registry = makeRegistry({ storeProvider: createFileSessionStoreProvider(dataDir) });
         const { server, client } = await connect();
-        const closed = new Promise<{ code: number; reason: string }>((done) =>
-          client.once("close", (code, reason) => done({ code, reason: reason.toString() }))
+        // The standards-style close event carries `wasClean`, which is what
+        // the browser decides on: a proper close frame makes this a clean
+        // close, so the web transport has to retry on the code rather than
+        // treat it as a deliberate teardown (`use-session-transport.ts`).
+        const closed = new Promise<{ code: number; reason: string; wasClean: boolean }>((done) =>
+          client.addEventListener("close", (event) =>
+            done({ code: event.code, reason: event.reason, wasClean: event.wasClean })
+          )
         );
         const runtime = await registry.withRuntime("s1", async (runtime) => {
           runtime.platform.sockets.adopt(server, ["wsid:c1"]);
@@ -584,8 +593,9 @@ describe("SessionRuntimeRegistry", () => {
         await registry.shutdown();
 
         expect(await closed).toEqual({
-          code: SERVICE_RESTART_CLOSE_CODE,
+          code: WS_CLOSE_SERVICE_RESTART,
           reason: "Service restart",
+          wasClean: true,
         });
         expect(runtime.server.onClose).toHaveBeenCalledWith(server, 1012, "Service restart", true);
         expect(deliveredAgainstOpenStore).toBe(true);
@@ -633,7 +643,7 @@ describe("SessionRuntimeRegistry", () => {
       await attached;
 
       await shutdown;
-      expect(await closed).toBe(SERVICE_RESTART_CLOSE_CODE);
+      expect(await closed).toBe(WS_CLOSE_SERVICE_RESTART);
       expect(registry.residentSessionIds()).toEqual([]);
       expect(log.warn).not.toHaveBeenCalled();
     } finally {
@@ -657,7 +667,7 @@ describe("SessionRuntimeRegistry", () => {
 
     held.resolve();
     await pending;
-    await shutdown;
+    expect(await shutdown).toEqual({ forced: [] });
     expect(stores.opened[0]!.closes).toBe(1);
     expect(log.warn).not.toHaveBeenCalled();
   });
@@ -668,8 +678,11 @@ describe("SessionRuntimeRegistry", () => {
     const pending = registry.withRuntime("s1", () => never.promise);
     await flush();
 
-    await registry.shutdown({ timeoutMs: 20 });
+    const report = await registry.shutdown({ timeoutMs: 20 });
 
+    // Reported, not only logged: the host writes a clean-stop marker from
+    // this, and forced work can have persisted a deadline without arming it.
+    expect(report).toEqual({ forced: ["s1"] });
     expect(stores.opened[0]!.closes).toBe(1);
     expect(log.warn).toHaveBeenCalledWith("session_registry.retired_busy", {
       session_id: "s1",
@@ -808,31 +821,45 @@ describe("SessionRuntimeRegistry", () => {
     expect(stores.opened.map((s) => s.closes)).toEqual([0, 1]);
   });
 
-  it("survives late garbage collection of a retired session's store", () => {
-    if (isGcChild) return;
-    const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-    const vitestRoot = dirname(dirname(fileURLToPath(import.meta.resolve("vitest"))));
-    const child = spawnSync(
-      process.execPath,
-      ["--expose-gc", "--no-warnings", join(vitestRoot, "vitest.mjs"), "run", import.meta.filename],
-      {
-        cwd: packageRoot,
-        encoding: "utf8",
-        env: { ...process.env, [GC_CHILD]: "1" },
-        timeout: GC_CHILD_TIMEOUT_MS,
-      }
-    );
+  it(
+    "survives late garbage collection of a retired session's store",
+    () => {
+      if (isGcChild) return;
+      const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+      const vitestRoot = dirname(dirname(fileURLToPath(import.meta.resolve("vitest"))));
+      const child = spawnSync(
+        process.execPath,
+        [
+          "--expose-gc",
+          "--no-warnings",
+          join(vitestRoot, "vitest.mjs"),
+          "run",
+          import.meta.filename,
+          "-t",
+          GC_CHILD_TEST,
+        ],
+        {
+          cwd: packageRoot,
+          encoding: "utf8",
+          env: { ...process.env, [GC_CHILD]: "1" },
+          timeout: GC_CHILD_TIMEOUT_MS,
+        }
+      );
 
-    expect(
-      { status: child.status, signal: child.signal, stdout: child.stdout, stderr: child.stderr },
-      "the isolated registry eviction probe must exit normally"
-    ).toMatchObject({ status: 0, signal: null });
-  });
+      expect(
+        { status: child.status, signal: child.signal, stdout: child.stdout, stderr: child.stderr },
+        "the isolated registry eviction probe must exit normally"
+      ).toMatchObject({ status: 0, signal: null });
+    },
+    // Spawning a vitest run costs more than the default 5s per-test budget on a
+    // loaded machine; hold this test to the same bound as the child itself.
+    GC_CHILD_TIMEOUT_MS
+  );
 });
 
 if (isGcChild) {
   describe("session registry eviction under late garbage collection", () => {
-    it("opens, reads, retires, and lets the collector run afterwards", async () => {
+    it(GC_CHILD_TEST, async () => {
       const dataDir = mkdtempSync(join(tmpdir(), "session-registry-gc-"));
       const alarms = fakeAlarms();
       const registry = new SessionRuntimeRegistry<FakeRuntime>({

@@ -2,10 +2,10 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
+import { WS_CLOSE_TRY_AGAIN_LATER } from "@open-inspect/shared/types/websocket";
 import type { Logger } from "../logger";
 import { isSocketOpen, type SessionWebSocket } from "../platform-ports";
 import {
-  BACKLOG_EXCEEDED_CLOSE_CODE,
   NodeWebSocketHost,
   type NodeSocketHostOptions,
   type SessionWebSocketEventSink,
@@ -310,7 +310,7 @@ describe("NodeWebSocketHost", () => {
     for (let i = 0; i < 4; i += 1) socket.emit("message", Buffer.from(`queued-${i}`), false);
 
     const [code, reason] = await once(client, "close");
-    expect(code).toBe(BACKLOG_EXCEEDED_CLOSE_CODE);
+    expect(code).toBe(WS_CLOSE_TRY_AGAIN_LATER);
     expect(String(reason)).toBe("Message backlog exceeded");
     expect(harness.log.warn).toHaveBeenCalledWith(
       "socket.backlog_exceeded",

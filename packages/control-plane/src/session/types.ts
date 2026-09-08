@@ -48,6 +48,8 @@ export interface SessionRow {
   vnc_enabled: number; // 0 = disabled (default), 1 = enabled
   total_cost: number; // Running aggregate of step_finish event costs
   sandbox_settings: string | null; // JSON blob of SandboxSettings
+  max_cost_usd: number | null; // Mutable effective session cost limit; NULL = unlimited
+  budget_exhausted: number; // 0 = promptable by budget, 1 = paused
   environment_id: string | null; // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at: number;
   updated_at: number;

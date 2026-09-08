@@ -136,6 +136,35 @@ describe("openJobStore", () => {
       ]);
     });
 
+    it("returns a claim no live delivery owns, without waiting out its lease", () => {
+      add("interrupted", 1_000);
+      claim(1_000);
+      // The process that held the claim is gone; the store is reopened by
+      // its replacement while the lease still has a quarter hour to run.
+      store.close();
+      store = openJobStore(dataDir);
+
+      expect(store.recoverAllClaims()).toEqual(["interrupted"]);
+      // The attempt the dead process spent is still spent: a queue counts a
+      // delivery however it ended.
+      expect(claim(1_100)).toEqual([expect.objectContaining({ id: "interrupted", attempts: 2 })]);
+    });
+
+    it("takes a claim back whatever its lease still has to run", () => {
+      add("early", 1_000);
+      add("later", 1_000);
+      const held = claim(1_000);
+      expect(held).toHaveLength(2);
+
+      // One statement, one token, both rows: which is why the store cannot be
+      // asked whose a claim is, and why this belongs to the boot alone.
+      expect(store.recoverAllClaims().sort()).toEqual(["early", "later"]);
+      expect(store.stats(9_000)).toMatchObject({ running: 0, pending: 2 });
+      // The claims are gone, so the settlement that outlived them is refused.
+      store.complete("early", held[0]!.token);
+      expect(store.stats(9_000)).toMatchObject({ pending: 2 });
+    });
+
     it("refuses a settlement from a delivery its lease already outlived", () => {
       add("overtaken", 1_000);
       const [stale] = claim(1_000);

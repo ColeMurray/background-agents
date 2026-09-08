@@ -33,6 +33,7 @@
  * explicit archive or delete route may.
  */
 
+import { WS_CLOSE_SERVICE_RESTART } from "@open-inspect/shared/types/websocket";
 import type { Logger } from "../logger";
 import type { SqlDatabase } from "../db/sql-database";
 import type { AlarmScheduleStore } from "../session/alarm/scheduler";
@@ -55,8 +56,6 @@ const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
 const DEFAULT_MAX_RESIDENT = 256;
 /** How long a shutdown waits for every runtime to quiesce before forcing it. */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
-/** The close code sent to sockets a shutdown closes: the peer should reconnect. */
-export const SERVICE_RESTART_CLOSE_CODE = 1012;
 
 /**
  * What the registry drives on a runtime: the session server's socket entry
@@ -259,8 +258,13 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
    * runtime's leases (including those close deliveries) and background
    * tasks are waited for; only then is its store closed. A runtime still
    * busy at the budget is logged and forced.
+   *
+   * Returns the sessions that were forced. A caller deciding whether the
+   * process stopped cleanly needs those: work cut off mid-flight can have
+   * persisted a deadline without arming it, which is exactly what the next
+   * boot's recovery scan exists to find.
    */
-  async shutdown(options: ShutdownOptions = {}): Promise<void> {
+  async shutdown(options: ShutdownOptions = {}): Promise<{ forced: string[] }> {
     const deadlineMs = Date.now() + (options.timeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS);
     this.shuttingDown = true;
     this.stopSweeper();
@@ -270,12 +274,17 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
       await Promise.allSettled([...this.opening.values()].map((o) => o.promise));
     }
     if (this.sweeping) await this.sweeping;
-    await Promise.all(
+    const outcomes = await Promise.all(
       [...this.resident.values()].map((session) => this.quiesce(session, deadlineMs))
     );
+    return { forced: outcomes.filter((outcome) => outcome !== null) };
   }
 
-  private async quiesce(session: ResidentSession<Runtime>, deadlineMs: number): Promise<void> {
+  /** The session id when it had to be forced, and null when it quiesced. */
+  private async quiesce(
+    session: ResidentSession<Runtime>,
+    deadlineMs: number
+  ): Promise<string | null> {
     session.state = "quiescing";
     const quiescent = await this.waitForQuiescence(session, deadlineMs);
     if (!quiescent) {
@@ -287,6 +296,7 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
       });
     }
     this.retire(session, "shutdown");
+    return quiescent ? null : session.id;
   }
 
   /**
@@ -301,7 +311,7 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
   ): Promise<boolean> {
     for (;;) {
       for (const socket of session.sockets.sockets()) {
-        socket.close(SERVICE_RESTART_CLOSE_CODE, "Service restart");
+        socket.close(WS_CLOSE_SERVICE_RESTART, "Service restart");
       }
       const remainingMs = deadlineMs - Date.now();
       if (remainingMs <= 0) return this.isQuiescent(session);

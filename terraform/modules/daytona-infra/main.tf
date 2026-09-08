@@ -16,11 +16,12 @@ resource "null_resource" "daytona_snapshot" {
     interpreter = ["bash"]
 
     environment = {
-      DAYTONA_API_KEY       = var.api_key
-      DAYTONA_API_URL       = var.api_url
-      DAYTONA_TARGET        = var.target
-      DAYTONA_BASE_SNAPSHOT = var.snapshot_name
-      DEPLOY_PATH           = var.deploy_path
+      DAYTONA_API_KEY             = var.api_key
+      DAYTONA_API_URL             = var.api_url
+      DAYTONA_TARGET              = var.target
+      DAYTONA_BASE_SNAPSHOT       = var.snapshot_name
+      OPENINSPECT_IMAGE_CANDIDATE = var.snapshot_name
+      DEPLOY_PATH                 = var.deploy_path
     }
   }
 }

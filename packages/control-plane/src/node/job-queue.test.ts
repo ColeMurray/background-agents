@@ -290,7 +290,7 @@ describe("NodeJobs", () => {
     await vi.advanceTimersByTimeAsync(2);
     expect(log.warn).toHaveBeenCalledWith(
       "Returning jobs whose claim expired",
-      expect.objectContaining({ event: "jobs.claims_recovered" })
+      expect.objectContaining({ event: "jobs.claims_expired" })
     );
     expect(handle).toHaveBeenCalledTimes(2);
   });
@@ -325,6 +325,26 @@ describe("NodeJobs", () => {
     releaseFirst();
     await queue.drain();
     expect(queue.stats()).toMatchObject({ pending: 0, running: 0, dead: 0 });
+  });
+
+  it("takes back every claim on disk when the boot returns them", async () => {
+    const handle = vi.fn(async (): Promise<JobOutcome> => "ack");
+    // A row left `running` on disk by a process that is gone, its lease with
+    // most of the quarter hour still to run.
+    store.add({ id: "orphan", kind: KIND, payload: JSON.stringify(PAYLOAD), runAt: 9_000 }, 9_000);
+    store.claim(9_000, 1, [KIND], 9_000 + JOB_CLAIM_LEASE_MS);
+    expect(store.stats(10_000)).toMatchObject({ running: 1, pending: 0 });
+
+    // The boot's job, not the poller's: one host holds the volume, so a claim
+    // already on disk is a dead process's.
+    expect(store.recoverAllClaims()).toEqual(["orphan"]);
+
+    const queue = createQueue(handle);
+    queue.start();
+    await runPoller(queue);
+
+    expect(handle).toHaveBeenCalledOnce();
+    expect(queueIsEmpty()).toBe(true);
   });
 
   it("does not let a second poller take a job the first is still delivering", async () => {

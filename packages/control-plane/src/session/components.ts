@@ -83,6 +83,9 @@ import { resolveSessionRepoId } from "./repo-id-resolution";
 import { Scheduler } from "../scheduler/scheduler";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
+import { SessionBudgetService } from "./budget-service";
+import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
+import { MessageFailureService } from "./message-failure-service";
 import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import { SessionSandboxEventProcessor } from "./sandbox-events/processor";
@@ -101,6 +104,7 @@ import { SandboxHandler } from "./http/handlers/sandbox.handler";
 import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { WsTokenHandler } from "./http/handlers/ws-token.handler";
 import { SessionLifecycleHandler } from "./http/handlers/session-lifecycle.handler";
+import { SessionBudgetHandler } from "./http/handlers/session-budget.handler";
 import { PullRequestHandler } from "./http/handlers/pull-request.handler";
 import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
@@ -406,7 +410,29 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   // Tier 6 — the message queue.
   const getExecutionTimeoutMs = () => resolveExecutionTimeoutMs(sessionCoreRepository, env, log);
-  const messageQueue = new SessionMessageQueue(
+  const messageFailures = new MessageFailureService(
+    backgroundTasks,
+    log,
+    messageRepository,
+    messenger,
+    callbackService,
+    recordTerminalMessage
+  );
+  const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
+    log,
+    sessionCoreRepository,
+    messageRepository,
+    wsManager,
+    messenger,
+    statusService,
+    messageFailures,
+    lifecycleManager,
+    alarmScheduler,
+    alarmDeadlines,
+    (): void => messageQueue.broadcastPromptQueue(),
+    (): Promise<void> => messageQueue.processMessageQueue()
+  );
+  const messageQueue: SessionMessageQueue = new SessionMessageQueue(
     backgroundTasks,
     log,
     sessionCoreRepository,
@@ -419,11 +445,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     statusService,
     (model) => userEnvResolver.getProviderAuthenticationError(model),
-    recordTerminalMessage,
+    messageFailures,
     lifecycleManager,
     sessionIndexStore,
     scmProviderName,
     alarmScheduler,
+    executionStop,
     getExecutionTimeoutMs
   );
 
@@ -443,19 +470,28 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     eventRepository,
     artifactRepository,
     messageQueue,
-    stopExecution: () => messageQueue.stopExecution(),
+    stopExecution: () => executionStop.stop(),
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
   });
   const autofixHandler = new AutofixHandler(messageQueue);
+  const budgetService = new SessionBudgetService(
+    sessionCoreRepository,
+    messageRepository,
+    eventRepository,
+    messenger,
+    executionStop,
+    () => messageQueue.processMessageQueue(),
+    generateId
+  );
 
   const updateLastActivity = (timestamp: number) => lifecycleManager.updateLastActivity(timestamp);
   const streamingEventHandler = new SandboxStreamingEventHandler(
     backgroundTasks,
-    sessionCoreRepository,
     eventRepository,
     callbackService,
     messenger,
-    updateLastActivity
+    updateLastActivity,
+    budgetService
   );
   const artifactEventHandler = new SandboxArtifactEventHandler(
     artifactRepository,
@@ -475,7 +511,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     updateLastActivity,
     () => lifecycleManager.scheduleInactivityCheck(),
     () => messageQueue.processMessageQueue(),
-    () => messageQueue.broadcastPromptQueue()
+    () => messageQueue.broadcastPromptQueue(),
+    budgetService,
+    transaction
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,
@@ -501,6 +539,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const alarmHandler = createAlarmHandler({
     repository: messageRepository,
     messageQueue,
+    executionStop,
     lifecycleManager,
     terminalMessageProjection,
     alarmScheduler,
@@ -628,6 +667,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       await statusService.cancel(() => messageQueue.cancelExecution());
     }
   );
+  const sessionBudgetHandler = new SessionBudgetHandler(sessionCoreRepository, budgetService, () =>
+    Date.now()
+  );
 
   const prCreationClaims = new PullRequestCreationClaims();
   const pullRequestHandler = new PullRequestHandler(
@@ -686,6 +728,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
 
   const connectionAuthenticator = new SessionConnectionAuthenticator({
+    getSessionOwnerId: async () =>
+      (await sessionIndexStore.get(getPublicSessionId()))?.userId ?? null,
     wsManager,
     sessionCoreRepository,
     sandboxRepository,
@@ -745,6 +789,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     pullRequestsRefresh: () => pullRequestHandler.refreshPullRequests(),
     wsToken: (request, _url, requestLog) => wsTokenHandler.generateWsToken(request, requestLog),
     updateTitle: (request) => sessionLifecycleHandler.updateTitle(request),
+    budget: (request) => sessionBudgetHandler.update(request),
     archive: () => sessionLifecycleHandler.archive(),
     unarchive: () => sessionLifecycleHandler.unarchive(),
     expireDraft: () => sessionLifecycleHandler.expireDraft(),
@@ -788,6 +833,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const clientCommands = new SessionClientCommandFacade(
     connectionAuthenticator,
     messageQueue,
+    () => executionStop.stop(),
     presenceService,
     eventStream
   );

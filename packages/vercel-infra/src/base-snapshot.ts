@@ -7,15 +7,16 @@
  * name and the control plane resolves that name to the latest snapshot ID.
  */
 
-import { createLogger } from "../../../logger";
-import type { CorrelationContext } from "../../../logger";
+import { createLogger } from "../../control-plane/src/logger";
+import type { CorrelationContext } from "../../control-plane/src/logger";
 import {
   DEFAULT_VERCEL_RUNTIME,
   VERCEL_LOCAL_RUNTIME_EXTRACT_DIR,
   VERCEL_RUNTIME_WORKDIR,
   buildVercelBootstrapScript,
 } from "./bootstrap";
-import type { VercelSandboxClient } from "./client";
+import { VERCEL_PYTHON_BIN } from "../../control-plane/src/sandbox/providers/vercel/bootstrap";
+import type { VercelSandboxClient } from "../../control-plane/src/sandbox/providers/vercel/client";
 
 const log = createLogger("vercel-base-snapshot");
 
@@ -125,6 +126,8 @@ export async function buildVercelBaseSnapshot(
       throw new Error(`Vercel base snapshot status was ${snapshot.snapshot.status}`);
     }
 
+    await verifyVercelSnapshot(client, snapshot.snapshot.id, sandboxName);
+
     log.info("vercel_base_snapshot.created", {
       snapshot_id: snapshot.snapshot.id,
       sandbox_name: sandboxName,
@@ -168,4 +171,35 @@ export function buildBaseSnapshotSandboxName(params: {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export async function verifyVercelSnapshot(
+  client: VercelSandboxClient,
+  snapshotId: string,
+  name = "openinspect-verify"
+): Promise<void> {
+  const restored = await client.createSandbox(
+    {
+      name: `${name}-verify`,
+      sourceSnapshotId: snapshotId,
+      timeoutMs: 5 * 60 * 1000,
+      ports: [],
+    },
+    undefined
+  );
+  try {
+    const verified = await client.runCommandAndWait(
+      {
+        sessionId: restored.session.id,
+        command: "bash",
+        args: ["-lc", `${VERCEL_PYTHON_BIN} /app/verify/smoke_test.py verify`],
+        sudo: true,
+        timeoutMs: 240_000,
+      },
+      undefined
+    );
+    if (verified.exitCode !== 0) throw new Error("Vercel fresh-artifact verification failed");
+  } finally {
+    await client.stopSession(restored.session.id, undefined);
+  }
 }

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - ".env.example"
       - ".github/workflows/ci.yml"
       - ".prettierignore"
       - ".prettierrc"
@@ -16,6 +17,8 @@ on:
       - "packages/linear-bot/**"
       - "packages/opencomputer-infra/**"
       - "packages/sandbox-runtime/**"
+      - "packages/sandbox-images/**"
+      - "packages/vercel-infra/**"
       - "packages/shared/**"
       - "packages/slack-bot/**"
       - "packages/web/**"
@@ -26,9 +29,15 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      - "packages/sandbox-runtime/src/**"
+      - "packages/sandbox-images/**"
+      # Re-included after the exclusion above, which later patterns override: a
+      # unit test holds this document's quick start to the required variables.
+      - "docs/CONTROL_PLANE_CONTAINER.md"
   pull_request:
     branches: [main]
     paths:
+      - ".env.example"
       - ".github/workflows/ci.yml"
       - ".prettierignore"
       - ".prettierrc"
@@ -41,6 +50,8 @@ on:
       - "packages/linear-bot/**"
       - "packages/opencomputer-infra/**"
       - "packages/sandbox-runtime/**"
+      - "packages/sandbox-images/**"
+      - "packages/vercel-infra/**"
       - "packages/shared/**"
       - "packages/slack-bot/**"
       - "packages/web/**"
@@ -51,6 +62,11 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      - "packages/sandbox-runtime/src/**"
+      - "packages/sandbox-images/**"
+      # Re-included after the exclusion above, which later patterns override: a
+      # unit test holds this document's quick start to the required variables.
+      - "docs/CONTROL_PLANE_CONTAINER.md"
 
 permissions:
   contents: read
@@ -88,6 +104,12 @@ jobs:
 
       - name: Test complexity reporter
         run: npm run test:lint-complexity
+
+      - name: Check SQL portability
+        run: npm run lint:sql-portability
+
+      - name: Test SQL portability check
+        run: npm run test:lint-sql-portability
 
       - name: Test Owner bootstrap CLI
         run: npm run test:rbac-bootstrap-owner

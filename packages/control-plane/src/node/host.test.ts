@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -7,11 +7,15 @@ import { WebSocket as NodeWebSocket } from "ws";
 import { NO_AUTHORIZATION } from "../routes/shared";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { PersistedAlarmDeadlineStore } from "../session/alarm/scheduler";
 import { CACHE_STORE_FILE } from "./cache-database";
 import { DEFAULT_MIGRATIONS_DIR, type NodeHostSettings } from "./config";
+import { HOST_STATE_FILE } from "./crash-recovery";
+import { openHostAlarmIndex } from "./host-alarm-index";
 import { GLOBAL_STORE_FILE, startNodeHost, type NodeHost, type NodeHostOptions } from "./host";
 import { JOB_STORE_FILE } from "./job-store";
 import type { HealthReport } from "./http-server";
+import { openSessionStore } from "./session-store";
 
 const KEY = Buffer.alloc(32, 7).toString("base64");
 
@@ -88,6 +92,12 @@ describe("startNodeHost", () => {
       ...overrides,
     });
   };
+
+  const marker = (): { indexedThroughMs: number; cleanShutdown: boolean } =>
+    JSON.parse(readFileSync(join(dataDir, HOST_STATE_FILE), "utf8")) as {
+      indexedThroughMs: number;
+      cleanShutdown: boolean;
+    };
 
   afterEach(async () => {
     await host?.shutdown();
@@ -205,9 +215,44 @@ describe("startNodeHost", () => {
     const report = await host.shutdown();
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(150);
     expect(report).toEqual({ clean: false, abandoned: ["http_requests:1"] });
+    // No clean marker: the handler that outlived the budget could still have
+    // armed a deadline, so the next boot goes looking for it.
+    expect(marker()).toMatchObject({ cleanShutdown: false });
     // The connection was cut at the end; the peer sees no answer.
     await expect(blocked).rejects.toThrow();
     host = null;
+  });
+
+  it("marks a stop that abandoned nothing as clean", async () => {
+    host = await start();
+    // Running, the marker says nothing about a clean stop.
+    expect(marker()).toMatchObject({ cleanShutdown: false });
+
+    await host.shutdown();
+    host = null;
+
+    expect(marker()).toEqual({ indexedThroughMs: expect.any(Number), cleanShutdown: true });
+  });
+
+  it("arms a deadline a previous process left only in the session file", async () => {
+    dataDir = mkdtempSync(join(tmpdir(), "node-host-"));
+    // The session committed its deadline and the process died before the row
+    // reached the index. Far enough out that the clock only arms a timer.
+    const deadline = Date.now() + 60 * 60 * 1000;
+    const session = openSessionStore({ dataDir, sessionId: "stranded" });
+    new PersistedAlarmDeadlineStore(session.storage.sql).setPending(deadline);
+    session.close();
+
+    host = await start();
+    await host.shutdown();
+    host = null;
+
+    const index = openHostAlarmIndex(dataDir);
+    try {
+      expect(index.get("stranded")).toBe(deadline);
+    } finally {
+      index.close();
+    }
   });
 
   it("fails to boot on a malformed encryption key with the Worker's message, leaving nothing open", async () => {
