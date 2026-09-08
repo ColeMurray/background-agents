@@ -6,6 +6,7 @@ import type {
   SessionParticipantProfilesResponse,
   SessionParticipantProfile,
 } from "@open-inspect/shared/types/sessions";
+import { sessionBudgetUpdateSchema } from "@open-inspect/shared/types/session-api";
 import {
   redactSessionSnapshotSandboxAccess,
   sessionSnapshotSchema,
@@ -29,8 +30,9 @@ import {
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   SCM_CREDENTIALS_ROUTE,
 } from "./shared";
-import { parseJsonBody } from "./body";
+import { parseBody, parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
+import { canManageSessionBudget } from "../session/budget-authorization";
 
 const participantsResponseSchema = z.object({
   participants: z.array(
@@ -273,6 +275,34 @@ function lifecycleProxy(internalPath: SessionInternalPath): ProxyHandler {
   };
 }
 
+/**
+ * Live limit changes are the session owner's alone: the runtime enforces the
+ * limit for every participant, so raising or removing it is not collaboration.
+ */
+async function handleBudgetUpdate(
+  request: Request,
+  _env: Env,
+  params: SessionParams,
+  ctx: SessionRouteContext
+): Promise<Response> {
+  const sessionId = params.id;
+
+  const body = await parseBody(request, sessionBudgetUpdateSchema, "Invalid budget request");
+  if (body instanceof Response) return body;
+
+  const session = await new SessionIndexStore(ctx.db).get(sessionId);
+  if (!session) return error("Session not found", 404);
+  if (!canManageSessionBudget(session.userId, ctx.authorization)) {
+    return error("Only the session owner can change the cost limit", 403);
+  }
+
+  return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.budget, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 /** Every proxied session operation, by the name its route is known by. */
 const LIFECYCLE = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
@@ -406,4 +436,12 @@ sessionRuntimeProxyRoutes.post("/sessions/:id/archive", LIFECYCLE, (c) =>
 );
 sessionRuntimeProxyRoutes.post("/sessions/:id/unarchive", LIFECYCLE, (c) =>
   dispatchSession(c, lifecycleProxy(SessionInternalPaths.unarchive))
+);
+sessionRuntimeProxyRoutes.patch(
+  "/sessions/:id/budget",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    authorization: requirePermission("sessions.lifecycle"),
+  }),
+  (c) => dispatchSession(c, handleBudgetUpdate)
 );

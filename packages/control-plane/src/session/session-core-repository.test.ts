@@ -133,6 +133,7 @@ describe("SessionCoreRepository", () => {
         0,
         null,
         null,
+        null,
         1000,
         2000,
       ]);
@@ -240,13 +241,25 @@ describe("SessionCoreRepository", () => {
   });
 
   describe("addSessionCost", () => {
-    it("increments total_cost and updates updated_at for the current session", () => {
-      repo.addSessionCost(0.0123, 5000);
+    it("increments total_cost and returns the accumulated value", () => {
+      mock.setOne({ total_cost: 1.25 });
+      expect(repo.addSessionCost(0.0123, 5000)).toBe(1.25);
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("SET total_cost = total_cost + ?");
       expect(mock.calls[0].query).toContain("updated_at = ?");
+      expect(mock.calls[0].query).toContain("RETURNING total_cost");
       expect(mock.calls[0].params).toEqual([0.0123, 5000]);
+    });
+  });
+
+  describe("budget state", () => {
+    it("updates the live limit and clears exhaustion", () => {
+      repo.setSessionBudget(20, false, 5000);
+
+      expect(mock.calls[0].query).toContain("max_cost_usd = ?");
+      expect(mock.calls[0].query).toContain("budget_exhausted = ?");
+      expect(mock.calls[0].params).toEqual([20, 0, 5000]);
     });
   });
 
@@ -283,6 +296,38 @@ describe("SessionCoreRepository", () => {
           branch_name: "feature/x",
           total_cost: 1.5,
         });
+      } finally {
+        db.close();
+      }
+    });
+
+    it("seeds max_cost_usd on insert but leaves a live limit alone", () => {
+      const db = new DatabaseSync(":memory:");
+      const storage = createNodeSqlStorage(db);
+      const realRepo = new SessionCoreRepository(storage.sql, storage.transactionSync);
+
+      try {
+        initSchema(storage.sql);
+        const base = {
+          id: "sess-1",
+          sessionName: "test-session",
+          title: "First",
+          repoOwner: "owner",
+          repoName: "repo",
+          repoId: 42,
+          model: "claude-sonnet-4",
+          status: "created" as const,
+          maxCostUsd: 10,
+          createdAt: 1000,
+          updatedAt: 1000,
+        };
+        realRepo.upsertSession(base);
+        expect(realRepo.getSession()).toMatchObject({ max_cost_usd: 10 });
+
+        realRepo.setSessionBudget(20, false, 2000);
+        realRepo.upsertSession({ ...base, maxCostUsd: 10, updatedAt: 3000 });
+
+        expect(realRepo.getSession()).toMatchObject({ max_cost_usd: 20, updated_at: 3000 });
       } finally {
         db.close();
       }
