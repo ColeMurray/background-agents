@@ -2,10 +2,23 @@
  * Automation create, read, update, and delete routes.
  */
 
-import { isValidCron, nextCronOccurrence, cronIntervalMinutes } from "@open-inspect/shared/cron";
-import { triggerConfigSchema } from "@open-inspect/shared/triggers";
+import {
+  isValidTimeZone,
+  nextCronOccurrence,
+  validateAutomationCron,
+} from "@open-inspect/shared/cron";
+import {
+  conditionRegistry,
+  normalizeSlackChannelConditions,
+  triggerConfigSchema,
+  validateTriggerConditions,
+  type TriggerConfig,
+} from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType } from "@open-inspect/shared/triggers";
-import { updateAutomationRequestSchema } from "@open-inspect/shared/types/automations";
+import {
+  MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
+  updateAutomationRequestSchema,
+} from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
@@ -46,19 +59,14 @@ import { AUTOMATIONS_READ, AUTOMATION_MANAGE, admittedAutomation } from "./autom
 import {
   type CreateAutomationBody,
   FAR_FUTURE_THRESHOLD_MS,
-  MAX_INSTRUCTIONS_LENGTH,
   MAX_NAME_LENGTH,
-  MIN_CRON_INTERVAL_MINUTES,
   TargetSelectionError,
-  consumeCondition,
   createAutomationBodySchema,
   extractSlackChannels,
   formatAutomationRequestError,
   getEnvironmentSelection,
   getRepositorySelection,
-  getTriggerConditionErrors,
   getTriggerEventTypeError,
-  isValidTimezone,
   requireTargetPermissions,
   resolveEnvironmentSelection,
   resolveReasoningEffort,
@@ -75,7 +83,7 @@ async function handleCreateAutomation(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const rawBody = await parseJsonBody<unknown>(request);
+  const rawBody = await parseJsonBody(request);
   if (rawBody instanceof Response) return rawBody;
 
   // Automation attribution comes from the verified principal. The stored
@@ -105,8 +113,11 @@ async function handleCreateAutomation(
   ) {
     return error("instructions is required", 400);
   }
-  if (body.instructions.length > MAX_INSTRUCTIONS_LENGTH) {
-    return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
+  if (body.instructions.length > MAX_AUTOMATION_INSTRUCTIONS_LENGTH) {
+    return error(
+      `instructions must be at most ${MAX_AUTOMATION_INSTRUCTIONS_LENGTH} characters`,
+      400
+    );
   }
 
   const selection = getRepositorySelection(body);
@@ -153,14 +164,9 @@ async function handleCreateAutomation(
 
   // Schedule-specific validation
   if (isSchedule) {
-    if (!body.scheduleCron || !isValidCron(body.scheduleCron)) {
-      return error("scheduleCron must be a valid 5-field cron expression", 400);
-    }
-    const interval = cronIntervalMinutes(body.scheduleCron);
-    if (interval !== null && interval < MIN_CRON_INTERVAL_MINUTES) {
-      return error(`Schedule interval must be at least ${MIN_CRON_INTERVAL_MINUTES} minutes`, 400);
-    }
-    if (!body.scheduleTz || !isValidTimezone(body.scheduleTz)) {
+    const cronError = validateAutomationCron(body.scheduleCron ?? "");
+    if (cronError) return error(cronError, 400);
+    if (!body.scheduleTz || !isValidTimeZone(body.scheduleTz)) {
       return error("scheduleTz must be a valid IANA timezone", 400);
     }
   } else {
@@ -175,13 +181,12 @@ async function handleCreateAutomation(
 
   // Validate conditions
   if (body.triggerConfig) {
-    const conditionErrors = getTriggerConditionErrors(
-      triggerType,
-      body.triggerConfig,
-      body.eventType
+    const conditionErrors = validateTriggerConditions(
+      { type: triggerType, conditions: body.triggerConfig.conditions, eventType: body.eventType },
+      conditionRegistry
     );
     if (conditionErrors.length > 0) {
-      return error(conditionErrors.map(({ message }) => message).join("; "), 400);
+      return error(conditionErrors.join("; "), 400);
     }
   }
 
@@ -189,6 +194,10 @@ async function handleCreateAutomation(
   if (triggerType === "slack_event") {
     const slackError = validateSlackTriggerConfig(body.triggerConfig);
     if (slackError) return error(slackError, 400);
+    body.triggerConfig = {
+      ...body.triggerConfig!,
+      conditions: normalizeSlackChannelConditions(body.triggerConfig!.conditions),
+    };
   }
 
   // Validate model
@@ -352,7 +361,7 @@ async function handleUpdateAutomation(
   const admission = admittedAutomation(ctx);
   const { automation: existing } = admission;
 
-  const rawBody = await parseJsonBody<unknown>(request);
+  const rawBody = await parseJsonBody(request);
   if (rawBody instanceof Response) return rawBody;
   const parsedBody = updateAutomationRequestSchema.safeParse(rawBody);
   if (!parsedBody.success) {
@@ -392,22 +401,20 @@ async function handleUpdateAutomation(
     if (typeof body.instructions !== "string" || body.instructions.trim().length === 0) {
       return error("instructions cannot be empty", 400);
     }
-    if (body.instructions.length > MAX_INSTRUCTIONS_LENGTH) {
-      return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
+    if (body.instructions.length > MAX_AUTOMATION_INSTRUCTIONS_LENGTH) {
+      return error(
+        `instructions must be at most ${MAX_AUTOMATION_INSTRUCTIONS_LENGTH} characters`,
+        400
+      );
     }
   }
 
   if (body.scheduleCron !== undefined) {
-    if (!isValidCron(body.scheduleCron)) {
-      return error("scheduleCron must be a valid 5-field cron expression", 400);
-    }
-    const interval = cronIntervalMinutes(body.scheduleCron);
-    if (interval !== null && interval < MIN_CRON_INTERVAL_MINUTES) {
-      return error(`Schedule interval must be at least ${MIN_CRON_INTERVAL_MINUTES} minutes`, 400);
-    }
+    const cronError = validateAutomationCron(body.scheduleCron);
+    if (cronError) return error(cronError, 400);
   }
 
-  if (body.scheduleTz !== undefined && !isValidTimezone(body.scheduleTz)) {
+  if (body.scheduleTz !== undefined && !isValidTimeZone(body.scheduleTz)) {
     return error("scheduleTz must be a valid IANA timezone", 400);
   }
 
@@ -540,36 +547,39 @@ async function handleUpdateAutomation(
   if (body.triggerConfig && existing.trigger_type === "slack_event") {
     const slackError = validateSlackTriggerConfig(body.triggerConfig);
     if (slackError) return error(slackError, 400);
+    body.triggerConfig = {
+      ...body.triggerConfig,
+      conditions: normalizeSlackChannelConditions(body.triggerConfig.conditions),
+    };
+    triggerConfigToValidate = body.triggerConfig;
   }
 
   if (triggerConfigToValidate) {
-    let conditionErrors = getTriggerConditionErrors(
-      existing.trigger_type as AutomationTriggerType,
-      triggerConfigToValidate,
-      effectiveEventType
-    );
-
-    // Existing source-wide GitHub conditions predate event-scoped validation.
-    // Preserve an unchanged condition on unrelated edits, but validate strictly
-    // when its value or the selected event changes.
-    const eventTypeChanged = body.eventType !== undefined && body.eventType !== existing.event_type;
-    if (existing.trigger_type === "github_event" && !eventTypeChanged && existing.trigger_config) {
+    let previousConfig: TriggerConfig | undefined;
+    if (existing.trigger_type === "github_event" && existing.trigger_config) {
       try {
         const parsedExisting = triggerConfigSchema.safeParse(JSON.parse(existing.trigger_config));
-        if (parsedExisting.success) {
-          const consumedIndexes = new Set<number>();
-          conditionErrors = conditionErrors.filter(({ code, condition }) => {
-            if (code !== "event_incompatible") return true;
-            return !consumeCondition(parsedExisting.data, condition, consumedIndexes);
-          });
-        }
+        if (parsedExisting.success) previousConfig = parsedExisting.data;
       } catch {
         // A valid replacement should be able to repair malformed stored JSON.
       }
     }
-
+    const triggerType = existing.trigger_type as AutomationTriggerType;
+    const conditionErrors = validateTriggerConditions(
+      {
+        type: triggerType,
+        conditions: triggerConfigToValidate.conditions,
+        eventType: effectiveEventType,
+      },
+      conditionRegistry,
+      previousConfig && {
+        type: triggerType,
+        conditions: previousConfig.conditions,
+        eventType: existing.event_type ?? undefined,
+      }
+    );
     if (conditionErrors.length > 0) {
-      return error(conditionErrors.map(({ message }) => message).join("; "), 400);
+      return error(conditionErrors.join("; "), 400);
     }
   }
 

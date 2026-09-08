@@ -47,6 +47,7 @@ export const SessionInternalPaths = {
   childSummary: "/internal/child-summary",
   parentPrompt: "/internal/parent-prompt",
   updateTitle: "/internal/update-title",
+  budget: "/internal/budget",
   cancel: "/internal/cancel",
   childSessionUpdate: "/internal/child-session-update",
   diffState: "/internal/diff-state",

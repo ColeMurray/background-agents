@@ -76,7 +76,7 @@ async function handleSetGlobal(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<unknown>(request);
+  const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
   const settings = parseScmGlobalSettingsBody(body);
   if (settings instanceof Response) return settings;
@@ -161,7 +161,7 @@ async function handleSetRepoSettings(
   const { owner, name } = repository;
   const repo = `${owner}/${name}`;
 
-  const body = await parseJsonBody<unknown>(request);
+  const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
   const settings = parseScmRepoSettingsBody(body);
   if (settings instanceof Response) return settings;

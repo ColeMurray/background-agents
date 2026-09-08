@@ -147,12 +147,15 @@ export class SandboxRepository {
    * Phase 1 of the two-phase spawn write (#1589): the reservation itself
    * invalidates credentials — no token can match the emptied hash — until
    * `updateSandboxAuthTokenHash` publishes the new one.
+   * A replacement has not sent a heartbeat yet; retaining the predecessor's
+   * timestamp lets an alarm declare the new generation stale during startup.
    */
   updateSandboxForSpawn(data: SpawnSandboxData): void {
     this.sql.exec(
       `UPDATE sandbox SET
          status = ?,
          created_at = ?,
+         last_heartbeat = NULL,
          auth_token_hash = '',
          auth_token = NULL,
          modal_sandbox_id = ?,

@@ -68,6 +68,13 @@ describe("MessageRepository", () => {
     expect(mock.calls[1].query).toContain("'pending', 'processing'");
   });
 
+  it("rejects malformed numeric SQL aggregate rows", () => {
+    mock.setOne({ count: "5" });
+    expect(() => repository.getPendingOrProcessingCount()).toThrow(
+      "Malformed numeric SQL result for count"
+    );
+  });
+
   it("calculates active duration", () => {
     mock.setOne({ duration_ms: 4500 });
     expect(repository.getActiveDurationMs()).toBe(4500);
@@ -210,7 +217,31 @@ describe("MessageRepository", () => {
         sessionClosed: true,
       })
     ).toEqual({ kind: "rejected", reason: "session_closed" });
-    expect(mock.calls).toHaveLength(1);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  it("rejects new Autofix feedback when the session budget is exhausted", () => {
+    mock.setData(`SELECT budget_exhausted FROM session LIMIT 1`, [{ budget_exhausted: 1 }]);
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "rejected", reason: "budget_exhausted" });
+    expect(mock.calls).toHaveLength(2);
   });
 
   it("rejects Autofix admission when the rolling PR cap is reached", () => {
@@ -234,7 +265,40 @@ describe("MessageRepository", () => {
         sessionClosed: false,
       })
     ).toEqual({ kind: "rejected", reason: "attempt_limit" });
-    expect(mock.calls).toHaveLength(3);
+    expect(mock.calls).toHaveLength(4);
+  });
+
+  it("does not admit Autofix feedback when the rolling count is malformed", () => {
+    mock.setOne({ count: 0 });
+    const exec = mock.sql.exec.bind(mock.sql);
+    vi.spyOn(mock.sql, "exec").mockImplementation((query, ...params) => {
+      const result = exec(query, ...params);
+      return query.includes("WHERE autofix_pr_key = ?")
+        ? { ...result, one: () => ({ count: "invalid-count" }) }
+        : result;
+    });
+    const authorId = vi.fn(() => "p-1");
+
+    expect(() =>
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId,
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toThrow("Malformed numeric SQL result for count");
+    expect(authorId).not.toHaveBeenCalled();
+    expect(mock.calls.some(({ query }) => query.includes("INSERT INTO messages"))).toBe(false);
   });
 
   it("admits Autofix feedback without checking the rolling count when there is no limit", () => {
@@ -282,7 +346,7 @@ describe("MessageRepository", () => {
         sessionClosed: false,
       })
     ).toEqual({ kind: "rejected", reason: "queue_full" });
-    expect(mock.calls).toHaveLength(2);
+    expect(mock.calls).toHaveLength(3);
   });
 
   it("admits Autofix metadata without creating an admission-time event", () => {
@@ -491,5 +555,30 @@ describe("MessageRepository", () => {
       source: "slack",
     });
     expect(repository.getProcessingMessageAuthor()).toEqual({ author_id: "p-1" });
+  });
+
+  describe("raiseReportedCost", () => {
+    it("returns the increase over the stored report", () => {
+      mock.setMatchingData(/SELECT reported_cost_usd FROM messages/, [{ reported_cost_usd: 1 }]);
+
+      expect(repository.raiseReportedCost("msg-1", 2.5)).toBe(1.5);
+
+      const call = mock.calls.find((c) => c.query.includes("SET reported_cost_usd"));
+      expect(call?.params).toEqual([2.5, "msg-1"]);
+    });
+
+    it("returns 0 without writing for a resend, an unknown message, or a non-positive report", () => {
+      mock.setMatchingData(/SELECT reported_cost_usd FROM messages/, [{ reported_cost_usd: 2.5 }]);
+      expect(repository.raiseReportedCost("msg-1", 2.5)).toBe(0);
+      expect(repository.raiseReportedCost("msg-1", 2)).toBe(0);
+      expect(repository.raiseReportedCost("msg-1", 0)).toBe(0);
+      expect(repository.raiseReportedCost("msg-1", Number.NaN)).toBe(0);
+      expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
+    });
+
+    it("returns 0 for an unknown message", () => {
+      expect(repository.raiseReportedCost("missing", 2.5)).toBe(0);
+      expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
+    });
   });
 });

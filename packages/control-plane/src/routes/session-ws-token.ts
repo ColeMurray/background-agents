@@ -17,7 +17,7 @@ export async function handleSessionWsToken(
 ): Promise<Response> {
   const sessionId = params.id;
 
-  const rawBody = await parseJsonBody<unknown>(request);
+  const rawBody = await parseJsonBody(request);
   if (rawBody instanceof Response) return rawBody;
 
   // The participant identity comes from the verified principal; body SCM

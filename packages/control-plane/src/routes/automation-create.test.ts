@@ -95,6 +95,16 @@ vi.mock("../auth/crypto", () => ({
   generateId: vi.fn(() => "generated-id"),
 }));
 
+const mockSlackChannelStore = {
+  bindChannelStatements: vi.fn(),
+  getWatchedSlackChannels: vi.fn(),
+};
+vi.mock("../db/slack-channel-store", () => ({
+  SlackChannelStore: vi.fn().mockImplementation(function () {
+    return mockSlackChannelStore;
+  }),
+}));
+
 vi.mock("./shared", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -114,6 +124,8 @@ describe("automation create route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     applyMockDefaults();
+    mockSlackChannelStore.bindChannelStatements.mockReturnValue([{ sql: "sync-slack-channels" }]);
+    mockSlackChannelStore.getWatchedSlackChannels.mockResolvedValue([]);
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       repoOwner: "acme",
@@ -130,6 +142,50 @@ describe("automation create route", () => {
       scheduleTz: "UTC",
       instructions: "Run tests",
     };
+
+    it("rejects a Slack channel condition with the wrong operator", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Slack triage",
+          instructions: "Triage the message",
+          triggerType: "slack_event",
+          triggerConfig: {
+            conditions: [{ type: "slack_channel", operator: "exclude", value: ["C1"] }],
+          },
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: expect.stringContaining("slack_channel") });
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+    });
+
+    it("normalizes Slack channel IDs before persisting config and index rows", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "slack_event" });
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Slack triage",
+          instructions: "Triage the message",
+          triggerType: "slack_event",
+          triggerConfig: {
+            conditions: [{ type: "slack_channel", operator: "any_of", value: [" C1 "] }],
+          },
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          trigger_config: JSON.stringify({
+            conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+          }),
+        })
+      );
+      expect(mockSlackChannelStore.bindChannelStatements).toHaveBeenCalledWith("generated-id", [
+        "C1",
+      ]);
+    });
 
     it("creates automation with valid input", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);

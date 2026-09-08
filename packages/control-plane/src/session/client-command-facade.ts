@@ -30,6 +30,7 @@ export class SessionClientCommandFacade implements SessionClientCommands<
   constructor(
     private readonly authenticator: SessionConnectionAuthenticator,
     private readonly prompts: SessionMessageQueue,
+    private readonly stop: () => Promise<void>,
     private readonly presence: PresenceService,
     private readonly events: SessionEventStream
   ) {}
@@ -51,7 +52,7 @@ export class SessionClientCommandFacade implements SessionClientCommands<
   }
 
   stopExecution(): Promise<void> {
-    return this.prompts.stopExecution();
+    return this.stop();
   }
 
   notifyTyping(): Promise<void> {

@@ -301,6 +301,36 @@ from a prebuild-enabled environment, the environment's whole repository set):
 
 If `start.sh` exists and fails, startup fails fast instead of continuing with a broken runtime.
 
+#### Preinstalling local MCP dependencies
+
+OpenInspect checks the global npm installation before preparing local `npx` MCP servers. An exact
+package version already installed with intact executable links is reused, including after a snapshot
+restore. Only missing or mismatched packages are installed. Failed or interrupted installs are
+marked for retry rather than treated as cache hits.
+
+To remove the installation from first-session startup, pin the same package version in the MCP
+command and the repository's `.openinspect/setup.sh` (or the setup hook used by its environment):
+
+```bash
+# .openinspect/setup.sh — replace this example package/version with your MCP dependency
+npm install --global @example/mcp-server@1.2.3
+```
+
+Configure the matching MCP command as `["npx", "-y", "@example/mcp-server@1.2.3"]` and rebuild the
+prebuilt image. This uses the existing setup/prebuild lifecycle; MCP settings are not automatically
+baked into images. Changing a pinned version causes an install until the image is rebuilt with it.
+
+Unversioned packages and tags such as `latest` are refreshed once per sandbox boot. Successful
+installs are reused across OpenCode process restarts within that boot, but not across snapshot
+restores. Remote MCP servers are unaffected, and server commands, arguments, and credentials are
+passed through unchanged. Unsupported `npx` option forms are left to `npx` without eager
+installation.
+
+The `mcp.package_cache` event reports hit/miss counts and lookup time; `mcp.packages_installed`
+reports preparation time on misses. This optimization removes redundant **global installation**, not
+all MCP startup work: `npx` may still resolve registry metadata or populate its own execution cache,
+particularly with explicit `--package` commands.
+
 ### When Snapshots Are Taken
 
 - **After successful prompt completion**: Preserves the workspace state

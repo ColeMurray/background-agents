@@ -10,6 +10,7 @@ import { RepoMetadataStore } from "../db/repo-metadata";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
+  enrichedRepositorySchema,
   repoMetadataSchema,
   type EnrichedRepository,
   type InstallationRepository,
@@ -17,6 +18,7 @@ import {
 } from "@open-inspect/shared/types/repository-catalog";
 import { resolveScmProviderFromEnv, SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
+import { z } from "zod";
 import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   type RequestContext,
@@ -50,16 +52,15 @@ export async function reposCacheIdentity(
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/**
- * Cached repos list structure stored in KV.
- */
-interface CachedReposList {
-  repos: EnrichedRepository[];
-  cachedAt: string;
-  scmIdentity: string;
-  /** Epoch ms — cache is considered fresh until this time. Missing in entries cached before this field was added. */
-  freshUntil?: number;
-}
+const cachedReposListSchema = z.object({
+  repos: z.array(enrichedRepositorySchema),
+  cachedAt: z.string(),
+  scmIdentity: z.string(),
+  // Missing in entries cached before this field was added.
+  freshUntil: z.number().optional(),
+});
+
+type CachedReposList = z.infer<typeof cachedReposListSchema>;
 
 type ReposRefreshResult =
   | { ok: true; repos: EnrichedRepository[]; cachedAt: string }
@@ -169,9 +170,10 @@ async function handleListRepos(
   // Read from KV cache
   let cached: CachedReposList | null = null;
   try {
-    cached = await ctx.metrics.time("kv_read", () =>
-      cacheStore.get<CachedReposList>(REPOS_CACHE_KEY, "json")
+    const result = cachedReposListSchema.safeParse(
+      await ctx.metrics.time("kv_read", () => cacheStore.get(REPOS_CACHE_KEY, "json"))
     );
+    cached = result.success ? result.data : null;
   } catch (e) {
     logger.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });
   }

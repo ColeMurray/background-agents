@@ -4,10 +4,105 @@ import {
   isGitHubConditionCompatible,
   matchesConditions,
   validateConditions,
+  validateTriggerConditions,
 } from "./conditions";
+import type { TriggerCondition } from "./types";
 import { conditionRegistry } from "./registry";
 import { CHECK_SUITE_CONCLUSIONS, WORKFLOW_RUN_CONCLUSIONS } from "./github";
 import { buildMockEvent } from "./testing";
+
+describe("validateTriggerConditions", () => {
+  const legacy: TriggerCondition = {
+    type: "path_glob",
+    operator: "any_match",
+    value: ["src/**"],
+  };
+  const previous = {
+    type: "github_event" as const,
+    eventType: "pull_request.opened",
+    conditions: [legacy],
+  };
+
+  it("validates new configurations without legacy exemptions", () => {
+    expect(validateTriggerConditions(previous, conditionRegistry)).toEqual([
+      'Condition "path_glob" does not apply to github triggers',
+    ]);
+    expect(
+      validateTriggerConditions(
+        {
+          ...previous,
+          conditions: [{ type: "branch", operator: "exact", value: ["main"] }],
+        },
+        conditionRegistry
+      )
+    ).toEqual([]);
+  });
+
+  it("preserves unchanged legacy filters on the same event", () => {
+    expect(validateTriggerConditions(previous, conditionRegistry, previous)).toEqual([]);
+  });
+
+  it("rejects edits to a legacy filter", () => {
+    expect(
+      validateTriggerConditions(
+        {
+          ...previous,
+          conditions: [{ ...legacy, value: ["packages/**"] }],
+        },
+        conditionRegistry,
+        previous
+      )
+    ).toHaveLength(1);
+  });
+
+  it("does not carry exemptions across event or trigger-source changes", () => {
+    expect(
+      validateTriggerConditions(
+        {
+          ...previous,
+          eventType: "pull_request.synchronize",
+        },
+        conditionRegistry,
+        previous
+      )
+    ).toHaveLength(1);
+    expect(
+      validateTriggerConditions(
+        {
+          ...previous,
+          type: "linear_event",
+        },
+        conditionRegistry,
+        previous
+      )
+    ).toHaveLength(1);
+  });
+
+  it("consumes each previous occurrence at most once", () => {
+    const duplicate = { ...previous, conditions: [legacy, legacy] };
+    expect(validateTriggerConditions(duplicate, conditionRegistry, previous)).toHaveLength(1);
+    expect(validateTriggerConditions(duplicate, conditionRegistry, duplicate)).toEqual([]);
+    expect(previous.conditions).toEqual([legacy]);
+    expect(duplicate.conditions).toEqual([legacy, legacy]);
+  });
+
+  it("does not exempt invalid values on supported conditions", () => {
+    const invalid = {
+      ...previous,
+      conditions: [{ type: "branch", operator: "exact", value: [] }] as TriggerCondition[],
+    };
+    expect(validateTriggerConditions(invalid, conditionRegistry, invalid)).toEqual([
+      "At least one branch pattern required",
+    ]);
+  });
+
+  it("does not grant legacy exemptions without an event type", () => {
+    const missingEvent = { ...previous, eventType: undefined };
+    expect(validateTriggerConditions(missingEvent, conditionRegistry, missingEvent)).toHaveLength(
+      1
+    );
+  });
+});
 
 describe("matchesConditions", () => {
   it("returns true when no conditions", () => {

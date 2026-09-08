@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { SqlStorage } from "./sql-storage";
 
 export interface PendingTerminalMessageProjection {
@@ -24,12 +25,22 @@ export interface TerminalMessageProjectionStore {
   clearThrough(message: { messageId: string; messageCreatedAt: number }): void;
 }
 
-interface PendingRow {
-  message_id: string;
-  message_created_at: number;
-  completed_at: number;
-  attempts: number;
-  next_attempt_at: number;
+const pendingRowSchema = z.object({
+  message_id: z.string(),
+  message_created_at: z.number(),
+  completed_at: z.number(),
+  attempts: z.number(),
+  next_attempt_at: z.number(),
+});
+
+type PendingRow = z.infer<typeof pendingRowSchema>;
+
+function parsePendingRow(row: unknown): PendingRow {
+  const parsed = pendingRowSchema.safeParse(row);
+  if (!parsed.success) {
+    throw new Error("Malformed pending terminal message projection row");
+  }
+  return parsed.data;
 }
 
 export class PersistedTerminalMessageProjectionStore implements TerminalMessageProjectionStore {
@@ -41,9 +52,10 @@ export class PersistedTerminalMessageProjectionStore implements TerminalMessageP
         `SELECT message_id, message_created_at, completed_at, attempts, next_attempt_at
          FROM terminal_message_projection_pending WHERE singleton = 1`
       )
-      .toArray() as PendingRow[];
-    const row = rows[0];
-    if (!row) return null;
+      .toArray();
+    const rawRow = rows[0];
+    if (!rawRow) return null;
+    const row = parsePendingRow(rawRow);
     return {
       messageId: row.message_id,
       messageCreatedAt: row.message_created_at,

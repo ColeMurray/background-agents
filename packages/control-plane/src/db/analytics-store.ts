@@ -8,6 +8,7 @@ import type {
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
+import { z } from "zod";
 
 /** Spawn sources that represent direct human-initiated sessions. */
 export const HUMAN_SPAWN_SOURCES: SpawnSource[] = ["user", "slack-bot", "linear-bot", "github-bot"];
@@ -18,38 +19,44 @@ export interface AnalyticsFilters {
   spawnSources?: SpawnSource[];
 }
 
-interface SummaryRow {
-  total_sessions: number;
-  active_users: number;
-  total_cost: number;
-  total_prs: number;
-  created_count: number;
-  active_count: number;
-  completed_count: number;
-  failed_count: number;
-  archived_count: number;
-  cancelled_count: number;
-}
+const summaryRowSchema = z.object({
+  total_sessions: z.number(),
+  active_users: z.number(),
+  total_cost: z.number(),
+  total_prs: z.number(),
+  created_count: z.number(),
+  active_count: z.number(),
+  completed_count: z.number(),
+  failed_count: z.number(),
+  archived_count: z.number(),
+  cancelled_count: z.number(),
+});
 
-interface TimeseriesRow {
-  day_index: number;
-  group_key: string;
-  count: number;
-}
+type SummaryRow = z.infer<typeof summaryRowSchema>;
 
-interface BreakdownRow {
-  key: string | null;
-  display_name?: string | null;
-  sessions: number;
-  completed: number;
-  failed: number;
-  cancelled: number;
-  cost: number;
-  prs: number;
-  message_count: number;
-  avg_duration: number;
-  last_active: number;
-}
+const timeseriesRowSchema = z.object({
+  day_index: z.number(),
+  group_key: z.string(),
+  count: z.number(),
+});
+
+type TimeseriesRow = z.infer<typeof timeseriesRowSchema>;
+
+const breakdownRowSchema = z.object({
+  key: z.string().nullable(),
+  display_name: z.string().nullable().optional(),
+  sessions: z.number(),
+  completed: z.number(),
+  failed: z.number(),
+  cancelled: z.number(),
+  cost: z.number(),
+  prs: z.number(),
+  message_count: z.number(),
+  avg_duration: z.number(),
+  last_active: z.number(),
+});
+
+type BreakdownRow = z.infer<typeof breakdownRowSchema>;
 
 const NO_REPOSITORY_ANALYTICS_KEY = "No repository";
 
@@ -90,7 +97,7 @@ export class AnalyticsStore {
   }
 
   decodeSummary(result: SqlResult): AnalyticsSummaryResponse {
-    const row = (result.results ?? [])[0] as SummaryRow | undefined;
+    const row = parseOptionalRow(result.results?.[0], summaryRowSchema, "analytics summary row");
 
     const totalSessions = row?.total_sessions ?? 0;
     const totalCost = row?.total_cost ?? 0;
@@ -139,7 +146,7 @@ export class AnalyticsStore {
 
   decodeTimeseries(result: SqlResult): AnalyticsTimeseriesResponse {
     const series: AnalyticsTimeseriesResponse["series"] = [];
-    for (const row of (result.results ?? []) as TimeseriesRow[]) {
+    for (const row of parseRows(result.results, timeseriesRowSchema, "analytics timeseries row")) {
       const date = utcDateFromDayIndex(row.day_index);
       const lastPoint = series[series.length - 1];
       if (lastPoint?.date === date) {
@@ -212,22 +219,47 @@ export class AnalyticsStore {
   }
 
   decodeBreakdown(result: SqlResult): AnalyticsBreakdownResponse {
-    const entries: AnalyticsBreakdownEntry[] = ((result.results ?? []) as BreakdownRow[]).map(
-      (row) => ({
-        key: row.key ?? NO_REPOSITORY_ANALYTICS_KEY,
-        ...(row.display_name != null && { displayName: row.display_name }),
-        sessions: row.sessions,
-        completed: row.completed,
-        failed: row.failed,
-        cancelled: row.cancelled,
-        cost: row.cost,
-        prs: row.prs,
-        messageCount: row.message_count,
-        avgDuration: row.avg_duration,
-        lastActive: row.last_active,
-      })
-    );
+    const entries: AnalyticsBreakdownEntry[] = parseRows(
+      result.results,
+      breakdownRowSchema,
+      "analytics breakdown row"
+    ).map((row) => ({
+      key: row.key ?? NO_REPOSITORY_ANALYTICS_KEY,
+      ...(row.display_name != null && { displayName: row.display_name }),
+      sessions: row.sessions,
+      completed: row.completed,
+      failed: row.failed,
+      cancelled: row.cancelled,
+      cost: row.cost,
+      prs: row.prs,
+      messageCount: row.message_count,
+      avgDuration: row.avg_duration,
+      lastActive: row.last_active,
+    }));
 
     return { entries };
   }
+}
+
+function parseOptionalRow<Schema extends z.ZodType>(
+  row: unknown,
+  schema: Schema,
+  name: string
+): z.infer<Schema> | undefined {
+  if (row === undefined) return undefined;
+  const parsed = schema.safeParse(row);
+  if (!parsed.success) throw new Error(`Invalid ${name}`);
+  return parsed.data;
+}
+
+function parseRows<Schema extends z.ZodType>(
+  rows: unknown[] | undefined,
+  schema: Schema,
+  name: string
+): Array<z.infer<Schema>> {
+  return (rows ?? []).map((row) => {
+    const parsed = schema.safeParse(row);
+    if (!parsed.success) throw new Error(`Invalid ${name}`);
+    return parsed.data;
+  });
 }

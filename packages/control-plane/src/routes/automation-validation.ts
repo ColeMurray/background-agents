@@ -2,20 +2,16 @@
  * Request validation and target selection shared by the automation create and update routes.
  */
 
-import {
-  validateConditions,
-  conditionRegistry,
-  isGitHubConditionSupported,
-  triggerSources,
-  TRIGGER_TYPE_TO_SOURCE,
-} from "@open-inspect/shared/triggers";
+import { hasValidSlackChannelCondition, triggerSources } from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
-import { createAutomationRequestSchema } from "@open-inspect/shared/types/automations";
+import {
+  createAutomationRequestSchema,
+  validateAutomationTargetCounts,
+} from "@open-inspect/shared/types/automations";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import { type AutomationRepositoryInsert } from "../db/automation-store";
 import { EnvironmentStore } from "../db/environments";
-import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
 import { type RequestContext, json, resolveRepoOrError } from "./shared";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -42,14 +38,8 @@ export function requireTargetPermissions(
   return null;
 }
 
-/** Minimum cron interval in minutes. */
-export const MIN_CRON_INTERVAL_MINUTES = 15;
-
 /** Maximum name length. */
 export const MAX_NAME_LENGTH = 200;
-
-/** Maximum instructions length. Keep in sync with INSTRUCTIONS_MAX_LENGTH in packages/web/src/components/automations/automation-form.tsx. */
-export const MAX_INSTRUCTIONS_LENGTH = 15_000;
 
 export const createAutomationBodySchema = createAutomationRequestSchema.extend({
   // Bot-asserted actor display fields are cosmetic only; identity enforcement
@@ -107,49 +97,6 @@ export function formatAutomationRequestError(parseError: z.ZodError, rawBody: un
   }
 
   return "Invalid automation request";
-}
-
-interface TriggerConditionError {
-  condition: TriggerConfig["conditions"][number];
-  code: "event_incompatible" | "invalid";
-  message: string;
-}
-
-export function getTriggerConditionErrors(
-  triggerType: AutomationTriggerType,
-  triggerConfig: TriggerConfig,
-  eventType?: string
-): TriggerConditionError[] {
-  const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
-  if (!source) return [];
-  return triggerConfig.conditions.flatMap((condition) => {
-    const code =
-      source === "github" &&
-      eventType !== undefined &&
-      !isGitHubConditionSupported(eventType, condition.type)
-        ? "event_incompatible"
-        : "invalid";
-    return validateConditions([condition], source, conditionRegistry, eventType).map((message) => ({
-      condition,
-      code,
-      message,
-    }));
-  });
-}
-
-export function consumeCondition(
-  triggerConfig: TriggerConfig,
-  condition: TriggerConditionError["condition"],
-  consumedIndexes: Set<number>
-): boolean {
-  const serialized = JSON.stringify(condition);
-  const index = triggerConfig.conditions.findIndex(
-    (existing, candidateIndex) =>
-      !consumedIndexes.has(candidateIndex) && JSON.stringify(existing) === serialized
-  );
-  if (index === -1) return false;
-  consumedIndexes.add(index);
-  return true;
 }
 
 export function getTriggerEventTypeError(
@@ -222,22 +169,12 @@ export function validateTargetCounts(
   repositoryCount: number,
   environmentCount: number
 ): void {
-  if (triggerType === "github_event" || triggerType === "linear_event") {
-    if (repositoryCount === 0) {
-      throw new TargetSelectionError("Repository-scoped triggers require exactly one repository");
-    }
-    if (environmentCount > 0) {
-      throw new TargetSelectionError("Repository-scoped triggers cannot target environments");
-    }
-  }
-  if (repositoryCount + environmentCount > 1 && triggerType !== "schedule") {
-    throw new TargetSelectionError("Multi-target selections require a schedule trigger");
-  }
-  if (repositoryCount + environmentCount > MAX_AUTOMATION_REPOSITORIES) {
-    throw new TargetSelectionError(
-      `At most ${MAX_AUTOMATION_REPOSITORIES} repositories and environments combined`
-    );
-  }
+  const validationError = validateAutomationTargetCounts(
+    triggerType,
+    repositoryCount,
+    environmentCount
+  );
+  if (validationError) throw new TargetSelectionError(validationError);
 }
 
 type EnvironmentSelectionRequest =
@@ -306,18 +243,6 @@ export async function resolveRepositorySelection(
   });
 }
 
-/**
- * Validate an IANA timezone string.
- */
-export function isValidTimezone(tz: string): boolean {
-  try {
-    Intl.DateTimeFormat(undefined, { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Extract the watched channel IDs from a slack automation's `slack_channel` condition. */
 export function extractSlackChannels(triggerConfig: TriggerConfig | null | undefined): string[] {
   for (const condition of triggerConfig?.conditions ?? []) {
@@ -337,7 +262,7 @@ export function validateSlackTriggerConfig(
   triggerConfig: TriggerConfig | null | undefined
 ): string | null {
   const conditions = triggerConfig?.conditions ?? [];
-  if (!conditions.some((c) => c.type === "slack_channel")) {
+  if (!hasValidSlackChannelCondition(conditions)) {
     return "slack_event triggers require a slack_channel condition";
   }
   return null;

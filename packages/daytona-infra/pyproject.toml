@@ -1,0 +1,8 @@
+[project]
+name = "open-inspect-daytona-infra"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["daytona==0.161.0"]
+
+[tool.uv]
+package = false

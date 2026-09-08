@@ -7,6 +7,9 @@
 
 import { CronExpressionParser } from "cron-parser";
 
+/** Fastest schedule cadence supported by automation persistence and execution. */
+export const MIN_AUTOMATION_CRON_INTERVAL_MINUTES = 15;
+
 /**
  * Return the next occurrence after `after` (defaults to now).
  */
@@ -70,6 +73,28 @@ export function cronIntervalMinutes(expression: string): number | null {
     return Math.min(...intervals);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Validate the cron-specific automation contract shared by the API and form.
+ * Returns the API-facing error message, or null when the expression is valid.
+ */
+export function validateAutomationCron(expression: string): string | null {
+  if (!isValidCron(expression)) return "scheduleCron must be a valid 5-field cron expression";
+  const interval = cronIntervalMinutes(expression);
+  return interval !== null && interval < MIN_AUTOMATION_CRON_INTERVAL_MINUTES
+    ? `Schedule interval must be at least ${MIN_AUTOMATION_CRON_INTERVAL_MINUTES} minutes`
+    : null;
+}
+
+/** Validate an IANA time-zone name without throwing. */
+export function isValidTimeZone(timeZone: string): boolean {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone });
+    return true;
+  } catch {
+    return false;
   }
 }
 
