@@ -20,7 +20,6 @@ def update_locks(root: Path, *, check: bool = False) -> None:
             "opencode-ai": tools["opencode"],
             "@opencode-ai/plugin": tools["opencode"],
             "zod": tools["zod"],
-            "agent-browser": tools["agentBrowser"],
             "pnpm": tools["pnpm"],
             "bun": tools["bun"],
         },

@@ -55,6 +55,12 @@ def test_debian_restores_shared_tmp_before_using_apt():
     assert script.index("install -d -m 1777 /tmp") < script.index("apt-get update")
 
 
+def test_agent_browser_installs_as_checked_native_binary():
+    script = (REPO_ROOT / "packages/sandbox-images/install/tools.sh").read_text()
+    assert 'install -m 0755 "$download_dir/agent-browser" /usr/local/bin/agent-browser' in script
+    assert "node_modules/agent-browser" not in script
+
+
 @pytest.mark.parametrize("provider", PROVIDERS)
 def test_pack_rejects_stale_locks_before_creating_context(checkout, tmp_path, provider):
     path = checkout / "packages/sandbox-images/locks/runtime.txt"
