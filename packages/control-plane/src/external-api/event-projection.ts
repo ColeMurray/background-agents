@@ -17,15 +17,15 @@ const OMITTED_FIELDS = new Set([
 const CREDENTIAL_FIELD =
   /(?:access[_-]?token|refresh[_-]?token|secret|password|authorization|cookie|credential)/i;
 
-function redactString(value: string, secrets: ReadonlySet<string>): string {
+function redactString(value: string, secrets: readonly string[]): string {
   let redacted = value;
   for (const secret of secrets) {
-    if (secret) redacted = redacted.split(secret).join("[REDACTED]");
+    redacted = redacted.split(secret).join("[REDACTED]");
   }
   return redacted;
 }
 
-function safeJson(value: unknown, secrets: ReadonlySet<string>): ExternalJsonValue | undefined {
+function safeJson(value: unknown, secrets: readonly string[]): ExternalJsonValue | undefined {
   if (value === null || typeof value === "boolean" || typeof value === "number") return value;
   if (typeof value === "string") return redactString(value, secrets);
   if (Array.isArray(value)) {
@@ -50,6 +50,9 @@ export function projectExternalEventPage(
   managedSecretValues: ReadonlySet<string> = new Set()
 ): ExternalEventPage {
   const parsed = sessionEventChangePageSchema.parse(page);
+  const redactionValues = [...managedSecretValues]
+    .filter((secret) => secret.length > 0)
+    .sort((left, right) => right.length - left.length);
   return externalEventPageSchema.parse({
     changes: parsed.changes.map((change) => {
       if (change.kind === "delete") return change;
@@ -65,7 +68,7 @@ export function projectExternalEventPage(
           type: change.event.type,
           messageId: change.event.messageId,
           createdAt: change.event.createdAt,
-          data: safeJson(data, managedSecretValues) as Record<string, ExternalJsonValue>,
+          data: safeJson(data, redactionValues) as Record<string, ExternalJsonValue>,
         },
       };
     }),

@@ -89,6 +89,24 @@ describe("external event projection", () => {
     expect(serialized).not.toContain("secret-error");
   });
 
+  it("redacts longer secrets before overlapping shorter values", () => {
+    const projected = projectExternalEventPage(
+      page("user_message", {
+        type: "user_message",
+        timestamp: 1,
+        sandboxId: "sandbox-1",
+        messageId: "message-1",
+        content: "abcdef abc",
+      }),
+      new Set(["abc", "abcdef"])
+    );
+
+    expect(projected.changes[0]).toMatchObject({
+      kind: "upsert",
+      event: { data: { content: "[REDACTED] [REDACTED]" } },
+    });
+  });
+
   it("preserves numeric usage, fixed statuses, and tombstones", () => {
     const finish = projectExternalEventPage(
       page("step_finish", {
