@@ -277,6 +277,20 @@ describe("automation read, update, and delete routes", () => {
       });
     });
 
+    it("rejects corrupt persisted trigger fields before updating", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "unknown" });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { name: "Updated" },
+      });
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({
+        error: "Stored automation trigger fields are invalid",
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+    });
+
     it("rejects an event type change that would leave incompatible conditions", async () => {
       mockStore.getById.mockResolvedValue({
         ...sampleRow,

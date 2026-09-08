@@ -15,7 +15,6 @@ import {
   slackChannelLabel,
   type AutomationEvent,
   type SlackAutomationEvent,
-  type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
 import type {
@@ -31,6 +30,7 @@ import { z } from "zod";
 import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
   AutomationStore,
+  parseAutomationTriggerFields,
   toAutomationRun,
   isDuplicateKeyError,
   type AutomationRow,
@@ -1067,9 +1067,7 @@ export class Scheduler {
       }
 
       // Trigger conditions gate starting a NEW run.
-      const config: TriggerConfig = automation.trigger_config
-        ? JSON.parse(automation.trigger_config)
-        : { conditions: [] };
+      const config = parseAutomationTriggerFields(automation).triggerConfig ?? { conditions: [] };
       if (!matchesConditions(config.conditions, event, conditionRegistry)) {
         continue;
       }

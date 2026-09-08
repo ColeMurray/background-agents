@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   AutomationStore,
   isDuplicateKeyError,
+  parseAutomationTriggerFields,
   toAutomation,
   toAutomationRun,
   type AutomationRow,
@@ -267,6 +268,36 @@ describe("toAutomation", () => {
       },
       xai: { mode: "api_key" },
     });
+  });
+});
+
+describe("parseAutomationTriggerFields", () => {
+  it("decodes persisted trigger fields at the storage boundary", () => {
+    const triggerConfig = {
+      conditions: [{ type: "text_match", operator: "contains", value: { pattern: "urgent" } }],
+    };
+
+    expect(
+      parseAutomationTriggerFields({
+        ...sampleRow,
+        trigger_type: "webhook",
+        trigger_config: JSON.stringify(triggerConfig),
+      })
+    ).toEqual({ triggerType: "webhook", triggerConfig });
+  });
+
+  it("rejects an unknown persisted trigger type", () => {
+    expect(() => parseAutomationTriggerFields({ ...sampleRow, trigger_type: "made_up" })).toThrow();
+  });
+
+  it("rejects a malformed persisted trigger config", () => {
+    expect(() =>
+      parseAutomationTriggerFields({
+        ...sampleRow,
+        trigger_type: "webhook",
+        trigger_config: JSON.stringify({ conditions: [{ type: "made_up" }] }),
+      })
+    ).toThrow();
   });
 });
 

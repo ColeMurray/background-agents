@@ -55,6 +55,10 @@ function marker(): { indexedThroughMs: number; cleanShutdown: boolean } {
   };
 }
 
+function writeMarker(value: unknown): void {
+  writeFileSync(join(dataDir, HOST_STATE_FILE), JSON.stringify(value));
+}
+
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), "oi-crash-recovery-"));
   index = openHostAlarmIndex(dataDir);
@@ -250,9 +254,30 @@ describe("recoverSessionDeadlines", () => {
 
   it("rejects a marker with the wrong field types as no marker", () => {
     writeSessionDeadline("stranded", 4_242);
+    writeMarker({ indexedThroughMs: String(BOOT_MS), cleanShutdown: "true" });
+
+    expect(recover()).toMatchObject({ previousStop: "no_marker", scanned: 1, rearmed: 1 });
+    expect(index.get("stranded")).toBe(4_242);
+  });
+
+  it.each([
+    ["negative", { indexedThroughMs: -1, cleanShutdown: false }],
+    ["non-integer", { indexedThroughMs: 1.5, cleanShutdown: false }],
+    ["unsafe integer", { indexedThroughMs: Number.MAX_SAFE_INTEGER + 1, cleanShutdown: false }],
+    ["sentinel clean", { indexedThroughMs: 0, cleanShutdown: true }],
+  ])("rejects a marker with an invalid %s indexed point", (_label, hostState) => {
+    writeSessionDeadline("stranded", 4_242);
+    writeMarker(hostState);
+
+    expect(recover()).toMatchObject({ previousStop: "no_marker", scanned: 1, rearmed: 1 });
+    expect(index.get("stranded")).toBe(4_242);
+  });
+
+  it("rejects a marker with a non-finite indexed point", () => {
+    writeSessionDeadline("stranded", 4_242);
     writeFileSync(
       join(dataDir, HOST_STATE_FILE),
-      JSON.stringify({ indexedThroughMs: String(BOOT_MS), cleanShutdown: "true" })
+      '{"indexedThroughMs":1e999,"cleanShutdown":false}'
     );
 
     expect(recover()).toMatchObject({ previousStop: "no_marker", scanned: 1, rearmed: 1 });

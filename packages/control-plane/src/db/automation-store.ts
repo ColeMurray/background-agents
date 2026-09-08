@@ -16,7 +16,12 @@ import type {
   AutomationRunStatus,
 } from "@open-inspect/shared/types/automations";
 import { automationInvocationStatusSchema } from "@open-inspect/shared/types/automations";
-import { automationTriggerTypeSchema, triggerConfigSchema } from "@open-inspect/shared/triggers";
+import {
+  automationTriggerTypeSchema,
+  triggerConfigSchema,
+  type AutomationTriggerType,
+  type TriggerConfig,
+} from "@open-inspect/shared/triggers";
 import {
   toProviderSelections,
   type AutomationModelProviderAuthRow,
@@ -146,6 +151,23 @@ export interface AutomationInvocationRow {
   updated_at: number;
 }
 
+export interface AutomationTriggerFields {
+  triggerType: AutomationTriggerType;
+  triggerConfig: TriggerConfig | null;
+}
+
+export function parseAutomationTriggerFields(
+  row: Pick<AutomationRow, "trigger_type" | "trigger_config">
+): AutomationTriggerFields {
+  return {
+    triggerType: automationTriggerTypeSchema.parse(row.trigger_type),
+    triggerConfig:
+      row.trigger_config === null
+        ? null
+        : triggerConfigSchema.parse(JSON.parse(row.trigger_config)),
+  };
+}
+
 const enrichedAutomationInvocationRowSchema = z.object({
   id: z.string(),
   automation_id: z.string(),
@@ -207,10 +229,7 @@ export function toAutomation(
   environmentRows: AutomationEnvironmentRow[],
   providerAuthRows: AutomationModelProviderAuthRow[]
 ): Automation {
-  const triggerConfig = row.trigger_config
-    ? triggerConfigSchema.parse(JSON.parse(row.trigger_config))
-    : null;
-  const triggerType = automationTriggerTypeSchema.parse(row.trigger_type);
+  const { triggerType, triggerConfig } = parseAutomationTriggerFields(row);
 
   return {
     id: row.id,

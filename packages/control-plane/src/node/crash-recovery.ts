@@ -69,15 +69,18 @@ interface HostState {
 type PreviousStop = "clean_shutdown" | "unclean_stop" | "no_marker";
 
 function isHostState(value: unknown): value is HostState {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "indexedThroughMs" in value &&
-    typeof value.indexedThroughMs === "number" &&
-    "cleanShutdown" in value &&
-    typeof value.cleanShutdown === "boolean"
-  );
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (!("indexedThroughMs" in value) || !("cleanShutdown" in value)) return false;
+  const { indexedThroughMs, cleanShutdown } = value;
+  if (
+    typeof indexedThroughMs !== "number" ||
+    !Number.isSafeInteger(indexedThroughMs) ||
+    indexedThroughMs < 0
+  ) {
+    return false;
+  }
+  if (typeof cleanShutdown !== "boolean") return false;
+  return cleanShutdown === false || indexedThroughMs !== SCAN_EVERYTHING_MS;
 }
 
 /** What a boot's recovery found and did. */
