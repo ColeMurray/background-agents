@@ -78,14 +78,6 @@ interface AutomationTriggerConfigurationFieldsProps extends AutomationTriggerFie
   conditionErrors: string[];
 }
 
-function updateTriggerDraft(
-  value: AutomationTriggerDraft,
-  onChange: (value: AutomationTriggerDraft) => void,
-  changes: Partial<AutomationTriggerDraft>
-) {
-  onChange({ ...value, ...changes });
-}
-
 export function AutomationTriggerTypeField({
   mode,
   value,
@@ -147,7 +139,7 @@ export function AutomationTriggerConfigurationFields({
   const isSchedule = value.type === "schedule";
 
   const update = (changes: Partial<AutomationTriggerDraft>) => {
-    updateTriggerDraft(value, onChange, changes);
+    onChange({ ...value, ...changes });
   };
 
   const changeEventType = (eventType: string) => {

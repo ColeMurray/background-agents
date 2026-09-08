@@ -8,8 +8,11 @@ import {
   validateAutomationCron,
 } from "@open-inspect/shared/cron";
 import {
+  conditionRegistry,
   normalizeSlackChannelConditions,
   triggerConfigSchema,
+  validateTriggerConditions,
+  type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType } from "@open-inspect/shared/triggers";
 import {
@@ -58,13 +61,11 @@ import {
   FAR_FUTURE_THRESHOLD_MS,
   MAX_NAME_LENGTH,
   TargetSelectionError,
-  consumeCondition,
   createAutomationBodySchema,
   extractSlackChannels,
   formatAutomationRequestError,
   getEnvironmentSelection,
   getRepositorySelection,
-  getTriggerConditionErrors,
   getTriggerEventTypeError,
   requireTargetPermissions,
   resolveEnvironmentSelection,
@@ -180,13 +181,12 @@ async function handleCreateAutomation(
 
   // Validate conditions
   if (body.triggerConfig) {
-    const conditionErrors = getTriggerConditionErrors(
-      triggerType,
-      body.triggerConfig,
-      body.eventType
+    const conditionErrors = validateTriggerConditions(
+      { type: triggerType, conditions: body.triggerConfig.conditions, eventType: body.eventType },
+      conditionRegistry
     );
     if (conditionErrors.length > 0) {
-      return error(conditionErrors.map(({ message }) => message).join("; "), 400);
+      return error(conditionErrors.join("; "), 400);
     }
   }
 
@@ -547,9 +547,6 @@ async function handleUpdateAutomation(
   if (body.triggerConfig && existing.trigger_type === "slack_event") {
     const slackError = validateSlackTriggerConfig(body.triggerConfig);
     if (slackError) return error(slackError, 400);
-  }
-
-  if (body.triggerConfig && existing.trigger_type === "slack_event") {
     body.triggerConfig = {
       ...body.triggerConfig,
       conditions: normalizeSlackChannelConditions(body.triggerConfig.conditions),
@@ -558,33 +555,31 @@ async function handleUpdateAutomation(
   }
 
   if (triggerConfigToValidate) {
-    let conditionErrors = getTriggerConditionErrors(
-      existing.trigger_type as AutomationTriggerType,
-      triggerConfigToValidate,
-      effectiveEventType
-    );
-
-    // Existing source-wide GitHub conditions predate event-scoped validation.
-    // Preserve an unchanged condition on unrelated edits, but validate strictly
-    // when its value or the selected event changes.
-    const eventTypeChanged = body.eventType !== undefined && body.eventType !== existing.event_type;
-    if (existing.trigger_type === "github_event" && !eventTypeChanged && existing.trigger_config) {
+    let previousConfig: TriggerConfig | undefined;
+    if (existing.trigger_type === "github_event" && existing.trigger_config) {
       try {
         const parsedExisting = triggerConfigSchema.safeParse(JSON.parse(existing.trigger_config));
-        if (parsedExisting.success) {
-          const consumedIndexes = new Set<number>();
-          conditionErrors = conditionErrors.filter(({ code, condition }) => {
-            if (code !== "event_incompatible") return true;
-            return !consumeCondition(parsedExisting.data, condition, consumedIndexes);
-          });
-        }
+        if (parsedExisting.success) previousConfig = parsedExisting.data;
       } catch {
         // A valid replacement should be able to repair malformed stored JSON.
       }
     }
-
+    const triggerType = existing.trigger_type as AutomationTriggerType;
+    const conditionErrors = validateTriggerConditions(
+      {
+        type: triggerType,
+        conditions: triggerConfigToValidate.conditions,
+        eventType: effectiveEventType,
+      },
+      conditionRegistry,
+      previousConfig && {
+        type: triggerType,
+        conditions: previousConfig.conditions,
+        eventType: existing.event_type ?? undefined,
+      }
+    );
     if (conditionErrors.length > 0) {
-      return error(conditionErrors.map(({ message }) => message).join("; "), 400);
+      return error(conditionErrors.join("; "), 400);
     }
   }
 

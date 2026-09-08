@@ -40,6 +40,7 @@ export {
   isGitHubConditionCompatible,
   matchesConditions,
   validateConditions,
+  validateTriggerConditions,
 } from "./conditions";
 
 // Registry

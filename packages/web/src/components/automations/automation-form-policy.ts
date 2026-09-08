@@ -2,10 +2,8 @@ import { isValidTimeZone, validateAutomationCron } from "@open-inspect/shared/cr
 import {
   conditionRegistry,
   hasValidSlackChannelCondition,
-  isGitHubConditionSupported,
   triggerSources,
-  TRIGGER_TYPE_TO_SOURCE,
-  validateConditions,
+  validateTriggerConditions,
   type AutomationTriggerType,
   type TriggerCondition,
   type TriggerConfig,
@@ -139,34 +137,6 @@ function isValidEventType(triggerType: AutomationTriggerType, eventType: string)
   );
 }
 
-function getConditionErrors(
-  trigger: AutomationTriggerDraft,
-  originalTrigger?: AutomationTriggerDraft
-): string[] {
-  if (trigger.type === "schedule") return [];
-  const source = TRIGGER_TYPE_TO_SOURCE[trigger.type];
-  if (!source) return [];
-  const unchangedGitHubEvent =
-    trigger.type === "github_event" &&
-    originalTrigger?.type === trigger.type &&
-    originalTrigger.eventType === trigger.eventType;
-  const remainingOriginalConditions = unchangedGitHubEvent
-    ? originalTrigger.conditions.map((condition) => JSON.stringify(condition))
-    : [];
-  return trigger.conditions.flatMap((condition) => {
-    // The API permits unchanged legacy filters on unrelated edits, but never
-    // grants that exception to a new filter or a different event type.
-    if (unchangedGitHubEvent && !isGitHubConditionSupported(trigger.eventType, condition.type)) {
-      const index = remainingOriginalConditions.indexOf(JSON.stringify(condition));
-      if (index !== -1) {
-        remainingOriginalConditions.splice(index, 1);
-        return [];
-      }
-    }
-    return validateConditions([condition], source, conditionRegistry, trigger.eventType);
-  });
-}
-
 function getConditionRequirementError(
   trigger: AutomationTriggerDraft
 ): "slack-channel-required" | null {
@@ -223,8 +193,9 @@ function findInvalidEvaluation({
   ) {
     return { valid: false, reason: "event-type-required" };
   }
-  const conditionErrors = getConditionErrors(
+  const conditionErrors = validateTriggerConditions(
     draft.trigger,
+    conditionRegistry,
     mode === "edit" ? originalTrigger : undefined
   );
   if (conditionErrors.length > 0) {

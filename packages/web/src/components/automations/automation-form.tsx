@@ -5,11 +5,10 @@ import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { DEFAULT_MODEL, resolveEnabledModel } from "@open-inspect/shared/models";
-import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import { SUBSCRIPTION_PROVIDER_IDS } from "@open-inspect/shared/types/provider-accounts";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
-import { EMPTY_PROVIDER_SELECTIONS, setProviderSelection } from "@/lib/provider-selection";
+import { setProviderSelection } from "@/lib/provider-selection";
 import { FieldDescription } from "./automation-form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,9 +41,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const { environments, loading: loadingEnvironments } = useEnvironments();
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
   const providerAccounts = useProviderAccounts();
-  const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>(
-    initialValues?.providerSelections ?? EMPTY_PROVIDER_SELECTIONS
-  );
   const initialDraft = useMemo(() => createAutomationFormDraft(initialValues), [initialValues]);
   const initialRepositories = useMemo(
     () => initialValues?.repositories ?? [],
@@ -52,6 +48,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   );
 
   const [name, setName] = useState(initialDraft.name);
+  const [providerSelections, setProviderSelections] = useState(initialDraft.providerSelections);
   const [agent, setAgent] = useState(initialDraft.agent);
   const [instructions, setInstructions] = useState(initialDraft.instructions);
   const [trigger, setTrigger] = useState(initialDraft.trigger);

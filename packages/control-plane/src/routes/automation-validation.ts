@@ -2,14 +2,7 @@
  * Request validation and target selection shared by the automation create and update routes.
  */
 
-import {
-  validateConditions,
-  hasValidSlackChannelCondition,
-  conditionRegistry,
-  isGitHubConditionSupported,
-  triggerSources,
-  TRIGGER_TYPE_TO_SOURCE,
-} from "@open-inspect/shared/triggers";
+import { hasValidSlackChannelCondition, triggerSources } from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
 import {
   createAutomationRequestSchema,
@@ -104,49 +97,6 @@ export function formatAutomationRequestError(parseError: z.ZodError, rawBody: un
   }
 
   return "Invalid automation request";
-}
-
-interface TriggerConditionError {
-  condition: TriggerConfig["conditions"][number];
-  code: "event_incompatible" | "invalid";
-  message: string;
-}
-
-export function getTriggerConditionErrors(
-  triggerType: AutomationTriggerType,
-  triggerConfig: TriggerConfig,
-  eventType?: string
-): TriggerConditionError[] {
-  const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
-  if (!source) return [];
-  return triggerConfig.conditions.flatMap((condition) => {
-    const code =
-      source === "github" &&
-      eventType !== undefined &&
-      !isGitHubConditionSupported(eventType, condition.type)
-        ? "event_incompatible"
-        : "invalid";
-    return validateConditions([condition], source, conditionRegistry, eventType).map((message) => ({
-      condition,
-      code,
-      message,
-    }));
-  });
-}
-
-export function consumeCondition(
-  triggerConfig: TriggerConfig,
-  condition: TriggerConditionError["condition"],
-  consumedIndexes: Set<number>
-): boolean {
-  const serialized = JSON.stringify(condition);
-  const index = triggerConfig.conditions.findIndex(
-    (existing, candidateIndex) =>
-      !consumedIndexes.has(candidateIndex) && JSON.stringify(existing) === serialized
-  );
-  if (index === -1) return false;
-  consumedIndexes.add(index);
-  return true;
 }
 
 export function getTriggerEventTypeError(

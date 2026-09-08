@@ -1,6 +1,10 @@
 "use client";
 
-import { getReasoningConfig, isValidReasoningEffort } from "@open-inspect/shared/models";
+import {
+  getReasoningConfig,
+  isValidReasoningEffort,
+  type ModelCategory,
+} from "@open-inspect/shared/models";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import {
   Select,
@@ -16,19 +20,10 @@ import type { AutomationAgentDraft } from "./automation-form-policy";
 
 const DEFAULT_REASONING_VALUE = "__default__";
 
-interface EnabledModelGroup {
-  category: string;
-  models: Array<{
-    id: string;
-    name: string;
-    description?: string;
-  }>;
-}
-
 interface AutomationAgentFieldsProps {
   value: AutomationAgentDraft;
   resolvedModel: string;
-  enabledModelOptions: EnabledModelGroup[];
+  enabledModelOptions: ModelCategory[];
   onChange: (value: AutomationAgentDraft) => void;
 }
 
