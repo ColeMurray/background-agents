@@ -21,6 +21,7 @@ import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-buil
 import type { CorrelationContext, Logger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import { Scheduler } from "./scheduler/scheduler";
+import { reapSupersededReviewSessions } from "./routes/github-reviews";
 import {
   ABANDONED_DRAFT_SWEEP_CRON,
   AbandonedDraftSweep,
@@ -29,7 +30,10 @@ import {
 import type { SessionRuntimeClient } from "./session/runtime-client";
 import type { Env } from "./types";
 
-/** Every minute: the automation scheduler's tick and the autofix queue health check. */
+/**
+ * Every minute: the automation scheduler's tick, the autofix queue health
+ * check, and the superseded-review reaper.
+ */
 export const SCHEDULER_TICK_CRON = "* * * * *";
 
 /** What one run of a scheduled job is given. The host builds it per run. */
@@ -55,10 +59,20 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
   {
     name: "scheduler_tick",
     cron: SCHEDULER_TICK_CRON,
-    async run({ env, db, backgroundTasks, log }) {
+    async run({ env, db, sessions, backgroundTasks, log }) {
       backgroundTasks.submit(() => checkAutofixQueueHealth(env, log), {
         name: "autofix_queue_health",
       });
+      // Retire review sessions a newer generation has superseded. Its failure
+      // must not cost the automation tick below its slot.
+      try {
+        await reapSupersededReviewSessions(db, sessions);
+      } catch (reaperError) {
+        log.warn("Review reaper tick failed", {
+          event: "review_reaper.tick_failed",
+          error: reaperError instanceof Error ? reaperError.message : String(reaperError),
+        });
+      }
       // The tick runs both the recovery sweep (orphaned/timed-out runs) and
       // processes overdue automations.
       await new Scheduler(db, env, backgroundTasks).tick();
