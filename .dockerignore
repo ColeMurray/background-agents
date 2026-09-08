@@ -1,0 +1,13 @@
+# The control-plane image builds from the repository root; only what it
+# needs enters the build context.
+*
+!package.json
+!package-lock.json
+!packages/shared/
+!packages/control-plane/
+!packages/sandbox-runtime/src/sandbox_runtime/*.json
+!terraform/d1/migrations/
+packages/**/node_modules/
+packages/**/dist/
+packages/**/coverage/
+packages/control-plane/.wrangler/

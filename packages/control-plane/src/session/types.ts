@@ -55,6 +55,8 @@ export interface SessionRow {
   vnc_enabled: number; // 0 = disabled (default), 1 = enabled
   total_cost: number; // Running aggregate of step_finish event costs
   sandbox_settings: string | null; // JSON blob of SandboxSettings
+  max_cost_usd: number | null; // Mutable effective session cost limit; NULL = unlimited
+  budget_exhausted: number; // 0 = promptable by budget, 1 = paused
   environment_id: string | null; // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at: number;
   updated_at: number;
@@ -183,6 +185,11 @@ export interface SandboxRow {
   tunnel_urls: string | null; // JSON mapping of port -> tunnel URL
   ttyd_url: string | null;
   ttyd_token: string | null;
+  /**
+   * The `socket:<id>` tag of the bridge socket the session dispatches to;
+   * `''` once revoked, NULL only on rows that predate persisted identities.
+   */
+  active_socket_id: string | null;
   created_at: number;
 }
 

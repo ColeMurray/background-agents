@@ -6,7 +6,7 @@ import type { SentryAutomationEvent, WebhookAutomationEvent } from "@open-inspec
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 import { Scheduler } from "../../src/scheduler/scheduler";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
@@ -35,7 +35,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
 }
 
 function sendEvent(event: SentryAutomationEvent | WebhookAutomationEvent) {
-  return new Scheduler(env.DB, env as Env, { submit() {} }).event(event);
+  return new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} }).event(event);
 }
 
 function makeSentryEvent(

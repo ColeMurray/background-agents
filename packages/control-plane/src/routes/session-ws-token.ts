@@ -1,26 +1,21 @@
-import { applyIdentityEnforcement } from "../auth/identity-enforcement";
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { applyIdentityEnforcement } from "../routing/identity-enforcement";
 import { SESSION_WEBSOCKET_CONNECT_PERMISSION } from "@open-inspect/shared/rbac";
 import { SessionInternalPaths, sessionScmDisplayFieldsSchema } from "../session/contracts";
 import type { Env } from "../types";
-import {
-  defineRoutes,
-  error,
-  GITHUB_USER_OR_SERVICE_ROUTE,
-  parseJsonBody,
-  parsePattern,
-  requirePermission,
-  type Route,
-} from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { parseJsonBody } from "./body";
+import { dispatchSession, type SessionRouteContext } from "./session-route";
 
-async function handleSessionWsToken(
+export async function handleSessionWsToken(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required");
+  const sessionId = params.id;
 
   const rawBody = await parseJsonBody<unknown>(request);
   if (rawBody instanceof Response) return rawBody;
@@ -55,11 +50,13 @@ async function handleSessionWsToken(
   );
 }
 
-export const sessionWsTokenRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/ws-token"),
+export const sessionWsTokenRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionWsTokenRoutes.post(
+  "/sessions/:id/ws-token",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission(SESSION_WEBSOCKET_CONNECT_PERMISSION),
-    handler: handleSessionWsToken,
   }),
-]);
+  (c) => dispatchSession(c, handleSessionWsToken)
+);

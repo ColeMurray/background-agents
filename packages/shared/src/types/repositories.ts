@@ -186,19 +186,31 @@ export function parseRepositoryFullName(fullName: string): RepositoryPair | null
   return { repoOwner, repoName };
 }
 
+/**
+ * The repository named by two already-decoded path segments, or null when
+ * they are not a canonical pair: an owner may be a nested namespace, but a
+ * name may not contain a slash, and neither may be empty.
+ */
+export function validateRepositoryPathSegments(
+  repoOwner: string,
+  repoName: string
+): RepositoryPair | null {
+  const repository = parseRepositoryFullName(formatRepositoryFullName({ repoOwner, repoName }));
+  return repository?.repoOwner === repoOwner && repository.repoName === repoName
+    ? repository
+    : null;
+}
+
 /** Decode and validate the two path segments used by repository APIs. */
 export function decodeRepositoryPathSegments(
   encodedOwner: string,
   encodedName: string
 ): RepositoryPair | null {
   try {
-    const repoOwner = decodeURIComponent(encodedOwner);
-    const repoName = decodeURIComponent(encodedName);
-    const repository = parseRepositoryFullName(formatRepositoryFullName({ repoOwner, repoName }));
-
-    return repository?.repoOwner === repoOwner && repository.repoName === repoName
-      ? repository
-      : null;
+    return validateRepositoryPathSegments(
+      decodeURIComponent(encodedOwner),
+      decodeURIComponent(encodedName)
+    );
   } catch {
     return null;
   }

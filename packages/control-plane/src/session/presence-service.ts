@@ -15,6 +15,7 @@ import type {
 } from "@open-inspect/shared/types/server-messages";
 import type { ClientInfo } from "../types";
 import type { SessionMessenger } from "./messenger";
+import type { SessionWebSocket } from "../platform-ports";
 
 /** Project one participant per identity from one or more client connections. */
 function projectConnectedParticipants(connections: Iterable<ClientInfo>): ParticipantPresence[] {
@@ -45,8 +46,8 @@ function projectConnectedParticipants(connections: Iterable<ClientInfo>): Partic
 export interface PresenceServiceDeps {
   getAuthenticatedClients: () => IterableIterator<ClientInfo>;
   messenger: SessionMessenger;
-  send: (ws: WebSocket, message: ServerMessage) => boolean;
-  getSandboxSocket: () => WebSocket | null;
+  send: (ws: SessionWebSocket, message: ServerMessage) => boolean;
+  getSandboxSocket: () => SessionWebSocket | null;
   isSpawning: () => boolean;
   spawnSandbox: () => Promise<void>;
   log: Logger;
@@ -73,7 +74,7 @@ export class PresenceService {
   /**
    * Send presence info to a specific client.
    */
-  sendPresence(ws: WebSocket): void {
+  sendPresence(ws: SessionWebSocket): void {
     const participants = this.getPresenceList();
     this.deps.send(ws, { type: "presence_sync", participants });
   }

@@ -1,27 +1,46 @@
+import { Hono } from "hono";
+import { z } from "zod";
+import type { Env } from "../types";
 import { PrAutofixFeedbackStore } from "../db/pr-autofix-feedback-store";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
-  defineRoutes,
   error,
   json,
   NO_AUTHORIZATION,
-  parsePattern,
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
-  type Route,
+  type RequestContext,
 } from "./shared";
+import { parseQuery } from "./query";
 
-const handleActivity: Route["handler"] = async (request, _env, _match, ctx) => {
-  const url = new URL(request.url);
-  const rawLimit = url.searchParams.get("limit") ?? "50";
-  const limit = Number(rawLimit);
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-    return error("limit must be an integer from 1 to 100", 400);
-  }
+const DEFAULT_ACTIVITY_LIMIT = 50;
+const MAX_ACTIVITY_LIMIT = 100;
+const ACTIVITY_LIMIT_ERROR = `limit must be an integer from 1 to ${MAX_ACTIVITY_LIMIT}`;
+
+const activityQuerySchema = z.object({
+  limit: z
+    .string()
+    .regex(/^[1-9]\d*$/, { error: ACTIVITY_LIMIT_ERROR })
+    .optional()
+    .transform((raw) => (raw === undefined ? DEFAULT_ACTIVITY_LIMIT : Number(raw)))
+    .refine((limit) => limit <= MAX_ACTIVITY_LIMIT, { error: ACTIVITY_LIMIT_ERROR }),
+  cursor: z.string().optional(),
+});
+
+async function handleActivity(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
+  const query = parseQuery(request, activityQuerySchema);
+  if (query instanceof Response) return query;
 
   try {
     return json(
       await new PrAutofixFeedbackStore(ctx.db).listActivity({
-        limit,
-        cursor: url.searchParams.get("cursor"),
+        limit: query.limit,
+        cursor: query.cursor ?? null,
       })
     );
   } catch (caught) {
@@ -30,13 +49,12 @@ const handleActivity: Route["handler"] = async (request, _env, _match, ctx) => {
     }
     throw caught;
   }
-};
+}
 
-export const autofixRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_WEB_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    pattern: parsePattern("/autofix/activity"),
-    authorization: NO_AUTHORIZATION,
-    handler: handleActivity,
-  },
-]);
+export const autofixRoutes = new Hono<ControlPlaneHonoEnv>();
+
+autofixRoutes.get(
+  "/autofix/activity",
+  admit({ ...SCM_AGNOSTIC_WEB_SERVICE_ROUTE, authorization: NO_AUTHORIZATION }),
+  (c) => dispatch(c, handleActivity)
+);

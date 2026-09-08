@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   callbackContextSchema,
   sendPromptRequestSchema,
@@ -8,7 +11,10 @@ import {
   sessionAttachmentReferencesSchema,
   type SessionAttachmentReference,
 } from "@open-inspect/shared/types/session-attachments";
-import { applyIdentityEnforcement, mayAttachCallbackContext } from "../auth/identity-enforcement";
+import {
+  applyIdentityEnforcement,
+  mayAttachCallbackContext,
+} from "../routing/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
@@ -21,15 +27,9 @@ import {
   type GitHubEnrichment,
 } from "../session/identity";
 import type { Env } from "../types";
-import {
-  defineRoutes,
-  error,
-  GITHUB_USER_OR_SERVICE_ROUTE,
-  parsePattern,
-  requirePermission,
-  type Route,
-} from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { parseJsonBody } from "./body";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
 
@@ -48,21 +48,16 @@ function validateAttachments(raw: unknown): SessionAttachmentReference[] | Respo
   return result.data;
 }
 
-async function handleSessionPrompt(
+export async function handleSessionPrompt(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required");
+  const sessionId = params.id;
 
-  let rawBody: unknown;
-  try {
-    rawBody = await request.json();
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
 
   const enforcement = applyIdentityEnforcement(ctx, "prompt", rawBody);
   if (enforcement.rejection) return enforcement.rejection;
@@ -178,11 +173,13 @@ async function handleSessionPrompt(
   return response;
 }
 
-export const sessionPromptRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/prompt"),
+export const sessionPromptRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionPromptRoutes.post(
+  "/sessions/:id/prompt",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("sessions.collaborate"),
-    handler: handleSessionPrompt,
   }),
-]);
+  (c) => dispatchSession(c, handleSessionPrompt)
+);

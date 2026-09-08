@@ -45,6 +45,9 @@
     "packages/opencomputer-infra": {
       "project": ["src/**/*.ts"]
     },
+    "packages/vercel-infra": {
+      "project": ["src/**/*.ts"]
+    },
     "packages/web": {
       "next": true,
       "entry": [

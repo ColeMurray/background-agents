@@ -7,6 +7,7 @@ import type {
 } from "@open-inspect/shared/types/analytics";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
+import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
 
 /** Spawn sources that represent direct human-initiated sessions. */
 export const HUMAN_SPAWN_SOURCES: SpawnSource[] = ["user", "slack-bot", "linear-bot", "github-bot"];
@@ -31,7 +32,7 @@ interface SummaryRow {
 }
 
 interface TimeseriesRow {
-  date: string;
+  day_index: number;
   group_key: string;
   count: number;
 }
@@ -123,15 +124,15 @@ export class AnalyticsStore {
     return this.db
       .prepare(
         `SELECT
-           date(s.created_at / 1000, 'unixepoch') AS date,
+           s.created_at / ${MS_PER_DAY} AS day_index,
            COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), '__unknown__') AS group_key,
            COUNT(*) AS count
          FROM sessions s
          LEFT JOIN users u ON s.user_id = u.id
          WHERE s.created_at >= ? AND s.created_at < ?
            AND s.spawn_source IN (${placeholders})
-         GROUP BY date, COALESCE(s.user_id, '__unlinked__' || COALESCE(s.scm_login, '__none__'))
-         ORDER BY date ASC, group_key ASC`
+         GROUP BY day_index, COALESCE(s.user_id, '__unlinked__' || COALESCE(s.scm_login, '__none__'))
+         ORDER BY day_index ASC, group_key ASC`
       )
       .bind(filters.startAt, filters.endAt, ...sources);
   }
@@ -139,14 +140,15 @@ export class AnalyticsStore {
   decodeTimeseries(result: SqlResult): AnalyticsTimeseriesResponse {
     const series: AnalyticsTimeseriesResponse["series"] = [];
     for (const row of (result.results ?? []) as TimeseriesRow[]) {
+      const date = utcDateFromDayIndex(row.day_index);
       const lastPoint = series[series.length - 1];
-      if (lastPoint?.date === row.date) {
+      if (lastPoint?.date === date) {
         lastPoint.groups[row.group_key] = (lastPoint.groups[row.group_key] ?? 0) + row.count;
         continue;
       }
 
       series.push({
-        date: row.date,
+        date,
         groups: { [row.group_key]: row.count },
       });
     }

@@ -86,6 +86,43 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
+  it("uses authoritative totals for duplicate steps and final cost repairs", () => {
+    const event = {
+      type: "step_finish" as const,
+      messageId: "message-1",
+      cost: 0.5,
+      messageCostUsd: 0.5,
+      sandboxId: "sb",
+      timestamp: 1,
+    };
+    let state = subscribedState({
+      session: createSessionState({ totalCost: 0, maxSessionCostUsd: null }),
+    });
+    state = reduce(
+      state,
+      { type: "events_appended", events: [event] },
+      serverMessage({
+        type: "budget_status",
+        totalCost: 0.5,
+        maxSessionCostUsd: null,
+        budgetExhausted: false,
+      })
+    );
+    state = reduce(state, { type: "events_appended", events: [event] });
+    expect(state.sessionState?.totalCost).toBe(0.5);
+    // A final cumulative report repairs steps the browser never received.
+    state = reduce(
+      state,
+      serverMessage({
+        type: "budget_status",
+        totalCost: 2,
+        maxSessionCostUsd: null,
+        budgetExhausted: false,
+      })
+    );
+    expect(state.sessionState?.totalCost).toBe(2);
+  });
+
   describe("snapshot", () => {
     it("hydrates the authoritative prompt queue", () => {
       const promptQueue = [
@@ -240,6 +277,26 @@ describe("sessionSocketReducer", () => {
   });
 
   describe("subscribed", () => {
+    it("hydrates budget management capability and applies authoritative budget updates", () => {
+      const subscribed = subscribedState({ canManageBudget: true });
+      const state = reduce(
+        subscribed,
+        serverMessage({
+          type: "budget_status",
+          totalCost: 10.5,
+          maxSessionCostUsd: 10,
+          budgetExhausted: true,
+        })
+      );
+
+      expect(state.canManageBudget).toBe(true);
+      expect(state.sessionState).toMatchObject({
+        totalCost: 10.5,
+        maxSessionCostUsd: 10,
+        budgetExhausted: true,
+      });
+    });
+
     it("hydrates the authoritative projection", () => {
       const state = subscribedState({
         session: createSessionState({
@@ -362,7 +419,7 @@ describe("sessionSocketReducer", () => {
       expect(state.events).toEqual(events);
     });
 
-    it("accumulates step_finish cost onto the session total", () => {
+    it("leaves totals to server updates even when budget fields are absent", () => {
       const base = subscribedState({ session: createSessionState({ totalCost: 1 }) });
       const state = reduce(base, {
         type: "events_appended",
@@ -370,7 +427,7 @@ describe("sessionSocketReducer", () => {
           { type: "step_finish", cost: 0.5, messageId: "msg-1", sandboxId: "sb-1", timestamp: 1 },
         ],
       });
-      expect(state.sessionState?.totalCost).toBe(1.5);
+      expect(state.sessionState?.totalCost).toBe(1);
     });
 
     it("ignores missing, non-finite, and non-positive costs", () => {

@@ -1,14 +1,10 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
-import {
-  defineRoutes,
-  error,
-  GITHUB_USER_OR_SERVICE_ROUTE,
-  parsePattern,
-  requirePermission,
-  type Route,
-} from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 /**
  * Manual PR sync (design §5.3): forwards to the session DO's internal
@@ -16,25 +12,26 @@ import { sessionRoute, type SessionRouteContext } from "./session-route";
  * immediately. Deliberately no session-index touch — PR changes must never
  * reorder the session list.
  */
-async function handleRefreshPullRequests(
+export async function handleRefreshPullRequests(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required");
+  const sessionId = params.id;
 
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.pullRequestsRefresh, {
     method: "POST",
   });
 }
 
-export const sessionPullRequestRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/pull-requests/refresh"),
+export const sessionPullRequestRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionPullRequestRoutes.post(
+  "/sessions/:id/pull-requests/refresh",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("sessions.lifecycle"),
-    handler: handleRefreshPullRequests,
   }),
-]);
+  (c) => dispatchSession(c, handleRefreshPullRequests)
+);

@@ -42,6 +42,8 @@ const NO_MESSAGES: Message[] = [];
 interface UseSessionSocketReturn {
   connected: boolean;
   connecting: boolean;
+  /** A reconnect is scheduled and has not started yet. */
+  reconnecting: boolean;
   ready: boolean;
   presenceSynced: boolean;
   authError: string | null;
@@ -54,6 +56,7 @@ interface UseSessionSocketReturn {
   participants: ParticipantPresence[];
   artifacts: Artifact[];
   currentParticipantId: string | null;
+  canManageBudget: boolean;
   isProcessing: boolean;
   promptQueue: PromptQueueItem[];
   hasMoreHistory: boolean;
@@ -414,6 +417,7 @@ export function useSessionSocket(
   return {
     connected: transport.connected,
     connecting: transport.connecting,
+    reconnecting: transport.reconnecting,
     ready: state.ready,
     presenceSynced: state.presenceSynced,
     authError: transport.authError,
@@ -425,6 +429,7 @@ export function useSessionSocket(
     participants: state.participants,
     artifacts: state.artifacts,
     currentParticipantId: state.currentParticipantId,
+    canManageBudget: state.canManageBudget,
     isProcessing,
     promptQueue: state.promptQueue,
     hasMoreHistory,
