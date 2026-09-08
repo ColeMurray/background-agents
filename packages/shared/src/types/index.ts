@@ -54,6 +54,7 @@ export {
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
   parseRepositoryFullName,
+  validateRepositoryPathSegments,
   normalizeOptionalRepositoryPair,
 } from "./repositories";
 export type {
@@ -170,7 +171,25 @@ export type {
 export type { AutomationTriggerType } from "../triggers/types";
 
 export {
+  MAX_AUDIT_EVENT_TIMESTAMP_MS,
+  auditEventTimestampSchema,
+  auditOperationResultSchema,
+  auditPrincipalKindSchema,
+  auditEventMetadataSchema,
+  auditEventSchema,
+  auditEventListResponseSchema,
+} from "./audit-events";
+export type {
+  AuditOperationResult,
+  AuditPrincipalKind,
+  AuditEventMetadata,
+  AuditEvent,
+  AuditEventListResponse,
+} from "./audit-events";
+
+export {
   MAX_AUTOMATION_REPOSITORIES,
+  MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
@@ -267,6 +286,7 @@ export type {
   AnalyticsPullRequestRepoEntry,
   AnalyticsPullRequestSourceEntry,
   AnalyticsPullRequestsResponse,
+  AnalyticsDashboardResponse,
 } from "./analytics";
 
 export {

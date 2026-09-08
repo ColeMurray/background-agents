@@ -9,6 +9,7 @@ import { truncateBranch } from "@/lib/format";
 import { listPrArtifacts } from "@/lib/pr-artifacts";
 import { getSafeExternalUrl } from "@/lib/urls";
 import type { Artifact } from "@/types/session";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 export interface SessionActionProps {
   sessionId: string;
@@ -18,10 +19,11 @@ export interface SessionActionProps {
   primaryRepo?: { repoOwner: string; repoName: string } | null;
   onArchive?: () => void | Promise<void>;
   onUnarchive?: () => void | Promise<void>;
+  capabilities: SessionCapabilities;
 }
 
 /** One PR a session-level action can open, ready to render as a link. */
-export interface SessionPrLink {
+interface SessionPrLink {
   id: string;
   url: string;
   /** "#12 · head-branch"; prefixed "owner/name#12" outside the primary repo. */

@@ -49,7 +49,8 @@ import {
 } from "@/components/ui/icons";
 import { CronPicker } from "./cron-picker";
 import { TriggerTypeSelector } from "./trigger-type-selector";
-import { ConditionBuilder, CONDITION_LABELS } from "./condition-builder";
+import { ConditionBuilder } from "./condition-builder";
+import { CONDITION_LABELS } from "./condition-labels";
 import { useAutomationTargets } from "./use-automation-targets";
 import { cn } from "@/lib/utils";
 import { NO_REPOSITORY_LABEL, formatRepositoriesLabel } from "@/lib/repo-label";

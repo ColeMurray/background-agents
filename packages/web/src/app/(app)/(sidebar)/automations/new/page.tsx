@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import {
@@ -14,11 +14,14 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import Link from "next/link";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 function NewAutomationContent() {
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { hasPermission, loading: authorizationLoading } = useCurrentUserAuthorization();
+  const canCreate = hasPermission("automations.create");
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -28,6 +31,12 @@ function NewAutomationContent() {
     webhookUrl?: string;
     sentryWebhookUrl?: string;
   } | null>(null);
+
+  useEffect(() => {
+    if (!authorizationLoading && !canCreate) router.replace("/automations");
+  }, [authorizationLoading, canCreate, router]);
+
+  if (authorizationLoading || !canCreate) return null;
 
   // A template id (from the gallery) pre-fills the form. Repository is never
   // pre-filled, so the repo-required-at-creation invariant is untouched. The

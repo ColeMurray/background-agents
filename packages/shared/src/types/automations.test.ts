@@ -6,6 +6,7 @@ import {
 } from "./automations";
 
 const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
+const USER_ID = "11111111111111111111111111111111";
 
 const automation = {
   id: "auto-1",
@@ -20,6 +21,7 @@ const automation = {
   nextRunAt: 123,
   consecutiveFailures: 0,
   createdBy: "user-1",
+  userId: USER_ID,
   createdAt: 1,
   updatedAt: 2,
   deletedAt: null,
@@ -65,6 +67,17 @@ describe("listAutomationsResponseSchema", () => {
         nextCursor: null,
       }).success
     ).toBe(false);
+  });
+
+  it("requires a canonical owner ID when ownership is present", () => {
+    const response = (userId: string | null) => ({
+      automations: [{ ...automation, userId }],
+      hasMore: false as const,
+      nextCursor: null,
+    });
+
+    expect(listAutomationsResponseSchema.safeParse(response(null)).success).toBe(true);
+    expect(listAutomationsResponseSchema.safeParse(response("user-1")).success).toBe(false);
   });
 
   it("validates recent execution summaries", () => {

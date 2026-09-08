@@ -21,16 +21,28 @@ import { EnvironmentIntegrationSettings } from "./environment-integration-settin
 import { EnvironmentSecretsImport } from "./environment-secrets-import";
 import { ImageBuildStatus } from "./image-build-status";
 import { SecretsEditor } from "@/components/secrets-editor";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 type View =
   | { mode: "list" }
   | { mode: "create" }
   | { mode: "edit"; environmentId: string; tab: "configuration" | "secrets" | "overrides" };
 
+/**
+ * Presents environments with configuration, secrets, settings, and image actions gated independently by permission.
+ */
 export function EnvironmentsSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManage = hasPermission("environments.manage");
+  const canManageSecrets = hasPermission("environments.secrets.manage");
+  const canManageRepoSecrets = hasPermission("repositories.secrets.manage");
+  const canManageSettings = hasPermission("environments.settings.manage");
+  const canManageImages = hasPermission("environments.images.manage");
+  const canReadImages = hasPermission("image_builds.read");
+  const canReadSettings = hasPermission("integrations.read");
   const { environments, loading } = useEnvironments();
   const { data: imageBuildsFeed, error: imageBuildsError } = useImageBuilds(
-    environments.some((environment) => environment.prebuildEnabled)
+    canReadImages && environments.some((environment) => environment.prebuildEnabled)
   );
   const [view, setView] = useState<View>({ mode: "list" });
   const [submitting, setSubmitting] = useState(false);
@@ -208,20 +220,27 @@ export function EnvironmentsSettings() {
         </p>
 
         <div className="flex items-center gap-1 border-b border-border-muted mb-4">
-          {(["configuration", "secrets", "overrides"] as const).map((tab) => (
-            <button
-              type="button"
-              key={tab}
-              onClick={() => setView({ ...view, tab })}
-              className={`px-3 py-2 text-sm capitalize transition border-b-2 -mb-px ${
-                view.tab === tab
-                  ? "border-accent text-foreground font-medium"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
+          {(["configuration", "secrets", "overrides"] as const)
+            .filter(
+              (tab) =>
+                (tab === "configuration" && canManage) ||
+                (tab === "secrets" && canManageSecrets) ||
+                (tab === "overrides" && canReadSettings)
+            )
+            .map((tab) => (
+              <button
+                type="button"
+                key={tab}
+                onClick={() => setView({ ...view, tab })}
+                className={`px-3 py-2 text-sm capitalize transition border-b-2 -mb-px ${
+                  view.tab === tab
+                    ? "border-accent text-foreground font-medium"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
         </div>
 
         {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
@@ -242,10 +261,12 @@ export function EnvironmentsSettings() {
               and triggers a rebuild.
             </p>
             <SecretsEditor scope="environment" environmentId={environment.id} />
-            <EnvironmentSecretsImport
-              environmentId={environment.id}
-              repositories={environment.repositories}
-            />
+            {canManageRepoSecrets && (
+              <EnvironmentSecretsImport
+                environmentId={environment.id}
+                repositories={environment.repositories}
+              />
+            )}
             <div className="mt-4">
               <Button variant="outline" size="xs" onClick={() => setView({ mode: "list" })}>
                 Back to environments
@@ -257,6 +278,7 @@ export function EnvironmentsSettings() {
             <EnvironmentIntegrationSettings
               environmentId={environment.id}
               repositories={environment.repositories}
+              canManage={canManageSettings}
             />
             <div className="mt-4">
               <Button variant="outline" size="xs" onClick={() => setView({ mode: "list" })}>
@@ -274,9 +296,11 @@ export function EnvironmentsSettings() {
       <div>
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-xl font-semibold text-foreground">Environments</h2>
-          <Button size="xs" onClick={() => setView({ mode: "create" })}>
-            New environment
-          </Button>
+          {canManage && (
+            <Button size="xs" onClick={() => setView({ mode: "create" })}>
+              New environment
+            </Button>
+          )}
         </div>
         <p className="text-sm text-muted-foreground mb-6">
           Named repository sets that launch together in one workspace, with their own secrets
@@ -319,82 +343,100 @@ export function EnvironmentsSettings() {
                   </div>
 
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {prebuildsSupported && (
+                    {prebuildsSupported && (canReadImages || canManage || canManageImages) && (
                       <>
-                        <EnvironmentImageStatus
-                          environment={environment}
-                          image={imageBuildsFeed?.images.find(
-                            (image) =>
-                              image.scopeKind === "environment" && image.scopeId === environment.id
-                          )}
-                          feedUnavailable={Boolean(imageBuildsError) && !imageBuildsFeed}
-                        />
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span>
-                              <Switch
-                                checked={environment.prebuildEnabled}
-                                onCheckedChange={(checked) =>
-                                  handlePrebuildToggle(environment, checked)
-                                }
-                                disabled={isToggling}
-                                aria-label={`Toggle prebuilt images for ${environment.name}`}
-                              />
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>Prebuild images</TooltipContent>
-                        </Tooltip>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleRebuild(environment)}
-                          disabled={!environment.prebuildEnabled || isTriggering}
-                          title="Rebuild image"
-                        >
-                          <RefreshIcon
-                            className={`w-4 h-4 ${isTriggering ? "animate-spin" : ""}`}
+                        {canReadImages && (
+                          <EnvironmentImageStatus
+                            environment={environment}
+                            image={imageBuildsFeed?.images.find(
+                              (image) =>
+                                image.scopeKind === "environment" &&
+                                image.scopeId === environment.id
+                            )}
+                            feedUnavailable={Boolean(imageBuildsError) && !imageBuildsFeed}
                           />
-                        </Button>
+                        )}
+                        {canManage && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span>
+                                <Switch
+                                  checked={environment.prebuildEnabled}
+                                  onCheckedChange={(checked) =>
+                                    handlePrebuildToggle(environment, checked)
+                                  }
+                                  disabled={isToggling}
+                                  aria-label={`Toggle prebuilt images for ${environment.name}`}
+                                />
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>Prebuild images</TooltipContent>
+                          </Tooltip>
+                        )}
+                        {canManageImages && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleRebuild(environment)}
+                            disabled={!environment.prebuildEnabled || isTriggering}
+                            title="Rebuild image"
+                          >
+                            <RefreshIcon
+                              className={`w-4 h-4 ${isTriggering ? "animate-spin" : ""}`}
+                            />
+                          </Button>
+                        )}
                       </>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() =>
-                        setView({
-                          mode: "edit",
-                          environmentId: environment.id,
-                          tab: "configuration",
-                        })
-                      }
-                    >
-                      Edit
-                    </Button>
-                    {confirmDeleteId === environment.id ? (
-                      <div className="flex items-center gap-1">
+                    {(canManage || canManageSecrets || canReadSettings) && (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() =>
+                          setView({
+                            mode: "edit",
+                            environmentId: environment.id,
+                            tab: canManage
+                              ? "configuration"
+                              : canManageSecrets
+                                ? "secrets"
+                                : "overrides",
+                          })
+                        }
+                      >
+                        Edit
+                      </Button>
+                    )}
+                    {canManage &&
+                      (confirmDeleteId === environment.id ? (
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="destructive"
+                            size="xs"
+                            onClick={() => {
+                              handleDelete(environment);
+                              setConfirmDeleteId(null);
+                            }}
+                          >
+                            Confirm
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => setConfirmDeleteId(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
                         <Button
                           variant="destructive"
                           size="xs"
-                          onClick={() => {
-                            handleDelete(environment);
-                            setConfirmDeleteId(null);
-                          }}
+                          onClick={() => setConfirmDeleteId(environment.id)}
                         >
-                          Confirm
+                          Delete
                         </Button>
-                        <Button variant="ghost" size="xs" onClick={() => setConfirmDeleteId(null)}>
-                          Cancel
-                        </Button>
-                      </div>
-                    ) : (
-                      <Button
-                        variant="destructive"
-                        size="xs"
-                        onClick={() => setConfirmDeleteId(environment.id)}
-                      >
-                        Delete
-                      </Button>
-                    )}
+                      ))}
                   </div>
                 </div>
               </div>

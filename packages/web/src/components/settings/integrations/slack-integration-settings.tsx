@@ -53,6 +53,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/slack";
 const REPO_SETTINGS_KEY = "/api/integration-settings/slack/repos";
@@ -114,7 +115,13 @@ function mergedGlobalDefaults(
   return defaults;
 }
 
+/**
+ * Displays Slack integration settings with global and repository edits gated by their respective permissions.
+ */
 export function SlackIntegrationSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManageGlobal = hasPermission("integrations.manage");
+  const canManageRepos = hasPermission("repositories.settings.manage");
   const { data: globalData, isLoading: globalLoading } =
     useSWR<GlobalResponse>(GLOBAL_SETTINGS_KEY);
   const { data: repoSettingsData, isLoading: repoSettingsLoading } =
@@ -154,21 +161,27 @@ export function SlackIntegrationSettings() {
         </p>
       </SettingsCardSection>
 
-      <GlobalSettingsSection settings={settings} />
+      <fieldset disabled={!canManageGlobal} className="min-w-0">
+        <GlobalSettingsSection settings={settings} />
+      </fieldset>
 
-      <RoutingRulesSection
-        settings={settings}
-        availableRepos={availableRepos}
-        availableEnvironments={availableEnvironments}
-        reposLoaded={reposLoaded}
-        environmentsLoaded={environmentsLoaded}
-      />
+      <fieldset disabled={!canManageGlobal} className="min-w-0">
+        <RoutingRulesSection
+          settings={settings}
+          availableRepos={availableRepos}
+          availableEnvironments={availableEnvironments}
+          reposLoaded={reposLoaded}
+          environmentsLoaded={environmentsLoaded}
+        />
+      </fieldset>
 
       <SettingsCardSection
         title="Repository overrides"
         description="Override the master switch for specific repositories. Mentions policy is workspace-wide and is not overridable per repo."
       >
-        <RepoOverridesSection overrides={repoOverrides} availableRepos={availableRepos} />
+        <fieldset disabled={!canManageRepos} className="min-w-0">
+          <RepoOverridesSection overrides={repoOverrides} availableRepos={availableRepos} />
+        </fieldset>
       </SettingsCardSection>
     </div>
   );

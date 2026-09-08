@@ -9,6 +9,7 @@ import type { SessionInboxCursor } from "./session-inbox-cursor";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
+/** Viewer, filtering, and pagination inputs for an inbox query. */
 export interface ListSessionInboxOptions {
   category: SessionInboxCategory;
   createdByUserIds?: readonly string[];
@@ -69,9 +70,11 @@ function toListItem(row: InboxSessionRow): SessionListItem {
   };
 }
 
+/** Builds viewer-specific session inbox pages from the D1 session index. */
 export class SessionInboxStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  /** List one inbox category with viewer-specific read state. */
   async list(options: ListSessionInboxOptions): Promise<ListSessionInboxResult> {
     const result = await this.bindInboxQuery(options).all<InboxSessionRow>();
     const page = this.buildPageData(options.limit, result.results ?? []);
@@ -85,6 +88,7 @@ export class SessionInboxStore {
     );
   }
 
+  /** List every inbox category with viewer-specific read state. */
   async snapshot(
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): Promise<ListSessionInboxSnapshotResult> {

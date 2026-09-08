@@ -1,6 +1,7 @@
 # Open-Inspect Control Plane
 
-Cloudflare Workers + Durable Objects control plane for session management and real-time streaming.
+Cloudflare Workers + Hono + Durable Objects control plane for session management and real-time
+streaming.
 
 ## Overview
 
@@ -21,8 +22,11 @@ The control plane provides:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Cloudflare Workers                            │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │                   API Gateway (router.ts)                 │   │
-│  │   POST /sessions  │  GET /sessions/:id  │  WebSocket      │   │
+│  │                  Worker fetch entrypoint                 │   │
+│  │  ┌──────────────────────────────────┐  ┌───────────────┐ │   │
+│  │  │ Hono HTTP API + Route Admission  │  │  WebSocket    │ │   │
+│  │  │ POST /sessions  GET /sessions/:id│  │  upgrade*     │ │   │
+│  │  └──────────────────────────────────┘  └───────────────┘ │   │
 │  └─────────────────────────────┬────────────────────────────┘   │
 │                                │                                 │
 │  ┌─────────────────────────────┴────────────────────────────┐   │
@@ -45,6 +49,12 @@ The control plane provides:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+Hono selects ordinary HTTP routes from the framework-neutral catalog. Authentication, service
+principal admission, canonical actor resolution, RBAC, sandbox capabilities, and route-specific
+authorization remain in the shared admission layer. WebSocket upgrades (`*` above), scheduled
+events, Queues, and Durable Object lifecycle callbacks stay at the Cloudflare Worker boundary and do
+not pass through Hono.
+
 ## API Endpoints
 
 ### Health
@@ -57,7 +67,7 @@ The control plane provides:
 
 | Endpoint                        | Method    | Description                    |
 | ------------------------------- | --------- | ------------------------------ |
-| `/sessions`                     | GET       | List user's sessions           |
+| `/sessions`                     | GET       | List workspace sessions        |
 | `/sessions`                     | POST      | Create new session             |
 | `/sessions/:id`                 | GET       | Get canonical session snapshot |
 | `/sessions/:id`                 | DELETE    | Delete session                 |
@@ -67,7 +77,7 @@ The control plane provides:
 | `/sessions/:id/ws`              | WebSocket | Real-time connection           |
 | `/sessions/:id/events`          | GET       | Paginated events               |
 | `/sessions/:id/artifacts`       | GET       | List artifacts                 |
-| `/sessions/:id/participants`    | GET/POST  | Manage participants            |
+| `/sessions/:id/participants`    | GET       | List runtime participants      |
 | `/sessions/:id/messages`        | GET       | List messages                  |
 | `/sessions/:id/pr`              | POST      | Create pull request            |
 | `/sessions/:id/scm-credentials` | POST      | Broker sandbox git credentials |
@@ -263,8 +273,15 @@ npm install
 
 ```bash
 npm run build
-# Outputs to dist/index.js
+# Outputs the Worker bundle to dist/index.js and the Node host to dist/node/main.js
 ```
+
+### Run as a container
+
+The control plane also runs as a Node process on a container, with SQLite on a volume and an
+S3-compatible bucket for media. See
+[docs/CONTROL_PLANE_CONTAINER.md](../../docs/CONTROL_PLANE_CONTAINER.md) for `docker compose up` and
+the image build.
 
 ### Deploy
 
@@ -434,6 +451,7 @@ All secrets are configured via Terraform. Required secrets include:
 - `GITHUB_APP_PRIVATE_KEY` - GitHub App private key (PKCS#8 format)
 - `GITHUB_APP_INSTALLATION_ID` - Single installation for all users
 - `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
+- `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` - Dedicated key for provider account credentials in D1
 
 Optional variables:
 

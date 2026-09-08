@@ -36,6 +36,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const DEFAULT_ALWAYS_USE_DRAFT_MODE = false;
 const DEFAULT_PULL_REQUEST_LABEL = "";
@@ -98,7 +99,12 @@ function isRepoListResponse(value: unknown): value is RepoListResponse {
   );
 }
 
+/**
+ * Displays source-control defaults and disables editing for users without SCM settings management permission.
+ */
 export function ScmSettingsPage() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManage = hasPermission("scm_settings.manage");
   const {
     data: globalData,
     error: globalError,
@@ -141,18 +147,22 @@ export function ScmSettingsPage() {
         Defaults for pull and merge requests opened by coding sessions.
       </p>
 
-      <GlobalSettingsSection settings={settings} />
+      <fieldset disabled={!canManage} className="min-w-0">
+        <GlobalSettingsSection settings={settings} />
+      </fieldset>
 
       <SettingsCardSection
         title="Repository Overrides"
         description="Override pull and merge request defaults for specific repositories."
       >
-        <RepoOverridesSection
-          overrides={repoOverrides}
-          availableRepos={availableRepos}
-          globalDefault={settings?.defaults?.alwaysUseDraftMode ?? DEFAULT_ALWAYS_USE_DRAFT_MODE}
-          globalLabel={settings?.defaults?.pullRequestLabel}
-        />
+        <fieldset disabled={!canManage} className="min-w-0">
+          <RepoOverridesSection
+            overrides={repoOverrides}
+            availableRepos={availableRepos}
+            globalDefault={settings?.defaults?.alwaysUseDraftMode ?? DEFAULT_ALWAYS_USE_DRAFT_MODE}
+            globalLabel={settings?.defaults?.pullRequestLabel}
+          />
+        </fieldset>
       </SettingsCardSection>
     </div>
   );

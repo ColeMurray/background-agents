@@ -8,8 +8,16 @@ import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SessionPromptComposer } from "./session-prompt-composer";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 expect.extend(matchers);
+
+const FULL_CAPABILITIES: SessionCapabilities = {
+  read: true,
+  collaborate: true,
+  lifecycle: true,
+  sandboxAccess: true,
+};
 
 vi.mock("@/components/action-bar", () => ({
   ActionBar: () => <div data-testid="action-bar" />,
@@ -38,6 +46,8 @@ function ComposerHarness({
   status = "active",
   submitError = null,
   withSkill = false,
+  blockedReason,
+  canManageLifecycle = true,
 }: {
   initialValue?: string;
   isProcessing?: boolean;
@@ -46,6 +56,8 @@ function ComposerHarness({
   status?: "active" | "archived" | "cancelled";
   submitError?: string | null;
   withSkill?: boolean;
+  blockedReason?: string;
+  canManageLifecycle?: boolean;
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -58,12 +70,14 @@ function ComposerHarness({
         artifacts: [],
         onArchive: vi.fn(),
         onUnarchive: vi.fn(),
+        capabilities: { ...FULL_CAPABILITIES, lifecycle: canManageLifecycle },
       }}
       prompt={{
         value,
         isProcessing,
         draftLocked: isUploading,
         sendBlocked: connecting,
+        blockedReason,
         submitError,
         inputRef,
         onSubmit: vi.fn(),
@@ -172,10 +186,33 @@ describe("SessionPromptComposer", () => {
     expect(screen.getByTitle(/Send/)).toBeDisabled();
   });
 
+  it("hides stop controls without lifecycle permission", () => {
+    render(
+      <ComposerHarness initialValue="Queued prompt" isProcessing canManageLifecycle={false} />
+    );
+
+    expect(
+      screen.queryByTitle("Stop current prompt; queued prompts will continue")
+    ).not.toBeInTheDocument();
+  });
+
   it("shows an inline submission error", () => {
     render(<ComposerHarness initialValue="Keep me" submitError="The prompt queue is full" />);
     expect(screen.getByRole("alert")).toHaveTextContent("The prompt queue is full");
     expect(screen.getByDisplayValue("Keep me")).toBeInTheDocument();
+  });
+
+  it("shows a persistent budget pause reason while preserving the draft", () => {
+    render(
+      <ComposerHarness
+        initialValue="Continue later"
+        connecting
+        blockedReason="Session cost limit reached. Raise or remove the limit to continue."
+      />
+    );
+    expect(screen.getByText(/Session cost limit reached/)).toBeInTheDocument();
+    expect(screen.getByTitle(/Send/)).toBeDisabled();
+    expect(screen.getByDisplayValue("Continue later")).toBeEnabled();
   });
 
   it("offers pinned skills in the follow-up textarea", async () => {

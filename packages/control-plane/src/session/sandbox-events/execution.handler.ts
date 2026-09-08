@@ -6,6 +6,7 @@ import type { MessageRepository } from "../message-repository";
 import type { SessionMessenger } from "../messenger";
 import type { SessionStatusService } from "../session-status-service";
 import type { SandboxEventContext } from "./context";
+import type { SessionBudgetService } from "../budget-service";
 
 /**
  * Execution-lifecycle family: settle a finished turn. `execution_complete`
@@ -34,17 +35,32 @@ export class SandboxExecutionEventHandler {
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
     private readonly processMessageQueue: () => Promise<void>,
-    private readonly broadcastPromptQueue: () => void
+    private readonly broadcastPromptQueue: () => void,
+    private readonly budget: Pick<
+      SessionBudgetService,
+      "observeExecutionCost" | "deliverTransition"
+    >,
+    private readonly transaction: <T>(closure: () => T) => T
   ) {}
 
   async handleExecutionComplete(
     event: Extract<SandboxEvent, { type: "execution_complete" }>,
     context: SandboxEventContext
   ): Promise<void> {
-    const completion =
-      context.processingMessage?.id === event.messageId
-        ? this.messageRepository.recordMessageCompletion(event, context.now, "processing")
-        : null;
+    // Release the processing/stop fence and settle final cost in one commit.
+    // No queue invocation may see a finished turn with its budget still stale.
+    const { completion, budgetTransition } = this.transaction(() => {
+      const completion =
+        context.processingMessage?.id === event.messageId
+          ? this.messageRepository.recordMessageCompletion(event, context.now, "processing")
+          : null;
+      if (!completion) this.messageRepository.clearMessageAwaitingStopConfirmation(event.messageId);
+      return {
+        completion,
+        budgetTransition: this.budget.observeExecutionCost(event, context.now),
+      };
+    });
+    await this.budget.deliverTransition(budgetTransition);
     if (completion) {
       await this.projectTerminalMessage(
         completion.messageId,
@@ -82,7 +98,6 @@ export class SandboxExecutionEventHandler {
       );
       await this.statusService.reconcileAfterExecution(event.success);
     } else {
-      this.messageRepository.clearMessageAwaitingStopConfirmation(event.messageId);
       this.log.info("prompt.complete", {
         event: "prompt.complete",
         message_id: event.messageId,

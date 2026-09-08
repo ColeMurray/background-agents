@@ -14,9 +14,13 @@ import { Switch } from "@/components/ui/switch";
 import { PlusIcon, SparkleIcon } from "@/components/ui/icons";
 import { SkillEditor } from "./skill-editor";
 import { SkillImport } from "./skill-import";
+import { SkillDetails } from "./skill-details";
 import { errorMessage } from "./utils";
 
-export function SkillsCatalog() {
+/**
+ * Displays the shared skill catalog and exposes catalog mutations only when `canManage` is true.
+ */
+export function SkillsCatalog({ canManage }: { canManage: boolean }) {
   const [cursorHistory, setCursorHistory] = useState<string[]>([]);
   const cursor = cursorHistory.at(-1) ?? null;
   const { skills, hasMore, nextCursor, loading, error } = useSkillCatalogPage(cursor);
@@ -91,7 +95,7 @@ export function SkillsCatalog() {
       return <p className="text-sm text-destructive">Failed to load this managed skill.</p>;
     if (loadingSkill || !skill)
       return <p className="text-sm text-muted-foreground">Loading skill...</p>;
-    return (
+    return canManage ? (
       <SkillEditor
         key={`${skill.id}:${skill.currentRevisionId}`}
         skill={skill}
@@ -101,6 +105,8 @@ export function SkillsCatalog() {
           await Promise.all([revalidateSkillCatalogPage(cursor), mutateSkill()]);
         }}
       />
+    ) : (
+      <SkillDetails skill={skill} onClose={() => setSelectedId(null)} />
     );
   }
 
@@ -113,14 +119,16 @@ export function SkillsCatalog() {
             Manage reusable instructions assigned to repositories and environments.
           </p>
         </div>
-        <div className="flex shrink-0 gap-2">
-          <Button size="sm" variant="subtle" onClick={() => setImporting(true)}>
-            Import from repository
-          </Button>
-          <Button size="sm" onClick={() => setCreating(true)}>
-            <PlusIcon className="h-4 w-4" /> New skill
-          </Button>
-        </div>
+        {canManage && (
+          <div className="flex shrink-0 gap-2">
+            <Button size="sm" variant="subtle" onClick={() => setImporting(true)}>
+              Import from repository
+            </Button>
+            <Button size="sm" onClick={() => setCreating(true)}>
+              <PlusIcon className="h-4 w-4" /> New skill
+            </Button>
+          </div>
+        )}
       </div>
       {error ? (
         <p className="text-sm text-destructive">Failed to load managed skills.</p>
@@ -171,14 +179,18 @@ export function SkillsCatalog() {
                   <span>· Created by {item.creatorDisplayName || item.createdBy}</span>
                 </p>
               </button>
-              <Switch
-                checked={item.enabled}
-                onCheckedChange={(value) => toggleEnabled(item.id, value)}
-                aria-label={`${item.enabled ? "Disable" : "Enable"} ${item.name}`}
-              />
-              <Button variant="ghost" size="xs" onClick={() => remove(item.id, item.name)}>
-                Delete
-              </Button>
+              {canManage && (
+                <Switch
+                  checked={item.enabled}
+                  onCheckedChange={(value) => toggleEnabled(item.id, value)}
+                  aria-label={`${item.enabled ? "Disable" : "Enable"} ${item.name}`}
+                />
+              )}
+              {canManage && (
+                <Button variant="ghost" size="xs" onClick={() => remove(item.id, item.name)}>
+                  Delete
+                </Button>
+              )}
             </div>
           ))}
         </div>

@@ -302,7 +302,7 @@ describe("handlePullRequestOpened", () => {
       handler_action: "auto_review",
     });
     expect(sessionCreateBody(getControlPlaneFetch(env)).scmLogin).toBe("test-bot[bot]");
-    expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('-f event="COMMENT"');
+    expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('"event": "COMMENT"');
   });
 
   it("rejects a bot-authored PR when the bot is not an allowed trigger user", async () => {

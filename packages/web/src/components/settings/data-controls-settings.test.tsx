@@ -11,15 +11,23 @@ import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 
 expect.extend(matchers);
 
-const { toastMock } = vi.hoisted(() => ({
+const { toastMock, authorizationMock } = vi.hoisted(() => ({
   toastMock: {
     success: vi.fn(),
     error: vi.fn(),
   },
+  authorizationMock: { permissions: null as Set<string> | null },
 }));
 
 vi.mock("sonner", () => ({
   toast: toastMock,
+}));
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      authorizationMock.permissions === null || authorizationMock.permissions.has(permission),
+  }),
 }));
 
 vi.mock("next/link", () => ({
@@ -143,9 +151,20 @@ afterEach(async () => {
   vi.restoreAllMocks();
   toastMock.success.mockReset();
   toastMock.error.mockReset();
+  authorizationMock.permissions = null;
 });
 
 describe("DataControlsSettings — unarchive flow", () => {
+  it("keeps archived sessions readable without exposing unarchive to read-only roles", async () => {
+    authorizationMock.permissions = new Set(["sessions.read"]);
+    installFetch({ archivedSessions: [createArchivedSession(1)] });
+
+    renderComponent();
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Unarchive" })).not.toBeInTheDocument();
+  });
+
   it("removes the row when the unarchive request succeeds", async () => {
     installFetch({
       archivedSessions: [createArchivedSession(1)],

@@ -8,11 +8,14 @@ import AutomationsPage from "./page";
 
 expect.extend(matchers);
 
-const { mockReplace, mockUseAutomations, mockSearchParamsState } = vi.hoisted(() => ({
-  mockReplace: vi.fn(),
-  mockUseAutomations: vi.fn(),
-  mockSearchParamsState: { value: new URLSearchParams() },
-}));
+const { mockReplace, mockUseAutomations, mockSearchParamsState, mockPermissions } = vi.hoisted(
+  () => ({
+    mockReplace: vi.fn(),
+    mockUseAutomations: vi.fn(),
+    mockSearchParamsState: { value: new URLSearchParams() },
+    mockPermissions: new Set<string>(),
+  })
+);
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/automations",
@@ -37,6 +40,12 @@ vi.mock("@/hooks/use-automations", () => ({
   useAutomations: mockUseAutomations,
 }));
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) => mockPermissions.has(permission),
+  }),
+}));
+
 vi.mock("@/components/automations/automations-list", () => ({
   AutomationsList: ({ automations }: { automations: Array<{ name: string }> }) => (
     <div>{automations.map((automation) => automation.name).join(", ")}</div>
@@ -58,6 +67,8 @@ describe("AutomationsPage", () => {
     vi.useFakeTimers();
     mockReplace.mockReset();
     mockSearchParamsState.value = new URLSearchParams();
+    mockPermissions.clear();
+    mockPermissions.add("automations.create");
     mockUseAutomations.mockReturnValue(defaultHookResult);
   });
 
@@ -126,5 +137,13 @@ describe("AutomationsPage", () => {
       "weekly"
     );
     expect(mockUseAutomations).toHaveBeenLastCalledWith("weekly");
+  });
+
+  it("hides create and template entry points without automations.create", () => {
+    mockPermissions.clear();
+    render(<AutomationsPage />);
+
+    expect(screen.queryByRole("link", { name: "Browse templates" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Create Automation" })).not.toBeInTheDocument();
   });
 });

@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 /**
  * Session image attachments added through the chat composer.
  *
@@ -8,7 +11,7 @@
  *
  * GET streams the file back. It is HMAC-authenticated for the web app's proxy
  * route and sandbox-token-authenticated so the bridge can hydrate attachments
- * before prompting OpenCode (see SANDBOX_AUTH_ROUTES in router.ts).
+ * before prompting OpenCode (see the sandbox-fallback policies in routes/shared.ts).
  *
  * Every stored object is registered as an attachment record in the session DO,
  * which enforces per-session quotas and prunes records never referenced by a
@@ -36,7 +39,7 @@ import {
   SessionAttachmentStorageError,
   SessionAttachmentStorageService,
 } from "../session/services/session-attachment-storage";
-import { createMediaObjectStorage, type ObjectStorageMetadata } from "../storage/object-storage";
+import type { ObjectStorageMetadata } from "../storage/object-storage";
 import type { Env } from "../types";
 import { parseByteRangeHeader, type ByteRange } from "./requests/byte-range";
 import {
@@ -45,15 +48,13 @@ import {
   createStoredObjectResponse,
 } from "./responses/stored-object-response";
 import {
-  defineRoute,
   error,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
-  parsePattern,
-  type Route,
+  requirePermission,
 } from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const logger = createLogger("router:session-attachments");
 
@@ -76,14 +77,13 @@ function attachmentStorageErrorResponse(cause: SessionAttachmentStorageError): R
   }
 }
 
-async function handleAttachmentPost(
+export async function handleAttachmentPost(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required");
+  const sessionId = params.id;
   if (sessionAttachmentRequestExceedsLimit(request)) {
     return error("Attachment request is too large", 413);
   }
@@ -137,7 +137,7 @@ async function handleAttachmentPost(
 
   const attachmentId = generateId();
   const objectKey = buildSessionAttachmentObjectKey(sessionId, attachmentId);
-  const storage = createMediaObjectStorage(env);
+  const storage = env.MEDIA_BUCKET;
   const attachmentStorage = new SessionAttachmentStorageService(
     ctx.sessionRuntime,
     storage,
@@ -179,14 +179,14 @@ async function handleAttachmentPost(
   );
 }
 
-async function handleAttachmentGet(
+export async function handleAttachmentGet(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; attachmentId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  const attachmentId = match.groups?.attachmentId;
+  const sessionId = params.id;
+  const attachmentId = params.attachmentId;
   if (!sessionId || !attachmentId) {
     return error("Session ID and attachment ID are required", 400);
   }
@@ -194,7 +194,7 @@ async function handleAttachmentGet(
     return error("Invalid attachment ID", 400);
   }
 
-  const storage = createMediaObjectStorage(env);
+  const storage = env.MEDIA_BUCKET;
   const objectKey = buildSessionAttachmentObjectKey(sessionId, attachmentId);
   const rangeHeader = request.headers.get("Range");
   let body: ReadableStream;
@@ -237,21 +237,19 @@ async function handleAttachmentGet(
     : createStoredObjectResponse(body, metadata, contentType);
 }
 
-export const sessionAttachmentRoutes: Route[] = [
-  defineRoute(
-    GITHUB_USER_OR_SERVICE_ROUTE,
-    sessionRoute({
-      method: "POST",
-      pattern: parsePattern("/sessions/:id/attachments"),
-      handler: handleAttachmentPost,
-    })
-  ),
-  defineRoute(
-    GITHUB_SANDBOX_FALLBACK_ROUTE,
-    sessionRoute({
-      method: "GET",
-      pattern: parsePattern("/sessions/:id/attachments/:attachmentId"),
-      handler: handleAttachmentGet,
-    })
-  ),
-];
+export const sessionAttachmentRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionAttachmentRoutes.post(
+  "/sessions/:id/attachments",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requirePermission("sessions.collaborate"),
+  }),
+  (c) => dispatchSession(c, handleAttachmentPost)
+);
+
+sessionAttachmentRoutes.get(
+  "/sessions/:id/attachments/:attachmentId",
+  admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requirePermission("sessions.read") }),
+  (c) => dispatchSession(c, handleAttachmentGet)
+);

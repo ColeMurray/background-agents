@@ -17,6 +17,8 @@ import {
 } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { canUseSettingsCapability } from "./settings-registry";
 
 const PAGE_SIZE = 20;
 const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
@@ -26,6 +28,12 @@ const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
 });
 
 export function DataControlsSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canUnarchive = canUseSettingsCapability(
+    "data-controls",
+    "unarchiveSessions",
+    hasPermission
+  );
   const [extraSessions, setExtraSessions] = useState<SessionListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -126,6 +134,7 @@ export function DataControlsSettings() {
               <ArchivedSessionRow
                 key={session.id}
                 session={session}
+                canUnarchive={canUnarchive}
                 onUnarchive={handleUnarchive}
               />
             ))}
@@ -150,9 +159,11 @@ export function DataControlsSettings() {
 
 function ArchivedSessionRow({
   session,
+  canUnarchive,
   onUnarchive,
 }: {
   session: SessionListItem;
+  canUnarchive: boolean;
   onUnarchive: (id: string) => void;
 }) {
   const repoInfo = formatRepoLabel(session.repoOwner, session.repoName);
@@ -169,14 +180,16 @@ function ArchivedSessionRow({
           <span className="truncate">{repoInfo}</span>
         </div>
       </Link>
-      <Button
-        variant="outline"
-        size="xs"
-        onClick={() => onUnarchive(session.id)}
-        className="flex-shrink-0 opacity-0 group-hover:opacity-100"
-      >
-        Unarchive
-      </Button>
+      {canUnarchive && (
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => onUnarchive(session.id)}
+          className="flex-shrink-0 opacity-0 group-hover:opacity-100"
+        >
+          Unarchive
+        </Button>
+      )}
     </div>
   );
 }

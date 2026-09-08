@@ -271,7 +271,7 @@ export async function deleteSkillProfile(id: string): Promise<void> {
   });
 }
 
-export async function resolveSkillPreview(
+async function resolveSkillPreview(
   input: SkillResolutionPreviewInput,
   signal?: AbortSignal
 ): Promise<SkillResolutionPreviewResponse> {

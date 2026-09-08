@@ -110,6 +110,26 @@ describe("SandboxRepository", () => {
     });
   });
 
+  describe("transitionSandboxStatus", () => {
+    const query = `UPDATE sandbox SET status = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ? AND status = ?`;
+    const generation = { sandboxId: "modal-sb-1", createdAt: 5000 };
+
+    it("moves the row only while it is still the generation's and in the expected status", () => {
+      mock.setRowsWritten(query, 1);
+
+      expect(repository.transitionSandboxStatus(generation, "snapshotting", "ready")).toBe(true);
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toBe(query);
+      expect(mock.calls[0].params).toEqual(["ready", "modal-sb-1", 5000, "snapshotting"]);
+    });
+
+    it("reports a row that another event or attempt moved instead of overwriting it", () => {
+      expect(repository.transitionSandboxStatus(generation, "spawning", "connecting")).toBe(false);
+    });
+  });
+
   describe("updateSandboxForSpawn", () => {
     it("sets all spawn fields atomically and invalidates credentials", () => {
       repository.updateSandboxForSpawn({
@@ -131,6 +151,9 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("vnc_password = NULL");
       // A replacement sandbox must not inherit the predecessor's runtime.
       expect(mock.calls[0].query).toContain("runtime_version = NULL");
+      // ...nor its bridge: the predecessor's socket loses dispatch authority
+      // here. Revoked is '' — NULL is reserved for rows that predate identities.
+      expect(mock.calls[0].query).toContain("active_socket_id = ''");
       expect(mock.calls[0].params).toEqual(["spawning", 1000, "modal-sb-1"]);
     });
 
@@ -146,8 +169,26 @@ describe("SandboxRepository", () => {
     });
   });
 
+  describe("active socket id", () => {
+    it("writes the identity to the session's one sandbox row", () => {
+      repository.setActiveSocketId("sbws-2");
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE sandbox SET active_socket_id = ?");
+      expect(mock.calls[0].params).toEqual(["sbws-2"]);
+    });
+
+    it("revokes with the empty sentinel rather than NULL", () => {
+      repository.revokeActiveSocketId();
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE sandbox SET active_socket_id = ''");
+      expect(mock.calls[0].params).toEqual([]);
+    });
+  });
+
   describe("updateSandboxAuthTokenHash", () => {
-    const query = `UPDATE sandbox SET auth_token_hash = ? WHERE modal_sandbox_id = ?`;
+    const query = `UPDATE sandbox SET auth_token_hash = ? WHERE modal_sandbox_id = ? AND status = 'spawning'`;
 
     it("publishes the hash scoped to the reserved identity", () => {
       mock.setRowsWritten(query, 1);
@@ -158,7 +199,7 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].params).toEqual(["hash-1", "modal-sb-1"]);
     });
 
-    it("reports a superseded reservation instead of touching the current row", () => {
+    it("reports a superseded or stopped reservation instead of touching the current row", () => {
       expect(repository.updateSandboxAuthTokenHash("modal-sb-stale", "hash-1")).toBe(false);
     });
   });
@@ -173,20 +214,27 @@ describe("SandboxRepository", () => {
     });
   });
 
-  describe("updateSandboxSnapshotImageId", () => {
-    it("stamps the snapshot with the runtime that produced it", () => {
-      repository.updateSandboxSnapshotImageId("sb-1", "img-123", "v59-runtime");
+  describe("recordSandboxSnapshot", () => {
+    const query = `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ?`;
 
+    it("stamps the snapshot with the runtime that produced it, for the sandbox it was taken of", () => {
+      mock.setRowsWritten(query, 1);
+
+      expect(repository.recordSandboxSnapshot("modal-sb-1", "img-123", "v59-runtime")).toBe(true);
       expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("UPDATE sandbox SET snapshot_image_id");
-      expect(mock.calls[0].query).toContain("snapshot_runtime_version");
-      expect(mock.calls[0].params).toEqual(["img-123", "v59-runtime", "sb-1"]);
+      expect(mock.calls[0].query).toBe(query);
+      expect(mock.calls[0].params).toEqual(["img-123", "v59-runtime", "modal-sb-1"]);
     });
 
     it("records a null runtime when the sandbox never reported one", () => {
-      repository.updateSandboxSnapshotImageId("sb-1", "img-123", null);
+      repository.recordSandboxSnapshot("modal-sb-1", "img-123", null);
 
-      expect(mock.calls[0].params).toEqual(["img-123", null, "sb-1"]);
+      expect(mock.calls[0].params).toEqual(["img-123", null, "modal-sb-1"]);
+    });
+
+    it("reports a replaced sandbox instead of stamping its successor", () => {
+      expect(repository.recordSandboxSnapshot("modal-sb-old", "img-123", null)).toBe(false);
     });
   });
 

@@ -7,7 +7,7 @@ const nullableOptionalString = z.string().nullable().optional();
 
 const generateWsTokenRequestSchema = sessionScmDisplayFieldsSchema.extend({
   userId: z.string().optional(),
-  canonicalUserId: nullableOptionalString,
+  canonicalUserId: z.string().min(1),
   scmUserId: nullableOptionalString,
   scmTokenEncrypted: nullableOptionalString,
   scmRefreshTokenEncrypted: nullableOptionalString,
@@ -29,6 +29,7 @@ export class WsTokenHandler {
     private readonly now: () => number = Date.now
   ) {}
 
+  /** Mint a token for a participant bound to the authenticated canonical user. */
   async generateWsToken(request: Request, log: Logger): Promise<Response> {
     let raw: unknown;
     try {
@@ -71,7 +72,7 @@ export class WsTokenHandler {
         (participant.scm_refresh_token_encrypted == null || shouldUpdateTokens);
 
       this.repository.updateParticipantCoalesce(participant.id, {
-        ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
+        canonicalUserId: body.canonicalUserId,
         scmUserId: body.scmUserId ?? null,
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
@@ -87,7 +88,7 @@ export class WsTokenHandler {
       this.repository.createParticipant({
         id,
         userId: body.userId,
-        ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
+        canonicalUserId: body.canonicalUserId,
         scmUserId: body.scmUserId ?? null,
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,

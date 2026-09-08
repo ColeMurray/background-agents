@@ -14,6 +14,10 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { SandboxSettingsEditor, SandboxSettingsPage } from "./sandbox-settings";
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+}));
+
 expect.extend(matchers);
 
 const reposMock = vi.hoisted(() => ({
@@ -38,7 +42,11 @@ const SETTINGS_KEY = "/api/integration-settings/sandbox";
 function globalSettings(
   tunnelPorts: number[],
   enabledRepos?: string[],
-  limits?: { maxConcurrentChildSessions?: number; maxTotalChildSessions?: number }
+  limits?: {
+    maxConcurrentChildSessions?: number;
+    maxTotalChildSessions?: number;
+    maxSessionCostUsd?: number;
+  }
 ) {
   return {
     integrationId: "sandbox",
@@ -78,6 +86,12 @@ afterEach(() => {
 
 describe("SandboxSettingsPage — tunnel ports editor", () => {
   const user = userEvent.setup();
+
+  it("renders configured session cost controls", () => {
+    renderWithSWR(globalSettings([], undefined, { maxSessionCostUsd: 25 }));
+    expect(screen.getByLabelText("Cost limit (USD)")).toHaveValue(25);
+    expect(screen.queryByLabelText("Warning threshold (%)")).not.toBeInTheDocument();
+  });
 
   it("shows empty state when no ports configured", () => {
     renderWithSWR({ integrationId: "sandbox", settings: null });

@@ -2,11 +2,14 @@ import type { Logger } from "../logger";
 import { decryptStoredAccessValue } from "./sandbox-access";
 import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
+import { resolveSandboxDashboardUrl, type SandboxDashboardSettings } from "./sandbox-access";
+import { safeParseTunnelUrls } from "./tunnel-urls";
 
 export interface SessionAccessReaderDeps {
   sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxRepository;
   repoSecretsEncryptionKey: string;
+  sandboxDashboardSettings: SandboxDashboardSettings;
   log: Logger;
 }
 
@@ -44,7 +47,9 @@ export class SessionAccessReader {
       current.vnc_url !== sandbox.vnc_url ||
       current.vnc_password !== sandbox.vnc_password ||
       current.ttyd_url !== sandbox.ttyd_url ||
-      current.ttyd_token !== sandbox.ttyd_token
+      current.ttyd_token !== sandbox.ttyd_token ||
+      current.tunnel_urls !== sandbox.tunnel_urls ||
+      current.modal_object_id !== sandbox.modal_object_id
     ) {
       return Response.json({ error: "Sandbox access changed; retry" }, { status: 409, headers });
     }
@@ -57,6 +62,13 @@ export class SessionAccessReader {
         vnc:
           current.vnc_url && vncPassword ? { url: current.vnc_url, password: vncPassword } : null,
         ttyd: current.ttyd_url && ttydToken ? { url: current.ttyd_url, token: ttydToken } : null,
+        tunnelUrls: current.tunnel_urls
+          ? safeParseTunnelUrls(current.tunnel_urls, this.deps.log)
+          : null,
+        sandboxDashboardUrl: resolveSandboxDashboardUrl(
+          this.deps.sandboxDashboardSettings,
+          current.modal_object_id
+        ),
       },
       { headers }
     );

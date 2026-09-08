@@ -183,6 +183,8 @@ function sessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1,
@@ -213,8 +215,6 @@ function makeHarness(
   options: {
     session?: SessionRow | null;
     memberRows?: SessionRepositoryRow[];
-    /** Model a deployment where the DB binding is missing. */
-    withoutDb?: boolean;
     /** Defaults to ENCRYPTION_KEY — the key is required in production. */
     encryptionKey?: string;
     /** Omit to model an unset SECRETS_CAP_ENFORCEMENT (fail-closed enforce). */
@@ -240,7 +240,7 @@ function makeHarness(
       ));
 
   const resolver = new UserEnvResolver({
-    db: options.withoutDb ? null : db,
+    db,
     sessionCoreRepository,
     resolveRepoId: (sessionForRepoId) => {
       resolveRepoIdCalls += 1;
@@ -285,14 +285,6 @@ describe("UserEnvResolver", () => {
 
       await expect(h.resolver.getProviderAuthenticationError("openai/gpt-5")).resolves.toBeNull();
     });
-  });
-
-  it("throws when a session exists but D1 is unavailable", async () => {
-    const h = makeHarness({ withoutDb: true });
-
-    await expect(h.resolver.getUserEnvVars()).rejects.toThrow(
-      "D1 is required to load session provider auth"
-    );
   });
 
   describe("with no stored secrets", () => {
