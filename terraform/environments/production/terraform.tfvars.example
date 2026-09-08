@@ -169,6 +169,11 @@ github_webhook_secret = ""
 # The webhook handler uses this to detect @mentions of the bot in PRs/issues.
 github_bot_username = ""
 
+# Model the GitHub bot uses for a repository that does not pin one in its own
+# integration config. Accepts a canonical "provider/model" id or a bare
+# "claude-"/"gpt-" id. Commented out means the default below.
+# github_bot_default_model = "anthropic/claude-haiku-4-5"
+
 # =============================================================================
 # Google OAuth Credentials (Optional)
 # =============================================================================
@@ -194,6 +199,10 @@ enable_slack_bot = false
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
 
+# Model the Slack bot uses for a user who has not picked one from the model
+# menu. Accepts a canonical "provider/model" id or a bare "claude-"/"gpt-" id.
+# slack_bot_default_model = "claude-haiku-4-5"
+
 # Linear Agent (Optional)
 # Create an OAuth Application at: https://linear.app/settings/api/applications/new
 # - Enable webhooks, select "Agent session events" + "Issues" + "Comments"
@@ -213,6 +222,11 @@ enable_linear_bot = false
 linear_client_id = ""        # OAuth Application Client ID
 linear_client_secret = ""    # OAuth Application Client Secret
 linear_webhook_secret = ""   # Webhook Signing Secret from the application config
+
+# Model the Linear bot uses when no repository config, user preference, or
+# "model:" issue label selects one. Accepts a canonical "provider/model" id or a
+# bare "claude-"/"gpt-" id.
+# linear_bot_default_model = "claude-sonnet-4-6"
 
 # =============================================================================
 # API Keys
