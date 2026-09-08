@@ -50,6 +50,11 @@ def test_debian_installs_disable_recommended_packages():
     assert all("--no-install-recommends" in command for command in install_commands)
 
 
+def test_debian_restores_shared_tmp_before_using_apt():
+    script = (REPO_ROOT / "packages/sandbox-images/install/os/debian.sh").read_text()
+    assert script.index("install -d -m 1777 /tmp") < script.index("apt-get update")
+
+
 @pytest.mark.parametrize("provider", PROVIDERS)
 def test_pack_rejects_stale_locks_before_creating_context(checkout, tmp_path, provider):
     path = checkout / "packages/sandbox-images/locks/runtime.txt"

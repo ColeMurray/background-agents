@@ -5,6 +5,7 @@ case "$ID" in debian|ubuntu) ;; *) echo "Unsupported Debian target: $ID" >&2; ex
 export DEBIAN_FRONTEND=noninteractive
 audio_library=libasound2
 if [[ "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]]; then audio_library=libasound2t64; fi
+install -d -m 1777 /tmp
 apt-get update
 apt-get install -y --no-install-recommends git curl build-essential ca-certificates gnupg openssh-client jq unzip \
   passwd adduser sysvinit-utils procps util-linux xz-utils ffmpeg xvfb fluxbox x11vnc \
