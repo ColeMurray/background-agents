@@ -235,6 +235,17 @@ describe("ApiClient", () => {
       hasMore: false,
     });
     await expect(client.pullRequest("s/1", "pr/1")).resolves.toEqual(pullRequest);
+    const binaryHeaders = new Headers(fetch.mock.calls[0]?.[1]?.headers);
+    const jsonHeaders = new Headers(fetch.mock.calls[1]?.[1]?.headers);
+    for (const headers of [binaryHeaders, jsonHeaders]) {
+      expect(headers.get("Authorization")).toBe(`Bearer ${credential}`);
+      expect(headers.get("X-Open-Inspect-API-Version")).toBe("1");
+      expect(headers.get("X-Open-Inspect-Client-Version")).toBe("0.1.0");
+      expect(headers.get("X-Open-Inspect-Client-Surface")).toBe("cli");
+    }
+    expect(binaryHeaders.get("Accept")).toBe("image/*,video/*");
+    expect(binaryHeaders.get("Range")).toBe("bytes=0-524287");
+    expect(jsonHeaders.get("Accept")).toBe("application/json");
     expect(new URL(String(fetch.mock.calls[0]?.[0])).pathname).toBe(
       "/external/v1/sessions/s%2F1/artifacts/artifact%2F1/content"
     );
@@ -262,6 +273,10 @@ describe("ApiClient", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status, kind });
     expect(exitCodeFor(error)).toBe(exitCode);
+    const binaryError = await client.artifactContent("s1", "artifact-1").catch((cause) => cause);
+    expect(binaryError).toBeInstanceOf(ApiError);
+    expect(binaryError).toMatchObject({ status, kind });
+    expect(exitCodeFor(binaryError)).toBe(exitCode);
   });
 
   it("never exposes an arbitrary HTML error body", async () => {
@@ -301,6 +316,9 @@ describe("ApiClient", () => {
       fetch: vi.fn().mockRejectedValue(new TypeError("network down")),
     });
     await expect(transport.listSessions()).rejects.toMatchObject({ kind: "transport" });
+    await expect(transport.artifactContent("s1", "artifact-1")).rejects.toMatchObject({
+      kind: "transport",
+    });
 
     const invalid = new ApiClient({
       baseUrl: "https://api.example.com",

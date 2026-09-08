@@ -1,3 +1,4 @@
+import { seedContext } from "./config-store.test-helpers.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +38,7 @@ function memoryStore(): CredentialStore & { values: Map<string, string> } {
 }
 
 async function seedOldContext(directory: string): Promise<void> {
-  await new ConfigStore(directory).saveContext("work", {
+  await seedContext(new ConfigStore(directory), "work", {
     url: "https://old.example.com",
     credential: oldCredential,
     expiresAt: 10,
@@ -299,7 +300,7 @@ describe("CredentialLifecycle", () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const localCredentials = memoryStore();
     const initial = new ConfigStore(directory, { credentialStore: localCredentials });
-    await initial.saveContext("work", {
+    await seedContext(initial, "work", {
       url: "https://old.example.com",
       credential: oldCredential,
       expiresAt: 10,
@@ -426,7 +427,7 @@ describe("CredentialLifecycle", () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const credentials = memoryStore();
     const store = new ConfigStore(directory, { credentialStore: credentials });
-    await store.saveContext("work", {
+    await seedContext(store, "work", {
       url: "https://old.example.com",
       credential: oldCredential,
       expiresAt: 10,

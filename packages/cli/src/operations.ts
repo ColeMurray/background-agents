@@ -1,9 +1,12 @@
-import type {
-  ExternalCreateSessionRequest,
-  ExternalEventChange,
-  ExternalEventFeedQuery,
-  ExternalFollowUpRequest,
-  ExternalSessionListQuery,
+import {
+  externalCreateSessionRequestSchema,
+  externalFollowUpRequestSchema,
+  type ExternalCreateSessionResponse,
+  type ExternalCreateSessionRequest,
+  type ExternalEventChange,
+  type ExternalEventFeedQuery,
+  type ExternalFollowUpRequest,
+  type ExternalSessionListQuery,
 } from "@open-inspect/shared/types/external-session-api";
 import type {
   ExternalDiffListQuery,
@@ -11,7 +14,12 @@ import type {
   ExternalListQuery,
 } from "@open-inspect/shared/types/external-resources-api";
 import type { ApiClient } from "./api-client.js";
-import { CliError } from "./errors.js";
+import { CliError, withErrorContext } from "./errors.js";
+import {
+  validateAttachmentBytes,
+  validateAttachmentCount,
+  type ResolvedAttachment,
+} from "./attachments.js";
 
 interface PollOptions {
   after?: number;
@@ -42,8 +50,42 @@ export class Operations {
     this.sleep = dependencies.sleep ?? abortableSleep;
   }
 
-  createSession(input: ExternalCreateSessionRequest) {
-    return this.api.createSession(input);
+  async createSession(
+    input: ExternalCreateSessionRequest,
+    files: readonly ResolvedAttachment[] = []
+  ): Promise<ExternalCreateSessionResponse> {
+    const attachmentCount = files.length + (input.initialAttachments?.length ?? 0);
+    validateAttachmentCount(attachmentCount);
+    for (const file of files) validateAttachmentBytes(file.bytes, file.name);
+    const request = externalCreateSessionRequestSchema.parse({
+      ...input,
+      ...(files.length
+        ? {
+            initialPrompt: undefined,
+            initialAttachments: undefined,
+            initialAttachmentCount: attachmentCount,
+          }
+        : {}),
+    });
+    const created = await this.api.createSession(request);
+    if (!files.length) return created;
+    try {
+      const uploaded = await this.uploadAttachments(created.sessionId, files, input.idempotencyKey);
+      const prompted = await this.promptSession(created.sessionId, {
+        content: input.initialPrompt,
+        attachments: [...(input.initialAttachments ?? []), ...uploaded],
+        clientRequestId: `external-create:${input.idempotencyKey}`,
+        model: input.model,
+        reasoningEffort: input.reasoningEffort,
+      });
+      return { sessionId: created.sessionId, ...prompted };
+    } catch (cause) {
+      throw withErrorContext(cause, {
+        sessionId: created.sessionId,
+        failedStage: "attachment_or_prompt",
+        idempotencyKey: input.idempotencyKey,
+      });
+    }
   }
 
   listRepositories(options?: ExternalListQuery) {
@@ -77,12 +119,39 @@ export class Operations {
     return this.api.getSession(id, signal);
   }
 
-  promptSession(id: string, input: ExternalFollowUpRequest) {
-    return this.api.promptSession(id, input);
+  async promptSession(
+    id: string,
+    input: ExternalFollowUpRequest,
+    files: readonly ResolvedAttachment[] = []
+  ) {
+    validateAttachmentCount(files.length + (input.attachments?.length ?? 0));
+    for (const file of files) validateAttachmentBytes(file.bytes, file.name);
+    const uploaded = await this.uploadAttachments(id, files, input.clientRequestId);
+    return this.api.promptSession(
+      id,
+      externalFollowUpRequestSchema.parse({
+        ...input,
+        ...(files.length ? { attachments: [...(input.attachments ?? []), ...uploaded] } : {}),
+      })
+    );
   }
 
-  uploadAttachment(id: string, file: Blob, name: string, idempotencyKey?: string) {
-    return this.api.uploadAttachment(id, file, name, idempotencyKey);
+  private async uploadAttachments(
+    id: string,
+    files: readonly ResolvedAttachment[],
+    idempotencyKey: string
+  ) {
+    const uploaded = [];
+    for (const [index, { bytes, name }] of files.entries()) {
+      const result = await this.api.uploadAttachment(
+        id,
+        new Blob([bytes]),
+        name,
+        `${idempotencyKey}:${index}`
+      );
+      uploaded.push({ attachmentId: result.attachmentId, name });
+    }
+    return uploaded;
   }
 
   messages(id: string, options?: { limit?: number; cursor?: string }) {

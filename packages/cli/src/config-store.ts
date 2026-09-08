@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { homedir, hostname, platform } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -73,7 +73,6 @@ function defaultConfigDirectory(env: NodeJS.ProcessEnv = process.env): string {
 
 interface ConfigStoreOptions {
   credentialStore?: CredentialStore | Promise<CredentialStore>;
-  generateCredentialRef?: () => string;
   updateConfigFile?: ConfigFileUpdater;
 }
 
@@ -81,13 +80,11 @@ interface ConfigStoreOptions {
 export class ConfigStore {
   readonly filePath: string;
   private readonly credentials: Promise<CredentialStore>;
-  private readonly generateCredentialRef: () => string;
   private readonly updateConfigFile: ConfigFileUpdater;
 
   constructor(directory?: string, options: ConfigStoreOptions = {}) {
     const resolvedDirectory = directory ?? defaultConfigDirectory();
     this.filePath = join(resolvedDirectory, "contexts.json");
-    this.generateCredentialRef = options.generateCredentialRef ?? randomUUID;
     this.updateConfigFile = options.updateConfigFile ?? updateJsonFile;
     this.credentials = Promise.resolve(
       options.credentialStore ??
@@ -105,42 +102,6 @@ export class ConfigStore {
 
   async credentialStoreKind(): Promise<CredentialStore["kind"]> {
     return (await this.credentials).kind;
-  }
-
-  async saveContext(name: string, context: StoredContext): Promise<void> {
-    validateContextName(name);
-    const credentialRef = this.generateCredentialRef();
-    const metadata = contextSchema.parse({
-      url: normalizeBaseUrl(context.url),
-      expiresAt: context.expiresAt,
-      credentialRef,
-    });
-    const credentials = await this.credentials;
-    await credentials.set(credentialRef, context.credential);
-    let previous: z.infer<typeof contextSchema> | undefined;
-    try {
-      await this.update((config) => {
-        previous = ownContext(config, name);
-        config.contexts[name] = metadata;
-        config.activeContext ??= name;
-      });
-    } catch (cause) {
-      await credentials.delete(credentialRef);
-      throw cause;
-    }
-    if (previous) {
-      const previousContext = previous;
-      try {
-        await credentials.delete(previousContext.credentialRef);
-      } catch (cause) {
-        await this.update((config) => {
-          if (config.contexts[name]?.credentialRef !== credentialRef) return;
-          config.contexts[name] = previousContext;
-        });
-        await credentials.delete(credentialRef);
-        throw cause;
-      }
-    }
   }
 
   async stageCredential(context: IssuedContext): Promise<StagedContext> {

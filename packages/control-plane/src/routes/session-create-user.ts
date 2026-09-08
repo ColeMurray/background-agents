@@ -14,7 +14,11 @@ import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { createLogger } from "../logger";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
-import { initializeSession, type SessionInitInput } from "../session/initialize";
+import {
+  buildSessionBootstrapRequest,
+  initializeSession,
+  type SessionInitInput,
+} from "../session/initialize";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
@@ -55,32 +59,7 @@ async function ensureUserSessionRuntime(
   const response = await runtime.fetch(session.id, SessionInternalPaths.ensureBootstrap, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      sessionName: session.id,
-      repoOwner: input.repoOwner,
-      repoName: input.repoName,
-      repoId: input.repoId,
-      defaultBranch: input.defaultBranch,
-      branch: input.branch,
-      repositories: input.repositories ?? [],
-      environmentId: input.environmentId ?? null,
-      title: input.title,
-      model: input.model,
-      reasoningEffort: input.reasoningEffort,
-      userId: input.participantUserId,
-      canonicalUserId: input.platformUserId,
-      scmLogin: input.scmLogin,
-      scmName: input.scmName,
-      scmEmail: input.scmEmail,
-      scmUserId: input.scmUserId,
-      scmTokenEncrypted: input.scmTokenEncrypted,
-      scmRefreshTokenEncrypted: input.scmRefreshTokenEncrypted,
-      scmTokenExpiresAt: input.scmTokenExpiresAt,
-      codeServerEnabled: input.codeServerEnabled,
-      vncEnabled: input.vncEnabled,
-      sandboxSettings: input.sandboxSettings,
-      requestFingerprint: input.requestFingerprint,
-    }),
+    body: JSON.stringify(buildSessionBootstrapRequest(input)),
   });
   const runtimeError = adaptExternalRuntimeFailure(response);
   if (runtimeError) return runtimeError;

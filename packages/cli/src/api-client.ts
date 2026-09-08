@@ -269,7 +269,7 @@ export class ApiClient {
     ) {
       throw new CliError("validation", "Artifact offset/limit is invalid");
     }
-    const response = await this.requestRaw(
+    const response = await this.send(
       `${SESSIONS_PATH}/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactId)}/content`,
       {
         headers: {
@@ -400,45 +400,34 @@ export class ApiClient {
   ): Promise<unknown> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
-    headers.set(CLIENT_API_VERSION_HEADER, CLIENT_API_VERSION);
-    headers.set(CLIENT_VERSION_HEADER, "0.1.0");
-    headers.set(CLIENT_SURFACE_HEADER, this.clientSurface);
     if (init.body !== undefined && !(init.body instanceof FormData)) {
       headers.set("Content-Type", "application/json");
     }
+    const response = await this.send(path, { ...init, headers }, authenticated);
+    if (response.status === 204) return undefined;
+    return parseJson(await readBounded(response, MAX_SUCCESS_BYTES), "API response");
+  }
+
+  private async send(
+    path: string,
+    init: RequestInit = {},
+    authenticated = true
+  ): Promise<Response> {
+    const headers = new Headers(init.headers);
+    headers.set(CLIENT_API_VERSION_HEADER, CLIENT_API_VERSION);
+    headers.set(CLIENT_VERSION_HEADER, "0.1.0");
+    headers.set(CLIENT_SURFACE_HEADER, this.clientSurface);
     if (authenticated) {
       const credential = await this.authorize();
       if (!credential) throw new CliError("auth", "Authentication required");
       headers.set("Authorization", `Bearer ${credential}`);
     }
-
     let response: Response;
     try {
       response = await this.fetch(`${this.baseUrl}${path}`, { ...init, headers });
     } catch (cause) {
       if (init.signal?.aborted)
         throw new CliError("timeout", "API request was aborted", undefined, undefined, { cause });
-      throw new CliError("transport", "API request failed", undefined, undefined, {
-        cause,
-      });
-    }
-    if (!response.ok) throw await ApiError.fromResponse(response);
-    if (response.status === 204) return undefined;
-    return parseJson(await readBounded(response, MAX_SUCCESS_BYTES), "API response");
-  }
-
-  private async requestRaw(path: string, init: RequestInit = {}): Promise<Response> {
-    const credential = await this.authorize();
-    if (!credential) throw new CliError("auth", "Authentication required");
-    let response: Response;
-    try {
-      const headers = new Headers(init.headers);
-      headers.set("Authorization", `Bearer ${credential}`);
-      headers.set(CLIENT_API_VERSION_HEADER, CLIENT_API_VERSION);
-      headers.set(CLIENT_VERSION_HEADER, "0.1.0");
-      headers.set(CLIENT_SURFACE_HEADER, this.clientSurface);
-      response = await this.fetch(`${this.baseUrl}${path}`, { ...init, headers });
-    } catch (cause) {
       throw new CliError("transport", "API request failed", undefined, undefined, { cause });
     }
     if (!response.ok) throw await ApiError.fromResponse(response);

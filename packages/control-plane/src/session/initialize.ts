@@ -80,19 +80,8 @@ export interface SessionInitInput {
   externalBootstrapSnapshot?: string;
 }
 
-/**
- * Initialize a new session: write D1 index first, then initialize the DO.
- *
- * D1 is written first so that failures are caught before any sandbox is spawned.
- * This ordering is an invariant that both create and spawn must respect.
- *
- * @throws if D1 write or DO init fails
- */
-export async function initializeSession(
-  env: Env,
-  input: SessionInitInput,
-  ctx: RequestContext
-): Promise<{ sessionId: string; status: string }> {
+/** Normalized wire payload shared by initial bootstrap and deterministic recovery. */
+export function buildSessionBootstrapRequest(input: Omit<SessionInitInput, "providerAuth">) {
   const hasRepoOwner = input.repoOwner !== null;
   const hasRepoName = input.repoName !== null;
   const hasRepoId = input.repoId != null;
@@ -109,7 +98,6 @@ export async function initializeSession(
   const branch = hasRepoOwner ? input.branch : null;
   const defaultBranch = hasRepoOwner ? input.defaultBranch : null;
 
-  const now = Date.now();
   const baseBranch = hasRepoOwner ? branch || defaultBranch || DEFAULT_BASE_BRANCH : null;
 
   if (input.repositories?.length) {
@@ -135,6 +123,55 @@ export async function initializeSession(
           },
         ]
       : [];
+
+  return {
+    sessionName: input.sessionId,
+    repoOwner: input.repoOwner,
+    repoName: input.repoName,
+    repoId: input.repoId,
+    defaultBranch,
+    branch,
+    repositories,
+    environmentId: input.environmentId ?? null,
+    title: input.title,
+    model: input.model,
+    reasoningEffort: input.reasoningEffort,
+    userId: input.participantUserId,
+    canonicalUserId: input.platformUserId,
+    scmLogin: input.scmLogin,
+    scmName: input.scmName,
+    scmEmail: input.scmEmail,
+    scmTokenEncrypted: input.scmTokenEncrypted,
+    scmRefreshTokenEncrypted: input.scmRefreshTokenEncrypted,
+    scmTokenExpiresAt: input.scmTokenExpiresAt,
+    scmUserId: input.scmUserId,
+    codeServerEnabled: input.codeServerEnabled,
+    vncEnabled: input.vncEnabled,
+    sandboxSettings: input.sandboxSettings,
+    parentSessionId: input.parentSessionId,
+    spawnSource: input.spawnSource,
+    spawnDepth: input.spawnDepth,
+    requestFingerprint: input.requestFingerprint,
+  };
+}
+
+/**
+ * Initialize a new session: write D1 index first, then initialize the DO.
+ *
+ * D1 is written first so that failures are caught before any sandbox is spawned.
+ * This ordering is an invariant that both create and spawn must respect.
+ *
+ * @throws if D1 write or DO init fails
+ */
+export async function initializeSession(
+  env: Env,
+  input: SessionInitInput,
+  ctx: RequestContext
+): Promise<{ sessionId: string; status: string }> {
+  const bootstrap = buildSessionBootstrapRequest(input);
+  const repositories = bootstrap.repositories;
+  const baseBranch = repositories[0]?.baseBranch ?? null;
+  const now = Date.now();
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(ctx.db);
@@ -181,35 +218,7 @@ export async function initializeSession(
       new Request(buildSessionInternalUrl(SessionInternalPaths.init), {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          sessionName: input.sessionId,
-          repoOwner: input.repoOwner,
-          repoName: input.repoName,
-          repoId: input.repoId,
-          defaultBranch,
-          branch,
-          repositories,
-          environmentId: input.environmentId ?? null,
-          title: input.title,
-          model: input.model,
-          reasoningEffort: input.reasoningEffort,
-          userId: input.participantUserId,
-          canonicalUserId: input.platformUserId,
-          scmLogin: input.scmLogin,
-          scmName: input.scmName,
-          scmEmail: input.scmEmail,
-          scmTokenEncrypted: input.scmTokenEncrypted,
-          scmRefreshTokenEncrypted: input.scmRefreshTokenEncrypted,
-          scmTokenExpiresAt: input.scmTokenExpiresAt,
-          scmUserId: input.scmUserId,
-          codeServerEnabled: input.codeServerEnabled,
-          vncEnabled: input.vncEnabled,
-          sandboxSettings: input.sandboxSettings,
-          parentSessionId: input.parentSessionId,
-          spawnSource: input.spawnSource,
-          spawnDepth: input.spawnDepth,
-          requestFingerprint: input.requestFingerprint,
-        }),
+        body: JSON.stringify(bootstrap),
       })
     );
   } catch (transportError) {

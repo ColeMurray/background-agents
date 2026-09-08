@@ -25,6 +25,110 @@ function remove(revision: number, eventId: string): ExternalEventChange {
 }
 
 describe("Operations", () => {
+  const file = { name: "image.png", bytes: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]) };
+
+  it("owns create-upload-prompt ordering and stable retry identifiers", async () => {
+    const api = {
+      createSession: vi.fn().mockResolvedValue({ sessionId: "s1", status: "created" }),
+      uploadAttachment: vi.fn().mockResolvedValue({ attachmentId: "uploaded" }),
+      promptSession: vi.fn().mockResolvedValue({ messageId: "m1", status: "queued" }),
+    };
+    const operations = new Operations(api as never);
+    const input = {
+      idempotencyKey: "retry-create",
+      initialPrompt: "Inspect these",
+      initialAttachments: [{ attachmentId: "existing", name: "existing.png" }],
+      model: "openai/gpt-5.6-sol",
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(operations.createSession(input, [file])).resolves.toEqual({
+        sessionId: "s1",
+        messageId: "m1",
+        status: "queued",
+      });
+    }
+    expect(api.createSession).toHaveBeenNthCalledWith(1, {
+      idempotencyKey: "retry-create",
+      initialAttachmentCount: 2,
+      initialPrompt: undefined,
+      initialAttachments: undefined,
+      model: input.model,
+    });
+    expect(api.createSession.mock.calls[1]).toEqual(api.createSession.mock.calls[0]);
+    expect(api.uploadAttachment).toHaveBeenNthCalledWith(
+      1,
+      "s1",
+      expect.any(Blob),
+      file.name,
+      "retry-create:0"
+    );
+    expect(api.uploadAttachment.mock.calls[1]?.[3]).toBe("retry-create:0");
+    expect(api.promptSession).toHaveBeenCalledWith("s1", {
+      content: "Inspect these",
+      attachments: [...input.initialAttachments, { attachmentId: "uploaded", name: file.name }],
+      clientRequestId: "external-create:retry-create",
+      model: input.model,
+      reasoningEffort: undefined,
+    });
+    expect(api.createSession.mock.invocationCallOrder[0]).toBeLessThan(
+      api.uploadAttachment.mock.invocationCallOrder[0]!
+    );
+    expect(api.uploadAttachment.mock.invocationCallOrder[0]).toBeLessThan(
+      api.promptSession.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it.each(["uploadAttachment", "promptSession"] as const)(
+    "retains the created session and retry key when %s fails",
+    async (stage) => {
+      const api = {
+        createSession: vi.fn().mockResolvedValue({ sessionId: "s1", status: "created" }),
+        uploadAttachment: vi.fn().mockResolvedValue({ attachmentId: "uploaded" }),
+        promptSession: vi.fn().mockResolvedValue({ messageId: "m1", status: "queued" }),
+      };
+      api[stage].mockRejectedValueOnce(new CliError("transport", "network failed"));
+      const operations = new Operations(api as never);
+      await expect(
+        operations.createSession({ idempotencyKey: "retry" }, [file])
+      ).rejects.toMatchObject({
+        kind: "transport",
+        context: { sessionId: "s1", idempotencyKey: "retry", failedStage: "attachment_or_prompt" },
+      });
+      if (stage === "uploadAttachment") expect(api.promptSession).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps follow-up attachment keys verbatim, including create-like prefixes", async () => {
+    const api = {
+      uploadAttachment: vi.fn().mockResolvedValue({ attachmentId: "uploaded" }),
+      promptSession: vi.fn().mockResolvedValue({ messageId: "m1", status: "queued" }),
+    };
+    const operations = new Operations(api as never);
+    await operations.promptSession("s1", { clientRequestId: "external-create:caller" }, [file]);
+    expect(api.uploadAttachment).toHaveBeenCalledWith(
+      "s1",
+      expect.any(Blob),
+      file.name,
+      "external-create:caller:0"
+    );
+    expect(api.promptSession).toHaveBeenCalledWith("s1", {
+      clientRequestId: "external-create:caller",
+      attachments: [{ attachmentId: "uploaded", name: file.name }],
+    });
+  });
+
+  it("rejects over-limit or invalid files before creating a session", async () => {
+    const api = { createSession: vi.fn() };
+    const operations = new Operations(api as never);
+    await expect(
+      operations.createSession({ idempotencyKey: "retry" }, Array(7).fill(file))
+    ).rejects.toMatchObject({ kind: "validation" });
+    await expect(
+      operations.createSession({ idempotencyKey: "retry" }, [{ ...file, bytes: new Uint8Array() }])
+    ).rejects.toMatchObject({ kind: "validation" });
+    expect(api.createSession).not.toHaveBeenCalled();
+  });
+
   it("preserves caller-supplied idempotency and client request IDs", async () => {
     const api = {
       createSession: vi.fn((input: unknown) => Promise.resolve(input)),

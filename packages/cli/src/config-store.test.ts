@@ -1,3 +1,4 @@
+import { seedContext } from "./config-store.test-helpers.js";
 import { chmod, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,12 +31,12 @@ describe("ConfigStore", () => {
   it("separates reference metadata from fallback credentials and secures POSIX files", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("work", {
+    await seedContext(store, "work", {
       url: "https://work.example.com",
       credential,
       expiresAt: 10,
     });
-    await store.saveContext("local", {
+    await seedContext(store, "local", {
       url: "http://localhost:8787",
       credential: rotatedCredential,
       expiresAt: 20,
@@ -57,20 +58,15 @@ describe("ConfigStore", () => {
   it("rotates through immutable references before deleting the old secret", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const credentials = memoryStore();
-    const references = [
-      "00000000-0000-4000-8000-000000000001",
-      "00000000-0000-4000-8000-000000000002",
-    ];
     const store = new ConfigStore(directory, {
       credentialStore: credentials,
-      generateCredentialRef: () => references.shift()!,
     });
-    await store.saveContext("work", {
+    await seedContext(store, "work", {
       url: "https://old.example.com",
       credential,
       expiresAt: 10,
     });
-    await store.saveContext("work", {
+    await seedContext(store, "work", {
       url: "https://new.example.com",
       credential: rotatedCredential,
       expiresAt: 20,
@@ -80,73 +76,80 @@ describe("ConfigStore", () => {
       url: "https://new.example.com",
       credential: rotatedCredential,
     });
-    expect([...credentials.values]).toEqual([[referencesForTest(2), rotatedCredential]]);
+    expect([...credentials.values]).toEqual([
+      [(await store.read()).contexts.work!.credentialRef, rotatedCredential],
+    ]);
   });
 
   it("retains the old URL/reference pair when writing a rotated secret fails", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const credentials = memoryStore();
     const set = vi.spyOn(credentials, "set");
-    const references = [referencesForTest(1), referencesForTest(2)];
     const store = new ConfigStore(directory, {
       credentialStore: credentials,
-      generateCredentialRef: () => references.shift()!,
     });
-    await store.saveContext("work", {
+    await seedContext(store, "work", {
       url: "https://old.example.com",
       credential,
       expiresAt: 10,
     });
-    set.mockRejectedValueOnce(new Error("keychain locked"));
+    const oldReference = (await store.read()).contexts.work!.credentialRef;
+    set.mockImplementation(async (reference, value) => {
+      if (value === rotatedCredential) throw new Error("keychain locked");
+      credentials.values.set(reference, value);
+    });
 
     await expect(
-      store.saveContext("work", {
+      seedContext(store, "work", {
         url: "https://new.example.com",
         credential: rotatedCredential,
         expiresAt: 20,
       })
-    ).rejects.toThrow("keychain locked");
+    ).rejects.toThrow("Credential secret could not be staged");
     expect(await store.getActiveContext()).toMatchObject({
       url: "https://old.example.com",
       credential,
     });
-    expect([...credentials.values]).toEqual([[referencesForTest(1), credential]]);
+    expect([...credentials.values]).toEqual([[oldReference, credential]]);
   });
 
-  it("restores the complete old pair when old-secret cleanup fails after rotation", async () => {
+  it("keeps the promoted binding when cleanup of a revoked credential fails", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const credentials = memoryStore();
-    const references = [referencesForTest(1), referencesForTest(2)];
-    const store = new ConfigStore(directory, {
-      credentialStore: credentials,
-      generateCredentialRef: () => references.shift()!,
-    });
-    await store.saveContext("work", {
+    const store = new ConfigStore(directory, { credentialStore: credentials });
+    await seedContext(store, "work", {
       url: "https://old.example.com",
       credential,
       expiresAt: 10,
     });
-    vi.spyOn(credentials, "delete").mockRejectedValueOnce(new Error("cleanup failed"));
+    const oldReference = (await store.read()).contexts.work!.credentialRef;
+    vi.spyOn(credentials, "delete").mockImplementation(async (reference) => {
+      if (reference === oldReference) throw new Error("cleanup failed");
+      credentials.values.delete(reference);
+    });
 
     await expect(
-      store.saveContext("work", {
+      seedContext(store, "work", {
         url: "https://new.example.com",
         credential: rotatedCredential,
         expiresAt: 20,
       })
-    ).rejects.toThrow("cleanup failed");
+    ).resolves.toMatchObject({ pendingRevocations: 1 });
     expect(await store.getActiveContext()).toMatchObject({
-      url: "https://old.example.com",
-      credential,
+      url: "https://new.example.com",
+      credential: rotatedCredential,
     });
-    expect([...credentials.values]).toEqual([[referencesForTest(1), credential]]);
+    expect(credentials.values.get(oldReference)).toBe(credential);
+    expect(credentials.values.get((await store.read()).contexts.work!.credentialRef)).toBe(
+      rotatedCredential
+    );
   });
 
   it("does not remove metadata when credential deletion fails", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const credentials = memoryStore();
     const store = new ConfigStore(directory, { credentialStore: credentials });
-    await store.saveContext("work", {
+    await seedContext(store, "work", {
       url: "https://work.example.com",
       credential,
       expiresAt: 10,
@@ -162,7 +165,7 @@ describe("ConfigStore", () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const credentials = memoryStore();
     const store = new ConfigStore(directory, { credentialStore: credentials });
-    await store.saveContext("work", {
+    await seedContext(store, "work", {
       url: "https://old.example.com",
       credential,
       expiresAt: 10,
@@ -199,7 +202,7 @@ describe("ConfigStore", () => {
   it("repairs permissive POSIX modes and uses unique atomic temporary files", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("default", {
+    await seedContext(store, "default", {
       url: "https://example.com",
       credential,
       expiresAt: 10,
@@ -216,7 +219,7 @@ describe("ConfigStore", () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     await Promise.all(
       Array.from({ length: 20 }, (_, index) =>
-        new ConfigStore(directory).saveContext(`context-${index}`, {
+        seedContext(new ConfigStore(directory), `context-${index}`, {
           url: `https://host-${index}.example.com`,
           credential: `oi_cli_${String(index).padStart(64, "a")}`,
           expiresAt: index,
@@ -233,7 +236,7 @@ describe("ConfigStore", () => {
       const store = new ConfigStore(directory);
 
       await expect(
-        store.saveContext(name, {
+        seedContext(store, name, {
           url: "https://example.com",
           credential,
           expiresAt: 10,

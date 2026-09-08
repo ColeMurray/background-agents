@@ -36,9 +36,13 @@ import {
   externalChildSessionListResponseSchema,
   externalChildSessionSchema,
 } from "@open-inspect/shared/types/external-resources-api";
-import { classifyError, CliError, publicErrorCode, withErrorContext } from "./errors.js";
+import { classifyError, CliError, publicErrorCode } from "./errors.js";
 import type { Operations } from "./operations.js";
-import { validateAttachmentBytes } from "./attachments.js";
+import {
+  validateAttachmentBytes,
+  validateAttachmentCount,
+  type ResolvedAttachment,
+} from "./attachments.js";
 
 const sessionId = z.string().min(1).describe("Open Inspect session ID");
 const MAX_WAIT_TIMEOUT_MS = 300_000;
@@ -108,47 +112,11 @@ export function createMcpServer(operations: Operations): McpServer {
     },
     async ({ attachmentPaths, ...input }) =>
       runTool(async () => {
-        const attachmentCount =
-          (attachmentPaths?.length ?? 0) + (input.initialAttachments?.length ?? 0);
-        if (attachmentCount > 6)
-          throw new CliError("validation", "A prompt may include at most 6 attachments");
-        const parsed = externalCreateSessionRequestSchema.parse({
-          ...input,
-          ...(attachmentPaths?.length
-            ? {
-                initialPrompt: undefined,
-                initialAttachments: undefined,
-                initialAttachmentCount: attachmentCount,
-              }
-            : {}),
-        });
-        const localFiles = await resolveMcpAttachments(server, attachmentPaths ?? []);
-        const created = await operations.createSession(parsed);
-        if (!attachmentPaths?.length) return created;
-        try {
-          const uploadedAttachments = await uploadMcpAttachments(
-            operations,
-            created.sessionId,
-            localFiles,
-            input.idempotencyKey
-          );
-          const attachments = [...(input.initialAttachments ?? []), ...uploadedAttachments];
-          if (!input.initialPrompt?.trim() && attachments.length === 0) return created;
-          const prompted = await operations.promptSession(created.sessionId, {
-            content: input.initialPrompt,
-            attachments,
-            clientRequestId: `external-create:${input.idempotencyKey}`,
-            model: input.model,
-            reasoningEffort: input.reasoningEffort,
-          });
-          return { sessionId: created.sessionId, ...prompted };
-        } catch (cause) {
-          throw withErrorContext(cause, {
-            sessionId: created.sessionId,
-            failedStage: "attachment_or_prompt",
-            idempotencyKey: input.idempotencyKey,
-          });
-        }
+        validateAttachmentCount(
+          (attachmentPaths?.length ?? 0) + (input.initialAttachments?.length ?? 0)
+        );
+        const files = await resolveMcpAttachments(server, attachmentPaths ?? []);
+        return operations.createSession(input, files);
       })
   );
   registerDiscoveryTools(server, operations);
@@ -184,20 +152,9 @@ export function createMcpServer(operations: Operations): McpServer {
     },
     async ({ sessionId, attachmentPaths, ...input }) =>
       runTool(async () => {
-        if ((attachmentPaths?.length ?? 0) + (input.attachments?.length ?? 0) > 6) {
-          throw new CliError("validation", "A prompt may include at most 6 attachments");
-        }
+        validateAttachmentCount((attachmentPaths?.length ?? 0) + (input.attachments?.length ?? 0));
         const files = await resolveMcpAttachments(server, attachmentPaths ?? []);
-        const local = files.length
-          ? await uploadMcpAttachments(operations, sessionId, files, input.clientRequestId)
-          : [];
-        return operations.promptSession(
-          sessionId,
-          externalFollowUpRequestSchema.parse({
-            ...input,
-            attachments: [...(input.attachments ?? []), ...local],
-          })
-        );
+        return operations.promptSession(sessionId, input, files);
       })
   );
   server.registerTool(
@@ -417,7 +374,7 @@ function registerSessionReadTools(server: McpServer, operations: Operations): vo
 async function resolveMcpAttachments(
   server: McpServer,
   paths: string[]
-): Promise<Array<{ name: string; bytes: Uint8Array }>> {
+): Promise<ResolvedAttachment[]> {
   if (paths.length === 0) return [];
   if (!server.server.getClientCapabilities()?.roots) {
     throw new CliError("validation", "MCP client did not negotiate filesystem roots");
@@ -444,25 +401,6 @@ async function resolveMcpAttachments(
     files.push({ name, bytes });
   }
   return files;
-}
-
-async function uploadMcpAttachments(
-  operations: Operations,
-  sessionIdValue: string,
-  files: Array<{ name: string; bytes: Uint8Array }>,
-  idempotencyKey: string
-): Promise<Array<{ attachmentId: string; name: string }>> {
-  const uploaded = [];
-  for (const [index, { name, bytes }] of files.entries()) {
-    const result = await operations.uploadAttachment(
-      sessionIdValue,
-      new Blob([bytes]),
-      name,
-      `${idempotencyKey}:${index}`
-    );
-    uploaded.push({ attachmentId: result.attachmentId, name });
-  }
-  return uploaded;
 }
 
 /** Starts stdio transport without writing non-protocol data to stdout. */

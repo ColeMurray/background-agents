@@ -5,7 +5,6 @@ import { Command, Option } from "commander";
 import open from "open";
 import {
   externalCreateSessionRequestSchema,
-  externalFollowUpRequestSchema,
   externalSessionListQuerySchema,
 } from "@open-inspect/shared/types/external-session-api";
 import { ApiClient, ApiError } from "./api-client.js";
@@ -18,7 +17,11 @@ import {
 } from "./config-store.js";
 import { CliError, withErrorContext } from "./errors.js";
 import { serveMcp } from "./mcp-server.js";
-import { validateAttachmentBytes } from "./attachments.js";
+import {
+  validateAttachmentBytes,
+  validateAttachmentCount,
+  type ResolvedAttachment,
+} from "./attachments.js";
 import { Operations } from "./operations.js";
 import { Output, type OutputFormat } from "./output.js";
 
@@ -285,10 +288,8 @@ export function createCli(dependencies: CliDependencies = {}): Command {
           ? { mode: options.skills }
           : undefined;
       const referencedAttachments = asAttachments(fileInput.initialAttachments);
-      if (options.attach.length + referencedAttachments.length > 6) {
-        throw new CliError("validation", "A prompt may include at most 6 attachments");
-      }
-      await validateLocalAttachmentPaths(options.attach);
+      validateAttachmentCount(options.attach.length + referencedAttachments.length);
+      const files = await readLocalAttachments(options.attach);
       const input = externalCreateSessionRequestSchema.parse({
         ...fileInput,
         title: options.title ?? fileInput.title,
@@ -305,8 +306,8 @@ export function createCli(dependencies: CliDependencies = {}): Command {
         providerSelections: options.providerSelections
           ? JSON.parse(options.providerSelections)
           : fileInput.providerSelections,
-        initialPrompt: options.attach.length ? undefined : (prompt ?? fileInput.initialPrompt),
-        initialAttachments: options.attach.length ? undefined : fileInput.initialAttachments,
+        initialPrompt: prompt ?? fileInput.initialPrompt,
+        initialAttachments: fileInput.initialAttachments,
         initialAttachmentCount:
           options.attach.length > 0
             ? options.attach.length + referencedAttachments.length
@@ -316,33 +317,10 @@ export function createCli(dependencies: CliDependencies = {}): Command {
       let result;
       try {
         const current = (await operations()).operations;
-        result = await current.createSession(input);
-        if (options.attach.length) {
-          const uploadedAttachments = await uploadLocalAttachments(
-            current,
-            result.sessionId,
-            options.attach,
-            idempotencyKey
-          );
-          const content = prompt ?? fileInput.initialPrompt;
-          const attachments = [...referencedAttachments, ...uploadedAttachments];
-          if (content?.trim() || attachments.length) {
-            const prompted = await current.promptSession(result.sessionId, {
-              content,
-              attachments,
-              clientRequestId: `external-create:${idempotencyKey}`,
-              model: input.model,
-              reasoningEffort: input.reasoningEffort,
-            });
-            result = { sessionId: result.sessionId, ...prompted };
-          }
-        }
+        result = await current.createSession(input, files);
       } catch (cause) {
         throw withErrorContext(cause, {
           idempotencyKey,
-          ...(result?.sessionId
-            ? { sessionId: result.sessionId, failedStage: "attachment_or_prompt" }
-            : {}),
         });
       }
       outputFor(command).result(options.idempotencyKey ? result : { ...result, idempotencyKey });
@@ -405,29 +383,23 @@ export function createCli(dependencies: CliDependencies = {}): Command {
       try {
         const current = (await operations()).operations;
         const referencedAttachments = asAttachments(fileInput.attachments);
-        if (options.attach.length + referencedAttachments.length > 6) {
-          throw new CliError("validation", "A prompt may include at most 6 attachments");
-        }
-        const attachments = await uploadLocalAttachments(
-          current,
-          id,
-          options.attach,
-          clientRequestId
-        );
+        validateAttachmentCount(options.attach.length + referencedAttachments.length);
+        const files = await readLocalAttachments(options.attach);
         result = await current.promptSession(
           id,
-          externalFollowUpRequestSchema.parse({
+          {
             ...fileInput,
             content: options.contentFile
               ? await readTextInput(options.contentFile, dependencies.stdin)
               : (options.content ??
                 (prompt === "-" ? await readTextInput("-", dependencies.stdin) : prompt) ??
                 fileInput.content),
-            attachments: [...referencedAttachments, ...attachments],
+            attachments: referencedAttachments,
             clientRequestId,
             model: options.model ?? fileInput.model,
             reasoningEffort: options.reasoning ?? fileInput.reasoningEffort,
-          })
+          },
+          files
         );
       } catch (cause) {
         throw withErrorContext(cause, { idempotencyKey: clientRequestId, clientRequestId });
@@ -660,38 +632,13 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-async function uploadLocalAttachments(
-  operations: Operations,
-  sessionId: string,
-  paths: string[],
-  idempotencyKey: string
-): Promise<Array<{ attachmentId: string; name: string }>> {
-  const uploaded = [];
-  const files = await Promise.all(
+async function readLocalAttachments(paths: string[]): Promise<ResolvedAttachment[]> {
+  return Promise.all(
     paths.map(async (path) => {
       const bytes = await readFile(path);
       const name = basename(path);
       validateAttachmentBytes(bytes, name);
       return { bytes, name };
-    })
-  );
-  for (const [index, { bytes, name }] of files.entries()) {
-    const result = await operations.uploadAttachment(
-      sessionId,
-      new Blob([bytes]),
-      name,
-      `${idempotencyKey}:${index}`
-    );
-    uploaded.push({ attachmentId: result.attachmentId, name });
-  }
-  return uploaded;
-}
-
-async function validateLocalAttachmentPaths(paths: string[]): Promise<void> {
-  await Promise.all(
-    paths.map(async (path) => {
-      const bytes = await readFile(path);
-      validateAttachmentBytes(bytes, basename(path));
     })
   );
 }

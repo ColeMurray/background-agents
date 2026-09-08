@@ -1,5 +1,21 @@
-import { SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@open-inspect/shared/types/session-attachments";
+import {
+  SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
+  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+} from "@open-inspect/shared/types/session-attachments";
 import { CliError } from "./errors.js";
+
+export interface ResolvedAttachment {
+  name: string;
+  bytes: Uint8Array;
+}
+
+export function validateAttachmentCount(count: number): void {
+  if (count > MAX_SESSION_ATTACHMENTS_PER_MESSAGE)
+    throw new CliError(
+      "validation",
+      `A prompt may include at most ${MAX_SESSION_ATTACHMENTS_PER_MESSAGE} attachments`
+    );
+}
 
 export function validateAttachmentBytes(bytes: Uint8Array, name: string): void {
   if (bytes.byteLength === 0) throw new CliError("validation", `Attachment is empty: ${name}`);

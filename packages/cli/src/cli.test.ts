@@ -1,3 +1,4 @@
+import { seedContext } from "./config-store.test-helpers.js";
 import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -173,7 +174,7 @@ describe("CLI commands", () => {
   it("passes bounded list pagination and exposes the continuation offset", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("default", {
+    await seedContext(store, "default", {
       url: "https://api.example.com",
       credential,
       expiresAt: Date.now() + 60_000,
@@ -210,7 +211,7 @@ describe("CLI commands", () => {
   it("prints event journal tombstones without rewriting their order or shape", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("default", {
+    await seedContext(store, "default", {
       url: "https://api.example.com",
       credential,
       expiresAt: Date.now() + 60_000,
@@ -247,7 +248,7 @@ describe("CLI commands", () => {
   it("removes the local credential when remote logout can be retried", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("default", {
+    await seedContext(store, "default", {
       url: "https://api.example.com",
       credential,
       expiresAt: Date.now() + 60_000,
@@ -265,7 +266,7 @@ describe("CLI commands", () => {
   it("reports incomplete remote logout while removing the local active login", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("default", {
+    await seedContext(store, "default", {
       url: "https://api.example.com",
       credential,
       expiresAt: Date.now() + 60_000,
@@ -288,7 +289,7 @@ describe("CLI commands", () => {
   it.each([429, 500])("removes local login after remote HTTP %s", async (status) => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("default", {
+    await seedContext(store, "default", {
       url: "https://api.example.com",
       credential,
       expiresAt: Date.now() + 60_000,
@@ -306,7 +307,7 @@ describe("CLI commands", () => {
   it("removes local login after a transport failure", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("default", {
+    await seedContext(store, "default", {
       url: "https://api.example.com",
       credential,
       expiresAt: Date.now() + 60_000,
@@ -326,7 +327,7 @@ describe("CLI commands", () => {
     async (status) => {
       const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
       const store = new ConfigStore(directory);
-      await store.saveContext("default", {
+      await seedContext(store, "default", {
         url: "https://api.example.com",
         credential,
         expiresAt: Date.now() + 60_000,
@@ -344,7 +345,7 @@ describe("CLI commands", () => {
   it("generates and reports an idempotency key for a one-shot create command", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("default", {
+    await seedContext(store, "default", {
       url: "https://api.example.com",
       credential,
       expiresAt: Date.now() + 60_000,
@@ -379,7 +380,7 @@ describe("CLI commands", () => {
   it("accepts positional, stdin, and complete JSON prompt input with idempotency keys", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("default", {
+    await seedContext(store, "default", {
       url: "https://api.example.com",
       credential,
       expiresAt: Date.now() + 60_000,
@@ -441,7 +442,7 @@ describe("CLI commands", () => {
     async (format) => {
       const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
       const store = new ConfigStore(directory);
-      await store.saveContext("default", {
+      await seedContext(store, "default", {
         url: "https://api.example.com",
         credential,
         expiresAt: Date.now() + 60_000,
@@ -497,7 +498,7 @@ describe("CLI commands", () => {
   it("returns a timeout exit error with the final wait status", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("default", {
+    await seedContext(store, "default", {
       url: "https://api.example.com",
       credential,
       expiresAt: Date.now() + 60_000,
@@ -531,7 +532,7 @@ describe("CLI commands", () => {
     async (operation, field, flag) => {
       const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
       const store = new ConfigStore(directory);
-      await store.saveContext("default", {
+      await seedContext(store, "default", {
         url: "https://api.example.com",
         credential,
         expiresAt: Date.now() + 60_000,
@@ -571,7 +572,7 @@ describe("CLI commands", () => {
   it("prints a generated idempotency key after a post-dispatch text failure", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
-    await store.saveContext("default", {
+    await seedContext(store, "default", {
       url: "https://api.example.com",
       credential,
       expiresAt: Date.now() + 60_000,

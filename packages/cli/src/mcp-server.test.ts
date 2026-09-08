@@ -1,7 +1,13 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 import { CliError } from "./errors.js";
+import { Operations } from "./operations.js";
 import { createMcpServer, MAX_MCP_RESULT_BYTES, toolResult } from "./mcp-server.js";
 
 async function connectedClient(operations: object) {
@@ -13,6 +19,62 @@ async function connectedClient(operations: object) {
 }
 
 describe("MCP server", () => {
+  it.each(["session_create", "session_prompt"])(
+    "uses the shared attachment workflow after root admission for %s",
+    async (tool) => {
+      const directory = await mkdtemp(join(tmpdir(), "oi-mcp-test-"));
+      const path = join(directory, "image.png");
+      await writeFile(path, new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]));
+      const api = {
+        createSession: vi.fn().mockResolvedValue({ sessionId: "s1", status: "created" }),
+        uploadAttachment: vi.fn().mockResolvedValue({ attachmentId: "a1" }),
+        promptSession: vi.fn().mockResolvedValue({ messageId: "m1", status: "queued" }),
+      };
+      const server = createMcpServer(new Operations(api as never));
+      const client = new Client({ name: "test", version: "1" }, { capabilities: { roots: {} } });
+      client.setRequestHandler(ListRootsRequestSchema, async () => ({
+        roots: [{ uri: pathToFileURL(directory).href }],
+      }));
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        const result = await client.callTool({
+          name: tool,
+          arguments: {
+            ...(tool === "session_create"
+              ? { idempotencyKey: "retry" }
+              : {
+                  sessionId: "s1",
+                  clientRequestId: "retry",
+                }),
+            attachmentPaths: [path],
+          },
+        });
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toMatchObject({ messageId: "m1", status: "queued" });
+        expect(api.uploadAttachment).toHaveBeenCalledWith(
+          "s1",
+          expect.any(Blob),
+          "image.png",
+          "retry:0"
+        );
+        expect(api.promptSession).toHaveBeenCalledWith(
+          "s1",
+          expect.objectContaining({
+            clientRequestId: tool === "session_create" ? "external-create:retry" : "retry",
+            attachments: [{ attachmentId: "a1", name: "image.png" }],
+          })
+        );
+        if (tool === "session_create")
+          expect(api.createSession).toHaveBeenCalledWith(
+            expect.objectContaining({ initialAttachmentCount: 1 })
+          );
+        else expect(api.createSession).not.toHaveBeenCalled();
+      } finally {
+        await Promise.all([client.close(), server.close()]);
+      }
+    }
+  );
   it("exposes the complete V1 tool set", async () => {
     const operations = {
       listSessions: vi.fn().mockResolvedValue({ sessions: [], hasMore: false }),
@@ -307,7 +369,8 @@ describe("MCP server", () => {
     });
 
     expect(operations.createSession).toHaveBeenCalledWith(
-      expect.not.objectContaining({ reasoningEffort: expect.anything() })
+      expect.not.objectContaining({ reasoningEffort: expect.anything() }),
+      []
     );
     expect(created.structuredContent).toEqual({ sessionId: "s1", status: "created" });
     expect(queued.structuredContent).toEqual({
@@ -317,7 +380,8 @@ describe("MCP server", () => {
     });
     expect(operations.promptSession).toHaveBeenCalledWith(
       "s1",
-      expect.objectContaining({ clientRequestId: "retry-prompt" })
+      expect.objectContaining({ clientRequestId: "retry-prompt" }),
+      []
     );
     await Promise.all([client.close(), server.close()]);
   });
