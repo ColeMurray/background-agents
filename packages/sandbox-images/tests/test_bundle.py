@@ -59,6 +59,9 @@ def test_agent_browser_installs_as_checked_native_binary():
     script = (REPO_ROOT / "packages/sandbox-images/install/tools.sh").read_text()
     assert 'install -m 0755 "$download_dir/agent-browser" /usr/local/bin/agent-browser' in script
     assert "node_modules/agent-browser" not in script
+    loop = next(line for line in script.splitlines() if line.startswith("for command in "))
+    commands = loop.removeprefix("for command in ").removesuffix("; do").split()
+    assert "agent-browser" not in commands
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
