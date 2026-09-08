@@ -112,6 +112,24 @@ describe("SessionRightSidebar", () => {
     expect(screen.getByRole("button", { name: "Edit limit" })).toBeInTheDocument();
   });
 
+  it("does not render budget spacing when the budget section is hidden", () => {
+    const { container } = render(
+      <SessionRightSidebar
+        sessionId="session-1"
+        sessionState={{ ...sessionState, totalCost: 0, maxSessionCostUsd: null }}
+        participants={[]}
+        presenceSynced={false}
+        events={[]}
+        artifacts={[]}
+        onOpenMedia={vi.fn()}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
+
+    expect(screen.queryByText(/Session cost|No session cost limit/)).not.toBeInTheDocument();
+    expect(container.querySelector(".mt-4")).not.toBeInTheDocument();
+  });
+
   it("forwards budget management to the mobile overlay", () => {
     render(
       <SessionDetailsOverlay

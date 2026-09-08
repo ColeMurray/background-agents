@@ -115,7 +115,7 @@ export function SessionRightSidebarContent({
       </div>
 
       {/* Metadata */}
-      <div className="px-4 py-4 border-b border-border-muted">
+      <div className="space-y-4 px-4 py-4 border-b border-border-muted">
         <MetadataSection
           sessionId={sessionId}
           createdAt={sessionState.createdAt}
@@ -133,14 +133,12 @@ export function SessionRightSidebarContent({
           parentSessionId={sessionState.parentSessionId}
           canManageLifecycle={capabilities.lifecycle}
         />
-        <div className="mt-4">
-          <BudgetSection
-            sessionId={sessionId}
-            totalCost={sessionState.totalCost ?? 0}
-            maxSessionCostUsd={sessionState.maxSessionCostUsd}
-            canManageBudget={canManageBudget}
-          />
-        </div>
+        <BudgetSection
+          sessionId={sessionId}
+          totalCost={sessionState.totalCost ?? 0}
+          maxSessionCostUsd={sessionState.maxSessionCostUsd}
+          canManageBudget={canManageBudget}
+        />
       </div>
 
       {/* Code Server */}
