@@ -31,8 +31,9 @@ function isSupportedImage(bytes: Uint8Array): boolean {
   const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   const isPng = png.every((byte, index) => bytes[index] === byte);
   const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  const signature = new TextDecoder().decode(bytes.slice(0, 12));
-  const isGif = signature.startsWith("GIF87a") || signature.startsWith("GIF89a");
-  const isWebp = signature.startsWith("RIFF") && signature.slice(8, 12) === "WEBP";
+  const matchesAscii = (offset: number, signature: string) =>
+    [...signature].every((character, index) => bytes[offset + index] === character.charCodeAt(0));
+  const isGif = matchesAscii(0, "GIF87a") || matchesAscii(0, "GIF89a");
+  const isWebp = matchesAscii(0, "RIFF") && matchesAscii(8, "WEBP");
   return isPng || isJpeg || isGif || isWebp;
 }
