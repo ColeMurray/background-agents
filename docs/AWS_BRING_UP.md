@@ -255,8 +255,9 @@ and give it these **variables** — every one of them a `terraform output`:
 
 None is a secret; they are all names and identifiers, which is why they are variables rather than
 secrets. To deploy on every push to `main`, set the **repository** variable
-`AWS_DEPLOY_ON_PUSH_ENVIRONMENT` to the environment name. Leave it unset and the workflow only runs
-when dispatched by hand, which is the right default for production.
+`AWS_DEPLOY_ON_PUSH_ENVIRONMENT` to the environment name. Leave it unset and the workflow skips
+every job and only does anything when dispatched by hand, which is the right default for production
+— and means an installation that never deploys to AWS pays nothing for this workflow existing.
 
 ### What a deploy does
 

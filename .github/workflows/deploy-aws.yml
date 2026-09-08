@@ -57,11 +57,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Which environment, if any. Separate from the deploy job because it declares
-  # no `environment:` -- a repository that has never configured one should not
-  # need it to exist for this workflow to be green.
+  # Which environment. Separate from the deploy job so the name is checked
+  # before it is used: `deploy` puts it in `environment:`, which is evaluated as
+  # the job starts and has no step to run first.
   target:
     name: Pick the target
+    # An installation that has configured no AWS environment skips the whole
+    # workflow rather than spending a runner to discover it has nothing to do.
+    # `vars` is readable here, which is the only reason this can be decided
+    # before a job starts -- `on:` has no access to it, so the alternative is a
+    # job that runs on every push to say it has nothing to deploy.
+    if: inputs.environment != '' || vars.AWS_DEPLOY_ON_PUSH_ENVIRONMENT != ''
     runs-on: ubuntu-latest
     permissions: {}
     timeout-minutes: 2
@@ -85,7 +91,6 @@ jobs:
           # not a plain environment name is a mistake, and worth failing on here
           # rather than passing along.
           case "$environment" in
-            "") ;;
             *[!A-Za-z0-9._-]*)
               echo "::error::AWS_DEPLOY_ON_PUSH_ENVIRONMENT is not a plain environment name."
               exit 1
@@ -93,12 +98,7 @@ jobs:
           esac
 
           printf 'environment=%s\n' "$environment" >>"$GITHUB_OUTPUT"
-
-          if [ -z "$environment" ]; then
-            echo "::notice::No AWS deploy: set the repository variable AWS_DEPLOY_ON_PUSH_ENVIRONMENT to deploy on push, or run this workflow manually. See docs/AWS_BRING_UP.md."
-          else
-            echo "deploying to $environment"
-          fi
+          echo "deploying to $environment"
 
   deploy:
     name: Deploy

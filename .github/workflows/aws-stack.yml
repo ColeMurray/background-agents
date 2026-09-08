@@ -1,0 +1,93 @@
+# Everything that parses the AWS deployment without deploying it.
+#
+# Split out of terraform.yml because its path filter is the union of every
+# service's -- a change to the web app was running the whole AWS suite. These
+# checks need no credentials and no AWS account (mocked providers, a stubbed
+# CLI), so they run for everyone; they just have no business running for
+# everything.
+#
+# `terraform fmt` and the production environment's own tests stay in
+# terraform.yml, which a change under `terraform/**` triggers anyway.
+name: AWS stack
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/modules/aws-control-plane/**"
+      - "terraform/environments/aws-staging/**"
+      - "terraform/environments/aws-production/**"
+      # Uploaded verbatim by the module, so these are what the instance runs.
+      - "docker-compose.yml"
+      - "docker-compose.aws.yml"
+      - "packages/control-plane/docker/**"
+      - "scripts/check-aws-stack.sh"
+      - "scripts/deploy-aws.sh"
+      - ".github/workflows/aws-stack.yml"
+  pull_request:
+    branches: [main]
+    # Duplicated rather than anchored: the Actions parser does not reliably
+    # resolve YAML aliases, and every other workflow here repeats its list.
+    paths:
+      - "terraform/modules/aws-control-plane/**"
+      - "terraform/environments/aws-staging/**"
+      - "terraform/environments/aws-production/**"
+      # Uploaded verbatim by the module, so these are what the instance runs.
+      - "docker-compose.yml"
+      - "docker-compose.aws.yml"
+      - "packages/control-plane/docker/**"
+      - "scripts/check-aws-stack.sh"
+      - "scripts/deploy-aws.sh"
+      - ".github/workflows/aws-stack.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aws-stack-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: "1.14.8"
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      # `terraform validate` reads HCL only: it never renders the instance
+      # bootstrap, and the compose smoke boots a different overlay. This is the
+      # only thing that parses either.
+      - name: AWS stack static checks
+        run: scripts/check-aws-stack.sh
+
+      # Deploys from CI move an image; `terraform apply` for these environments
+      # stays a human's, so this is the only thing that parses them. The module
+      # is shared, so a break here is a break there.
+      - name: Terraform Init and Validate (AWS environments)
+        run: |
+          for environment in aws-staging aws-production; do
+            echo "::group::$environment"
+            terraform -chdir="terraform/environments/$environment" init -backend=false -no-color
+            terraform -chdir="terraform/environments/$environment" validate -no-color
+            echo "::endgroup::"
+          done
+
+      # `validate` does not evaluate locals, so these runs are the only thing
+      # that plans the module at all. Mocked providers, no credentials. The
+      # directory is unfiltered so a new tests/*.tftest.hcl file is gated the
+      # moment it lands.
+      - name: Terraform Test (AWS control-plane module)
+        run: |
+          terraform -chdir=terraform/modules/aws-control-plane init -backend=false -no-color
+          terraform -chdir=terraform/modules/aws-control-plane test -no-color
