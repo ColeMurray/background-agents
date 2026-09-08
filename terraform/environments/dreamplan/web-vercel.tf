@@ -44,12 +44,6 @@ module "web_app" {
       sensitive = false
     },
     {
-      key       = "NEXT_PUBLIC_APP_SHORT_NAME"
-      value     = var.app_short_name
-      targets   = ["production", "preview"]
-      sensitive = false
-    },
-    {
       key       = "NEXT_PUBLIC_APP_ICON_URL"
       value     = var.app_icon_url
       targets   = ["production", "preview"]
@@ -70,14 +64,7 @@ module "web_app" {
       targets   = ["production", "preview"]
       sensitive = true
     },
-    # Build-time flag that reveals the "Sign in with Google" button. Inlined
-    # into the client bundle, so it must be present at build time (not just
-    # runtime).
-    {
-      key       = "NEXT_PUBLIC_GOOGLE_ENABLED"
-      value     = tostring(local.google_enabled)
-      targets   = ["production", "preview"]
-      sensitive = false
-    },
+    # Append new variables to keep count indices stable and avoid Vercel
+    # ENV_CONFLICT replacement races.
   ]
 }

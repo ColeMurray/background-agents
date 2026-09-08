@@ -629,11 +629,6 @@ variable "default_model" {
   default     = "claude-haiku-4-5"
 }
 
-variable "classification_model" {
-  description = "Model used by the Slack bot for lightweight classification tasks (intent detection, routing)."
-  type        = string
-  default     = "claude-haiku-4-5"
-}
 
 variable "app_name" {
   description = "Display name shown in the web UI tab title, sign-in page, bot messages (Slack, Linear), PR body footer, and outbound HTTP User-Agent headers."
