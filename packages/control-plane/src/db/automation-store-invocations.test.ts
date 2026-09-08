@@ -58,7 +58,14 @@ describe("AutomationStore listInvocations row parsing", () => {
     });
   });
 
-  it("rejects malformed invocation rows before exposing API state", async () => {
+  it.each([
+    { derived_status: "bogus" },
+    { source: "unknown" },
+    { created_at: "1000" },
+    { scheduled_at: undefined },
+    { skip_reason: undefined },
+    { derived_completed_at: undefined },
+  ])("rejects malformed invocation rows instead of hiding history: %j", async (invalidFields) => {
     const { store, childStatement } = createStore([
       {
         id: "inv-1",
@@ -67,15 +74,13 @@ describe("AutomationStore listInvocations row parsing", () => {
         scheduled_at: null,
         skip_reason: null,
         created_at: 1000,
-        derived_status: "bogus",
+        derived_status: "running",
         derived_completed_at: null,
+        ...invalidFields,
       },
     ]);
 
-    await expect(store.listInvocations("auto-1", { limit: 10, offset: 0 })).resolves.toEqual({
-      total: 1,
-      invocations: [],
-    });
+    await expect(store.listInvocations("auto-1", { limit: 10, offset: 0 })).rejects.toThrow();
     expect(childStatement.all).not.toHaveBeenCalled();
   });
 });

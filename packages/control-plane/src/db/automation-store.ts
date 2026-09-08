@@ -1221,12 +1221,10 @@ export class AutomationStore {
         .bind(automationId, options.limit, options.offset),
     ]);
 
-    const total = countRowSchema.safeParse(countResult.results?.[0]).data?.count ?? 0;
-    const rows: EnrichedAutomationInvocationRow[] = [];
-    for (const row of pageResult.results ?? []) {
-      const parsed = enrichedAutomationInvocationRowSchema.safeParse(row);
-      if (parsed.success) rows.push(parsed.data);
-    }
+    const total = countRowSchema.parse(countResult.results?.[0]).count;
+    // A malformed stored row is an integrity error, not a missing invocation.
+    // Reject the page instead of silently returning incomplete history.
+    const rows = enrichedAutomationInvocationRowSchema.array().parse(pageResult.results ?? []);
     if (rows.length === 0) return { invocations: [], total };
 
     const placeholders = rows.map(() => "?").join(", ");

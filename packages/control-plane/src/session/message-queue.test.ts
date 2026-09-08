@@ -1084,57 +1084,73 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 
-  it("preserves Autofix origin on the canonical dispatch-time user event", async () => {
-    const h = buildQueue();
-    h.repository.getParticipantById.mockReturnValue(
-      createParticipant({ scm_user_id: "255062780", scm_login: "open-inspect[bot]" })
-    );
-    const origin = {
-      kind: "review",
-      authorType: "human",
-      feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
-    } as const;
-    h.repository.getNextPendingMessage.mockReturnValue(
-      createMessage({ source: "github", origin_context: JSON.stringify(origin) })
-    );
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+  it.each([
+    { kind: "review", authorType: "human" },
+    { kind: "review", authorType: "bot" },
+    { kind: "pr_comment", authorType: "human" },
+  ])(
+    "preserves valid Autofix origin on the canonical dispatch-time user event: %j",
+    async (fields) => {
+      const h = buildQueue();
+      h.repository.getParticipantById.mockReturnValue(
+        createParticipant({ scm_user_id: "255062780", scm_login: "open-inspect[bot]" })
+      );
+      const origin = {
+        ...fields,
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+      } as const;
+      h.repository.getNextPendingMessage.mockReturnValue(
+        createMessage({ source: "github", origin_context: JSON.stringify(origin) })
+      );
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
 
-    await h.queue.processMessageQueue();
+      await h.queue.processMessageQueue();
 
-    const event = h.repository.startMessageProcessing.mock.calls[0][2];
-    expect(event).toEqual(
-      expect.objectContaining({
-        origin,
-        author: expect.objectContaining({
-          avatar: "https://avatars.githubusercontent.com/u/255062780?v=4",
-        }),
-      })
-    );
-    expect(serverMessageSchema.parse({ type: "sandbox_event", event })).toEqual({
-      type: "sandbox_event",
-      event: expect.objectContaining({ origin }),
-    });
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
-  });
+      const event = h.repository.startMessageProcessing.mock.calls[0][2];
+      expect(event).toEqual(
+        expect.objectContaining({
+          origin,
+          author: expect.objectContaining({
+            avatar: "https://avatars.githubusercontent.com/u/255062780?v=4",
+          }),
+        })
+      );
+      expect(serverMessageSchema.parse({ type: "sandbox_event", event })).toEqual({
+        type: "sandbox_event",
+        event: expect.objectContaining({ origin }),
+      });
+      expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    }
+  );
 
-  it("drops malformed Autofix origin context from the dispatch-time user event", async () => {
-    const h = buildQueue();
-    h.repository.getNextPendingMessage.mockReturnValue(
-      createMessage({
-        source: "github",
-        origin_context: JSON.stringify({ kind: "review", authorType: "human" }),
-      })
-    );
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+  it.each([
+    "{",
+    "null",
+    "[]",
+    JSON.stringify({ kind: "review", authorType: "human" }),
+    JSON.stringify({ kind: "review", authorType: "human", feedbackUrl: "invalid" }),
+    JSON.stringify({ kind: "pr_comment", authorType: "bot", feedbackUrl: "https://example.test" }),
+  ])(
+    "drops malformed Autofix origin context from the dispatch-time user event: %s",
+    async (originContext) => {
+      const h = buildQueue();
+      h.repository.getNextPendingMessage.mockReturnValue(
+        createMessage({
+          source: "github",
+          origin_context: originContext,
+        })
+      );
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
 
-    await h.queue.processMessageQueue();
+      await h.queue.processMessageQueue();
 
-    const event = h.repository.startMessageProcessing.mock.calls[0][2];
-    expect(event).not.toHaveProperty("origin");
-    expect(h.log.error).toHaveBeenCalledWith("prompt.invalid_origin_context", {
-      message_id: "msg-1",
-    });
-  });
+      const event = h.repository.startMessageProcessing.mock.calls[0][2];
+      expect(event).not.toHaveProperty("origin");
+      expect(h.log.error).toHaveBeenCalledWith("prompt.invalid_origin_context", {
+        message_id: "msg-1",
+      });
+    }
+  );
 
   it("fails an unavailable prompt model before spawning or dispatching", async () => {
     const h = buildQueue();

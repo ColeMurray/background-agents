@@ -589,9 +589,7 @@ export class SessionMessageQueue {
     let origin: GitHubAutofixOrigin | undefined;
     if (originContext) {
       try {
-        const parsedOrigin = githubAutofixOriginSchema.safeParse(JSON.parse(originContext));
-        if (!parsedOrigin.success) throw new Error("invalid shape");
-        origin = parsedOrigin.data;
+        origin = githubAutofixOriginSchema.parse(JSON.parse(originContext));
       } catch {
         this.log.error("prompt.invalid_origin_context", { message_id: messageId });
       }
