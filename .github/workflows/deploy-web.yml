@@ -1,12 +1,9 @@
 name: Deploy Web
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "packages/web/**"
-      - "packages/shared/**"
-      - ".github/workflows/deploy-web.yml"
+  # NOTE (fork): push:[main] auto-deploy removed. This fork deploys the
+  # dreamplan Vercel project manually (`vercel deploy --prod`); upstream CI
+  # targets a different project via secrets. Manual trigger kept.
   workflow_dispatch: # Allow manual trigger
 
 permissions:
@@ -67,9 +64,6 @@ jobs:
       - name: Build Project
         if: steps.check-secrets.outputs.configured == 'true'
         run: vercel build --prod --token=${{ secrets.VERCEL_API_TOKEN }}
-        env:
-          # Required for NextAuth static generation - set via GitHub secret or Vercel will provide
-          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL || 'https://localhost:3000' }}
 
       - name: Deploy to Vercel
         if: steps.check-secrets.outputs.configured == 'true'

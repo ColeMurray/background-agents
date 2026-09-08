@@ -1,4 +1,4 @@
-import type { SlackEnvelope } from "@open-inspect/shared";
+import { z } from "zod";
 import { createLogger } from "./logger";
 import type { Env } from "./types";
 
@@ -11,15 +11,32 @@ const TOOL_STATUS_INDICATOR = "Working...";
 
 const log = createLogger("activity-status");
 
+const slackSetStatusResponseSchema = z
+  .object({
+    ok: z.boolean(),
+    error: z.string().optional(),
+    retryAfter: z.number().optional(),
+    detail: z.unknown().optional(),
+    response_metadata: z.unknown().optional(),
+    warning: z.unknown().optional(),
+    warnings: z.unknown().optional(),
+  })
+  .passthrough();
+
 type AssistantThreadStatusOptions = {
   loadingMessages?: string[];
 };
 
-type AssistantThreadStatusResult = SlackEnvelope & {
-  detail?: unknown;
-  responseMetadata?: unknown;
-  warning?: unknown;
-};
+type AssistantThreadStatusResult =
+  | { ok: true }
+  | {
+      ok: false;
+      error: string;
+      retryAfter?: number;
+      detail?: unknown;
+      responseMetadata?: unknown;
+      warning?: unknown;
+    };
 
 type AssistantStatusMeta = {
   event: "start" | "tool_call";
@@ -181,16 +198,15 @@ export async function setAssistantThreadStatus(
   }
 
   try {
-    const envelope = (await response.json()) as SlackEnvelope & {
-      detail?: unknown;
-      response_metadata?: unknown;
-      warning?: unknown;
-      warnings?: unknown;
-    };
-    if (typeof envelope.ok !== "boolean") {
+    const parsed = slackSetStatusResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
       return { ok: false, error: "invalid_response" };
     }
+    const envelope = parsed.data;
     if (!envelope.ok) {
+      if (!envelope.error) {
+        return { ok: false, error: "invalid_response" };
+      }
       return {
         ok: false,
         error: envelope.error,
@@ -202,7 +218,7 @@ export async function setAssistantThreadStatus(
           : {}),
       };
     }
-    return envelope;
+    return { ok: true };
   } catch {
     return { ok: false, error: "invalid_response" };
   }

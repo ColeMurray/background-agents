@@ -1,19 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { SELF, env } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import type {
   AnalyticsBreakdownResponse,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
   SpawnSource,
 } from "@open-inspect/shared";
-import { generateInternalToken } from "../../src/auth/internal";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return { Authorization: `Bearer ${token}` };
-}
+import { serviceFetch } from "./helpers";
 
 function dateBucket(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 10);
@@ -23,8 +18,9 @@ async function seedSession(
   store: SessionIndexStore,
   input: {
     id: string;
-    repoOwner: string;
-    repoName: string;
+    repoOwner: string | null;
+    repoName: string | null;
+    baseBranch?: string | null;
     scmLogin: string | null;
     userId?: string | null;
     spawnSource?: SpawnSource;
@@ -44,7 +40,8 @@ async function seedSession(
     repoName: input.repoName,
     model: "anthropic/claude-haiku-4-5",
     reasoningEffort: null,
-    baseBranch: "main",
+    baseBranch:
+      input.repoOwner !== null && input.repoName !== null ? (input.baseBranch ?? "main") : null,
     status: input.status,
     spawnSource: input.spawnSource,
     scmLogin: input.scmLogin,
@@ -173,9 +170,7 @@ describe("Analytics API", () => {
       prCount: 9,
     });
 
-    const response = await SELF.fetch("https://test.local/analytics/summary?days=30", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/analytics/summary?days=30");
 
     expect(response.status).toBe(200);
     const body = await response.json<AnalyticsSummaryResponse>();
@@ -259,9 +254,7 @@ describe("Analytics API", () => {
       prCount: 0,
     });
 
-    const response = await SELF.fetch("https://test.local/analytics/timeseries?days=7", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/analytics/timeseries?days=7");
 
     expect(response.status).toBe(200);
     const body = await response.json<AnalyticsTimeseriesResponse>();
@@ -346,9 +339,7 @@ describe("Analytics API", () => {
       prCount: 0,
     });
 
-    const response = await SELF.fetch("https://test.local/analytics/breakdown?days=30&by=user", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/analytics/breakdown?days=30&by=user");
 
     expect(response.status).toBe(200);
     const body = await response.json<AnalyticsBreakdownResponse>();
@@ -405,6 +396,7 @@ describe("Analytics API", () => {
     const webPendingAt = now - 12 * 60 * 60 * 1000;
     const apiFailedAt = now - 3 * 24 * 60 * 60 * 1000;
     const apiActiveAt = now - 6 * 60 * 60 * 1000;
+    const noRepoCompletedAt = now - 5 * 60 * 60 * 1000;
 
     await seedSession(store, {
       id: "repo-web-completed",
@@ -471,10 +463,21 @@ describe("Analytics API", () => {
       messageCount: 0,
       prCount: 0,
     });
-
-    const response = await SELF.fetch("https://test.local/analytics/breakdown?days=30&by=repo", {
-      headers: await authHeaders(),
+    await seedSession(store, {
+      id: "no-repo-completed",
+      repoOwner: null,
+      repoName: null,
+      scmLogin: "dana",
+      status: "completed",
+      createdAt: noRepoCompletedAt,
+      updatedAt: noRepoCompletedAt + 9_000,
+      totalCost: 0.25,
+      activeDurationMs: 30_000,
+      messageCount: 1,
+      prCount: 0,
     });
+
+    const response = await serviceFetch("https://test.local/analytics/breakdown?days=30&by=repo");
 
     expect(response.status).toBe(200);
     const body = await response.json<AnalyticsBreakdownResponse>();
@@ -503,6 +506,18 @@ describe("Analytics API", () => {
         messageCount: 4,
         avgDuration: 300_000,
         lastActive: apiActiveAt + 8_000,
+      },
+      {
+        key: "No repository",
+        sessions: 1,
+        completed: 1,
+        failed: 0,
+        cancelled: 0,
+        cost: 0.25,
+        prs: 0,
+        messageCount: 1,
+        avgDuration: 30_000,
+        lastActive: noRepoCompletedAt + 9_000,
       },
     ]);
   });
@@ -601,9 +616,7 @@ describe("Analytics API", () => {
     });
 
     // Summary should count only the 4 human sessions
-    const summaryRes = await SELF.fetch("https://test.local/analytics/summary?days=7", {
-      headers: await authHeaders(),
-    });
+    const summaryRes = await serviceFetch("https://test.local/analytics/summary?days=7");
     expect(summaryRes.status).toBe(200);
     const summary = await summaryRes.json<AnalyticsSummaryResponse>();
     expect(summary.totalSessions).toBe(4);
@@ -612,9 +625,9 @@ describe("Analytics API", () => {
     expect(summary.totalPrs).toBe(2);
 
     // Breakdown by user should include bot sessions, not agent/automation
-    const breakdownRes = await SELF.fetch("https://test.local/analytics/breakdown?days=7&by=user", {
-      headers: await authHeaders(),
-    });
+    const breakdownRes = await serviceFetch(
+      "https://test.local/analytics/breakdown?days=7&by=user"
+    );
     expect(breakdownRes.status).toBe(200);
     const breakdown = await breakdownRes.json<AnalyticsBreakdownResponse>();
 
@@ -684,9 +697,8 @@ describe("Analytics API", () => {
     });
 
     // Breakdown: user_id sessions merge under canonical ID with display name
-    const breakdownRes = await SELF.fetch(
-      "https://test.local/analytics/breakdown?days=30&by=user",
-      { headers: await authHeaders() }
+    const breakdownRes = await serviceFetch(
+      "https://test.local/analytics/breakdown?days=30&by=user"
     );
     expect(breakdownRes.status).toBe(200);
     const breakdown = await breakdownRes.json<AnalyticsBreakdownResponse>();
@@ -721,17 +733,13 @@ describe("Analytics API", () => {
     ]);
 
     // Summary: activeUsers counts distinct user_id (alice's 2 sessions = 1 user)
-    const summaryRes = await SELF.fetch("https://test.local/analytics/summary?days=30", {
-      headers: await authHeaders(),
-    });
+    const summaryRes = await serviceFetch("https://test.local/analytics/summary?days=30");
     expect(summaryRes.status).toBe(200);
     const summary = await summaryRes.json<AnalyticsSummaryResponse>();
     expect(summary.activeUsers).toBe(2); // user-abc + bob
 
     // Timeseries: uses display name from users table
-    const timeseriesRes = await SELF.fetch("https://test.local/analytics/timeseries?days=30", {
-      headers: await authHeaders(),
-    });
+    const timeseriesRes = await serviceFetch("https://test.local/analytics/timeseries?days=30");
     expect(timeseriesRes.status).toBe(200);
     const timeseries = await timeseriesRes.json<AnalyticsTimeseriesResponse>();
 
@@ -781,9 +789,7 @@ describe("Analytics API", () => {
       prCount: 0,
     });
 
-    const res = await SELF.fetch("https://test.local/analytics/timeseries?days=7", {
-      headers: await authHeaders(),
-    });
+    const res = await serviceFetch("https://test.local/analytics/timeseries?days=7");
     expect(res.status).toBe(200);
     const body = await res.json<AnalyticsTimeseriesResponse>();
 

@@ -1,4 +1,13 @@
 import { DEFAULT_APP_NAME } from "@open-inspect/shared";
+import { z } from "zod";
+
+const collaboratorPermissionResponseSchema = z.object({
+  permission: z.string(),
+});
+
+const installationTokenResponseSchema = z.object({
+  token: z.string(),
+});
 
 export interface GitHubAppConfig {
   appId: string;
@@ -88,8 +97,18 @@ async function getInstallationToken(
     throw new Error(`Failed to get installation token: ${response.status} ${error}`);
   }
 
-  const data = (await response.json()) as { token: string };
-  return data.token;
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch {
+    throw new Error("Failed to get installation token: invalid response");
+  }
+
+  const parsed = installationTokenResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("Failed to get installation token: invalid response");
+  }
+  return parsed.data.token;
 }
 
 export async function generateInstallationToken(config: GitHubAppConfig): Promise<string> {
@@ -124,7 +143,9 @@ export async function checkSenderPermission(
       }
     );
     if (!response.ok) return { hasPermission: false, error: true };
-    const data = (await response.json()) as { permission: string };
+    const parsed = collaboratorPermissionResponseSchema.safeParse(await response.json());
+    if (!parsed.success) return { hasPermission: false, error: true };
+    const data = parsed.data;
     return { hasPermission: WRITE_PERMISSIONS.has(data.permission) };
   } catch {
     return { hasPermission: false, error: true };

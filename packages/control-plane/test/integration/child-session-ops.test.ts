@@ -81,6 +81,33 @@ describe("Child session operations (list, get, cancel)", () => {
     return { pName, childName, parentStub, childStub, sandboxToken, store };
   }
 
+  async function setupNestedSession(
+    store: SessionIndexStore,
+    parentSessionId: string,
+    spawnDepth: number,
+    prefix: string
+  ): Promise<string> {
+    const id = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    await initNamedSession(id, { repoOwner: "acme", repoName: "web-app" });
+    const now = Date.now();
+    await store.create({
+      id,
+      title: "Nested Session",
+      repoOwner: "acme",
+      repoName: "web-app",
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "active",
+      parentSessionId,
+      spawnSource: "agent",
+      spawnDepth,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return id;
+  }
+
   describe("GET /sessions/:parentId/children", () => {
     it("returns children from D1", async () => {
       const { pName, childName, sandboxToken } = await setupParentAndChild();
@@ -134,6 +161,64 @@ describe("Child session operations (list, get, cancel)", () => {
       // The tool_call event should appear in recentEvents
       const toolCall = body.recentEvents.find((e) => e.type === "tool_call");
       expect(toolCall).toBeDefined();
+    });
+
+    it("forwards optional result and trajectory parameters to child summary", async () => {
+      const { pName, childName, childStub, sandboxToken } = await setupParentAndChild();
+      const [{ id: participantId }] = await queryDO<{ id: string }>(
+        childStub,
+        "SELECT id FROM participants LIMIT 1"
+      );
+
+      await queryDO(
+        childStub,
+        `INSERT INTO messages (id, author_id, content, source, status, created_at, started_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        "msg-child-result",
+        participantId,
+        "Do the child task",
+        "web",
+        "completed",
+        100,
+        110,
+        200
+      );
+      await seedEvents(childStub, [
+        {
+          id: "evt-child-token",
+          type: "token",
+          data: JSON.stringify({ content: "usable child result" }),
+          messageId: "msg-child-result",
+          createdAt: 180,
+        },
+        {
+          id: "evt-child-complete",
+          type: "execution_complete",
+          data: JSON.stringify({ success: true }),
+          messageId: "msg-child-result",
+          createdAt: 200,
+        },
+      ]);
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}?include=result,trajectory`,
+        { headers: { Authorization: `Bearer ${sandboxToken}` } }
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        finalResponse: { textContent: string; messageId: string } | null;
+        trajectory: { events: Array<{ id: string }> };
+      }>();
+
+      expect(body.finalResponse).toMatchObject({
+        messageId: "msg-child-result",
+        textContent: "usable child result",
+      });
+      expect(body.trajectory.events.map((event) => event.id)).toEqual([
+        "evt-child-token",
+        "evt-child-complete",
+      ]);
     });
 
     it("returns 404 for wrong parent", async () => {
@@ -206,6 +291,124 @@ describe("Child session operations (list, get, cancel)", () => {
         "SELECT status FROM session LIMIT 1"
       );
       expect(rows[0].status).toBe("cancelled");
+    });
+
+    it("cancels nested tasks by default", async () => {
+      const { pName, childName, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "active",
+      });
+      const grandchildName = await setupNestedSession(store, childName, 2, "grandchild-ops");
+      const greatGrandchildName = await setupNestedSession(
+        store,
+        grandchildName,
+        3,
+        "great-grandchild-ops"
+      );
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}` },
+        }
+      );
+
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        status: "cancelled",
+        cancelledDescendantIds: [greatGrandchildName, grandchildName],
+      });
+      expect((await store.get(childName))?.status).toBe("cancelled");
+      expect((await store.get(grandchildName))?.status).toBe("cancelled");
+      expect((await store.get(greatGrandchildName))?.status).toBe("cancelled");
+    });
+
+    it("leaves nested tasks running when cancelNested is false", async () => {
+      const { pName, childName, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "active",
+      });
+      const grandchildName = await setupNestedSession(store, childName, 2, "grandchild-no-cascade");
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${sandboxToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ cancelNested: false }),
+        }
+      );
+
+      expect(res.status).toBe(200);
+      expect((await store.get(childName))?.status).toBe("cancelled");
+      expect((await store.get(grandchildName))?.status).toBe("active");
+    });
+
+    it("returns 400 for malformed non-empty JSON without cancelling tasks", async () => {
+      const { pName, childName, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "active",
+      });
+      const grandchildName = await setupNestedSession(store, childName, 2, "grandchild-malformed");
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${sandboxToken}`,
+            "Content-Type": "application/json",
+          },
+          body: '{"cancelNested":false',
+        }
+      );
+
+      expect(res.status).toBe(400);
+      expect((await store.get(childName))?.status).toBe("active");
+      expect((await store.get(grandchildName))?.status).toBe("active");
+    });
+
+    it("continues cascading when the direct child is already terminal", async () => {
+      const { pName, childName, childStub, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "cancelled",
+      });
+      await queryDO(childStub, "UPDATE session SET status = 'cancelled'");
+      const grandchildName = await setupNestedSession(store, childName, 2, "grandchild-retry");
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}` },
+        }
+      );
+
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        status: "cancelled",
+        cancelledDescendantIds: [grandchildName],
+      });
+      expect((await store.get(childName))?.status).toBe("cancelled");
+      expect((await store.get(grandchildName))?.status).toBe("cancelled");
+    });
+
+    it("returns 409 when the direct child is terminal and no descendants are active", async () => {
+      const { pName, childName, childStub, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "cancelled",
+      });
+      await queryDO(childStub, "UPDATE session SET status = 'cancelled'");
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}` },
+        }
+      );
+
+      expect(res.status).toBe(409);
+      expect((await store.get(childName))?.status).toBe("cancelled");
     });
 
     it("returns 409 for completed session", async () => {

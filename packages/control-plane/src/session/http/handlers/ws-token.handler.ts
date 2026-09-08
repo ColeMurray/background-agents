@@ -1,17 +1,23 @@
 import type { Logger } from "../../../logger";
 import type { SessionRepository } from "../../repository";
 import type { ParticipantRow } from "../../types";
+import { z } from "zod";
 
-interface GenerateWsTokenRequest {
-  userId: string;
-  scmUserId?: string;
-  scmLogin?: string;
-  scmName?: string;
-  scmEmail?: string;
-  scmTokenEncrypted?: string | null;
-  scmRefreshTokenEncrypted?: string | null;
-  scmTokenExpiresAt?: number | null;
-}
+const nullableOptionalString = z.string().nullable().optional();
+
+const generateWsTokenRequestSchema = z.object({
+  userId: z.string().optional(),
+  scmUserId: nullableOptionalString,
+  scmLogin: nullableOptionalString,
+  scmName: nullableOptionalString,
+  authName: nullableOptionalString,
+  scmEmail: nullableOptionalString,
+  scmTokenEncrypted: nullableOptionalString,
+  scmRefreshTokenEncrypted: nullableOptionalString,
+  scmTokenExpiresAt: z.number().nullable().optional(),
+});
+
+type GenerateWsTokenRequest = z.infer<typeof generateWsTokenRequestSchema>;
 
 export interface WsTokenHandlerDeps {
   repository: Pick<
@@ -22,17 +28,27 @@ export interface WsTokenHandlerDeps {
   generateId: (bytes?: number) => string;
   hashToken: (token: string) => Promise<string>;
   now: () => number;
-  getLog: () => Logger;
 }
 
 export interface WsTokenHandler {
-  generateWsToken: (request: Request) => Promise<Response>;
+  generateWsToken: (request: Request, log: Logger) => Promise<Response>;
 }
 
 export function createWsTokenHandler(deps: WsTokenHandlerDeps): WsTokenHandler {
   return {
-    async generateWsToken(request: Request): Promise<Response> {
-      const body = (await request.json()) as GenerateWsTokenRequest;
+    async generateWsToken(request: Request, log: Logger): Promise<Response> {
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const parsed = generateWsTokenRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+      const body: GenerateWsTokenRequest = parsed.data;
 
       if (!body.userId) {
         return Response.json({ error: "userId is required" }, { status: 400 });
@@ -65,6 +81,7 @@ export function createWsTokenHandler(deps: WsTokenHandlerDeps): WsTokenHandler {
           scmUserId: body.scmUserId ?? null,
           scmLogin: body.scmLogin ?? null,
           scmName: body.scmName ?? null,
+          authName: body.authName ?? null,
           scmEmail: body.scmEmail ?? null,
           scmAccessTokenEncrypted: shouldUpdateTokens ? (body.scmTokenEncrypted ?? null) : null,
           scmRefreshTokenEncrypted: shouldUpdateRefreshToken
@@ -80,6 +97,7 @@ export function createWsTokenHandler(deps: WsTokenHandlerDeps): WsTokenHandler {
           scmUserId: body.scmUserId ?? null,
           scmLogin: body.scmLogin ?? null,
           scmName: body.scmName ?? null,
+          authName: body.authName ?? null,
           scmEmail: body.scmEmail ?? null,
           scmAccessTokenEncrypted: body.scmTokenEncrypted ?? null,
           scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
@@ -94,9 +112,7 @@ export function createWsTokenHandler(deps: WsTokenHandlerDeps): WsTokenHandler {
       const tokenHash = await deps.hashToken(plainToken);
 
       deps.repository.updateParticipantWsToken(participant.id, tokenHash, now);
-      deps
-        .getLog()
-        .info("Generated WS token", { participant_id: participant.id, user_id: body.userId });
+      log.info("Generated WS token", { participant_id: participant.id, user_id: body.userId });
 
       return Response.json({
         token: plainToken,

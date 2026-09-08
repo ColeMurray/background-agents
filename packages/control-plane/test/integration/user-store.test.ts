@@ -96,6 +96,37 @@ describe("UserStore", () => {
       expect(identities.map((i) => i.provider).sort()).toEqual(["github", "slack"]);
     });
 
+    it("links a Google identity to an existing GitHub user by matching verified email (F1/F2 link surface)", async () => {
+      const github = await store.resolveOrCreateUser({
+        provider: "github",
+        providerUserId: "gh-900",
+        displayName: "Cole",
+        providerEmail: "cole@example.com",
+      });
+
+      const google = await store.resolveOrCreateUser({
+        provider: "google",
+        providerUserId: "google-sub-900",
+        displayName: "Cole (Google)",
+        providerEmail: "cole@example.com",
+      });
+
+      expect(google.id).toBe(github.id);
+      expect(google.isNew).toBe(false);
+
+      const identities = await store.getIdentitiesForUser(github.id);
+      expect(identities).toHaveLength(2);
+      expect(identities.map((i) => i.provider).sort()).toEqual(["github", "google"]);
+
+      // The Google login must not overwrite or masquerade as the GitHub identity:
+      // each provider keeps its own provider_user_id (a Google sub never lands
+      // under provider='github').
+      const githubIdentity = identities.find((i) => i.provider === "github");
+      const googleIdentity = identities.find((i) => i.provider === "google");
+      expect(githubIdentity!.providerUserId).toBe("gh-900");
+      expect(googleIdentity!.providerUserId).toBe("google-sub-900");
+    });
+
     it("backfills email on existing user when email becomes available", async () => {
       // Create user without email (e.g. Slack bot before users:read.email scope)
       const first = await store.resolveOrCreateUser({

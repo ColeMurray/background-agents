@@ -4,6 +4,8 @@
  * Error classes and types for source control operations.
  */
 
+import type { z } from "zod";
+
 /**
  * Error classification for source control operations.
  *
@@ -91,4 +93,36 @@ export class SourceControlProviderError extends Error {
       error instanceof Error ? error : undefined
     );
   }
+}
+
+/**
+ * Parse a provider API response body against its wire schema.
+ *
+ * A body that is not JSON or does not match the schema throws a permanent
+ * SourceControlProviderError naming the offending fields — provider/schema
+ * drift must fail loudly rather than flow onward as apparently-valid state.
+ */
+export async function parseProviderResponse<Schema extends z.ZodType>(
+  response: Response,
+  schema: Schema,
+  context: string
+): Promise<z.output<Schema>> {
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch {
+    throw new SourceControlProviderError(`${context}: response body is not JSON`, "permanent");
+  }
+
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) {
+    const fields = [
+      ...new Set(parsed.error.issues.map((issue) => issue.path.join(".") || "(root)")),
+    ].join(", ");
+    throw new SourceControlProviderError(
+      `${context}: unexpected response shape (${fields})`,
+      "permanent"
+    );
+  }
+  return parsed.data;
 }

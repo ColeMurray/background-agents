@@ -43,14 +43,14 @@ describe("extractAgentResponse", () => {
               type: "pr",
               url: "https://github.com/octocat/repo/pull/42",
               metadata: { number: 42 },
-              createdAt: 1,
+              createdAt: 10,
             },
             {
               id: "a2",
               type: "branch",
               url: "https://github.com/octocat/repo/pull/new/main...open-inspect%2Fsession-123",
               metadata: { head: "open-inspect/session-123", mode: "manual_pr" },
-              createdAt: 2,
+              createdAt: 11,
             },
           ],
         });
@@ -61,6 +61,7 @@ describe("extractAgentResponse", () => {
 
     const env = {
       CONTROL_PLANE: { fetch: fetchMock },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     const response = await extractAgentResponse(env, "session-1", "msg-1");
@@ -121,6 +122,7 @@ describe("extractAgentResponse", () => {
 
     const env = {
       CONTROL_PLANE: { fetch: fetchMock },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     const response = await extractAgentResponse(env, "session-2", "msg-2");

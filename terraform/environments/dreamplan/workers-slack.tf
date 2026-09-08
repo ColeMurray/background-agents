@@ -22,9 +22,10 @@ module "slack_bot_worker" {
   count  = var.enable_slack_bot ? 1 : 0
   source = "../../modules/cloudflare-worker"
 
-  account_id  = var.cloudflare_account_id
-  worker_name = "open-inspect-slack-bot-${local.name_suffix}"
-  script_path = local.slack_bot_script_path
+  account_id       = var.cloudflare_account_id
+  worker_name      = "open-inspect-slack-bot-${local.name_suffix}"
+  worker_subdomain = var.cloudflare_worker_subdomain
+  script_path      = local.slack_bot_script_path
 
   kv_namespaces = [
     {
@@ -55,7 +56,7 @@ module "slack_bot_worker" {
     { name = "SLACK_BOT_TOKEN", value = var.slack_bot_token },
     { name = "SLACK_SIGNING_SECRET", value = var.slack_signing_secret },
     { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-    { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
+    { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_slack_bot.result },
   ]
 
   compatibility_date  = "2024-09-23"

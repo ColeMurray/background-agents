@@ -4,7 +4,9 @@ import { useEffect, useState, type ReactNode } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
+  encodeRepositoryPathSegments,
   MODEL_REASONING_CONFIG,
+  parseRepositoryFullName,
   isValidReasoningEffort,
   type EnrichedRepository,
   type GitHubBotSettings,
@@ -12,6 +14,7 @@ import {
   type ValidModel,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -38,6 +41,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { CommitSigningSettings } from "./commit-signing-settings";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/github";
 const REPO_SETTINGS_KEY = "/api/integration-settings/github/repos";
@@ -98,6 +102,8 @@ export function GitHubIntegrationSettings() {
           </p>
         )}
       </Section>
+
+      <CommitSigningSettings />
 
       <GlobalSettingsSection settings={settings} availableRepos={availableRepos} />
 
@@ -177,7 +183,7 @@ function GlobalSettingsSection({
     setError("");
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
 
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
@@ -220,7 +226,7 @@ function GlobalSettingsSection({
     }
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, {
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: body }),
@@ -261,7 +267,7 @@ function GlobalSettingsSection({
   };
 
   return (
-    <Section title="Defaults & Scope" description="Global behavior and repository targeting.">
+    <Section title="Defaults & Scope" description="Global behavior and repository scope.">
       {error && <Message tone="error" text={error} />}
 
       <label
@@ -432,7 +438,10 @@ function GlobalSettingsSection({
       </div>
 
       <div className="mb-4">
-        <label className="block text-sm font-medium text-foreground mb-1">
+        <label
+          htmlFor="github-code-review-instructions"
+          className="block text-sm font-medium text-foreground mb-1"
+        >
           Code Review Instructions
         </label>
         <p className="text-xs text-muted-foreground mb-2">
@@ -440,6 +449,7 @@ function GlobalSettingsSection({
           areas or coding standards.
         </p>
         <Textarea
+          id="github-code-review-instructions"
           value={codeReviewInstructions}
           onChange={(e) => {
             setCodeReviewInstructions(e.target.value);
@@ -453,7 +463,10 @@ function GlobalSettingsSection({
       </div>
 
       <div className="mb-4">
-        <label className="block text-sm font-medium text-foreground mb-1">
+        <label
+          htmlFor="github-comment-action-instructions"
+          className="block text-sm font-medium text-foreground mb-1"
+        >
           Comment Action Instructions
         </label>
         <p className="text-xs text-muted-foreground mb-2">
@@ -461,6 +474,7 @@ function GlobalSettingsSection({
           guide how the bot responds to comments.
         </p>
         <Textarea
+          id="github-comment-action-instructions"
           value={commentActionInstructions}
           onChange={(e) => {
             setCommentActionInstructions(e.target.value);
@@ -524,14 +538,18 @@ function RepoOverridesSection({
 
   const handleAdd = async () => {
     if (!addingRepo) return;
-    const [owner, name] = addingRepo.split("/");
+    const repository = parseRepositoryFullName(addingRepo);
+    if (!repository) return;
 
     try {
-      const res = await fetch(`/api/integration-settings/github/repos/${owner}/${name}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: {} }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings: {} }),
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
@@ -645,9 +663,9 @@ function RepoOverrideRow({
   };
 
   const handleSave = async () => {
+    const repository = parseRepositoryFullName(entry.repo);
+    if (!repository) return;
     setSaving(true);
-
-    const [owner, name] = entry.repo.split("/");
     const settings: GitHubBotSettings = {};
     if (model) settings.model = model;
     if (effort) settings.reasoningEffort = effort;
@@ -658,11 +676,14 @@ function RepoOverrideRow({
     if (autoReviewMode === "override") settings.autoReviewOnOpen = autoReviewOnOpen;
 
     try {
-      const res = await fetch(`/api/integration-settings/github/repos/${owner}/${name}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings }),
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
@@ -680,12 +701,16 @@ function RepoOverrideRow({
   };
 
   const handleDelete = async () => {
-    const [owner, name] = entry.repo.split("/");
+    const repository = parseRepositoryFullName(entry.repo);
+    if (!repository) return;
 
     try {
-      const res = await fetch(`/api/integration-settings/github/repos/${owner}/${name}`, {
-        method: "DELETE",
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "DELETE",
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);

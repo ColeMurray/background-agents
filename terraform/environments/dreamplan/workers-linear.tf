@@ -20,9 +20,10 @@ module "linear_bot_worker" {
   count  = var.enable_linear_bot ? 1 : 0
   source = "../../modules/cloudflare-worker"
 
-  account_id  = var.cloudflare_account_id
-  worker_name = "open-inspect-linear-bot-${local.name_suffix}"
-  script_path = local.linear_bot_script_path
+  account_id       = var.cloudflare_account_id
+  worker_name      = "open-inspect-linear-bot-${local.name_suffix}"
+  worker_subdomain = var.cloudflare_worker_subdomain
+  script_path      = local.linear_bot_script_path
 
   kv_namespaces = [
     {
@@ -53,7 +54,7 @@ module "linear_bot_worker" {
   secrets = [
     { name = "LINEAR_WEBHOOK_SECRET", value = var.linear_webhook_secret },
     { name = "LINEAR_CLIENT_SECRET", value = var.linear_client_secret },
-    { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
+    { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_linear_bot.result },
     { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
     { name = "LINEAR_API_KEY", value = var.linear_api_key },
   ]

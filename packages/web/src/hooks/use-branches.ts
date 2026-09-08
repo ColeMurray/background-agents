@@ -1,12 +1,12 @@
 import useSWR from "swr";
-import { useSession } from "next-auth/react";
+import { useAuthSession } from "@/lib/auth-session";
 
 interface BranchesResponse {
   branches: { name: string }[];
 }
 
 export function useBranches(repoOwner: string, repoName: string) {
-  const { data: session } = useSession();
+  const { data: session } = useAuthSession();
 
   const key =
     session && repoOwner && repoName

@@ -161,6 +161,67 @@ currently exposes model and reasoning settings on repository overrides. If globa
 defaults exist in integration settings, GitHub-started sessions honor them. If neither a repository
 override nor global default sets a model, sessions use the deployment default model.
 
+### Commit Signing
+
+Open-Inspect can sign normal agent-created commits with one deployment-wide OpenSSH Ed25519 key. The
+identities remain deliberately separate:
+
+| Git/GitHub role      | Identity                                                                                |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| Commit author        | The trusted prompting GitHub user, when available; otherwise Open-Inspect               |
+| Committer and signer | The dedicated Open-Inspect signing account                                              |
+| Branch pusher        | The existing GitHub App                                                                 |
+| Pull request author  | The prompting user's OAuth identity when available; otherwise the existing App fallback |
+
+This makes the signature an attestation by the Open-Inspect deployment, not a cryptographic claim
+that the attributed user personally signed the commit. GitHub repository rules remain the
+server-side enforcement boundary for rejecting unsigned commits.
+
+To configure signing, open **Settings > Integrations > GitHub > Commit signing**:
+
+1. Create or recover a dedicated GitHub account for the signing identity. It does not need
+   repository access because the GitHub App continues to push branches.
+2. Generate an unencrypted OpenSSH Ed25519 key and add its public key to that account as a **signing
+   key**.
+3. Enter the fixed committer name/email and private key in the write-only form. The committer email
+   must belong to the dedicated account.
+4. Save, then exercise a normal commit and a history rewrite in a non-critical repository before
+   requiring signed commits.
+
+The private key is encrypted in the control-plane database. The settings page reads back only the
+derived public key, fingerprint, fixed identity, and last update time; it never repopulates the
+private-key field. Sandboxes receive only the public key. For each commit, a stateless Git signer
+derives its fingerprint from that public key and sends the bounded unsigned commit buffer to the
+authenticated control-plane signing endpoint. The control plane decrypts the active key in
+request-local memory and returns a complete `git`-namespace SSH signature. The private key is never
+delivered to a sandbox file, environment, process, or provider snapshot.
+
+The unsigned commit buffer contains Git headers, author/committer identities, and the commit
+message. It does not contain file contents or diffs. Open-Inspect does not interpret, retain, or log
+the buffer and does not maintain a signature ledger.
+
+For rotation, register the replacement public key on GitHub before replacing the private key in
+Open-Inspect, then remove the old public key after existing signing requests drain. A request that
+already resolved the old key may complete; later requests for that fingerprint fail and retry after
+the next prompt refresh with the new public key. Disabling deletes the active database ciphertext.
+Requests that resolve configuration afterward fail closed, and running sandboxes remove Git signing
+configuration on their next prompt refresh.
+
+Important limitations:
+
+- GitHub vigilant mode shows attributed commits as **Partially verified** because the author and
+  committer are intentionally different.
+- GitHub-created merge or squash commits follow the repository's merge-signing behavior; the
+  signature on the branch commit does not automatically carry onto a newly created merge commit.
+- Commit creation and history rewrites require the control plane to be available. Rewriting multiple
+  commits performs one signing round trip per recreated commit, with no unsigned fallback.
+- Any process in a live sandbox that can use its session token can ask the control plane to sign an
+  arbitrary bounded commit buffer. Remote signing prevents reusable-key extraction; it does not make
+  the sandbox trustworthy or add commit-policy enforcement.
+- Sessions already running when signing support is deployed must be recreated so they start the
+  updated shared runtime. Provider images and snapshots do not need a preinstalled signer wrapper;
+  the checked-in launcher is installed with the runtime's other standalone commands during startup.
+
 ---
 
 ## Admin and Safety Notes

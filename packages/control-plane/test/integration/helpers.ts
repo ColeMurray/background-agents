@@ -1,6 +1,150 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
+import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared";
+import type { SandboxStatus } from "../../src/types";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
+
+const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
+const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
+const TEST_BROWSER_ACCOUNT_ID = "test-browser-account";
+const TEST_BROWSER_PROVIDER_SUBJECT = "583231";
+const TEST_BROWSER_SESSION_ID = "test-browser-session";
+const TEST_BROWSER_SESSION_TOKEN = "test-browser-session-token";
+const TEST_BROWSER_SESSION_COOKIE = "__Secure-openinspect.session_token";
+
+async function signCookieValue(value: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value))
+  );
+  const signatureBase64 = btoa(String.fromCharCode(...signature));
+  return encodeURIComponent(`${value}.${signatureBase64}`);
+}
+
+/**
+ * Seed one real Better Auth user/account/session and return its signed cookie.
+ *
+ * Integration route tests exercise browser-owned endpoints, so their default
+ * web request must carry the same compound credential as production. Direct
+ * service-auth tests intentionally build their own bare sig1 requests.
+ */
+async function testBrowserSessionCookie(): Promise<string> {
+  const secret = env.BROWSER_AUTH_SECRET;
+  if (!secret) throw new Error("BROWSER_AUTH_SECRET is not configured for integration tests");
+
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const applicationTimestamp = now.getTime();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO auth_users
+         (id, name, email, emailVerified, image, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      TEST_BROWSER_USER_ID,
+      "Integration Browser User",
+      "browser@test.local",
+      1,
+      null,
+      now.toISOString(),
+      now.toISOString()
+    ),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO users
+         (id, display_name, email, avatar_url, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(
+      TEST_BROWSER_USER_ID,
+      "Integration Browser User",
+      "browser@test.local",
+      null,
+      applicationTimestamp,
+      applicationTimestamp
+    ),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO auth_accounts
+         (id, accountId, providerId, userId, accessToken, refreshToken, idToken,
+          accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      TEST_BROWSER_ACCOUNT_ID,
+      TEST_BROWSER_PROVIDER_SUBJECT,
+      "github",
+      TEST_BROWSER_USER_ID,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      now.toISOString(),
+      now.toISOString()
+    ),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO auth_sessions
+         (id, expiresAt, token, createdAt, updatedAt, ipAddress, userAgent, userId)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      TEST_BROWSER_SESSION_ID,
+      expiresAt.toISOString(),
+      TEST_BROWSER_SESSION_TOKEN,
+      now.toISOString(),
+      now.toISOString(),
+      "127.0.0.1",
+      "integration-test",
+      TEST_BROWSER_USER_ID
+    ),
+  ]);
+
+  const signedToken = await signCookieValue(TEST_BROWSER_SESSION_TOKEN, secret);
+  return `${TEST_BROWSER_SESSION_COOKIE}=${signedToken}`;
+}
+
+/**
+ * Fetch a control-plane route with production-equivalent credentials. Web
+ * calls carry both sig1 and a Better Auth browser session; other services
+ * carry their service credential. Signs per request because sig1 binds method,
+ * URL, and body.
+ */
+export async function serviceFetch(
+  url: string,
+  init?: {
+    method?: string;
+    body?: string;
+    headers?: Record<string, string>;
+    service?: ServiceName;
+    actor?: string;
+  }
+): Promise<Response> {
+  const method = init?.method ?? "GET";
+  const service = init?.service ?? "web";
+  const auth = await buildServiceAuthHeaders({
+    service,
+    secret: `test-service-secret-${service}`,
+    method,
+    url,
+    body: init?.body,
+    actor: init?.actor,
+  });
+  const browserCookie = service === "web" ? await testBrowserSessionCookie() : undefined;
+  return SELF.fetch(url, {
+    method,
+    headers: {
+      ...(init?.body === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(browserCookie ? { Cookie: browserCookie } : {}),
+      ...init?.headers,
+      ...auth,
+    },
+    body: init?.body,
+  });
+}
 
 /**
  * Create a fresh DO, call /internal/init, return the stub and id.
@@ -10,6 +154,14 @@ export async function initSession(overrides?: {
   repoOwner?: string;
   repoName?: string;
   repoId?: number;
+  defaultBranch?: string;
+  repositories?: Array<{
+    repoOwner: string;
+    repoName: string;
+    repoId: number;
+    baseBranch: string;
+  }>;
+  environmentId?: string | null;
   title?: string;
   model?: string;
   reasoningEffort?: string;
@@ -46,6 +198,25 @@ export async function queryDO<T>(
   return runInDurableObject(stub, (instance: SessionDO) => {
     return instance.ctx.storage.sql.exec(sql, ...params).toArray() as T[];
   });
+}
+
+export async function waitForSandboxStatus(
+  stub: DurableObjectStub,
+  status: string,
+  timeoutMs = DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus: string | undefined;
+  while (Date.now() < deadline) {
+    const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
+    lastStatus = rows[0]?.status;
+    if (lastStatus === status) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(
+    `Timed out after ${timeoutMs}ms waiting for sandbox status "${status}"; last status was "${lastStatus ?? "missing"}"`
+  );
 }
 
 /**
@@ -118,8 +289,16 @@ export async function initNamedSession(
     repoOwner?: string;
     repoName?: string;
     repoId?: number;
+    defaultBranch?: string;
+    repositories?: Array<{
+      repoOwner: string;
+      repoName: string;
+      repoId: number;
+      baseBranch: string;
+    }>;
     title?: string;
     model?: string;
+    reasoningEffort?: string;
     userId?: string;
     scmLogin?: string;
   }
@@ -238,39 +417,48 @@ export async function openSandboxWs(
 }
 
 /**
- * Seed auth_token and modal_sandbox_id on the sandbox row so sandbox
- * WebSocket auth can pass.
+ * Seed a sandbox with auth_token and modal_sandbox_id so sandbox auth can
+ * pass, in the given lifecycle status (default: the "ready" steady state).
+ * Waits out the (always-failing) test spawn first so its status write can't
+ * clobber the seeded status.
  */
 export async function seedSandboxAuth(
   stub: DurableObjectStub,
-  opts: { authToken: string; sandboxId: string }
+  opts: { authToken: string; sandboxId: string; status?: SandboxStatus }
 ): Promise<void> {
+  await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
   await runInDurableObject(stub, (instance: SessionDO) => {
     instance.ctx.storage.sql.exec(
-      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?",
+      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?",
       opts.authToken,
       tokenHash,
-      opts.sandboxId
+      opts.sandboxId,
+      opts.status ?? "ready"
     );
   });
 }
 
 /**
- * Seed auth_token_hash and modal_sandbox_id on the sandbox row.
+ * Seed a sandbox with auth_token_hash and modal_sandbox_id, in the given
+ * lifecycle status (default: the "ready" steady state). Waits out the
+ * (always-failing) test spawn first so its status write can't clobber the
+ * seeded status.
  */
 export async function seedSandboxAuthHash(
   stub: DurableObjectStub,
-  opts: { authToken: string; sandboxId: string }
+  opts: { authToken: string; sandboxId: string; status?: SandboxStatus }
 ): Promise<void> {
+  await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
   await runInDurableObject(stub, (instance: SessionDO) => {
     instance.ctx.storage.sql.exec(
-      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?",
+      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?",
       tokenHash,
-      opts.sandboxId
+      opts.sandboxId,
+      opts.status ?? "ready"
     );
   });
 }

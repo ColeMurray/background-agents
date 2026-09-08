@@ -1,6 +1,8 @@
 import type {
   AnalyticsBreakdownEntry,
   AnalyticsDays,
+  AnalyticsPullRequestFunnel,
+  AnalyticsPullRequestsResponse,
   AnalyticsTimeseriesResponse,
 } from "@open-inspect/shared";
 
@@ -82,6 +84,51 @@ export function getCompletionRate(entry: AnalyticsBreakdownEntry): number {
 
 export function formatCompletionRate(entry: AnalyticsBreakdownEntry): string {
   return `${Math.round(getCompletionRate(entry) * 100)}%`;
+}
+
+/**
+ * Merged ÷ resolved (merged + closed-without-merge). PR-scoped by design:
+ * still-open PRs are not in the denominator (they haven't failed, they just
+ * haven't resolved), and sessions never are. Null when nothing has resolved.
+ */
+export function getPullRequestAcceptanceRate(
+  outcomes: Pick<AnalyticsPullRequestFunnel, "merged" | "closed">
+): number | null {
+  const resolved = outcomes.merged + outcomes.closed;
+  return resolved > 0 ? outcomes.merged / resolved : null;
+}
+
+export function formatPullRequestAcceptanceRate(
+  outcomes: Pick<AnalyticsPullRequestFunnel, "merged" | "closed">
+): string {
+  const rate = getPullRequestAcceptanceRate(outcomes);
+  return rate === null ? "—" : `${Math.round(rate * 100)}%`;
+}
+
+/**
+ * Cost basis is the sessions that produced the cohort's PRs — never
+ * platform-wide cost, which would charge non-PR work (Q&A, debugging,
+ * research) against PR output. Null until something has merged.
+ */
+export function getCostPerMergedPullRequest(
+  pullRequests: AnalyticsPullRequestsResponse
+): number | null {
+  return pullRequests.funnel.merged > 0
+    ? pullRequests.prSessionCost / pullRequests.funnel.merged
+    : null;
+}
+
+/** Duration formatter for day-scale spans (merge cycle time, open-PR age). */
+export function formatAnalyticsLongDuration(durationMs: number): string {
+  // Round to whole hours before splitting so the remainder can never render
+  // as an invalid "2d 24h" — 2d 23h 45m carries into 3d.
+  const totalHours = Math.round(durationMs / 3_600_000);
+  if (totalHours >= 48) {
+    const days = Math.floor(totalHours / 24);
+    const hours = totalHours % 24;
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  return formatAnalyticsDuration(durationMs);
 }
 
 const UNKNOWN_SENTINEL = "__unknown__";

@@ -2,7 +2,8 @@
 {
   "name": "open-inspect-control-plane-test",
   "main": "src/index.ts",
-  "compatibility_date": "2024-12-30",
+  "compatibility_date": "2024-09-23",
+  "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [
       { "name": "SESSION", "class_name": "SessionDO" },

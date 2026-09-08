@@ -36,7 +36,7 @@ function buildFailureEnvelope(reason, message, retryAfter) {
   const detail = message ? `${guidance} (${message})` : guidance;
   const envelope = { ok: false, reason, agentMessage: detail };
   if (typeof retryAfter === "number") {
-    envelope.retryAfter = retryAfter;
+    envelope.retryAfterSeconds = retryAfter;
   }
   return JSON.stringify(envelope);
 }

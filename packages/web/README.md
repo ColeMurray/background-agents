@@ -4,7 +4,7 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 
 ## Features
 
-- GitHub OAuth authentication
+- GitHub and optional Google authentication through the control plane
 - Session dashboard with list view
 - Real-time streaming via WebSocket
 - Message timeline with tool calls
@@ -25,7 +25,7 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 │  └──────────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                      API Routes                           │   │
-│  │  /api/auth/[...nextauth] - GitHub OAuth                  │   │
+│  │  /api/auth/[...auth]     - Signed auth proxy             │   │
 │  │  /api/sessions           - Session CRUD                  │   │
 │  │  /api/repos              - Repository list               │   │
 │  │  /api/repos/:owner/:name/secrets - Secrets CRUD          │   │
@@ -73,28 +73,18 @@ Required permissions for the GitHub App:
 Create `.env.local`:
 
 ```bash
-# GitHub App (for user authentication)
-GITHUB_CLIENT_ID=your_github_app_client_id
-GITHUB_CLIENT_SECRET=your_github_app_client_secret
-
-# NextAuth
-NEXTAUTH_URL=http://localhost:3000
-NEXTAUTH_SECRET=your_random_secret  # Generate: openssl rand -base64 32
-
-# Access Control
-ALLOWED_USERS=username1,username2          # Comma-separated GitHub usernames
-ALLOWED_EMAIL_DOMAINS=example.com,corp.io  # Comma-separated email domains
-UNSAFE_ALLOW_ALL_USERS=false               # Set true to explicitly allow all users when both lists are empty
-
 # Control Plane
 CONTROL_PLANE_URL=http://localhost:8787
 NEXT_PUBLIC_WS_URL=ws://localhost:8787
+SERVICE_AUTH_SECRET=your_web_service_sig1_secret
+
+# Match the control plane's enabled providers
+NEXT_PUBLIC_GOOGLE_ENABLED=false
 ```
 
-> **Access Control**: If both `ALLOWED_USERS` and `ALLOWED_EMAIL_DOMAINS` are empty, sign-in is
-> denied unless `UNSAFE_ALLOW_ALL_USERS=true`. For Terraform-managed production deploys, Terraform
-> also fails validation unless you set at least one allowlist or explicitly opt in with
-> `unsafe_allow_all_users = true`.
+The web app is a framework-free BFF. It signs requests with `SERVICE_AUTH_SECRET`, forwards only
+Better Auth's opaque session cookie, and does not hold OAuth provider credentials or admission
+policy. Configure those on the control plane through Terraform.
 
 ### Development
 

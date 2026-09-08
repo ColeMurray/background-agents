@@ -20,9 +20,10 @@ module "github_bot_worker" {
   count  = var.enable_github_bot ? 1 : 0
   source = "../../modules/cloudflare-worker"
 
-  account_id  = var.cloudflare_account_id
-  worker_name = "open-inspect-github-bot-${local.name_suffix}"
-  script_path = local.github_bot_script_path
+  account_id       = var.cloudflare_account_id
+  worker_name      = "open-inspect-github-bot-${local.name_suffix}"
+  worker_subdomain = var.cloudflare_worker_subdomain
+  script_path      = local.github_bot_script_path
 
   kv_namespaces = [
     {
@@ -52,7 +53,7 @@ module "github_bot_worker" {
     { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
     { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
     { name = "GITHUB_WEBHOOK_SECRET", value = var.github_webhook_secret },
-    { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
+    { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_github_bot.result },
   ]
 
   compatibility_date  = "2024-09-23"

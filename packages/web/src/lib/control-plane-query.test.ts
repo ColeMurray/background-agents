@@ -33,10 +33,14 @@ describe("buildControlPlanePath", () => {
   });
 
   it("supports route-specific allowlists", () => {
-    const searchParams = new URLSearchParams("excludeStatus=archived&status=running&debug=true");
+    const searchParams = new URLSearchParams(
+      "excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&status=running&debug=true"
+    );
 
     expect(
       buildControlPlanePath("/sessions", searchParams, SESSION_CONTROL_PLANE_QUERY_PARAMS)
-    ).toBe("/sessions?status=running&excludeStatus=archived");
+    ).toBe(
+      "/sessions?status=running&excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
   });
 });

@@ -2,15 +2,19 @@
  * OpenAI OAuth token refresh utilities.
  */
 
+import { z } from "zod";
+
 const OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 
-export interface OpenAITokenResponse {
-  id_token: string;
-  access_token: string;
-  refresh_token: string;
-  expires_in?: number;
-}
+export const openAITokenResponseSchema = z.object({
+  id_token: z.string(),
+  access_token: z.string(),
+  refresh_token: z.string(),
+  expires_in: z.number().optional(),
+});
+
+export type OpenAITokenResponse = z.infer<typeof openAITokenResponseSchema>;
 
 export class OpenAITokenRefreshError extends Error {
   constructor(
@@ -47,7 +51,18 @@ export async function refreshOpenAIToken(refreshToken: string): Promise<OpenAITo
     );
   }
 
-  return response.json() as Promise<OpenAITokenResponse>;
+  const body = await response.text();
+  const parsed: unknown = JSON.parse(body);
+  const tokenResult = openAITokenResponseSchema.safeParse(parsed);
+  if (!tokenResult.success) {
+    throw new OpenAITokenRefreshError(
+      `OpenAI token refresh returned invalid response: ${response.status}`,
+      response.status,
+      body
+    );
+  }
+
+  return tokenResult.data;
 }
 
 /**

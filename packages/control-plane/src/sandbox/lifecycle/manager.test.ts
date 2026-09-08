@@ -14,9 +14,12 @@ import {
   type AlarmScheduler,
   type IdGenerator,
   type SandboxLifecycleConfig,
-  type RepoImageLookup,
+  type McpServerLookup,
+  type ImageBuildLookup,
   type SlackAgentNotifyLookup,
 } from "./manager";
+import type { ImageBuildSpawnRow } from "./image-selection";
+import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import {
   SandboxProviderError,
   type SandboxProvider,
@@ -26,8 +29,11 @@ import {
   type RestoreResult,
   type ResumeConfig,
   type ResumeResult,
+  type SessionRepositoryInfo,
   type SnapshotConfig,
   type SnapshotResult,
+  type StopConfig,
+  type StopResult,
 } from "../provider";
 import type { SandboxRow, SessionRow } from "../../session/types";
 import type { SandboxStatus } from "../../types";
@@ -56,6 +62,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    environment_id: null,
     created_at: Date.now() - 60000,
     updated_at: Date.now(),
     ...overrides,
@@ -96,7 +103,8 @@ function createMockStorage(
   sandbox:
     | (SandboxRow & { spawn_failure_count: number; last_spawn_failure: number })
     | null = createMockSandbox(),
-  userEnvVars: Record<string, string> | undefined = undefined
+  userEnvVars: Record<string, string> | undefined = undefined,
+  sessionRepositories: SessionRepositoryInfo[] = []
 ): SandboxStorage & { calls: string[] } {
   const calls: string[] = [];
 
@@ -113,6 +121,10 @@ function createMockStorage(
     getSession: vi.fn(() => {
       calls.push("getSession");
       return session;
+    }),
+    getSessionRepositories: vi.fn(() => {
+      calls.push("getSessionRepositories");
+      return sessionRepositories;
     }),
     getUserEnvVars: vi.fn(async () => {
       calls.push("getUserEnvVars");
@@ -178,6 +190,12 @@ function createMockStorage(
       if (sandbox) {
         sandbox.code_server_url = null;
         sandbox.code_server_password = null;
+      }
+    }),
+    clearSandboxCodeServerUrl: vi.fn(() => {
+      calls.push("clearSandboxCodeServerUrl");
+      if (sandbox) {
+        sandbox.code_server_url = null;
       }
     }),
     updateSandboxTunnelUrls: vi.fn(async (urls: Record<string, string>) => {
@@ -253,12 +271,19 @@ function createMockIdGenerator(): IdGenerator {
   };
 }
 
+function parseStructuredLogs(spy: ReturnType<typeof vi.spyOn>): Array<Record<string, unknown>> {
+  return spy.mock.calls.map(
+    (call: unknown[]) => JSON.parse(String(call[0])) as Record<string, unknown>
+  );
+}
+
 function createMockProvider(
   overrides: Partial<{
     createSandbox: (config: CreateSandboxConfig) => Promise<CreateSandboxResult>;
     restoreFromSnapshot: (config: RestoreConfig) => Promise<RestoreResult>;
     resumeSandbox: (config: ResumeConfig) => Promise<ResumeResult>;
     takeSnapshot: (config: SnapshotConfig) => Promise<SnapshotResult>;
+    stopSandbox: (config: StopConfig) => Promise<StopResult>;
     capabilities: Partial<SandboxProvider["capabilities"]>;
   }> = {}
 ): SandboxProvider {
@@ -267,7 +292,6 @@ function createMockProvider(
     capabilities: {
       supportsSnapshots: true,
       supportsRestore: true,
-      supportsWarm: true,
       ...overrides.capabilities,
     },
     createSandbox:
@@ -293,6 +317,9 @@ function createMockProvider(
   };
   if (overrides.resumeSandbox) {
     provider.resumeSandbox = overrides.resumeSandbox;
+  }
+  if (overrides.stopSandbox) {
+    provider.stopSandbox = overrides.stopSandbox;
   }
   return provider;
 }
@@ -336,6 +363,105 @@ describe("SandboxLifecycleManager", () => {
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_status")
       ).toBe(true);
+    });
+
+    it("logs one terminal sandbox.spawn event for success", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      await manager.spawnSandbox();
+
+      const spawnLogs = parseStructuredLogs(logSpy).filter(
+        (entry) => entry.msg === "Sandbox spawn completed" && entry.event === "sandbox.spawn"
+      );
+      logSpy.mockRestore();
+
+      expect(spawnLogs).toHaveLength(1);
+      expect(spawnLogs[0]).toEqual(
+        expect.objectContaining({
+          outcome: "success",
+          sandbox_id: expect.any(String),
+          provider_object_id: "provider-obj-123",
+          duration_ms: expect.any(Number),
+        })
+      );
+    });
+
+    it("logs one terminal sandbox.spawn event for failure", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider({
+        createSandbox: vi.fn(async () => {
+          throw new Error("spawn exploded");
+        }),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      await manager.spawnSandbox();
+
+      const errorLogs = parseStructuredLogs(errorSpy);
+      errorSpy.mockRestore();
+
+      expect(errorLogs).toContainEqual(
+        expect.objectContaining({
+          msg: "Sandbox spawn completed",
+          event: "sandbox.spawn",
+          outcome: "error",
+          duration_ms: expect.any(Number),
+        })
+      );
+    });
+
+    it("logs only an error terminal event when spawn success-side effects fail", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      vi.mocked(storage.updateSandboxModalObjectId).mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+      const infoSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      await manager.spawnSandbox();
+
+      const terminalLogs = [
+        ...parseStructuredLogs(infoSpy),
+        ...parseStructuredLogs(errorSpy),
+      ].filter((entry) => entry.event === "sandbox.spawn");
+      infoSpy.mockRestore();
+      errorSpy.mockRestore();
+
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0]).toEqual(expect.objectContaining({ outcome: "error" }));
     });
 
     it("broadcasts sandbox_dashboard_url after spawn when builder is configured", async () => {
@@ -444,6 +570,64 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ userEnvVars }));
     });
 
+    it("spawns no-repository sessions without repo-only sandbox features", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(
+        createMockSession({
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+          code_server_enabled: 1,
+        }),
+        sandbox
+      );
+      const provider = createMockProvider();
+      const mcpServerLookup = {
+        getDecryptedForSession: vi.fn(async () => []),
+      };
+      const slackAgentNotifyLookup: SlackAgentNotifyLookup = {
+        isEnabledForRepo: vi.fn(async () => true),
+      };
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => null),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        {
+          ...createTestConfig(),
+          mcpServerLookup,
+          slackAgentNotifyLookup,
+        },
+        {},
+        imageBuildLookup
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoOwner: null,
+          repoName: null,
+          branch: null,
+          codeServerEnabled: true,
+          agentSlackNotifyEnabled: true,
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
+        })
+      );
+      expect(mcpServerLookup.getDecryptedForSession).toHaveBeenCalledWith([]);
+      expect(slackAgentNotifyLookup.isEnabledForRepo).toHaveBeenCalledWith(null, null);
+      expect(imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
+    });
+
     it("respects circuit breaker blocking", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
@@ -527,6 +711,122 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.restoreFromSnapshot).toHaveBeenCalled();
       expect(provider.createSandbox).not.toHaveBeenCalled();
+    });
+
+    it("logs one terminal sandbox.restore event for success", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+      });
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        createMockStorage(createMockSession(), sandbox),
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      await manager.spawnSandbox();
+
+      const infoLogs = parseStructuredLogs(logSpy);
+      logSpy.mockRestore();
+
+      expect(infoLogs).toContainEqual(
+        expect.objectContaining({
+          msg: "Sandbox restore completed",
+          event: "sandbox.restore",
+          outcome: "success",
+          snapshot_image_id: "img-abc123",
+          duration_ms: expect.any(Number),
+        })
+      );
+    });
+
+    it("logs one terminal sandbox.restore event for failure", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+      });
+      const provider = createMockProvider({
+        restoreFromSnapshot: vi.fn(
+          async (): Promise<RestoreResult> => ({
+            success: false,
+            error: "Snapshot not found",
+          })
+        ),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(createMockSession(), sandbox),
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      await manager.spawnSandbox();
+
+      const errorLogs = parseStructuredLogs(errorSpy);
+      errorSpy.mockRestore();
+
+      expect(errorLogs).toContainEqual(
+        expect.objectContaining({
+          msg: "Sandbox restore completed",
+          event: "sandbox.restore",
+          outcome: "error",
+          snapshot_image_id: "img-abc123",
+          error: "Snapshot not found",
+          duration_ms: expect.any(Number),
+        })
+      );
+    });
+
+    it("logs only an error terminal event when restore success-side effects fail", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      vi.mocked(storage.updateSandboxModalObjectId).mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+      const provider = createMockProvider({
+        restoreFromSnapshot: vi.fn(async (config: RestoreConfig) => ({
+          success: true,
+          sandboxId: config.sandboxId,
+          providerObjectId: "restored-object",
+        })),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+      const infoSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      await manager.spawnSandbox();
+
+      const terminalLogs = [
+        ...parseStructuredLogs(infoSpy),
+        ...parseStructuredLogs(errorSpy),
+      ].filter((entry) => entry.event === "sandbox.restore");
+      infoSpy.mockRestore();
+      errorSpy.mockRestore();
+
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0]).toEqual(expect.objectContaining({ outcome: "error" }));
     });
 
     it("schedules connecting timeout alarm after restore", async () => {
@@ -957,7 +1257,7 @@ describe("SandboxLifecycleManager", () => {
       const broadcaster = createMockBroadcaster();
       const provider: SandboxProvider = {
         name: "no-snapshot",
-        capabilities: { supportsSnapshots: false, supportsRestore: false, supportsWarm: false },
+        capabilities: { supportsSnapshots: false, supportsRestore: false },
         createSandbox: vi.fn(),
         // No takeSnapshot method
       };
@@ -1179,6 +1479,125 @@ describe("SandboxLifecycleManager", () => {
       await manager.handleAlarm();
 
       expect(provider.takeSnapshot).toHaveBeenCalled();
+    });
+
+    it("snapshots and explicitly stops non-resumable providers on inactivity timeout", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000,
+        last_activity: now - 11 * 60 * 1000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const wsManager = createMockWebSocketManager(false, 0);
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: false },
+        stopSandbox,
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+
+      expect(provider.takeSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "modal-obj-123",
+          reason: "inactivity_timeout",
+        })
+      );
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "modal-obj-123",
+          reason: "inactivity_timeout",
+        })
+      );
+      expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
+      expect(storage.calls).toContain("clearSandboxCodeServer");
+    });
+
+    it("does not explicitly stop providers when the capability is disabled", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000,
+        last_activity: now - 11 * 60 * 1000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const wsManager = createMockWebSocketManager(false, 0);
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: false, supportsPersistentResume: false },
+        stopSandbox,
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+
+      expect(provider.takeSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "modal-obj-123",
+          reason: "inactivity_timeout",
+        })
+      );
+      expect(stopSandbox).not.toHaveBeenCalled();
+      expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
+    });
+
+    it("stops resumable provider-managed sandboxes without snapshotting", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000,
+        last_activity: now - 11 * 60 * 1000,
+        code_server_url: "https://code.test",
+        code_server_password: "encrypted-password",
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+        stopSandbox,
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false, 0),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+
+      expect(provider.takeSnapshot).not.toHaveBeenCalled();
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "modal-obj-123",
+          reason: "inactivity_timeout",
+        })
+      );
+      expect(storage.calls).toContain("clearSandboxCodeServerUrl");
+      expect(storage.calls).not.toContain("clearSandboxCodeServer");
     });
 
     it("calls onSandboxTerminating callback on heartbeat stale", async () => {
@@ -1493,119 +1912,40 @@ describe("SandboxLifecycleManager", () => {
     });
   });
 
-  describe("repo image lookup in doSpawn", () => {
-    it("passes repoImageId when lookup returns a ready image", async () => {
-      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
-      const storage = createMockStorage(createMockSession(), sandbox);
-      const broadcaster = createMockBroadcaster();
-      const provider = createMockProvider();
+  describe("repo-scope image lookup in doSpawn", () => {
+    const REPO_MEMBER: SessionRepositoryInfo[] = [
+      { repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" },
+    ];
 
-      const repoImageLookup: RepoImageLookup = {
-        getLatestReady: vi.fn(async () => ({
-          provider_image_id: "img-abc123",
-          base_sha: "sha-def456",
-        })),
+    async function repoImageRow(
+      overrides: Partial<ImageBuildSpawnRow> = {}
+    ): Promise<ImageBuildSpawnRow> {
+      return {
+        id: "imgb-repo-1",
+        provider_image_id: "img-abc123",
+        repositories_fingerprint: await computeRepositoriesFingerprint(REPO_MEMBER),
+        repository_shas: JSON.stringify([
+          { repoOwner: "testowner", repoName: "testrepo", baseSha: "sha-def456" },
+        ]),
+        runtime_version: "v53-list-native-runtime",
+        ...overrides,
       };
+    }
 
-      const manager = new SandboxLifecycleManager(
-        provider,
-        storage,
-        broadcaster,
-        createMockWebSocketManager(false),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig(),
-        {},
-        repoImageLookup
-      );
-
-      await manager.spawnSandbox();
-
-      expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repoImageId: "img-abc123",
-          repoImageSha: "sha-def456",
-        })
-      );
-    });
-
-    it("passes null repoImageId when no ready image exists", async () => {
+    function createRepoSessionManager(overrides?: {
+      provider?: SandboxProvider;
+      imageBuildLookup?: ImageBuildLookup;
+      session?: SessionRow;
+      sessionRepositories?: SessionRepositoryInfo[];
+    }) {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
-      const storage = createMockStorage(createMockSession(), sandbox);
-      const broadcaster = createMockBroadcaster();
-      const provider = createMockProvider();
-
-      const repoImageLookup: RepoImageLookup = {
-        getLatestReady: vi.fn(async () => null),
-      };
-
-      const manager = new SandboxLifecycleManager(
-        provider,
-        storage,
-        broadcaster,
-        createMockWebSocketManager(false),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig(),
-        {},
-        repoImageLookup
+      const storage = createMockStorage(
+        overrides?.session ?? createMockSession(),
+        sandbox,
+        undefined,
+        overrides?.sessionRepositories ?? REPO_MEMBER
       );
-
-      await manager.spawnSandbox();
-
-      expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repoImageId: null,
-          repoImageSha: null,
-        })
-      );
-    });
-
-    it("falls back gracefully when repo image lookup fails", async () => {
-      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
-      const storage = createMockStorage(createMockSession(), sandbox);
-      const broadcaster = createMockBroadcaster();
-      const provider = createMockProvider();
-
-      const repoImageLookup: RepoImageLookup = {
-        getLatestReady: vi.fn(async () => {
-          throw new Error("D1 unavailable");
-        }),
-      };
-
-      const manager = new SandboxLifecycleManager(
-        provider,
-        storage,
-        broadcaster,
-        createMockWebSocketManager(false),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig(),
-        {},
-        repoImageLookup
-      );
-
-      await manager.spawnSandbox();
-
-      // Should still spawn, just without repo image
-      expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repoImageId: null,
-          repoImageSha: null,
-        })
-      );
-    });
-
-    it("passes session base_branch to repo image lookup", async () => {
-      const session = createMockSession({ base_branch: "feature/xyz" });
-      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
-      const storage = createMockStorage(session, sandbox);
-      const provider = createMockProvider();
-
-      const repoImageLookup: RepoImageLookup = {
-        getLatestReady: vi.fn(async () => null),
-      };
-
+      const provider = overrides?.provider ?? createMockProvider();
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
@@ -1615,42 +1955,523 @@ describe("SandboxLifecycleManager", () => {
         createMockIdGenerator(),
         createTestConfig(),
         {},
-        repoImageLookup
+        overrides?.imageBuildLookup
       );
+      return { manager, provider, storage };
+    }
+
+    it("boots from the repo image when the one-element fingerprint matches", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider } = createRepoSessionManager({ imageBuildLookup });
 
       await manager.spawnSandbox();
 
-      expect(repoImageLookup.getLatestReady).toHaveBeenCalledWith(
-        "testowner",
-        "testrepo",
-        "feature/xyz"
+      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith({
+        kind: "repo",
+        id: "testowner/testrepo",
+      });
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prebuiltImageId: "img-abc123",
+          prebuiltImageSha: "sha-def456",
+        })
       );
     });
 
-    it("passes null repoImageId when no lookup is configured", async () => {
-      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
-      const storage = createMockStorage(createMockSession(), sandbox);
-      const broadcaster = createMockBroadcaster();
-      const provider = createMockProvider();
+    it("misses to base on a non-default-branch session (fingerprint reproduces the branch filter)", async () => {
+      // The image was built on the default branch; a session on any other
+      // branch computes a different one-element fingerprint and must not
+      // boot from it.
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider } = createRepoSessionManager({
+        imageBuildLookup,
+        session: createMockSession({ base_branch: "feature/xyz" }),
+        sessionRepositories: [
+          { repoOwner: "testowner", repoName: "testrepo", baseBranch: "feature/xyz" },
+        ],
+      });
 
-      // No repoImageLookup provided
-      const manager = new SandboxLifecycleManager(
-        provider,
-        storage,
-        broadcaster,
-        createMockWebSocketManager(false),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig()
+      await manager.spawnSandbox();
+
+      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith({
+        kind: "repo",
+        id: "testowner/testrepo",
+      });
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
+    });
+
+    it("rejects a repo image below the runtime floor at selection", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow({ runtime_version: "v52-legacy" })),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider } = createRepoSessionManager({ imageBuildLookup });
 
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+    });
+
+    it("passes null prebuiltImageId when no ready image exists", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => null),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider } = createRepoSessionManager({ imageBuildLookup });
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+    });
+
+    it("falls back gracefully when the image lookup fails", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => {
+          throw new Error("D1 unavailable");
+        }),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider } = createRepoSessionManager({ imageBuildLookup });
+
+      await manager.spawnSandbox();
+
+      // Should still spawn, just without a prebuilt image
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+    });
+
+    it("passes null prebuiltImageId when no lookup is configured", async () => {
+      const { manager, provider } = createRepoSessionManager();
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+    });
+
+    it("marks the repo image restore-failed and retries from base when the provider rejects it", async () => {
+      // Deliberate behavior change: the old repo path failed the spawn
+      // outright; repo images now take the same restore fallback the
+      // environment side has.
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const createSandbox = vi
+        .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
+        .mockRejectedValueOnce(new Error("image expired"))
+        .mockImplementation(async (config) => ({
+          sandboxId: config.sandboxId,
+          providerObjectId: "provider-obj-123",
+          status: "connecting",
+          createdAt: Date.now(),
+        }));
+      const { manager, storage } = createRepoSessionManager({
+        imageBuildLookup,
+        provider: createMockProvider({ createSandbox }),
+      });
+
+      await manager.spawnSandbox();
+
+      expect(imageBuildLookup.markRestoreFailed).toHaveBeenCalledWith(
+        "imgb-repo-1",
+        expect.stringContaining("image expired")
+      );
+      expect(createSandbox).toHaveBeenCalledTimes(2);
+      expect(createSandbox.mock.calls[1][0]).toEqual(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+      // The retry rotates the spawn identity, same as the environment path.
+      const [firstAttempt, retryAttempt] = createSandbox.mock.calls.map(([config]) => config);
+      expect(retryAttempt.sandboxAuthToken).not.toBe(firstAttempt.sandboxAuthToken);
+      expect(retryAttempt.sandboxId).not.toBe(firstAttempt.sandboxId);
+      expect(storage.calls).toContain("updateSandboxStatus:connecting");
+      expect(storage.calls).not.toContain("updateSandboxStatus:failed");
+    });
+  });
+
+  describe("environment image lookup in doSpawn", () => {
+    const ENV_MEMBERS: SessionRepositoryInfo[] = [
+      { repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" },
+      { repoOwner: "testowner", repoName: "backend", baseBranch: "develop" },
+    ];
+
+    async function envImageRow(
+      overrides: Partial<ImageBuildSpawnRow> = {}
+    ): Promise<ImageBuildSpawnRow> {
+      return {
+        id: "imgb-1",
+        provider_image_id: "im-env-123",
+        repositories_fingerprint: await computeRepositoriesFingerprint(ENV_MEMBERS),
+        repository_shas: JSON.stringify([
+          { repoOwner: "testowner", repoName: "testrepo", baseSha: "sha-primary" },
+          { repoOwner: "testowner", repoName: "backend", baseSha: "sha-backend" },
+        ]),
+        runtime_version: "v53-list-native-runtime",
+        ...overrides,
+      };
+    }
+
+    function createEnvironmentSessionManager(overrides?: {
+      provider?: SandboxProvider;
+      environmentImageLookup?: ImageBuildLookup;
+      sessionRepositories?: SessionRepositoryInfo[];
+    }) {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(
+        createMockSession({ environment_id: "env-1" }),
+        sandbox,
+        undefined,
+        overrides?.sessionRepositories ?? ENV_MEMBERS
+      );
+      const provider = overrides?.provider ?? createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        {},
+        overrides?.environmentImageLookup
+      );
+      return { manager, provider, storage };
+    }
+
+    it("boots from the environment image when it matches the session's snapshot", async () => {
+      const environmentImageLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => envImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider } = createEnvironmentSessionManager({ environmentImageLookup });
+
+      await manager.spawnSandbox();
+
+      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith({
+        kind: "environment",
+        id: "env-1",
+      });
+      expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
-          repoImageId: null,
-          repoImageSha: null,
+          prebuiltImageId: "im-env-123",
+          prebuiltImageSha: "sha-primary",
+          repositories: ENV_MEMBERS,
         })
+      );
+    });
+
+    it("boots from base when the image does not match the session's own snapshot", async () => {
+      const environmentImageLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () =>
+          envImageRow({
+            repositories_fingerprint: await computeRepositoriesFingerprint([
+              ...ENV_MEMBERS,
+              { repoOwner: "testowner", repoName: "docs", baseBranch: "main" },
+            ]),
+          })
+        ),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider } = createEnvironmentSessionManager({ environmentImageLookup });
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+    });
+
+    it("never consults the repo scope for environment sessions", async () => {
+      // Even a single-repo environment session must not fall back to that
+      // repository's repo image: it bakes the repo's setup and secrets, not
+      // the environment's.
+      const environmentImageLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => null),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider } = createEnvironmentSessionManager({
+        environmentImageLookup,
+        sessionRepositories: [ENV_MEMBERS[0]],
+      });
+
+      await manager.spawnSandbox();
+
+      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledTimes(1);
+      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith({
+        kind: "environment",
+        id: "env-1",
+      });
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+    });
+
+    it("falls back to base when the environment image lookup fails", async () => {
+      const environmentImageLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => {
+          throw new Error("D1 unavailable");
+        }),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider, storage } = createEnvironmentSessionManager({
+        environmentImageLookup,
+      });
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+      expect(storage.calls).toContain("updateSandboxStatus:connecting");
+    });
+
+    it("boots from base when no environment image lookup is bound", async () => {
+      const { manager, provider } = createEnvironmentSessionManager();
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+    });
+
+    it("marks the image restore-failed and retries from base when the provider rejects it", async () => {
+      const environmentImageLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => envImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const createSandbox = vi
+        .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
+        .mockRejectedValueOnce(new Error("image expired"))
+        .mockImplementation(async (config) => ({
+          sandboxId: config.sandboxId,
+          providerObjectId: "provider-obj-123",
+          status: "connecting",
+          createdAt: Date.now(),
+        }));
+      const { manager, storage } = createEnvironmentSessionManager({
+        environmentImageLookup,
+        provider: createMockProvider({ createSandbox }),
+      });
+
+      await manager.spawnSandbox();
+
+      expect(environmentImageLookup.markRestoreFailed).toHaveBeenCalledWith(
+        "imgb-1",
+        expect.stringContaining("image expired")
+      );
+      expect(createSandbox).toHaveBeenCalledTimes(2);
+      expect(createSandbox.mock.calls[1][0]).toEqual(
+        expect.objectContaining({
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
+          repositories: ENV_MEMBERS,
+        })
+      );
+      // The retry rotates the spawn identity: the failed attempt may have
+      // created an orphan sandbox provider-side, and it must not share
+      // credentials with the sandbox that actually boots.
+      const [firstAttempt, retryAttempt] = createSandbox.mock.calls.map(([config]) => config);
+      expect(retryAttempt.sandboxAuthToken).not.toBe(firstAttempt.sandboxAuthToken);
+      expect(retryAttempt.sandboxId).not.toBe(firstAttempt.sandboxId);
+      expect(vi.mocked(storage.updateSandboxForSpawn)).toHaveBeenCalledTimes(2);
+      expect(storage.calls).toContain("updateSandboxStatus:connecting");
+      expect(storage.calls).not.toContain("updateSandboxStatus:failed");
+    });
+
+    it("fails the spawn when the base-image retry also fails", async () => {
+      const environmentImageLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => envImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const createSandbox = vi
+        .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
+        .mockRejectedValue(new Error("quota exceeded"));
+      const { manager, storage } = createEnvironmentSessionManager({
+        environmentImageLookup,
+        provider: createMockProvider({ createSandbox }),
+      });
+
+      await manager.spawnSandbox();
+
+      expect(createSandbox).toHaveBeenCalledTimes(2);
+      expect(environmentImageLookup.markRestoreFailed).toHaveBeenCalledTimes(1);
+      expect(storage.calls).toContain("updateSandboxStatus:failed");
+    });
+
+    it("still retries from base when marking the row restore-failed fails", async () => {
+      const environmentImageLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => envImageRow()),
+        markRestoreFailed: vi.fn(async () => {
+          throw new Error("D1 unavailable");
+        }),
+      };
+      const createSandbox = vi
+        .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
+        .mockRejectedValueOnce(new Error("image expired"))
+        .mockImplementation(async (config) => ({
+          sandboxId: config.sandboxId,
+          providerObjectId: "provider-obj-123",
+          status: "connecting",
+          createdAt: Date.now(),
+        }));
+      const { manager, storage } = createEnvironmentSessionManager({
+        environmentImageLookup,
+        provider: createMockProvider({ createSandbox }),
+      });
+
+      await manager.spawnSandbox();
+
+      expect(createSandbox).toHaveBeenCalledTimes(2);
+      expect(storage.calls).toContain("updateSandboxStatus:connecting");
+    });
+  });
+
+  describe("multi-repo spawn", () => {
+    const MULTI_REPO_MEMBERS: SessionRepositoryInfo[] = [
+      { repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" },
+      { repoOwner: "testowner", repoName: "backend", baseBranch: "develop" },
+    ];
+
+    function createMultiRepoManager(overrides?: {
+      provider?: SandboxProvider;
+      imageBuildLookup?: ImageBuildLookup;
+      mcpServerLookup?: McpServerLookup;
+      sandbox?: ReturnType<typeof createMockSandbox>;
+      sessionRepositories?: SessionRepositoryInfo[];
+    }) {
+      const sandbox =
+        overrides?.sandbox ??
+        createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(
+        createMockSession(),
+        sandbox,
+        undefined,
+        overrides?.sessionRepositories ?? MULTI_REPO_MEMBERS
+      );
+      const provider = overrides?.provider ?? createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        { ...createTestConfig(), mcpServerLookup: overrides?.mcpServerLookup },
+        {},
+        overrides?.imageBuildLookup
+      );
+      return { manager, provider, storage };
+    }
+
+    it("passes the member list on fresh spawns", async () => {
+      const { manager, provider } = createMultiRepoManager();
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ repositories: MULTI_REPO_MEMBERS })
+      );
+    });
+
+    it("omits the member list for single-member sessions", async () => {
+      const { manager, provider } = createMultiRepoManager({
+        sessionRepositories: [MULTI_REPO_MEMBERS[0]],
+      });
+
+      await manager.spawnSandbox();
+
+      const config = vi.mocked(provider.createSandbox).mock.calls[0][0];
+      expect(config.repositories).toBeUndefined();
+    });
+
+    it("omits the member list for pre-list sessions with no member rows", async () => {
+      const { manager, provider } = createMultiRepoManager({ sessionRepositories: [] });
+
+      await manager.spawnSandbox();
+
+      const config = vi.mocked(provider.createSandbox).mock.calls[0][0];
+      expect(config.repositories).toBeUndefined();
+    });
+
+    it("never uses prebuilt images for multi-repo ad-hoc sessions", async () => {
+      // A repo image bakes a single checkout; only environment sessions
+      // (matched by their environment scope) can boot a multi-repo workspace
+      // from a prebuilt image.
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => null),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider } = createMultiRepoManager({ imageBuildLookup });
+
+      await manager.spawnSandbox();
+
+      expect(imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+    });
+
+    it("passes every member to the MCP server lookup", async () => {
+      const mcpServerLookup: McpServerLookup = {
+        getDecryptedForSession: vi.fn(async () => []),
+      };
+      const { manager } = createMultiRepoManager({ mcpServerLookup });
+
+      await manager.spawnSandbox();
+
+      expect(mcpServerLookup.getDecryptedForSession).toHaveBeenCalledWith([
+        { repoOwner: "testowner", repoName: "testrepo" },
+        { repoOwner: "testowner", repoName: "backend" },
+      ]);
+    });
+
+    it("passes storage-synthesized members to the MCP lookup on pre-list sessions", async () => {
+      // Pre-list sessions get their scalar member synthesized by the storage
+      // adapter (buildSessionRepositories owns the rule) — the manager passes
+      // the list through as-is.
+      const mcpServerLookup: McpServerLookup = {
+        getDecryptedForSession: vi.fn(async () => []),
+      };
+      const { manager } = createMultiRepoManager({
+        mcpServerLookup,
+        sessionRepositories: [{ repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" }],
+      });
+
+      await manager.spawnSandbox();
+
+      expect(mcpServerLookup.getDecryptedForSession).toHaveBeenCalledWith([
+        { repoOwner: "testowner", repoName: "testrepo" },
+      ]);
+    });
+
+    it("passes the member list on snapshot restores", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "snapshot-img-1",
+        created_at: Date.now() - 60000,
+      });
+      const { manager, provider } = createMultiRepoManager({ sandbox });
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ repositories: MULTI_REPO_MEMBERS })
       );
     });
   });
@@ -1731,6 +2552,60 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           sandboxSettings: { tunnelPorts: [3000] },
+        })
+      );
+    });
+
+    it("doSpawn() forwards valid cpuCores and memoryMib to provider config", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"cpuCores":2,"memoryMib":4096}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(session, sandbox);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSettings: { cpuCores: 2, memoryMib: 4096 },
+        })
+      );
+    });
+
+    it("doSpawn() drops non-positive cpuCores and memoryMib from stored settings", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"cpuCores":-2,"memoryMib":0}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(session, sandbox);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSettings: {},
         })
       );
     });
@@ -1878,10 +2753,11 @@ describe("SandboxLifecycleManager", () => {
       lookup?: SlackAgentNotifyLookup;
       provider?: ReturnType<typeof createMockProvider>;
       sandbox?: ReturnType<typeof createMockSandbox>;
+      session?: ReturnType<typeof createMockSession>;
     }) {
       const sandbox =
         opts.sandbox ?? createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
-      const storage = createMockStorage(createMockSession(), sandbox);
+      const storage = createMockStorage(opts.session ?? createMockSession(), sandbox);
       const provider = opts.provider ?? createMockProvider();
       const config = { ...createTestConfig(), slackAgentNotifyLookup: opts.lookup };
       const manager = new SandboxLifecycleManager(
@@ -1937,6 +2813,26 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
+    it("uses the global slack-notify lookup for no-repository sessions", async () => {
+      const lookup: SlackAgentNotifyLookup = {
+        isEnabledForRepo: vi.fn(async () => true),
+      };
+      const session = createMockSession({
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      });
+      const { manager, provider } = buildManagerWith({ lookup, session });
+
+      await manager.spawnSandbox();
+
+      expect(lookup.isEnabledForRepo).toHaveBeenCalledWith(null, null);
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ agentSlackNotifyEnabled: true })
+      );
+    });
+
     it("treats lookup failure as disabled and continues spawning", async () => {
       const lookup: SlackAgentNotifyLookup = {
         isEnabledForRepo: vi.fn(async () => {
@@ -1985,6 +2881,30 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({ agentSlackNotifyEnabled: false })
+      );
+    });
+
+    it("uses the global slack-notify lookup for no-repository snapshot restores", async () => {
+      const lookup: SlackAgentNotifyLookup = {
+        isEnabledForRepo: vi.fn(async () => true),
+      };
+      const session = createMockSession({
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      });
+      const { manager, provider } = buildManagerWith({
+        lookup,
+        session,
+        sandbox: snapshotSandbox(),
+      });
+
+      await manager.spawnSandbox();
+
+      expect(lookup.isEnabledForRepo).toHaveBeenCalledWith(null, null);
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ agentSlackNotifyEnabled: true })
       );
     });
 

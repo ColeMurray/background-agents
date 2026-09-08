@@ -1,12 +1,12 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { getServerAuthSession } from "@/lib/server-auth-session";
+import { buildAuthDisplay } from "@/lib/build-auth-identity";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { buildControlPlanePath } from "@/lib/control-plane-query";
 
 export async function GET(request: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
   const path = buildControlPlanePath("/automations", request.nextUrl.searchParams);
 
   try {
-    const response = await controlPlaneFetch(path);
+    const response = await controlPlaneUserFetch(path);
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -24,27 +24,37 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
     const body = await request.json();
-    const user = session.user;
-    const userId = user.id || user.email || "anonymous";
 
-    const response = await controlPlaneFetch("/automations", {
+    // Explicitly pick allowed fields from the client body. Creator identity
+    // and SCM provenance derive from authenticated control-plane state.
+    const user = session.user;
+
+    const automationBody = {
+      name: body.name,
+      instructions: body.instructions,
+      triggerType: body.triggerType,
+      scheduleCron: body.scheduleCron,
+      scheduleTz: body.scheduleTz,
+      model: body.model,
+      reasoningEffort: body.reasoningEffort,
+      eventType: body.eventType,
+      triggerConfig: body.triggerConfig,
+      sentryClientSecret: body.sentryClientSecret,
+      repositories: body.repositories,
+      environmentIds: body.environmentIds,
+      ...buildAuthDisplay(user),
+    };
+
+    const response = await controlPlaneUserFetch("/automations", {
       method: "POST",
-      body: JSON.stringify({
-        ...body,
-        userId,
-        scmUserId: user.id,
-        scmLogin: user.login,
-        scmName: user.name,
-        scmEmail: user.email,
-        scmAvatarUrl: user.image,
-      }),
+      body: JSON.stringify(automationBody),
     });
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });

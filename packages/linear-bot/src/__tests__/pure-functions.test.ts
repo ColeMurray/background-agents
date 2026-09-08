@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   extractModelFromLabels,
   resolveSessionModelSettings,
-  resolveStaticRepo,
+  resolveStaticTarget,
 } from "../model-resolution";
-import { isValidPayload, verifyCallbackSignature } from "../callbacks";
+import { isValidPayload } from "../callbacks";
 import { buildOAuthSuccessHtml } from "../index";
 import type { CompletionCallback } from "../types";
 
@@ -46,8 +46,24 @@ describe("extractModelFromLabels", () => {
     expect(extractModelFromLabels([{ name: "model:gpt-5.5" }])).toBe("openai/gpt-5.5");
   });
 
+  it.each(["gpt-5.2", "gpt-5.2-codex"])("returns null for unsupported model:%s label", (model) => {
+    expect(extractModelFromLabels([{ name: `model:${model}` }])).toBeNull();
+  });
+
+  it.each([
+    ["sol", "openai/gpt-5.6-sol"],
+    ["terra", "openai/gpt-5.6-terra"],
+    ["luna", "openai/gpt-5.6-luna"],
+  ])("returns GPT 5.6 %s for its model label", (variant, expected) => {
+    expect(extractModelFromLabels([{ name: `model:gpt-5.6-${variant}` }])).toBe(expected);
+  });
+
   it("returns Opus 4.7 for model:opus-4-7 label", () => {
     expect(extractModelFromLabels([{ name: "model:opus-4-7" }])).toBe("anthropic/claude-opus-4-7");
+  });
+
+  it("returns Opus 5 for model:opus-5 label", () => {
+    expect(extractModelFromLabels([{ name: "model:opus-5" }])).toBe("anthropic/claude-opus-5");
   });
 
   it("returns null for unknown model label", () => {
@@ -63,9 +79,9 @@ describe("extractModelFromLabels", () => {
   });
 });
 
-// ─── resolveStaticRepo ──────────────────────────────────────────────────────
+// ─── resolveStaticTarget ────────────────────────────────────────────────────
 
-describe("resolveStaticRepo", () => {
+describe("resolveStaticTarget", () => {
   const mapping = {
     "team-1": [
       { owner: "org", name: "frontend", label: "frontend" },
@@ -75,21 +91,44 @@ describe("resolveStaticRepo", () => {
   };
 
   it("matches by label", () => {
-    const result = resolveStaticRepo(mapping, "team-1", ["Frontend"]);
+    const result = resolveStaticTarget(mapping, "team-1", ["Frontend"]);
     expect(result).toEqual({ owner: "org", name: "frontend", label: "frontend" });
   });
 
   it("falls back to entry without label", () => {
-    const result = resolveStaticRepo(mapping, "team-1", ["unrelated"]);
+    const result = resolveStaticTarget(mapping, "team-1", ["unrelated"]);
     expect(result).toEqual({ owner: "org", name: "default-repo" });
   });
 
   it("returns null for empty mapping", () => {
-    expect(resolveStaticRepo({}, "team-1")).toBeNull();
+    expect(resolveStaticTarget({}, "team-1")).toBeNull();
   });
 
   it("returns null for unknown team", () => {
-    expect(resolveStaticRepo(mapping, "team-unknown")).toBeNull();
+    expect(resolveStaticTarget(mapping, "team-unknown")).toBeNull();
+  });
+
+  it("matches an environment entry by label", () => {
+    const mixed = {
+      "team-1": [
+        { environmentId: "env_fullstack", label: "fullstack" },
+        { owner: "org", name: "default-repo" },
+      ],
+    };
+    expect(resolveStaticTarget(mixed, "team-1", ["Fullstack"])).toEqual({
+      environmentId: "env_fullstack",
+      label: "fullstack",
+    });
+  });
+
+  it("falls back to a label-less environment entry", () => {
+    const mixed = {
+      "team-1": [
+        { owner: "org", name: "frontend", label: "frontend" },
+        { environmentId: "env_fullstack" },
+      ],
+    };
+    expect(resolveStaticTarget(mixed, "team-1", [])).toEqual({ environmentId: "env_fullstack" });
   });
 });
 
@@ -224,65 +263,5 @@ describe("isValidPayload", () => {
   it("rejects missing signature", () => {
     const { signature: _signature, ...rest } = validPayload;
     expect(isValidPayload(rest)).toBe(false);
-  });
-});
-
-// ─── verifyCallbackSignature ────────────────────────────────────────────────
-
-describe("verifyCallbackSignature", () => {
-  const secret = "test-secret-key";
-
-  async function signPayload(data: Record<string, unknown>): Promise<string> {
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      "raw",
-      encoder.encode(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"]
-    );
-    const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(JSON.stringify(data)));
-    return Array.from(new Uint8Array(sig))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-  }
-
-  it("returns true for valid signature", async () => {
-    const data = {
-      sessionId: "sess-1",
-      messageId: "msg-1",
-      success: true,
-      timestamp: 1234567890,
-      context: {
-        source: "linear" as const,
-        issueId: "issue-1",
-        issueIdentifier: "ENG-1",
-        issueUrl: "https://linear.app/issue/ENG-1",
-        repoFullName: "org/repo",
-        model: "claude-sonnet-4-5",
-      },
-    };
-    const signature = await signPayload(data);
-    const payload = { ...data, signature } as CompletionCallback;
-    expect(await verifyCallbackSignature(payload, secret)).toBe(true);
-  });
-
-  it("returns false for invalid signature", async () => {
-    const payload: CompletionCallback = {
-      sessionId: "sess-1",
-      messageId: "msg-1",
-      success: true,
-      timestamp: 1234567890,
-      signature: "invalid-hex-signature",
-      context: {
-        source: "linear",
-        issueId: "issue-1",
-        issueIdentifier: "ENG-1",
-        issueUrl: "https://linear.app/issue/ENG-1",
-        repoFullName: "org/repo",
-        model: "claude-sonnet-4-5",
-      },
-    };
-    expect(await verifyCallbackSignature(payload, secret)).toBe(false);
   });
 });

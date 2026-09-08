@@ -1,5 +1,6 @@
 "use client";
 
+import { useTheme } from "next-themes";
 import {
   useSyntaxHighlightPreferences,
   LIGHT_THEMES,
@@ -36,6 +37,7 @@ function ThemeRow({
         <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
       </div>
       <select
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="text-sm bg-background border border-border rounded px-2 py-1.5 text-foreground"
@@ -53,6 +55,8 @@ function ThemeRow({
 export function AppearanceSettings() {
   const { colorSchemeMode, preferredLightTheme, preferredDarkTheme, update } =
     useSyntaxHighlightPreferences();
+  const { theme, setTheme } = useTheme();
+  const selectedColorScheme = (theme ?? colorSchemeMode) as ColorSchemeMode;
 
   return (
     <div>
@@ -81,9 +85,12 @@ export function AppearanceSettings() {
               type="single"
               variant="outline"
               size="sm"
-              value={colorSchemeMode}
+              value={selectedColorScheme}
               onValueChange={(value) => {
-                if (value) update({ colorSchemeMode: value as ColorSchemeMode });
+                if (!value) return;
+                const nextMode = value as ColorSchemeMode;
+                setTheme(nextMode);
+                update({ colorSchemeMode: nextMode });
               }}
             >
               {COLOR_SCHEME_OPTIONS.map((opt) => {

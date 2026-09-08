@@ -35,8 +35,7 @@ function createTestHarness() {
 
   const deps: PresenceServiceDeps = {
     getAuthenticatedClients: vi.fn(() => clients.values()),
-    getClientInfo: vi.fn(() => null),
-    broadcast: vi.fn(),
+    messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(() => true) },
     send: vi.fn(() => true),
     getSandboxSocket: vi.fn(() => null),
     isSpawning: vi.fn(() => false),
@@ -208,7 +207,7 @@ describe("PresenceService", () => {
 
       harness.service.broadcastPresence();
 
-      expect(harness.deps.broadcast).toHaveBeenCalledWith({
+      expect(harness.deps.messenger.broadcast).toHaveBeenCalledWith({
         type: "presence_update",
         participants: [
           {
@@ -227,23 +226,12 @@ describe("PresenceService", () => {
   describe("updatePresence", () => {
     it("updates client status/lastSeen and broadcasts", () => {
       const client = createMockClient({ status: "active", lastSeen: 1000 });
-      vi.mocked(harness.deps.getClientInfo).mockReturnValue(client);
-      const ws = {} as WebSocket;
 
-      harness.service.updatePresence(ws, { status: "idle" });
+      harness.service.updatePresence(client, { status: "idle" });
 
       expect(client.status).toBe("idle");
       expect(client.lastSeen).toBeGreaterThan(1000);
-      expect(harness.deps.broadcast).toHaveBeenCalled();
-    });
-
-    it("skips when client not found (no broadcast)", () => {
-      vi.mocked(harness.deps.getClientInfo).mockReturnValue(null);
-      const ws = {} as WebSocket;
-
-      harness.service.updatePresence(ws, { status: "idle" });
-
-      expect(harness.deps.broadcast).not.toHaveBeenCalled();
+      expect(harness.deps.messenger.broadcast).toHaveBeenCalled();
     });
   });
 
@@ -254,7 +242,7 @@ describe("PresenceService", () => {
 
       await harness.service.handleTyping();
 
-      expect(harness.deps.broadcast).toHaveBeenCalledWith({ type: "sandbox_warming" });
+      expect(harness.deps.messenger.broadcast).toHaveBeenCalledWith({ type: "sandbox_warming" });
       expect(harness.deps.spawnSandbox).toHaveBeenCalled();
     });
 
@@ -263,7 +251,7 @@ describe("PresenceService", () => {
       vi.mocked(harness.deps.isSpawning).mockReturnValue(false);
 
       const callOrder: string[] = [];
-      vi.mocked(harness.deps.broadcast).mockImplementation(() => {
+      vi.mocked(harness.deps.messenger.broadcast).mockImplementation(() => {
         callOrder.push("broadcast");
       });
       vi.mocked(harness.deps.spawnSandbox).mockImplementation(async () => {
@@ -281,7 +269,7 @@ describe("PresenceService", () => {
 
       await harness.service.handleTyping();
 
-      expect(harness.deps.broadcast).not.toHaveBeenCalled();
+      expect(harness.deps.messenger.broadcast).not.toHaveBeenCalled();
       expect(harness.deps.spawnSandbox).not.toHaveBeenCalled();
     });
 
@@ -290,7 +278,7 @@ describe("PresenceService", () => {
 
       await harness.service.handleTyping();
 
-      expect(harness.deps.broadcast).not.toHaveBeenCalled();
+      expect(harness.deps.messenger.broadcast).not.toHaveBeenCalled();
       expect(harness.deps.spawnSandbox).not.toHaveBeenCalled();
     });
   });

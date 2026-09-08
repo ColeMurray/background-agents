@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMediaObjectKey,
+  buildSessionAttachmentObjectKey,
+  detectSessionAttachmentFileType,
   detectScreenshotFileType,
   detectVideoFileType,
+  isSupportedSessionAttachmentMimeType,
+  SESSION_ATTACHMENT_MAX_REQUEST_BYTES,
+  sessionAttachmentRequestExceedsLimit,
   isSupportedScreenshotMimeType,
   isSupportedVideoMimeType,
   parseDimensions,
@@ -42,6 +47,100 @@ describe("media helpers", () => {
       mimeType: "video/mp4",
       extension: "mp4",
     });
+  });
+
+  it("builds session attachment object keys", () => {
+    expect(buildSessionAttachmentObjectKey("session-1", "attachment-1")).toBe(
+      "sessions/session-1/attachments/attachment-1"
+    );
+  });
+
+  it("accepts image, pdf, and markdown session attachment mime types", () => {
+    for (const mimeType of [
+      "image/png",
+      "image/jpeg",
+      "image/webp",
+      "image/gif",
+      "application/pdf",
+      "text/markdown",
+    ]) {
+      expect(isSupportedSessionAttachmentMimeType(mimeType)).toBe(true);
+    }
+    expect(isSupportedSessionAttachmentMimeType("video/mp4")).toBe(false);
+    expect(isSupportedSessionAttachmentMimeType("video/quicktime")).toBe(false);
+    expect(isSupportedSessionAttachmentMimeType("video/webm")).toBe(false);
+    expect(isSupportedSessionAttachmentMimeType("text/plain")).toBe(false);
+    expect(isSupportedSessionAttachmentMimeType("image/svg+xml")).toBe(false);
+  });
+
+  it("rejects oversized session attachment requests before multipart buffering", () => {
+    expect(
+      sessionAttachmentRequestExceedsLimit(
+        new Request("https://example.test", {
+          headers: { "Content-Length": String(SESSION_ATTACHMENT_MAX_REQUEST_BYTES + 1) },
+        })
+      )
+    ).toBe(true);
+    expect(
+      sessionAttachmentRequestExceedsLimit(
+        new Request("https://example.test", {
+          headers: { "Content-Length": String(SESSION_ATTACHMENT_MAX_REQUEST_BYTES) },
+        })
+      )
+    ).toBe(false);
+  });
+
+  it("detects session attachment images including gif", () => {
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    expect(detectSessionAttachmentFileType(png)).toEqual({
+      mimeType: "image/png",
+      extension: "png",
+    });
+
+    const gif89 = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01]);
+    expect(detectSessionAttachmentFileType(gif89)).toEqual({
+      mimeType: "image/gif",
+      extension: "gif",
+    });
+
+    const gif87 = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x01]);
+    expect(detectSessionAttachmentFileType(gif87)?.mimeType).toBe("image/gif");
+  });
+
+  it("detects PDF attachments by the %PDF- header", () => {
+    const pdf = Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37]);
+    expect(detectSessionAttachmentFileType(pdf)).toEqual({
+      mimeType: "application/pdf",
+      extension: "pdf",
+    });
+  });
+
+  it("detects markdown/text attachments as text/markdown", () => {
+    const markdown = new TextEncoder().encode("# Title\n\nSome **notes** with é unicode.\n");
+    expect(detectSessionAttachmentFileType(markdown)).toEqual({
+      mimeType: "text/markdown",
+      extension: "md",
+    });
+  });
+
+  it("rejects video session attachments (binary, not valid text)", () => {
+    expect(detectSessionAttachmentFileType(MP4_SIGNATURE)).toBeNull();
+    const mov = Uint8Array.from([
+      0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20,
+    ]);
+    expect(detectSessionAttachmentFileType(mov)).toBeNull();
+
+    // EBML header followed by an invalid UTF-8 byte (0xff), as real webm bytes are.
+    const webm = Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0xff]);
+    expect(detectSessionAttachmentFileType(webm)).toBeNull();
+  });
+
+  it("rejects bytes that are neither a known binary format nor valid UTF-8 text", () => {
+    // Invalid UTF-8 (lone 0xff bytes) with no image/pdf signature.
+    expect(detectSessionAttachmentFileType(Uint8Array.from([0xff, 0xff, 0xff]))).toBeNull();
+    // Contains a NUL byte, so not treated as text.
+    expect(detectSessionAttachmentFileType(Uint8Array.from([0x68, 0x69, 0x00, 0x21]))).toBeNull();
+    expect(detectSessionAttachmentFileType(new Uint8Array(0))).toBeNull();
   });
 
   it("parses required video metadata", () => {

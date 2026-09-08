@@ -57,6 +57,7 @@ export function CodeServerSection({ url, password, sandboxStatus }: CodeServerSe
       )}
       {isActive && password && (
         <button
+          type="button"
           onClick={handleCopyPassword}
           className="p-1 hover:bg-muted transition-colors shrink-0"
           title={copiedPassword ? "Copied!" : "Copy password"}

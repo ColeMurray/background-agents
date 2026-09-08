@@ -113,7 +113,6 @@ describe("DaytonaSandboxProvider", () => {
       expect(provider.capabilities).toEqual({
         supportsSnapshots: false,
         supportsRestore: false,
-        supportsWarm: false,
         supportsPersistentResume: true,
         supportsExplicitStop: true,
       });
@@ -189,6 +188,23 @@ describe("DaytonaSandboxProvider", () => {
       expect(envVars.VCS_CLONE_TOKEN).toBeUndefined();
     });
 
+    it("maps bitbucket to the Bitbucket clone identity", async () => {
+      // Daytona historically collapsed bitbucket to the GitHub identity (a
+      // pre-Bitbucket-support drift that made bitbucket clones impossible);
+      // it now resolves the real Bitbucket identity like every provider.
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, {
+        scmProvider: "bitbucket",
+        codeServerPasswordSecret: "secret",
+      });
+
+      await provider.createSandbox(baseCreateConfig);
+
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
+      expect(envVars.VCS_HOST).toBe("bitbucket.org");
+      expect(envVars.VCS_CLONE_USERNAME).toBe("x-token-auth");
+    });
+
     it("includes branch in SESSION_CONFIG when provided", async () => {
       const client = createMockClient();
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
@@ -198,6 +214,22 @@ describe("DaytonaSandboxProvider", () => {
       const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
       const sessionConfig = JSON.parse(envVars.SESSION_CONFIG);
       expect(sessionConfig.branch).toBe("feature/test");
+    });
+
+    it("includes mcp_servers in SESSION_CONFIG when provided", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      await provider.createSandbox({
+        ...baseCreateConfig,
+        mcpServers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
+      });
+
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
+      const sessionConfig = JSON.parse(envVars.SESSION_CONFIG);
+      expect(sessionConfig.mcp_servers).toEqual([
+        { id: "mcp-1", name: "Tool", type: "local", enabled: true },
+      ]);
     });
 
     it("includes user env vars (repo secrets) with system vars taking precedence", async () => {
@@ -221,11 +253,35 @@ describe("DaytonaSandboxProvider", () => {
 
       await provider.createSandbox(baseCreateConfig);
 
-      const labels = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].labels;
+      const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      const labels = createCall.labels;
       expect(labels).toEqual({
         openinspect_framework: "open-inspect",
         openinspect_session_id: "session-123",
         openinspect_repo: "testowner/testrepo",
+        openinspect_expected_sandbox_id: "sandbox-456",
+      });
+    });
+
+    it("omits repo label for no-repository sandboxes", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      await provider.createSandbox({
+        ...baseCreateConfig,
+        repoOwner: null,
+        repoName: null,
+      });
+
+      const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(createCall.env).toMatchObject({
+        REPO_OWNER: "",
+        REPO_NAME: "",
+      });
+      const labels = createCall.labels;
+      expect(labels).toEqual({
+        openinspect_framework: "open-inspect",
+        openinspect_session_id: "session-123",
         openinspect_expected_sandbox_id: "sandbox-456",
       });
     });

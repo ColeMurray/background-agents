@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAnalyticsBreakdownPath,
+  buildAnalyticsPullRequestsPath,
   buildAnalyticsSummaryPath,
   buildAnalyticsTimeseriesPath,
 } from "./analytics-query";
@@ -22,5 +23,11 @@ describe("analytics query helpers", () => {
     const searchParams = new URLSearchParams("by=repo&days=90&extra=true");
 
     expect(buildAnalyticsBreakdownPath(searchParams)).toBe("/analytics/breakdown?days=90&by=repo");
+  });
+
+  it("forwards only days for pull requests", () => {
+    const searchParams = new URLSearchParams("days=7&by=repo&debug=true");
+
+    expect(buildAnalyticsPullRequestsPath(searchParams)).toBe("/analytics/pull-requests?days=7");
   });
 });

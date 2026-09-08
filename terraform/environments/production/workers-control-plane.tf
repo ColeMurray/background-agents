@@ -19,9 +19,10 @@ resource "null_resource" "control_plane_build" {
 module "control_plane_worker" {
   source = "../../modules/cloudflare-worker"
 
-  account_id  = var.cloudflare_account_id
-  worker_name = "open-inspect-control-plane-${local.name_suffix}"
-  script_path = local.control_plane_script_path
+  account_id       = var.cloudflare_account_id
+  worker_name      = "open-inspect-control-plane-${local.name_suffix}"
+  worker_subdomain = var.cloudflare_worker_subdomain
+  script_path      = local.control_plane_script_path
 
   kv_namespaces = [
     {
@@ -64,33 +65,89 @@ module "control_plane_worker" {
   plain_text_bindings = concat(
     [
       { name = "GITHUB_CLIENT_ID", value = var.github_client_id },
+      { name = "GOOGLE_CLIENT_ID", value = var.google_client_id },
       { name = "WEB_APP_URL", value = local.web_app_url },
+      { name = "ALLOWED_USERS", value = var.allowed_users },
+      { name = "ALLOWED_EMAIL_DOMAINS", value = var.allowed_email_domains },
+      { name = "ALLOWED_EMAILS", value = var.allowed_emails },
+      { name = "ALLOWED_GITHUB_ORGS", value = var.allowed_github_orgs },
+      { name = "UNSAFE_ALLOW_ALL_USERS", value = tostring(var.unsafe_allow_all_users) },
       { name = "WORKER_URL", value = local.control_plane_url },
       { name = "DEPLOYMENT_NAME", value = var.deployment_name },
       { name = "APP_NAME", value = var.app_name },
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
+      { name = "SANDBOX_INACTIVITY_TIMEOUT_MS", value = tostring(var.sandbox_inactivity_timeout_ms) },
     ],
-    local.use_modal_backend ? [{ name = "MODAL_WORKSPACE", value = var.modal_workspace }] : [],
+    local.use_modal_backend ? [
+      { name = "MODAL_WORKSPACE", value = var.modal_workspace },
+      { name = "MODAL_ENVIRONMENT", value = var.modal_environment },
+      { name = "MODAL_ENVIRONMENT_WEB_SUFFIX", value = var.modal_environment_web_suffix },
+    ] : [],
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_URL", value = var.daytona_api_url },
       { name = "DAYTONA_BASE_SNAPSHOT", value = var.daytona_base_snapshot },
     ] : [],
     local.use_daytona_backend && var.daytona_target != "" ? [
       { name = "DAYTONA_TARGET", value = var.daytona_target },
+    ] : [],
+    local.use_opencomputer_backend ? [
+      { name = "OPENCOMPUTER_API_URL", value = var.opencomputer_api_url },
+      # Pinned template when provided, otherwise the Terraform-managed base snapshot.
+      {
+        name  = "OPENCOMPUTER_TEMPLATE",
+        value = var.opencomputer_template != "" ? var.opencomputer_template : module.opencomputer_infra[0].snapshot_name,
+      },
+    ] : [],
+    local.use_vercel_backend ? [
+      { name = "VERCEL_PROJECT_ID", value = var.vercel_sandbox_project_id },
+      { name = "VERCEL_RUNTIME", value = var.vercel_sandbox_runtime },
+      { name = "VERCEL_SNAPSHOT_EXPIRATION_MS", value = tostring(var.vercel_snapshot_expiration_ms) },
+    ] : [],
+    local.use_vercel_backend && var.vercel_sandbox_team_id != "" ? [
+      { name = "VERCEL_TEAM_ID", value = var.vercel_sandbox_team_id },
+    ] : [],
+    local.use_vercel_backend && var.vercel_sandbox_api_base_url != "" ? [
+      { name = "VERCEL_SANDBOX_API_BASE_URL", value = var.vercel_sandbox_api_base_url },
+    ] : [],
+    local.use_vercel_backend && var.vercel_base_snapshot_id != "" ? [
+      { name = "VERCEL_BASE_SNAPSHOT_ID", value = var.vercel_base_snapshot_id },
+    ] : [],
+    local.use_vercel_backend && var.vercel_base_snapshot_id == "" ? [
+      { name = "VERCEL_BASE_SNAPSHOT_NAME", value = module.vercel_sandbox_infra[0].snapshot_name },
+    ] : [],
+    local.use_e2b_backend ? [
+      { name = "E2B_API_URL", value = var.e2b_api_url },
+      { name = "E2B_TEMPLATE_ID", value = var.e2b_template_id },
+      { name = "E2B_SANDBOX_TIMEOUT_SECONDS", value = tostring(var.e2b_sandbox_timeout_seconds) },
+      { name = "E2B_AUTO_PAUSE", value = tostring(var.e2b_auto_pause) },
     ] : []
   )
 
   secrets = concat(
     [
+      # The existing operator-managed auth secret now signs Better Auth state
+      # and cookies in the control plane. Keeping the Terraform input stable
+      # avoids coupling secret rotation to the browser-auth cutover.
+      { name = "BROWSER_AUTH_SECRET", value = var.nextauth_secret },
       { name = "GITHUB_CLIENT_SECRET", value = var.github_client_secret },
       { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
       { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
-      { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
+      # Pepper for image-build callback token hashes (see service-auth.tf)
+      { name = "IMAGE_CALLBACK_TOKEN_PEPPER", value = random_password.image_callback_token_pepper.result },
+      # Per-service sig1 verification keys
+      { name = "SERVICE_AUTH_SECRET_WEB", value = random_password.service_auth_secret_web.result },
+      { name = "SERVICE_AUTH_SECRET_SLACK_BOT", value = random_password.service_auth_secret_slack_bot.result },
+      { name = "SERVICE_AUTH_SECRET_GITHUB_BOT", value = random_password.service_auth_secret_github_bot.result },
+      { name = "SERVICE_AUTH_SECRET_LINEAR_BOT", value = random_password.service_auth_secret_linear_bot.result },
+      { name = "SERVICE_AUTH_SECRET_MODAL", value = random_password.service_auth_secret_modal.result },
       # GitHub App credentials for /repos endpoint (listInstallationRepositories)
       { name = "GITHUB_APP_ID", value = var.github_app_id },
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
       { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
     ],
+    local.google_enabled ? [
+      { name = "GOOGLE_CLIENT_SECRET", value = var.google_client_secret },
+    ] : [],
     local.use_modal_backend ? [
       { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
       { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },
@@ -98,6 +155,16 @@ module "control_plane_worker" {
     ] : [],
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_KEY", value = var.daytona_api_key },
+    ] : [],
+    local.use_opencomputer_backend ? [
+      { name = "OPENCOMPUTER_API_KEY", value = var.opencomputer_api_key },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+    ] : [],
+    local.use_vercel_backend ? [
+      { name = "VERCEL_TOKEN", value = var.vercel_sandbox_token },
+    ] : [],
+    local.use_e2b_backend ? [
+      { name = "E2B_API_KEY", value = var.e2b_api_key },
     ] : [],
     # Slack bot token enables the agent-initiated `slack-notify` endpoint.
     # Shares the variable with the slack-bot worker; bound here so the same
@@ -128,5 +195,8 @@ module "control_plane_worker" {
     null_resource.d1_migrations,
     module.linear_bot_worker,
     module.daytona_infra,
+    module.vercel_sandbox_infra,
+    module.opencomputer_infra,
+    module.e2b_infra,
   ]
 }

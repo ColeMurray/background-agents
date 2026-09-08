@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" role="img" aria-labelledby="title desc">
+  <title id="title">Open Inspect logo mark</title>
+  <desc id="desc">A square outline with a smaller filled square inside.</desc>
+  <rect x="1" y="1" width="34" height="34" fill="none" stroke="#1a1a1a" stroke-width="2" />
+  <rect x="8" y="8" width="20" height="20" fill="#1a1a1a" />
+</svg>

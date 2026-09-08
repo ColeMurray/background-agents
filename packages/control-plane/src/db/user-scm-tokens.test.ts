@@ -1,22 +1,6 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { webcrypto } from "node:crypto";
+import { beforeEach, describe, expect, it } from "vitest";
 import { UserScmTokenStore } from "./user-scm-tokens";
 import { generateEncryptionKey } from "../auth/crypto";
-
-let didPolyfillCrypto = false;
-
-beforeAll(() => {
-  if (!(globalThis as { crypto?: typeof webcrypto }).crypto) {
-    Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
-    didPolyfillCrypto = true;
-  }
-});
-
-afterAll(() => {
-  if (didPolyfillCrypto) {
-    Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
-  }
-});
 
 type ScmTokenRow = {
   provider_user_id: string;

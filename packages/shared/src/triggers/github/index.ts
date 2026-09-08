@@ -7,7 +7,6 @@ import { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
 
 export type { GitHubAutomationEvent } from "../types";
 export { normalizeGitHubEvent } from "./normalizer";
-export { buildGitHubContextBlock } from "./context";
 export { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
 
 export const githubSource: TriggerSourceDefinition = {

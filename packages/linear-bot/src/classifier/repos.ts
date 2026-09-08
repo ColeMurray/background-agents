@@ -1,20 +1,13 @@
 /**
- * Dynamic repository fetching from the control plane.
- * Same pattern as slack-bot: local cache + KV cache + fallback.
+ * Dynamic repository fetching from the control plane. A cached resource
+ * (in-memory → control plane → KV, fail open to an empty list); an empty
+ * repo list surfaces to the user as a clarification asking for the
+ * repository name.
  */
 
 import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } from "../types";
-import { buildInternalAuthHeaders } from "../utils/internal";
-import { createLogger } from "../logger";
-
-const log = createLogger("repos");
-
-const LOCAL_CACHE_TTL_MS = 60 * 1000;
-
-let localCache: {
-  repos: RepoConfig[];
-  timestamp: number;
-} | null = null;
+import { createCachedResource } from "../cached-resource";
+import { fetchControlPlaneJson } from "../control-plane";
 
 function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
   const owner = repo.owner.toLowerCase();
@@ -35,82 +28,26 @@ function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
   };
 }
 
+const reposResource = createCachedResource<RepoConfig[]>({
+  name: "repos",
+  kvKey: "repos:cache",
+  load: async (env, traceId) => {
+    const body = await fetchControlPlaneJson(env, "/repos", traceId);
+    return (body as ControlPlaneReposResponse).repos.map(toRepoConfig);
+  },
+  deserialize: (cached) => (Array.isArray(cached) ? (cached as RepoConfig[]) : null),
+  fallback: [],
+});
+
 export async function getAvailableRepos(env: Env, traceId?: string): Promise<RepoConfig[]> {
-  if (localCache && Date.now() - localCache.timestamp < LOCAL_CACHE_TTL_MS) {
-    return localCache.repos;
-  }
-
-  const startTime = Date.now();
-  try {
-    const headers: Record<string, string> = {
-      Accept: "application/json",
-      ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
-    };
-
-    const response = await env.CONTROL_PLANE.fetch("https://internal/repos", { headers });
-
-    if (!response.ok) {
-      log.error("control_plane.fetch_repos", {
-        trace_id: traceId,
-        outcome: "error",
-        http_status: response.status,
-        duration_ms: Date.now() - startTime,
-      });
-      return getFromCacheOrFallback(env);
-    }
-
-    const data = (await response.json()) as ControlPlaneReposResponse;
-    const repos = data.repos.map(toRepoConfig);
-
-    localCache = { repos, timestamp: Date.now() };
-
-    try {
-      await env.LINEAR_KV.put("repos:cache", JSON.stringify(repos), { expirationTtl: 300 });
-    } catch (e) {
-      log.warn("kv.put", {
-        trace_id: traceId,
-        key_prefix: "repos_cache",
-        error: e instanceof Error ? e : new Error(String(e)),
-      });
-    }
-
-    log.info("control_plane.fetch_repos", {
-      trace_id: traceId,
-      outcome: "success",
-      repo_count: repos.length,
-      duration_ms: Date.now() - startTime,
-    });
-
-    return repos;
-  } catch (e) {
-    log.error("control_plane.fetch_repos", {
-      trace_id: traceId,
-      outcome: "error",
-      error: e instanceof Error ? e : new Error(String(e)),
-      duration_ms: Date.now() - startTime,
-    });
-    return getFromCacheOrFallback(env);
-  }
+  return reposResource.get(env, traceId);
 }
 
-async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
-  try {
-    const cached = await env.LINEAR_KV.get("repos:cache", "json");
-    if (cached && Array.isArray(cached)) {
-      log.info("control_plane.fetch_repos", { source: "kv_cache" });
-      return cached as RepoConfig[];
-    }
-  } catch (e) {
-    log.warn("kv.get", {
-      key_prefix: "repos_cache",
-      error: e instanceof Error ? e : new Error(String(e)),
-    });
-  }
-
-  log.error("control_plane.fetch_repos", {
-    error_message: "No repos available from any source.",
-  });
-  return [];
+/**
+ * Clear the in-memory cache (for testing).
+ */
+export function clearReposLocalCache(): void {
+  reposResource.invalidate();
 }
 
 export async function buildRepoDescriptions(env: Env, traceId?: string): Promise<string> {

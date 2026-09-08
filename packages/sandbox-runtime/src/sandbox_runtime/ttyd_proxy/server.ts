@@ -7,8 +7,19 @@
  * Usage: bun run /app/sandbox_runtime/ttyd_proxy/server.ts
  */
 
+// PROXY_PORT (the externally-exposed, tunneled bind port) may be overridden by
+// the control plane via the TTYD_PROXY_PORT env var; its default mirrors
+// TTYD_PROXY_PORT in ../constants.py. TTYD_PORT is the fixed localhost-only
+// upstream (mirrors TTYD_PORT in ../constants.py) — no env override.
+function portFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : fallback;
+}
+
 const TTYD_PORT = 7681;
-const PROXY_PORT = 7680;
+const PROXY_PORT = portFromEnv("TTYD_PROXY_PORT", 7680);
 const SECRET = process.env.SANDBOX_AUTH_TOKEN;
 
 if (!SECRET) {

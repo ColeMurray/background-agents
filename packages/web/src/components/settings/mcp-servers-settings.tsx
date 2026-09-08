@@ -282,6 +282,7 @@ function McpServerForm({
         <Label className="mb-1.5">Type</Label>
         <div className="flex gap-2">
           <button
+            type="button"
             onClick={() => setForm({ ...form, type: "local" })}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
               form.type === "local"
@@ -293,6 +294,7 @@ function McpServerForm({
             Local
           </button>
           <button
+            type="button"
             onClick={() => setForm({ ...form, type: "remote" })}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
               form.type === "remote"
@@ -646,6 +648,7 @@ export function McpServersSettings() {
                       aria-label={server.enabled ? "Disable" : "Enable"}
                     />
                     <button
+                      type="button"
                       onClick={() => setDeleteTarget(server.id)}
                       className="px-2 py-1 text-xs text-destructive hover:text-destructive/80 transition"
                     >

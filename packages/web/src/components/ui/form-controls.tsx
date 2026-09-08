@@ -11,17 +11,22 @@ export function RadioCard({
   description,
   className = "",
   checked,
+  disabled,
   ...props
 }: RadioCardProps) {
   return (
     <label
       className={cn(
         "flex cursor-pointer items-start gap-2 rounded-sm border px-3 py-2 text-sm transition",
-        checked ? "border-accent bg-accent-muted/70" : "border-border hover:bg-muted/50",
+        disabled
+          ? "cursor-not-allowed border-border-muted bg-muted/30 opacity-60"
+          : checked
+            ? "border-accent bg-accent-muted/70"
+            : "border-border hover:bg-muted/50",
         className
       )}
     >
-      <input type="radio" checked={checked} className="sr-only" {...props} />
+      <input type="radio" checked={checked} disabled={disabled} className="sr-only" {...props} />
       <span
         className={cn(
           "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition",

@@ -127,6 +127,27 @@ export function SendIcon({ className }: IconProps) {
   );
 }
 
+export function PaperclipIcon({ className }: IconProps) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"
+      />
+    </svg>
+  );
+}
+
+export function XIcon({ className }: IconProps) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+
 export function StopIcon({ className }: IconProps) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -176,6 +197,26 @@ export function SlackIcon({ className }: IconProps) {
         strokeWidth={2}
         d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"
       />
+    </svg>
+  );
+}
+
+export function SentryIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      data-testid="sentry-icon"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 4.5 4.6 17.4a1.4 1.4 0 0 0 1.2 2.1H9" />
+      <path d="M12 4.5 19.4 17.4a1.4 1.4 0 0 1-1.2 2.1h-3.6" />
+      <path d="M8.8 19.5a5.5 5.5 0 0 0-2.6-4.6" />
+      <path d="M14.6 19.5A10.5 10.5 0 0 0 9.2 10.3" />
     </svg>
   );
 }
@@ -268,6 +309,28 @@ export function GitHubIcon({ className }: IconProps) {
   );
 }
 
+// Official Google "G" brand mark — intentionally multicolor (does not inherit
+// theme color), per Google's sign-in branding guidelines.
+export function GoogleIcon({ className }: IconProps) {
+  return (
+    <svg className={className} data-testid="google-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="#4285F4"
+        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"
+      />
+      <path
+        fill="#34A853"
+        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0012 23z"
+      />
+      <path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 010-4.2V7.06H2.18a11 11 0 000 9.88l3.66-2.84z" />
+      <path
+        fill="#EA4335"
+        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 002.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"
+      />
+    </svg>
+  );
+}
+
 export function GitPrIcon({ className }: IconProps) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -277,6 +340,65 @@ export function GitPrIcon({ className }: IconProps) {
         strokeWidth={2}
         d="M6 3v12M18 9a3 3 0 100-6 3 3 0 000 6zM6 21a3 3 0 100-6 3 3 0 000 6zM18 9a9 9 0 01-9 9"
       />
+    </svg>
+  );
+}
+
+export function GitMergeIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="18" cy="18" r="3" />
+      <circle cx="6" cy="6" r="3" />
+      <path d="M6 21V9a9 9 0 0 0 9 9" />
+    </svg>
+  );
+}
+
+export function GitPrClosedIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="6" cy="6" r="3" />
+      <path d="M6 9v12" />
+      <path d="m21 3-6 6" />
+      <path d="m21 9-6-6" />
+      <path d="M18 11.5V15" />
+      <circle cx="18" cy="18" r="3" />
+    </svg>
+  );
+}
+
+export function GitPrDraftIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="18" cy="18" r="3" />
+      <circle cx="6" cy="6" r="3" />
+      <path d="M18 6V5" />
+      <path d="M18 11v-1" />
+      <line x1="6" x2="6" y1="9" y2="21" />
     </svg>
   );
 }

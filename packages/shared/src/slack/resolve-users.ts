@@ -1,4 +1,6 @@
-import { getUserInfo } from "./client";
+import { getUserInfo as defaultGetUserInfo } from "./client";
+
+export type GetUserInfo = (token: string, userId: string) => ReturnType<typeof defaultGetUserInfo>;
 
 /**
  * Resolve Slack user IDs to display names.
@@ -10,7 +12,8 @@ import { getUserInfo } from "./client";
  */
 export async function resolveUserNames(
   token: string,
-  userIds: string[]
+  userIds: string[],
+  getUserInfo: GetUserInfo = defaultGetUserInfo
 ): Promise<Map<string, string>> {
   const names = new Map<string, string>();
   const results = await Promise.allSettled(

@@ -20,7 +20,7 @@ Use TodoWrite to create a checklist tracking these phases:
 1. Initial setup questions
 2. Repository setup
 3. Credential collection (Cloudflare, Vercel, Modal, Anthropic)
-4. GitHub App creation
+4. GitHub App creation (+ Google OAuth if enabled)
 5. Slack App creation (if enabled)
 6. Security secrets generation
 7. Terraform configuration
@@ -130,10 +130,11 @@ Guide user through creating a GitHub App (handles both OAuth and repo access):
    - **CRITICAL**: Must match deployed Vercel URL exactly!
 6. **Repository permissions**: Contents (Read & Write), Issues (Read & Write), Pull requests (Read &
    Write), Metadata (Read-only)
-7. Create app, note **App ID**
-8. Generate **Client Secret**, note **Client ID** and **Client Secret**
-9. Generate **Private Key** (downloads .pem file)
-10. Install app on account, note **Installation ID** from URL
+7. **Account permissions**: Email addresses (Read-only)
+8. Create app, note **App ID**
+9. Generate **Client Secret**, note **Client ID** and **Client Secret**
+10. Generate **Private Key** (downloads .pem file)
+11. Install app on account, note **Installation ID** from URL
 
 After receiving the .pem path, convert to PKCS#8:
 
@@ -142,17 +143,49 @@ openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in {pem_path} -out /tmp/
 cat /tmp/github-app-key-pkcs8.pem
 ```
 
+## Phase 4b: Google OAuth Setup (If Enabled)
+
+Only if the user wants Google login for non-developer users (PMs, support agents). Skip for
+GitHub-only deployments — leave `google_client_id` and `google_client_secret` empty.
+
+Guide user:
+
+1. https://console.cloud.google.com/apis/credentials → "Create Credentials" → "OAuth client ID"
+2. **Application type**: Web application
+3. **Authorized redirect URI**:
+   `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/google` (or your
+   `*.workers.dev` web URL if `web_platform = "cloudflare"`)
+   - **CRITICAL**: Must match deployed web URL exactly!
+4. OAuth consent screen: request only `openid`, `email`, `profile` scopes (non-sensitive — no Google
+   verification review required)
+5. Note **Client ID** and **Client Secret**
+
+Then in `terraform.tfvars`:
+
+- Set `google_client_id` and `google_client_secret` (both required together; leave both empty to
+  disable)
+- Add at least one entry to `allowed_emails` (exact addresses, e.g. `pm@gmail.com`) or
+  `allowed_email_domains`. Prefer `allowed_emails` for shared domains like gmail.com.
+
+Terraform derives `NEXT_PUBLIC_GOOGLE_ENABLED` automatically when both Google credentials are set,
+which reveals the "Sign in with Google" button. Google users get the same flat access; their PRs
+fall back to the App bot unless the same verified email is also a linked GitHub identity.
+
 ## Phase 5: Slack App Setup (If Enabled)
 
 Guide user:
 
 1. https://api.slack.com/apps → "Create New App" → "From scratch"
 2. OAuth & Permissions → Add scopes: `app_mentions:read`, `chat:write`, `channels:history`,
-   `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `reactions:write`
+   `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `files:read`,
+   `files:write`, `reactions:write`
 3. Install to Workspace, note **Bot Token** (`xoxb-...`)
 4. Basic Information → note **Signing Secret**
 5. **App Home and Event Subscriptions configured AFTER deployment** (worker must be running for URL
    verification)
+
+`files:read` forwards user-attached images into sessions; `files:write` posts generated media back
+to Slack. Reinstall the app whenever either scope is added to an existing installation.
 
 ## Phase 6: Generate Security Secrets
 
@@ -237,10 +270,13 @@ The App Home provides a settings interface where users can configure their prefe
 
 4. Interactivity → Enable → Request URL:
    `https://open-inspect-slack-bot-{deployment_name}.{subdomain}.workers.dev/interactions`
+5. Select Menus → Options Load URL:
+   `https://open-inspect-slack-bot-{deployment_name}.{subdomain}.workers.dev/interactions` Required
+   for searchable Slack repository pickers that use external data sources.
 
 ### Invite Bot to Channels
 
-5. Invite bot to channels: `/invite @BotName`
+6. Invite bot to channels: `/invite @BotName`
 
 ## Phase 10: Complete GitHub Bot Setup (If Enabled)
 

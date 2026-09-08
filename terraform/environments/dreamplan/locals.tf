@@ -3,6 +3,9 @@ locals {
   use_modal_backend   = var.sandbox_provider == "modal"
   use_daytona_backend = var.sandbox_provider == "daytona"
 
+  # Enables the control plane's conditional Better Auth Google provider.
+  google_enabled = trimspace(var.google_client_id) != "" && trimspace(var.google_client_secret) != ""
+
   # URLs for cross-service configuration
   control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
   control_plane_url  = "https://${local.control_plane_host}"

@@ -6,10 +6,25 @@
  * GitHub App installation to get the list of accessible repositories.
  */
 
-import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } from "../types";
+import type { Env, RepoConfig } from "../types";
 import { normalizeRepoId } from "../utils/repo";
-import { buildInternalAuthHeaders, createKvCacheStore } from "@open-inspect/shared";
+import {
+  controlPlaneReposResponseSchema,
+  createKvCacheStore,
+  normalizeRoutingRules,
+  repoConfigSchema,
+  type SlackGlobalConfig,
+  type SlackRoutingRule,
+} from "@open-inspect/shared";
+import { createCachedResource } from "./cached-resource";
+import {
+  controlPlaneFetch,
+  fetchControlPlaneJson,
+  KV_CACHE_TTL_SECONDS,
+  LOCAL_CACHE_TTL_MS,
+} from "./control-plane";
 import { createLogger } from "../logger";
+import { z } from "zod";
 
 const log = createLogger("repos");
 
@@ -20,13 +35,6 @@ const log = createLogger("repos");
 const FALLBACK_REPOS: RepoConfig[] = [];
 
 /**
- * Local cache TTL in milliseconds (1 minute).
- * This is shorter than the control plane's 5-minute cache because
- * the slack-bot might be restarted more frequently.
- */
-const LOCAL_CACHE_TTL_MS = 60 * 1000;
-
-/**
  * Local in-memory cache for repos.
  */
 let localCache: {
@@ -34,11 +42,21 @@ let localCache: {
   timestamp: number;
 } | null = null;
 
+const WATCHED_CHANNELS_CACHE_KEY = "slack:watched-channels";
+
+const watchedChannelsSchema = z.array(z.string());
+
+const watchedChannelsResponseSchema = z.object({
+  channels: watchedChannelsSchema.optional(),
+});
+
+type ParsedControlPlaneRepo = z.infer<typeof controlPlaneReposResponseSchema>["repos"][number];
+
 /**
  * Convert a control plane repo to a RepoConfig.
  * Normalizes identifiers to lowercase for consistent comparison.
  */
-function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
+function toRepoConfig(repo: ParsedControlPlaneRepo): RepoConfig {
   const normalizedOwner = repo.owner.toLowerCase();
   const normalizedName = repo.name.toLowerCase();
 
@@ -76,28 +94,7 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
 
   const startTime = Date.now();
   try {
-    // Use service binding if available, otherwise fall back to HTTP fetch
-    let response: Response;
-
-    // Build headers with auth token if secret is configured
-    const headers: Record<string, string> = {
-      Accept: "application/json",
-      ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
-    };
-
-    if (env.CONTROL_PLANE) {
-      response = await env.CONTROL_PLANE.fetch("https://internal/repos", {
-        headers,
-      });
-    } else {
-      const url = `${env.CONTROL_PLANE_URL}/repos`;
-      response = await fetch(url, {
-        headers: {
-          ...headers,
-          "User-Agent": "open-inspect-slack-bot",
-        },
-      });
-    }
+    const response = await controlPlaneFetch(env, "/repos", traceId);
 
     if (!response.ok) {
       log.error("control_plane.fetch_repos", {
@@ -109,8 +106,17 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
       return getFromCacheOrFallback(env);
     }
 
-    const data = (await response.json()) as ControlPlaneReposResponse;
-    const repos = data.repos.map(toRepoConfig);
+    const parsed = controlPlaneReposResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      log.error("control_plane.fetch_repos", {
+        trace_id: traceId,
+        outcome: "invalid_response",
+        duration_ms: Date.now() - startTime,
+      });
+      return getFromCacheOrFallback(env);
+    }
+
+    const repos = parsed.data.repos.map(toRepoConfig);
 
     // Update local cache
     localCache = {
@@ -121,7 +127,7 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
     // Also store in KV for persistence across worker restarts
     try {
       await createKvCacheStore(env.SLACK_KV).put("repos:cache", JSON.stringify(repos), {
-        expirationTtl: 300, // 5 minutes
+        expirationTtl: KV_CACHE_TTL_SECONDS,
       });
     } catch (e) {
       log.warn("kv.put", {
@@ -156,9 +162,10 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
 async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
   try {
     const cached = await createKvCacheStore(env.SLACK_KV).get("repos:cache", "json");
-    if (cached && Array.isArray(cached)) {
+    const parsed = z.array(repoConfigSchema).safeParse(cached);
+    if (parsed.success) {
       log.info("control_plane.fetch_repos", { source: "kv_cache" });
-      return cached as RepoConfig[];
+      return parsed.data;
     }
   } catch (e) {
     log.warn("kv.get", {
@@ -176,6 +183,115 @@ async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
     });
   }
   return FALLBACK_REPOS;
+}
+
+/**
+ * Workspace-wide Slack routing rules (keyword → repository or environment)
+ * from the control plane's GET /integration-settings/slack endpoint. Fails
+ * open to an empty list — no rules means no deterministic routing, the safe
+ * default. Normalizes on every path (fresh and KV-fallback) so callers see
+ * one canonical shape.
+ */
+const routingRules = createCachedResource<SlackRoutingRule[]>({
+  name: "routing_rules",
+  kvKey: "slack:routing-rules",
+  load: async (env, traceId) => {
+    const body = await fetchControlPlaneJson(env, "/integration-settings/slack", traceId);
+    return normalizeRoutingRules(
+      (body as { settings?: SlackGlobalConfig | null }).settings?.defaults?.routingRules
+    );
+  },
+  deserialize: (cached) =>
+    Array.isArray(cached) ? normalizeRoutingRules(cached as SlackRoutingRule[]) : null,
+  fallback: [],
+});
+
+export async function getRoutingRules(env: Env, traceId?: string): Promise<SlackRoutingRule[]> {
+  return routingRules.get(env, traceId);
+}
+
+/**
+ * Channel IDs watched by enabled `slack_event` automations, used to pre-filter
+ * inbound channel messages. KV-backed with no in-memory tier: served from the
+ * KV last-known-good copy and refreshed from the control plane on a miss.
+ * **Fails closed** to an empty set — an unknown watch-list forwards no channel
+ * messages, so an outage pauses triggers rather than forwarding every message.
+ */
+export async function getWatchedChannels(env: Env, traceId?: string): Promise<Set<string>> {
+  const kv = createKvCacheStore(env.SLACK_KV);
+
+  try {
+    const cached = await kv.get(WATCHED_CHANNELS_CACHE_KEY, "json");
+    const parsed = watchedChannelsSchema.safeParse(cached);
+    if (parsed.success) {
+      return new Set(parsed.data);
+    }
+  } catch (e) {
+    log.warn("kv.get", {
+      key_prefix: "watched_channels_cache",
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  }
+
+  const startTime = Date.now();
+  try {
+    const response = await controlPlaneFetch(
+      env,
+      "/integration-settings/slack/watched-channels",
+      traceId
+    );
+
+    if (!response.ok) {
+      log.warn("control_plane.fetch_watched_channels", {
+        trace_id: traceId,
+        outcome: "error",
+        http_status: response.status,
+        duration_ms: Date.now() - startTime,
+      });
+      return new Set();
+    }
+
+    const parsed = watchedChannelsResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      return new Set();
+    }
+    const channels = parsed.data.channels ?? [];
+
+    try {
+      await kv.put(WATCHED_CHANNELS_CACHE_KEY, JSON.stringify(channels), {
+        expirationTtl: KV_CACHE_TTL_SECONDS,
+      });
+    } catch (e) {
+      log.warn("kv.put", {
+        trace_id: traceId,
+        key_prefix: "watched_channels_cache",
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+    }
+
+    return new Set(channels);
+  } catch (e) {
+    log.warn("control_plane.fetch_watched_channels", {
+      trace_id: traceId,
+      outcome: "error",
+      error: e instanceof Error ? e : new Error(String(e)),
+      duration_ms: Date.now() - startTime,
+    });
+    return new Set();
+  }
+}
+
+/**
+ * Filter repos by a free-text query against their full name (case-insensitive).
+ * Returns all repos when the query is empty — the canonical filter shared by the
+ * clarification picker and the App Home branch picker.
+ */
+export function filterReposByQuery(repos: RepoConfig[], query: string | undefined): RepoConfig[] {
+  const normalizedQuery = query?.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return repos;
+  }
+  return repos.filter((repo) => repo.fullName.toLowerCase().includes(normalizedQuery));
 }
 
 /**
@@ -203,24 +319,10 @@ export async function getRepoById(
 }
 
 /**
- * Find repositories associated with a Slack channel.
- */
-export async function getReposByChannel(
-  env: Env,
-  channelId: string,
-  traceId?: string
-): Promise<RepoConfig[]> {
-  const repos = await getAvailableRepos(env, traceId);
-  return repos.filter((r) => r.channelAssociations?.includes(channelId));
-}
-
-/**
- * Build a description string for all available repos.
+ * Build a description string for the given repos.
  * Used in the classification prompt.
  */
-export async function buildRepoDescriptions(env: Env, traceId?: string): Promise<string> {
-  const repos = await getAvailableRepos(env, traceId);
-
+export function buildRepoDescriptions(repos: RepoConfig[]): string {
   if (repos.length === 0) {
     return "No repositories are currently available.";
   }
@@ -239,8 +341,11 @@ export async function buildRepoDescriptions(env: Env, traceId?: string): Promise
 }
 
 /**
- * Clear local cache (for testing or forced refresh).
+ * Clear this module's in-memory caches — repos and routing rules (for testing
+ * or forced refresh). Environments have their own clear in
+ * classifier/environments.ts.
  */
 export function clearLocalCache(): void {
   localCache = null;
+  routingRules.invalidate();
 }

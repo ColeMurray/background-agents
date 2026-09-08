@@ -16,6 +16,7 @@
     "test:integration": "npm run test:integration --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
+    "build:opencomputer-template": "npm run build-template -w @open-inspect/opencomputer-infra --",
     "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
   },
   "devDependencies": {
@@ -31,14 +32,14 @@
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.21.0",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.103.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "overrides": {
-    "minimatch": "^10.2.4",
-    "undici": "^7.24.0"
+    "minimatch": "^10.2.5",
+    "undici": "^7.28.0"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
@@ -49,6 +50,10 @@
       "prettier --write"
     ],
     "packages/modal-infra/**/*.py": [
+      "ruff check --fix",
+      "ruff format"
+    ],
+    "packages/sandbox-runtime/**/*.py": [
       "ruff check --fix",
       "ruff format"
     ]

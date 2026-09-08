@@ -1,35 +1,37 @@
-import type { ArtifactRow, EventRow, MessageRow } from "../types";
-import type { ArtifactResponse } from "../../types";
+import type { ArtifactRow } from "../types";
+import { sessionAttachmentReferencesSchema, type SessionMessage } from "@open-inspect/shared";
+import type { ArtifactResponse, ListEventsResponse } from "../../types";
 import type { SessionRepository } from "../repository";
 import type { SessionMessageQueue } from "../message-queue";
+import { SessionEventStream, type SessionEventListRequest } from "../event-stream";
+import { parseStoredSessionAttachments } from "../session-attachment-resolver";
+import { z } from "zod";
 
-export interface EnqueuePromptRequest {
-  content: string;
-  authorId: string;
-  source: string;
-  model?: string;
-  reasoningEffort?: string;
-  attachments?: Array<{ type: string; name: string; url?: string }>;
-  callbackContext?: Record<string, unknown>;
+export const enqueuePromptRequestSchema = z.object({
+  content: z.string(),
+  authorId: z.string(),
+  source: z.string(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  attachments: sessionAttachmentReferencesSchema.optional(),
+  callbackContext: z.record(z.string(), z.unknown()).optional(),
+  // Trusted SCM enrichment resolved by the router at prompt time.
+  scmEnrichment: z
+    .object({
+      userId: z.string().nullable(),
+      login: z.string().nullable(),
+      name: z.string().nullable(),
+      email: z.string().nullable(),
+      accessTokenEncrypted: z.string().nullable(),
+      refreshTokenEncrypted: z.string().nullable(),
+      tokenExpiresAt: z.number().nullable(),
+    })
+    .optional(),
+});
 
-  // Identity enrichment (from router D1 lookup at prompt time)
-  authorDisplayName?: string;
-  authorEmail?: string;
-  authorLogin?: string;
+export type EnqueuePromptRequest = z.infer<typeof enqueuePromptRequestSchema>;
 
-  // SCM token enrichment (from cross-provider identity resolution)
-  scmUserId?: string;
-  scmAccessTokenEncrypted?: string;
-  scmRefreshTokenEncrypted?: string;
-  scmTokenExpiresAt?: number;
-}
-
-export interface ListEventsRequest {
-  cursor: string | null;
-  limit: number;
-  type: string | null;
-  messageId: string | null;
-}
+export type ListEventsRequest = SessionEventListRequest;
 
 export interface ListMessagesRequest {
   cursor: string | null;
@@ -47,7 +49,11 @@ interface MessageServiceDeps {
 }
 
 export class MessageService {
-  constructor(private readonly deps: MessageServiceDeps) {}
+  private readonly eventStream: SessionEventStream;
+
+  constructor(private readonly deps: MessageServiceDeps) {
+    this.eventStream = new SessionEventStream(deps.repository);
+  }
 
   enqueuePrompt(request: EnqueuePromptRequest): Promise<{ messageId: string; status: "queued" }> {
     return this.deps.messageQueue.enqueuePromptFromApi(request);
@@ -58,25 +64,8 @@ export class MessageService {
     return { status: "stopping" };
   }
 
-  listEvents(request: ListEventsRequest): {
-    events: EventRow[];
-    cursor: string | undefined;
-    hasMore: boolean;
-  } {
-    const events = this.deps.repository.listEvents({
-      cursor: request.cursor,
-      limit: request.limit,
-      type: request.type,
-      messageId: request.messageId,
-    });
-    const hasMore = events.length > request.limit;
-    if (hasMore) events.pop();
-
-    return {
-      events,
-      cursor: events.length > 0 ? events[events.length - 1].created_at.toString() : undefined,
-      hasMore,
-    };
+  listEvents(request: ListEventsRequest): ListEventsResponse {
+    return this.eventStream.listEvents(request);
   }
 
   listArtifacts(): {
@@ -86,6 +75,7 @@ export class MessageService {
       url: string | null;
       metadata: Record<string, unknown> | null;
       createdAt: number;
+      updatedAt: number;
     }>;
   } {
     const artifacts = this.deps.repository.listArtifacts();
@@ -96,6 +86,7 @@ export class MessageService {
         url: artifact.url,
         metadata: this.deps.parseArtifactMetadata(artifact),
         createdAt: artifact.created_at,
+        updatedAt: artifact.updated_at,
       })),
     };
   }
@@ -113,12 +104,13 @@ export class MessageService {
         url: artifact.url,
         metadata: this.deps.parseArtifactMetadata(artifact),
         createdAt: artifact.created_at,
+        updatedAt: artifact.updated_at,
       },
     };
   }
 
   listMessages(request: ListMessagesRequest): {
-    messages: MessageRow[];
+    messages: SessionMessage[];
     cursor: string | undefined;
     hasMore: boolean;
   } {
@@ -131,7 +123,17 @@ export class MessageService {
     if (hasMore) messages.pop();
 
     return {
-      messages,
+      messages: messages.map((message) => ({
+        id: message.id,
+        authorId: message.author_id,
+        content: message.content,
+        source: message.source,
+        attachments: parseStoredSessionAttachments(message.attachments) ?? null,
+        status: message.status,
+        createdAt: message.created_at,
+        startedAt: message.started_at,
+        completedAt: message.completed_at,
+      })),
       cursor: messages.length > 0 ? messages[messages.length - 1].created_at.toString() : undefined,
       hasMore,
     };

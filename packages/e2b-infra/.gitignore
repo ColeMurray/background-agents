@@ -1,0 +1,8 @@
+# Staged copy of packages/sandbox-runtime/src/sandbox_runtime, created by
+# build-template.py so the SDK .copy() resolves. Never committed —
+# sandbox-runtime is the single source of truth.
+/sandbox_runtime/
+
+# E2B CLI build artifacts
+e2b.toml
+.e2b/

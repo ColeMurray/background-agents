@@ -16,7 +16,7 @@ async function handleAutomationWebhook(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const automationId = match.groups?.id;
   if (!automationId) return error("Automation ID required", 400);
@@ -33,7 +33,7 @@ async function handleAutomationWebhook(
   if (!apiKey) return error("Missing API key", 401);
 
   // 3. Look up automation
-  const store = new AutomationStore(env.DB);
+  const store = new AutomationStore(ctx.db);
   const automation = await store.getById(automationId);
   if (!automation || automation.trigger_type !== "webhook") {
     return error("Not found", 404);

@@ -2,85 +2,73 @@
  * Normalize Sentry webhook payloads into SentryAutomationEvent.
  */
 
+import { z } from "zod";
+
 import type { SentryAutomationEvent } from "../types";
 import { buildSentryContextBlock } from "./context";
 
-// Sentry webhook payload shapes (minimal typed subset)
+// ─── Schemas ────────────────────────────────────────────────────────────────
+// Each schema is the single source of truth for one Sentry webhook shape: it
+// produces the static payload type via `z.infer` and validates at runtime via
+// `safeParse`. Only the fields consumed for trigger/concurrency keys and `meta`
+// are modeled. A successful parse guarantees the structural fields that
+// `buildSentryContextBlock` dereferences off the raw payload (`data.event`,
+// `data.event.metadata`, `data.issue`, `data.issue.project`).
 
-interface SentryIssueAlertPayload {
-  action: string;
-  data: {
-    event: {
-      event_id: string;
-      title: string;
-      culprit: string;
-      level: string;
-      metadata: {
-        type?: string;
-        value?: string;
-        filename?: string;
-        function?: string;
-      };
-      exception?: {
-        values: Array<{
-          type: string;
-          value: string;
-          stacktrace?: {
-            frames: Array<{
-              filename: string;
-              function: string;
-              lineno: number;
-              colno: number;
-              abs_path: string;
-              in_app: boolean;
-            }>;
-          };
-        }>;
-      };
-      tags: Array<{ key: string; value: string }>;
-    };
-    issue: {
-      id: string;
-      shortId: string;
-      title: string;
-      culprit: string;
-      level: string;
-      project: { id: number; slug: string; name: string };
-      count: string;
-      firstSeen: string;
-      lastSeen: string;
-      status: string;
-    };
-    triggered_rule: string;
-  };
-  actor: { type: string; id: number; name: string };
-}
+const sentryIssueAlertSchema = z.object({
+  action: z.string(),
+  data: z.object({
+    event: z.object({
+      metadata: z.object({
+        filename: z.string().optional(),
+      }),
+    }),
+    issue: z.object({
+      id: z.string(),
+      shortId: z.string(),
+      level: z.string(),
+      status: z.string(),
+      lastSeen: z.string(),
+      project: z.object({
+        slug: z.string(),
+      }),
+    }),
+    triggered_rule: z.string(),
+  }),
+});
 
-interface SentryMetricAlertPayload {
-  action: string;
-  data: {
-    metric_alert: {
-      id: number;
-      title: string;
-      alert_rule: { id: number; name: string };
-      date_started: string;
-      current_trigger: { label: string };
-    };
-    description_text: string;
-    description_title: string;
-    web_url: string;
-  };
-}
+const sentryMetricAlertSchema = z.object({
+  action: z.string(),
+  data: z.object({
+    metric_alert: z.object({
+      id: z.number(),
+      title: z.string(),
+      date_started: z.string(),
+      alert_rule: z.object({
+        id: z.number(),
+      }),
+      current_trigger: z.object({
+        label: z.string(),
+      }),
+    }),
+    web_url: z.string(),
+    description_text: z.string(),
+    description_title: z.string(),
+  }),
+});
+
+type SentryMetricAlertPayload = z.infer<typeof sentryMetricAlertSchema>;
 
 export function normalizeSentryEvent(
   payload: Record<string, unknown>,
   automationId?: string
 ): SentryAutomationEvent | null {
   // Issue alert (event_alert action or issue action)
-  if (isIssueAlertPayload(payload)) {
-    const p = payload as unknown as SentryIssueAlertPayload;
-    const issue = p.data.issue;
-    const isRegression = p.action === "regression" || issue.status === "regressed";
+  const issueResult = sentryIssueAlertSchema.safeParse(payload);
+  if (issueResult.success) {
+    const { action, data } = issueResult.data;
+    const issue = data.issue;
+    const isRegression = action === "regression" || issue.status === "regressed";
     const eventType = isRegression ? "issue.regression" : "issue.created";
     const triggerKey = isRegression
       ? `sentry_regression:${issue.id}:${issue.lastSeen}`
@@ -95,19 +83,20 @@ export function normalizeSentryEvent(
       concurrencyKey,
       sentryProject: issue.project.slug,
       sentryLevel: issue.level,
-      culpritFile: p.data.event.metadata.filename,
-      contextBlock: buildSentryContextBlock(p as unknown as Record<string, unknown>),
+      culpritFile: data.event.metadata.filename,
+      contextBlock: buildSentryContextBlock(payload),
       meta: {
         issueId: issue.id,
         shortId: issue.shortId,
-        triggeredRule: p.data.triggered_rule,
+        triggeredRule: data.triggered_rule,
       },
     };
   }
 
   // Metric alert
-  if (isMetricAlertPayload(payload)) {
-    const p = payload as unknown as SentryMetricAlertPayload;
+  const metricResult = sentryMetricAlertSchema.safeParse(payload);
+  if (metricResult.success) {
+    const p = metricResult.data;
     if (p.action !== "critical") return null;
 
     const alert = p.data.metric_alert;
@@ -131,16 +120,6 @@ export function normalizeSentryEvent(
   }
 
   return null;
-}
-
-function isIssueAlertPayload(payload: Record<string, unknown>): boolean {
-  const data = payload.data as Record<string, unknown> | undefined;
-  return !!data && "issue" in data && "event" in data;
-}
-
-function isMetricAlertPayload(payload: Record<string, unknown>): boolean {
-  const data = payload.data as Record<string, unknown> | undefined;
-  return !!data && "metric_alert" in data;
 }
 
 function buildSentryMetricContextBlock(p: SentryMetricAlertPayload): string {

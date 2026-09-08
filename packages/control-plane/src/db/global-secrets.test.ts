@@ -1,23 +1,7 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { webcrypto } from "node:crypto";
+import { beforeEach, describe, expect, it } from "vitest";
 import { GlobalSecretsStore } from "./global-secrets";
 import { SecretsValidationError } from "./secrets-validation";
 import { generateEncryptionKey } from "../auth/crypto";
-
-let didPolyfillCrypto = false;
-
-beforeAll(() => {
-  if (!(globalThis as { crypto?: typeof webcrypto }).crypto) {
-    Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
-    didPolyfillCrypto = true;
-  }
-});
-
-afterAll(() => {
-  if (didPolyfillCrypto) {
-    Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
-  }
-});
 
 type GlobalSecretRow = {
   key: string;
@@ -154,6 +138,12 @@ describe("GlobalSecretsStore", () => {
 
     const secrets = await store.getDecryptedSecrets();
     expect(secrets).toEqual({ FOO: "two" });
+  });
+
+  it("rejects keys that collide after normalization", async () => {
+    await expect(store.setSecrets({ foo: "one", FOO: "two" })).rejects.toThrow(
+      "Duplicate secret key 'FOO' after normalization"
+    );
   });
 
   it("rejects reserved keys", async () => {

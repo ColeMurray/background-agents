@@ -8,8 +8,9 @@
 /**
  * Token validity window in milliseconds (5 minutes).
  * Tokens older than this are rejected to prevent replay attacks.
+ * Shared by the MODAL_API_SECRET internal token and the sig1 service signature.
  */
-const TOKEN_VALIDITY_MS = 5 * 60 * 1000;
+export const TOKEN_VALIDITY_MS = 5 * 60 * 1000;
 
 /**
  * Constant-time string comparison to prevent timing attacks.
@@ -23,6 +24,18 @@ export function timingSafeEqual(a: string, b: string): boolean {
     result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
   return result === 0;
+}
+
+/**
+ * Encode bytes as a lowercase hex string.
+ *
+ * Internal helper shared with `service-auth.ts` (HMAC, digest, and nonce hex
+ * encoding); exported for that module, not intended as public package surface.
+ */
+export function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 /**
@@ -45,13 +58,12 @@ export async function computeHmacHex(data: string, secret: string): Promise<stri
     ["sign"]
   );
   const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(data));
-  return Array.from(new Uint8Array(sig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return bytesToHex(new Uint8Array(sig));
 }
 
 /**
- * Generate an internal API token for service-to-service calls.
+ * Generate an internal API token for CP→Modal endpoint calls (the
+ * MODAL_API_SECRET mechanism — separate from sig1 service auth).
  *
  * Token format: `timestamp.signature` where:
  * - timestamp: Unix milliseconds when the token was generated
@@ -67,29 +79,29 @@ export async function generateInternalToken(secret: string): Promise<string> {
 }
 
 /**
- * Build internal authentication headers for service-to-service requests.
- *
- * Returns a headers object with `Authorization` (when a secret is provided)
- * and `x-trace-id` (when a trace ID is provided). Callers add their own
- * `Content-Type` or `Accept` header as needed.
- *
- * @param secret - The shared secret for HMAC signing (omit to skip auth)
- * @param traceId - Optional trace ID for request correlation
- * @returns A headers record with auth and tracing fields
+ * Verify the HMAC body signature on a CP→bot callback payload.
+ * Prevents external callers from forging completion callbacks.
  */
-export async function buildInternalAuthHeaders(
-  secret: string | undefined,
-  traceId?: string
-): Promise<Record<string, string>> {
-  const headers: Record<string, string> = {};
-  if (secret) {
-    const token = await generateInternalToken(secret);
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-  if (traceId) {
-    headers["x-trace-id"] = traceId;
-  }
-  return headers;
+export async function verifyCallbackSignature<T extends { signature: string }>(
+  payload: T,
+  secret: string
+): Promise<boolean> {
+  const { signature, ...data } = payload;
+  const expectedHex = await computeHmacHex(JSON.stringify(data), secret);
+  return timingSafeEqual(signature, expectedHex);
+}
+
+/**
+ * Verify a CP→bot callback against the bot's own per-service secret
+ * (the CP signs callbacks with the destination bot's key).
+ */
+export async function verifyCallbackFromControlPlane<T extends { signature: string }>(
+  payload: T,
+  env: { SERVICE_AUTH_SECRET?: string }
+): Promise<boolean> {
+  return Boolean(
+    env.SERVICE_AUTH_SECRET && (await verifyCallbackSignature(payload, env.SERVICE_AUTH_SECRET))
+  );
 }
 
 /**

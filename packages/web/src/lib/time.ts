@@ -40,10 +40,30 @@ export function formatRelativeTime(timestamp: number): string {
 }
 
 /**
+ * Format a future timestamp as the time remaining until it occurs.
+ */
+export function formatFutureRelativeTime(timestamp: number): string {
+  const minutes = Math.floor((timestamp - Date.now()) / (60 * 1000));
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) {
+    return `in ${days}d`;
+  }
+  if (hours > 0) {
+    return `in ${hours}h`;
+  }
+  if (minutes > 0) {
+    return `in ${minutes}m`;
+  }
+  return "in <1m";
+}
+
+/**
  * Group sessions by activity status.
  * Sessions older than 7 days are considered "inactive".
  */
-export function isInactiveSession(updatedAt: number): boolean {
-  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+export function isInactiveSession(updatedAt: number, now: number): boolean {
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
   return updatedAt < sevenDaysAgo;
 }

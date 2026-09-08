@@ -65,9 +65,20 @@ export function WebhookConfig({
     <div className="space-y-4 p-4 border border-border-muted rounded-md bg-background">
       {/* URL */}
       <div>
-        <label className="block text-xs font-medium text-muted-foreground mb-1">{urlLabel}</label>
+        <label
+          htmlFor="automation-webhook-url"
+          className="block text-xs font-medium text-muted-foreground mb-1"
+        >
+          {urlLabel}
+        </label>
         <div className="flex gap-2">
-          <Input type="text" value={currentUrl || ""} readOnly className="text-xs font-mono" />
+          <Input
+            id="automation-webhook-url"
+            type="text"
+            value={currentUrl || ""}
+            readOnly
+            className="text-xs font-mono"
+          />
           <Button
             type="button"
             variant="outline"
@@ -87,9 +98,20 @@ export function WebhookConfig({
       {/* API Key (webhook variant only) */}
       {currentKey && (
         <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">{keyLabel}</label>
+          <label
+            htmlFor="automation-webhook-key"
+            className="block text-xs font-medium text-muted-foreground mb-1"
+          >
+            {keyLabel}
+          </label>
           <div className="flex gap-2">
-            <Input type="text" value={currentKey} readOnly className="text-xs font-mono" />
+            <Input
+              id="automation-webhook-key"
+              type="text"
+              value={currentKey}
+              readOnly
+              className="text-xs font-mono"
+            />
             <Button
               type="button"
               variant="outline"

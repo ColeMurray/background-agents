@@ -1,0 +1,2 @@
+#!/bin/sh
+exec python3 -m sandbox_runtime.git_signer "$@"

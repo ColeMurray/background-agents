@@ -1,11 +1,10 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { getServerAuthSession } from "@/lib/server-auth-session";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 export async function GET(request: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -13,7 +12,7 @@ export async function GET(request: NextRequest) {
   try {
     const repo = request.nextUrl.searchParams.get("repo");
     const path = repo ? `/mcp-servers?repo=${encodeURIComponent(repo)}` : "/mcp-servers";
-    const response = await controlPlaneFetch(path);
+    const response = await controlPlaneUserFetch(path);
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -23,14 +22,14 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
     const body = await request.json();
-    const response = await controlPlaneFetch("/mcp-servers", {
+    const response = await controlPlaneUserFetch("/mcp-servers", {
       method: "POST",
       body: JSON.stringify(body),
     });

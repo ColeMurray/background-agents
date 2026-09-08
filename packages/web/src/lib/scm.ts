@@ -20,14 +20,20 @@ function getProvider(): ScmProvider {
   return "github";
 }
 
+function encodeOwner(provider: ScmProvider, owner: string): string {
+  return provider === "gitlab"
+    ? owner.split("/").map(encodeURIComponent).join("/")
+    : encodeURIComponent(owner);
+}
+
 export function getScmRepoUrl(owner: string, name: string): string {
   const provider = getProvider();
-  return `${BASE_URLS[provider]}/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+  return `${BASE_URLS[provider]}/${encodeOwner(provider, owner)}/${encodeURIComponent(name)}`;
 }
 
 export function getScmBranchUrl(owner: string, name: string, branch: string): string {
   const provider = getProvider();
-  const encodedOwner = encodeURIComponent(owner);
+  const encodedOwner = encodeOwner(provider, owner);
   const encodedName = encodeURIComponent(name);
   const encodedBranch = encodeURIComponent(branch);
   if (provider === "gitlab") {

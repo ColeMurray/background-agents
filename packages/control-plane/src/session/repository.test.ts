@@ -5,7 +5,12 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { SessionRepository, type SqlStorage, type SqlResult } from "./repository";
+import { SessionRepository } from "./repository";
+import {
+  AttachmentClaimConflictError,
+  SessionAttachmentRepository,
+} from "./session-attachment-repository";
+import type { SqlResult, SqlStorage } from "./sql-storage";
 
 /**
  * Create a mock SqlStorage that tracks calls and returns configurable data.
@@ -14,6 +19,7 @@ function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const mockData: Map<string, unknown[]> = new Map();
   const rowsWrittenByQuery: Map<string, number> = new Map();
+  let defaultRowsWritten = 0;
   let oneValue: unknown = null;
 
   const sql: SqlStorage = {
@@ -31,7 +37,7 @@ function createMockSql() {
           return oneValue;
         },
         get rowsWritten() {
-          return consumed ? (rowsWrittenByQuery.get(query) ?? 0) : 0;
+          return consumed ? (rowsWrittenByQuery.get(query) ?? defaultRowsWritten) : 0;
         },
       };
     },
@@ -46,6 +52,9 @@ function createMockSql() {
     setRowsWritten(query: string, rowsWritten: number) {
       rowsWrittenByQuery.set(query, rowsWritten);
     },
+    setDefaultRowsWritten(rowsWritten: number) {
+      defaultRowsWritten = rowsWritten;
+    },
     setOne(value: unknown) {
       oneValue = value;
     },
@@ -53,6 +62,7 @@ function createMockSql() {
       calls.length = 0;
       mockData.clear();
       rowsWrittenByQuery.clear();
+      defaultRowsWritten = 0;
       oneValue = null;
     },
   };
@@ -64,7 +74,11 @@ describe("SessionRepository", () => {
 
   beforeEach(() => {
     mock = createMockSql();
-    repo = new SessionRepository(mock.sql);
+    repo = new SessionRepository(
+      mock.sql,
+      (closure) => closure(),
+      new SessionAttachmentRepository(mock.sql)
+    );
   });
 
   // === SESSION ===
@@ -121,9 +135,44 @@ describe("SessionRepository", () => {
         0,
         0,
         null,
+        null,
         1000,
         2000,
       ]);
+    });
+
+    it("rejects partial repository context", () => {
+      expect(() =>
+        repo.upsertSession({
+          id: "sess-1",
+          sessionName: "test-session",
+          title: "Test Title",
+          repoOwner: "owner",
+          repoName: null,
+          model: "claude-sonnet-4",
+          status: "created",
+          createdAt: 1000,
+          updatedAt: 2000,
+        })
+      ).toThrow("Session repository context must include repoOwner and repoName together");
+    });
+
+    it("rejects repo metadata for no-repository sessions", () => {
+      expect(() =>
+        repo.upsertSession({
+          id: "sess-1",
+          sessionName: "test-session",
+          title: "Test Title",
+          repoOwner: null,
+          repoName: null,
+          repoId: 123,
+          baseBranch: "main",
+          model: "claude-sonnet-4",
+          status: "created",
+          createdAt: 1000,
+          updatedAt: 2000,
+        })
+      ).toThrow("No-repository sessions must not persist repoId or baseBranch");
     });
   });
 
@@ -201,6 +250,116 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].query).toContain("SET total_cost = total_cost + ?");
       expect(mock.calls[0].query).toContain("updated_at = ?");
       expect(mock.calls[0].params).toEqual([0.0123, 5000]);
+    });
+  });
+
+  // === SESSION REPOSITORIES ===
+
+  describe("replaceSessionRepositories", () => {
+    it("deletes existing rows before inserting the new set in order", () => {
+      repo.replaceSessionRepositories([
+        { position: 0, repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "backend",
+          repoId: null,
+          baseBranch: "develop",
+        },
+      ]);
+
+      expect(mock.calls.length).toBe(3);
+      expect(mock.calls[0].query).toContain("DELETE FROM session_repositories");
+      expect(mock.calls[1].query).toContain("INSERT INTO session_repositories");
+      expect(mock.calls[1].params).toEqual([0, "acme", "frontend", 1, "main"]);
+      expect(mock.calls[2].params).toEqual([1, "acme", "backend", null, "develop"]);
+    });
+
+    it("clears all rows when given an empty set", () => {
+      repo.replaceSessionRepositories([]);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("DELETE FROM session_repositories");
+    });
+  });
+
+  describe("getSessionRepositoryRows", () => {
+    it("returns rows ordered by position", () => {
+      const rows = [
+        { position: 0, repo_owner: "acme", repo_name: "frontend" },
+        { position: 1, repo_owner: "acme", repo_name: "backend" },
+      ];
+      mock.setData(`SELECT * FROM session_repositories ORDER BY position`, rows);
+
+      expect(repo.getSessionRepositoryRows()).toEqual(rows);
+    });
+
+    it("returns an empty list for pre-feature sessions", () => {
+      expect(repo.getSessionRepositoryRows()).toEqual([]);
+    });
+  });
+
+  describe("setSessionDiffBaselines", () => {
+    it("writes each baseline once using position and repository identity", () => {
+      repo.setSessionDiffBaselines([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "a".repeat(40),
+          isPrimary: true,
+        },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "b".repeat(40),
+          isPrimary: false,
+        },
+      ]);
+
+      expect(mock.calls[0].query).toContain("WHERE position = ?");
+      expect(mock.calls[0].query).toContain("repo_owner = ?");
+      expect(mock.calls[0].query).toContain("repo_name = ?");
+      expect(mock.calls[0].query).toContain("base_sha IS NULL");
+      expect(mock.calls[0].params).toEqual(["a".repeat(40), 0, "acme", "web"]);
+      expect(mock.calls[1].query).toContain("UPDATE session SET base_sha");
+      expect(mock.calls[1].query).toContain("base_sha IS NULL");
+      expect(mock.calls[1].params).toEqual(["a".repeat(40), "acme", "web"]);
+      expect(mock.calls[2].query).toContain("WHERE position = ?");
+      expect(mock.calls[2].params).toEqual(["b".repeat(40), 1, "acme", "web"]);
+    });
+
+    it("applies all baseline updates in one transaction", () => {
+      let transactions = 0;
+      repo = new SessionRepository(
+        mock.sql,
+        (closure) => {
+          transactions += 1;
+          return closure();
+        },
+        new SessionAttachmentRepository(mock.sql)
+      );
+
+      repo.setSessionDiffBaselines([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "a".repeat(40),
+          isPrimary: true,
+        },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "api",
+          baseSha: "b".repeat(40),
+          isPrimary: false,
+        },
+      ]);
+
+      expect(transactions).toBe(1);
+      expect(mock.calls).toHaveLength(3);
     });
   });
 
@@ -388,6 +547,7 @@ describe("SessionRepository", () => {
         scmUserId: "gh-123",
         scmLogin: "testuser",
         scmName: "Test User",
+        authName: "Authenticated User",
         scmEmail: "test@example.com",
         scmAccessTokenEncrypted: "encrypted-token",
         scmTokenExpiresAt: 9000,
@@ -403,6 +563,7 @@ describe("SessionRepository", () => {
         "gh-123",
         "testuser",
         "Test User",
+        "Authenticated User",
         "test@example.com",
         "encrypted-token",
         null,
@@ -430,6 +591,7 @@ describe("SessionRepository", () => {
         null,
         null,
         null,
+        null,
         "member",
         1000,
       ]);
@@ -441,13 +603,15 @@ describe("SessionRepository", () => {
       repo.updateParticipantCoalesce("p-1", {
         scmLogin: "newlogin",
         scmName: null,
+        authName: "Authenticated User",
       });
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("COALESCE");
       expect(mock.calls[0].params[0]).toBe(null); // scmUserId
       expect(mock.calls[0].params[1]).toBe("newlogin");
-      expect(mock.calls[0].params[7]).toBe("p-1"); // participantId
+      expect(mock.calls[0].params[3]).toBe("Authenticated User");
+      expect(mock.calls[0].params[8]).toBe("p-1"); // participantId
     });
   });
 
@@ -555,6 +719,46 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("createMessageWithAttachments", () => {
+    const message = {
+      id: "msg-1",
+      authorId: "p-1",
+      content: "Look",
+      source: "web" as const,
+      status: "pending" as const,
+      createdAt: 1000,
+    };
+
+    it("claims every upload and creates the message in one transaction", () => {
+      let transactions = 0;
+      repo = new SessionRepository(
+        mock.sql,
+        (closure) => {
+          transactions += 1;
+          return closure();
+        },
+        new SessionAttachmentRepository(mock.sql)
+      );
+      mock.setDefaultRowsWritten(2);
+
+      repo.createMessageWithAttachments(message, ["up-1", "up-2"]);
+
+      expect(transactions).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE attachments SET message_id");
+      expect(mock.calls[0].params).toEqual(["msg-1", "up-1", "up-2"]);
+      expect(mock.calls[1].query).toContain("INSERT INTO messages");
+    });
+
+    it("fails before creating the message when not every upload can be claimed", () => {
+      mock.setDefaultRowsWritten(1);
+
+      expect(() => repo.createMessageWithAttachments(message, ["up-1", "up-2"])).toThrow(
+        AttachmentClaimConflictError
+      );
+      expect(mock.calls).toHaveLength(1);
+    });
+  });
+
   describe("updateMessageToProcessing", () => {
     it("changes status and sets startedAt", () => {
       repo.updateMessageToProcessing("msg-1", 2000);
@@ -594,6 +798,18 @@ describe("SessionRepository", () => {
       repo.listMessages({ limit: 10, cursor: "5000" });
       expect(mock.calls[0].query).toContain("created_at < ?");
       expect(mock.calls[0].params).toContain(5000);
+    });
+  });
+
+  describe("getLatestTerminalMessage", () => {
+    it("selects the newest completed or failed message", () => {
+      repo.getLatestTerminalMessage();
+
+      expect(mock.calls[0].query).toContain("status IN ('completed', 'failed')");
+      expect(mock.calls[0].query).toContain(
+        "ORDER BY COALESCE(completed_at, started_at, created_at) DESC"
+      );
+      expect(mock.calls[0].query).toContain("LIMIT 1");
     });
   });
 
@@ -723,28 +939,120 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("listEvents", () => {
-    it("returns in descending order", () => {
-      repo.listEvents({ limit: 50 });
-      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC");
+  describe("listEventPage", () => {
+    it("returns in deterministic descending order", () => {
+      repo.listEventPage({ limit: 50 });
+      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
     });
 
     it("filters by type", () => {
-      repo.listEvents({ limit: 50, type: "tool_call" });
+      repo.listEventPage({ limit: 50, type: "tool_call" });
       expect(mock.calls[0].query).toContain("type = ?");
       expect(mock.calls[0].params).toContain("tool_call");
     });
 
     it("filters by messageId", () => {
-      repo.listEvents({ limit: 50, messageId: "msg-1" });
+      repo.listEventPage({ limit: 50, messageId: "msg-1" });
       expect(mock.calls[0].query).toContain("message_id = ?");
       expect(mock.calls[0].params).toContain("msg-1");
     });
 
-    it("uses cursor for pagination", () => {
-      repo.listEvents({ limit: 50, cursor: "5000" });
+    it("keeps legacy timestamp cursors for pagination", () => {
+      repo.listEventPage({ limit: 50, cursor: { kind: "legacy", createdAt: 5000 } });
       expect(mock.calls[0].query).toContain("created_at < ?");
       expect(mock.calls[0].params).toContain(5000);
+    });
+
+    it("uses composite cursors for stable pagination across tied timestamps", () => {
+      repo.listEventPage({
+        limit: 50,
+        cursor: { kind: "timeline", createdAt: 5000, id: "cursor-id" },
+      });
+      expect(mock.calls[0].query).toContain("((created_at < ?) OR (created_at = ? AND id < ?))");
+      expect(mock.calls[0].params).toEqual([5000, 5000, "cursor-id", 51]);
+    });
+
+    it("returns hasMore and trims overflow", () => {
+      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      mock.setData(query, [
+        { id: "e3", created_at: 5000, type: "token", data: "{}" },
+        { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
+        { id: "e1", created_at: 3000, type: "token", data: "{}" },
+      ]);
+
+      const result = repo.listEventPage({ limit: 2 });
+
+      expect(result.hasMore).toBe(true);
+      expect(result.events.map((event) => event.id)).toEqual(["e3", "e2"]);
+      expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 4000, id: "e2" });
+    });
+  });
+
+  describe("getEventTimelinePage", () => {
+    it("queries the first timeline page with deterministic descending storage order", () => {
+      repo.getEventTimelinePage({ limit: 50 });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toBe(
+        "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?"
+      );
+      expect(mock.calls[0].params).toEqual([51]);
+    });
+
+    it("queries timeline pages after a composite cursor", () => {
+      repo.getEventTimelinePage({
+        limit: 50,
+        cursor: { kind: "timeline", createdAt: 5000, id: "cursor-id" },
+      });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toBe(
+        "SELECT * FROM events WHERE ((created_at < ?) OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?"
+      );
+      expect(mock.calls[0].params).toEqual([5000, 5000, "cursor-id", 51]);
+    });
+
+    it("can exclude event types while using the same timeline pager", () => {
+      repo.getEventTimelinePage({
+        limit: 50,
+        cursor: { kind: "timeline", createdAt: 5000, id: "cursor-id" },
+        excludeTypes: ["heartbeat"],
+      });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toBe(
+        "SELECT * FROM events WHERE type NOT IN (?) AND ((created_at < ?) OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?"
+      );
+      expect(mock.calls[0].params).toEqual(["heartbeat", 5000, 5000, "cursor-id", 51]);
+    });
+
+    it("returns hasMore=false when a timeline page fits within the limit", () => {
+      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      mock.setData(query, [
+        { id: "e2", created_at: 4000, type: "token", data: "{}" },
+        { id: "e1", created_at: 3000, type: "tool_call", data: "{}" },
+      ]);
+
+      const result = repo.getEventTimelinePage({ limit: 50 });
+
+      expect(result.hasMore).toBe(false);
+      expect(result.events.map((event) => event.id)).toEqual(["e1", "e2"]);
+      expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 3000, id: "e1" });
+    });
+
+    it("returns hasMore=true and trims overflow when a timeline page exceeds the limit", () => {
+      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      mock.setData(query, [
+        { id: "e3", created_at: 5000, type: "token", data: "{}" },
+        { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
+        { id: "e1", created_at: 3000, type: "token", data: "{}" },
+      ]);
+
+      const result = repo.getEventTimelinePage({ limit: 2 });
+
+      expect(result.hasMore).toBe(true);
+      expect(result.events.map((event) => event.id)).toEqual(["e2", "e3"]);
+      expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 4000, id: "e2" });
     });
   });
 
@@ -761,78 +1069,10 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("getEventsHistoryPage", () => {
-    it("queries events with composite cursor excluding heartbeats", () => {
-      repo.getEventsHistoryPage(5000, "cursor-id", 50);
-
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("FROM events");
-      expect(mock.calls[0].query).toContain("type != 'heartbeat'");
-      expect(mock.calls[0].query).toContain("created_at < ?1");
-      expect(mock.calls[0].query).toContain("created_at = ?1 AND id < ?2");
-      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
-      expect(mock.calls[0].params).toEqual([5000, "cursor-id", 51]); // limit + 1
-    });
-
-    it("returns hasMore=false when results fit within limit", () => {
-      const query = `SELECT * FROM events
-         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
-         ORDER BY created_at DESC, id DESC LIMIT ?3`;
-
-      mock.setData(query, [
-        { id: "e1", created_at: 4000, type: "token", data: "{}" },
-        { id: "e2", created_at: 3000, type: "tool_call", data: "{}" },
-      ]);
-
-      const result = repo.getEventsHistoryPage(5000, "cursor-id", 50);
-      expect(result.hasMore).toBe(false);
-      expect(result.events.length).toBe(2);
-    });
-
-    it("returns hasMore=true and trims overflow when results exceed limit", () => {
-      const query = `SELECT * FROM events
-         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
-         ORDER BY created_at DESC, id DESC LIMIT ?3`;
-
-      // 3 rows returned, limit = 2 → hasMore = true, last row trimmed
-      mock.setData(query, [
-        { id: "e1", created_at: 4000, type: "token", data: "{}" },
-        { id: "e2", created_at: 3000, type: "tool_call", data: "{}" },
-        { id: "e3", created_at: 2000, type: "token", data: "{}" },
-      ]);
-
-      const result = repo.getEventsHistoryPage(5000, "cursor-id", 2);
-      expect(result.hasMore).toBe(true);
-      expect(result.events.length).toBe(2);
-    });
-
-    it("returns events in chronological order (reversed from DESC query)", () => {
-      const query = `SELECT * FROM events
-         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
-         ORDER BY created_at DESC, id DESC LIMIT ?3`;
-
-      mock.setData(query, [
-        { id: "e2", created_at: 4000, type: "token", data: "{}" },
-        { id: "e1", created_at: 3000, type: "tool_call", data: "{}" },
-      ]);
-
-      const result = repo.getEventsHistoryPage(5000, "cursor-id", 50);
-      // After reverse(), oldest first
-      expect(result.events[0].id).toBe("e1");
-      expect(result.events[1].id).toBe("e2");
-    });
-
-    it("returns empty results with hasMore=false when no data matches cursor", () => {
-      const result = repo.getEventsHistoryPage(5000, "cursor-id", 50);
-      expect(result.events).toEqual([]);
-      expect(result.hasMore).toBe(false);
-    });
-  });
-
   // === ARTIFACTS ===
 
   describe("createArtifact", () => {
-    it("stores artifact", () => {
+    it("stores artifact with updated_at starting at created_at", () => {
       repo.createArtifact({
         id: "art-1",
         type: "pr",
@@ -843,12 +1083,35 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO artifacts");
+      expect(mock.calls[0].query).toContain("updated_at");
       expect(mock.calls[0].params).toEqual([
         "art-1",
         "pr",
         "https://github.com/owner/repo/pull/1",
         '{"number":1}',
         1000,
+        1000,
+      ]);
+    });
+  });
+
+  describe("updateArtifact", () => {
+    it("updates url, metadata, and updated_at in place", () => {
+      repo.updateArtifact("art-1", {
+        url: "https://github.com/owner/renamed/pull/1",
+        metadata: '{"number":1}',
+        updatedAt: 3000,
+      });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain(
+        "UPDATE artifacts SET url = ?, metadata = ?, updated_at = ? WHERE id = ?"
+      );
+      expect(mock.calls[0].params).toEqual([
+        "https://github.com/owner/renamed/pull/1",
+        '{"number":1}',
+        3000,
+        "art-1",
       ]);
     });
   });

@@ -5,11 +5,13 @@
  * code-server password derivation that previously lived in the Python shim.
  */
 
-import { computeHmacHex, MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
+import type { SandboxSettings } from "@open-inspect/shared";
+import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
 import { DaytonaApiError, DaytonaNotFoundError } from "../daytona-rest-client";
+import { buildSandboxEnvVars, deriveCodeServerPassword, scmCloneIdentity } from "../sandbox-env";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -28,7 +30,6 @@ const log = createLogger("daytona-provider");
 // Constants (ported from packages/daytona-infra/src/config.py)
 // ---------------------------------------------------------------------------
 
-const CODE_SERVER_PORT = 8080;
 const DEFAULT_PREVIEW_EXPIRY_SECONDS = 3900;
 
 // ---------------------------------------------------------------------------
@@ -52,7 +53,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSnapshots: false,
     supportsRestore: false,
-    supportsWarm: false,
     supportsPersistentResume: true,
     supportsExplicitStop: true,
   };
@@ -191,53 +191,15 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   // -----------------------------------------------------------------------
 
   private async buildEnvVars(config: CreateSandboxConfig): Promise<Record<string, string>> {
-    // Start with user env vars (repo secrets), then overlay system vars
-    const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
-
-    const sessionConfig: Record<string, string> = {
-      session_id: config.sessionId,
-      repo_owner: config.repoOwner,
-      repo_name: config.repoName,
-      provider: config.provider,
-      model: config.model,
-    };
-    if (config.branch) {
-      sessionConfig.branch = config.branch;
-    }
-
-    Object.assign(envVars, {
-      PYTHONUNBUFFERED: "1",
-      SANDBOX_ID: config.sandboxId,
-      CONTROL_PLANE_URL: config.controlPlaneUrl,
-      SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
-      REPO_OWNER: config.repoOwner,
-      REPO_NAME: config.repoName,
-      SESSION_CONFIG: JSON.stringify(sessionConfig),
+    return buildSandboxEnvVars(config, {
+      scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
+      codeServerPassword: config.codeServerEnabled
+        ? await deriveCodeServerPassword(
+            config.sandboxId,
+            this.providerConfig.codeServerPasswordSecret
+          )
+        : undefined,
     });
-
-    if (config.codeServerEnabled) {
-      envVars.CODE_SERVER_PASSWORD = await this.deriveCodeServerPassword(config.sandboxId);
-    }
-
-    if (config.agentSlackNotifyEnabled) {
-      envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
-    }
-
-    if (this.providerConfig.scmProvider === "gitlab") {
-      envVars.VCS_HOST = "gitlab.com";
-      envVars.VCS_CLONE_USERNAME = "oauth2";
-    } else {
-      envVars.VCS_HOST = "github.com";
-      envVars.VCS_CLONE_USERNAME = "x-access-token";
-    }
-
-    // Note: no VCS_CLONE_TOKEN / GITHUB_TOKEN / GITHUB_APP_TOKEN. Git
-    // operations in the sandbox authenticate per-request via the system git
-    // credential helper, which hits /sessions/:id/scm-credentials. Embedding
-    // a token in env would silently fail once the token expires (or
-    // immediately, for providers like GitHub Apps with short-lived tokens).
-
-    return envVars;
   }
 
   // -----------------------------------------------------------------------
@@ -248,8 +210,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     return {
       openinspect_framework: "open-inspect",
       openinspect_session_id: config.sessionId,
-      openinspect_repo: `${config.repoOwner}/${config.repoName}`,
       openinspect_expected_sandbox_id: config.sandboxId,
+      ...(config.repoOwner && config.repoName
+        ? { openinspect_repo: `${config.repoOwner}/${config.repoName}` }
+        : {}),
     };
   }
 
@@ -269,6 +233,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     tunnelUrls?: Record<string, string>;
   }> {
     const expirySeconds = resolvePreviewExpirySeconds(timeoutSeconds);
+    const { codeServerPort } = resolveServicePorts(sandboxSettings);
     let tunnelPorts = resolveTunnelPorts(sandboxSettings?.tunnelPorts);
     let codeServerUrl: string | undefined;
     let codeServerPassword: string | undefined;
@@ -276,12 +241,15 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     if (codeServerEnabled) {
       const preview = await this.client.getSignedPreviewUrl(
         daytonaSandboxId,
-        CODE_SERVER_PORT,
+        codeServerPort,
         expirySeconds
       );
       codeServerUrl = preview.url;
-      codeServerPassword = await this.deriveCodeServerPassword(logicalSandboxId);
-      tunnelPorts = tunnelPorts.filter((p) => p !== CODE_SERVER_PORT);
+      codeServerPassword = await deriveCodeServerPassword(
+        logicalSandboxId,
+        this.providerConfig.codeServerPasswordSecret
+      );
+      tunnelPorts = tunnelPorts.filter((p) => p !== codeServerPort);
     }
 
     let tunnelUrls: Record<string, string> | undefined;
@@ -300,18 +268,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     }
 
     return { codeServerUrl, codeServerPassword, tunnelUrls };
-  }
-
-  // -----------------------------------------------------------------------
-  // Code-server password (ported from auth.py derive_code_server_password)
-  // -----------------------------------------------------------------------
-
-  private async deriveCodeServerPassword(sandboxId: string): Promise<string> {
-    const digest = await computeHmacHex(
-      `code-server:${sandboxId}`,
-      this.providerConfig.codeServerPasswordSecret
-    );
-    return digest.slice(0, 32);
   }
 
   // -----------------------------------------------------------------------
@@ -337,18 +293,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 function resolvePreviewExpirySeconds(timeoutSeconds: number | undefined): number {
   if (!timeoutSeconds) return DEFAULT_PREVIEW_EXPIRY_SECONDS;
   return Math.min(86400, Math.max(900, timeoutSeconds + 300));
-}
-
-function resolveTunnelPorts(rawPorts: number[] | undefined): number[] {
-  if (!rawPorts) return [];
-  const ports: number[] = [];
-  for (const value of rawPorts) {
-    if (Number.isInteger(value) && value >= 1 && value <= 65535) {
-      ports.push(value);
-    }
-    if (ports.length >= MAX_TUNNEL_PORTS) break;
-  }
-  return ports;
 }
 
 // ---------------------------------------------------------------------------

@@ -20,7 +20,8 @@ describe("openai", () => {
 
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve(mockTokens),
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(mockTokens)),
       } as unknown as Response);
 
       const result = await refreshOpenAIToken("rt_old");
@@ -35,6 +36,35 @@ describe("openai", () => {
       expect(init.body).toContain("grant_type=refresh_token");
       expect(init.body).toContain("refresh_token=rt_old");
       expect(init.body).toContain("client_id=app_EMoamEEZ73f0CkXaXp7hrann");
+    });
+
+    it("returns tokens when optional expires_in is omitted", async () => {
+      const mockTokens: OpenAITokenResponse = {
+        id_token: "id.jwt.token",
+        access_token: "acc_123",
+        refresh_token: "rt_new",
+      };
+
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(mockTokens)),
+      } as unknown as Response);
+
+      await expect(refreshOpenAIToken("rt_old")).resolves.toEqual(mockTokens);
+    });
+
+    it("throws OpenAITokenRefreshError on malformed success response", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('{"access_token":"acc_123"}'),
+      } as unknown as Response);
+
+      const err = await refreshOpenAIToken("rt_old").catch((e) => e);
+      expect(err).toBeInstanceOf(OpenAITokenRefreshError);
+      expect(err.status).toBe(200);
+      expect(err.body).toBe('{"access_token":"acc_123"}');
     });
 
     it("throws OpenAITokenRefreshError on 401 with status and body", async () => {

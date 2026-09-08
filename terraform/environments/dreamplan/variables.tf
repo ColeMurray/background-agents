@@ -295,8 +295,26 @@ variable "daytona_target" {
 }
 
 variable "nextauth_secret" {
-  description = "NextAuth.js secret (generate with: openssl rand -base64 32)"
+  description = "Browser authentication secret; signs Better Auth state and cookies in the control plane (legacy name; generate with: openssl rand -base64 32)"
   type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(regexall("\\S", var.nextauth_secret)) >= 32
+    error_message = "nextauth_secret must contain at least 32 non-whitespace characters."
+  }
+}
+
+variable "google_client_id" {
+  description = "Google OAuth client ID. Leave empty to keep Google sign-in disabled."
+  type        = string
+  default     = ""
+}
+
+variable "google_client_secret" {
+  description = "Google OAuth client secret. Leave empty to keep Google sign-in disabled."
+  type        = string
+  default     = ""
   sensitive   = true
 }
 
@@ -439,4 +457,16 @@ variable "unsafe_allow_all_users" {
   description = "Bypass Terraform's access-control safety check and allow any authenticated GitHub user to sign in when both allowlists are empty. Set to true only for intentionally open deployments."
   type        = bool
   default     = false
+}
+
+variable "allowed_emails" {
+  description = "Comma-separated list of exact email addresses allowed to sign in. Optional; supplements allowed_users / allowed_email_domains."
+  type        = string
+  default     = ""
+}
+
+variable "allowed_github_orgs" {
+  description = "Comma-separated list of GitHub organizations whose members are allowed to sign in. Optional; supplements the other allowlists."
+  type        = string
+  default     = ""
 }

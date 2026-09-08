@@ -12,12 +12,12 @@ async function handleListMcpServers(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  if (!env.DB) return error("Database not configured", 503);
+  if (!ctx.db) return error("Database not configured", 503);
 
   const url = new URL(request.url);
   const repo = url.searchParams.get("repo") ?? undefined;
 
-  const store = new McpServerStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const store = new McpServerStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
   const servers = await store.list(repo);
   logger.info("MCP servers listed", {
     event: "mcp_server.list",
@@ -36,9 +36,9 @@ async function handleGetMcpServer(
 ): Promise<Response> {
   const id = match.groups?.id;
   if (!id) return error("Missing server ID", 400);
-  if (!env.DB) return error("Database not configured", 503);
+  if (!ctx.db) return error("Database not configured", 503);
 
-  const store = new McpServerStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const store = new McpServerStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
   const server = await store.get(id);
   if (!server) return error("MCP server not found", 404);
   logger.info("MCP server retrieved", {
@@ -56,7 +56,7 @@ async function handleCreateMcpServer(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  if (!env.DB) return error("Database not configured", 503);
+  if (!ctx.db) return error("Database not configured", 503);
 
   let body: Partial<McpServerConfig>;
   try {
@@ -90,7 +90,7 @@ async function handleCreateMcpServer(
   }
 
   try {
-    const store = new McpServerStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+    const store = new McpServerStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
     const server = await store.create({
       name: body.name,
       type: body.type,
@@ -125,7 +125,7 @@ async function handleUpdateMcpServer(
 ): Promise<Response> {
   const id = match.groups?.id;
   if (!id) return error("Missing server ID", 400);
-  if (!env.DB) return error("Database not configured", 503);
+  if (!ctx.db) return error("Database not configured", 503);
 
   let body: Partial<McpServerConfig>;
   try {
@@ -160,7 +160,7 @@ async function handleUpdateMcpServer(
   }
 
   try {
-    const store = new McpServerStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+    const store = new McpServerStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
     const updated = await store.update(id, body);
     if (!updated) return error("MCP server not found", 404);
 
@@ -187,9 +187,9 @@ async function handleDeleteMcpServer(
 ): Promise<Response> {
   const id = match.groups?.id;
   if (!id) return error("Missing server ID", 400);
-  if (!env.DB) return error("Database not configured", 503);
+  if (!ctx.db) return error("Database not configured", 503);
 
-  const store = new McpServerStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const store = new McpServerStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
   const deleted = await store.delete(id);
   if (!deleted) return error("MCP server not found", 404);
 

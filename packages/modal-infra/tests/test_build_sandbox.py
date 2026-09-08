@@ -99,8 +99,8 @@ async def test_no_control_plane_or_auth_vars(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_timeout_is_1800(monkeypatch):
-    """Build sandbox should use 30-minute (1800s) timeout."""
+async def test_timeout_defaults_to_1800(monkeypatch):
+    """Build sandbox should default to the 30-minute (1800s) timeout."""
     captured = {}
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
 
@@ -111,6 +111,36 @@ async def test_timeout_is_1800(monkeypatch):
     )
 
     assert captured["timeout"] == 1800
+
+
+@pytest.mark.asyncio
+async def test_honors_explicit_timeout_seconds(monkeypatch):
+    """An explicit timeout_seconds should drive the build sandbox lifetime."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    manager = SandboxManager()
+    await manager.create_build_sandbox(
+        repo_owner="acme",
+        repo_name="my-repo",
+        timeout_seconds=2400,
+    )
+
+    assert captured["timeout"] == 2400
+
+
+def test_build_function_timeout_exceeds_sandbox_plus_snapshot():
+    """The build worker's function timeout must outlive sandbox + snapshot."""
+    from src.sandbox.manager import (
+        SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS,
+        build_function_timeout_seconds,
+    )
+
+    for sandbox_timeout in (1800, 3600):
+        assert (
+            build_function_timeout_seconds(sandbox_timeout)
+            > sandbox_timeout + SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+        )
 
 
 @pytest.mark.asyncio
@@ -255,3 +285,36 @@ async def test_system_vars_override_user_env_vars(monkeypatch):
     env = captured["env"]
     assert env["IMAGE_BUILD_MODE"] == "true"
     assert env["SANDBOX_ID"].startswith("build-acme-my-repo-")
+
+
+@pytest.mark.asyncio
+async def test_session_config_includes_repositories_when_passed(monkeypatch):
+    """Multi-repo builds (environment images) pass the member list through."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    manager = SandboxManager()
+    members = [
+        {"repo_owner": "acme", "repo_name": "frontend", "branch": "main"},
+        {"repo_owner": "acme", "repo_name": "backend", "branch": "develop"},
+    ]
+    await manager.create_build_sandbox(
+        repo_owner="acme",
+        repo_name="frontend",
+        repositories=members,
+    )
+
+    session_config = json.loads(captured["env"]["SESSION_CONFIG"])
+    assert session_config["repositories"] == members
+
+
+@pytest.mark.asyncio
+async def test_session_config_omits_repositories_by_default(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    manager = SandboxManager()
+    await manager.create_build_sandbox(repo_owner="acme", repo_name="my-repo")
+
+    session_config = json.loads(captured["env"]["SESSION_CONFIG"])
+    assert "repositories" not in session_config
