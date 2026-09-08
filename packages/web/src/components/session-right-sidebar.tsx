@@ -133,12 +133,14 @@ export function SessionRightSidebarContent({
           parentSessionId={sessionState.parentSessionId}
           canManageLifecycle={capabilities.lifecycle}
         />
-        <BudgetSection
-          sessionId={sessionId}
-          totalCost={sessionState.totalCost ?? 0}
-          maxSessionCostUsd={sessionState.maxSessionCostUsd}
-          canManageBudget={canManageBudget}
-        />
+        <div className="mt-4">
+          <BudgetSection
+            sessionId={sessionId}
+            totalCost={sessionState.totalCost ?? 0}
+            maxSessionCostUsd={sessionState.maxSessionCostUsd}
+            canManageBudget={canManageBudget}
+          />
+        </div>
       </div>
 
       {/* Code Server */}
