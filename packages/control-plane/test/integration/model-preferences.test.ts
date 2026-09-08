@@ -22,6 +22,18 @@ async function getStoredModels(): Promise<unknown> {
 describe("Model preferences API", () => {
   beforeEach(cleanD1Tables);
 
+  it("rejects malformed JSON without replacing preferences", async () => {
+    const stored = ["anthropic/claude-sonnet-4-6"];
+    await seedPreferences(stored);
+    const response = await serviceFetch("https://test.local/model-preferences", {
+      method: "PUT",
+      body: "{",
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid JSON body" });
+    expect(await getStoredModels()).toEqual(stored);
+  });
+
   it("returns defaults when no preferences are stored", async () => {
     const response = await serviceFetch("https://test.local/model-preferences");
 
