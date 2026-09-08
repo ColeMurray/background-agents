@@ -59,10 +59,11 @@ lint_shell() {
 lint_shell "$RENDERED"
 echo "user-data template: syntax and shellcheck clean"
 
-# The deploy script is the other thing here that only ever runs somewhere it is
-# hard to iterate on: a CI job, against a live instance.
+# The deploy scripts are the other things here that only ever run somewhere it is
+# hard to iterate on: a CI job, and an instance reached over SSM.
 lint_shell "$REPO_ROOT/scripts/deploy-aws.sh"
-echo "deploy script: syntax and shellcheck clean"
+lint_shell "$REPO_ROOT/terraform/modules/aws-control-plane/files/deploy.sh"
+echo "deploy scripts: syntax and shellcheck clean"
 
 # ---------------------------------------------------------------------------
 # The AWS overlay resolves to the stack the instance is meant to run

@@ -7,9 +7,15 @@
 #
 # The deployed version is an SSM parameter the instance reads into `.env` on
 # every activation, so a deploy is a parameter write plus one remote command --
-# no new instance, and no ssh. The command runs `open-inspect-deploy`, which
-# fetches, pulls and `up -d --wait`s without stopping the old stack first, so a
-# failure before the swap leaves the running deployment untouched.
+# no new instance, and no ssh. The command fetches (which brings down the stack
+# files, `.env` and the activation script itself) and then runs the activation,
+# which pulls and `up -d --wait`s without stopping the old stack first: a failure
+# before the swap leaves the running deployment untouched.
+#
+# It names those two steps rather than a helper baked into the instance, because
+# the instance ignores `user_data_base64` -- a host keeps whatever cloud-init
+# wrote at its first boot, so anything a deploy assumes is installed there is an
+# assumption about how old the instance is.
 #
 # A rollback is therefore the same two steps with the old value, which is why
 # this script and not the workflow owns the sequence: the value to restore has
@@ -25,6 +31,9 @@ set -euo pipefail
 # How long the remote command may take, and how long after it the service has
 # to answer. The command itself pulls an image over the instance's own link.
 COMMAND_TIMEOUT_SECONDS="${COMMAND_TIMEOUT_SECONDS:-600}"
+# How long past the remote command's own deadline this waits for a final status.
+# SSM has already stopped the command by then, so a rollback cannot overlap it.
+COMMAND_GRACE_SECONDS="${COMMAND_GRACE_SECONDS:-60}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-300}"
 # "Healthy" is sustained, not a single 200: a container that answers once and
 # then exits is the failure this is here to catch.
@@ -50,22 +59,37 @@ write_deployed_image() {
     --region "$AWS_REGION" >/dev/null
 }
 
-# Runs open-inspect-deploy on the instance and waits for it, printing whatever
-# it wrote. Returns non-zero on any failure, including a command that never
-# reaches a terminal state inside the budget.
+# Fetches and activates on the instance, waiting for the result and printing
+# whatever it wrote. Returns non-zero on any failure, including a command that
+# never reaches a terminal state inside the budget.
 activate() {
-  local command_id status deadline
+  local command_id status deadline execution_timeout parameters
+
+  # `--timeout-seconds` bounds delivery only: once AWS-RunShellScript starts, it
+  # runs to completion no matter what this script does. `executionTimeout` is
+  # the document's own bound, and it is what keeps a hung activation from still
+  # pulling and recreating containers while the rollback below writes the old
+  # image and sends a second one. The document rejects anything under 30s; the
+  # tests compress the local budget well below that, hence the floor.
+  execution_timeout=$(( COMMAND_TIMEOUT_SECONDS < 30 ? 30 : COMMAND_TIMEOUT_SECONDS ))
+  parameters="$(printf '{"commands":["%s","%s"],"executionTimeout":["%s"]}' \
+    "/usr/local/bin/open-inspect-fetch-config" \
+    "bash /opt/open-inspect/deploy.sh" \
+    "$execution_timeout")"
+
   command_id="$(aws ssm send-command \
     --instance-ids "$INSTANCE_ID" \
     --document-name AWS-RunShellScript \
     --comment "open-inspect deploy" \
-    --parameters '{"commands":["/usr/local/bin/open-inspect-deploy"]}' \
+    --parameters "$parameters" \
     --timeout-seconds "$COMMAND_TIMEOUT_SECONDS" \
     --region "$AWS_REGION" \
     --query 'Command.CommandId' --output text)" || return 1
   log "command $command_id sent"
 
-  deadline=$(( SECONDS + COMMAND_TIMEOUT_SECONDS ))
+  # Past the document's deadline, not up to it: the point of waiting the extra
+  # grace is to see the terminal status SSM writes when it stops the command.
+  deadline=$(( SECONDS + execution_timeout + COMMAND_GRACE_SECONDS ))
   while [ "$SECONDS" -lt "$deadline" ]; do
     sleep "$COMMAND_POLL_SECONDS"
     # A just-sent command is briefly unknown to GetCommandInvocation.
@@ -86,7 +110,7 @@ activate() {
     esac
   done
 
-  log "command $command_id did not finish within ${COMMAND_TIMEOUT_SECONDS}s"
+  log "command $command_id has no terminal status ${COMMAND_GRACE_SECONDS}s past its ${execution_timeout}s deadline"
   print_command_output "$command_id"
   return 1
 }

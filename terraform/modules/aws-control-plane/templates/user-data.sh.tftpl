@@ -218,17 +218,18 @@ chmod 755 /usr/local/bin/open-inspect-fetch-config
 # nothing at all, which is what makes a failed deploy a no-op rather than an
 # outage -- and what lets a rollback be the same command with the parameter put
 # back.
+#
+# Only the two steps are here. The activation itself is `deploy.sh`, which comes
+# down from S3 with the compose files, because this file cannot: the instance
+# ignores `user_data_base64`, so whatever cloud-init writes is what the host has
+# for its lifetime. A deploy therefore never assumes an instance is running a
+# particular revision of this template -- it runs the two steps itself.
 cat >/usr/local/bin/open-inspect-deploy <<'SCRIPT'
 #!/bin/bash
 set -euo pipefail
 
-STACK_DIR=/opt/open-inspect
-compose() { docker compose -f docker-compose.yml -f docker-compose.aws.yml "$@"; }
-
 /usr/local/bin/open-inspect-fetch-config
-cd "$STACK_DIR"
-compose pull
-compose up -d --wait
+exec bash /opt/open-inspect/deploy.sh
 SCRIPT
 chmod 755 /usr/local/bin/open-inspect-deploy
 

@@ -132,6 +132,7 @@ function runDeploy({
     status: result.status,
     output: `${result.stdout}${result.stderr}`,
     deployed: readFileSync(join(dir, "deployed"), "utf8"),
+    calls: readFileSync(join(dir, "calls"), "utf8"),
     activations: countLines("activations"),
     probes: countLines("probes"),
   };
@@ -198,4 +199,23 @@ test("a single failed check restarts the count rather than resuming it", () => {
   assert.equal(run.status, 0, run.output);
   assert.equal(run.deployed, NEW);
   assert.equal(run.probes, 4);
+});
+
+test("the remote command bounds its own execution and assumes nothing about the host", () => {
+  const run = runDeploy({ previous: OLD, image: NEW });
+  const sent = run.calls.split("\n").filter((line) => line.includes("send-command"));
+
+  assert.equal(sent.length, 1);
+
+  // Without executionTimeout the document runs to completion whatever this
+  // script does, and the rollback below would pull and recreate containers
+  // underneath an activation still doing the same. `--timeout-seconds` does not
+  // cover it: that bounds delivery, not the shell.
+  assert.match(sent[0], /executionTimeout/);
+
+  // The instance ignores user_data_base64, so a host keeps whatever cloud-init
+  // wrote at its first boot. Naming anything installed that way makes a deploy
+  // depend on how old the instance is; the fetch brings the rest down itself.
+  assert.match(sent[0], /open-inspect-fetch-config/);
+  assert.doesNotMatch(sent[0], /open-inspect-deploy/);
 });

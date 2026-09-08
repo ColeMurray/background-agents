@@ -14,6 +14,12 @@ locals {
     "docker-compose.aws.yml"                       = "${local.repository_root}/docker-compose.aws.yml"
     "packages/control-plane/docker/Caddyfile"      = "${local.repository_root}/packages/control-plane/docker/Caddyfile"
     "packages/control-plane/docker/litestream.yml" = "${local.repository_root}/packages/control-plane/docker/litestream.yml"
+
+    # Not part of the compose stack: the activation sequence itself. It ships
+    # here rather than in user data because `aws_instance.this` ignores
+    # `user_data_base64` -- cloud-init's copy of anything is frozen at the
+    # instance's first boot, while this arrives on every fetch.
+    "deploy.sh" = "${path.module}/files/deploy.sh"
   }
 
   # Everything the infrastructure itself decides. An entry in var.config wins,
