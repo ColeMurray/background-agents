@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket as NodeWebSocket } from "ws";
 import { NO_AUTHORIZATION } from "../routes/shared";
 import { admit } from "../routing/admit";
@@ -49,7 +49,15 @@ function cacheWritingRoute(): Hono<ControlPlaneHonoEnv>[] {
 }
 
 /** A public route that answers once `release` is called, for shutdown against work in flight. */
-function blockingRoute(): { routes: Hono<ControlPlaneHonoEnv>[]; release: () => void } {
+function blockingRoute(): {
+  routes: Hono<ControlPlaneHonoEnv>[];
+  entered: Promise<void>;
+  release: () => void;
+} {
+  let markEntered!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    markEntered = resolve;
+  });
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;
@@ -63,11 +71,12 @@ function blockingRoute(): { routes: Hono<ControlPlaneHonoEnv>[]; release: () => 
       authorization: NO_AUTHORIZATION,
     }),
     async () => {
+      markEntered();
       await held;
       return Response.json({ released: true });
     }
   );
-  return { routes: [routes], release };
+  return { routes: [routes], entered, release };
 }
 
 describe("startNodeHost", () => {
@@ -171,15 +180,12 @@ describe("startNodeHost", () => {
   });
 
   it("waits for a request in flight before closing the stores, and answers it", async () => {
-    const { routes, release } = blockingRoute();
+    const { routes, entered, release } = blockingRoute();
     host = await start({ routes });
     const base = `http://127.0.0.1:${host.address.port}`;
 
     const blocked = fetch(`${base}/block`);
-    await vi.waitFor(async () => {
-      // The request has reached the handler once a second one is admitted behind it.
-      expect((await fetch(`${base}/healthz`)).status).toBe(200);
-    });
+    await entered;
     const stopping = host.shutdown();
     await new Promise((resolve) => setTimeout(resolve, 50));
     // Not closed underneath the handler: the shutdown is still waiting.

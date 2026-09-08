@@ -265,6 +265,8 @@ export const sandboxSettingsSchema = z.strictObject({
   sandboxTimeoutMs: z.number().optional(),
   /** Repo-image build timeout (the build sandbox lifetime), in seconds. */
   buildTimeoutSeconds: z.number().optional(),
+  /** Maximum OpenCode-reported session cost in USD. */
+  maxSessionCostUsd: z.number().finite().positive().optional(),
 });
 
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;

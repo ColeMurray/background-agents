@@ -92,6 +92,13 @@ const fields: FieldRegistry = {
     parse: (value) => ({ value }),
     isChanged: (value, current) => value !== current,
   },
+  maxSessionCostUsd: {
+    draftKey: "maxSessionCostUsd",
+    ...numberField(
+      (value) => Number.isFinite(Number(value)) && Number(value) > 0,
+      "Session cost limit must be a positive USD amount."
+    ),
+  },
   maxConcurrentChildSessions: {
     draftKey: "maxConcurrentChildSessions",
     ...numberField(

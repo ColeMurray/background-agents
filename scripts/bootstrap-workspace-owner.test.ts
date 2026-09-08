@@ -321,6 +321,28 @@ describe("Owner bootstrap SQL", () => {
 });
 
 describe("Owner bootstrap orchestration", () => {
+  it("rejects malformed Wrangler JSON result shapes", async () => {
+    await assert.rejects(
+      run(
+        { database: "workspace", userId: USER_ID, execute: false },
+        {
+          runWrangler: () => JSON.stringify({ success: true, results: [] }),
+        }
+      ),
+      /malformed JSON result/
+    );
+
+    await assert.rejects(
+      run(
+        { database: "workspace", userId: USER_ID, execute: false },
+        {
+          runWrangler: () => JSON.stringify([{ success: true, results: [null] }]),
+        }
+      ),
+      /malformed JSON result/
+    );
+  });
+
   it("accepts only the execution response bound to this invocation's audit", async () => {
     let calls = 0;
     await run(

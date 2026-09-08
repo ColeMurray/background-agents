@@ -20,6 +20,7 @@ import {
 import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
 import { MIN_SANDBOX_TIMEOUT_MINUTES } from "./sandbox-timeout";
 import { resolveSandboxSettingsDraft, type SandboxSettingsDraft } from "./sandbox-settings-draft";
+import { SessionCostSettingsFields } from "./session-cost-settings-fields";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const GLOBAL_SCOPE = "__global__";
@@ -370,6 +371,12 @@ export function SandboxSettingsEditor({
           )}
         </div>
       </fieldset>
+
+      <SessionCostSettingsFields
+        isGlobal={isGlobal}
+        maxSessionCostUsd={values.maxSessionCostUsd}
+        onMaxSessionCostUsdChange={(value) => updateField("maxSessionCostUsd", value)}
+      />
 
       <fieldset className="min-w-0">
         <legend className="block text-sm font-medium text-foreground mb-1.5">Child Sessions</legend>

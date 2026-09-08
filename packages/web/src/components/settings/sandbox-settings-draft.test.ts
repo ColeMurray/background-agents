@@ -36,6 +36,7 @@ describe("resolveSandboxSettingsDraft", () => {
       values: {
         tunnelPorts: ["3000", "5173"],
         terminalEnabled: true,
+        maxSessionCostUsd: "",
         codeServerPort: "8081",
         vncPort: "6081",
         terminalPort: "7682",
@@ -108,6 +109,7 @@ describe("resolveSandboxSettingsDraft", () => {
         sandboxTimeoutMinutes: " 2.05 ",
         maxConcurrentChildSessions: "02",
         maxTotalChildSessions: "10",
+        maxSessionCostUsd: " 2.50 ",
         cpuCores: " .25 ",
         memoryMib: " 2048 ",
       }).result
@@ -121,6 +123,7 @@ describe("resolveSandboxSettingsDraft", () => {
         sandboxTimeoutMs: 123_000,
         maxConcurrentChildSessions: 2,
         maxTotalChildSessions: 10,
+        maxSessionCostUsd: 2.5,
         cpuCores: 0.25,
         memoryMib: 2048,
       },

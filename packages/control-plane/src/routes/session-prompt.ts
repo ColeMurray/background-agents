@@ -56,7 +56,7 @@ export async function handleSessionPrompt(
 ): Promise<Response> {
   const sessionId = params.id;
 
-  const rawBody = await parseJsonBody<unknown>(request);
+  const rawBody = await parseJsonBody(request);
   if (rawBody instanceof Response) return rawBody;
 
   const enforcement = applyIdentityEnforcement(ctx, "prompt", rawBody);

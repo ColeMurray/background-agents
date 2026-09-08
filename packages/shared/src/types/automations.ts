@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { automationTriggerTypeSchema, triggerConfigSchema } from "../triggers/types";
+import {
+  type AutomationTriggerType,
+  automationTriggerTypeSchema,
+  triggerConfigSchema,
+} from "../triggers/types";
 import {
   MAX_TARGET_REPOSITORIES,
   repositoriesInputSchema,
@@ -33,6 +37,33 @@ export type AutomationInvocationStatus = z.infer<typeof automationInvocationStat
 /** Maximum repositories an automation can fan out across per invocation. */
 export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
 
+/** Maximum length of an automation's instruction prompt. */
+export const MAX_AUTOMATION_INSTRUCTIONS_LENGTH = 15_000;
+
+/**
+ * Validate target-count rules shared by automation clients and the API.
+ * Repository-scoped triggers bind to exactly one repository and no
+ * environments; fan-out is schedule-only; both target kinds share one cap.
+ */
+export function validateAutomationTargetCounts(
+  triggerType: AutomationTriggerType,
+  repositoryCount: number,
+  environmentCount: number
+): string | null {
+  if ((triggerType === "github_event" || triggerType === "linear_event") && repositoryCount === 0) {
+    return "Repository-scoped triggers require exactly one repository";
+  }
+  if ((triggerType === "github_event" || triggerType === "linear_event") && environmentCount > 0) {
+    return "Repository-scoped triggers cannot target environments";
+  }
+  if (repositoryCount + environmentCount > 1 && triggerType !== "schedule") {
+    return "Multi-target selections require a schedule trigger";
+  }
+  if (repositoryCount + environmentCount > MAX_AUTOMATION_REPOSITORIES) {
+    return `At most ${MAX_AUTOMATION_REPOSITORIES} repositories and environments combined`;
+  }
+  return null;
+}
 /** Largest page `GET /automations/:id/invocations` serves; larger limits are refused. */
 export const MAX_AUTOMATION_INVOCATION_LIST_LIMIT = 100;
 

@@ -19,40 +19,28 @@ The infrastructure spans multiple cloud providers:
 ```
 terraform/
 ├── d1/
-│   └── migrations/              # D1 database migrations (applied via d1-migrate.sh)
-├── modules/                      # Reusable Terraform modules
-│   ├── cloudflare-kv/           # KV namespace management
-│   ├── cloudflare-worker/       # Worker deployment with bindings (KV, DO, D1)
-│   ├── daytona-infra/           # Daytona snapshot bootstrap wrapper
-│   ├── vercel-project/          # Vercel project + environment vars
-│   └── modal-app/               # Modal CLI wrapper
-│       └── scripts/             # Deployment scripts
+│   └── migrations/              # D1 migrations (applied via d1-migrate.sh)
+├── modules/                     # Reusable modules with input/output definitions
 ├── environments/
-│   └── production/              # Production root module (split by concern)
-│       ├── main.tf              # Entrypoint + file map
-│       ├── locals.tf            # Shared naming/URL/script path locals
-│       ├── kv.tf                # Cloudflare KV namespaces
-│       ├── d1.tf                # D1 database + migrations
-│       ├── workers-*.tf         # Worker builds/deployments per service
-│       ├── web-*.tf             # Web app resources (Vercel/OpenNext)
-│       ├── daytona.tf           # Daytona snapshot resources
-│       ├── modal.tf             # Modal infrastructure
-│       ├── checks.tf            # Terraform check blocks
-│       ├── moved.tf             # State move declarations
-│       ├── variables.tf         # Input variables
-│       ├── outputs.tf           # Output values
-│       ├── backend.tf           # State backend (R2)
-│       ├── versions.tf          # Provider versions
-│       └── terraform.tfvars.example
+│   ├── production/              # Cloudflare-based deployment (split by concern)
+│   ├── aws-staging/             # AWS staging root module
+│   └── aws-production/          # AWS production root module
 └── README.md                    # This file
 ```
+
+The [production root module](environments/production/) is split across `.tf` files loaded together;
+there is no special entrypoint file. See [variables.tf](environments/production/variables.tf) for
+inputs, [outputs.tf](environments/production/outputs.tf) for outputs, and
+[terraform.tfvars.example](environments/production/terraform.tfvars.example) for configuration. For
+AWS deployment instructions, see [AWS staging](environments/aws-staging/) and
+[AWS production](environments/aws-production/).
 
 ## Prerequisites
 
 ### 1. Required Tools
 
 ```bash
-# Terraform >= 1.9.0
+# Terraform >= 1.14.0 (see environments/production/versions.tf)
 brew install terraform
 
 # Modal CLI (for Modal deployments)
@@ -300,124 +288,17 @@ APP_ICON_URL
 
 ## Module Reference
 
-### cloudflare-kv
+Browse [modules/](modules/) for the available modules. Each module's `variables.tf` defines its
+inputs, types, defaults, and validation; `outputs.tf` defines its returned values.
 
-Creates a Cloudflare Workers KV namespace.
+Use the maintained deployment configurations as integration examples:
 
-```hcl
-module "my_kv" {
-  source = "../../modules/cloudflare-kv"
+- [Cloudflare KV namespaces](environments/production/kv.tf)
+- [Control-plane Worker and bindings](environments/production/workers-control-plane.tf)
+- [Vercel web project](environments/production/web-vercel.tf)
+- [Modal deployment](environments/production/modal.tf)
 
-  account_id     = var.cloudflare_account_id
-  namespace_name = "my-namespace"
-}
-```
-
-**Outputs:** `namespace_id`, `namespace_name`
-
-### cloudflare-worker
-
-Deploys a Cloudflare Worker with bindings using the native 3-resource pattern: `cloudflare_worker` +
-`cloudflare_worker_version` + `cloudflare_workers_deployment`
-
-```hcl
-module "my_worker" {
-  source = "../../modules/cloudflare-worker"
-
-  account_id  = var.cloudflare_account_id
-  worker_name = "my-worker"
-  script_path = "dist/index.js"  # Path to bundled JS file
-
-  kv_namespaces = [
-    { binding_name = "KV", namespace_id = module.my_kv.namespace_id }
-  ]
-
-  service_bindings = [
-    { binding_name = "OTHER_WORKER", service_name = "other-worker" }
-  ]
-
-  secrets = [
-    { name = "API_KEY", value = var.api_key }
-  ]
-
-  durable_objects = [
-    { binding_name = "DO", class_name = "MyDurableObject" }
-  ]
-
-  d1_databases = [
-    { binding_name = "DB", database_id = cloudflare_d1_database.main.id }
-  ]
-
-  compatibility_date = "2024-09-23"
-  migration_tag      = "v1"  # For DO migrations
-}
-```
-
-**Outputs:** `worker_name`, `worker_id`, `version_id`, `deployment_id`, `worker_url`
-
-### vercel-project
-
-Creates a Vercel project with environment variables.
-
-```hcl
-module "web_app" {
-  source = "../../modules/vercel-project"
-
-  project_name = "my-app"
-  team_id      = var.vercel_team_id
-  framework    = "nextjs"
-
-  git_repository = {
-    type = "github"
-    repo = "owner/repo"
-  }
-
-  root_directory = "packages/web"
-
-  environment_variables = [
-    {
-      key       = "API_URL"
-      value     = "https://api.example.com"
-      targets   = ["production", "preview"]
-      sensitive = false
-    }
-  ]
-}
-```
-
-**Outputs:** `project_id`, `project_name`, `production_url`
-
-### modal-app
-
-Deploys a Modal app via CLI wrapper.
-
-```hcl
-module "modal" {
-  source = "../../modules/modal-app"
-
-  modal_token_id     = var.modal_token_id
-  modal_token_secret = var.modal_token_secret
-
-  app_name                     = "my-app"
-  workspace                    = "my-workspace"
-  modal_environment            = "main"
-  modal_environment_web_suffix = ""
-  deploy_path                  = "${path.root}/../../../packages/modal-infra"
-  deploy_module                = "deploy"
-
-  secrets = [
-    {
-      name = "my-secret"
-      values = {
-        KEY1 = "value1"
-        KEY2 = "value2"
-      }
-    }
-  ]
-}
-```
-
-**Outputs:** `app_name`, `deploy_id`, `api_health_url`
+The other sandbox providers are wired in the same [production directory](environments/production/).
 
 ## Important Notes
 

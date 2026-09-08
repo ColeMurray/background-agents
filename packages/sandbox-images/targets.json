@@ -1,0 +1,37 @@
+{
+  "modal": {
+    "os": "debian",
+    "base": "python:3.12-slim-bookworm",
+    "node": "22",
+    "user": "root",
+    "home": "/root"
+  },
+  "daytona": {
+    "os": "debian",
+    "base": "python:3.12-slim-bookworm",
+    "node": "22",
+    "user": "root",
+    "home": "/root"
+  },
+  "e2b": {
+    "os": "debian",
+    "base": "python:3.12-slim-bookworm",
+    "node": "22",
+    "user": "user",
+    "home": "/home/user"
+  },
+  "vercel": {
+    "os": "amazon-linux",
+    "base": "node24",
+    "node": "24",
+    "user": "root",
+    "home": "/root"
+  },
+  "opencomputer": {
+    "os": "debian",
+    "base": "provider-default",
+    "node": "24",
+    "user": "sandbox",
+    "home": "/home/sandbox"
+  }
+}

@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "sandbox:images": "python3 packages/sandbox-images/cli.py",
     "lint": "eslint .",
     "lint:complexity": "node scripts/lint-complexity.mjs",
     "lint:sql-portability": "node scripts/lint-sql-portability.mjs",
@@ -18,6 +19,7 @@
     "test:lint-sql-portability": "node --test scripts/lint-sql-portability.test.mjs",
     "test:rbac-bootstrap-owner": "node --experimental-transform-types --test scripts/bootstrap-workspace-owner.test.ts",
     "test:user-merge-cli": "node --experimental-transform-types --test scripts/merge-split-users.test.ts",
+    "test:cf-logs-cli": "node --experimental-strip-types --test scripts/cf-logs.test.ts",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:integration": "npm run test:integration --workspaces --if-present",
     "typecheck": "npm run build -w @open-inspect/shared && npm run typecheck --workspaces --if-present",
@@ -58,7 +60,7 @@
     "*.{js,jsx,json,md,yaml,yml,css}": [
       "prettier --write"
     ],
-    "packages/{daytona-infra,e2b-infra,modal-infra,sandbox-runtime}/**/*.py": [
+    "packages/{daytona-infra,e2b-infra,modal-infra,sandbox-runtime,sandbox-images}/**/*.py": [
       "ruff check --fix",
       "ruff format"
     ]
