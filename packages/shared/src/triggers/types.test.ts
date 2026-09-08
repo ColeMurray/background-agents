@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { automationEventSchema, githubAutomationEventSchema, jsonPathFilterSchema } from "./types";
+import { automationEventSchema, githubAutomationEventSchema, triggerConfigSchema } from "./types";
 
 describe("automationEventSchema", () => {
   it("parses a valid Slack automation event", () => {
@@ -103,44 +103,36 @@ describe("automationEventSchema", () => {
   });
 });
 
-describe("jsonPathFilterSchema", () => {
-  it("parses numeric comparison filters", () => {
-    expect(jsonPathFilterSchema.safeParse({ path: "$.count", comparison: "gt", value: 3 })).toEqual(
-      {
-        success: true,
-        data: { path: "$.count", comparison: "gt", value: 3 },
-      }
-    );
+describe("persisted webhook filters", () => {
+  it("preserves scalar values accepted by existing editors and API clients", () => {
+    const config = {
+      conditions: [
+        {
+          type: "jsonpath",
+          operator: "all_match",
+          value: [
+            { path: "$.count", comparison: "gt", value: "3" },
+            { path: "$.count", comparison: "gte", value: true },
+            { path: "$.name", comparison: "contains", value: 3 },
+            { path: "$.name", comparison: "exists" },
+          ],
+        },
+      ],
+    };
+    expect(triggerConfigSchema.parse(config)).toEqual(config);
   });
 
-  it("parses string contains filters", () => {
+  it.each([null, [], {}])("rejects non-scalar filter values: %j", (value) => {
     expect(
-      jsonPathFilterSchema.safeParse({ path: "$.name", comparison: "contains", value: "deploy" })
-    ).toEqual({
-      success: true,
-      data: { path: "$.name", comparison: "contains", value: "deploy" },
-    });
-  });
-
-  it("rejects malformed comparison values", () => {
-    expect(
-      jsonPathFilterSchema.safeParse({ path: "$.count", comparison: "gt", value: "3" }).success
+      triggerConfigSchema.safeParse({
+        conditions: [
+          {
+            type: "jsonpath",
+            operator: "all_match",
+            value: [{ path: "$.count", comparison: "gt", value }],
+          },
+        ],
+      }).success
     ).toBe(false);
-    expect(
-      jsonPathFilterSchema.safeParse({ path: "$.name", comparison: "contains", value: 3 }).success
-    ).toBe(false);
-  });
-
-  it("rejects partial numeric filters", () => {
-    expect(jsonPathFilterSchema.safeParse({ path: "$.count", comparison: "gt" }).success).toBe(
-      false
-    );
-  });
-
-  it("parses exists filters without a value", () => {
-    expect(jsonPathFilterSchema.safeParse({ path: "$.name", comparison: "exists" })).toEqual({
-      success: true,
-      data: { path: "$.name", comparison: "exists" },
-    });
   });
 });

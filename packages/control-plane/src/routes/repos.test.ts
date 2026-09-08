@@ -169,13 +169,15 @@ describe("repository list route", () => {
   });
 
   it("treats a malformed singleton cache entry as a miss", async () => {
-    mockCacheGet.mockResolvedValue({ repos: [{ id: "not-a-number" }], cachedAt: "now" });
+    const env = createEnv();
+    mockCacheGet.mockResolvedValue({
+      repos: [{ id: "not-a-number" }],
+      cachedAt: new Date().toISOString(),
+      scmIdentity: await reposCacheIdentity(env),
+      freshUntil: Date.now() + 60_000,
+    });
 
-    const response = await handleRequest(
-      request("/repos"),
-      createEnv(),
-      createTestBackgroundTasks()
-    );
+    const response = await handleRequest(request("/repos"), env, createTestBackgroundTasks());
 
     expect(response.status).toBe(200);
     expect(mockListRepositories).toHaveBeenCalledOnce();

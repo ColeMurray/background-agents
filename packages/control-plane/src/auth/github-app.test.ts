@@ -228,7 +228,11 @@ describe("github-app utilities", () => {
       };
       await cacheStore.put(
         `github:installation-token:v1:${config.appId}:${config.installationId}`,
-        JSON.stringify({ token: "missing-expiry", cachedAtEpochMs: Date.now() })
+        JSON.stringify({
+          token: 42,
+          expiresAtEpochMs: Date.parse(expiresAt),
+          cachedAtEpochMs: Date.now(),
+        })
       );
 
       await expect(getCachedInstallationToken(config, { cacheStore })).resolves.toBe("fresh-token");
