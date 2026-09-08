@@ -7,6 +7,10 @@
 # OIDC provider, and on-and-reusing one. The third is the one with teeth: the
 # provider is an account-wide singleton, so a second environment that created
 # its own would fail the apply with EntityAlreadyExists.
+#
+# The last two runs cover the subject the trust policy pins, which is the string
+# that decides whether a deploy can authenticate at all. A wrong one is not a
+# failed plan; it is a role nothing can assume.
 
 mock_provider "aws" {}
 mock_provider "cloudinit" {}
@@ -129,5 +133,63 @@ run "reuses_a_provider_when_given_one" {
   assert {
     condition     = length(aws_iam_role.github_deploy) == 1
     error_message = "Reusing a provider must still create the deploy role."
+  }
+}
+
+run "escapes_a_colon_in_the_environment_name" {
+  command = plan
+
+  override_data {
+    target = data.aws_iam_policy_document.github_assume[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"sts:AssumeRole\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"}}]}" }
+  }
+
+  override_data {
+    target = data.aws_iam_policy_document.github_deploy[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"*\"}]}" }
+  }
+
+  variables {
+    github_deploy = {
+      repository  = "example-org/example-repo"
+      environment = "aws:staging"
+    }
+  }
+
+  # GitHub percent-encodes a colon inside a claim's context value. Comparing
+  # against the raw name would pin a subject no token ever carries.
+  assert {
+    condition     = local.github_deploy_subject == "repo:example-org/example-repo:environment:aws%3Astaging"
+    error_message = "A colon in the environment name must reach the trust policy percent-encoded."
+  }
+}
+
+run "accepts_an_immutable_subject_repository" {
+  command = plan
+
+  override_data {
+    target = data.aws_iam_policy_document.github_assume[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"sts:AssumeRole\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"}}]}" }
+  }
+
+  override_data {
+    target = data.aws_iam_policy_document.github_deploy[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"*\"}]}" }
+  }
+
+  # Every repository created after 2026-07-15, and any that opts in, gets a
+  # `sub` whose repository segment carries the owner and repository ids. The
+  # module takes that form as-is rather than assembling it, so an operator on
+  # such a repository configures the subject GitHub actually sends.
+  variables {
+    github_deploy = {
+      repository  = "example-org@1234/example-repo@5678"
+      environment = "aws-staging"
+    }
+  }
+
+  assert {
+    condition     = local.github_deploy_subject == "repo:example-org@1234/example-repo@5678:environment:aws-staging"
+    error_message = "An immutable-subject repository must reach the trust policy unchanged."
   }
 }

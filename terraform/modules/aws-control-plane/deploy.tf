@@ -26,6 +26,20 @@ locals {
   create_oidc_provider = local.github_deploy_enabled && local.provided_oidc_arn == null
 
   oidc_provider_arn = local.create_oidc_provider ? one(aws_iam_openid_connect_provider.github[*].arn) : local.provided_oidc_arn
+
+  # The one string the whole trust boundary reduces to, named so a test can read
+  # it: the policy document below is mocked away in `terraform test`, and the
+  # subject is the part of it worth holding still.
+  #
+  # GitHub percent-encodes a colon inside a claim's context value, so an
+  # environment named "aws:staging" arrives as "aws%3Astaging" and a raw
+  # comparison would never match it. `repository` carries whichever form the
+  # repository uses -- "owner/name", or "owner@id/name@id" on the immutable
+  # subject claims every repository created after 2026-07-15 gets.
+  github_deploy_subject = try(
+    "repo:${var.github_deploy.repository}:environment:${replace(var.github_deploy.environment, ":", "%3A")}",
+    null,
+  )
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -65,7 +79,7 @@ data "aws_iam_policy_document" "github_assume" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_deploy.repository}:environment:${var.github_deploy.environment}"]
+      values   = [local.github_deploy_subject]
     }
   }
 }
@@ -128,10 +142,12 @@ data "aws_iam_policy_document" "github_deploy" {
   }
 
   # Reading a command's result takes no resource-level permission: the command
-  # id is not known until SendCommand returns it.
+  # id is not known until SendCommand returns it. Which is the reason to grant
+  # only the call that needs one -- ListCommandInvocations would read the output
+  # of commands this role did not send.
   statement {
     sid       = "ReadCommandResult"
-    actions   = ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations"]
+    actions   = ["ssm:GetCommandInvocation"]
     resources = ["*"]
   }
 }

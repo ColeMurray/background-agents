@@ -114,9 +114,18 @@ variable "snapshot_schedule_utc" {
 # ---------------------------------------------------------------------------
 
 variable "config" {
-  description = "Non-secret `.env` entries Terraform owns, written to SSM as String parameters. Merged over the values the module derives from its own resources, so an entry here wins. Empty values are dropped: the host reads a missing variable and an empty one the same way."
+  description = "Non-secret `.env` entries Terraform owns, written to SSM as String parameters. Merged over the values the module derives from its own resources, so an entry here wins. Empty values are dropped: the host reads a missing variable and an empty one the same way. CONTROL_PLANE_IMAGE is not settable here; see `control_plane_image_tag`."
   type        = map(string)
   default     = {}
+
+  validation {
+    # It has its own resource, at the same SSM name, because CI owns its value
+    # after the first deploy. An entry here would be a second resource writing
+    # the same parameter -- an apply that fails, or one that quietly puts the
+    # deployed version back. `control_plane_image_tag` sets the first boot's.
+    condition     = !contains(keys(var.config), "CONTROL_PLANE_IMAGE")
+    error_message = "config must not set CONTROL_PLANE_IMAGE; use control_plane_image_tag for the first boot, and a deploy for every value after it."
+  }
 }
 
 variable "secret_names" {
@@ -165,7 +174,7 @@ variable "github_deploy" {
   description = <<-EOT
     Lets one GitHub Actions environment deploy this stack over OIDC, with no AWS access key anywhere. Null creates no role and no provider, and the environment is deployed by hand.
 
-    `repository` is "owner/name". `environment` is the GitHub environment the deploy job requests -- the trust policy pins both, so an environment's approval gate is also the AWS access gate. `oidc_provider_arn` reuses an existing account-wide provider; leave it null in the first environment and pass that one's `github_oidc_provider_arn` output to the second, because the provider is a singleton per account.
+    `repository` is "owner/name" -- or "owner@owner-id/name@repo-id" for a repository on GitHub's immutable subject claims, which is every repository created after 2026-07-15 and any that has opted in. `environment` is the GitHub environment the deploy job requests -- the trust policy pins both, so an environment's approval gate is also the AWS access gate. `oidc_provider_arn` reuses an existing account-wide provider; leave it null in the first environment and pass that one's `github_oidc_provider_arn` output to the second, because the provider is a singleton per account.
   EOT
   type = object({
     repository        = string

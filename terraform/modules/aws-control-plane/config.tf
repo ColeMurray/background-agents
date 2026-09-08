@@ -123,6 +123,14 @@ resource "aws_ssm_parameter" "secret" {
 # The consequence worth knowing: after the first deploy, `control_plane_image`
 # and `control_plane_image_tag` no longer describe what is running.
 # `terraform output deployed_image_parameter` names where that lives.
+# Before CI owned it, this same SSM name was one entry in the map above. Without
+# this, an upgrade plans a destroy and a create against one name, and whichever
+# order it picks either fails or resets the value CI last deployed.
+moved {
+  from = aws_ssm_parameter.config["CONTROL_PLANE_IMAGE"]
+  to   = aws_ssm_parameter.deployed_image
+}
+
 resource "aws_ssm_parameter" "deployed_image" {
   name  = "${local.ssm_env_prefix}/CONTROL_PLANE_IMAGE"
   type  = "String"
