@@ -378,7 +378,11 @@ export const STORAGE_CONTRACTS: Record<
           expect(attachments.getUnreferenced(["attachment-1"])).toHaveLength(1);
           expect(repository.cancelPendingMessage("message-middle")).toBe(false);
           expect(
-            repository.listMessages({ limit: 1, status: "pending", cursor: "30" })
+            repository.listMessages({
+              limit: 1,
+              status: "pending",
+              cursor: { createdAt: 30, id: "message-new" },
+            })
           ).toMatchObject([{ id: "message-old" }]);
           expect(repository.listPendingMessagesWithCreatedAt().map(({ id }) => id)).toEqual([
             "message-old",

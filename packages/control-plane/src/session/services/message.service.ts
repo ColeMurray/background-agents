@@ -4,16 +4,18 @@ import type { ListEventsResponse } from "@open-inspect/shared/types/sandbox-even
 import type { NormalizedArtifactResponse } from "../artifacts";
 import type { MessageRepository } from "../message-repository";
 import type { ArtifactRepository } from "../artifact-repository";
-import type { EventRepository } from "../event-repository";
+import type { EventRepository, ListEventChangesOptions } from "../event-repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { EnqueuePromptRequest } from "../enqueue-prompt-contract";
 import { SessionEventStream, type SessionEventListRequest } from "../event-stream";
+import type { SessionEventChangePage } from "../contracts";
 import { parseStoredSessionAttachments } from "../session-attachment-resolver";
+import { encodeCreatedAtIdCursor, type CreatedAtIdCursor } from "../list-cursor";
 
 export type ListEventsRequest = SessionEventListRequest;
 
 export interface ListMessagesRequest {
-  cursor: string | null;
+  cursor: CreatedAtIdCursor | null;
   limit: number;
   status: string | null;
 }
@@ -49,8 +51,19 @@ export class MessageService {
     return this.eventStream.listEvents(request);
   }
 
-  listArtifacts(): { artifacts: NormalizedArtifactResponse[] } {
-    const artifacts = this.deps.artifactRepository.listArtifacts();
+  listEventChanges(request: ListEventChangesOptions): SessionEventChangePage {
+    return this.eventStream.listEventChanges(request);
+  }
+
+  listArtifacts(request?: { cursor: CreatedAtIdCursor | null; limit: number }): {
+    artifacts: NormalizedArtifactResponse[];
+    cursor?: string;
+    hasMore?: boolean;
+  } {
+    const artifacts = this.deps.artifactRepository.listArtifacts(request);
+    const hasMore = request !== undefined && artifacts.length > request.limit;
+    if (hasMore) artifacts.pop();
+    const last = artifacts.at(-1);
     return {
       artifacts: artifacts.map((artifact) => ({
         id: artifact.id,
@@ -60,6 +73,10 @@ export class MessageService {
         createdAt: artifact.created_at,
         updatedAt: artifact.updated_at,
       })),
+      ...(request ? { hasMore } : {}),
+      ...(hasMore && last
+        ? { cursor: encodeCreatedAtIdCursor({ createdAt: last.created_at, id: last.id }) }
+        : {}),
     };
   }
 
@@ -106,7 +123,13 @@ export class MessageService {
         startedAt: message.started_at,
         completedAt: message.completed_at,
       })),
-      cursor: messages.length > 0 ? messages[messages.length - 1].created_at.toString() : undefined,
+      cursor:
+        hasMore && messages.length > 0
+          ? encodeCreatedAtIdCursor({
+              createdAt: messages[messages.length - 1]!.created_at,
+              id: messages[messages.length - 1]!.id,
+            })
+          : undefined,
       hasMore,
     };
   }

@@ -11,6 +11,7 @@
 import { SELF, env } from "cloudflare:test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
+import { hashToken } from "../../src/auth/crypto";
 import { createExecutionContext } from "cloudflare:test";
 import { cloudflareHost, createControlPlaneHttpHandler } from "../../src/cloudflare/http-host";
 import { createControlPlaneApp } from "../../src/routing/hono-app";
@@ -33,6 +34,12 @@ import {
 const BASE = "https://test.local";
 const BROWSER_USER_ID = "11111111111111111111111111111111";
 const SANDBOX_TOKEN = "matrix-sandbox-token";
+const NATIVE_CREDENTIAL = `oi_cli_${"a".repeat(64)}`;
+const CLIENT_METADATA = {
+  "X-Open-Inspect-API-Version": "1",
+  "X-Open-Inspect-Client-Version": "matrix-test",
+  "X-Open-Inspect-Client-Surface": "mobile",
+};
 const BOT_SERVICES = ["slack-bot", "github-bot", "linear-bot"] as const;
 const PROTECTED_STATUSES = new Set([401, 403]);
 const ROUTE_MISS_BODY = JSON.stringify({ error: "Not found" });
@@ -89,7 +96,9 @@ function materialize(route: RouteContract, values: Record<string, string>): stri
 }
 
 function isSessionRoute(route: RouteContract): boolean {
-  return route.path.startsWith("/sessions/:id");
+  return (
+    route.path.startsWith("/sessions/:id") || route.path.startsWith("/external/v1/sessions/:id")
+  );
 }
 
 function isAutomationRoute(route: RouteContract): boolean {
@@ -149,7 +158,7 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     const observed: string[] = [];
     for (const route of routes) {
       const url = `${BASE}${materialize(route, { id: "matrix-anonymous" })}`;
-      const response = await SELF.fetch(url, { method: route.method });
+      const response = await SELF.fetch(url, { method: route.method, headers: CLIENT_METADATA });
       const identity = `${route.method} ${route.path}`;
       observed.push(`${identity} ${outcome("anonymous", response.status)}`);
 
@@ -159,7 +168,8 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
 
       switch (route.authentication.kind) {
         case "public":
-          expect(response.status, identity).toBe(200);
+          // Device authorization is public but still requires a valid body.
+          expect(response.status, identity).toBe(route.path.startsWith("/external/") ? 400 : 200);
           break;
         case "handler-authenticated":
           // The handler owns credential verification and its own error order.
@@ -179,6 +189,8 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     for (const route of routes) {
       const kind = route.authentication.kind;
       if (kind === "sandbox" || kind === "service" || kind === "public") continue;
+      if (route.authentication.kind === "user" && route.authentication.credential === "cli")
+        continue;
       if (kind === "handler-authenticated") continue;
 
       // Mutating routes get a fresh resource so an earlier DELETE or state
@@ -397,6 +409,17 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
   beforeAll(async () => {
     await cleanD1Tables();
     expect((await serviceFetch(`${BASE}/me/authorization`)).status).toBe(200);
+    await env.DB.prepare(
+      "INSERT INTO cli_credentials (id, token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)"
+    )
+      .bind(
+        "sentinel-native",
+        await hashToken(NATIVE_CREDENTIAL),
+        BROWSER_USER_ID,
+        Date.now(),
+        Date.now() + MATRIX_TIMEOUT_MS * 2
+      )
+      .run();
     fixtures.readonlySessionId = await createReadySession();
     const { stub, sessionName } = await initSession({ userId: BROWSER_USER_ID });
     await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: "sb-sentinel" });
@@ -462,6 +485,12 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       const sandbox = { Authorization: `Bearer ${SANDBOX_TOKEN}` };
       const wrongSandbox = { Authorization: "Bearer not-the-sandbox-token" };
       const actorBot = await botHeaders(url, method, "slack-bot", "slack:U-SENTINEL");
+      const native = { ...CLIENT_METADATA, Authorization: `Bearer ${NATIVE_CREDENTIAL}` };
+      const acceptsNative =
+        route.authentication.kind === "user" && route.authentication.credential !== undefined;
+      if (kind !== "public" && kind !== "handler-authenticated") {
+        await expectReach(native, "native bearer", acceptsNative);
+      }
 
       switch (kind) {
         case "public":
@@ -477,7 +506,11 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
           await expectReach(actorBot, "bot", false);
           break;
         case "user":
-          await expectReach(owner, "owner", true);
+          await expectReach(
+            owner,
+            "owner",
+            route.authentication.kind === "user" && route.authentication.credential !== "cli"
+          );
           await expectReach({}, "anonymous", false);
           await expectReach(actorBot, "bot actor", false);
           break;

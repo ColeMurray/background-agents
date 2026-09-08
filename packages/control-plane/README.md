@@ -57,6 +57,22 @@ not pass through Hono.
 
 ## API Endpoints
 
+### Shared First-Party Client API
+
+`/external/v1` is the versioned resource API for web, CLI/MCP, and future mobile/desktop clients.
+Resource routes accept either the existing signed web channel plus Better Auth session, or a
+revocable bearer credential. Both use the same canonical human principal and RBAC. Bearer requests
+include `X-Open-Inspect-API-Version: 1`, a client version, and a bounded client-surface name; the
+surface is diagnostic metadata, not a permission. Credential lifecycle routes under
+`/external/v1/cli` retain their specific authentication requirements.
+
+The legacy web create route delegates to the shared human creation operation. Its optional
+`Idempotency-Key` header provides the same user-scoped retry semantics as the versioned create
+body's `idempotencyKey`. Resource reads migrate incrementally without changing existing web sockets.
+See [ADR 0004](../../docs/adr/0004-shared-first-party-client-api.md) for the migration and
+event-feed boundary; existing internal, service, and sandbox routes do not automatically accept
+bearer auth.
+
 ### Health
 
 | Endpoint  | Method | Description  |

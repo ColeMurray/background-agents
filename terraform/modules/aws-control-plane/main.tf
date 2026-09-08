@@ -36,6 +36,7 @@ locals {
   default_secret_names = [
     "ANTHROPIC_API_KEY",
     "BROWSER_AUTH_SECRET",
+    "EXTERNAL_SESSION_ID_SECRET",
     "GITHUB_APP_ID",
     "GITHUB_APP_INSTALLATION_ID",
     "GITHUB_APP_PRIVATE_KEY",

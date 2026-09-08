@@ -72,4 +72,19 @@ describe("SignInProviderButtons", () => {
     await user.click(screen.getByRole("button", { name: "Sign in with GitHub" }));
     expect(signIn).toHaveBeenCalledTimes(2);
   });
+
+  it("passes the approval callback to the selected provider", async () => {
+    vi.mocked(signIn).mockResolvedValue();
+    const user = userEvent.setup();
+    render(
+      <SignInProviderButtons
+        providers={["github"]}
+        callbackURL="/cli/authorize?user_code=ABCD-EFGH"
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Sign in with GitHub" }));
+
+    expect(signIn).toHaveBeenCalledWith("github", "/cli/authorize?user_code=ABCD-EFGH");
+  });
 });

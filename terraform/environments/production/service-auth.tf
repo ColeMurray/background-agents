@@ -39,6 +39,13 @@ resource "random_bytes" "provider_accounts_encryption_key" {
   length = 32
 }
 
+# Stable installation-scoped key for deterministic external session identity.
+# This is intentionally independent from rotatable encryption and auth keys.
+resource "random_bytes" "external_session_id_secret" {
+  length = 32
+}
+
 locals {
   effective_provider_accounts_encryption_key = trimspace(var.provider_accounts_encryption_key) != "" ? trimspace(var.provider_accounts_encryption_key) : random_bytes.provider_accounts_encryption_key.base64
+  effective_external_session_id_secret       = trimspace(var.external_session_id_secret) != "" ? trimspace(var.external_session_id_secret) : random_bytes.external_session_id_secret.base64
 }

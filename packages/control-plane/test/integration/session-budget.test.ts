@@ -119,7 +119,9 @@ describe("session budgets", () => {
       `UPDATE session_repositories SET branch_name = 'feature/live', current_sha = 'abc123'`
     );
 
-    await initNamedSessionDO(name, { sandboxSettings: { maxSessionCostUsd: 100 } });
+    // A retry replays the immutable bootstrap; it must not restore its old
+    // limit over the session's subsequently changed live budget.
+    await initNamedSessionDO(name, { sandboxSettings: { maxSessionCostUsd: 10 } });
 
     expect(
       await queryDO(

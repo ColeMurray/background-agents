@@ -11,6 +11,7 @@ import { analyticsRoutes } from "./analytics";
 import { auditEventRoutes } from "./audit-events";
 import { autofixRoutes } from "./autofix";
 import { automationRoutes } from "./automations";
+import { cliAuthRoutes } from "./cli-auth";
 import { browserAuthRoutes } from "./browser-auth";
 import { commitSigningRoutes } from "./commit-signing";
 import { environmentSecretsRoutes } from "./environment-secrets";
@@ -36,6 +37,7 @@ export const catalog: readonly RouteModule[] = [
   healthRoutes,
 
   browserAuthRoutes,
+  cliAuthRoutes,
   signInProviderRoutes,
 
   // Session management, then the agent-initiated Slack notification

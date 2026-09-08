@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { initializeSession, type SessionInitInput } from "./initialize";
+import {
+  buildSessionBootstrapRequest,
+  initializeSession,
+  type SessionInitInput,
+} from "./initialize";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "./contracts";
 import type { SqlDatabase } from "../db/sql-database";
@@ -94,6 +98,46 @@ describe("initializeSession", () => {
     );
   });
 
+  it.each([
+    {},
+    { repoOwner: null, repoName: null, repoId: null, branch: null, defaultBranch: null },
+    {
+      repositories: [
+        { repoOwner: "acme", repoName: "web-app", repoId: 42, baseBranch: "feature-1" },
+        { repoOwner: "acme", repoName: "api", repoId: 43, baseBranch: "main" },
+      ],
+      environmentId: "environment-1",
+    },
+  ])(
+    "uses the same normalized payload for initial creation and persisted recovery: %j",
+    async (target) => {
+      const input = {
+        ...baseInput,
+        ...target,
+        requestFingerprint: "existing-fingerprint",
+        externalBootstrapSnapshot: "internal-only",
+      };
+      await initializeSession(createEnv(), input, ctx as never);
+      const request = stubFetchMock.mock.calls[0][0] as Request;
+      const initial = await request.json();
+      const {
+        providerAuth: _providerAuth,
+        externalBootstrapSnapshot: _snapshot,
+        ...recovery
+      } = input;
+      const retried = buildSessionBootstrapRequest(JSON.parse(JSON.stringify(recovery)));
+      expect(initial).toEqual(JSON.parse(JSON.stringify(retried)));
+      expect(initial).toMatchObject({
+        requestFingerprint: "existing-fingerprint",
+        userId: baseInput.participantUserId,
+        canonicalUserId: baseInput.platformUserId,
+        scmTokenEncrypted: baseInput.scmTokenEncrypted,
+      });
+      expect(initial).not.toHaveProperty("providerAuth");
+      expect(initial).not.toHaveProperty("externalBootstrapSnapshot");
+      expect(createMock.mock.calls[0][0].repositories).toEqual(retried.repositories);
+    }
+  );
   it("requires exactly one resolved or inherited managed skills manifest", async () => {
     await expect(
       initializeSession(

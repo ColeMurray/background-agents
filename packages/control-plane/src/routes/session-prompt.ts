@@ -16,8 +16,11 @@ import {
   mayAttachCallbackContext,
 } from "../routing/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
+import { adaptExternalRuntimeFailure } from "../external-api/runtime-response";
 import { SessionIndexStore } from "../db/session-index";
+import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { UserStore } from "../db/user-store";
+import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
@@ -32,6 +35,115 @@ import { parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
+
+export async function dispatchUserSessionPrompt(
+  ctx: SessionRouteContext,
+  sessionId: string,
+  input: {
+    content: string;
+    attachments?: SessionAttachmentReference[];
+    model?: string;
+    reasoningEffort?: string;
+    clientRequestId: string;
+  },
+  preAdmittedModel?: { model: string; reasoningEffort?: string }
+): Promise<Response> {
+  return dispatchSessionPrompt(
+    ctx,
+    sessionId,
+    {
+      content: input.content,
+      attachments: input.attachments,
+      authorId: ctx.principal?.kind === "user" ? ctx.principal.userId : "anonymous",
+      canonicalUserId: ctx.principal?.kind === "user" ? ctx.principal.userId : undefined,
+      source: "extension",
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      clientRequestId: input.clientRequestId,
+    },
+    (response) => adaptExternalRuntimeFailure(response) ?? response,
+    preAdmittedModel
+  );
+}
+
+interface PromptModelAdmissionInput {
+  sessionId?: string;
+  model?: string;
+  reasoningEffort?: string;
+}
+
+export async function admitPromptModel(
+  ctx: Pick<SessionRouteContext, "db">,
+  input: PromptModelAdmissionInput
+): Promise<{ model: string; reasoningEffort?: string } | Response> {
+  let model = input.model;
+  if (!model && input.sessionId) {
+    const session = await new SessionIndexStore(ctx.db).get(input.sessionId);
+    if (!session) return error("Session not found", 404);
+    model = session.model;
+  }
+  if (!model || !isValidModel(model)) {
+    return error(`Model "${model ?? ""}" is not recognized`, 400);
+  }
+  try {
+    const enabledModels = await getEffectiveEnabledModels(ctx.db);
+    if (!enabledModels.includes(model)) return error(`Model "${model}" is not enabled`, 400);
+  } catch {
+    return error("Model preferences unavailable", 503);
+  }
+  if (
+    input.reasoningEffort !== undefined &&
+    !isValidReasoningEffort(model, input.reasoningEffort)
+  ) {
+    return error(
+      `Reasoning effort "${input.reasoningEffort}" is not supported by model "${model}"`,
+      400
+    );
+  }
+  return { model, reasoningEffort: input.reasoningEffort };
+}
+
+/** Dispatch a prompt and project session activity through one canonical operation. */
+export async function dispatchSessionPrompt(
+  ctx: SessionRouteContext,
+  sessionId: string,
+  promptRequest: EnqueuePromptRequest,
+  adaptRuntimeResponse: (response: Response) => Response = (response) => response,
+  preAdmittedModel?: { model: string; reasoningEffort?: string }
+): Promise<Response> {
+  const admission =
+    preAdmittedModel ??
+    (await admitPromptModel(ctx, {
+      sessionId,
+      model: promptRequest.model,
+      reasoningEffort: promptRequest.reasoningEffort,
+    }));
+  if (admission instanceof Response) return admission;
+  const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.prompt, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...promptRequest, ...admission }),
+  });
+
+  const store = new SessionIndexStore(ctx.db);
+  ctx.executionCtx.submit(
+    () =>
+      store.touchUpdatedAt(sessionId).catch((error) => {
+        logger.error("session_index.touch_updated_at.background_error", {
+          session_id: sessionId,
+          trace_id: ctx.trace_id,
+          request_id: ctx.request_id,
+          error,
+        });
+      }),
+    {
+      name: "session_index.touch_updated_at",
+      context: { session_id: sessionId, trace_id: ctx.trace_id, request_id: ctx.request_id },
+    }
+  );
+
+  return adaptRuntimeResponse(response);
+}
 
 function validateAttachments(raw: unknown): SessionAttachmentReference[] | Response | undefined {
   if (raw === undefined) return undefined;
@@ -147,30 +259,7 @@ export async function handleSessionPrompt(
       : undefined,
   } satisfies EnqueuePromptRequest;
 
-  const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.prompt, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(promptRequest),
-  });
-
-  const store = new SessionIndexStore(ctx.db);
-  ctx.executionCtx.submit(
-    () =>
-      store.touchUpdatedAt(sessionId).catch((error) => {
-        logger.error("session_index.touch_updated_at.background_error", {
-          session_id: sessionId,
-          trace_id: ctx.trace_id,
-          request_id: ctx.request_id,
-          error,
-        });
-      }),
-    {
-      name: "session_index.touch_updated_at",
-      context: { session_id: sessionId, trace_id: ctx.trace_id, request_id: ctx.request_id },
-    }
-  );
-
-  return response;
+  return dispatchSessionPrompt(ctx, sessionId, promptRequest);
 }
 
 export const sessionPromptRoutes = new Hono<ControlPlaneHonoEnv>();

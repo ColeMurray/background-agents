@@ -45,6 +45,7 @@ export function useWarmDraftSession(
   const identityRef = useRef(identity);
   const sessionIdRef = useRef<string | null>(null);
   const creationRef = useRef<Promise<string | null> | null>(null);
+  const creationKeyRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isWarming, setIsWarming] = useState(false);
@@ -58,6 +59,7 @@ export function useWarmDraftSession(
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     creationRef.current = null;
+    creationKeyRef.current = null;
     setIsWarming(false);
 
     const supersededSessionId = sessionIdRef.current;
@@ -83,6 +85,9 @@ export function useWarmDraftSession(
     const launchIdentity = identityRef.current;
     if (!launchRequest || !launchIdentity) return null;
 
+    // An unknown network result must resume the same server-side creation.
+    const idempotencyKey = (creationKeyRef.current ??= crypto.randomUUID());
+
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     setIsWarming(true);
@@ -91,7 +96,7 @@ export function useWarmDraftSession(
       try {
         const response = await browserApiFetch("/api/sessions", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
           body: JSON.stringify(launchRequest),
           signal: abortController.signal,
         });
@@ -130,6 +135,7 @@ export function useWarmDraftSession(
 
   const consume = useCallback((consumedSessionId: string) => {
     if (sessionIdRef.current !== consumedSessionId) return;
+    creationKeyRef.current = null;
     sessionIdRef.current = null;
     setSessionId(null);
   }, []);

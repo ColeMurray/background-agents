@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { generateEncryptionKey } from "./auth/crypto";
-import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "./env-validation";
+import {
+  requireExternalSessionIdSecret,
+  requireRepoSecretsEncryptionKey,
+  requireTokenEncryptionKey,
+} from "./env-validation";
 import type { Env } from "./types";
 
 function envWith(key: string | undefined): Env {
@@ -59,5 +63,15 @@ describe("requireTokenEncryptionKey", () => {
     expect(() =>
       requireTokenEncryptionKey({ TOKEN_ENCRYPTION_KEY: "dG9vc2hvcnQ=" } as Env)
     ).toThrow(/TOKEN_ENCRYPTION_KEY must decode to 32 bytes/);
+  });
+});
+
+describe("requireExternalSessionIdSecret", () => {
+  it("requires dedicated 32-byte installation key material", () => {
+    const key = generateEncryptionKey();
+    expect(requireExternalSessionIdSecret({ EXTERNAL_SESSION_ID_SECRET: key } as Env)).toBe(key);
+    expect(() => requireExternalSessionIdSecret({} as Env)).toThrow(
+      /EXTERNAL_SESSION_ID_SECRET is not configured/
+    );
   });
 });

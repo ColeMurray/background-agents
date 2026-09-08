@@ -25,6 +25,8 @@ type SessionRow = {
   message_count: number;
   pr_count: number;
   environment_id: string | null;
+  external_request_fingerprint: string | null;
+  external_bootstrap_snapshot: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -209,6 +211,8 @@ class FakeD1Database {
         scmLogin,
         userId,
         environmentId,
+        externalRequestFingerprint,
+        externalBootstrapSnapshot,
         createdAt,
         updatedAt,
       ] = args as [
@@ -226,6 +230,8 @@ class FakeD1Database {
         string | null,
         "user" | "agent" | "automation",
         number,
+        string | null,
+        string | null,
         string | null,
         string | null,
         string | null,
@@ -262,6 +268,8 @@ class FakeD1Database {
           message_count: 0,
           pr_count: 0,
           environment_id: environmentId,
+          external_request_fingerprint: externalRequestFingerprint,
+          external_bootstrap_snapshot: externalBootstrapSnapshot,
           created_at: createdAt,
           updated_at: updatedAt,
         });
@@ -484,6 +492,23 @@ describe("SessionIndexStore", () => {
   });
 
   describe("create", () => {
+    it("keeps creation recovery state out of ordinary reads and lists", async () => {
+      await store.create({
+        ...makeSession(),
+        externalRequestFingerprint: "fingerprint",
+        externalBootstrapSnapshot: JSON.stringify({ scmTokenEncrypted: "encrypted-test-value" }),
+      });
+      const reservation = await store.getCreationReservation("test-id");
+      expect(reservation?.externalRequestFingerprint).toBe("fingerprint");
+      expect(reservation?.externalBootstrapSnapshot).toContain("encrypted-test-value");
+      const session = await store.get("test-id");
+      const listed = await store.list();
+      for (const entry of [session, ...listed.sessions]) {
+        expect(entry).not.toHaveProperty("externalRequestFingerprint");
+        expect(entry).not.toHaveProperty("externalBootstrapSnapshot");
+      }
+    });
+
     it("inserts a new session", async () => {
       const session = makeSession();
       await store.create(session);

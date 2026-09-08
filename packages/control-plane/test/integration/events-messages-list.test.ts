@@ -1,6 +1,6 @@
 import { beforeEach, describe, it, expect } from "vitest";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, seedEvents } from "./helpers";
+import { initSession, queryDO, seedEvents } from "./helpers";
 
 describe("GET /internal/events", () => {
   beforeEach(cleanD1Tables);
@@ -262,6 +262,51 @@ describe("GET /internal/events", () => {
 });
 
 describe("GET /internal/messages", () => {
+  it("paginates tied timestamps deterministically across intervening inserts", async () => {
+    const { stub } = await initSession();
+    const [{ id: authorId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    for (const id of ["message-a", "message-b", "message-c"]) {
+      await queryDO(
+        stub,
+        `INSERT INTO messages (id, author_id, content, source, status, created_at)
+         VALUES (?, ?, ?, 'web', 'completed', 1000)`,
+        id,
+        authorId,
+        id
+      );
+    }
+
+    const firstResponse = await stub.fetch("http://internal/internal/messages?limit=2");
+    const first = await firstResponse.json<{
+      messages: Array<{ id: string }>;
+      cursor: string;
+      hasMore: boolean;
+    }>();
+    expect(first.messages.map(({ id }) => id)).toEqual(["message-c", "message-b"]);
+    expect(first.hasMore).toBe(true);
+    expect(first.cursor).not.toContain("message-b");
+
+    await queryDO(
+      stub,
+      `INSERT INTO messages (id, author_id, content, source, status, created_at)
+       VALUES ('message-new', ?, 'new', 'web', 'completed', 2000)`,
+      authorId
+    );
+
+    const secondResponse = await stub.fetch(
+      `http://internal/internal/messages?limit=2&cursor=${encodeURIComponent(first.cursor)}`
+    );
+    const second = await secondResponse.json<{
+      messages: Array<{ id: string }>;
+      hasMore: boolean;
+    }>();
+    expect(second.messages.map(({ id }) => id)).toEqual(["message-a"]);
+    expect(second.hasMore).toBe(false);
+  });
+
   it("lists messages with status filter", async () => {
     const { stub } = await initSession();
 

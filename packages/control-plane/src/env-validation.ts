@@ -58,3 +58,13 @@ export function requireRepoSecretsEncryptionKey(
 export function requireTokenEncryptionKey(env: Pick<EnvConfig, "TOKEN_ENCRYPTION_KEY">): string {
   return requireEncryptionKey(env.TOKEN_ENCRYPTION_KEY, "TOKEN_ENCRYPTION_KEY", "OAuth tokens");
 }
+
+export function requireExternalSessionIdSecret(
+  env: Pick<EnvConfig, "EXTERNAL_SESSION_ID_SECRET">
+): string {
+  return requireEncryptionKey(
+    env.EXTERNAL_SESSION_ID_SECRET,
+    "EXTERNAL_SESSION_ID_SECRET",
+    "deterministic external session identities"
+  );
+}

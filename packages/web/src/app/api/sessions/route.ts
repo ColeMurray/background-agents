@@ -60,6 +60,9 @@ export async function POST(request: NextRequest) {
 
     const response = await controlPlaneUserFetch("/sessions", {
       method: "POST",
+      ...(request.headers.has("Idempotency-Key")
+        ? { headers: { "Idempotency-Key": request.headers.get("Idempotency-Key")! } }
+        : {}),
       body: JSON.stringify(sessionBody),
     });
 

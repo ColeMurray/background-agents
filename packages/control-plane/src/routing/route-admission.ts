@@ -6,7 +6,7 @@ import {
   type PermissionId,
 } from "@open-inspect/shared/rbac";
 import { authenticate, isAuthError } from "../auth/authenticate";
-import type { Principal } from "../auth/principal";
+import type { AuthenticationContext, Principal } from "../auth/principal";
 import type {
   AuthorizationDecisionRequirement,
   RouteAuthorizationDecision,
@@ -218,7 +218,8 @@ async function verifySandboxAuthSafely(
 export function enforceRoutePrincipal(
   authentication: RouteAuthentication,
   principal: Principal,
-  evidence: AuthorizationEvidence = emptyEvidence()
+  evidence: AuthorizationEvidence = emptyEvidence(),
+  authenticationContext?: AuthenticationContext
 ): AuthorizationFailure | null {
   if (
     authentication.kind === "web-service" &&
@@ -233,6 +234,19 @@ export function enforceRoutePrincipal(
       { kind: "principal-type" },
       "principal_type_required",
       "Human user authentication required"
+    );
+  }
+  if (
+    authentication.kind === "user" &&
+    authentication.credential === "cli" &&
+    authenticationContext?.mechanism !== "cli_credential"
+  ) {
+    return authorizationDenial(
+      error("CLI authentication required", 403),
+      evidence,
+      { kind: "principal-type" },
+      "cli_credential_required",
+      "CLI authentication required"
     );
   }
   if (authentication.kind === "service" && principal.kind !== "service") {
@@ -607,7 +621,12 @@ async function enforceRouteAuthorization(
     return allowed(policy, "user", evidence);
   }
 
-  const principalFailure = enforceRoutePrincipal(policy.authentication, principal, evidence);
+  const principalFailure = enforceRoutePrincipal(
+    policy.authentication,
+    principal,
+    evidence,
+    ctx.authentication
+  );
   if (principalFailure) return resultForFailure(principalFailure);
 
   if (
@@ -676,6 +695,7 @@ export async function admitRoute(input: {
         : error("Unauthorized: Invalid session path", 401);
     } else {
       const authResult = await authenticate(handlerRequest, env, ctx, {
+        userCredential: authentication.kind === "user" ? authentication.credential : undefined,
         webService:
           authentication.kind === "web-service" || authentication.kind === "service"
             ? "service"

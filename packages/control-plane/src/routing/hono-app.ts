@@ -1,5 +1,6 @@
 /** Hono application for ordinary control-plane HTTP requests. */
 
+import { withExternalErrorContract } from "../external-api/error-contract";
 import { Hono } from "hono";
 import type { RouterRoute } from "hono/types";
 import { TrieRouter } from "hono/router/trie-router";
@@ -157,7 +158,19 @@ export function createControlPlaneApp(
       if (unexpected) {
         // Admission itself failed: the 500 still carries the selected
         // route's response policy and the common headers.
-        replaceResponse(c, finalizeRouteResponse(c.res, c.get("routePolicy") ?? {}, context));
+        replaceResponse(
+          c,
+          finalizeRouteResponse(
+            await withExternalErrorContract(
+              c.res,
+              c.get("routePolicy")?.errorContract,
+              c.env,
+              context
+            ),
+            c.get("routePolicy") ?? {},
+            context
+          )
+        );
         return;
       }
       logger.error("Handler answered without admission running ahead of it", {
@@ -174,7 +187,14 @@ export function createControlPlaneApp(
     const { policy, result } = admission;
     if (result.kind === "denied") {
       if (result.requestLog === "emit") logRequest(c.res, context, method, pathname, startedAt);
-      replaceResponse(c, finalizeRouteResponse(c.res, policy, context));
+      replaceResponse(
+        c,
+        finalizeRouteResponse(
+          await withExternalErrorContract(c.res, policy.errorContract, c.env, context),
+          policy,
+          context
+        )
+      );
       return;
     }
 
@@ -188,7 +208,14 @@ export function createControlPlaneApp(
         decision: result.decision,
       });
     }
-    replaceResponse(c, finalizeRouteResponse(c.res, policy, context));
+    replaceResponse(
+      c,
+      finalizeRouteResponse(
+        await withExternalErrorContract(c.res, policy.errorContract, c.env, context),
+        policy,
+        context
+      )
+    );
   });
 
   app.onError((caught, c) => {

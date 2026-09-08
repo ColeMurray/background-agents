@@ -3,10 +3,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
-import {
-  parseSessionListQuery,
-  SESSION_LIST_CURRENT_USER,
-} from "@open-inspect/shared/session-list-query";
+import { parseSessionListQuery } from "@open-inspect/shared/session-list-query";
 import {
   sessionInboxCategorySchema,
   type SessionInboxCategory,
@@ -14,7 +11,6 @@ import {
   type SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import { sessionReadActionSchema } from "@open-inspect/shared/types/sessions";
-import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {
   error,
@@ -47,31 +43,10 @@ const sessionInboxQuerySchema = z.object({
   mine: z.literal("true", { error: "Invalid mine" }).optional(),
 });
 
+import { parseCreatedByFilters } from "./session-list-filter";
+
 const log = createLogger("session-read-state");
 const SESSION_INBOX_LIMIT = 20;
-
-function parseCreatedByFilters(
-  values: readonly string[],
-  currentUserId: string | null
-): string[] | Response {
-  const userIds: string[] = [];
-  const seen = new Set<string>();
-
-  for (const value of values) {
-    const userId = value === SESSION_LIST_CURRENT_USER ? currentUserId : value;
-
-    if (!isCanonicalUserId(userId)) {
-      return error("Invalid createdBy", 400);
-    }
-
-    if (!seen.has(userId)) {
-      seen.add(userId);
-      userIds.push(userId);
-    }
-  }
-
-  return userIds;
-}
 
 export async function handleListSessions(
   request: Request,

@@ -18,6 +18,7 @@ function buildHandler(options?: {
 }) {
   const repository = {
     create: vi.fn(),
+    get: vi.fn(),
     getTotals: vi.fn(() => options?.totals ?? { count: 0, totalBytes: 0 }),
     claimStale: vi.fn(() => options?.stale ?? []),
     acknowledgeCleanup: vi.fn(),

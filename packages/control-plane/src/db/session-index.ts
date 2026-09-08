@@ -103,6 +103,14 @@ export interface SessionEntry {
   providerAuth?: SessionModelProviderAuthInput[];
 }
 
+/** Internal creation state; never project it into resource or list responses. */
+export interface SessionCreationReservation extends SessionEntry {
+  /** Canonical external create request reserved atomically with the session row. */
+  externalRequestFingerprint?: string | null;
+  /** Resolved external bootstrap state reserved atomically for deterministic retries. */
+  externalBootstrapSnapshot?: string | null;
+}
+
 interface SessionRow {
   id: string;
   title: string | null;
@@ -125,6 +133,8 @@ interface SessionRow {
   message_count: number;
   pr_count: number;
   environment_id: string | null;
+  external_request_fingerprint: string | null;
+  external_bootstrap_snapshot: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -146,6 +156,7 @@ export interface ListSessionsOptions {
   limit?: number;
   offset?: number;
   viewerUserId?: string;
+  repositorylessOnly?: boolean;
 }
 
 /** Paginated session index entries. */
@@ -243,7 +254,7 @@ export class SessionIndexStore {
     return result !== null;
   }
 
-  async create(session: SessionEntry): Promise<void> {
+  async create(session: SessionCreationReservation): Promise<void> {
     const repository = normalizeSessionRepositoryFields(session);
 
     if (session.skillManifest && session.skillManifestSourceSessionId) {
@@ -267,8 +278,8 @@ export class SessionIndexStore {
 
     const sessionStmt = this.db
       .prepare(
-        `INSERT INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, external_request_fingerprint, external_bootstrap_snapshot, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -290,6 +301,8 @@ export class SessionIndexStore {
         session.scmLogin ?? null,
         session.userId ?? null,
         session.environmentId ?? null,
+        session.externalRequestFingerprint ?? null,
+        session.externalBootstrapSnapshot ?? null,
         session.createdAt,
         session.updatedAt
       );
@@ -439,6 +452,21 @@ export class SessionIndexStore {
     return result ? toEntry(result) : null;
   }
 
+  /** Only creation retry recovery may read credential-bearing bootstrap state. */
+  async getCreationReservation(id: string): Promise<SessionCreationReservation | null> {
+    const result = await this.db
+      .prepare("SELECT * FROM sessions WHERE id = ?")
+      .bind(id)
+      .first<SessionRow>();
+    return result
+      ? {
+          ...toEntry(result),
+          externalRequestFingerprint: result.external_request_fingerprint,
+          externalBootstrapSnapshot: result.external_bootstrap_snapshot,
+        }
+      : null;
+  }
+
   private async getProviderAuth(sessionId: string): Promise<SessionModelProviderAuthInput[]> {
     const result = await this.db
       .prepare(
@@ -519,10 +547,13 @@ export class SessionIndexStore {
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
+      repositorylessOnly,
     } = options;
 
     const conditions: string[] = [];
     const params: unknown[] = [];
+
+    if (repositorylessOnly) conditions.push("repo_owner IS NULL AND repo_name IS NULL");
 
     if (status) {
       conditions.push("status = ?");

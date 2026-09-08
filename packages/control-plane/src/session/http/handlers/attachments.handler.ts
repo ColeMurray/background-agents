@@ -51,6 +51,13 @@ export class AttachmentsHandler {
     }
     const record = command.data;
 
+    const existing = this.repository.get(record.attachmentId);
+    if (existing) {
+      return existing.mime_type === record.mimeType && existing.size_bytes === record.sizeBytes
+        ? Response.json({ status: "ok" })
+        : Response.json({ error: "Attachment idempotency conflict" }, { status: 409 });
+    }
+
     const timestamp = this.now();
     const stale = this.repository.claimStale(
       timestamp - SESSION_ATTACHMENT_UNREFERENCED_TTL_MS,

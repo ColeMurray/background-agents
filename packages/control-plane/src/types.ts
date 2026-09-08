@@ -21,6 +21,7 @@ export interface EnvConfig {
   GOOGLE_CLIENT_SECRET?: string;
   BROWSER_AUTH_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
+  EXTERNAL_SESSION_ID_SECRET?: string;
   PROVIDER_ACCOUNTS_ENCRYPTION_KEY: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;

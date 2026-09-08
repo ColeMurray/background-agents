@@ -1,0 +1,39 @@
+import {
+  SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
+  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+} from "@open-inspect/shared/types/session-attachments";
+import { CliError } from "./errors.js";
+
+export interface ResolvedAttachment {
+  name: string;
+  bytes: Uint8Array;
+}
+
+export function validateAttachmentCount(count: number): void {
+  if (count > MAX_SESSION_ATTACHMENTS_PER_MESSAGE)
+    throw new CliError(
+      "validation",
+      `A prompt may include at most ${MAX_SESSION_ATTACHMENTS_PER_MESSAGE} attachments`
+    );
+}
+
+export function validateAttachmentBytes(bytes: Uint8Array, name: string): void {
+  if (bytes.byteLength === 0) throw new CliError("validation", `Attachment is empty: ${name}`);
+  if (bytes.byteLength > SESSION_ATTACHMENT_IMAGE_MAX_BYTES) {
+    throw new CliError("validation", `Attachment exceeds 10 MiB: ${name}`);
+  }
+  if (!isSupportedImage(bytes)) {
+    throw new CliError("validation", `Attachment is not PNG, JPEG, WebP, or GIF: ${name}`);
+  }
+}
+
+function isSupportedImage(bytes: Uint8Array): boolean {
+  const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const isPng = png.every((byte, index) => bytes[index] === byte);
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const matchesAscii = (offset: number, signature: string) =>
+    [...signature].every((character, index) => bytes[offset + index] === character.charCodeAt(0));
+  const isGif = matchesAscii(0, "GIF87a") || matchesAscii(0, "GIF89a");
+  const isWebp = matchesAscii(0, "RIFF") && matchesAscii(8, "WEBP");
+  return isPng || isJpeg || isGif || isWebp;
+}

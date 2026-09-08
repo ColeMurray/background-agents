@@ -108,4 +108,17 @@ export async function hashToken(token: string): Promise<string> {
     .join("");
 }
 
+/** Derive a deterministic opaque value from installation-scoped key material. */
+export async function hmacToken(value: string, keyBase64: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    Uint8Array.from(atob(keyBase64), (character) => character.charCodeAt(0)),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
+  return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 // timingSafeEqual is exported from @open-inspect/shared — use that instead.

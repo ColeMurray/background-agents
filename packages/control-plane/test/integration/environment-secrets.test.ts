@@ -40,6 +40,11 @@ describe("EnvironmentSecretsStore", () => {
 
     expect(await store.deleteSecret(ENV_ID, "TOKEN")).toBe(true);
     expect((await store.listSecretKeys(ENV_ID)).map((k) => k.key)).toEqual(["API_URL"]);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM managed_secret_redaction_history").first<{
+        count: number;
+      }>()
+    ).toEqual({ count: 1 });
   });
 
   it("scopes secrets per environment", async () => {

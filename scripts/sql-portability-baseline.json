@@ -44,6 +44,32 @@
         ],
         "reason": "Merge audit payload, same constraint as authorization-store: before/after state is read inside the mutating batch. Postgres form is json_build_object."
       }
+    },
+    "terraform/d1/migrations/0077_managed_secret_redaction_history.sql": {
+      "create-trigger": {
+        "occurrences": [
+          "CREATE TRIGGER",
+          "CREATE TRIGGER",
+          "CREATE TRIGGER",
+          "CREATE TRIGGER",
+          "CREATE TRIGGER",
+          "CREATE TRIGGER",
+          "CREATE TRIGGER"
+        ],
+        "reason": "Capture old ciphertext atomically for event/error redaction across credential updates, deletes, and foreign-key cascades. Store-only writes would miss cascade deletions and require auditing every credential writer; retain this security invariant during the host migration. A Postgres migration must provide equivalent transactional capture."
+      },
+      "strftime": {
+        "occurrences": [
+          "strftime(",
+          "strftime(",
+          "strftime(",
+          "strftime(",
+          "strftime(",
+          "strftime(",
+          "strftime("
+        ],
+        "reason": "These timestamps are generated inside redaction-history triggers, including cascade deletes that have no TypeScript timestamp argument. Moving them to TypeScript requires replacing the atomic trigger capture; a Postgres migration will use its transaction timestamp."
+      }
     }
   },
   "grandfatheredMigrations": [

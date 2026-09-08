@@ -3,13 +3,13 @@ import type { AuthenticationContext, Principal } from "./principal";
 export interface AuthError {
   /** Response body message (also the log detail). Never carries token material. */
   reason: string;
-  status: 401 | 413 | 500;
+  status: 401 | 413 | 426 | 500;
   /**
    * Which scheme was attempted and failed. A per-service attempt is terminal;
    * "none" means no recognized credential was presented at all, and the
    * router may still try sandbox auth on sandbox routes.
    */
-  failedScheme: "per-service" | "browser-session" | "none";
+  failedScheme: "per-service" | "browser-session" | "cli-bearer" | "none";
 }
 
 export type AuthResult =

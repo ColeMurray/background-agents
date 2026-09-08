@@ -308,6 +308,75 @@ describe("authenticate — service credentials", () => {
   });
 });
 
+describe("authenticate — direct CLI bearer", () => {
+  const credential = `oi_cli_${"a".repeat(64)}`;
+
+  it.each(["cli", "mcp", "mobile", "desktop"])(
+    "resolves a %s bearer to its canonical user",
+    async (surface) => {
+      const ctx = createCtx({
+        id: "credential-id",
+        user_id: "11111111111111111111111111111111",
+        expires_at: Date.now() + 60_000,
+      });
+      const request = new Request("https://cp.test.local/external/v1/cli/me", {
+        headers: {
+          Authorization: `Bearer ${credential}`,
+          "X-Open-Inspect-API-Version": "1",
+          "X-Open-Inspect-Client-Version": "0.1.0-test",
+          "X-Open-Inspect-Client-Surface": surface,
+        },
+      });
+
+      const result = await authenticate(request, createEnv(), ctx, {
+        userCredential: "browser-or-cli",
+      });
+
+      expect(isAuthError(result)).toBe(false);
+      if (isAuthError(result)) return;
+      expect(result.principal).toEqual({
+        kind: "user",
+        userId: "11111111111111111111111111111111",
+      });
+      expect(result.authentication).toMatchObject({
+        mechanism: "cli_credential",
+        credentialId: "credential-id",
+        channel: { kind: "direct_bearer" },
+      });
+    }
+  );
+
+  it("does not enable a CLI bearer on browser-only routes", async () => {
+    const request = new Request("https://cp.test.local/sessions", {
+      headers: { Authorization: `Bearer ${credential}` },
+    });
+
+    await expect(authenticate(request, createEnv(), createCtx())).resolves.toEqual({
+      reason: "Unauthorized",
+      status: 401,
+      failedScheme: "none",
+    });
+  });
+
+  it("does not fall back to a bearer after a failed signed-channel attempt", async () => {
+    const request = await signedRequest({
+      service: "web",
+      method: "GET",
+      url: "https://cp.test.local/external/v1/sessions",
+      secret: "invalid-secret",
+      mutate: (headers) => {
+        headers.Authorization = `Bearer ${credential}`;
+      },
+    });
+    await expect(
+      authenticate(request, createEnv(), createCtx(), {
+        webService: "user",
+        userCredential: "browser-or-cli",
+      })
+    ).resolves.toMatchObject({ status: 401, failedScheme: "per-service" });
+  });
+});
+
 describe("authenticate — compound browser credentials", () => {
   function createUserAuthContext(
     session: {
@@ -325,52 +394,60 @@ describe("authenticate — compound browser credentials", () => {
     return ctx;
   }
 
-  it("requires the web sig1 channel and Better Auth session for a browser resource", async () => {
-    const userId = "0123456789abcdef0123456789abcdef";
-    const request = await signedRequest({
-      service: "web",
-      method: "GET",
-      url: "https://cp.test.local/sessions",
-      mutate: (headers) => {
-        headers.Cookie = "__Secure-openinspect.session_token=signed-session-token";
-      },
-    });
-    const ctx = createUserAuthContext({
-      session: { id: "session-1", userId },
-      user: { id: userId },
-    });
+  it.each([undefined, "browser-or-cli"] as const)(
+    "accepts compound browser auth for %s resources",
+    async (userCredential) => {
+      const userId = "0123456789abcdef0123456789abcdef";
+      const request = await signedRequest({
+        service: "web",
+        method: "GET",
+        url: "https://cp.test.local/sessions",
+        mutate: (headers) => {
+          headers.Cookie = "__Secure-openinspect.session_token=signed-session-token";
+        },
+      });
+      const ctx = createUserAuthContext({
+        session: { id: "session-1", userId },
+        user: { id: userId },
+      });
 
-    const result = await authenticate(request, createEnv(), ctx, {
-      webService: "user",
-    });
+      const result = await authenticate(request, createEnv(), ctx, {
+        webService: "user",
+        userCredential,
+      });
 
-    expect(isAuthError(result)).toBe(false);
-    if (isAuthError(result)) return;
-    expect(result.principal).toEqual({ kind: "user", userId });
-    expect(result.authentication).toEqual({
-      mechanism: "browser_session",
-      credentialId: "session-1",
-      channel: { kind: "sig1", service: "web" },
-    });
-  });
+      expect(isAuthError(result)).toBe(false);
+      if (isAuthError(result)) return;
+      expect(result.principal).toEqual({ kind: "user", userId });
+      expect(result.authentication).toEqual({
+        mechanism: "browser_session",
+        credentialId: "session-1",
+        channel: { kind: "sig1", service: "web" },
+      });
+    }
+  );
 
-  it("does not let a valid web channel fall back when its browser session is absent", async () => {
-    const request = await signedRequest({
-      service: "web",
-      method: "GET",
-      url: "https://cp.test.local/sessions",
-    });
+  it.each([undefined, "browser-or-cli"] as const)(
+    "requires a browser session on %s resources",
+    async (userCredential) => {
+      const request = await signedRequest({
+        service: "web",
+        method: "GET",
+        url: "https://cp.test.local/sessions",
+      });
 
-    const result = await authenticate(request, createEnv(), createUserAuthContext(null), {
-      webService: "user",
-    });
+      const result = await authenticate(request, createEnv(), createUserAuthContext(null), {
+        webService: "user",
+        userCredential,
+      });
 
-    expect(result).toEqual({
-      reason: "Unauthorized",
-      status: 401,
-      failedScheme: "browser-session",
-    });
-  });
+      expect(result).toEqual({
+        reason: "Unauthorized",
+        status: 401,
+        failedScheme: "browser-session",
+      });
+    }
+  );
 });
 
 describe("authenticate — nonce replay logging", () => {

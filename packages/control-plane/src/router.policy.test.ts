@@ -15,11 +15,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(172);
+    expect(routes).toHaveLength(204);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(131);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(172);
+    expect(new Set(paths).size).toBe(161);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(204);
   });
 
   it("declares every path in the literal-or-parameter grammar", () => {
@@ -73,7 +73,7 @@ describe("route policy table", () => {
           authentication
         );
       } else if (authorization.kind === "authenticated" || authorization.kind === "active-self") {
-        expect(authentication).toBe("user");
+        expect(["user"]).toContain(authentication);
       } else if (authorization.kind === "service") {
         expect(authentication).toBe("service");
         expect(authorization.services.length).toBeGreaterThan(0);
@@ -273,6 +273,13 @@ describe("route policy table", () => {
 
   it.each([
     ["GET", "/health", "public"],
+    ["POST", "/external/v1/cli/device-authorizations", "public"],
+    ["POST", "/external/v1/cli/device-authorizations/exchange", "public"],
+    ["POST", "/external/v1/cli/device-authorizations/revoke", "public"],
+    ["GET", "/external/v1/cli/device-authorizations/pending", "user"],
+    ["POST", "/external/v1/cli/device-authorizations/approve", "user"],
+    ["GET", "/external/v1/cli/me", "user"],
+    ["DELETE", "/external/v1/cli/credentials/current", "user"],
     ["POST", "/webhooks/sentry/automation-1", "handler-authenticated"],
     ["POST", "/webhooks/automation/automation-1", "handler-authenticated"],
     ["POST", "/image-builds/build-complete", "handler-authenticated"],
@@ -293,6 +300,39 @@ describe("route policy table", () => {
     ["PUT", "/model-provider-account-defaults/openai", "user"],
   ])("owns the auth policy for %s %s", (method, path, expectedKind) => {
     expect(routeFor(method, path)?.authentication.kind).toBe(expectedKind);
+  });
+
+  it("applies active-user policy to browser approval and CLI credential routes", () => {
+    expect(
+      routeFor("POST", "/external/v1/cli/device-authorizations/approve")?.authorization
+    ).toEqual({ kind: "active-self", auditAllowed: false });
+    expect(routeFor("GET", "/external/v1/cli/me")?.authorization).toEqual({
+      kind: "active-self",
+      auditAllowed: false,
+    });
+    expect(routeFor("DELETE", "/external/v1/cli/credentials/current")?.authorization).toEqual({
+      kind: "active-self",
+      auditAllowed: false,
+    });
+  });
+
+  it.each([
+    ["POST", "/external/v1/sessions", "sessions.create"],
+    ["GET", "/external/v1/sessions", "sessions.read"],
+    ["GET", "/external/v1/sessions/session-1", "sessions.read"],
+    ["POST", "/external/v1/sessions/session-1/messages", "sessions.collaborate"],
+    ["POST", "/external/v1/sessions/session-1/stop", "sessions.lifecycle"],
+    ["GET", "/external/v1/sessions/session-1/events", "sessions.read"],
+    ["GET", "/external/v1/sessions/session-1/wait", "sessions.read"],
+  ])("shares external v1 session route %s %s across human clients", (method, path, permission) => {
+    const route = routeFor(method, path);
+    expect(route?.authentication).toEqual({ kind: "user", credential: "browser-or-cli" });
+    expect(route?.supportedScmProviders).toBe("all");
+    expect(route?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission }],
+      service: { kind: "deny" },
+    });
   });
 
   it.each([
@@ -511,6 +551,26 @@ describe("route principal policy", () => {
     ],
   ])("accepts matching principals for %o", (authentication, principal) => {
     expect(enforceRoutePrincipal(authentication, principal)).toBeNull();
+  });
+
+  it("requires bearer provenance for credential management", () => {
+    expect(
+      enforceRoutePrincipal(
+        { kind: "user", credential: "cli" },
+        { kind: "user", userId: "user-1" },
+        undefined,
+        {
+          mechanism: "cli_credential",
+          credentialId: "credential-1",
+          expiresAt: Date.now() + 1_000,
+          channel: { kind: "direct_bearer" },
+        }
+      )
+    ).toBeNull();
+    expect(
+      enforceRoutePrincipal({ kind: "user", credential: "cli" }, { kind: "user", userId: "user-1" })
+        ?.response.status
+    ).toBe(403);
   });
 
   it.each([

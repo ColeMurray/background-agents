@@ -27,13 +27,22 @@ export type AuthSessionState =
       status: "loading" | "unauthenticated" | "unavailable";
     };
 
-export async function signIn(provider: SignInProvider): Promise<void> {
+function validateSameOriginCallback(callbackURL: string): string {
+  const callback = new URL(callbackURL, globalThis.location.origin);
+  if (callback.origin !== globalThis.location.origin) {
+    throw new Error("Invalid sign-in callback URL");
+  }
+  return `${callback.pathname}${callback.search}${callback.hash}`;
+}
+
+export async function signIn(provider: SignInProvider, callbackURL = "/"): Promise<void> {
+  const validatedCallbackURL = validateSameOriginCallback(callbackURL);
   const response = await browserApiFetch("/api/auth/sign-in/social", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       provider,
-      callbackURL: "/",
+      callbackURL: validatedCallbackURL,
       disableRedirect: true,
     }),
   });
