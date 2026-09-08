@@ -57,6 +57,7 @@ import type {
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import {
   buildInteractiveProviderRoutingIdentity,
   parseStoredProviderSelections,
@@ -89,6 +90,8 @@ function skillPreviewTarget(
 
 export default function Home() {
   const { data: session } = useAuthSession();
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canCreateSession = hasPermission("sessions.create");
   const router = useRouter();
   const picker = useSessionTargetPicker();
   const { sessionTarget, buildRequestFields, isLaunchable } = picker;
@@ -184,6 +187,7 @@ export default function Home() {
   );
 
   const warmRequest: WarmDraftSessionRequest | null =
+    canCreateSession &&
     session &&
     providerSelectionsHydrated &&
     !providerAccounts.loading &&
@@ -267,6 +271,7 @@ export default function Home() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (
+      !canCreateSession ||
       submitInFlightRef.current ||
       sessionAttachments.isUploading ||
       !providerSelectionsHydrated ||
@@ -343,6 +348,7 @@ export default function Home() {
   return (
     <HomeContent
       isAuthenticated={!!session}
+      canCreateSession={canCreateSession}
       picker={picker}
       selectedModel={selectedModel}
       setSelectedModel={handleModelChange}
@@ -378,6 +384,7 @@ export default function Home() {
 
 function HomeContent({
   isAuthenticated,
+  canCreateSession,
   picker,
   selectedModel,
   setSelectedModel,
@@ -403,6 +410,7 @@ function HomeContent({
   providerAccounts,
 }: {
   isAuthenticated: boolean;
+  canCreateSession: boolean;
   picker: SessionTargetSelection;
   selectedModel: ValidModel;
   setSelectedModel: (value: ValidModel) => void;
@@ -477,9 +485,13 @@ function HomeContent({
           {/* Welcome text */}
           <div className="text-center mb-8">
             <h1 className="text-3xl font-semibold text-foreground mb-2">Welcome to {APP_NAME}</h1>
-            {isAuthenticated ? (
+            {isAuthenticated && canCreateSession ? (
               <p className="text-muted-foreground">
                 Ask a question or describe what you want to build
+              </p>
+            ) : isAuthenticated ? (
+              <p className="text-muted-foreground">
+                You don&apos;t have permission to create sessions.
               </p>
             ) : (
               <p className="text-muted-foreground">Sign in to start a new session</p>
@@ -487,7 +499,7 @@ function HomeContent({
           </div>
 
           {/* Input box - only show when authenticated */}
-          {isAuthenticated && (
+          {isAuthenticated && canCreateSession && (
             <form onSubmit={handleSubmit}>
               {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 

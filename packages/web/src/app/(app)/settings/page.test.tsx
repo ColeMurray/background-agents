@@ -7,12 +7,16 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsPage from "./page";
 import { SettingsViewportProvider } from "@/components/settings/settings-viewport-context";
+import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
 
 expect.extend(matchers);
 
 const mocks = vi.hoisted(() => ({
   tab: null as string | null,
   repoImagesEnabled: true,
+  allowedPermissions: new Set<string>(),
+  authorization: { permissions: [] as string[] },
+  hasPermission: (permission: string) => mocks.allowedPermissions.has(permission),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -21,6 +25,14 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/sandbox-provider", () => ({
   supportsRepoImages: () => mocks.repoImagesEnabled,
+}));
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    authorization: mocks.authorization,
+    loading: false,
+    hasPermission: mocks.hasPermission,
+  }),
 }));
 
 vi.mock("@/components/settings/secrets-settings", () => ({
@@ -66,6 +78,8 @@ vi.mock("@/components/settings/mcp-servers-settings", () => ({
 beforeEach(() => {
   mocks.tab = null;
   mocks.repoImagesEnabled = true;
+  mocks.allowedPermissions = new Set(PERMISSION_IDS);
+  mocks.authorization.permissions = [...PERMISSION_IDS];
   window.history.replaceState(null, "", "/settings");
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
@@ -94,8 +108,8 @@ describe("SettingsPage mobile navigation", () => {
 
     await user.click(screen.getByRole("button", { name: /Appearance/ }));
 
-    expect(screen.getByRole("heading", { name: "Appearance" })).toHaveFocus();
-    expect(screen.getByText("Appearance panel")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Appearance" })).toHaveFocus();
+    expect(await screen.findByText("Appearance panel")).toBeInTheDocument();
     expect(window.location.href).toContain("/settings?tab=appearance");
     expect(window.history.state).toMatchObject({ openInspectSettingsDetail: true });
 
@@ -137,6 +151,42 @@ describe("SettingsPage mobile navigation", () => {
     expect(screen.getByRole("heading", { name: "Settings" })).toHaveFocus();
     expect(window.location.pathname).toBe("/settings");
     expect(window.location.search).toBe("");
+  });
+
+  it("redirects an unauthorized deep link to the first available panel", () => {
+    mocks.tab = "secrets";
+    mocks.allowedPermissions = new Set();
+    mocks.authorization.permissions = [];
+    window.history.replaceState(null, "", "/settings?tab=secrets");
+
+    renderSettingsPage();
+
+    expect(screen.getByRole("heading", { name: "Appearance" })).toBeInTheDocument();
+    expect(screen.getByText("Appearance panel")).toBeInTheDocument();
+    expect(screen.queryByText("Secrets panel")).not.toBeInTheDocument();
+  });
+
+  it("allows repository secret managers to open secrets", async () => {
+    mocks.tab = "secrets";
+    mocks.allowedPermissions = new Set(["repositories.secrets.manage", "repositories.read"]);
+    mocks.authorization.permissions = ["repositories.secrets.manage", "repositories.read"];
+    window.history.replaceState(null, "", "/settings?tab=secrets");
+
+    renderSettingsPage();
+
+    expect(await screen.findByText("Secrets panel")).toBeInTheDocument();
+  });
+
+  it("rejects repository secret managers without repository read access", async () => {
+    mocks.tab = "secrets";
+    mocks.allowedPermissions = new Set(["repositories.secrets.manage"]);
+    mocks.authorization.permissions = ["repositories.secrets.manage"];
+    window.history.replaceState(null, "", "/settings?tab=secrets");
+
+    renderSettingsPage();
+
+    expect(await screen.findByText("Appearance panel")).toBeInTheDocument();
+    expect(screen.queryByText("Secrets panel")).not.toBeInTheDocument();
   });
 
   it("uses browser history for the in-app back action", async () => {

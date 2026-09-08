@@ -1,0 +1,17 @@
+export const CONDITION_LABELS: Record<string, string> = {
+  sentry_project: "Sentry Project",
+  sentry_level: "Error Level",
+  jsonpath: "JSONPath Filter",
+  branch: "Head branch",
+  target_branch: "Target branch",
+  label: "Label",
+  path_glob: "Path Glob",
+  actor: "Actor",
+  conclusion: "Conclusion",
+  check_conclusion: "Check Conclusion",
+  workflow_name: "Workflow Name",
+  linear_status: "Linear Status",
+  text_match: "Message Text",
+  slack_channel: "Slack Channel",
+  slack_actor: "Slack User",
+};

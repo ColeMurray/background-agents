@@ -4,6 +4,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { mutate } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
 import { useSandboxAccess } from "@/hooks/use-sandbox-access";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 import {
   ingestLiveSandboxEvent,
   pendingToTokenEvent,
@@ -41,6 +42,8 @@ const NO_MESSAGES: Message[] = [];
 interface UseSessionSocketReturn {
   connected: boolean;
   connecting: boolean;
+  /** A reconnect is scheduled and has not started yet. */
+  reconnecting: boolean;
   ready: boolean;
   presenceSynced: boolean;
   authError: string | null;
@@ -53,6 +56,7 @@ interface UseSessionSocketReturn {
   participants: ParticipantPresence[];
   artifacts: Artifact[];
   currentParticipantId: string | null;
+  canManageBudget: boolean;
   isProcessing: boolean;
   promptQueue: PromptQueueItem[];
   hasMoreHistory: boolean;
@@ -99,7 +103,8 @@ interface PendingCorrelatedRequest {
  */
 export function useSessionSocket(
   sessionId: string,
-  initialSnapshot: SessionSnapshot
+  initialSnapshot: SessionSnapshot,
+  capabilities: SessionCapabilities
 ): UseSessionSocketReturn {
   const [state, dispatch] = useReducer(
     sessionSocketReducer,
@@ -117,7 +122,11 @@ export function useSessionSocket(
     sandboxAccess,
     clear: clearSandboxAccess,
     refresh: refreshSandboxAccess,
-  } = useSandboxAccess(sessionId, state.sessionState?.sandboxStatus === "ready");
+  } = useSandboxAccess(
+    sessionId,
+    state.sessionState?.sandboxStatus === "ready",
+    capabilities.sandboxAccess
+  );
 
   const settleSubscriptionWaiters = useCallback((subscribed: boolean) => {
     for (const resolve of subscriptionWaitersRef.current) {
@@ -228,10 +237,14 @@ export function useSessionSocket(
     dispatch({ type: "socket_closed" });
   }, [settleAllCorrelatedRequests, settleSubscriptionWaiters]);
 
-  const transport = useSessionTransport(sessionId, {
-    onMessage: handleMessage,
-    onClose: handleClose,
-  });
+  const transport = useSessionTransport(
+    sessionId,
+    {
+      onMessage: handleMessage,
+      onClose: handleClose,
+    },
+    capabilities.read
+  );
   const { isOpen, send, reconnect, markHealthy } = transport;
 
   useEffect(() => {
@@ -404,6 +417,7 @@ export function useSessionSocket(
   return {
     connected: transport.connected,
     connecting: transport.connecting,
+    reconnecting: transport.reconnecting,
     ready: state.ready,
     presenceSynced: state.presenceSynced,
     authError: transport.authError,
@@ -415,6 +429,7 @@ export function useSessionSocket(
     participants: state.participants,
     artifacts: state.artifacts,
     currentParticipantId: state.currentParticipantId,
+    canManageBudget: state.canManageBudget,
     isProcessing,
     promptQueue: state.promptQueue,
     hasMoreHistory,

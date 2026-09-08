@@ -47,15 +47,27 @@ describe("sandbox access BFF", () => {
     await expect(response.json()).resolves.toEqual({ error: "Sandbox access changed; retry" });
   });
 
-  it("preserves malformed conflicts instead of treating them as sandbox unavailable", async () => {
-    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json(["bad"], { status: 409 }));
+  it.each([null, ["bad"], "Sandbox access is unavailable", {}, { error: 42 }])(
+    "preserves malformed conflicts instead of treating them as sandbox unavailable: %s",
+    async (body) => {
+      vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json(body, { status: 409 }));
 
+      const response = await GET({} as Request, {
+        params: Promise.resolve({ id: "session-1" }),
+      });
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual(body);
+    }
+  );
+
+  it("preserves a non-JSON conflict body", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(new Response("unavailable", { status: 409 }));
     const response = await GET({} as Request, {
       params: Promise.resolve({ id: "session-1" }),
     });
-
     expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual(["bad"]);
+    expect(await response.text()).toBe("unavailable");
   });
 
   it("preserves unexpected control-plane errors", async () => {

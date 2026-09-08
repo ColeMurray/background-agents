@@ -20,3 +20,4 @@ export * from "./browser-auth-routes";
 export * from "./sign-in-provider";
 export * from "./slack";
 export * from "./pull-request-tool";
+export * from "./rbac";

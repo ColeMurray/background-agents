@@ -13,6 +13,10 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { GitHubIntegrationSettings } from "./github-integration-settings";
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+}));
+
 expect.extend(matchers);
 
 interface RepoSettingsEntry {

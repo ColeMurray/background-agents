@@ -1,6 +1,6 @@
 import { runInSessionDO } from "./session-do-access";
 import { describe, it, expect } from "vitest";
-import type { SessionDO } from "../../src/session/durable-object";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import {
   initSession,
   queryDO,
@@ -59,7 +59,7 @@ describe("POST /internal/archive", () => {
     expect(state.status).toBe("archived");
   });
 
-  it("archive rejects non-participant", async () => {
+  it("archive does not use participant identity for authorization", async () => {
     const { stub } = await initSession({ userId: "user-1" });
 
     const res = await stub.fetch("http://internal/internal/archive", {
@@ -68,7 +68,7 @@ describe("POST /internal/archive", () => {
       body: JSON.stringify({ userId: "stranger" }),
     });
 
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
   });
 });
 

@@ -24,6 +24,7 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
+  "gpt-6-astra",
   "gpt-5.3-codex",
   "gpt-5.3-codex-spark",
   "gpt-5.1-codex",
@@ -112,63 +113,29 @@ export const CodexAuthProxy = async (input) => {
         return {
           apiKey: OAUTH_DUMMY_KEY,
           async fetch(requestInput, init) {
-            // Remove dummy API key authorization header
-            if (init?.headers) {
-              if (init.headers instanceof Headers) {
-                init.headers.delete("authorization");
-                init.headers.delete("Authorization");
-              } else if (Array.isArray(init.headers)) {
-                init.headers = init.headers.filter(
-                  ([key]) => key.toLowerCase() !== "authorization"
-                );
-              } else {
-                delete init.headers["authorization"];
-                delete init.headers["Authorization"];
-              }
-            }
+            const request = new Request(requestInput, init);
 
             const currentAuth = await getAuth();
-            if (currentAuth.type !== "oauth") return fetch(requestInput, init);
+            if (currentAuth.type !== "oauth") return fetch(request);
+
+            request.headers.delete("authorization");
 
             // Ensure we have a valid access token
             const { accessToken, accountId } = await ensureAccessToken(getAuth, setAuth);
 
-            // Build headers
-            const headers = new Headers();
-            if (init?.headers) {
-              if (init.headers instanceof Headers) {
-                init.headers.forEach((value, key) => headers.set(key, value));
-              } else if (Array.isArray(init.headers)) {
-                for (const [key, value] of init.headers) {
-                  if (value !== undefined) headers.set(key, String(value));
-                }
-              } else {
-                for (const [key, value] of Object.entries(init.headers)) {
-                  if (value !== undefined) headers.set(key, String(value));
-                }
-              }
-            }
-
-            // Set real authorization
-            headers.set("authorization", `Bearer ${accessToken}`);
-
-            // Set ChatGPT-Account-Id header
-            if (accountId) {
-              headers.set("ChatGPT-Account-Id", accountId);
-            }
-
-            // Rewrite URL to Codex endpoint
-            const parsed =
-              requestInput instanceof URL
-                ? requestInput
-                : new URL(typeof requestInput === "string" ? requestInput : requestInput.url);
+            const parsed = new URL(request.url);
             const url =
               parsed.pathname.includes("/v1/responses") ||
               parsed.pathname.includes("/chat/completions")
                 ? new URL(CODEX_API_ENDPOINT)
                 : parsed;
+            const proxiedRequest = new Request(url, request);
 
-            return fetch(url, { ...init, headers });
+            // Replace the dummy API key without discarding source Request options.
+            proxiedRequest.headers.set("authorization", `Bearer ${accessToken}`);
+            if (accountId) proxiedRequest.headers.set("ChatGPT-Account-Id", accountId);
+
+            return fetch(proxiedRequest);
           },
         };
       },

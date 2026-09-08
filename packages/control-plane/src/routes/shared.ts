@@ -2,15 +2,13 @@
  * Shared route primitives used by all route modules.
  */
 
-import { decodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
-import type { CorrelationContext } from "../logger";
-import type { AuthenticationContext, Principal } from "../auth/principal";
-import type { RequestMetrics } from "../db/instrumented-d1";
-import type { SqlDatabase } from "../db/sql-database";
+import type { Principal } from "../auth/principal";
+import type { RequestContext } from "../http/request-context";
+import { HttpError } from "../http/responses";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
-import type { BackgroundTasks } from "../platform-ports";
-import type { BetterAuthRuntime, UserAuthRuntime } from "../auth/user/runtime";
+import type { PermissionId, ScopedPermissionStem } from "@open-inspect/shared/rbac";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -19,41 +17,208 @@ import {
   type SourceControlProviderName,
 } from "../source-control";
 
-/**
- * Request context with correlation IDs and per-request metrics.
- */
-export type RequestContext = CorrelationContext & {
-  metrics: RequestMetrics;
-  /**
-   * The request's database handle (the DB binding wrapped with query
-   * instrumentation). Route handlers must use this instead of the raw binding
-   * so every query is timed — an ESLint rule forbids `.DB` access under
-   * src/routes and src/webhooks.
-   */
-  db: SqlDatabase;
-  /** Request-scoped capability for scheduling background tasks. */
-  executionCtx: BackgroundTasks;
-  /** Lazy runtime dependency used by user-session authentication and credential access. */
-  getUserAuth?: () => BetterAuthRuntime;
-  /** Lazy normalized auth runtime used by server-only authentication composition routes. */
-  getUserAuthRuntime?: () => UserAuthRuntime;
-  /**
-   * The request's verified principal. Absent only on public routes and CORS
-   * preflights — every authenticated request carries one.
-   */
-  principal?: Principal;
-  /** Authentication provenance, separate from the principal being authorized. */
-  authentication?: AuthenticationContext;
-};
+export type { AutomationRouteAdmission, RequestContext } from "../http/request-context";
+export { error, HttpError, json } from "../http/responses";
+
+/** Profile data a route can extract from an already verified service request. */
+export interface ServiceActorProfileClaims {
+  displayName?: string;
+  email?: string;
+  avatarUrl?: string;
+}
 
 /**
- * Route configuration.
+ * Outcome of preparing a route's actor claims before identity is finalized.
+ * A rejected body ends admission with the route's own response, so no user,
+ * identity, or assignment is written for a request the handler would refuse.
  */
-export interface RouteDefinition<Context extends RequestContext = RequestContext> {
-  method: string;
-  pattern: RegExp;
-  cacheControl?: "no-store" | "private, no-store";
-  handler: (request: Request, env: Env, match: RegExpMatchArray, ctx: Context) => Promise<Response>;
+export type ServiceActorClaimsResult =
+  | { kind: "claims"; claims: ServiceActorProfileClaims }
+  | { kind: "rejected"; response: Response };
+
+/** One permission or resource-admission requirement for an active user. */
+export type RouteAuthorizationRequirement =
+  | { kind: "permission"; permission: PermissionId }
+  | { kind: "scoped-permission"; stem: ScopedPermissionStem }
+  | {
+      kind: "automation";
+      operation: "manage" | "trigger";
+      automationIdParam: string;
+    };
+
+type BotServiceName = Exclude<ServiceName, "web">;
+const DEFAULT_AUDIT_ALLOWED = false;
+
+/** Narrow route grant for a trusted service without an acting user. */
+export interface ActorlessServiceGrant {
+  service: BotServiceName;
+  pathParams?: Readonly<Record<string, string>>;
+}
+
+type ServiceAuthorization =
+  | { kind: "deny" }
+  | {
+      kind: "actor";
+      actorlessGrants?: readonly ActorlessServiceGrant[];
+    };
+
+/** Declarative authorization policy enforced by the router. */
+export type RouteAuthorization =
+  | { kind: "none"; auditAllowed: false }
+  | { kind: "authenticated"; auditAllowed: false }
+  | { kind: "active-self"; auditAllowed: boolean }
+  | { kind: "active-global"; service: ServiceAuthorization; auditAllowed: boolean }
+  | {
+      kind: "active-user";
+      allOf: readonly RouteAuthorizationRequirement[];
+      service: ServiceAuthorization;
+      auditAllowed: boolean;
+    }
+  | {
+      kind: "service";
+      services: readonly BotServiceName[];
+      actor: "required" | "optional";
+      auditAllowed: true;
+    };
+
+/**
+ * Skips router-level permission checks after route authentication.
+ *
+ * The route may still require a service signature, a session-bound sandbox token, or credentials
+ * verified by its handler. Only routes whose authentication policy is `public` are publicly
+ * accessible.
+ */
+export const NO_AUTHORIZATION = {
+  kind: "none",
+  auditAllowed: DEFAULT_AUDIT_ALLOWED,
+} as const satisfies RouteAuthorization;
+/** Policy requiring any authenticated principal. */
+export const AUTHENTICATED_USER = {
+  kind: "authenticated",
+  auditAllowed: DEFAULT_AUDIT_ALLOWED,
+} as const satisfies RouteAuthorization;
+/** Policy requiring an active user to access their own account resource. */
+export function activeSelf(options?: { auditAllowed?: boolean }): RouteAuthorization {
+  return {
+    kind: "active-self",
+    auditAllowed: options?.auditAllowed ?? DEFAULT_AUDIT_ALLOWED,
+  };
+}
+export const ACTIVE_SELF = activeSelf();
+
+const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
+  "automations.create",
+  "automations.manage.any",
+  "automations.manage.own",
+  "automations.trigger.any",
+  "automations.trigger.own",
+  "commit_signing.manage",
+  "environments.images.manage",
+  "environments.manage",
+  "environments.secrets.manage",
+  "environments.settings.manage",
+  "global_secrets.manage",
+  "integrations.manage",
+  "mcp_servers.manage",
+  "models.preferences.manage",
+  "provider_accounts.manage",
+  "repositories.images.manage",
+  "repositories.secrets.manage",
+  "repositories.settings.manage",
+  "scm_settings.manage",
+  "sessions.collaborate",
+  "sessions.create",
+  "sessions.delete",
+  "sessions.lifecycle",
+  "sessions.sandbox_access",
+  "skill_profiles.manage_own",
+  "skills.manage",
+  "workspace.members.manage",
+  "workspace.transfer_ownership",
+]);
+
+function auditsAllowedRequirement(requirement: RouteAuthorizationRequirement): boolean {
+  if (requirement.kind === "permission") {
+    return AUDITED_ALLOWED_PERMISSIONS.has(requirement.permission);
+  }
+  return true;
+}
+
+/** Build a global permission requirement for composition with other requirements. */
+export function permissionRequirement(permission: PermissionId): RouteAuthorizationRequirement {
+  return { kind: "permission", permission };
+}
+
+/** Require an active user with a global permission, optionally allowing service actors. */
+export function requirePermission(
+  permission: PermissionId,
+  options?: { service?: "actor" | "deny"; actorlessGrants?: readonly ActorlessServiceGrant[] }
+): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [permissionRequirement(permission)],
+    auditAllowed: AUDITED_ALLOWED_PERMISSIONS.has(permission),
+    service:
+      options?.service === "deny"
+        ? { kind: "deny" }
+        : { kind: "actor", actorlessGrants: options?.actorlessGrants },
+  };
+}
+
+/** Require an active user with at least one permission under a scoped stem. */
+export function requireScopedPermission(
+  stem: ScopedPermissionStem,
+  options?: { service?: "actor" }
+): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [{ kind: "scoped-permission", stem }],
+    auditAllowed: true,
+    service: options?.service === "actor" ? { kind: "actor" } : { kind: "deny" },
+  };
+}
+
+/** Require admission to manage or trigger the automation identified by a path parameter. */
+export function requireAutomation(
+  operation: "manage" | "trigger",
+  automationIdParam = "id"
+): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [{ kind: "automation", operation, automationIdParam }],
+    service: { kind: "deny" },
+    auditAllowed: true,
+  };
+}
+
+/** Require an active user to satisfy every supplied authorization requirement. */
+export function requireAll(...allOf: readonly RouteAuthorizationRequirement[]): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf,
+    service: { kind: "actor" },
+    auditAllowed: allOf.some(auditsAllowedRequirement),
+  };
+}
+
+/** Require any active user, with optional actorless service grants. */
+export function activeGlobal(options?: {
+  actorlessGrants?: readonly ActorlessServiceGrant[];
+  auditAllowed?: boolean;
+}): RouteAuthorization {
+  return {
+    kind: "active-global",
+    service: { kind: "actor", actorlessGrants: options?.actorlessGrants },
+    auditAllowed: options?.auditAllowed ?? DEFAULT_AUDIT_ALLOWED,
+  };
+}
+
+/** Restrict a route to one trusted service, with optional actor identity. */
+export function serviceAuthorized(
+  service: BotServiceName,
+  actor: "required" | "optional" = "optional"
+): RouteAuthorization {
+  return { kind: "service", services: [service], actor, auditAllowed: true };
 }
 
 type UserPrincipal = Extract<Principal, { kind: "user" }>;
@@ -62,14 +227,18 @@ type ServicePrincipal = Extract<Principal, { kind: "service" }>;
 type WebServicePrincipal = Omit<ServicePrincipal, "service"> & { service: "web" };
 type UserOrServicePrincipal = Exclude<Principal, SandboxPrincipal>;
 
+/** Raw path parameters of the selected route, keyed by parameter name. */
+export type RouteParams = Readonly<Record<string, string>>;
+
 type SandboxSessionBinding = {
-  getSessionId(match: RegExpMatchArray): string | null;
+  getSessionId(params: RouteParams): string | null;
 };
 
 export type RouteAuthentication =
   | { kind: "public" }
   | { kind: "handler-authenticated" }
   | { kind: "web-service" }
+  | { kind: "service" }
   | { kind: "user" }
   | { kind: "user-or-service" }
   | ({ kind: "sandbox" } & SandboxSessionBinding)
@@ -82,11 +251,13 @@ export type RouteContext<Authentication extends RouteAuthentication> = RequestCo
       ? SandboxPrincipal
       : Authentication extends { kind: "web-service" }
         ? WebServicePrincipal
-        : Authentication extends { kind: "user-or-service" }
-          ? UserOrServicePrincipal
-          : Authentication extends { kind: "user-or-service-with-sandbox-fallback" }
-            ? Principal
-            : Principal | undefined;
+        : Authentication extends { kind: "service" }
+          ? ServicePrincipal
+          : Authentication extends { kind: "user-or-service" }
+            ? UserOrServicePrincipal
+            : Authentication extends { kind: "user-or-service-with-sandbox-fallback" }
+              ? Principal
+              : Principal | undefined;
 };
 
 export type UserRouteContext = RouteContext<{ kind: "user" }>;
@@ -97,14 +268,30 @@ export interface RoutePolicy {
   supportedScmProviders: "all" | readonly SourceControlProviderName[];
 }
 
-export interface Route extends RouteDefinition, RoutePolicy {}
+/** Framework-neutral policy consumed by request admission. */
+export interface RouteAdmissionPolicy extends RoutePolicy {
+  /** Authorization policy enforced before the handler runs. */
+  authorization: RouteAuthorization;
+  /**
+   * Extract profile claims asserted by the trusted service that owns this
+   * route. Authentication has already verified the exact request body before
+   * this hook runs. Invalid route input returns the route's own rejection so
+   * admission stops before any identity is written.
+   */
+  serviceActorClaims?: (request: Request, ctx: RequestContext) => Promise<ServiceActorClaimsResult>;
+}
 
 const SESSION_ID_BINDING: SandboxSessionBinding = {
-  getSessionId: (match) => match.groups?.id ?? null,
+  getSessionId: (params) => params.id ?? null,
 };
 
 export const GITHUB_USER_OR_SERVICE_ROUTE = {
   authentication: { kind: "user-or-service" },
+  supportedScmProviders: ["github"],
+} as const satisfies RoutePolicy;
+
+export const GITHUB_SERVICE_ROUTE = {
+  authentication: { kind: "service" },
   supportedScmProviders: ["github"],
 } as const satisfies RoutePolicy;
 
@@ -148,62 +335,6 @@ export const SCM_AGNOSTIC_SANDBOX_ROUTE = {
   supportedScmProviders: "all",
 } as const satisfies RoutePolicy;
 
-export function defineRoutes<const Policy extends RoutePolicy>(
-  policy: Policy,
-  routes: RouteDefinition<RouteContext<Policy["authentication"]>>[]
-): Route[] {
-  return routes.map((route) => defineRoute(policy, route));
-}
-
-export function defineRoute<const Policy extends RoutePolicy>(
-  policy: Policy,
-  route: RouteDefinition<RouteContext<Policy["authentication"]>>
-): Route {
-  const handler: Route["handler"] = (request, env, match, ctx) =>
-    route.handler(request, env, match, ctx as RouteContext<Policy["authentication"]>);
-  return { ...route, ...policy, handler };
-}
-
-/**
- * Parse route pattern into regex.
- */
-export function parsePattern(pattern: string): RegExp {
-  const regexPattern = pattern.replace(/:(\w+)/g, "(?<$1>[^/]+)");
-  return new RegExp(`^${regexPattern}$`);
-}
-
-/**
- * Create JSON response.
- */
-export function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-/**
- * Create error response.
- */
-export function error(message: string, status = 400): Response {
-  return json({ error: message }, status);
-}
-
-/**
- * Raise from a route handler or helper to return an error response with a
- * specific status. Mapped centrally in router.ts's dispatch catch to
- * error(message, status), avoiding `| Response` plumbing in callers.
- */
-export class HttpError extends Error {
-  constructor(
-    message: string,
-    readonly status: number
-  ) {
-    super(message);
-    this.name = "HttpError";
-  }
-}
-
 /**
  * Create a SourceControlProvider for use in Worker-level route handlers.
  * Cheap to construct (no I/O), so creating per-request is fine.
@@ -219,42 +350,6 @@ export async function resolveInstalledRepo(
 ): Promise<RepositoryAccessResult | null> {
   const result = await provider.checkRepositoryAccess({ owner: repoOwner, name: repoName });
   return result;
-}
-
-/**
- * Parse the request body as JSON, returning the typed result or an error Response.
- *
- * Usage:
- * ```ts
- * const body = await parseJsonBody<{ secrets: Record<string, string> }>(request);
- * if (body instanceof Response) return body;
- * ```
- */
-export async function parseJsonBody<T>(request: Request): Promise<T | Response> {
-  try {
-    return (await request.json()) as T;
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
-}
-
-/**
- * Extract `owner` and `name` named groups from a route match, returning
- * the pair or an error Response when either is missing.
- */
-export function extractRepoParams(
-  match: RegExpMatchArray
-): { owner: string; name: string } | Response {
-  const encodedOwner = match.groups?.owner;
-  const encodedName = match.groups?.name;
-  if (!encodedOwner || !encodedName) {
-    return error("Owner and name are required", 400);
-  }
-  const repository = decodeRepositoryPathSegments(encodedOwner, encodedName);
-  if (!repository) {
-    return error("Owner and name must be valid repository path segments", 400);
-  }
-  return { owner: repository.repoOwner, name: repository.repoName };
 }
 
 /**

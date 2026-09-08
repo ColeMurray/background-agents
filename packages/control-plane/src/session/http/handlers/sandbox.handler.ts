@@ -5,7 +5,6 @@ import {
 } from "@open-inspect/shared/types/session-api";
 import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import type { ParticipantRole } from "@open-inspect/shared/types/sessions";
 import { isDeadSandboxStatus } from "../../../sandbox/lifecycle/decisions";
 import {
   OpenAITokenNotConfiguredError,
@@ -20,7 +19,6 @@ import type { SessionMessenger } from "../../messenger";
 import type { MessageRepository } from "../../message-repository";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { EventRepository } from "../../event-repository";
-import type { ParticipantRepository } from "../../participant-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { SessionSandboxEventProcessor } from "../../sandbox-events/processor";
@@ -29,37 +27,25 @@ import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
 import { z } from "zod";
 
-const addParticipantRequestSchema = z.object({
-  userId: z.string(),
-  scmLogin: z.string().optional(),
-  scmName: z.string().optional(),
-  scmEmail: z.string().optional(),
-  role: z.enum(["owner", "member"] satisfies [ParticipantRole, ParticipantRole]).optional(),
-});
-
 const sandboxErrorRequestSchema = z.object({
   error: z.string().trim().min(1).max(1000),
 });
 
-type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
-
 /**
  * HTTP boundary for the sandbox-facing endpoints: event ingestion, media
- * artifacts, participant registration, token verification, and the
+ * artifacts, token verification, and the
  * credential/token refresh routes the in-sandbox tooling calls.
  */
 export class SandboxHandler {
+  /** Create the sandbox HTTP handler with its repositories and service dependencies. */
   constructor(
     private readonly messageRepository: MessageRepository,
     private readonly eventRepository: EventRepository,
-    private readonly participantRepository: ParticipantRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly sessionCoreRepository: SessionCoreRepository,
     private readonly sandboxRepository: SandboxRepository,
     private readonly sandboxEventProcessor: SessionSandboxEventProcessor,
     private readonly messenger: SessionMessenger,
-    /** Fixed at composition time: managed secrets exist only when D1 is bound. */
-    private readonly managedSecretsConfigured: boolean,
     private readonly refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAIToken>,
     private readonly refreshXaiToken: (
       session: SessionRow,
@@ -209,37 +195,6 @@ export class SandboxHandler {
     return Response.json({ status: "ok", artifactId: artifact.id });
   }
 
-  async addParticipant(request: Request): Promise<Response> {
-    let raw: unknown;
-    try {
-      raw = await request.json();
-    } catch {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-
-    const result = addParticipantRequestSchema.safeParse(raw);
-    if (!result.success) {
-      return Response.json({ error: "Invalid participant body" }, { status: 400 });
-    }
-
-    const body: AddParticipantRequest = result.data;
-
-    const id = this.generateId();
-    const now = this.now();
-
-    this.participantRepository.createParticipant({
-      id,
-      userId: body.userId,
-      scmLogin: body.scmLogin ?? null,
-      scmName: body.scmName ?? null,
-      scmEmail: body.scmEmail ?? null,
-      role: body.role ?? "member",
-      joinedAt: now,
-    });
-
-    return Response.json({ id, status: "added" });
-  }
-
   async verifySandboxToken(request: Request, log: Logger): Promise<Response> {
     let raw: unknown;
     try {
@@ -287,10 +242,6 @@ export class SandboxHandler {
       return Response.json({ error: "No session" }, { status: 404 });
     }
 
-    if (!this.managedSecretsConfigured) {
-      return Response.json({ error: "Secrets not configured" }, { status: 500 });
-    }
-
     let token: OpenAIToken;
     try {
       token = await this.refreshOpenAIToken(session, log);
@@ -324,9 +275,6 @@ export class SandboxHandler {
     const session = this.sessionCoreRepository.getSession();
     if (!session) {
       return Response.json({ error: "No session" }, { status: 404 });
-    }
-    if (!this.managedSecretsConfigured) {
-      return Response.json({ error: "Secrets not configured" }, { status: 500 });
     }
     const result = await this.refreshXaiToken(session, log);
     if (!result.ok) {

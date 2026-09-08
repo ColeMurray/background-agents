@@ -5,12 +5,12 @@ import {
   SESSION_LIST_CURRENT_USER,
   type SessionListQuery,
 } from "@open-inspect/shared/session-list-query";
-import { sessionStatusSchema, type SessionReadState } from "@open-inspect/shared/types/sessions";
+import { sessionStatusSchema } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
-export const SESSIONS_PAGE_SIZE = DEFAULT_SESSION_LIST_LIMIT;
+const SESSIONS_PAGE_SIZE = DEFAULT_SESSION_LIST_LIMIT;
 const COMMAND_MENU_SESSIONS_LIMIT = 100;
 const SESSIONS_API_PATH = "/api/sessions";
 export const CURRENT_USER_CREATED_BY = SESSION_LIST_CURRENT_USER;
@@ -44,15 +44,23 @@ const sessionListItemSchema = z.object({
     .optional(),
   readState: z
     .union([
-      z.object({ latestMessageId: z.null(), unread: z.literal(false) }),
-      z.object({ latestMessageId: z.string(), unread: z.boolean() }),
+      z.object({
+        latestMessageId: z.null(),
+        unread: z.literal(false),
+        version: z.number().default(0),
+      }),
+      z.object({
+        latestMessageId: z.string(),
+        unread: z.boolean(),
+        version: z.number().default(0),
+      }),
     ])
     .optional(),
 });
 
 export type SessionListItem = z.infer<typeof sessionListItemSchema>;
 
-export const sessionListResponseSchema = z.object({
+const sessionListResponseSchema = z.object({
   sessions: z.array(sessionListItemSchema),
   hasMore: z.boolean(),
 });
@@ -109,29 +117,6 @@ export function applyTitleUpdate(
     sessions: data.sessions.map((session) =>
       session.id === sessionId ? { ...session, title } : session
     ),
-  };
-}
-
-export function applySessionReadState(
-  data: SessionListResponse | undefined,
-  sessionId: string,
-  readState: SessionReadState | undefined
-): SessionListResponse | undefined {
-  if (!data) return data;
-  return {
-    ...data,
-    sessions: data.sessions.map((session) => {
-      if (session.id !== sessionId) return session;
-      if (!readState) return session;
-      const currentMessageId = session.readState?.latestMessageId;
-      if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId) {
-        return session;
-      }
-      return {
-        ...session,
-        readState,
-      };
-    }),
   };
 }
 

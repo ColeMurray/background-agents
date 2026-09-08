@@ -3,7 +3,7 @@ import useSWR from "swr";
 import {
   DEFAULT_KEYBOARD_SHORTCUTS,
   KEYBOARD_SHORTCUT_ACTIONS,
-  keyboardShortcutPreferencesResponseSchema,
+  keyboardShortcutPreferencesPayloadSchema,
   type KeyboardShortcutAction,
   type KeyboardShortcutPreferences,
 } from "@open-inspect/shared/types/keyboard-shortcuts";
@@ -15,12 +15,12 @@ export const KEYBOARD_SHORTCUTS_KEY = "/api/keyboard-shortcuts";
 async function fetchKeyboardShortcuts() {
   const response = await browserApiFetch(KEYBOARD_SHORTCUTS_KEY);
   if (!response.ok) throw new Error("Failed to load keyboard shortcuts");
-  return keyboardShortcutPreferencesResponseSchema.parse(await response.json());
+  return keyboardShortcutPreferencesPayloadSchema.parse(await response.json());
 }
 
 export function useKeyboardShortcuts() {
   const { data, error, isLoading, mutate } = useSWR(KEYBOARD_SHORTCUTS_KEY, fetchKeyboardShortcuts);
-  const parsed = useMemo(() => keyboardShortcutPreferencesResponseSchema.safeParse(data), [data]);
+  const parsed = useMemo(() => keyboardShortcutPreferencesPayloadSchema.safeParse(data), [data]);
   const shortcuts = parsed.success ? parsed.data.shortcuts : DEFAULT_KEYBOARD_SHORTCUTS;
   const labels = useMemo(
     () =>
@@ -47,7 +47,7 @@ export function useKeyboardShortcuts() {
           : "Failed to save keyboard shortcuts";
       throw new Error(message);
     }
-    const saved = keyboardShortcutPreferencesResponseSchema.parse(body);
+    const saved = keyboardShortcutPreferencesPayloadSchema.parse(body);
     await mutate(saved, { revalidate: false });
   }
 

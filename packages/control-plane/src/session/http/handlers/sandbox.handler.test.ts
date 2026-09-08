@@ -9,16 +9,14 @@ import {
 import type { SandboxRow, SessionRow } from "../../types";
 import { SandboxHandler } from "./sandbox.handler";
 import type { ArtifactRepository } from "../../artifact-repository";
-import type { ParticipantRepository } from "../../participant-repository";
 import type { EventRepository } from "../../event-repository";
 import type { MessageRepository } from "../../message-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { SessionSandboxEventProcessor } from "../../sandbox-events/processor";
 
-function createHandler({ managedSecretsConfigured = true } = {}) {
+function createHandler() {
   const repository = {
-    createParticipant: vi.fn(),
     createEvent: vi.fn(),
     getProcessingMessage: vi.fn(),
   };
@@ -47,13 +45,11 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
   const sandboxHandler = new SandboxHandler(
     repository as unknown as MessageRepository,
     repository as unknown as EventRepository,
-    repository as unknown as ParticipantRepository,
     artifactRepository,
     { getSession } as unknown as SessionCoreRepository,
     { getSandbox } as unknown as SandboxRepository,
     { processSandboxEvent } as unknown as SessionSandboxEventProcessor,
     messenger,
-    managedSecretsConfigured,
     refreshOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
@@ -69,7 +65,6 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     sandboxEvent: (request: Request) => sandboxHandler.sandboxEvent(request),
     sandboxError: (request: Request) => sandboxHandler.sandboxError(request),
     createMediaArtifact: (request: Request) => sandboxHandler.createMediaArtifact(request),
-    addParticipant: (request: Request) => sandboxHandler.addParticipant(request),
     verifySandboxToken: (request: Request) => sandboxHandler.verifySandboxToken(request, log),
     openaiTokenRefresh: () => sandboxHandler.openaiTokenRefresh(log),
     xaiTokenRefresh: () => sandboxHandler.xaiTokenRefresh(log),
@@ -263,84 +258,6 @@ describe("SandboxHandler", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid sandbox event" });
     expect(processSandboxEvent).not.toHaveBeenCalled();
-  });
-
-  it("adds participant with defaults and returns id", async () => {
-    const { handler, repository, generateId, now } = createHandler();
-
-    const response = await handler.addParticipant(
-      new Request("http://internal/internal/participants", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          userId: "user-1",
-          scmLogin: "octocat",
-          scmName: "The Octocat",
-        }),
-      })
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ id: "participant-1", status: "added" });
-    expect(generateId).toHaveBeenCalled();
-    expect(now).toHaveBeenCalled();
-    expect(repository.createParticipant).toHaveBeenCalledWith({
-      id: "participant-1",
-      userId: "user-1",
-      scmLogin: "octocat",
-      scmName: "The Octocat",
-      scmEmail: null,
-      role: "member",
-      joinedAt: 1234,
-    });
-  });
-
-  it("adds participant with a parsed owner role", async () => {
-    const { handler, repository } = createHandler();
-
-    const response = await handler.addParticipant(
-      new Request("http://internal/internal/participants", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userId: "user-1", role: "owner" }),
-      })
-    );
-
-    expect(response.status).toBe(200);
-    expect(repository.createParticipant).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: "user-1", role: "owner" })
-    );
-  });
-
-  it("rejects malformed participant bodies", async () => {
-    const { handler, repository } = createHandler();
-
-    const response = await handler.addParticipant(
-      new Request("http://internal/internal/participants", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userId: 123 }),
-      })
-    );
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Invalid participant body" });
-    expect(repository.createParticipant).not.toHaveBeenCalled();
-  });
-
-  it("rejects invalid participant roles", async () => {
-    const { handler, repository } = createHandler();
-
-    const response = await handler.addParticipant(
-      new Request("http://internal/internal/participants", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userId: "user-1", role: "admin" }),
-      })
-    );
-
-    expect(response.status).toBe(400);
-    expect(repository.createParticipant).not.toHaveBeenCalled();
   });
 
   it("creates a media artifact row and matching timeline event", async () => {
@@ -622,16 +539,6 @@ describe("SandboxHandler", () => {
     expect(await response.json()).toEqual({ error: "No session" });
   });
 
-  it("returns 500 when openai secrets are not configured", async () => {
-    const { handler, getSession } = createHandler({ managedSecretsConfigured: false });
-    getSession.mockReturnValue({} as SessionRow);
-
-    const response = await handler.openaiTokenRefresh();
-
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: "Secrets not configured" });
-  });
-
   it.each([
     [OpenAITokenNotConfiguredError, 404, "OPENAI_OAUTH_REFRESH_TOKEN not configured"],
     [OpenAITokenUnauthorizedError, 401, "OpenAI token refresh failed: unauthorized"],
@@ -706,16 +613,6 @@ describe("SandboxHandler", () => {
 
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "No session" });
-  });
-
-  it("returns 500 when managed secrets are not configured for xAI", async () => {
-    const { handler, getSession } = createHandler({ managedSecretsConfigured: false });
-    getSession.mockReturnValue({} as SessionRow);
-
-    const response = await handler.xaiTokenRefresh();
-
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: "Secrets not configured" });
   });
 
   it("returns mapped service error from xAI token refresh", async () => {

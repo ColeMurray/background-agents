@@ -9,7 +9,7 @@ import {
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { ModelProviderAccountStatus } from "@open-inspect/shared/types/provider-accounts";
 
-export type ProviderCredentialExchangeState = "idle" | "in_flight";
+type ProviderCredentialExchangeState = "idle" | "in_flight";
 export type ProviderCredentialExchangeAccountStatus = Exclude<
   ModelProviderAccountStatus,
   "disabled"

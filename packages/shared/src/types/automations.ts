@@ -8,6 +8,7 @@ import {
 import type { RepositoryInput, RepositoryRef } from "./repositories";
 import { modelProviderSelectionsSchema } from "./provider-accounts";
 import { isEnvironmentId } from "./environments";
+import { isCanonicalUserId } from "../user-id";
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
 
@@ -31,6 +32,9 @@ export type AutomationInvocationStatus = z.infer<typeof automationInvocationStat
 
 /** Maximum repositories an automation can fan out across per invocation. */
 export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
+
+/** Largest page `GET /automations/:id/invocations` serves; larger limits are refused. */
+export const MAX_AUTOMATION_INVOCATION_LIST_LIMIT = 100;
 
 /** A repository selected on an automation (response shape, resolved). */
 const automationRepositorySchema = z.object({
@@ -80,6 +84,7 @@ const automationSchema = z.object({
   nextRunAt: z.number().nullable(),
   consecutiveFailures: z.number(),
   createdBy: z.string(),
+  userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID").nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),
   deletedAt: z.number().nullable(),

@@ -32,6 +32,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 type ScopeMode = "global" | "selected";
 type Editor =
@@ -438,7 +439,12 @@ function McpServerForm({
   );
 }
 
+/**
+ * Lists workspace MCP servers and exposes create, edit, and delete controls only to authorized users.
+ */
 export function McpServersSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManage = hasPermission("mcp_servers.manage");
   const { servers, loading, mutate } = useMcpServers();
   const { repos, loading: loadingRepos } = useRepos();
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -564,12 +570,14 @@ export function McpServersSettings() {
     <div>
       <div className="flex items-center justify-between mb-1">
         <h2 className="text-xl font-semibold text-foreground">MCP Servers</h2>
-        <Button onClick={startNew} variant="outline" size="sm">
-          <span className="inline-flex items-center gap-1">
-            <PlusIcon className="w-3.5 h-3.5" />
-            Add Server
-          </span>
-        </Button>
+        {canManage && (
+          <Button onClick={startNew} variant="outline" size="sm">
+            <span className="inline-flex items-center gap-1">
+              <PlusIcon className="w-3.5 h-3.5" />
+              Add Server
+            </span>
+          </Button>
+        )}
       </div>
       <p className="text-sm text-muted-foreground mb-6">
         Configure Model Context Protocol servers that are available to agent sessions.
@@ -635,7 +643,8 @@ export function McpServersSettings() {
                   <button
                     type="button"
                     className="flex items-center gap-3 min-w-0 cursor-pointer text-left"
-                    onClick={() => startEdit(server)}
+                    onClick={() => canManage && startEdit(server)}
+                    disabled={!canManage}
                   >
                     <ChevronRightIcon
                       className={`w-3 h-3 text-muted-foreground flex-shrink-0 transition-transform ${
@@ -667,20 +676,22 @@ export function McpServersSettings() {
                     </div>
                   </button>
 
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <Switch
-                      checked={server.enabled}
-                      onCheckedChange={() => handleToggle(server)}
-                      aria-label={server.enabled ? "Disable" : "Enable"}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setDeleteTarget(server.id)}
-                      className="px-2 py-1 text-xs text-destructive hover:text-destructive/80 transition"
-                    >
-                      Delete
-                    </button>
-                  </div>
+                  {canManage && (
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <Switch
+                        checked={server.enabled}
+                        onCheckedChange={() => handleToggle(server)}
+                        aria-label={server.enabled ? "Disable" : "Enable"}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget(server.id)}
+                        className="px-2 py-1 text-xs text-destructive hover:text-destructive/80 transition"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Expanded edit form */}
@@ -713,7 +724,7 @@ export function McpServersSettings() {
       )}
 
       {/* Delete confirmation dialog */}
-      <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
+      <AlertDialog open={canManage && !!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete MCP server</AlertDialogTitle>

@@ -136,7 +136,10 @@ export function ProfileForm({
   );
 }
 
-export function Profiles() {
+/**
+ * Lists the user's skill profiles and exposes profile mutations only when `canManage` is true.
+ */
+export function Profiles({ canManage }: { canManage: boolean }) {
   const { profiles, loading, error, mutate } = useSkillProfiles();
   const { skills, loading: skillsLoading, error: skillsError } = useSkills();
   const [editing, setEditing] = useState<SkillProfile | "new" | null>(null);
@@ -172,9 +175,11 @@ export function Profiles() {
             Save personal skill sets for session creation.
           </p>
         </div>
-        <Button size="sm" onClick={() => setEditing("new")}>
-          <PlusIcon className="h-4 w-4" /> New profile
-        </Button>
+        {canManage && (
+          <Button size="sm" onClick={() => setEditing("new")}>
+            <PlusIcon className="h-4 w-4" /> New profile
+          </Button>
+        )}
       </div>
       {error ? (
         <p className="text-sm text-destructive">Failed to load skill profiles.</p>
@@ -190,7 +195,8 @@ export function Profiles() {
             <div key={profile.id} className="flex items-center gap-3 p-4">
               <button
                 type="button"
-                onClick={() => setEditing(profile)}
+                onClick={() => canManage && setEditing(profile)}
+                disabled={!canManage}
                 className="min-w-0 flex-1 text-left"
               >
                 <p className="truncate text-sm font-medium text-foreground">{profile.name}</p>
@@ -207,9 +213,11 @@ export function Profiles() {
                           .join(", ") || "None"}
                 </p>
               </button>
-              <Button variant="ghost" size="xs" onClick={() => remove(profile)}>
-                Delete
-              </Button>
+              {canManage && (
+                <Button variant="ghost" size="xs" onClick={() => remove(profile)}>
+                  Delete
+                </Button>
+              )}
             </div>
           ))}
         </div>

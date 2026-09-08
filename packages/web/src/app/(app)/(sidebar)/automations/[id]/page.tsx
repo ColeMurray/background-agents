@@ -3,6 +3,7 @@
 import { useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
 import { describeCron } from "@open-inspect/shared/cron";
 import { getReasoningConfig } from "@open-inspect/shared/models";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
@@ -17,6 +18,8 @@ import { BackIcon, PencilIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { canAccessAutomation } from "@/lib/automation-authorization";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -25,18 +28,24 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const { automation, loading, mutate } = useAutomation(id);
+  const { authorization } = useCurrentUserAuthorization();
   const { environments } = useEnvironments();
   // "Load more" grows the fetch limit rather than paging by offset: the
   // endpoint returns newest-first, so a larger limit re-fetches the head plus
-  // the next page in one request. Fine at automation-history scale; revisit
-  // with real offset pagination if histories grow large.
+  // the next page in one request. The endpoint refuses limits past its
+  // maximum, so the history stops there; revisit with real offset pagination
+  // if histories grow large.
   const [extraHistoryLimit, setExtraHistoryLimit] = useState(0);
+  const historyLimit = Math.min(
+    HISTORY_PAGE_SIZE + extraHistoryLimit,
+    MAX_AUTOMATION_INVOCATION_LIST_LIMIT
+  );
   const {
     invocations,
     total: totalInvocations,
     loading: loadingInvocations,
     mutate: mutateInvocations,
-  } = useAutomationInvocations(id, HISTORY_PAGE_SIZE + extraHistoryLimit, 0);
+  } = useAutomationInvocations(id, historyLimit, 0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const reasoningLabel = automation
@@ -96,6 +105,9 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     );
   }
 
+  const canManage = canAccessAutomation("automations.manage", authorization, automation);
+  const canTrigger = canAccessAutomation("automations.trigger", authorization, automation);
+
   return (
     <div className="h-full flex flex-col">
       {!isOpen && (
@@ -139,70 +151,76 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
               </p>
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-none sm:flex-row sm:flex-wrap sm:justify-end sm:gap-2">
-              <Link href={`/automations/${id}/edit`} className="w-full sm:w-auto">
-                <Button variant="outline" size="sm" className="w-full sm:w-auto">
-                  <span className="flex items-center gap-1.5">
-                    <PencilIcon className="w-3.5 h-3.5" />
-                    Edit
-                  </span>
-                </Button>
-              </Link>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full sm:w-auto"
-                onClick={() => handleAction("trigger")}
-              >
-                Trigger Now
-              </Button>
-              {automation.enabled ? (
+              {canManage && (
+                <Link href={`/automations/${id}/edit`} className="w-full sm:w-auto">
+                  <Button variant="outline" size="sm" className="w-full sm:w-auto">
+                    <span className="flex items-center gap-1.5">
+                      <PencilIcon className="w-3.5 h-3.5" />
+                      Edit
+                    </span>
+                  </Button>
+                </Link>
+              )}
+              {canTrigger && (
                 <Button
                   variant="outline"
                   size="sm"
                   className="w-full sm:w-auto"
-                  onClick={() => handleAction("pause")}
+                  onClick={() => handleAction("trigger")}
                 >
-                  Pause
-                </Button>
-              ) : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full sm:w-auto"
-                  onClick={() => handleAction("resume")}
-                >
-                  Resume
+                  Trigger Now
                 </Button>
               )}
-              {confirmDelete ? (
-                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-1">
+              {canManage &&
+                (automation.enabled ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    onClick={() => handleAction("pause")}
+                  >
+                    Pause
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    onClick={() => handleAction("resume")}
+                  >
+                    Resume
+                  </Button>
+                ))}
+              {canManage &&
+                (confirmDelete ? (
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-1">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="w-full sm:w-auto"
+                      onClick={handleDelete}
+                    >
+                      Confirm Delete
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full sm:w-auto"
+                      onClick={() => setConfirmDelete(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
                   <Button
                     variant="destructive"
                     size="sm"
                     className="w-full sm:w-auto"
-                    onClick={handleDelete}
+                    onClick={() => setConfirmDelete(true)}
                   >
-                    Confirm Delete
+                    Delete
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full sm:w-auto"
-                    onClick={() => setConfirmDelete(false)}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="w-full sm:w-auto"
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  Delete
-                </Button>
-              )}
+                ))}
             </div>
           </div>
 
@@ -322,7 +340,10 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
               invocations={invocations}
               total={totalInvocations}
               loading={loadingInvocations}
-              hasMore={invocations.length < totalInvocations}
+              hasMore={
+                invocations.length < totalInvocations &&
+                historyLimit < MAX_AUTOMATION_INVOCATION_LIST_LIMIT
+              }
               onLoadMore={() => setExtraHistoryLimit((prev) => prev + HISTORY_PAGE_SIZE)}
             />
           </div>

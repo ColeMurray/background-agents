@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
-import type { SessionIndexStore } from "../db/session-index";
 import { SessionTitleService } from "./title-service";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionRow } from "./types";
@@ -18,7 +17,7 @@ function sessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
   } as SessionRow;
 }
 
-function makeHarness(options: { session?: SessionRow | null; withoutIndexStore?: boolean } = {}) {
+function makeHarness(options: { session?: SessionRow | null } = {}) {
   const session = options.session === undefined ? sessionRow() : options.session;
   const repository = {
     getSession: vi.fn(() => session),
@@ -28,15 +27,13 @@ function makeHarness(options: { session?: SessionRow | null; withoutIndexStore?:
   const messenger = { broadcast: vi.fn(), sendToSandbox: vi.fn(async () => {}) };
   const statusService = { notifyParentOfChildUpdate: vi.fn() };
   const backgroundTasks = createTestBackgroundTasks();
-  const updateTitleIfNewer = vi.fn(async () => {});
+  const updateTitleIfNewer = vi.fn(async () => true);
   const service = new SessionTitleService({
     sessionCoreRepository: repository as unknown as SessionCoreRepository,
     messenger,
     statusService,
     backgroundTasks,
-    sessionIndexStore: options.withoutIndexStore
-      ? null
-      : ({ updateTitleIfNewer } as unknown as SessionIndexStore),
+    sessionIndexStore: { updateTitleIfNewer },
     durableObjectId: "do-hex-id",
     now: () => NOW,
   });
@@ -120,14 +117,5 @@ describe("SessionTitleService", () => {
       "public-name",
       { status: "active", title: "Child title" }
     );
-  });
-
-  it("skips the index sync when no D1 store is bound", () => {
-    const h = makeHarness({ withoutIndexStore: true });
-
-    const result = h.service.applySessionTitleUpdate("A title");
-
-    expect(result).toEqual({ ok: true, title: "A title" });
-    expect(h.backgroundTasks.submissions).toEqual([]);
   });
 });

@@ -53,16 +53,15 @@ import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import { useSessionDetailsSidebar } from "@/hooks/use-session-details-sidebar";
-import {
-  classifySessionReadAttempt,
-  markMessageRead,
-  reconcileSessionReadState,
-  SessionReadRequestError,
-} from "@/lib/session-read-state";
+import { findLatestTerminalMessageId } from "@/lib/session-read-state";
+import { useMarkSessionRead } from "@/hooks/use-mark-session-read";
 import { usePromptInput } from "@/hooks/use-prompt-input";
+import { formatSessionCost } from "@/lib/session-cost";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { resolveSessionCapabilities } from "@/lib/session-capabilities";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -71,11 +70,14 @@ const DEFAULT_SESSION_STATUS = "created" as const;
 
 export default function SessionPage() {
   const { shortcuts } = useKeyboardShortcuts();
+  const { hasPermission } = useCurrentUserAuthorization();
+  const capabilities = useMemo(() => resolveSessionCapabilities(hasPermission), [hasPermission]);
   const initialSnapshot = useSessionSnapshot();
   const sessionId = initialSnapshot.session.id;
   const {
     connected,
     connecting,
+    reconnecting,
     ready,
     presenceSynced,
     authError,
@@ -86,6 +88,7 @@ export default function SessionPage() {
     participants,
     artifacts,
     currentParticipantId,
+    canManageBudget,
     isProcessing,
     promptQueue,
     loadingHistory,
@@ -95,7 +98,9 @@ export default function SessionPage() {
     sendTyping,
     reconnect,
     loadOlderEvents,
-  } = useSessionSocket(sessionId, initialSnapshot);
+  } = useSessionSocket(sessionId, initialSnapshot, capabilities);
+  const latestTerminalMessageId = useMemo(() => findLatestTerminalMessageId(events), [events]);
+  useMarkSessionRead(sessionId, latestTerminalMessageId);
   const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
     sessionId,
     participants,
@@ -143,13 +148,14 @@ export default function SessionPage() {
     reasoningEffort,
     loadingEnabledModels,
     sessionState?.status ?? DEFAULT_SESSION_STATUS,
-    ready,
+    ready && capabilities.collaborate && !sessionState?.budgetExhausted,
     shortcuts["send-prompt"]
   );
   const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
   const cancellingPromptIdsRef = useRef(new Set<string>());
   const handleRemoveQueuedPrompt = useCallback(
     async (messageId: string) => {
+      if (!capabilities.lifecycle) return;
       if (cancellingPromptIdsRef.current.has(messageId)) return;
       const queuedPrompt = promptQueue.find((item) => item.messageId === messageId);
       if (!queuedPrompt || queuedPrompt.status !== "pending") return;
@@ -175,7 +181,7 @@ export default function SessionPage() {
         setCancellingPromptIds(new Set(cancellingPromptIdsRef.current));
       }
     },
-    [cancelPrompt, promptQueue, restorePrompt, setSubmitError]
+    [cancelPrompt, capabilities.lifecycle, promptQueue, restorePrompt, setSubmitError]
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
@@ -217,7 +223,13 @@ export default function SessionPage() {
   }, [applyTerminalOpen]);
   const ttydUrl = sessionState?.ttydUrl;
   const ttydToken = sessionState?.ttydToken;
-  const showTerminal = !!(ttydUrl && ttydToken && terminalOpen && !isBelowLg);
+  const showTerminal = !!(
+    capabilities.sandboxAccess &&
+    ttydUrl &&
+    ttydToken &&
+    terminalOpen &&
+    !isBelowLg
+  );
 
   const toggleDetails = useCallback(() => {
     setIsDetailsOpen((prev) => !prev);
@@ -272,24 +284,6 @@ export default function SessionPage() {
     setSelectedDiff(selection);
     setIsDetailsOpen(false);
   }, []);
-  const attemptMarkVisibleMessageRead = useCallback(
-    async (messageId: string) => {
-      try {
-        const result = await markMessageRead(sessionId, messageId);
-        await reconcileSessionReadState(result);
-        return classifySessionReadAttempt(result);
-      } catch (error) {
-        if (
-          error instanceof SessionReadRequestError &&
-          [400, 401, 403, 404, 405].includes(error.status)
-        ) {
-          return "permanent_failure" as const;
-        }
-        return "retry" as const;
-      }
-    },
-    [sessionId]
-  );
   const closeDiff = useCallback(() => {
     const returnSelection = diffReturnFocusRef.current;
     setSelectedDiff(null);
@@ -332,13 +326,6 @@ export default function SessionPage() {
               showSkeleton={false}
               onLoadOlder={loadOlderEvents}
               onOpenMedia={setSelectedMediaArtifactId}
-              terminalMessageReadObservationEnabled={
-                !loadingHistory &&
-                !isDetailsOpen &&
-                selectedMediaArtifactId === null &&
-                resolvedDiff === null
-              }
-              onMarkMessageRead={attemptMarkVisibleMessageRead}
             />
           </Panel>
           {showTerminal && (
@@ -355,44 +342,53 @@ export default function SessionPage() {
         promptQueue={promptQueue}
         cancellingPromptIds={cancellingPromptIds}
         onRemove={handleRemoveQueuedPrompt}
+        capabilities={capabilities}
       />
-      <SessionPromptComposer
-        session={{
-          id: sessionId,
-          status: sessionState?.status ?? DEFAULT_SESSION_STATUS,
-          artifacts,
-          primaryRepo,
-          onArchive: handleArchive,
-          onUnarchive: handleUnarchive,
-        }}
-        prompt={{
-          value: prompt,
-          isProcessing: ready && isProcessing,
-          draftLocked: isSubmitting || sessionAttachments.isUploading,
-          sendBlocked: !ready,
-          submitError,
-          inputRef,
-          onSubmit: handleSubmit,
-          onValueChange: handleInputValueChange,
-          onKeyDown: handleKeyDown,
-          onStopExecution: stopExecution,
-        }}
-        skillSuggestions={skillSuggestions}
-        attachments={{
-          items: sessionAttachments.attachments,
-          error: sessionAttachments.attachmentError,
-          isUploading: sessionAttachments.isUploading,
-          onAdd: sessionAttachments.addFiles,
-          onRemove: sessionAttachments.removeAttachment,
-        }}
-        model={{
-          selectedModel,
-          reasoningEffort,
-          items: enabledModelOptions,
-          onModelChange: handleModelChange,
-          onReasoningEffortChange: setReasoningEffort,
-        }}
-      />
+      {capabilities.collaborate && (
+        <SessionPromptComposer
+          session={{
+            id: sessionId,
+            status: sessionState?.status ?? DEFAULT_SESSION_STATUS,
+            artifacts,
+            primaryRepo,
+            onArchive: handleArchive,
+            onUnarchive: handleUnarchive,
+            capabilities,
+          }}
+          prompt={{
+            value: prompt,
+            isProcessing: ready && isProcessing,
+            draftLocked: isSubmitting || sessionAttachments.isUploading,
+            sendBlocked: !ready || Boolean(sessionState?.budgetExhausted),
+            blockedReason: sessionState?.budgetExhausted
+              ? canManageBudget
+                ? `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. Raise or remove the limit to continue.`
+                : `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. The session owner must raise or remove the limit to continue.`
+              : undefined,
+            submitError,
+            inputRef,
+            onSubmit: handleSubmit,
+            onValueChange: handleInputValueChange,
+            onKeyDown: handleKeyDown,
+            onStopExecution: stopExecution,
+          }}
+          skillSuggestions={skillSuggestions}
+          attachments={{
+            items: sessionAttachments.attachments,
+            error: sessionAttachments.attachmentError,
+            isUploading: sessionAttachments.isUploading,
+            onAdd: sessionAttachments.addFiles,
+            onRemove: sessionAttachments.removeAttachment,
+          }}
+          model={{
+            selectedModel,
+            reasoningEffort,
+            items: enabledModelOptions,
+            onModelChange: handleModelChange,
+            onReasoningEffortChange: setReasoningEffort,
+          }}
+        />
+      )}
     </div>
   );
 
@@ -404,6 +400,7 @@ export default function SessionPage() {
         fallbackSessionInfo={fallbackSessionInfo}
         connected={connected && ready}
         connecting={connecting || (connected && !ready)}
+        reconnecting={reconnecting}
         isDetailsOpen={isDetailsOpen}
         isDesktopDetailsOpen={isDesktopDetailsOpen}
         showDesktopDetailsToggle={!resolvedDiff}
@@ -419,13 +416,15 @@ export default function SessionPage() {
           primaryRepo,
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
+          capabilities,
         }}
         optimisticTitle={optimisticTitle}
         renameSession={renameSession}
+        capabilities={capabilities}
       />
 
       {/* Connection error banner */}
-      {(authError || connectionError) && (
+      {capabilities.read && (authError || connectionError) && (
         <div className="bg-destructive-muted border-b border-destructive-border px-4 py-3 flex items-center justify-between">
           <p className="text-sm text-destructive">{authError || connectionError}</p>
           <button
@@ -459,6 +458,8 @@ export default function SessionPage() {
                 diffLoading={diffLoading}
                 selectedDiff={selectedDiff}
                 onOpenDiff={openDiff}
+                canManageBudget={canManageBudget}
+                capabilities={capabilities}
               />
             }
             changes={
@@ -469,6 +470,7 @@ export default function SessionPage() {
                   resolved={resolvedDiff}
                   onClose={closeDiff}
                   onSelect={setSelectedDiff}
+                  capabilities={capabilities}
                 />
               ) : null
             }
@@ -492,6 +494,8 @@ export default function SessionPage() {
               diffLoading={diffLoading}
               selectedDiff={selectedDiff}
               onOpenDiff={openDiff}
+              canManageBudget={canManageBudget}
+              capabilities={capabilities}
             />
           </>
         )}
@@ -516,6 +520,8 @@ export default function SessionPage() {
           diffLoading={diffLoading}
           selectedDiff={selectedDiff}
           onOpenDiff={openDiff}
+          canManageBudget={canManageBudget}
+          capabilities={capabilities}
         />
       )}
 
@@ -534,6 +540,7 @@ export default function SessionPage() {
                 resolved={resolvedDiff}
                 onClose={closeDiff}
                 onSelect={setSelectedDiff}
+                capabilities={capabilities}
               />
             )}
           </SheetContent>

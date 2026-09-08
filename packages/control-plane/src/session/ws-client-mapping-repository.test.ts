@@ -29,9 +29,11 @@ describe("WsClientMappingRepository", () => {
       participantId: "p-1",
       clientId: "client-1",
       createdAt: 1000,
+      authorizationExpiresAt: 2000,
     });
-    expect(mock.calls[0].query).toContain("INSERT OR REPLACE INTO ws_client_mapping");
-    expect(mock.calls[0].params).toEqual(["ws-1", "p-1", "client-1", 1000]);
+    expect(mock.calls[0].query).toContain("INSERT INTO ws_client_mapping");
+    expect(mock.calls[0].query).toContain("ON CONFLICT (ws_id) DO UPDATE SET");
+    expect(mock.calls[0].params).toEqual(["ws-1", "p-1", "client-1", 1000, 2000]);
   });
 
   it("restores a mapping with joined participant data", () => {
@@ -40,15 +42,20 @@ describe("WsClientMappingRepository", () => {
         participant_id: "p-1",
         client_id: "client-1",
         user_id: "user-1",
-        canonical_user_id: null,
-        scm_name: null,
-        scm_login: null,
+        canonical_user_id: "canonical-1",
+        scm_name: "Test User",
+        scm_login: "test-user",
+        authorization_expires_at: 2000,
       },
     ]);
     expect(repository.getWsClientMapping("ws-1")).toMatchObject({
       participant_id: "p-1",
       client_id: "client-1",
       user_id: "user-1",
+      canonical_user_id: "canonical-1",
+      scm_name: "Test User",
+      scm_login: "test-user",
+      authorization_expires_at: 2000,
     });
     expect(mock.calls[0].query).toContain("JOIN participants");
   });
@@ -58,7 +65,17 @@ describe("WsClientMappingRepository", () => {
   });
 
   it("returns null for a malformed persisted mapping", () => {
-    mock.setRows([{ participant_id: "p-1", client_id: 42, user_id: "user-1" }]);
+    mock.setRows([
+      {
+        participant_id: "p-1",
+        client_id: 42,
+        user_id: "user-1",
+        canonical_user_id: null,
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: 2000,
+      },
+    ]);
     expect(repository.getWsClientMapping("ws-1")).toBeNull();
   });
 
@@ -71,6 +88,7 @@ describe("WsClientMappingRepository", () => {
         canonical_user_id: null,
         scm_name: null,
         scm_login: null,
+        authorization_expires_at: 2000,
       },
     ]);
     expect(repository.getWsClientMapping("ws-1")?.scm_name).toBeNull();
@@ -81,4 +99,22 @@ describe("WsClientMappingRepository", () => {
     mock.setRows([{ participant_id: "p-1" }]);
     expect(repository.hasWsClientMapping("ws-1")).toBe(true);
   });
+
+  it.each([undefined, null, "2000", Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects a mapping with an invalid authorization expiration: %s",
+    (authorizationExpiresAt) => {
+      mock.setRows([
+        {
+          participant_id: "p-1",
+          client_id: "client-1",
+          user_id: "user-1",
+          canonical_user_id: "canonical-1",
+          scm_name: "Test User",
+          scm_login: "test-user",
+          authorization_expires_at: authorizationExpiresAt,
+        },
+      ]);
+      expect(repository.getWsClientMapping("ws-1")).toBeNull();
+    }
+  );
 });

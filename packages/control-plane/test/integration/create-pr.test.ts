@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import type { SourceControlProvider } from "../../src/source-control";
-import type { SessionDO } from "../../src/session/durable-object";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import { initNamedSession, initSession, queryDO, seedMessage, serviceFetch } from "./helpers";
 

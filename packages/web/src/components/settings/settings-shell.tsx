@@ -5,12 +5,13 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { SettingsViewportProvider } from "@/components/settings/settings-viewport-context";
-import {
-  DEFAULT_SETTINGS_CATEGORY,
-  isSettingsCategory,
-  SettingsNav,
-} from "@/components/settings/settings-nav";
+import { SettingsNav } from "@/components/settings/settings-nav";
+import { resolveSettingsCategory } from "@/components/settings/settings-registry";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
+/**
+ * Hosts responsive settings content and redirects routes whose category is unavailable to the current user.
+ */
 export function SettingsShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -18,15 +19,24 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   const isMobile = useIsMobile();
   const [isHydrated, setIsHydrated] = useState(false);
   const tab = searchParams.get("tab");
-  const activeCategory = pathname.startsWith("/settings/integrations/")
-    ? "integrations"
-    : isSettingsCategory(tab, supportsRepoImages())
-      ? tab
-      : DEFAULT_SETTINGS_CATEGORY;
+  const { hasPermission, loading } = useCurrentUserAuthorization();
+  const requestedCategory = pathname.startsWith("/settings/integrations/") ? "integrations" : tab;
+  const activeCategory = resolveSettingsCategory(
+    requestedCategory,
+    supportsRepoImages(),
+    hasPermission
+  );
+  const categoryRedirectRequired =
+    requestedCategory !== null && activeCategory !== requestedCategory;
 
   useEffect(() => setIsHydrated(true), []);
+  useEffect(() => {
+    if (isHydrated && !loading && categoryRedirectRequired) {
+      router.replace(`/settings?tab=${activeCategory}`);
+    }
+  }, [activeCategory, categoryRedirectRequired, isHydrated, loading, router]);
 
-  if (!isHydrated) {
+  if (!isHydrated || loading || categoryRedirectRequired) {
     return <main className="h-dvh overflow-hidden bg-background" aria-busy="true" />;
   }
 
