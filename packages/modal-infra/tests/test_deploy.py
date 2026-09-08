@@ -185,6 +185,12 @@ def test_modal_deploy_script_builds_sandbox_image_before_app_deploy(tmp_path: Pa
     ]
 
 
+def test_function_image_copies_runtime_before_later_build_steps() -> None:
+    source = (Path(__file__).parents[1] / "src/app.py").read_text()
+    add_runtime = source.index(".add_local_dir(")
+    assert "copy=True" in source[add_runtime : source.index(".env(", add_runtime)]
+
+
 def test_modal_deploy_script_stops_when_eager_build_fails(tmp_path: Path) -> None:
     result, uv_calls = _run_deploy_script(tmp_path, fail_eager_build=True)
 

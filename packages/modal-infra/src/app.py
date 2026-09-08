@@ -37,7 +37,7 @@ function_image = (
         "PyJWT[crypto]",  # For GitHub App token generation
     )
     # Bundle sandbox_runtime so modal-infra shims can import from it at runtime
-    .add_local_dir(str(_SANDBOX_RUNTIME_DIR), remote_path="/root/sandbox_runtime")
+    .add_local_dir(str(_SANDBOX_RUNTIME_DIR), remote_path="/root/sandbox_runtime", copy=True)
     .env(deployed_image_environment())
 )
 
