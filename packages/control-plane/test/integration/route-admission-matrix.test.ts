@@ -12,13 +12,10 @@ import { SELF, env } from "cloudflare:test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { createExecutionContext } from "cloudflare:test";
-import {
-  cloudflareHost,
-  createControlPlaneApp,
-  createControlPlaneHttpHandler,
-} from "../../src/routing/hono-app";
+import { cloudflareHost, createControlPlaneHttpHandler } from "../../src/cloudflare/http-host";
+import { createControlPlaneApp } from "../../src/routing/hono-app";
 import { listRouteContracts, type RouteContract } from "../../src/routing/route-contracts";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { catalog } from "../../src/routes/catalog";
 import { Hono } from "hono";
@@ -435,7 +432,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
   function send(url: string, method: string, headers: Record<string, string>): Promise<Response> {
     return handle(
       new Request(url, { method, headers }),
-      env as unknown as Env,
+      createCloudflareEnv(env),
       createExecutionContext()
     );
   }
@@ -552,7 +549,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       const headers = await serviceRequestHeaders(url, { method });
       const response = await handleEcho(
         new Request(url, { method, headers }),
-        env as unknown as Env,
+        createCloudflareEnv(env),
         createExecutionContext()
       );
       expect(response.status, url).toBe(200);

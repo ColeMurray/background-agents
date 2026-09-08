@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
 import { SessionIndexStore } from "../../src/db/session-index";
@@ -38,7 +39,7 @@ describe("session provider auth persistence", () => {
     const providerAuth = await resolveSessionProviderAuth(env.DB, { unattended: false });
     const sessionId = `provider-auth-${Date.now()}`;
     await initializeSession(
-      env,
+      createCloudflareEnv(env),
       {
         sessionId,
         repoOwner: null,

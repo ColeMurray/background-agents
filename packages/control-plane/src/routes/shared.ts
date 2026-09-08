@@ -4,7 +4,7 @@
 
 import type { Principal } from "../auth/principal";
 import type { RequestContext } from "../http/request-context";
-import { error, HttpError } from "../http/responses";
+import { HttpError } from "../http/responses";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { PermissionId, ScopedPermissionStem } from "@open-inspect/shared/rbac";
@@ -350,23 +350,6 @@ export async function resolveInstalledRepo(
 ): Promise<RepositoryAccessResult | null> {
   const result = await provider.checkRepositoryAccess({ owner: repoOwner, name: repoName });
   return result;
-}
-
-/**
- * Parse the request body as JSON, returning the typed result or an error Response.
- *
- * Usage:
- * ```ts
- * const body = await parseJsonBody<{ secrets: Record<string, string> }>(request);
- * if (body instanceof Response) return body;
- * ```
- */
-export async function parseJsonBody<T>(request: Request): Promise<T | Response> {
-  try {
-    return (await request.json()) as T;
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
 }
 
 /**

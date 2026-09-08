@@ -1,0 +1,14 @@
+{
+  "name": "@open-inspect/vercel-infra",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=esm --platform=node --target=node22 --outfile=dist/build-base-snapshot.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.2"
+  }
+}

@@ -15,7 +15,11 @@ import {
 } from "./routes/shared";
 import { admit } from "./routing/admit";
 import type { ControlPlaneHonoEnv } from "./routing/hono-env";
-import { createTestRequestHandler, TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
+import {
+  createTestRequestHandler,
+  fakeSessionRuntimeDispatch,
+  TEST_BACKGROUND_TASK_CONTEXT,
+} from "./router.test-support";
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
 
@@ -188,10 +192,7 @@ function createEnv(options?: {
     env: {
       DB: db,
       SCM_PROVIDER: "github",
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => ({ fetch: async () => new Response(null, { status: 204 }) }),
-      },
+      SESSION: fakeSessionRuntimeDispatch(async () => new Response(null, { status: 204 })),
     } as never,
     auditWrites,
   };

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  fakeSessionRuntimeDispatch,
   handleRequest,
   matchRoute,
+  routeContracts as routes,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
-  routeContracts as routes,
 } from "./router.test-support";
 
 function routeFor(method: string, path: string) {
@@ -34,10 +35,7 @@ function createEnv(verifyStatus: number) {
       exec: vi.fn(),
       dump: vi.fn(),
     },
-    SESSION: {
-      idFromName: (name: string) => name,
-      get: () => ({ fetch }),
-    },
+    SESSION: fakeSessionRuntimeDispatch(fetch),
   };
   return { env, doFetch: fetch };
 }

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { RepositoryRef, RepositoryPair } from "@open-inspect/shared/types/repositories";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
@@ -69,6 +69,7 @@ async function extractSessionActorProfileClaims(
 export async function handleCreateSession(
   request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const parsed = await parseCreateSessionInput(request);
@@ -301,5 +302,5 @@ sessionCreateRoutes.post(
     authorization: requirePermission("sessions.create"),
     serviceActorClaims: extractSessionActorProfileClaims,
   }),
-  (c) => handleCreateSession(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  (c) => dispatch(c, handleCreateSession)
 );

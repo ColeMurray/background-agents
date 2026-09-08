@@ -4,7 +4,7 @@ import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { UserStore } from "../../src/db/user-store";
-import { handleControlPlaneHttp as routeRequest } from "../../src/routing/hono-app";
+import { routeRequest } from "./helpers";
 import { cleanD1Tables } from "./cleanup";
 import { createSignedGoogleIdToken } from "./google-id-token";
 import {

@@ -28,7 +28,7 @@ const providerConfig: E2BProviderConfig = {
  * command line, which E2B platform-logs.
  */
 const ENTRYPOINT_COMMAND =
-  "nohup python -m sandbox_runtime.entrypoint >/tmp/oi-supervisor.log 2>&1 &";
+  "nohup /opt/openinspect/python/bin/python -m sandbox_runtime.entrypoint >/tmp/oi-supervisor.log 2>&1 &";
 
 function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
   return {

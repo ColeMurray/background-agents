@@ -4,7 +4,7 @@ import type { RequestContext, UserRouteContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import type { Principal } from "../auth/principal";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { createTestEnv, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const mockSessionIndexStore = {
   list: vi.fn(),
@@ -38,7 +38,7 @@ function createCtx(principal?: Principal): RequestContext {
     db: { prepare: vi.fn(() => statement) } as unknown as SqlDatabase,
     executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
-      d1Queries: [],
+      sqlQueries: [],
       spans: {},
       time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
       summarize: () => ({}),
@@ -58,15 +58,14 @@ function createCtx(principal?: Principal): RequestContext {
 }
 
 function createEnv(): Env {
-  return {
-    DB: {} as D1Database,
-  } as Env;
+  return createTestEnv();
 }
 
 async function listSessions(query = "", principal?: Principal): Promise<Response> {
   return handleListSessions(
     new Request(`https://test.local/sessions${query}`),
     createEnv(),
+    {},
     createCtx(principal)
   );
 }
@@ -77,22 +76,19 @@ async function listInbox(query = ""): Promise<Response> {
   return handleListSessionInbox(
     new Request(`https://test.local/sessions/inbox${query}`),
     createEnv(),
+    {},
     createCtx(USER_PRINCIPAL) as UserRouteContext
   );
 }
 
-async function patchReadState(
-  body: string,
-  principal?: Principal,
-  paramsOverride?: { id: string }
-): Promise<Response> {
+async function patchReadState(body: string, principal?: Principal): Promise<Response> {
   return handlePatchReadState(
     new Request("https://test.local/sessions/session-1/read-state", {
       method: "PATCH",
       body,
     }),
     createEnv(),
-    paramsOverride ?? { id: "session-1" },
+    { id: "session-1" },
     createCtx(principal) as UserRouteContext
   );
 }
@@ -304,18 +300,6 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.listInbox).not.toHaveBeenCalled();
     expect(mockSessionIndexStore.listInboxSnapshot).not.toHaveBeenCalled();
   });
-
-  it("requires a session ID for read-state mutations", async () => {
-    const response = await patchReadState(
-      JSON.stringify({ action: "mark_latest_message_read" }),
-      { kind: "user", userId: "user-1" },
-      { id: "" }
-    );
-
-    expect(response.status).toBe(400);
-    expect(mockSessionIndexStore.updateReadState).not.toHaveBeenCalled();
-  });
-
   it.each([
     ["invalid JSON", "{"],
     ["an invalid action", JSON.stringify({ action: "mark_latest_message_read", userId: "user-2" })],

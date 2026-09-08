@@ -5,7 +5,7 @@
 import { listChannels } from "@open-inspect/shared/slack";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { Hono } from "hono";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   type RequestContext,
@@ -34,6 +34,7 @@ const logger = createLogger("router:automations");
 async function handleGetWatchedSlackChannels(
   _request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const channels = await new SlackChannelStore(ctx.db).getWatchedSlackChannels();
@@ -55,6 +56,7 @@ async function handleGetWatchedSlackChannels(
 async function handleGetSlackChannels(
   request: Request,
   env: Env,
+  _params: object,
   _ctx: RequestContext
 ): Promise<Response> {
   if (!env.SLACK_BOT_TOKEN) {
@@ -78,8 +80,8 @@ automationSlackSettingsRoutes.get(
       actorlessGrants: [{ service: "slack-bot" }],
     }),
   }),
-  (c) => handleGetWatchedSlackChannels(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  (c) => dispatch(c, handleGetWatchedSlackChannels)
 );
 automationSlackSettingsRoutes.get("/integration-settings/slack/channels", AUTOMATIONS_READ, (c) =>
-  handleGetSlackChannels(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  dispatch(c, handleGetSlackChannels)
 );

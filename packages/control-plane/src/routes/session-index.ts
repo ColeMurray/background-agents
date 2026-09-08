@@ -1,3 +1,4 @@
+import { parseBody } from "./body";
 import { Hono } from "hono";
 import { z } from "zod";
 import { admit, dispatch } from "../routing/admit";
@@ -19,7 +20,6 @@ import {
   error,
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
-  parseJsonBody,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   requirePermission,
   type RequestContext,
@@ -76,6 +76,7 @@ function parseCreatedByFilters(
 export async function handleListSessions(
   request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -130,6 +131,7 @@ export async function handleListSessions(
 export async function handleListSessionInbox(
   request: Request,
   _env: Env,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const query = parseQuery(request, sessionInboxQuerySchema);
@@ -208,13 +210,9 @@ export async function handlePatchReadState(
   ctx: UserRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required");
 
-  const unparsedBody = await parseJsonBody<unknown>(request);
-  if (unparsedBody instanceof Response) return unparsedBody;
-  const parsedBody = sessionReadActionSchema.safeParse(unparsedBody);
-  if (!parsedBody.success) return error("Invalid session read action", 400);
-  const body = parsedBody.data;
+  const body = await parseBody(request, sessionReadActionSchema, "Invalid session read action");
+  if (body instanceof Response) return body;
 
   const store = new SessionIndexStore(ctx.db);
   const result = await store.updateReadState(ctx.principal.userId, sessionId, body);
@@ -241,7 +239,6 @@ export async function handleDeleteSession(
   ctx: RequestContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required");
 
   const sessionStore = new SessionIndexStore(ctx.db);
   await sessionStore.delete(sessionId);
@@ -254,7 +251,7 @@ export const sessionIndexRoutes = new Hono<ControlPlaneHonoEnv>();
 sessionIndexRoutes.get(
   "/sessions",
   admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.read") }),
-  (c) => handleListSessions(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  (c) => dispatch(c, handleListSessions)
 );
 sessionIndexRoutes.get(
   "/sessions/inbox",
@@ -262,7 +259,7 @@ sessionIndexRoutes.get(
     ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     authorization: requirePermission("sessions.read", { service: "deny" }),
   }),
-  (c) => handleListSessionInbox(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  (c) => dispatch(c, handleListSessionInbox)
 );
 sessionIndexRoutes.patch(
   "/sessions/:id/read-state",

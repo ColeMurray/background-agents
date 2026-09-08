@@ -21,7 +21,6 @@ import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import {
-  error,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
   requirePermission,
@@ -63,7 +62,6 @@ export async function handleSlackNotify(
   ctx: RequestContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required", 400);
 
   const parsed = await parseBody(request);
   if (parsed instanceof Response) return parsed;

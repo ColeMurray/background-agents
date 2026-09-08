@@ -76,6 +76,22 @@ describe("Worker routing compatibility", () => {
     await expectJsonNotFound(encodedResponse, "Session not found");
   });
 
+  it("prefers the literal legacy-credentials route but validates its encoded alias as an account id", async () => {
+    const literalResponse = await serviceFetch(
+      "https://test.local/model-provider-accounts/legacy-credentials"
+    );
+    expect(literalResponse.status).toBe(200);
+    await expect(literalResponse.json()).resolves.toEqual({ legacyKeys: [] });
+
+    const encodedResponse = await serviceFetch(
+      "https://test.local/model-provider-accounts/%6cegacy-credentials"
+    );
+    expect(encodedResponse.status).toBe(400);
+    await expect(encodedResponse.json()).resolves.toEqual({
+      error: "Invalid provider account ID",
+    });
+  });
+
   it.each(["/health/", "//health", "/Health"])(
     "does not normalize the strict path %s",
     async (path) => {

@@ -35,9 +35,9 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   error,
-  parseJsonBody,
   requirePermission,
 } from "./shared";
+import { parseJsonBody } from "./body";
 import type { Env } from "../types";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
@@ -72,6 +72,7 @@ const logger = createLogger("router:automations");
 async function handleCreateAutomation(
   request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const rawBody = await parseJsonBody<unknown>(request);
@@ -646,7 +647,6 @@ async function handleDeleteAutomation(
   const id = params.id;
 
   const store = new AutomationStore(ctx.db);
-  admittedAutomation(ctx);
   const result = await ctx.db.batch([store.bindSoftDelete(id)]);
   const deleted = result[0]?.meta.changes === 1;
   if (!deleted) return error("Automation not found", 404);
@@ -669,7 +669,7 @@ automationCrudRoutes.post(
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("automations.create"),
   }),
-  (c) => handleCreateAutomation(c.var.admitted.request, c.env, c.var.admitted.ctx)
+  (c) => dispatch(c, handleCreateAutomation)
 );
 automationCrudRoutes.get("/automations/:id", AUTOMATIONS_READ, (c) =>
   dispatch(c, handleGetAutomation)

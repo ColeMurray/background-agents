@@ -21,7 +21,7 @@ import type { Env } from "../types";
 const logger = createLogger("auth");
 
 export { isAuthError, type AuthResult } from "./result";
-export { SERVICE_REQUEST_MAX_BODY_BYTES } from "./service/request-authenticator";
+export { SERVICE_REQUEST_MAX_BODY_BYTES } from "@open-inspect/shared/service-auth";
 
 export interface AuthenticationRequirement {
   /**

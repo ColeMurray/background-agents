@@ -10,12 +10,15 @@ import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/
 import type { BackgroundTasks } from "./platform-ports";
 import { createTestBackgroundTasks } from "./background-tasks.test-support";
 import { BUILT_IN_ROLE_REGISTRY, type PermissionId } from "@open-inspect/shared/rbac";
+import type { CacheStore } from "@open-inspect/shared/cache-store";
 import type { SqlDatabase, SqlStatement } from "./db/sql-database";
-import { cloudflareHost, createControlPlaneApp, type RouteModule } from "./routing/hono-app";
+import type { SessionRuntimeDispatch } from "./session/runtime-client";
+import { cloudflareHost } from "./cloudflare/http-host";
+import { createControlPlaneApp, type RouteModule } from "./routing/hono-app";
 import { listRouteContracts, type RouteContract } from "./routing/route-contracts";
 import { catalog } from "./routes/catalog";
 import type { RouteParams } from "./routes/shared";
-import type { Env } from "./types";
+import type { Env, EnvConfig } from "./types";
 
 // The single contract-faithful double lives in background-tasks.test-support;
 // this shared instance's recordings are unused by the router suites.
@@ -133,6 +136,71 @@ export function authorizationDatabase(options: AuthorizationDatabaseOptions = {}
 /** An owner's database: every permission, data access mocked at the store. */
 export function ownerAuthorizationDatabase(userId = TEST_USER_ID): SqlDatabase {
   return authorizationDatabase({ userId });
+}
+
+/**
+ * A session runtime dispatch that answers with `fetch`, handed the request a
+ * runtime receives on any host, so a fixture asserts on what the runtime's
+ * server would see rather than on how it was addressed.
+ */
+export function fakeSessionRuntimeDispatch(
+  fetch: (request: Request, sessionId: string) => Promise<Response>
+): SessionRuntimeDispatch {
+  return (sessionId, request) => fetch(request, sessionId);
+}
+
+/** A cache that lives for the test. */
+function memoryCacheStore(): CacheStore {
+  const entries = new Map<string, string>();
+  return {
+    get: (async (key: string, type?: "json") => {
+      const value = entries.get(key) ?? null;
+      return value !== null && type === "json" ? JSON.parse(value) : value;
+    }) as CacheStore["get"],
+    put: async (key, value) => {
+      entries.set(key, value);
+    },
+    delete: async (key) => {
+      entries.delete(key);
+    },
+  };
+}
+
+/** A port member no test wired: calling it fails naming it, so an unexpected dependency shows. */
+function unwired(port: keyof Env, member: string): () => Promise<never> {
+  return async () => {
+    throw new Error(`${port}.${member} is not wired in this test`);
+  };
+}
+
+/** The configuration every unit fixture's `Env` starts from. */
+const TEST_ENV_CONFIG = {
+  DEPLOYMENT_NAME: "test",
+  GITHUB_BOT_USERNAME: "open-inspect[bot]",
+  TOKEN_ENCRYPTION_KEY: "test-key",
+  PROVIDER_ACCOUNTS_ENCRYPTION_KEY: "test-provider-accounts-key",
+} as const satisfies Partial<EnvConfig>;
+
+/**
+ * An `Env` for unit fixtures: `TEST_ENV_CONFIG`, a database that answers
+ * nothing, a cache, and ports that fail when reached, each replaced by
+ * `overrides`.
+ */
+export function createTestEnv(overrides: Partial<Env> = {}): Env {
+  return {
+    ...TEST_ENV_CONFIG,
+    DB: { prepare: () => emptyStatement(), batch: async () => [] },
+    SESSION: unwired("SESSION", "dispatch"),
+    REPOS_CACHE: memoryCacheStore(),
+    JOBS: { send: unwired("JOBS", "send") },
+    MEDIA_BUCKET: {
+      put: unwired("MEDIA_BUCKET", "put"),
+      delete: unwired("MEDIA_BUCKET", "delete"),
+      head: unwired("MEDIA_BUCKET", "head"),
+      get: unwired("MEDIA_BUCKET", "get"),
+    },
+    ...overrides,
+  };
 }
 
 /** Compile a route path into a matcher over a concrete pathname, for handler-level fixtures. */

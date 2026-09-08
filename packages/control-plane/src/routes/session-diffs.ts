@@ -85,7 +85,6 @@ export async function handleDiffState(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required", 400);
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.diffState);
   if (!response.ok) {
     return response.status === 404
@@ -105,7 +104,6 @@ export async function handleDiffUpload(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required", 400);
   const body = await readBoundedJson(
     request,
     SESSION_DIFF_UPLOAD_BODY_MAX_BYTES,
@@ -125,7 +123,6 @@ export async function handleDiffFailure(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required", 400);
   const body = await readBoundedJson(
     request,
     SESSION_DIFF_FAILURE_BODY_MAX_BYTES,
@@ -171,7 +168,6 @@ export async function handleDiffRetry(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required", 400);
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.diffRetry, {
     method: "POST",
   });

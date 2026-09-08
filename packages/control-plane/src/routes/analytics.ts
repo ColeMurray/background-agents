@@ -11,8 +11,9 @@ import {
 } from "../db/pull-request-analytics-store";
 import { Hono } from "hono";
 import { z } from "zod";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { Env } from "../types";
 import { parseQuery } from "./query";
 import {
   type RequestContext,
@@ -56,7 +57,12 @@ function getPullRequestFilters(days: AnalyticsDays): PullRequestAnalyticsFilters
   return { startAt: now - days * 24 * 60 * 60 * 1000, endAt: now, now };
 }
 
-async function handleDashboard(request: Request, ctx: RequestContext): Promise<Response> {
+async function handleDashboard(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   const query = parseQuery(request, daysQuery);
   if (query instanceof Response) return query;
   const { days } = query;
@@ -72,7 +78,12 @@ async function handleDashboard(request: Request, ctx: RequestContext): Promise<R
   );
 }
 
-async function handleSummary(request: Request, ctx: RequestContext): Promise<Response> {
+async function handleSummary(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   const query = parseQuery(request, daysQuery);
   if (query instanceof Response) return query;
   const { days } = query;
@@ -81,7 +92,12 @@ async function handleSummary(request: Request, ctx: RequestContext): Promise<Res
   return json(await store.getSummary(getFilters(days)));
 }
 
-async function handleTimeseries(request: Request, ctx: RequestContext): Promise<Response> {
+async function handleTimeseries(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   const query = parseQuery(request, daysQuery);
   if (query instanceof Response) return query;
   const { days } = query;
@@ -90,7 +106,12 @@ async function handleTimeseries(request: Request, ctx: RequestContext): Promise<
   return json(await store.getTimeseries(getFilters(days)));
 }
 
-async function handleBreakdown(request: Request, ctx: RequestContext): Promise<Response> {
+async function handleBreakdown(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   const query = parseQuery(request, breakdownQuery);
   if (query instanceof Response) return query;
   const { days, by } = query;
@@ -99,7 +120,12 @@ async function handleBreakdown(request: Request, ctx: RequestContext): Promise<R
   return json(await store.getBreakdown(getFilters(days), by));
 }
 
-async function handlePullRequests(request: Request, ctx: RequestContext): Promise<Response> {
+async function handlePullRequests(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   const query = parseQuery(request, daysQuery);
   if (query instanceof Response) return query;
   const { days } = query;
@@ -115,18 +141,10 @@ const ANALYTICS_READ = admit({
 
 export const analyticsRoutes = new Hono<ControlPlaneHonoEnv>();
 
-analyticsRoutes.get("/analytics/dashboard", ANALYTICS_READ, (c) =>
-  handleDashboard(c.var.admitted.request, c.var.admitted.ctx)
-);
-analyticsRoutes.get("/analytics/summary", ANALYTICS_READ, (c) =>
-  handleSummary(c.var.admitted.request, c.var.admitted.ctx)
-);
-analyticsRoutes.get("/analytics/timeseries", ANALYTICS_READ, (c) =>
-  handleTimeseries(c.var.admitted.request, c.var.admitted.ctx)
-);
-analyticsRoutes.get("/analytics/breakdown", ANALYTICS_READ, (c) =>
-  handleBreakdown(c.var.admitted.request, c.var.admitted.ctx)
-);
+analyticsRoutes.get("/analytics/dashboard", ANALYTICS_READ, (c) => dispatch(c, handleDashboard));
+analyticsRoutes.get("/analytics/summary", ANALYTICS_READ, (c) => dispatch(c, handleSummary));
+analyticsRoutes.get("/analytics/timeseries", ANALYTICS_READ, (c) => dispatch(c, handleTimeseries));
+analyticsRoutes.get("/analytics/breakdown", ANALYTICS_READ, (c) => dispatch(c, handleBreakdown));
 analyticsRoutes.get("/analytics/pull-requests", ANALYTICS_READ, (c) =>
-  handlePullRequests(c.var.admitted.request, c.var.admitted.ctx)
+  dispatch(c, handlePullRequests)
 );

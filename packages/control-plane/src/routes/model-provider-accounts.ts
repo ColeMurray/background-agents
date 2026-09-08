@@ -1,3 +1,4 @@
+import { parseBody } from "./body";
 import {
   MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
   PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN,
@@ -50,7 +51,6 @@ import { createSessionRuntimeClient } from "../session/runtime-client";
 import {
   error,
   json,
-  parseJsonBody,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   type RequestContext,
@@ -229,13 +229,15 @@ modelProviderAccountRoutes.get("/model-provider-accounts", ACCOUNTS_READ, (c) =>
 );
 modelProviderAccountRoutes.post("/model-provider-accounts", ACCOUNTS_MANAGE, (c) =>
   dispatch(c, async (request, env, _params, ctx) => {
-    const body = await parseJsonBody<unknown>(request);
+    const body = await parseBody(
+      request,
+      connectModelProviderAccountRequestSchema,
+      "Invalid provider account"
+    );
     if (body instanceof Response) return body;
-    const parsed = connectModelProviderAccountRequestSchema.safeParse(body);
-    if (!parsed.success) return error("Invalid provider account", 400);
     const accounts = service(env, ctx);
     return accountOperation(ctx, async () => {
-      const result = await accounts.create(parsed.data, ctx.principal.userId);
+      const result = await accounts.create(body, ctx.principal.userId);
       return json(result, result.reconnectedExisting ? 200 : 201);
     });
   })
@@ -247,17 +249,15 @@ modelProviderAccountRoutes.post(
     dispatch(c, async (request, env, params, ctx) => {
       const parsedProvider = provider(params.provider);
       if (parsedProvider instanceof Response) return parsedProvider;
-      const body = await parseJsonBody<unknown>(request);
+      const body = await parseBody(
+        request,
+        startProviderDeviceAuthorizationRequestSchema,
+        "Invalid device authorization request"
+      );
       if (body instanceof Response) return body;
-      const parsed = startProviderDeviceAuthorizationRequestSchema.safeParse(body);
-      if (!parsed.success) return error("Invalid device authorization request", 400);
       return authorizationOperation(ctx, async () =>
         json(
-          await authorizationService(env, ctx).start(
-            ctx.principal.userId,
-            parsedProvider,
-            parsed.data
-          ),
+          await authorizationService(env, ctx).start(ctx.principal.userId, parsedProvider, body),
           201
         )
       );
@@ -304,13 +304,11 @@ modelProviderAccountRoutes.patch("/model-provider-accounts/:id", ACCOUNTS_MANAGE
   dispatch(c, async (request, env, params, ctx) => {
     const id = accountId(params.id);
     if (id instanceof Response) return id;
-    const body = await parseJsonBody<unknown>(request);
+    const body = await parseBody(request, renameSchema, "Invalid provider account name");
     if (body instanceof Response) return body;
-    const parsed = renameSchema.safeParse(body);
-    if (!parsed.success) return error("Invalid provider account name", 400);
     const accounts = service(env, ctx);
     return accountOperation(ctx, async () =>
-      json({ account: await accounts.rename(id, parsed.data.displayName, ctx.principal.userId) })
+      json({ account: await accounts.rename(id, body.displayName, ctx.principal.userId) })
     );
   })
 );
@@ -338,13 +336,15 @@ modelProviderAccountRoutes.post("/model-provider-accounts/:id/reconnect", ACCOUN
   dispatch(c, async (request, env, params, ctx) => {
     const id = accountId(params.id);
     if (id instanceof Response) return id;
-    const body = await parseJsonBody<unknown>(request);
+    const body = await parseBody(
+      request,
+      reconnectModelProviderAccountRequestSchema,
+      "Invalid provider account reconnect request"
+    );
     if (body instanceof Response) return body;
-    const parsed = reconnectModelProviderAccountRequestSchema.safeParse(body);
-    if (!parsed.success) return error("Invalid provider account reconnect request", 400);
     const accounts = service(env, ctx);
     return accountOperation(ctx, async () =>
-      json({ account: await accounts.reconnect(id, parsed.data, ctx.principal.userId) })
+      json({ account: await accounts.reconnect(id, body, ctx.principal.userId) })
     );
   })
 );
@@ -368,20 +368,22 @@ modelProviderAccountRoutes.put("/model-provider-account-defaults/:provider", ACC
   dispatch(c, async (request, _env, params, ctx) => {
     const parsedProvider = provider(params.provider);
     if (parsedProvider instanceof Response) return parsedProvider;
-    const body = await parseJsonBody<unknown>(request);
+    const body = await parseBody(
+      request,
+      modelProviderAccountDefaultRequestSchema,
+      "Invalid provider default"
+    );
     if (body instanceof Response) return body;
-    const parsed = modelProviderAccountDefaultRequestSchema.safeParse(body);
-    if (!parsed.success) return error("Invalid provider default", 400);
     const defaults = new ProviderDefaultStore(ctx.db);
     try {
       await new ProviderAccountSelectionPolicy(
         new ModelProviderAccountStore(ctx.db),
         modelProviderAccountAdapterRegistry
-      ).validateDefault(parsedProvider, parsed.data.providerAccountId);
+      ).validateDefault(parsedProvider, body.providerAccountId);
       await defaults.set(
         parsedProvider,
-        parsed.data.providerAccountId,
-        parsed.data.unattendedMode,
+        body.providerAccountId,
+        body.unattendedMode,
         ctx.principal.userId
       );
       return json({ default: await defaults.get(parsedProvider) });

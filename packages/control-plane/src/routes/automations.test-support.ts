@@ -11,6 +11,7 @@ import type { Principal } from "../auth/principal";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import {
   authorizationDatabase,
+  createTestEnv,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
   type TestRequestHandler,
@@ -92,14 +93,11 @@ function createDatabase(permissions: readonly PermissionId[]): SqlDatabase {
 }
 
 export function createEnv(permissions: readonly PermissionId[] = PERMISSION_IDS): Env {
-  return {
+  return createTestEnv({
     ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "github",
     DB: createDatabase(permissions),
-    SESSION: {} as DurableObjectNamespace,
-    DEPLOYMENT_NAME: "test",
-    TOKEN_ENCRYPTION_KEY: "test-key",
-  } as unknown as Env;
+  });
 }
 
 export const USER_PRINCIPAL: Principal = {

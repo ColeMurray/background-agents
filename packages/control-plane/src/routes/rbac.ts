@@ -1,10 +1,10 @@
+import { parseBody } from "./body";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import {
   replaceMemberRoleInputSchema,
   replaceMemberStatusInputSchema,
 } from "@open-inspect/shared/rbac";
 import { Hono } from "hono";
-import { ZodError } from "zod";
 import {
   AuthorizationError,
   AuthorizationService,
@@ -18,7 +18,6 @@ import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   error,
   json,
-  parseJsonBody,
   requirePermission,
   type UserRouteContext,
 } from "./shared";
@@ -37,7 +36,6 @@ function rbacErrorResponse(cause: unknown): Response {
   if (cause instanceof RbacConflictError) {
     return json({ error: cause.message, code: "rbac_conflict" }, 409);
   }
-  if (cause instanceof ZodError) return error("Invalid request body", 400);
   return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
 }
 
@@ -106,14 +104,13 @@ async function handleReplaceMemberRole(
 ): Promise<Response> {
   const targetUserId = params.id;
   if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
-  const body = await parseJsonBody<unknown>(request);
+  const body = await parseBody(request, replaceMemberRoleInputSchema, "Invalid request body");
   if (body instanceof Response) return body;
   const service = new AuthorizationService(ctx.db);
   try {
-    const parsed = replaceMemberRoleInputSchema.parse(body);
     await service.replaceMemberRole({
       targetUserId,
-      roleId: parsed.roleId,
+      roleId: body.roleId,
       actorUserId: ctx.principal.userId,
       requestId: ctx.request_id,
     });
@@ -131,14 +128,13 @@ async function handleReplaceMemberStatus(
 ): Promise<Response> {
   const targetUserId = params.id;
   if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
-  const body = await parseJsonBody<unknown>(request);
+  const body = await parseBody(request, replaceMemberStatusInputSchema, "Invalid request body");
   if (body instanceof Response) return body;
   const service = new AuthorizationService(ctx.db);
   try {
-    const parsed = replaceMemberStatusInputSchema.parse(body);
     await service.replaceMemberStatus({
       targetUserId,
-      suspended: parsed.suspended,
+      suspended: body.suspended,
       actorUserId: ctx.principal.userId,
       requestId: ctx.request_id,
     });

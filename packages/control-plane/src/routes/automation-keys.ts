@@ -8,7 +8,8 @@ import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
-import { type RequestContext, json, error, parseJsonBody } from "./shared";
+import { type RequestContext, json, error } from "./shared";
+import { parseBody } from "./body";
 import type { Env } from "../types";
 import { z } from "zod";
 import { createLogger } from "../logger";
@@ -35,17 +36,17 @@ async function handleRegenerateKey(
 
   if (automation.trigger_type === "sentry") {
     // Sentry: user provides a new client secret
-    const rawBody = await parseJsonBody<unknown>(request);
-    if (rawBody instanceof Response) return rawBody;
-    const parsedBody = regenerateSentrySecretBodySchema.safeParse(rawBody);
-    if (!parsedBody.success) {
-      return error("sentryClientSecret is required", 400);
-    }
+    const body = await parseBody(
+      request,
+      regenerateSentrySecretBodySchema,
+      "sentryClientSecret is required"
+    );
+    if (body instanceof Response) return body;
     if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
       return error("Encryption key not configured", 503);
     }
     const encrypted = await encryptSentrySecret(
-      parsedBody.data.sentryClientSecret,
+      body.sentryClientSecret,
       env.REPO_SECRETS_ENCRYPTION_KEY
     );
     const statement = store.bindAutomationUpdate(id, {

@@ -3,24 +3,30 @@
  */
 
 import { Hono } from "hono";
+import type { Env } from "../types";
 import { DEFAULT_ENABLED_MODELS, normalizeValidModels } from "@open-inspect/shared/models";
 import { ModelPreferencesStore, ModelPreferencesValidationError } from "../db/model-preferences";
 import { createLogger } from "../logger";
-import { admit } from "../routing/admit";
+import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   type RequestContext,
   json,
   error,
-  parseJsonBody,
   activeGlobal,
   requirePermission,
 } from "./shared";
+import { parseJsonBody } from "./body";
 
 const logger = createLogger("router:model-preferences");
 
-async function getModelPreferences(ctx: RequestContext): Promise<Response> {
+async function getModelPreferences(
+  _request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   if (!ctx.db) {
     return json({ enabledModels: DEFAULT_ENABLED_MODELS });
   }
@@ -55,7 +61,12 @@ async function getModelPreferences(ctx: RequestContext): Promise<Response> {
   }
 }
 
-async function setModelPreferences(request: Request, ctx: RequestContext): Promise<Response> {
+async function setModelPreferences(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   if (!ctx.db) {
     return error("Model preferences storage is not configured", 503);
   }
@@ -105,7 +116,7 @@ modelPreferencesRoutes.get(
     authorization: activeGlobal({ actorlessGrants: [{ service: "slack-bot" }] }),
     cacheControl: "private, no-store",
   }),
-  (c) => getModelPreferences(c.var.admitted.ctx)
+  (c) => dispatch(c, getModelPreferences)
 );
 
 modelPreferencesRoutes.put(
@@ -114,5 +125,5 @@ modelPreferencesRoutes.put(
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("models.preferences.manage"),
   }),
-  (c) => setModelPreferences(c.var.admitted.request, c.var.admitted.ctx)
+  (c) => dispatch(c, setModelPreferences)
 );

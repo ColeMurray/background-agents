@@ -2,6 +2,7 @@
  * Repository and global secrets routes and handlers.
  */
 
+import { parseBody } from "./body";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -16,7 +17,6 @@ import {
   type RequestContext,
   json,
   error,
-  parseJsonBody,
   resolveRepoOrError,
   requirePermission,
 } from "./shared";
@@ -46,14 +46,12 @@ async function handleSetRepoSecrets(
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
 
-  const rawBody = await parseJsonBody<unknown>(request);
-  if (rawBody instanceof Response) return rawBody;
-
-  const parsedBody = secretsRequestBodySchema.safeParse(rawBody);
-  if (!parsedBody.success) {
-    return error("Request body must include secrets object", 400);
-  }
-  const body = parsedBody.data;
+  const body = await parseBody(
+    request,
+    secretsRequestBodySchema,
+    "Request body must include secrets object"
+  );
+  if (body instanceof Response) return body;
 
   const store = new RepoSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
@@ -236,6 +234,7 @@ async function handleDeleteRepoSecret(
 async function handleSetGlobalSecrets(
   request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
@@ -245,14 +244,12 @@ async function handleSetGlobalSecrets(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const rawBody = await parseJsonBody<unknown>(request);
-  if (rawBody instanceof Response) return rawBody;
-
-  const parsedBody = secretsRequestBodySchema.safeParse(rawBody);
-  if (!parsedBody.success) {
-    return error("Request body must include secrets object", 400);
-  }
-  const body = parsedBody.data;
+  const body = await parseBody(
+    request,
+    secretsRequestBodySchema,
+    "Request body must include secrets object"
+  );
+  if (body instanceof Response) return body;
 
   const store = new GlobalSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
@@ -290,6 +287,7 @@ async function handleSetGlobalSecrets(
 async function handleListGlobalSecrets(
   _request: Request,
   env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
@@ -395,12 +393,8 @@ secretsRoutes.get("/repos/:owner/:name/secrets", REPO_SECRETS_MANAGE, (c) =>
 secretsRoutes.delete("/repos/:owner/:name/secrets/:key", REPO_SECRETS_MANAGE, (c) =>
   dispatch(c, handleDeleteRepoSecret)
 );
-secretsRoutes.put("/secrets", GLOBAL_SECRETS_MANAGE, (c) =>
-  handleSetGlobalSecrets(c.var.admitted.request, c.env, c.var.admitted.ctx)
-);
-secretsRoutes.get("/secrets", GLOBAL_SECRETS_MANAGE, (c) =>
-  handleListGlobalSecrets(c.var.admitted.request, c.env, c.var.admitted.ctx)
-);
+secretsRoutes.put("/secrets", GLOBAL_SECRETS_MANAGE, (c) => dispatch(c, handleSetGlobalSecrets));
+secretsRoutes.get("/secrets", GLOBAL_SECRETS_MANAGE, (c) => dispatch(c, handleListGlobalSecrets));
 secretsRoutes.delete("/secrets/:key", GLOBAL_SECRETS_MANAGE, (c) =>
   dispatch(c, handleDeleteGlobalSecret)
 );

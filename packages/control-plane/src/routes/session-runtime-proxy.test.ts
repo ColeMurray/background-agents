@@ -1,13 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import type * as AuthenticateModule from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
+import { SessionIndexStore } from "../db/session-index";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import {
-  createTestRequestHandler,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
+  createTestRequestHandler,
+  fakeSessionRuntimeDispatch,
 } from "../router.test-support";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
@@ -85,10 +87,7 @@ function createEnv(
     ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "github",
     DB: createDatabase(database),
-    SESSION: {
-      idFromName: vi.fn((name: string) => `do-${name}`),
-      get: vi.fn(() => ({ fetch })),
-    },
+    SESSION: fakeSessionRuntimeDispatch(fetch),
   } as unknown as Env;
 }
 
@@ -99,6 +98,8 @@ function dispatch(request: Request, env: Env): Promise<Response> {
 function authenticateAs(principal: Principal): void {
   mocks.authenticate.mockImplementation(async (request: Request) => ({ principal, request }));
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("session runtime proxy routes", () => {
   beforeEach(() => {
@@ -673,5 +674,76 @@ describe("session runtime proxy routes", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "repoOwner must be a string" });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  describe("budget updates", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function ownedBy(userId: string): void {
+      vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue({
+        id: "session-1",
+        userId,
+      } as Awaited<ReturnType<SessionIndexStore["get"]>>);
+    }
+
+    it("forwards budget updates from the session owner", async () => {
+      ownedBy("user-1");
+      const requests: Request[] = [];
+      const fetch = vi.fn(async (request: Request) => {
+        requests.push(request);
+        return Response.json({ maxSessionCostUsd: 20 });
+      });
+
+      const response = await dispatch(
+        new Request("https://test.local/sessions/session-1/budget", {
+          method: "PATCH",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ maxCostUsd: 20 }),
+        }),
+        createEnv(fetch)
+      );
+
+      expect(response.status).toBe(200);
+      expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.budget);
+      await expect(requests[0].json()).resolves.toEqual({ maxCostUsd: 20 });
+    });
+
+    it("rejects budget updates from a non-owner", async () => {
+      ownedBy("owner-1");
+      const fetch = vi.fn(async () => Response.json({ maxSessionCostUsd: 20 }));
+
+      const response = await dispatch(
+        new Request("https://test.local/sessions/session-1/budget", {
+          method: "PATCH",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ maxCostUsd: 20 }),
+        }),
+        createEnv(fetch)
+      );
+
+      expect(response.status).toBe(403);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it("rejects a malformed budget body before reading the session", async () => {
+      const get = vi.spyOn(SessionIndexStore.prototype, "get");
+      const fetch = vi.fn(async () => Response.json({ maxSessionCostUsd: 20 }));
+
+      const response = await dispatch(
+        new Request("https://test.local/sessions/session-1/budget", {
+          method: "PATCH",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ maxCostUsd: "twenty" }),
+        }),
+        createEnv(fetch)
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid budget request" });
+      expect(get).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    });
   });
 });

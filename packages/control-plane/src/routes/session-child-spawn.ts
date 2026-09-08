@@ -1,3 +1,4 @@
+import { parseBody } from "./body";
 import { Hono } from "hono";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -55,13 +56,13 @@ export async function handleSpawnChild(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const parentId = params.id;
-  if (!parentId) return error("Parent session ID required");
 
-  const parsedBody = spawnChildSessionRequestSchema.safeParse(await request.json());
-  if (!parsedBody.success) {
-    return error("title and prompt are required");
-  }
-  const body = parsedBody.data;
+  const body = await parseBody(
+    request,
+    spawnChildSessionRequestSchema,
+    "title and prompt are required"
+  );
+  if (body instanceof Response) return body;
 
   if (!body.title || !body.prompt) {
     return error("title and prompt are required");

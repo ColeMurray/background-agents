@@ -5,7 +5,8 @@ import { applyIdentityEnforcement } from "../routing/identity-enforcement";
 import { SESSION_WEBSOCKET_CONNECT_PERMISSION } from "@open-inspect/shared/rbac";
 import { SessionInternalPaths, sessionScmDisplayFieldsSchema } from "../session/contracts";
 import type { Env } from "../types";
-import { error, GITHUB_USER_OR_SERVICE_ROUTE, parseJsonBody, requirePermission } from "./shared";
+import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { parseJsonBody } from "./body";
 import { dispatchSession, type SessionRouteContext } from "./session-route";
 
 export async function handleSessionWsToken(
@@ -15,7 +16,6 @@ export async function handleSessionWsToken(
   ctx: SessionRouteContext
 ): Promise<Response> {
   const sessionId = params.id;
-  if (!sessionId) return error("Session ID required");
 
   const rawBody = await parseJsonBody<unknown>(request);
   if (rawBody instanceof Response) return rawBody;
