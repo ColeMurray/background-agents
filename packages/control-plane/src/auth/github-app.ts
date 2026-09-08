@@ -17,7 +17,7 @@ import { z } from "zod";
 import { base64UrlEncode } from "./encoding";
 
 /** Timeout for individual GitHub API requests (ms). */
-export const GITHUB_FETCH_TIMEOUT_MS = 60_000;
+const GITHUB_FETCH_TIMEOUT_MS = 60_000;
 
 /** Cache installation tokens for this duration at most (ms). */
 export const INSTALLATION_TOKEN_CACHE_MAX_AGE_MS = 50 * 60 * 1000;
@@ -26,7 +26,7 @@ export const INSTALLATION_TOKEN_CACHE_MAX_AGE_MS = 50 * 60 * 1000;
 export const INSTALLATION_TOKEN_MIN_REMAINING_MS = 5 * 60 * 1000;
 
 /** Upper bound for KV cache TTL (seconds). */
-export const INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS = 3600;
+const INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS = 3600;
 
 const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v1";
 
@@ -41,11 +41,13 @@ function resolveUserAgent(env: InstallationTokenCacheBindings | undefined): stri
   return value && value.length > 0 ? value : DEFAULT_APP_NAME;
 }
 
-interface CachedInstallationToken {
-  token: string;
-  expiresAtEpochMs: number;
-  cachedAtEpochMs: number;
-}
+const cachedInstallationTokenSchema = z.object({
+  token: z.string(),
+  expiresAtEpochMs: z.number(),
+  cachedAtEpochMs: z.number(),
+});
+
+type CachedInstallationToken = z.infer<typeof cachedInstallationTokenSchema>;
 
 interface GitHubHttpError extends Error {
   status?: number;
@@ -73,7 +75,7 @@ export function fetchWithTimeout(
 }
 
 /** Per-page timing record returned from listInstallationRepositories. */
-export interface GitHubPageTiming {
+interface GitHubPageTiming {
   page: number;
   fetchMs: number;
   repoCount: number;
@@ -135,12 +137,14 @@ const repositoryBranchesResponseSchema = z.array(z.object({ name: z.string() }))
  * Parse PEM-encoded private key to raw bytes.
  */
 function parsePemPrivateKey(pem: string): Uint8Array {
-  // Remove PEM header/footer and newlines
+  // Remove PEM header/footer and newlines, including the two-character
+  // `\n` an environment file leaves in place of a newline.
   const pemContents = pem
     .replace(/-----BEGIN RSA PRIVATE KEY-----/g, "")
     .replace(/-----END RSA PRIVATE KEY-----/g, "")
     .replace(/-----BEGIN PRIVATE KEY-----/g, "")
     .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\\n/g, "")
     .replace(/\s/g, "");
 
   // Decode base64
@@ -205,7 +209,7 @@ async function importPrivateKeyCached(pem: string): Promise<CryptoKey> {
  * @param privateKey - PEM-encoded private key
  * @returns Signed JWT valid for 10 minutes
  */
-export async function generateAppJwt(appId: string, privateKey: string): Promise<string> {
+async function generateAppJwt(appId: string, privateKey: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
 
   // JWT header
@@ -304,8 +308,10 @@ async function readInstallationTokenFromCache(
   }
 
   try {
-    const cached = await env.cacheStore.get<CachedInstallationToken>(cacheKey, "json");
-    return cached ?? null;
+    const result = cachedInstallationTokenSchema.safeParse(
+      await env.cacheStore.get(cacheKey, "json")
+    );
+    return result.success ? result.data : null;
   } catch {
     return null;
   }
@@ -442,7 +448,7 @@ export async function getCachedInstallationTokenWithExpiry(
 }
 
 // Re-export from shared for backward compatibility
-export type { InstallationRepository } from "@open-inspect/shared";
+export type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 
 /**
  * List all repositories accessible to the GitHub App installation.

@@ -1,29 +1,72 @@
 import { z } from "zod";
 import type { ResolvedSessionAttachment } from "./session-attachments";
-import {
-  sandboxStatusSchema,
-  sessionStatusSchema,
-  type MessageSource,
-  type MessageStatus,
-  type ParticipantRole,
-  type SandboxStatus,
-  type SessionStatus,
-  type SpawnSource,
-} from "./statuses";
-import {
-  sessionRepositoryStateSchema,
-  type SessionListRepository,
-  type SessionRepositoryState,
-} from "./repositories";
+import type { SessionListRepository } from "./repositories";
 
-export interface SessionParticipant {
-  id: string;
-  userId: string;
-  scmLogin: string | null;
-  scmName: string | null;
-  scmEmail: string | null;
-  role: ParticipantRole;
-}
+/**
+ * A session's conversation lifecycle: durable, user-visible, and independent
+ * of whether any compute is currently attached. See `SandboxStatus` for the
+ * compute side; the two are at different levels and share no vocabulary.
+ */
+export const sessionStatusSchema = z.enum([
+  "created",
+  "active",
+  "completed",
+  "failed",
+  "archived",
+  "cancelled",
+]);
+export type SessionStatus = z.infer<typeof sessionStatusSchema>;
+
+/**
+ * The state of a session's CURRENT sandbox incarnation.
+ *
+ * A session has many incarnations over its lifetime, so this never describes
+ * the session itself — see `SessionStatus` for that. A session may be
+ * `completed` with a live sandbox attached, or `active` with none at all. Do
+ * not render this as the session's status: doing so is what let the sidebar
+ * and the header disagree about the same session.
+ *
+ * Every member here must be producible by some code path. `syncing` and
+ * `running` were removed because nothing in any language ever wrote them;
+ * `warming` is kept because, although it is never persisted, the web client
+ * sets it optimistically on the `sandbox_warming` message and Modal reports
+ * it from its own manager.
+ */
+export const sandboxStatusSchema = z.enum([
+  "pending",
+  "spawning",
+  "connecting",
+  "warming",
+  "ready",
+  "stale",
+  "snapshotting",
+  "stopped",
+  "failed",
+]);
+export type SandboxStatus = z.infer<typeof sandboxStatusSchema>;
+
+export type MessageStatus = "pending" | "processing" | "completed" | "failed";
+
+export const messageSourceSchema = z.enum([
+  "web",
+  "slack",
+  "linear",
+  "extension",
+  "github",
+  "automation",
+  "agent",
+]);
+export type MessageSource = z.infer<typeof messageSourceSchema>;
+
+export type ParticipantRole = "owner" | "member";
+
+export type SpawnSource =
+  | "user"
+  | "agent"
+  | "automation"
+  | "github-bot"
+  | "linear-bot"
+  | "slack-bot";
 
 /**
  * Aggregate PR counts for a session, grouped by display status. Computed from
@@ -37,6 +80,59 @@ export interface PullRequestSummary {
   merged: number;
   closed: number;
 }
+
+/**
+ * Viewer-specific read state for a session's latest terminal message.
+ *
+ * `version` orders terminal messages: it is the projected creation time of
+ * the latest one and 0 before any turn completes. A read state with a higher
+ * version supersedes one with a lower version. Messages that share a version
+ * are ordered by message ID, as the projection orders them. For one message,
+ * read is final.
+ */
+export type SessionReadState =
+  | {
+      latestMessageId: null;
+      unread: false;
+      version: number;
+    }
+  | {
+      latestMessageId: string;
+      unread: boolean;
+      version: number;
+    };
+
+export const sessionReadActionSchema = z.discriminatedUnion("action", [
+  z
+    .object({
+      action: z.literal("mark_message_read"),
+      messageId: z.string().min(1),
+    })
+    .strict(),
+  z.object({ action: z.literal("mark_latest_message_read") }).strict(),
+]);
+export type SessionReadAction = z.infer<typeof sessionReadActionSchema>;
+
+// Parsed from responses, so additive server fields must not fail an older
+// client. A control plane that predates `version` reads as version 0, which
+// never supersedes cached state.
+export const sessionReadResultSchema = z.union([
+  z.object({
+    sessionId: z.string(),
+    outcome: z.literal("no_terminal_message"),
+    unread: z.literal(false),
+    latestMessageId: z.null(),
+    version: z.number().default(0),
+  }),
+  z.object({
+    sessionId: z.string(),
+    outcome: z.enum(["marked_read", "already_read", "not_latest"]),
+    unread: z.boolean(),
+    latestMessageId: z.string(),
+    version: z.number().default(0),
+  }),
+]);
+export type SessionReadResult = z.infer<typeof sessionReadResultSchema>;
 
 export interface Session {
   id: string;
@@ -72,6 +168,8 @@ export interface Session {
    * overlap or when the session has no tracked PRs.
    */
   pullRequestSummary?: PullRequestSummary;
+  /** Viewer-specific read state; absent for non-user service callers. */
+  readState?: SessionReadState;
 }
 
 export interface SessionMessage {
@@ -84,52 +182,6 @@ export interface SessionMessage {
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
-}
-
-export interface SessionState {
-  id: string;
-  title: string | null;
-  repoOwner: string | null;
-  repoName: string | null;
-  baseBranch: string | null;
-  branchName: string | null;
-  status: SessionStatus;
-  sandboxStatus: SandboxStatus;
-  messageCount: number;
-  createdAt: number;
-  model?: string;
-  reasoningEffort?: string;
-  isProcessing?: boolean;
-  parentSessionId?: string | null;
-  totalCost?: number;
-  codeServerUrl?: string | null;
-  codeServerPassword?: string | null;
-  tunnelUrls?: Record<string, string> | null;
-  ttydUrl?: string | null;
-  ttydToken?: string | null;
-  sandboxDashboardUrl?: string | null;
-  /**
-   * Ordered repository list; [0] = primary. Absent on scalar-era producers —
-   * consumers default to [] / synthesize from repoOwner/repoName.
-   */
-  repositories?: SessionRepositoryState[];
-  /**
-   * The environment this session was launched from (provenance), or null for
-   * repo-launched/ad-hoc sessions. `environmentName` is resolved live and is
-   * null when the environment has since been deleted (design §7.6) — the UI
-   * renders "environment deleted" in that case.
-   */
-  environmentId?: string | null;
-  environmentName?: string | null;
-}
-
-export interface ParticipantPresence {
-  participantId: string;
-  userId: string;
-  name: string;
-  avatar?: string;
-  status: "active" | "idle" | "away";
-  lastSeen: number;
 }
 
 export const sessionParticipantProfileSchema = z.object({
@@ -147,48 +199,3 @@ export const sessionParticipantProfilesResponseSchema = z.object({
 export type SessionParticipantProfilesResponse = z.infer<
   typeof sessionParticipantProfilesResponseSchema
 >;
-
-/** Internal runtime schema used by the server-message protocol. */
-export const sessionStateSchema = z.object({
-  id: z.string(),
-  title: z.string().nullable(),
-  repoOwner: z.string().nullable(),
-  repoName: z.string().nullable(),
-  baseBranch: z.string().nullable(),
-  branchName: z.string().nullable(),
-  status: sessionStatusSchema,
-  sandboxStatus: sandboxStatusSchema,
-  messageCount: z.number(),
-  createdAt: z.number(),
-  model: z.string().optional(),
-  reasoningEffort: z.string().optional(),
-  isProcessing: z.boolean().optional(),
-  parentSessionId: z.string().nullable().optional(),
-  totalCost: z.number().optional(),
-  codeServerUrl: z.string().nullable().optional(),
-  codeServerPassword: z.string().nullable().optional(),
-  tunnelUrls: z.record(z.string(), z.string()).nullable().optional(),
-  ttydUrl: z.string().nullable().optional(),
-  ttydToken: z.string().nullable().optional(),
-  sandboxDashboardUrl: z.string().nullable().optional(),
-  /**
-   * Ordered repository list; [0] = primary. Optional so pre-feature servers
-   * and producers stay valid — consumers default to [] (absent means a
-   * scalar-era session; synthesize from repoOwner/repoName when rendering).
-   */
-  repositories: z.array(sessionRepositoryStateSchema).optional(),
-  // Environment provenance (design §7.6). environmentName resolves live —
-  // null when the environment was deleted after launch.
-  environmentId: z.string().nullable().optional(),
-  environmentName: z.string().nullable().optional(),
-});
-
-/** Internal runtime schema used by the server-message protocol. */
-export const participantPresenceSchema = z.object({
-  participantId: z.string(),
-  userId: z.string(),
-  name: z.string(),
-  avatar: z.string().optional(),
-  status: z.enum(["active", "idle", "away"]),
-  lastSeen: z.number(),
-});

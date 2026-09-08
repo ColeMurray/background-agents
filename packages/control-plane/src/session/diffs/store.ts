@@ -9,18 +9,27 @@ import {
   type SessionDiffState,
   type StoredSessionDiffBundle,
 } from "@open-inspect/shared/types/session-diffs";
+import { z } from "zod";
 import type { SqlStorage } from "../sql-storage";
 import { DiffFileNotFoundError, DiffRevisionStaleError } from "./errors";
 
-interface SessionDiffRow {
-  revision_id: string | null;
-  trigger_message_id: string | null;
-  bundle_json: string | null;
-  captured_at: number | null;
-  last_error: string | null;
-  error_at: number | null;
-  updated_at: number;
-}
+/**
+ * Columns that carry the stored patch state. Validated on its own so corrupt
+ * refresh metadata can never discard an otherwise readable bundle.
+ */
+const sessionDiffBundleRowSchema = z.object({
+  revision_id: z.string(),
+  bundle_json: z.string(),
+});
+
+/**
+ * Columns that carry the latest refresh failure. Validated on its own so a
+ * corrupt bundle can never hide a real failure, and vice versa.
+ */
+const sessionDiffFailureRowSchema = z.object({
+  last_error: z.string(),
+  error_at: z.number().int().nonnegative(),
+});
 
 /** Persists the single latest session-diff bundle in Durable Object SQLite. */
 export class SessionDiffStore {
@@ -74,10 +83,7 @@ export class SessionDiffStore {
     return sessionDiffStateSchema.parse({
       version: SESSION_DIFF_VERSION,
       current: current ? toSessionDiffManifest(current) : null,
-      lastError:
-        row?.last_error && row.error_at !== null
-          ? { message: row.last_error, occurredAt: row.error_at }
-          : null,
+      lastError: this.parseFailure(row),
       unavailableReason,
     });
   }
@@ -101,28 +107,31 @@ export class SessionDiffStore {
     return file.patch;
   }
 
-  private readRow(): SessionDiffRow | null {
-    return (
-      (
-        this.sql
-          .exec(`SELECT * FROM session_diff WHERE singleton = 1`)
-          .toArray() as SessionDiffRow[]
-      )[0] ?? null
-    );
+  private readRow(): unknown {
+    return this.sql.exec(`SELECT * FROM session_diff WHERE singleton = 1`).toArray()[0] ?? null;
   }
 
-  private parseBundle(row: SessionDiffRow | null): StoredSessionDiffBundle | null {
-    if (!row?.bundle_json || !row.revision_id) return null;
+  private parseBundle(row: unknown): StoredSessionDiffBundle | null {
+    const bundleRow = sessionDiffBundleRowSchema.safeParse(row);
+    if (!bundleRow.success) return null;
     try {
-      const upload = sessionDiffUploadSchema.safeParse(JSON.parse(row.bundle_json));
+      const upload = sessionDiffUploadSchema.safeParse(JSON.parse(bundleRow.data.bundle_json));
       if (!upload.success) return null;
       const stored = storedSessionDiffBundleSchema.safeParse({
-        revisionId: row.revision_id,
+        revisionId: bundleRow.data.revision_id,
         ...upload.data,
       });
       return stored.success ? stored.data : null;
     } catch {
       return null;
     }
+  }
+
+  private parseFailure(row: unknown): SessionDiffState["lastError"] {
+    const failureRow = sessionDiffFailureRowSchema.safeParse(row);
+    if (!failureRow.success) return null;
+    const failure = sessionDiffFailureSchema.safeParse({ error: failureRow.data.last_error });
+    if (!failure.success) return null;
+    return { message: failure.data.error, occurredAt: failureRow.data.error_at };
   }
 }

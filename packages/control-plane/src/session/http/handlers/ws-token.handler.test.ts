@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import type { ParticipantRow } from "../../types";
-import { createWsTokenHandler } from "./ws-token.handler";
+import { WsTokenHandler } from "./ws-token.handler";
+import type { ParticipantRepository } from "../../participant-repository";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -24,13 +25,14 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 }
 
 function createHandler() {
+  const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const repository = {
     createParticipant: vi.fn(),
     updateParticipantCoalesce: vi.fn(),
     updateParticipantWsToken: vi.fn(),
+    getParticipantByUserId,
   };
 
-  const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const generateId = vi
     .fn<(bytes?: number) => string>()
     .mockImplementation((bytes?: number) => (bytes === 32 ? "plain-token" : "participant-1"));
@@ -44,18 +46,30 @@ function createHandler() {
     child: vi.fn(),
   } as unknown as Logger;
 
-  const wsTokenHandler = createWsTokenHandler({
-    repository,
-    getParticipantByUserId,
+  const wsTokenHandler = new WsTokenHandler(
+    repository as unknown as ParticipantRepository,
     generateId,
     hashToken,
-    now,
-  });
+    now
+  );
 
   // Bind the request-scoped log so call sites exercise the threading without
   // repeating it at every invocation.
   const handler = {
-    generateWsToken: (request: Request) => wsTokenHandler.generateWsToken(request, log),
+    generateWsToken: async (request: Request) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      return wsTokenHandler.generateWsToken(
+        new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: JSON.stringify({
+            canonicalUserId: "user-1",
+            ...body,
+          }),
+        }),
+        log
+      );
+    },
   };
 
   return {
@@ -69,7 +83,7 @@ function createHandler() {
   };
 }
 
-describe("createWsTokenHandler", () => {
+describe("WsTokenHandler", () => {
   it("returns 400 when userId is missing", async () => {
     const { handler } = createHandler();
 
@@ -130,6 +144,7 @@ describe("createWsTokenHandler", () => {
       participantId: "participant-1",
     });
     expect(repository.updateParticipantCoalesce).toHaveBeenCalledWith("participant-1", {
+      canonicalUserId: "user-1",
       scmUserId: "scm-user-1",
       scmLogin: "octocat-updated",
       scmName: "Updated Octocat",
@@ -173,6 +188,7 @@ describe("createWsTokenHandler", () => {
 
     expect(response.status).toBe(200);
     expect(repository.updateParticipantCoalesce).toHaveBeenCalledWith("participant-1", {
+      canonicalUserId: "user-1",
       scmUserId: null,
       scmLogin: null,
       scmName: null,
@@ -214,6 +230,7 @@ describe("createWsTokenHandler", () => {
     expect(repository.createParticipant).toHaveBeenCalledWith({
       id: "participant-new",
       userId: "user-1",
+      canonicalUserId: "user-1",
       scmUserId: "scm-user-1",
       scmLogin: "octocat",
       scmName: "The Octocat",
@@ -258,6 +275,7 @@ describe("createWsTokenHandler", () => {
     expect(repository.createParticipant).toHaveBeenCalledWith({
       id: "participant-1",
       userId: "user-1",
+      canonicalUserId: "user-1",
       scmUserId: null,
       scmLogin: null,
       scmName: null,

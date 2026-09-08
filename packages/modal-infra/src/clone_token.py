@@ -9,7 +9,7 @@ log = get_logger("clone_token")
 
 def resolve_clone_token() -> str | None:
     """Return a provider-specific clone token, or None when credentials are unavailable."""
-    from .auth import generate_installation_token
+    from sandbox_runtime.auth import generate_installation_token
 
     scm_provider = os.environ.get("SCM_PROVIDER", "github")
 

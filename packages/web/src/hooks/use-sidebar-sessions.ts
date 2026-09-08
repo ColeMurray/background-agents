@@ -1,264 +1,464 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MutableRefObject } from "react";
 import { useAuthSession } from "@/lib/auth-session";
-import { browserApiFetch } from "@/lib/browser-api-fetch";
-import useSWR, { mutate } from "swr";
-import { isInactiveSession } from "@/lib/time";
+import useSWR, { mutate, useSWRConfig } from "swr";
+import type {
+  SessionInboxCategory,
+  SessionInboxItem,
+  SessionInboxPage,
+  SessionInboxSnapshot,
+  SessionListItem,
+} from "@open-inspect/shared/types/session-inbox";
 import {
-  applyTitleUpdate,
-  buildSessionsPageKey,
-  CURRENT_USER_CREATED_BY,
-  isUnarchivedSessionListKey,
-  mergeUniqueSessions,
-  removeSessionFromList,
-  type SessionListResponse,
-} from "@/lib/session-list";
-import type { Session } from "@open-inspect/shared";
+  applySessionInboxItemReadState,
+  applySessionInboxReadStateUpdate,
+  buildSessionInboxKey,
+  buildSessionInboxSnapshotKey,
+  isSessionInboxItemFullyRead,
+  isSessionInboxKey,
+  isSessionInboxPaginationKey,
+  sessionInboxDestinationCategory,
+} from "@/lib/session-inbox-api";
+import {
+  markLatestMessageRead,
+  reconcileSessionReadState,
+  subscribeSessionReadStateReconciliation,
+  type SessionReadStateReconciledDetail,
+} from "@/lib/session-read-state";
 
-export type SessionItem = Session;
+const VISIBLE_INBOX_POLL_MS = 30_000;
+const SESSION_CREATOR_FILTER_STORAGE_KEY = "open-inspect-sidebar-session-creator-filter";
 
+export type SessionItem = SessionListItem;
 type SessionCreatorFilter = "all" | "mine";
+type PaginationKey = ReturnType<typeof buildSessionInboxKey>;
 
-export function useSidebarSessions(currentSessionId: string | null) {
-  const { data: authSession } = useAuthSession();
-  const router = useRouter();
-  const [sessionCreatorFilter, setSessionCreatorFilter] = useState<SessionCreatorFilter>("all");
-  const [extraSessionsState, setExtraSessionsState] = useState<{
-    source: SessionListResponse | undefined;
-    sessions: SessionItem[];
-  }>({ source: undefined, sessions: [] });
-  const [hasMorePages, setHasMorePages] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const offsetRef = useRef(0);
-  const hasMoreRef = useRef(false);
-  const loadingMoreRef = useRef(false);
-  const sessionListVersionRef = useRef(0);
+interface AdditionalPagesState {
+  filterIdentity: string;
+  pages: Array<{ page: SessionInboxPage; sequence: number }>;
+}
 
-  const sidebarSessionsKey = useMemo(() => {
-    if (!authSession) return null;
+interface PaginationRequest {
+  filterIdentity: string;
+  key: PaginationKey;
+}
 
-    return buildSessionsPageKey({
-      excludeStatus: "archived",
-      createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
+function useCategoryPagination(
+  category: SessionInboxCategory,
+  snapshot: SessionInboxSnapshot | undefined,
+  filterIdentity: string,
+  canonicalRootIds: Set<string>,
+  mine: boolean,
+  refreshSnapshot: () => Promise<unknown>,
+  nextPageSequence: MutableRefObject<number>
+) {
+  const { fetcher } = useSWRConfig();
+  const [additionalPagesState, setAdditionalPagesState] = useState<AdditionalPagesState>({
+    filterIdentity,
+    pages: [],
+  });
+  const [paginationRequest, setPaginationRequest] = useState<PaginationRequest | null>(null);
+  const firstPage = snapshot?.categories[category];
+  const additionalPages =
+    additionalPagesState.filterIdentity === filterIdentity ? additionalPagesState.pages : [];
+
+  useEffect(() => {
+    setAdditionalPagesState({ filterIdentity, pages: [] });
+    setPaginationRequest(null);
+  }, [filterIdentity]);
+
+  useEffect(() => {
+    setAdditionalPagesState((state) => {
+      if (state.filterIdentity !== filterIdentity) return state;
+      const pages = state.pages.map(({ page, sequence }) => ({
+        sequence,
+        page: {
+          ...page,
+          items: page.items.filter((item) => !canonicalRootIds.has(item.rootSession.id)),
+        },
+      }));
+      return { filterIdentity, pages };
     });
-  }, [authSession, sessionCreatorFilter]);
+  }, [canonicalRootIds, filterIdentity]);
 
   const {
-    data,
-    error: sessionsError,
-    isLoading: sessionsLoading,
-  } = useSWR<SessionListResponse>(sidebarSessionsKey);
-  const loading = sessionsLoading;
-  const firstPageSessions = useMemo(() => data?.sessions ?? [], [data?.sessions]);
-
-  // Hide paginated rows synchronously when SWR replaces their source page.
-  const extraSessions = useMemo(
-    () => (extraSessionsState.source === data ? extraSessionsState.sessions : []),
-    [data, extraSessionsState]
+    data: loadedPage,
+    error,
+    isLoading: loadingMore,
+    mutate: retryPage,
+  } = useSWR<SessionInboxPage>(
+    paginationRequest ? [paginationRequest.key, paginationRequest.filterIdentity] : null,
+    paginationRequest
+      ? () => {
+          if (!fetcher) throw new Error("Missing SWR fetcher");
+          return fetcher(paginationRequest.key) as Promise<SessionInboxPage>;
+        }
+      : null,
+    { shouldRetryOnError: false }
   );
 
   useEffect(() => {
-    sessionListVersionRef.current += 1;
-    setExtraSessionsState({ source: data, sessions: [] });
-    setLoadingMore(false);
-    loadingMoreRef.current = false;
-
-    const nextHasMore = data?.hasMore ?? false;
-    const nextOffset = data ? firstPageSessions.length : 0;
-
-    setHasMorePages(nextHasMore);
-    offsetRef.current = nextOffset;
-    hasMoreRef.current = nextHasMore;
-  }, [sidebarSessionsKey, data, firstPageSessions.length]);
-
-  const loadMoreSessions = useCallback(async () => {
-    if (!authSession || !sidebarSessionsKey || loadingMoreRef.current || !hasMoreRef.current) {
-      return;
-    }
-
-    loadingMoreRef.current = true;
-    setLoadingMore(true);
-    const sessionListVersion = sessionListVersionRef.current;
-
-    try {
-      const response = await browserApiFetch(
-        buildSessionsPageKey({
-          excludeStatus: "archived",
-          createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
-          offset: offsetRef.current,
-        })
-      );
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch additional sessions: ${response.status}`);
-      }
-
-      const page: SessionListResponse = await response.json();
-      const fetched = page.sessions ?? [];
-
-      if (sessionListVersion !== sessionListVersionRef.current) {
-        return;
-      }
-
-      setExtraSessionsState((previous) => ({
-        source: data,
-        sessions: mergeUniqueSessions(previous.source === data ? previous.sessions : [], fetched),
+    if (!loadedPage || !paginationRequest) return;
+    if (paginationRequest.filterIdentity === filterIdentity) {
+      const sequence = nextPageSequence.current++;
+      const page = {
+        ...loadedPage,
+        items: loadedPage.items.filter((item) => !canonicalRootIds.has(item.rootSession.id)),
+      };
+      setAdditionalPagesState((state) => ({
+        filterIdentity,
+        pages: [
+          ...(state.filterIdentity === filterIdentity ? state.pages : []),
+          { page, sequence },
+        ],
       }));
-      setHasMorePages(page.hasMore);
-      offsetRef.current += fetched.length;
-      hasMoreRef.current = page.hasMore;
-    } catch (error) {
-      console.error("Failed to fetch additional sessions:", error);
-    } finally {
-      if (sessionListVersion === sessionListVersionRef.current) {
-        loadingMoreRef.current = false;
-        setLoadingMore(false);
-      }
     }
-  }, [authSession, data, sessionCreatorFilter, sidebarSessionsKey]);
+    setPaginationRequest(null);
+  }, [canonicalRootIds, filterIdentity, loadedPage, nextPageSequence, paginationRequest]);
 
-  const maybeLoadMoreSessions = useCallback(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
+  const lastPage = additionalPages.at(-1)?.page ?? firstPage;
+  const hasMore = lastPage?.hasMore ?? false;
+  const loadMore = useCallback(() => {
+    if (!snapshot || !lastPage?.nextCursor || paginationRequest) return;
+    setPaginationRequest({
+      filterIdentity,
+      key: buildSessionInboxKey({
+        category,
+        cursor: lastPage.nextCursor,
+        mine,
+      }),
+    });
+  }, [category, filterIdentity, lastPage, mine, paginationRequest, snapshot]);
 
-    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 96;
-    if (nearBottom) {
-      void loadMoreSessions();
-    }
-  }, [loadMoreSessions]);
-
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container || loading || loadingMore || !hasMorePages) return;
-
-    if (container.clientHeight > 0 && container.scrollHeight <= container.clientHeight) {
-      void loadMoreSessions();
-    }
-  }, [
-    hasMorePages,
-    loading,
-    loadingMore,
-    loadMoreSessions,
-    firstPageSessions.length,
-    extraSessions.length,
-  ]);
-
-  const sessions = useMemo(
-    () => mergeUniqueSessions(firstPageSessions, extraSessions),
-    [firstPageSessions, extraSessions]
+  const retry = useCallback(
+    () => (error && paginationRequest ? retryPage() : refreshSnapshot()),
+    [error, paginationRequest, refreshSnapshot, retryPage]
   );
 
-  // Sort sessions by updatedAt (most recent first) and group children under their parent sessions.
-  const { activeSessions, inactiveSessions, childrenMap } = useMemo(() => {
-    const filtered = sessions.filter((session) => session.status !== "archived");
+  // Mutations revalidate the head snapshot, but pages loaded through `Load
+  // more` live only in this retained state. Reconcile them in place or they
+  // keep rendering the pre-mutation rows.
+  const updateRetainedItems = useCallback(
+    (update: (item: SessionInboxItem) => SessionInboxItem | null) => {
+      setAdditionalPagesState((state) => ({
+        ...state,
+        pages: state.pages.map(({ page, sequence }) => ({
+          sequence,
+          page: {
+            ...page,
+            items: page.items.flatMap((item) => {
+              const updated = update(item);
+              return updated ? [updated] : [];
+            }),
+          },
+        })),
+      }));
+    },
+    []
+  );
+  const resetRetainedPages = useCallback(() => {
+    setAdditionalPagesState({ filterIdentity, pages: [] });
+    setPaginationRequest(null);
+  }, [filterIdentity]);
 
-    // Sort by updatedAt descending
-    const sorted = [...filtered].sort((a, b) => {
-      const aTime = a.updatedAt || a.createdAt;
-      const bTime = b.updatedAt || b.createdAt;
-      return bTime - aTime;
+  return {
+    firstPageItems: firstPage?.items ?? [],
+    additionalPages,
+    error,
+    isLoading: firstPage === undefined,
+    hasMore,
+    loadingMore,
+    loadMore,
+    retry,
+    updateRetainedItems,
+    resetRetainedPages,
+  };
+}
+
+export function useSidebarSessions() {
+  const { data: authSession } = useAuthSession();
+  const { mutate: mutateCache } = useSWRConfig();
+  const [sessionCreatorFilter, setSessionCreatorFilterState] =
+    useState<SessionCreatorFilter | null>(null);
+
+  useEffect(() => {
+    let initialFilter: SessionCreatorFilter = "all";
+    try {
+      const storedFilter = localStorage.getItem(SESSION_CREATOR_FILTER_STORAGE_KEY);
+      if (storedFilter === "all" || storedFilter === "mine") initialFilter = storedFilter;
+    } catch {
+      // Storage is optional; the default remains usable in restricted browsers.
+    } finally {
+      setSessionCreatorFilterState(initialFilter);
+    }
+  }, []);
+
+  const setSessionCreatorFilter = useCallback((value: SessionCreatorFilter) => {
+    setSessionCreatorFilterState(value);
+    try {
+      localStorage.setItem(SESSION_CREATOR_FILTER_STORAGE_KEY, value);
+    } catch {
+      // Continue with the in-memory preference when storage is unavailable.
+    }
+  }, []);
+
+  const enabled = Boolean(authSession) && sessionCreatorFilter !== null;
+  const mine = sessionCreatorFilter === "mine";
+  const snapshotKey = enabled ? buildSessionInboxSnapshotKey(mine) : null;
+  const {
+    data: snapshot,
+    error: snapshotError,
+    isLoading,
+    mutate: refreshSnapshot,
+  } = useSWR<SessionInboxSnapshot>(snapshotKey, {
+    refreshInterval: () =>
+      typeof document !== "undefined" && document.visibilityState === "visible"
+        ? VISIBLE_INBOX_POLL_MS
+        : 0,
+    refreshWhenHidden: false,
+  });
+  const userId = authSession?.user.id ?? null;
+  const paginationFilterIdentity = JSON.stringify([userId, mine]);
+  const nextPageSequence = useRef(0);
+  const canonicalRootIds = useMemo(
+    () =>
+      new Set(
+        snapshot
+          ? Object.values(snapshot.categories).flatMap((page) =>
+              page.items.map((item) => item.rootSession.id)
+            )
+          : []
+      ),
+    [snapshot]
+  );
+  const refreshInbox = useCallback(async () => {
+    await mutate(isSessionInboxKey);
+  }, []);
+  const attention = useCategoryPagination(
+    "needs_attention",
+    snapshot,
+    paginationFilterIdentity,
+    canonicalRootIds,
+    mine,
+    refreshSnapshot,
+    nextPageSequence
+  );
+  const inProgress = useCategoryPagination(
+    "in_progress",
+    snapshot,
+    paginationFilterIdentity,
+    canonicalRootIds,
+    mine,
+    refreshSnapshot,
+    nextPageSequence
+  );
+  const finished = useCategoryPagination(
+    "finished",
+    snapshot,
+    paginationFilterIdentity,
+    canonicalRootIds,
+    mine,
+    refreshSnapshot,
+    nextPageSequence
+  );
+  const categoryResults = [attention, inProgress, finished];
+
+  const categoryItems = useMemo(() => {
+    const results = [
+      {
+        firstPageItems: attention.firstPageItems,
+        additionalPages: attention.additionalPages,
+      },
+      {
+        firstPageItems: inProgress.firstPageItems,
+        additionalPages: inProgress.additionalPages,
+      },
+      {
+        firstPageItems: finished.firstPageItems,
+        additionalPages: finished.additionalPages,
+      },
+    ];
+    const latestTailSequence = new Map<string, number>();
+    for (const result of results) {
+      for (const { page, sequence } of result.additionalPages) {
+        for (const item of page.items) {
+          const id = item.rootSession.id;
+          if (!canonicalRootIds.has(id) && sequence > (latestTailSequence.get(id) ?? -1)) {
+            latestTailSequence.set(id, sequence);
+          }
+        }
+      }
+    }
+
+    return results.map((result) => {
+      const renderedIds = new Set(result.firstPageItems.map((item) => item.rootSession.id));
+      return [
+        ...result.firstPageItems,
+        ...result.additionalPages.flatMap(({ page, sequence }) =>
+          page.items.filter((item) => {
+            const id = item.rootSession.id;
+            if (renderedIds.has(id) || latestTailSequence.get(id) !== sequence) return false;
+            renderedIds.add(id);
+            return true;
+          })
+        ),
+      ];
     });
+  }, [
+    attention.additionalPages,
+    attention.firstPageItems,
+    canonicalRootIds,
+    finished.additionalPages,
+    finished.firstPageItems,
+    inProgress.additionalPages,
+    inProgress.firstPageItems,
+  ]);
+  const [attentionItems, inProgressItems, finishedItems] = categoryItems;
 
-    // Build set of visible session IDs for orphan detection
-    const visibleIds = new Set(sorted.map((s) => s.id));
-
-    // Group children by parent ID
-    const children = new Map<string, SessionItem[]>();
-    const topLevel: SessionItem[] = [];
-
-    for (const session of sorted) {
-      const parentId = session.parentSessionId;
-      if (parentId && visibleIds.has(parentId)) {
-        // Parent is visible — nest under it
-        const siblings = children.get(parentId) ?? [];
-        siblings.push(session);
-        children.set(parentId, siblings);
-      } else {
-        // Top-level session (or orphan child whose parent is filtered out)
-        topLevel.push(session);
+  const inboxItems = useMemo(
+    () => [...attentionItems, ...inProgressItems, ...finishedItems],
+    [attentionItems, finishedItems, inProgressItems]
+  );
+  const childrenMap = useMemo(() => {
+    const result = new Map<string, SessionItem[]>();
+    for (const item of inboxItems) {
+      for (const descendant of item.descendantSessions) {
+        if (!descendant.parentSessionId) continue;
+        const siblings = result.get(descendant.parentSessionId) ?? [];
+        siblings.push(descendant);
+        result.set(descendant.parentSessionId, siblings);
       }
     }
-
-    const active: SessionItem[] = [];
-    const inactive: SessionItem[] = [];
-    const now = Date.now();
-
-    for (const session of topLevel) {
-      const timestamp = session.updatedAt || session.createdAt;
-      if (isInactiveSession(timestamp, now)) {
-        inactive.push(session);
-      } else {
-        active.push(session);
-      }
+    for (const siblings of result.values()) {
+      siblings.sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? 1 : -1));
     }
+    return result;
+  }, [inboxItems]);
 
-    return {
-      activeSessions: active,
-      inactiveSessions: inactive,
-      childrenMap: children,
-    };
-  }, [sessions]);
+  const updateAttentionRetained = attention.updateRetainedItems;
+  const updateInProgressRetained = inProgress.updateRetainedItems;
+  const updateFinishedRetained = finished.updateRetainedItems;
+  const resetInProgressRetained = inProgress.resetRetainedPages;
+  const resetFinishedRetained = finished.resetRetainedPages;
+  const updateAllRetainedItems = useCallback(
+    (update: (item: SessionInboxItem) => SessionInboxItem | null) => {
+      updateAttentionRetained(update);
+      updateInProgressRetained(update);
+      updateFinishedRetained(update);
+    },
+    [updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
+  );
+
+  // Every session open acknowledges its terminal message, read or not, so
+  // this runs far more often than read state actually changes. Retained pages
+  // are updated in place; only a hierarchy leaving attention restarts a chain.
+  const reconcileSidebarReadState = useCallback(
+    ({ sessionId, outcome, readState }: SessionReadStateReconciledDetail) => {
+      const applyReadState = (item: SessionInboxItem) =>
+        applySessionInboxItemReadState(item, sessionId, readState);
+      updateAttentionRetained((item) => {
+        const updated = applyReadState(item);
+        return isSessionInboxItemFullyRead(updated) ? null : updated;
+      });
+      updateInProgressRetained(applyReadState);
+      updateFinishedRetained(applyReadState);
+
+      // The destination chain was paged without the arriving hierarchy, so a
+      // rank between its head and retained tail would never render. Restart
+      // that one chain from the head.
+      const attentionItem = attentionItems.find(
+        (item) =>
+          item.rootSession.id === sessionId ||
+          item.descendantSessions.some((session) => session.id === sessionId)
+      );
+      if (
+        attentionItem &&
+        !readState.unread &&
+        isSessionInboxItemFullyRead(applyReadState(attentionItem))
+      ) {
+        if (sessionInboxDestinationCategory(attentionItem) === "in_progress") {
+          resetInProgressRetained();
+        } else {
+          resetFinishedRetained();
+        }
+      }
+
+      return Promise.all([
+        mutateCache<SessionInboxSnapshot | SessionInboxPage>(
+          isSessionInboxKey,
+          (current) => applySessionInboxReadStateUpdate(current, sessionId, readState),
+          // `already_read` confirms the cached state; any other outcome may
+          // carry a change the snapshot has not seen yet.
+          { populateCache: true, revalidate: outcome !== "already_read" }
+        ),
+        // Cached cursor pages would restore pre-acknowledgement rows on remount.
+        mutateCache<SessionInboxPage | undefined>(isSessionInboxPaginationKey, () => undefined, {
+          populateCache: true,
+          revalidate: false,
+        }),
+      ]);
+    },
+    [
+      attentionItems,
+      mutateCache,
+      resetFinishedRetained,
+      resetInProgressRetained,
+      updateAttentionRetained,
+      updateFinishedRetained,
+      updateInProgressRetained,
+    ]
+  );
+
+  useEffect(() => {
+    return subscribeSessionReadStateReconciliation(reconcileSidebarReadState);
+  }, [reconcileSidebarReadState]);
 
   const handleSessionArchived = useCallback(
     async (sessionId: string) => {
-      if (!sidebarSessionsKey) return;
-
-      await mutate<SessionListResponse>(
-        isUnarchivedSessionListKey,
-        (current) =>
-          current
-            ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
-            : current,
-        { revalidate: false, populateCache: true }
+      updateAllRetainedItems((item) =>
+        item.rootSession.id === sessionId
+          ? null
+          : {
+              ...item,
+              descendantSessions: item.descendantSessions.filter(
+                (session) => session.id !== sessionId
+              ),
+            }
       );
-      setExtraSessionsState((previous) => ({
-        ...previous,
-        sessions: previous.sessions.filter((session) => session.id !== sessionId),
-      }));
-
-      if (currentSessionId === sessionId) {
-        router.push("/");
-      }
+      void refreshInbox().catch((error) => {
+        console.error("Failed to refresh session inbox after archive", error);
+      });
     },
-    [currentSessionId, router, sidebarSessionsKey]
+    [refreshInbox, updateAllRetainedItems]
   );
 
-  const handleSessionRenamed = useCallback(
-    (sessionId: string, title: string) => {
-      const updatedAt = Date.now();
-      setExtraSessionsState((previous) => ({
-        ...previous,
-        sessions: previous.sessions.map((session) =>
-          session.id === sessionId ? { ...session, title, updatedAt } : session
-        ),
-      }));
-      if (!sidebarSessionsKey) return;
-
-      void mutate<SessionListResponse>(
-        isUnarchivedSessionListKey,
-        (currentData) => applyTitleUpdate(currentData, sessionId, title, updatedAt),
-        { revalidate: false }
-      );
-    },
-    [sidebarSessionsKey]
-  );
+  const handleMarkLatestMessageRead = useCallback(async (sessionId: string) => {
+    const result = await markLatestMessageRead(sessionId);
+    await reconcileSessionReadState(result);
+  }, []);
 
   return {
-    sessions,
-    activeSessions,
-    inactiveSessions,
+    needsAttention: attentionItems.map((item) => item.rootSession),
+    inProgress: inProgressItems.map((item) => item.rootSession),
+    finished: finishedItems.map((item) => item.rootSession),
     childrenMap,
-    loading,
-    loadingMore,
-    sessionsError,
+    loading: sessionCreatorFilter === null || isLoading,
+    sessionsError: snapshotError ?? categoryResults.find((result) => result.error)?.error,
+    refreshSnapshot,
+    // Keyed by SessionInboxCategory, in camelCase. These used to be `running`
+    // and `recent` here and `in_progress`/`finished` everywhere else, so the
+    // render site had to translate between the two -- the same session and
+    // sandbox vocabularies getting mixed that this module now keeps apart.
+    sectionPagination: {
+      needsAttention: attention,
+      inProgress,
+      finished,
+    },
     sessionCreatorFilter,
     setSessionCreatorFilter,
-    scrollContainerRef,
-    maybeLoadMoreSessions,
     handleSessionArchived,
-    handleSessionRenamed,
+    handleMarkLatestMessageRead,
   };
 }

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import type { ImageBuildProvider } from "./model";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
+import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
 
 const unit = {
   scope: { kind: "repo" as const, id: "acme/web" },
@@ -11,16 +13,16 @@ const unit = {
 function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordView {
   return {
     id: "build-1",
-    scope_kind: "repo",
-    scope_id: "acme/web",
+    scopeKind: "repo",
+    scopeId: "acme/web",
     provider: "modal",
     status: "ready",
-    repositories_fingerprint: "fp-current",
-    repository_shas: JSON.stringify([{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }]),
-    runtime_version: "v53-runtime",
-    build_duration_seconds: 1,
-    error_message: null,
-    created_at: 1,
+    repositoriesFingerprint: "fp-current",
+    repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
+    runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+    buildDurationSeconds: 1,
+    errorMessage: null,
+    createdAt: 1,
     ...overrides,
   };
 }
@@ -39,10 +41,14 @@ describe("evaluateImageBuildRebuildPolicy", () => {
       reason: "missing_image",
     });
     expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ runtime_version: "v52-runtime" })], "modal")
+      evaluateImageBuildRebuildPolicy(
+        unit,
+        [row({ runtimeVersion: "v56-managed-provider-runtime" })],
+        "modal"
+      )
     ).toMatchObject({ type: "rebuild", reason: "runtime_incompatible" });
     expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ repository_shas: "not-json" })], "modal")
+      evaluateImageBuildRebuildPolicy(unit, [row({ repositoryShas: null })], "modal")
     ).toMatchObject({ type: "rebuild", reason: "invalid_provenance" });
   });
 
@@ -50,6 +56,30 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     expect(
       evaluateImageBuildRebuildPolicy(unit, [row({ provider: "vercel" })], "modal")
     ).toMatchObject({ type: "rebuild", reason: "missing_image" });
+  });
+
+  it("rebuilds each provider's pre-wraparound image and keeps the shared new generation", () => {
+    const superseded: Array<[ImageBuildProvider, string]> = [
+      ["modal", "v58-image-build-stdin-launch-vnc"],
+      ["opencomputer", "v57-vnc-opencode-1-18-11"],
+      ["vercel", "v57-vnc-opencode-1-18-11"],
+    ];
+    for (const [provider, runtimeVersion] of superseded) {
+      expect(
+        evaluateImageBuildRebuildPolicy(unit, [row({ provider, runtimeVersion })], provider)
+      ).toMatchObject({ type: "rebuild", reason: "runtime_incompatible" });
+    }
+
+    const current: Array<[ImageBuildProvider, string]> = [
+      ["modal", COMPATIBLE_RUNTIME_VERSION],
+      ["opencomputer", COMPATIBLE_RUNTIME_VERSION],
+      ["vercel", COMPATIBLE_RUNTIME_VERSION],
+    ];
+    for (const [provider, runtimeVersion] of current) {
+      expect(
+        evaluateImageBuildRebuildPolicy(unit, [row({ provider, runtimeVersion })], provider).type
+      ).toBe("check_branches");
+    }
   });
 
   it("defers a compatible image to branch-head comparison", () => {

@@ -186,6 +186,11 @@ gets its own lightweight database that can handle hundreds of events per second 
 other sessions. The WebSocket Hibernation API keeps connections alive during idle periods without
 incurring compute costs.
 
+Sandbox lifecycle state is authoritative across WebSocket reconnects. Losing the sandbox WebSocket
+does not stop the sandbox: the bridge reconnects while the control plane schedules a heartbeat check
+in case the process is actually gone. Explicit lifecycle paths such as inactivity and stale
+heartbeat persist `stopped` or `stale` before closing the connection, which prevents reconnection.
+
 ### Data Plane (Sandbox Backends)
 
 The data plane is where code actually runs. Each session gets an isolated sandbox with a full
@@ -394,6 +399,31 @@ This lets you send follow-up thoughts while the agent works. Prompts are process
 
 You can also stop the current execution if the agent is going down the wrong path.
 
+### Parent-to-Child Follow-Ups
+
+An agent that created a child with `spawn-child` can continue that same child session with
+`send-child-prompt`. The follow-up enters the child's normal durable queue:
+
+```text
+Child prompt 1 (processing) ──▶ Parent follow-up (queued) ──▶ Child continues
+```
+
+The follow-up does not interrupt active work. Completed and failed children can resume, restoring
+their compatible sandbox snapshot when available. Cancelled children remain terminal, and archived
+children must be explicitly unarchived before they can accept prompts.
+
+The parent token is never exchanged for the child's sandbox token. The control plane authenticates
+the parent session, verifies the direct parent-child relationship in D1, verifies it again in the
+child Durable Object, and attributes the queued prompt to the child owner with source `agent`.
+
+`send-child-prompt` returns after the prompt is durably queued. The parent calls `get-child-status`
+when it needs the follow-up result. An earlier completed response is labeled as such while newer
+child work is still running.
+
+The runtime tool is installed when a sandbox starts from a runtime image that includes it. A parent
+restored from a snapshot created before this capability shipped keeps the older captured runtime and
+will not see `send-child-prompt` until it starts in a fresh sandbox built from the newer runtime.
+
 ---
 
 ## The Agent
@@ -545,6 +575,7 @@ was built for internal use where all employees have access to company repositori
 | User OAuth Token   | Create PRs, identify users                 | Repos the user has access to     |
 | Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                   |
 | WebSocket Token    | Authenticate client connections            | Single session                   |
+| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Pinned session provider account  |
 
 Fresh and prebuilt-image sandboxes fetch git credentials on demand through the control plane instead
 of relying on a token embedded in the environment or remote URL. Snapshot restores may still receive
@@ -570,11 +601,47 @@ per-environment scope. A session receives global secrets plus its **session targ
 - Injected into sandboxes at startup
 - Never exposed to clients (only key names are visible)
 
-> **Daytona and Vercel users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
-> added as global secrets. Modal injects these automatically via its own secrets mechanism.
+OpenAI and xAI subscription credentials are installation-wide provider accounts. Account rows store
+display, status, and optional external identity separately from credentials encrypted with
+`PROVIDER_ACCOUNTS_ENCRYPTION_KEY`. Each provider has an optional default account and an unattended
+mode that chooses the default account or API-key mode for Slack, GitHub, Linear, and unpinned
+automation runs.
+
+The web groups OpenAI and xAI accounts from shared static provider IDs and display metadata; there
+is no provider-catalog endpoint. The control-plane adapter registry remains authoritative when an
+account is connected, selected, defaulted, or consumed.
+
+Session creation resolves every subscription provider once and persists an immutable provider
+account, API-key, or legacy scoped-OAuth auth row in D1, the sole authority for session provider
+auth. The session Durable Object remains authoritative for lifecycle and sandbox-token
+authentication but does not replicate provider-account bindings. An interactive session can follow
+provider policy, select an active account, or choose API-key mode. Automations can pin the same
+choices or resolve current defaults each run. Child sessions copy their parent's D1 auth rows, and
+later default changes do not move existing sessions between accounts.
+
+In account mode, the sandbox receives only a managed marker. Provider API keys and legacy OAuth
+fields for that provider are suppressed. The runtime plugin calls the sandbox-authenticated
+`POST /sessions/:id/provider-auth/:provider/access-token` endpoint; the control plane reads the
+trusted D1 session binding using the sandbox-authenticated session ID, refreshes the encrypted
+account credential, and returns short-lived access with `Cache-Control: no-store`. Sandbox startup
+also reads the complete D1 auth snapshot and fails closed if it is unavailable or incomplete.
+
+Legacy scoped OAuth and provider accounts can coexist. Existing sessions remain pinned to legacy
+scoped OAuth. New sessions use an explicit choice, then a provider-account default, and otherwise
+retain legacy scoped OAuth or API-key behavior. Setting a default affects only future sessions;
+operators may remove legacy keys after legacy-bound sessions are no longer needed. See
+[Using OpenAI Models](./OPENAI_MODELS.md) and
+[Using Grok with a SuperGrok Subscription](./GROK_MODELS.md).
+
+> **LLM API keys** (e.g., `ANTHROPIC_API_KEY` for Claude models) are added as global secrets. A
+> deployment can instead configure `anthropic_api_key` in Terraform to inject one fleet-wide key
+> into Modal session sandboxes and OpenComputer sandboxes; a global secret of the same name takes
+> precedence over it, and the other providers read only the secret store.
 >
 > **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, and Z.AI Coding Plan
-> models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider.
+> models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider. SuperGrok models
+> require an xAI provider account or `XAI_API_KEY` mode and must be enabled under **Settings >
+> Models**.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 
@@ -589,4 +656,5 @@ See [Secrets Management](./SECRETS.md) for setup instructions.
 ## What's Next
 
 - **[Getting Started](./GETTING_STARTED.md)**: Deploy your own instance
+- **[Managed Skills](./MANAGED_SKILLS.md)**: Create and select reusable agent instructions
 - **[Debugging Playbook](./DEBUGGING_PLAYBOOK.md)**: Troubleshoot issues with structured logs

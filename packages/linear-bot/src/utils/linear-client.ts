@@ -17,18 +17,18 @@ import {
   LinearAuthError,
 } from "./linear-credentials";
 import { z } from "zod";
+import { abortable } from "./abortable";
 
 export {
   completeLinearOAuthInstallation,
   getClientCredentialsTokenOrThrow,
   LinearAuthError,
-  type LinearAuthFailure,
-  type LinearAuthFailureReason,
 } from "./linear-credentials";
 
 const log = createLogger("linear-client");
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
+export const LINEAR_GRAPHQL_TIMEOUT_MS = 15_000;
 
 const linearCommentCreateResponseSchema = z.object({
   data: z
@@ -43,6 +43,16 @@ const linearCommentCreateResponseSchema = z.object({
     .nullable()
     .optional(),
 });
+
+const linearGraphQLErrorSchema = z.object({
+  message: z.string().optional(),
+});
+
+const linearGraphQLResponseSchema = z
+  .object({
+    errors: z.array(linearGraphQLErrorSchema).optional(),
+  })
+  .passthrough();
 
 // ─── OAuth Helpers ───────────────────────────────────────────────────────────
 
@@ -99,8 +109,11 @@ export async function getLinearClientOrThrow(
 export async function linearGraphQL(
   client: LinearApiClient,
   query: string,
-  variables: Record<string, unknown>
+  variables: Record<string, unknown>,
+  callerSignal?: AbortSignal
 ): Promise<Record<string, unknown>> {
+  const deadlineSignal = AbortSignal.timeout(LINEAR_GRAPHQL_TIMEOUT_MS);
+  const signal = callerSignal ? AbortSignal.any([callerSignal, deadlineSignal]) : deadlineSignal;
   const body = JSON.stringify({ query, variables });
   const send = (accessToken: string) =>
     fetch(LINEAR_API_URL, {
@@ -110,6 +123,7 @@ export async function linearGraphQL(
         Authorization: `Bearer ${accessToken}`,
       },
       body,
+      signal,
     });
 
   let res = await send(client.accessToken);
@@ -117,8 +131,9 @@ export async function linearGraphQL(
     log.warn("linear.graphql.unauthorized", { org_id: client.organizationId });
     let renewedToken: string;
     try {
-      renewedToken = await client.renewAccessToken();
+      renewedToken = await abortable(client.renewAccessToken(), signal);
     } catch (error) {
+      if (signal.aborted) throw signal.reason;
       if (error instanceof LinearAuthError) throw error;
       throw new LinearAuthError({ reason: "client_credentials_error" });
     }
@@ -151,10 +166,14 @@ export async function linearGraphQL(
     throw new Error(`Linear API error: ${res.status}`);
   }
 
-  const json = (await res.json()) as Record<string, unknown>;
+  const parsed = linearGraphQLResponseSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    throw new Error("Linear GraphQL error: unexpected response shape");
+  }
+  const json = parsed.data;
 
   if (Array.isArray(json.errors) && json.errors.length > 0) {
-    const msg = (json.errors[0] as { message?: string }).message ?? "Unknown GraphQL error";
+    const msg = json.errors[0]?.message ?? "Unknown GraphQL error";
     throw new Error(`Linear GraphQL error: ${msg}`);
   }
 
@@ -382,26 +401,31 @@ export async function postIssueComment(
   issueId: string,
   body: string
 ): Promise<{ success: boolean }> {
-  const response = await fetch(LINEAR_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: apiKey,
-    },
-    body: JSON.stringify({
-      query: `
-        mutation CommentCreate($input: CommentCreateInput!) {
-          commentCreate(input: $input) { success }
-        }
-      `,
-      variables: { input: { issueId, body } },
-    }),
-  });
+  try {
+    const response = await fetch(LINEAR_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: apiKey,
+      },
+      body: JSON.stringify({
+        query: `
+          mutation CommentCreate($input: CommentCreateInput!) {
+            commentCreate(input: $input) { success }
+          }
+        `,
+        variables: { input: { issueId, body } },
+      }),
+      signal: AbortSignal.timeout(LINEAR_GRAPHQL_TIMEOUT_MS),
+    });
 
-  if (!response.ok) return { success: false };
-  const result = linearCommentCreateResponseSchema.safeParse(
-    await response.json().catch(() => null)
-  );
-  if (!result.success) return { success: false };
-  return { success: result.data.data?.commentCreate?.success ?? false };
+    if (!response.ok) return { success: false };
+    const result = linearCommentCreateResponseSchema.safeParse(
+      await response.json().catch(() => null)
+    );
+    if (!result.success) return { success: false };
+    return { success: result.data.data?.commentCreate?.success ?? false };
+  } catch {
+    return { success: false };
+  }
 }

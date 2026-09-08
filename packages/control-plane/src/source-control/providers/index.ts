@@ -9,15 +9,10 @@ import { createGitLabProvider } from "./gitlab-provider";
 import type { GitHubProviderConfig, GitLabProviderConfig } from "./types";
 
 // Types
-export type { GitHubProviderConfig, GitLabProviderConfig } from "./types";
-
-// Constants
-export { USER_AGENT, GITHUB_API_BASE } from "./constants";
-export { GITLAB_API_BASE } from "./gitlab-provider";
+export type { GitHubProviderConfig } from "./types";
 
 // Providers
 export { GitHubSourceControlProvider, createGitHubProvider } from "./github-provider";
-export { GitLabSourceControlProvider, createGitLabProvider } from "./gitlab-provider";
 
 /**
  * Factory configuration for selecting a source control provider.

@@ -1,6 +1,4 @@
-import type { Env } from "../types";
-
-type ObjectStoragePutValue = ArrayBuffer | ArrayBufferView | ReadableStream | string;
+export type ObjectStoragePutValue = ArrayBuffer | ArrayBufferView | ReadableStream | string;
 
 export type ObjectStoragePutOptions = {
   contentType?: string;
@@ -26,39 +24,4 @@ export interface ObjectStorage {
   delete(key: string): Promise<void>;
   head(key: string): Promise<ObjectStorageMetadata | null>;
   get(key: string, options?: { range?: ObjectStorageRange }): Promise<ObjectStorageObject | null>;
-}
-
-class R2ObjectStorage implements ObjectStorage {
-  constructor(private readonly bucket: R2Bucket) {}
-
-  async put(
-    key: string,
-    value: ObjectStoragePutValue,
-    options?: ObjectStoragePutOptions
-  ): Promise<void> {
-    await this.bucket.put(
-      key,
-      value,
-      options?.contentType ? { httpMetadata: { contentType: options.contentType } } : undefined
-    );
-  }
-
-  async delete(key: string): Promise<void> {
-    await this.bucket.delete(key);
-  }
-
-  async head(key: string): Promise<ObjectStorageMetadata | null> {
-    return this.bucket.head(key);
-  }
-
-  async get(
-    key: string,
-    options?: { range?: ObjectStorageRange }
-  ): Promise<ObjectStorageObject | null> {
-    return this.bucket.get(key, options?.range ? { range: options.range } : undefined);
-  }
-}
-
-export function createMediaObjectStorage(env: Env): ObjectStorage {
-  return new R2ObjectStorage(env.MEDIA_BUCKET);
 }

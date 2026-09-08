@@ -4,7 +4,14 @@ import {
   excludeSupersededBuilds,
   foldEnabledRepoScopeIds,
   foldImageBuildStatusByScope,
+  IMAGE_BUILD_IDLE_POLL_INTERVAL_MS,
+  IMAGE_BUILD_POLL_INTERVAL_MS,
+  imageBuildPollInterval,
   imageBuildScopeKey,
+  imageBuildEnabledRepoViewSchema,
+  imageBuildsEnabledReposResponseSchema,
+  imageBuildsEnabledResponseSchema,
+  imageBuildUnitViewSchema,
   parsePrimaryBuildSha,
   repoImageBuildScopeId,
   type ImageBuildUnitView,
@@ -13,16 +20,16 @@ import {
 function record(overrides: Partial<ImageBuildRecordView>): ImageBuildRecordView {
   return {
     id: "build-1",
-    scope_kind: "environment",
-    scope_id: "env-1",
+    scopeKind: "environment",
+    scopeId: "env-1",
     provider: "modal",
     status: "ready",
-    repositories_fingerprint: "fp-current",
-    repository_shas: JSON.stringify([{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }]),
-    runtime_version: "60",
-    build_duration_seconds: 42,
-    error_message: null,
-    created_at: 1700000000000,
+    repositoriesFingerprint: "fp-current",
+    repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
+    runtimeVersion: "60",
+    buildDurationSeconds: 42,
+    errorMessage: null,
+    createdAt: 1700000000000,
     ...overrides,
   };
 }
@@ -59,11 +66,11 @@ describe("foldImageBuildStatusByScope", () => {
   it("ready beats building beats failed regardless of row order", () => {
     const folded = foldImageBuildStatusByScope(
       [
-        record({ id: "a", status: "failed", scope_id: "env-ready" }),
-        record({ id: "b", status: "building", scope_id: "env-ready" }),
-        record({ id: "c", status: "ready", scope_id: "env-ready" }),
-        record({ id: "d", status: "failed", scope_id: "env-building" }),
-        record({ id: "e", status: "building", scope_id: "env-building" }),
+        record({ id: "a", status: "failed", scopeId: "env-ready" }),
+        record({ id: "b", status: "building", scopeId: "env-ready" }),
+        record({ id: "c", status: "ready", scopeId: "env-ready" }),
+        record({ id: "d", status: "failed", scopeId: "env-building" }),
+        record({ id: "e", status: "building", scopeId: "env-building" }),
       ],
       [unit({ scopeId: "env-ready" }), unit({ scopeId: "env-building" })]
     );
@@ -75,8 +82,8 @@ describe("foldImageBuildStatusByScope", () => {
   it("folds repo and environment scopes independently", () => {
     const folded = foldImageBuildStatusByScope(
       [
-        record({ id: "a", scope_kind: "repo", scope_id: "acme/web", status: "failed" }),
-        record({ id: "b", scope_kind: "environment", scope_id: "env-1", status: "ready" }),
+        record({ id: "a", scopeKind: "repo", scopeId: "acme/web", status: "failed" }),
+        record({ id: "b", scopeKind: "environment", scopeId: "env-1", status: "ready" }),
       ],
       [unit({ scopeKind: "repo", scopeId: "acme/web" }), unit()]
     );
@@ -88,8 +95,8 @@ describe("foldImageBuildStatusByScope", () => {
   it("folds to failed when only a stale-fingerprint ready row outranks the failed current build", () => {
     const folded = foldImageBuildStatusByScope(
       [
-        record({ id: "a", status: "ready", repositories_fingerprint: "fp-stale" }),
-        record({ id: "b", status: "failed", repositories_fingerprint: "fp-current" }),
+        record({ id: "a", status: "ready", repositoriesFingerprint: "fp-stale" }),
+        record({ id: "b", status: "failed", repositoriesFingerprint: "fp-current" }),
       ],
       [unit()]
     );
@@ -100,8 +107,8 @@ describe("foldImageBuildStatusByScope", () => {
   it("folds to ready when the ready row carries the current fingerprint", () => {
     const folded = foldImageBuildStatusByScope(
       [
-        record({ id: "a", status: "ready", repositories_fingerprint: "fp-current" }),
-        record({ id: "b", status: "failed", repositories_fingerprint: "fp-stale" }),
+        record({ id: "a", status: "ready", repositoriesFingerprint: "fp-current" }),
+        record({ id: "b", status: "failed", repositoriesFingerprint: "fp-stale" }),
       ],
       [unit()]
     );
@@ -112,8 +119,8 @@ describe("foldImageBuildStatusByScope", () => {
   it("falls back to the unfiltered fold for a scope missing from units", () => {
     const folded = foldImageBuildStatusByScope(
       [
-        record({ id: "a", status: "ready", repositories_fingerprint: "fp-stale" }),
-        record({ id: "b", status: "failed", repositories_fingerprint: "fp-other" }),
+        record({ id: "a", status: "ready", repositoriesFingerprint: "fp-stale" }),
+        record({ id: "b", status: "failed", repositoriesFingerprint: "fp-other" }),
       ],
       []
     );
@@ -143,26 +150,78 @@ describe("foldEnabledRepoScopeIds", () => {
   });
 });
 
+describe("image-build feed schemas", () => {
+  it("parses valid unit and enabled-repo payloads", () => {
+    expect(
+      imageBuildUnitViewSchema.safeParse({
+        scopeKind: "environment",
+        scopeId: "env_1",
+        repositoriesFingerprint: "fp-current",
+      }).success
+    ).toBe(true);
+    expect(
+      imageBuildEnabledRepoViewSchema.safeParse({ repoOwner: "acme", repoName: "web" }).success
+    ).toBe(true);
+  });
+
+  it("rejects malformed or partial unit and enabled-repo payloads", () => {
+    expect(
+      imageBuildUnitViewSchema.safeParse({
+        scopeKind: "workspace",
+        scopeId: "env_1",
+        repositoriesFingerprint: "fp-current",
+      }).success
+    ).toBe(false);
+    expect(imageBuildEnabledRepoViewSchema.safeParse({ repoOwner: "acme" }).success).toBe(false);
+  });
+
+  it("requires response arrays from the control-plane feed", () => {
+    expect(imageBuildsEnabledResponseSchema.safeParse({}).success).toBe(false);
+    expect(imageBuildsEnabledReposResponseSchema.safeParse({}).success).toBe(false);
+  });
+});
+
 describe("parsePrimaryBuildSha", () => {
   it("reads the primary repository's baseSha", () => {
-    const shas = JSON.stringify([
+    const shas = [
       { repoOwner: "acme", repoName: "web", baseSha: "abc123def" },
       { repoOwner: "acme", repoName: "api", baseSha: "fff000" },
-    ]);
+    ];
 
     expect(parsePrimaryBuildSha(shas)).toBe("abc123def");
   });
 
   it("returns null for an empty document", () => {
-    expect(parsePrimaryBuildSha("[]")).toBeNull();
+    expect(parsePrimaryBuildSha([])).toBeNull();
   });
 
-  it("returns null for malformed JSON", () => {
-    expect(parsePrimaryBuildSha("not json")).toBeNull();
+  it("returns null for unavailable provenance", () => {
+    expect(parsePrimaryBuildSha(null)).toBeNull();
+  });
+});
+
+describe("imageBuildPollInterval", () => {
+  it("polls fast while any row is still building", () => {
+    const images = [record({ status: "ready" }), record({ id: "build-2", status: "building" })];
+
+    expect(imageBuildPollInterval(images)).toBe(IMAGE_BUILD_POLL_INTERVAL_MS);
   });
 
-  it("returns null when the primary entry has no string baseSha", () => {
-    expect(parsePrimaryBuildSha(JSON.stringify([{ repoOwner: "acme" }]))).toBeNull();
-    expect(parsePrimaryBuildSha(JSON.stringify([{ baseSha: 42 }]))).toBeNull();
+  it("keeps a slow discovery poll on an all-terminal feed", () => {
+    // Builds also start without any client action (cron scheduler, detached
+    // save hooks), so a terminal feed must still discover new building rows.
+    const images = [record({ status: "ready" }), record({ id: "build-2", status: "failed" })];
+
+    expect(imageBuildPollInterval(images)).toBe(IMAGE_BUILD_IDLE_POLL_INTERVAL_MS);
+  });
+
+  it("keeps the slow discovery poll on an empty feed", () => {
+    // The detached save hook can lose the race against the toggle response's
+    // immediate mutate — an empty feed still has to discover the first build.
+    expect(imageBuildPollInterval([])).toBe(IMAGE_BUILD_IDLE_POLL_INTERVAL_MS);
+  });
+
+  it("does not poll before the feed has loaded", () => {
+    expect(imageBuildPollInterval(undefined)).toBe(0);
   });
 });

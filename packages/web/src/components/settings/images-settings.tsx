@@ -1,25 +1,30 @@
 "use client";
 
 import { useState } from "react";
-import useSWR, { mutate } from "swr";
+import { mutate } from "swr";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import { useImageBuilds } from "@/hooks/use-image-builds";
 import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import { IMAGE_BUILDS_KEY, parsePrimaryBuildSha, type ImageBuildsFeed } from "@/lib/image-builds";
+import { IMAGE_BUILDS_KEY, formatReadyDetails, parsePrimaryBuildSha } from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
-import { ImageBuildStatus, formatReadyDetails } from "./image-build-status";
+import { ImageBuildStatus } from "./image-build-status";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
+/**
+ * Displays repository image configuration and limits image mutations to authorized users.
+ */
 export function ImagesSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManage = hasPermission("repositories.images.manage");
   const repoImagesSupported = supportsRepoImages();
   const { repos, loading: reposLoading } = useRepos();
-  const { data, isLoading: imagesLoading } = useSWR<ImageBuildsFeed>(
-    repoImagesSupported ? IMAGE_BUILDS_KEY : null
-  );
+  const { data, error: feedError, isLoading: imagesLoading } = useImageBuilds();
   const [togglingRepos, setTogglingRepos] = useState<Set<string>>(new Set());
   const [triggeringRepos, setTriggeringRepos] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
@@ -44,10 +49,10 @@ export function ImagesSettings() {
     (data?.enabledRepos ?? []).map((repo) => `${repo.repoOwner}/${repo.repoName}`.toLowerCase())
   );
 
-  // Repo scope_ids are lowercase `owner/name` pairs.
+  // Repo scope ids are lowercase `owner/name` pairs.
   const getLatestImage = (owner: string, name: string): ImageBuildRecordView | undefined => {
     const key = `${owner}/${name}`.toLowerCase();
-    return data?.images.find((img) => img.scope_kind === "repo" && img.scope_id === key);
+    return data?.images.find((img) => img.scopeKind === "repo" && img.scopeId === key);
   };
 
   const handleToggle = async (owner: string, name: string, enabled: boolean) => {
@@ -119,6 +124,17 @@ export function ImagesSettings() {
     );
   }
 
+  // Without the feed there is no toggle state to show — rendering the list
+  // would present every repo as disabled and invite state-changing toggles.
+  if (feedError && !data) {
+    return (
+      <div>
+        <h2 className="text-xl font-semibold text-foreground mb-1">Pre-Built Images</h2>
+        <ErrorBanner>Failed to load image build settings.</ErrorBanner>
+      </div>
+    );
+  }
+
   return (
     <TooltipProvider>
       <div>
@@ -147,7 +163,7 @@ export function ImagesSettings() {
                   <Switch
                     checked={isEnabled}
                     onCheckedChange={(checked) => handleToggle(repo.owner, repo.name, checked)}
-                    disabled={isToggling}
+                    disabled={!canManage || isToggling}
                     aria-label={`Toggle pre-built images for ${repo.owner}/${repo.name}`}
                   />
                   <span className="text-sm font-medium text-foreground truncate">
@@ -161,24 +177,26 @@ export function ImagesSettings() {
                     image={
                       image && {
                         status: image.status,
-                        createdAt: image.created_at,
+                        createdAt: image.createdAt,
                         readyDetails: formatReadyDetails(
-                          parsePrimaryBuildSha(image.repository_shas),
-                          image.build_duration_seconds
+                          parsePrimaryBuildSha(image.repositoryShas),
+                          image.buildDurationSeconds
                         ),
-                        errorMessage: image.error_message,
+                        errorMessage: image.errorMessage,
                       }
                     }
                   />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleTrigger(repo.owner, repo.name)}
-                    disabled={!isEnabled || isTriggering || image?.status === "building"}
-                    title="Rebuild image"
-                  >
-                    <RefreshIcon className={`w-4 h-4 ${isTriggering ? "animate-spin" : ""}`} />
-                  </Button>
+                  {canManage && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleTrigger(repo.owner, repo.name)}
+                      disabled={!isEnabled || isTriggering || image?.status === "building"}
+                      title="Rebuild image"
+                    >
+                      <RefreshIcon className={`w-4 h-4 ${isTriggering ? "animate-spin" : ""}`} />
+                    </Button>
+                  )}
                 </div>
               </div>
             );

@@ -1,19 +1,24 @@
 import { DEFAULT_MENTIONS_POLICY } from "@open-inspect/shared/slack";
 import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
 import { isEnvironmentId } from "@open-inspect/shared/types/environments";
+import { type z } from "zod";
 import {
   ENVIRONMENT_SETTINGS_INTEGRATION_IDS,
   INTEGRATION_DEFINITIONS,
   MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
+  getIntegrationGlobalSettingsSchema,
+  getIntegrationRepoSettingsSchema,
   normalizeRoutingRules,
   type EnvironmentSettingsIntegrationId,
   type IntegrationId,
   type IntegrationSettingsMap,
+  type GitHubAutofixSettings,
   type GitHubBotSettings,
   type LinearBotSettings,
   type CodeServerSettings,
+  type VncSettings,
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
   type SlackRoutingRule,
@@ -23,6 +28,12 @@ import { normalizeSandboxSettings } from "../sandbox/settings";
 import type { SqlDatabase } from "./sql-database";
 
 type SettingsLevel = "global" | "repo";
+type IntegrationSettingsAtLevel<
+  K extends keyof IntegrationSettingsMap,
+  L extends SettingsLevel,
+> = L extends "global"
+  ? NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>
+  : IntegrationSettingsMap[K]["repo"];
 
 const SLACK_MENTIONS_POLICIES = ["allow", "escape", "strip"] as const;
 
@@ -41,9 +52,40 @@ export function isValidIntegrationId(id: string): id is IntegrationId {
 
 const ENVIRONMENT_SETTINGS_INTEGRATIONS = new Set<string>(ENVIRONMENT_SETTINGS_INTEGRATION_IDS);
 
+function parseSettings<TSchema extends z.ZodType<object>>(
+  schema: TSchema,
+  value: unknown,
+  description: string
+): z.output<TSchema> {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    const detail =
+      issue?.code === "invalid_type" && issue.path.length > 0
+        ? `${issue.path.join(".")} must be ${issue.expected === "array" ? "an" : "a"} ${issue.expected}`
+        : (issue?.message ?? "invalid shape");
+    throw new IntegrationSettingsValidationError(`${description} are invalid: ${detail}`);
+  }
+  return result.data;
+}
+
+function parseStoredSettings<TSchema extends z.ZodType<object>>(
+  schema: TSchema,
+  raw: string,
+  description: string
+): z.output<TSchema> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new IntegrationSettingsValidationError(`${description} are invalid: malformed JSON`);
+  }
+  return parseSettings(schema, parsed, description);
+}
+
 /** Whether an integration accepts environment-level setting overrides (design §13.5). */
 export function supportsEnvironmentSettings(
-  id: IntegrationId
+  id: keyof IntegrationSettingsMap
 ): id is EnvironmentSettingsIntegrationId {
   return ENVIRONMENT_SETTINGS_INTEGRATIONS.has(id);
 }
@@ -51,7 +93,7 @@ export function supportsEnvironmentSettings(
 export class IntegrationSettingsStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  async getGlobal<K extends IntegrationId>(
+  async getGlobal<K extends keyof IntegrationSettingsMap>(
     integrationId: K
   ): Promise<IntegrationSettingsMap[K]["global"] | null> {
     const row = await this.db
@@ -60,15 +102,25 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["global"];
+    const settings = parseStoredSettings(
+      getIntegrationGlobalSettingsSchema(integrationId),
+      row.settings,
+      "Stored global integration settings"
+    );
     return this.normalizeStoredGlobalSettings(integrationId, settings);
   }
 
-  async setGlobal<K extends IntegrationId>(
+  async setGlobal<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["global"]
   ): Promise<void> {
-    if (settings.enabledRepos !== undefined) {
+    settings = parseSettings(
+      getIntegrationGlobalSettingsSchema(integrationId),
+      settings,
+      "Global integration settings"
+    );
+
+    if (settings.enabledRepos !== undefined && settings.enabledRepos !== null) {
       if (
         !Array.isArray(settings.enabledRepos) ||
         !settings.enabledRepos.every((r) => typeof r === "string")
@@ -101,14 +153,14 @@ export class IntegrationSettingsStore {
       .run();
   }
 
-  async deleteGlobal<K extends IntegrationId>(integrationId: K): Promise<void> {
+  async deleteGlobal<K extends keyof IntegrationSettingsMap>(integrationId: K): Promise<void> {
     await this.db
       .prepare("DELETE FROM integration_settings WHERE integration_id = ?")
       .bind(integrationId)
       .run();
   }
 
-  async getRepoSettings<K extends IntegrationId>(
+  async getRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     repo: string
   ): Promise<IntegrationSettingsMap[K]["repo"] | null> {
@@ -120,16 +172,25 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"];
+    const settings = parseStoredSettings(
+      getIntegrationRepoSettingsSchema(integrationId),
+      row.settings,
+      "Stored repo integration settings"
+    );
     return this.normalizeStoredRepoSettings(integrationId, settings);
   }
 
-  async setRepoSettings<K extends IntegrationId>(
+  async setRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     repo: string,
     settings: IntegrationSettingsMap[K]["repo"]
   ): Promise<void> {
-    const normalized = this.validateAndNormalizeSettings(integrationId, settings, "repo");
+    const structurallyValid = parseSettings(
+      getIntegrationRepoSettingsSchema(integrationId),
+      settings,
+      "Repo integration settings"
+    );
+    const normalized = this.validateAndNormalizeSettings(integrationId, structurallyValid, "repo");
 
     const now = Date.now();
     await this.db
@@ -144,14 +205,17 @@ export class IntegrationSettingsStore {
       .run();
   }
 
-  async deleteRepoSettings<K extends IntegrationId>(integrationId: K, repo: string): Promise<void> {
+  async deleteRepoSettings<K extends keyof IntegrationSettingsMap>(
+    integrationId: K,
+    repo: string
+  ): Promise<void> {
     await this.db
       .prepare("DELETE FROM integration_repo_settings WHERE integration_id = ? AND repo = ?")
       .bind(integrationId, repo.toLowerCase())
       .run();
   }
 
-  async listRepoSettings<K extends IntegrationId>(
+  async listRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K
   ): Promise<Array<{ repo: string; settings: IntegrationSettingsMap[K]["repo"] }>> {
     const { results } = await this.db
@@ -163,7 +227,11 @@ export class IntegrationSettingsStore {
       repo: row.repo,
       settings: this.normalizeStoredRepoSettings(
         integrationId,
-        JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"]
+        parseStoredSettings(
+          getIntegrationRepoSettingsSchema(integrationId),
+          row.settings,
+          "Stored repo integration settings"
+        )
       ),
     }));
   }
@@ -186,7 +254,11 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"];
+    const settings = parseStoredSettings(
+      getIntegrationRepoSettingsSchema(integrationId),
+      row.settings,
+      "Stored environment integration settings"
+    );
     return this.normalizeStoredRepoSettings(integrationId, settings);
   }
 
@@ -195,7 +267,12 @@ export class IntegrationSettingsStore {
     environmentId: string,
     settings: IntegrationSettingsMap[K]["repo"]
   ): Promise<void> {
-    const normalized = this.validateAndNormalizeSettings(integrationId, settings, "repo");
+    const structurallyValid = parseSettings(
+      getIntegrationRepoSettingsSchema(integrationId),
+      settings,
+      "Environment integration settings"
+    );
+    const normalized = this.validateAndNormalizeSettings(integrationId, structurallyValid, "repo");
 
     const now = Date.now();
     await this.db
@@ -222,7 +299,7 @@ export class IntegrationSettingsStore {
       .run();
   }
 
-  async getResolvedConfig<K extends IntegrationId>(
+  async getResolvedConfig<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     repo: string,
     environmentId?: string | null
@@ -249,7 +326,17 @@ export class IntegrationSettingsStore {
     for (const overrides of [repoSettings ?? {}, environmentSettings ?? {}]) {
       for (const [key, value] of Object.entries(overrides)) {
         if (value !== undefined) {
-          settings[key] = value;
+          settings[key] =
+            integrationId === "github" &&
+            key === "autofix" &&
+            typeof settings[key] === "object" &&
+            settings[key] !== null &&
+            !Array.isArray(settings[key]) &&
+            typeof value === "object" &&
+            value !== null &&
+            !Array.isArray(value)
+              ? { ...(settings[key] as Record<string, unknown>), ...value }
+              : value;
         }
       }
     }
@@ -264,7 +351,7 @@ export class IntegrationSettingsStore {
     >;
   }
 
-  private normalizeStoredGlobalSettings<K extends IntegrationId>(
+  private normalizeStoredGlobalSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["global"]
   ): IntegrationSettingsMap[K]["global"] {
@@ -275,7 +362,7 @@ export class IntegrationSettingsStore {
     } as IntegrationSettingsMap[K]["global"];
   }
 
-  private normalizeStoredRepoSettings<K extends IntegrationId>(
+  private normalizeStoredRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["repo"]
   ): IntegrationSettingsMap[K]["repo"] {
@@ -285,15 +372,18 @@ export class IntegrationSettingsStore {
     }) as IntegrationSettingsMap[K]["repo"];
   }
 
-  private validateAndNormalizeSettings<K extends IntegrationId>(
+  private validateAndNormalizeSettings<
+    K extends keyof IntegrationSettingsMap,
+    L extends SettingsLevel,
+  >(
     integrationId: K,
-    settings: IntegrationSettingsMap[K]["repo"],
-    level: SettingsLevel
-  ): IntegrationSettingsMap[K]["repo"] {
+    settings: IntegrationSettingsAtLevel<K, L>,
+    level: L
+  ): IntegrationSettingsAtLevel<K, L> {
     if (integrationId === "github") {
       return this.validateAndNormalizeGitHubSettings(
         settings as GitHubBotSettings
-      ) as IntegrationSettingsMap[K]["repo"];
+      ) as IntegrationSettingsAtLevel<K, L>;
     }
 
     if (integrationId === "linear") {
@@ -304,18 +394,22 @@ export class IntegrationSettingsStore {
       this.validateCodeServerSettings(settings as CodeServerSettings);
     }
 
+    if (integrationId === "vnc") {
+      this.validateVncSettings(settings as VncSettings);
+    }
+
     if (integrationId === "sandbox") {
       return normalizeSandboxSettings(settings, {
         invalid: "throw",
         createError: (message) => new IntegrationSettingsValidationError(message),
-      }) as IntegrationSettingsMap[K]["repo"];
+      }) as IntegrationSettingsAtLevel<K, L>;
     }
 
     if (integrationId === "slack") {
       return this.validateSlackSettings(
         settings as SlackGlobalSettings,
         level
-      ) as IntegrationSettingsMap[K]["repo"];
+      ) as IntegrationSettingsAtLevel<K, L>;
     }
 
     return settings;
@@ -354,6 +448,8 @@ export class IntegrationSettingsStore {
       throw new IntegrationSettingsValidationError("commentActionInstructions must be a string");
     }
 
+    let normalized = settings;
+
     if (settings.allowedTriggerUsers !== undefined) {
       if (
         !Array.isArray(settings.allowedTriggerUsers) ||
@@ -363,13 +459,66 @@ export class IntegrationSettingsStore {
           "allowedTriggerUsers must be an array of strings"
         );
       }
-      return {
+      normalized = {
         ...settings,
         allowedTriggerUsers: settings.allowedTriggerUsers.map((u) => u.trim().toLowerCase()),
       };
     }
 
-    return settings;
+    if (settings.autofix !== undefined) {
+      normalized = {
+        ...normalized,
+        autofix: this.validateAndNormalizeGitHubAutofixSettings(settings.autofix),
+      };
+    }
+
+    return normalized;
+  }
+
+  private validateAndNormalizeGitHubAutofixSettings(value: unknown): GitHubAutofixSettings {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new IntegrationSettingsValidationError("autofix must be an object");
+    }
+
+    const settings = value as Record<string, unknown>;
+    const booleanKeys = [
+      "enabled",
+      "reviewsEnabled",
+      "prCommentsEnabled",
+      "openInspectReviewsEnabled",
+    ] as const;
+    for (const key of booleanKeys) {
+      if (settings[key] !== undefined && typeof settings[key] !== "boolean") {
+        throw new IntegrationSettingsValidationError(`autofix.${key} must be a boolean`);
+      }
+    }
+
+    const allowedReviewBots = settings.allowedReviewBots;
+    if (
+      allowedReviewBots !== undefined &&
+      (!Array.isArray(allowedReviewBots) ||
+        !allowedReviewBots.every((login) => typeof login === "string"))
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "autofix.allowedReviewBots must be an array of strings"
+      );
+    }
+
+    const maxAttempts = settings.maxAttemptsPerPrPer24Hours;
+
+    const normalized: GitHubAutofixSettings = {};
+    for (const key of booleanKeys) {
+      if (typeof settings[key] === "boolean") normalized[key] = settings[key];
+    }
+    if (Array.isArray(allowedReviewBots)) {
+      normalized.allowedReviewBots = Array.from(
+        new Set(allowedReviewBots.map((login) => login.trim().toLowerCase()).filter(Boolean))
+      );
+    }
+    if (typeof maxAttempts === "number" || maxAttempts === null) {
+      normalized.maxAttemptsPerPrPer24Hours = maxAttempts;
+    }
+    return normalized;
   }
 
   private validateLinearSettings(settings: LinearBotSettings): void {
@@ -414,6 +563,12 @@ export class IntegrationSettingsStore {
   }
 
   private validateCodeServerSettings(settings: CodeServerSettings): void {
+    if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") {
+      throw new IntegrationSettingsValidationError("enabled must be a boolean");
+    }
+  }
+
+  private validateVncSettings(settings: VncSettings): void {
     if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") {
       throw new IntegrationSettingsValidationError("enabled must be a boolean");
     }

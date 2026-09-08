@@ -4,8 +4,13 @@ import { HttpError, type RequestContext } from "../routes/shared";
 import type { SourceControlProvider, RepositoryAccessResult } from "../source-control";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
-const ctx = { request_id: "req-1", trace_id: "trace-1" } as unknown as RequestContext;
+const ctx = {
+  request_id: "req-1",
+  trace_id: "trace-1",
+  executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
+} as unknown as RequestContext;
 const env = {} as Env;
 const logger = {
   error: vi.fn(),

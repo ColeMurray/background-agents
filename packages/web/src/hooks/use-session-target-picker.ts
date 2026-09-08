@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import useSWR from "swr";
 import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { ImageBuildStatus } from "@open-inspect/shared/types/image-builds";
@@ -10,15 +9,13 @@ import { useBranches } from "@/hooks/use-branches";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useRepos, type Repo } from "@/hooks/use-repos";
 import {
-  IMAGE_BUILDS_KEY,
   foldEnabledRepoScopeIds,
   foldImageBuildStatusByScope,
   imageBuildScopeKey,
   repoImageBuildScopeId,
-  type ImageBuildsFeed,
 } from "@/lib/image-builds";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
-import { supportsRepoImages } from "@/lib/sandbox-provider";
+import { useImageBuilds } from "@/hooks/use-image-builds";
 import {
   type SessionTarget,
   type SessionTargetRequestFields,
@@ -152,10 +149,8 @@ export function useSessionTargetPicker(): SessionTargetSelection {
   // Prebuild status for the repository and environment options: the unified
   // cross-scope feed (repo and environment scopes, failed rows included), one
   // call across all of them, folded to one status per scope. Fetched whenever
-  // there is anything to annotate on a provider that supports repo images.
-  const { data: imageBuildsData } = useSWR<ImageBuildsFeed>(
-    supportsRepoImages() && (environments.length > 0 || repos.length > 0) ? IMAGE_BUILDS_KEY : null
-  );
+  // there is anything to annotate.
+  const { data: imageBuildsData } = useImageBuilds(environments.length > 0 || repos.length > 0);
   const imageStatusByScope = useMemo(
     () => foldImageBuildStatusByScope(imageBuildsData?.images ?? [], imageBuildsData?.units ?? []),
     [imageBuildsData]

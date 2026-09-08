@@ -9,9 +9,14 @@ import { SWRConfig } from "swr";
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+  DEFAULT_VNC_PORT,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared/types/integrations";
 import { SandboxSettingsEditor, SandboxSettingsPage } from "./sandbox-settings";
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+}));
 
 expect.extend(matchers);
 
@@ -37,7 +42,11 @@ const SETTINGS_KEY = "/api/integration-settings/sandbox";
 function globalSettings(
   tunnelPorts: number[],
   enabledRepos?: string[],
-  limits?: { maxConcurrentChildSessions?: number; maxTotalChildSessions?: number }
+  limits?: {
+    maxConcurrentChildSessions?: number;
+    maxTotalChildSessions?: number;
+    maxSessionCostUsd?: number;
+  }
 ) {
   return {
     integrationId: "sandbox",
@@ -78,9 +87,23 @@ afterEach(() => {
 describe("SandboxSettingsPage — tunnel ports editor", () => {
   const user = userEvent.setup();
 
+  it("renders configured session cost controls", () => {
+    renderWithSWR(globalSettings([], undefined, { maxSessionCostUsd: 25 }));
+    expect(screen.getByLabelText("Cost limit (USD)")).toHaveValue(25);
+    expect(screen.queryByLabelText("Warning threshold (%)")).not.toBeInTheDocument();
+  });
+
   it("shows empty state when no ports configured", () => {
     renderWithSWR({ integrationId: "sandbox", settings: null });
     expect(screen.getByText("No tunnel ports configured.")).toBeInTheDocument();
+  });
+
+  it("groups related sandbox controls under accessible names", () => {
+    renderWithSWR({ integrationId: "sandbox", settings: null });
+
+    for (const name of ["Service Ports", "Tunnel Ports", "Child Sessions", "Resources"]) {
+      expect(screen.getByRole("group", { name })).toBeInTheDocument();
+    }
   });
 
   it("displays session timeout in minutes and saves milliseconds", async () => {
@@ -248,7 +271,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     });
   });
 
-  it("includes configured code-server and terminal ports in the save payload", async () => {
+  it("includes configured code-server, VNC, and terminal ports in the save payload", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PUT") {
         return new Response(JSON.stringify({}), { status: 200 });
@@ -273,6 +296,10 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     );
 
     await user.type(screen.getByPlaceholderText("8080"), "8081");
+    await user.type(
+      screen.getByPlaceholderText(String(DEFAULT_VNC_PORT)),
+      String(DEFAULT_VNC_PORT + 1)
+    );
     await user.type(screen.getByPlaceholderText("7680"), "7000");
     await user.click(screen.getByText("Save Settings"));
 
@@ -287,6 +314,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
                 tunnelPorts: [],
                 terminalEnabled: false,
                 codeServerPort: 8081,
+                vncPort: DEFAULT_VNC_PORT + 1,
                 terminalPort: 7000,
                 maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
                 maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
@@ -297,6 +325,36 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
         })
       );
     });
+  });
+
+  it("rejects a tunnel port that collides with the default VNC port", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: { [SETTINGS_KEY]: globalSettings([], ["acme/app"]) },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByText("Add port"));
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), String(DEFAULT_VNC_PORT));
+    await user.click(screen.getByText("Save Settings"));
+
+    expect(screen.getByText(/must all be different/)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      SETTINGS_KEY,
+      expect.objectContaining({ method: "PUT" })
+    );
   });
 
   it("rejects a service port that duplicates a tunnel port", async () => {

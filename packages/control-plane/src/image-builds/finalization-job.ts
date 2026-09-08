@@ -10,14 +10,17 @@ export const imageBuildFinalizationJobSchema = z.object({
 
 export type ImageBuildFinalizationJob = z.infer<typeof imageBuildFinalizationJobSchema>;
 
-/** Minimal producer boundary used by callback workflows. */
-export interface ImageBuildFinalizationQueue {
-  send(job: ImageBuildFinalizationJob): Promise<void>;
+/** The one constructor of the versioned Queue command shape. */
+export function imageBuildFinalizationJob(
+  buildId: string,
+  completionHash: string
+): ImageBuildFinalizationJob {
+  return { version: 1, buildId, completionHash };
 }
 
 type FinalizationOutcome =
-  | { outcome: "success"; completion: CompleteImageBuildCallback & { providerSessionId: string } }
-  | { outcome: "failure"; failure: FailImageBuildCallback & { providerSessionId: string } };
+  | { outcome: "success"; completion: CompleteImageBuildCallback }
+  | { outcome: "failure"; failure: FailImageBuildCallback };
 
 /**
  * Creates a deterministic command whose hash binds the accepted callback
@@ -34,7 +37,7 @@ export async function createImageBuildFinalizationJob(
           providerSessionId: result.completion.providerSessionId,
           outcome: result.outcome,
           repositoryShas: result.completion.repositoryShas
-            ?.map((repository) => ({
+            .map((repository) => ({
               repoOwner: repository.repoOwner.toLowerCase(),
               repoName: repository.repoName.toLowerCase(),
               baseSha: repository.baseSha,
@@ -46,7 +49,12 @@ export async function createImageBuildFinalizationJob(
                 left.baseSha.localeCompare(right.baseSha)
             ),
           runtimeVersion: result.completion.runtimeVersion,
-          buildDurationMs: result.completion.buildDurationMs,
+          // Frozen hash canonicalization: this document is a persisted
+          // idempotency contract, not a mirror of the domain types. The
+          // member keeps its original name and millisecond value so the same
+          // wire callback hashes identically across deploys and refactors —
+          // change it only with an explicit hash-schema version bump.
+          buildDurationMs: result.completion.buildDurationSeconds * 1000,
         }
       : {
           buildId,
@@ -63,5 +71,5 @@ export async function createImageBuildFinalizationJob(
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 
-  return { version: 1, buildId, completionHash };
+  return imageBuildFinalizationJob(buildId, completionHash);
 }

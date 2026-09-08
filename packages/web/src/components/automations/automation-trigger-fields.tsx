@@ -1,10 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import {
+  dedupeConditionsBySemanticKey,
+  isGitHubConditionCompatible,
   triggerSources,
   TRIGGER_TYPE_TO_SOURCE,
   type AutomationEventSource,
   type AutomationTriggerType,
+  type TriggerCondition,
 } from "@open-inspect/shared/triggers";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
@@ -17,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { ChevronDownIcon } from "@/components/ui/icons";
 import { ConditionBuilder } from "./condition-builder";
+import { CONDITION_LABELS } from "./condition-labels";
 import { CronPicker } from "./cron-picker";
 import { FieldDescription } from "./automation-form-field";
 import { TriggerTypeSelector } from "./trigger-type-selector";
@@ -92,14 +97,23 @@ export function AutomationTriggerTypeField({
 
   return (
     <div>
-      <label className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</label>
+      <div
+        id="automation-trigger-type-label"
+        className="block text-sm font-medium text-foreground mb-1.5"
+      >
+        Trigger Type
+      </div>
       {mode === "create" ? (
         <>
           <FieldDescription className="my-1">
             Scheduled automations run on a repeating timer. Other types run when the connected
             service sends an event (for example a GitHub webhook or Sentry alert).
           </FieldDescription>
-          <TriggerTypeSelector value={value.type} onChange={changeTriggerType} />
+          <TriggerTypeSelector
+            value={value.type}
+            onChange={changeTriggerType}
+            labelledBy="automation-trigger-type-label"
+          />
         </>
       ) : (
         <>
@@ -125,6 +139,7 @@ export function AutomationTriggerConfigurationFields({
   slackChannelError,
   conditionErrors,
 }: AutomationTriggerConfigurationFieldsProps) {
+  const [droppedConditions, setDroppedConditions] = useState<TriggerCondition[]>([]);
   const source = triggerSources.find((candidate) => candidate.triggerType === value.type);
   const eventTypes = source?.eventTypes ?? [];
   const showEventTypeSelector = Boolean(source?.supportsEventTypes && eventTypes.length > 0);
@@ -135,12 +150,26 @@ export function AutomationTriggerConfigurationFields({
     updateTriggerDraft(value, onChange, changes);
   };
 
+  const changeEventType = (eventType: string) => {
+    if (TRIGGER_TYPE_TO_SOURCE[value.type] !== "github") {
+      setDroppedConditions([]);
+      update({ eventType });
+      return;
+    }
+    const candidates = dedupeConditionsBySemanticKey([...value.conditions, ...droppedConditions]);
+    const conditions = candidates.filter((condition) =>
+      isGitHubConditionCompatible(eventType, condition)
+    );
+    setDroppedConditions(candidates.filter((condition) => !conditions.includes(condition)));
+    update({ eventType, conditions });
+  };
+
   return (
     <>
       {isSchedule && (
         <>
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">Schedule</label>
+          <fieldset>
+            <legend className="block text-sm font-medium text-foreground mb-1.5">Schedule</legend>
             <CronPicker
               value={value.scheduleCron}
               onChange={(scheduleCron) => update({ scheduleCron })}
@@ -150,10 +179,18 @@ export function AutomationTriggerConfigurationFields({
               How often this automation runs. Use a preset or a five-field cron expression (minute,
               hour, day of month, month, day of week).
             </FieldDescription>
-          </div>
+          </fieldset>
           <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">Timezone</label>
+            <label
+              id="automation-timezone-label"
+              htmlFor="automation-timezone"
+              className="block text-sm font-medium text-foreground mb-1.5"
+            >
+              Timezone
+            </label>
             <Combobox
+              id="automation-timezone"
+              labelId="automation-timezone-label"
               value={value.scheduleTz}
               onChange={(scheduleTz) => update({ scheduleTz })}
               items={TIMEZONE_GROUPS}
@@ -182,9 +219,14 @@ export function AutomationTriggerConfigurationFields({
 
       {showEventTypeSelector && (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Event Type</label>
-          <Select value={value.eventType} onValueChange={(eventType) => update({ eventType })}>
-            <SelectTrigger className="w-full">
+          <label
+            htmlFor="automation-event-type"
+            className="block text-sm font-medium text-foreground mb-1.5"
+          >
+            Event Type
+          </label>
+          <Select value={value.eventType} onValueChange={changeEventType}>
+            <SelectTrigger id="automation-event-type" className="w-full">
               <SelectValue placeholder={eventTypePlaceholder} />
             </SelectTrigger>
             <SelectContent>
@@ -229,20 +271,30 @@ export function AutomationTriggerConfigurationFields({
       )}
 
       {!isSchedule && TRIGGER_TYPE_TO_SOURCE[value.type] && (
-        <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">
+        <fieldset className="m-0 min-w-0 border-0 p-0">
+          <legend className="block text-sm font-medium text-foreground mb-1.5">
             Conditions
             <span className="text-xs text-muted-foreground ml-1 font-normal">(optional)</span>
-          </label>
+          </legend>
           <ConditionBuilder
             conditions={value.conditions}
             onChange={(conditions) => update({ conditions })}
             triggerSource={TRIGGER_TYPE_TO_SOURCE[value.type] as AutomationEventSource}
+            eventType={value.eventType || undefined}
           />
           <FieldDescription>
             Optional filters on incoming events. When you add conditions, every condition must pass
             before a run starts.
           </FieldDescription>
+          {droppedConditions.length > 0 && (
+            <FieldDescription>
+              <span role="status">
+                Removed{" "}
+                {droppedConditions.map(({ type }) => CONDITION_LABELS[type] || type).join(", ")} —
+                not available for this event type.
+              </span>
+            </FieldDescription>
+          )}
           {conditionErrors.map((conditionError, index) => (
             <p key={`${conditionError}-${index}`} className="mt-1 text-xs text-destructive">
               {conditionError}
@@ -251,7 +303,7 @@ export function AutomationTriggerConfigurationFields({
           {slackChannelError && (
             <p className="mt-1 text-xs text-destructive">{slackChannelError}</p>
           )}
-        </div>
+        </fieldset>
       )}
     </>
   );

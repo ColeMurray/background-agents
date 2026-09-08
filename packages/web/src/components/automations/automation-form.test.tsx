@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
 import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
@@ -90,6 +90,10 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   }),
 }));
 
+vi.mock("@/hooks/use-provider-accounts", () => ({
+  useProviderAccounts: () => ({ accounts: [], defaults: [], providers: [], loading: false }),
+}));
+
 // The SlackChannelPicker (rendered for slack_channel conditions) lists channels via
 // useSession-backed SWR. The form tests don't exercise channel listing, so stub it out
 // to avoid needing a SessionProvider.
@@ -106,9 +110,73 @@ const singleRepository = [
 ];
 
 const openRepositoryPicker = () =>
-  fireEvent.click(screen.getByRole("button", { name: "Repository selection" }));
+  fireEvent.click(screen.getByRole("button", { name: "Repository Configuration" }));
 
 describe("automation cron submission", () => {
+  it("locks provider authentication while submitting", () => {
+    const props = {
+      mode: "create" as const,
+      onSubmit: vi.fn(),
+      initialValues: {
+        name: "Provider pins",
+        repositories: singleRepository,
+        model: "openai/gpt-5.4",
+        instructions: "Run with pins.",
+      },
+    };
+    const { rerender } = render(<AutomationForm {...props} submitting={false} />);
+    expect(screen.getByLabelText("OpenAI authentication")).toBeEnabled();
+
+    rerender(<AutomationForm {...props} submitting />);
+    expect(screen.getByLabelText("OpenAI authentication")).toBeDisabled();
+    expect(screen.getByLabelText("xAI authentication")).toBeDisabled();
+  });
+
+  it("retains and submits pins for all providers", () => {
+    const onSubmit = vi.fn();
+    const providerSelections = {
+      openai: { mode: "provider_account" as const, accountId: "a".repeat(32) },
+      xai: { mode: "api_key" as const },
+    };
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Provider pins",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Run with pins.",
+          providerSelections,
+        }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].providerSelections).toEqual(providerSelections);
+  });
+
+  it("groups conditions under an accessible name", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Watch Sentry",
+          triggerType: "sentry",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Triage the alert.",
+        }}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: /Conditions/ })).toBeInTheDocument();
+  });
+
   it("clears the propagated cron when custom input becomes invalid", () => {
     const onChange = vi.fn();
 
@@ -152,6 +220,51 @@ describe("automation cron submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("exposes trigger choices as a named radio group with selection state", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Daily review",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review the repo.",
+          triggerType: "schedule",
+        }}
+      />
+    );
+
+    const group = screen.getByRole("radiogroup", { name: "Trigger Type" });
+    expect(within(group).getByRole("radio", { name: /Schedule/ })).toBeChecked();
+    expect(within(group).getByRole("radio", { name: /Sentry/ })).not.toBeChecked();
+
+    fireEvent.click(within(group).getByRole("radio", { name: /Sentry/ }));
+
+    expect(within(group).getByRole("radio", { name: /Sentry/ })).toBeChecked();
+    expect(within(group).getByRole("radio", { name: /Schedule/ })).not.toBeChecked();
+  });
+
+  it("names the repository picker with its visible label", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Daily review",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review the repo.",
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Repository Configuration" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Repository selection" })).toBeNull();
+  });
+
   it("requires event type when trigger source exposes event type selector", () => {
     const onSubmit = vi.fn();
     const { container } = render(
@@ -175,6 +288,158 @@ describe("automation cron submission", () => {
     fireEvent.submit(container.querySelector("form")!);
 
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("drops conditions the newly picked event type cannot answer, and says which", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "CI watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Look at the failing workflow.",
+          triggerType: "github_event",
+          eventType: "workflow_run.completed",
+          triggerConfig: {
+            conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByPlaceholderText(/Exact workflow name/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /PR Opened/ }));
+
+    expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Removed Workflow Name — not available for this event type."
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      eventType: "pull_request.opened",
+      triggerConfig: { conditions: [] },
+    });
+  });
+
+  it("restores conditions when switching back to a compatible GitHub event", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "CI watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Look at the failing workflow.",
+          triggerType: "github_event",
+          eventType: "workflow_run.completed",
+          triggerConfig: {
+            conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+          },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /PR Opened/ }));
+    expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /Workflow Run Completed/ }));
+
+    expect(screen.getByPlaceholderText(/Exact workflow name/)).toHaveValue("CI");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("drops and restores conclusions based on event-specific values", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Check suite watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Inspect failed check suites.",
+          triggerType: "github_event",
+          eventType: "check_suite.completed",
+          triggerConfig: {
+            conditions: [{ type: "conclusion", operator: "eq", value: "startup_failure" }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getAllByText("startup_failure").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /Workflow Run Completed/ }));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Removed Conclusion — not available for this event type."
+    );
+
+    fireEvent.click(screen.getByText("Add condition..."));
+    fireEvent.click(screen.getByRole("option", { name: "Conclusion" }));
+    const conclusionSelect = screen
+      .getAllByRole("combobox")
+      .find((element) => element.textContent?.includes("success"));
+    expect(conclusionSelect).toBeDefined();
+    fireEvent.click(conclusionSelect!);
+    fireEvent.click(screen.getByRole("option", { name: "failure" }));
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /Check Suite Completed/ }));
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      eventType: "check_suite.completed",
+      triggerConfig: {
+        conditions: [{ type: "conclusion", operator: "eq", value: "failure" }],
+      },
+    });
+  });
+
+  it("clears active and dropped conditions when changing trigger source", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "CI watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Look at the failing workflow.",
+          triggerType: "github_event",
+          eventType: "workflow_run.completed",
+          triggerConfig: {
+            conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByPlaceholderText(/Exact workflow name/)).toHaveValue("CI");
+
+    fireEvent.click(screen.getByRole("radio", { name: /^Sentry / }));
+
+    expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("submits triggerConfig with empty conditions for non-schedule automations", () => {
@@ -648,7 +913,7 @@ describe("repository selection", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /GitHub Event/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /GitHub Event/ }));
 
     expect(
       screen.getByText("Repository-scoped triggers need exactly one repository.")

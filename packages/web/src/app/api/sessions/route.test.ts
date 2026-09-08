@@ -43,15 +43,16 @@ describe("sessions API route", () => {
 
     const response = await GET(
       request(
-        "/api/sessions?debug=true&limit=10&offset=20&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
+        "/api/sessions?debug=true&limit=10&offset=20&status=active&excludeStatus=archived&excludeAutomationLineage=true&createdBy=0123456789abcdef0123456789abcdef"
       )
     );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/sessions?limit=10&offset=20&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
+      "/sessions?status=active&limit=10&offset=20&excludeStatus=archived&excludeAutomationLineage=true&createdBy=0123456789abcdef0123456789abcdef"
     );
     expect(getServerAuthSession).not.toHaveBeenCalled();
     expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     await expect(response.json()).resolves.toEqual({ sessions: [], hasMore: false });
   });
 
@@ -73,22 +74,30 @@ describe("sessions API route", () => {
     expect(response.status).toBe(200);
   });
 
-  it("preserves createdBy=me across pagination requests", async () => {
+  it("preserves Mine filters across pagination requests", async () => {
     vi.mocked(controlPlaneUserFetch)
       .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: true }, { status: 200 }))
       .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: false }, { status: 200 }));
 
-    await GET(request("/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me"));
-    await GET(request("/api/sessions?limit=50&offset=50&excludeStatus=archived&createdBy=me"));
+    await GET(
+      request(
+        "/api/sessions?limit=50&offset=0&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
+      )
+    );
+    await GET(
+      request(
+        "/api/sessions?limit=50&offset=50&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
+      )
+    );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledTimes(2);
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       1,
-      "/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me"
+      "/sessions?limit=50&offset=0&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
     );
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       2,
-      "/sessions?limit=50&offset=50&excludeStatus=archived&createdBy=me"
+      "/sessions?limit=50&offset=50&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
     );
     expect(getServerAuthSession).not.toHaveBeenCalled();
   });
@@ -194,6 +203,60 @@ describe("sessions API route (POST)", () => {
     const sent = controlPlaneBody();
     expect(sent.repositories).toEqual(repositories);
     expect(sent.environmentId).toBeUndefined();
+  });
+
+  it("forwards only the managed skill selection from the browser", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({
+      user: { id: "0123456789abcdef0123456789abcdef" },
+    } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ id: "sess-skills" }, { status: 201 })
+    );
+
+    await POST(
+      postRequest({
+        repoOwner: "acme",
+        repoName: "web",
+        skillSelection: { mode: "profile", profileId: "profile-1" },
+        skillIds: ["caller-controlled-id"],
+      })
+    );
+
+    expect(controlPlaneBody()).toEqual({
+      repoOwner: "acme",
+      repoName: "web",
+      skillSelection: { mode: "profile", profileId: "profile-1" },
+    });
+  });
+
+  it("forwards bounded provider selections without forwarding adjacent hostile fields", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({
+      user: { id: "0123456789abcdef0123456789abcdef" },
+    } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ id: "sess-provider" }, { status: 201 })
+    );
+
+    await POST(
+      postRequest({
+        repoOwner: "acme",
+        repoName: "web",
+        providerSelections: {
+          openai: { mode: "provider_account", accountId: "a".repeat(32) },
+          xai: { mode: "api_key" },
+        },
+        providerAuth: [{ credential: "must-not-forward" }],
+      })
+    );
+
+    expect(controlPlaneBody()).toEqual({
+      repoOwner: "acme",
+      repoName: "web",
+      providerSelections: {
+        openai: { mode: "provider_account", accountId: "a".repeat(32) },
+        xai: { mode: "api_key" },
+      },
+    });
   });
 
   it("still strips fields outside the allowlist", async () => {

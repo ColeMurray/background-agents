@@ -2,6 +2,7 @@ import { isValidTimeZone, validateAutomationCron } from "@open-inspect/shared/cr
 import {
   conditionRegistry,
   hasValidSlackChannelCondition,
+  isGitHubConditionSupported,
   triggerSources,
   TRIGGER_TYPE_TO_SOURCE,
   validateConditions,
@@ -14,6 +15,7 @@ import {
   type AutomationRepositoryInput,
 } from "@open-inspect/shared/types/automations";
 import { DEFAULT_MODEL, isValidReasoningEffort } from "@open-inspect/shared/models";
+import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 
 export interface AutomationFormValues {
   name: string;
@@ -28,6 +30,7 @@ export interface AutomationFormValues {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
+  providerSelections: ModelProviderSelections;
 }
 
 export interface AutomationTriggerDraft {
@@ -47,6 +50,7 @@ export interface AutomationAgentDraft {
 export interface AutomationFormDraft {
   name: string;
   instructions: string;
+  providerSelections: ModelProviderSelections;
   trigger: AutomationTriggerDraft;
   agent: AutomationAgentDraft;
 }
@@ -86,6 +90,7 @@ export function createAutomationFormDraft(
   return {
     name: initialValues.name ?? "",
     instructions: initialValues.instructions ?? "",
+    providerSelections: initialValues.providerSelections ?? {},
     trigger: {
       type: initialValues.triggerType ?? "schedule",
       scheduleCron: initialValues.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
@@ -118,15 +123,11 @@ export function transitionAutomationTriggerType(
   const eventTypeStillValid = nextSource?.eventTypes.some(
     (eventType) => eventType.eventType === trigger.eventType
   );
-  const nextEventSource = TRIGGER_TYPE_TO_SOURCE[nextType];
   return {
     ...trigger,
     type: nextType,
     eventType: eventTypeStillValid ? trigger.eventType : "",
-    conditions: trigger.conditions.filter((condition) => {
-      const conditionDefinition = conditionRegistry[condition.type];
-      return Boolean(nextEventSource && conditionDefinition?.appliesTo.includes(nextEventSource));
-    }),
+    conditions: [],
   };
 }
 
@@ -138,10 +139,32 @@ function isValidEventType(triggerType: AutomationTriggerType, eventType: string)
   );
 }
 
-function getConditionErrors(trigger: AutomationTriggerDraft): string[] {
+function getConditionErrors(
+  trigger: AutomationTriggerDraft,
+  originalTrigger?: AutomationTriggerDraft
+): string[] {
   if (trigger.type === "schedule") return [];
   const source = TRIGGER_TYPE_TO_SOURCE[trigger.type];
-  return source ? validateConditions(trigger.conditions, source, conditionRegistry) : [];
+  if (!source) return [];
+  const unchangedGitHubEvent =
+    trigger.type === "github_event" &&
+    originalTrigger?.type === trigger.type &&
+    originalTrigger.eventType === trigger.eventType;
+  const remainingOriginalConditions = unchangedGitHubEvent
+    ? originalTrigger.conditions.map((condition) => JSON.stringify(condition))
+    : [];
+  return trigger.conditions.flatMap((condition) => {
+    // The API permits unchanged legacy filters on unrelated edits, but never
+    // grants that exception to a new filter or a different event type.
+    if (unchangedGitHubEvent && !isGitHubConditionSupported(trigger.eventType, condition.type)) {
+      const index = remainingOriginalConditions.indexOf(JSON.stringify(condition));
+      if (index !== -1) {
+        remainingOriginalConditions.splice(index, 1);
+        return [];
+      }
+    }
+    return validateConditions([condition], source, conditionRegistry, trigger.eventType);
+  });
 }
 
 function getConditionRequirementError(
@@ -159,12 +182,14 @@ function findInvalidEvaluation({
   loadingModels,
   repositoryCount,
   environmentCount,
+  originalTrigger,
 }: {
   mode: AutomationFormMode;
   draft: AutomationFormDraft;
   loadingModels: boolean;
   repositoryCount: number;
   environmentCount: number;
+  originalTrigger?: AutomationTriggerDraft;
 }): Exclude<AutomationFormEvaluation, { valid: true }> | null {
   if (loadingModels) return { valid: false, reason: "models-loading" };
   if (!draft.name.trim() || !draft.instructions.trim()) {
@@ -198,7 +223,10 @@ function findInvalidEvaluation({
   ) {
     return { valid: false, reason: "event-type-required" };
   }
-  const conditionErrors = getConditionErrors(draft.trigger);
+  const conditionErrors = getConditionErrors(
+    draft.trigger,
+    mode === "edit" ? originalTrigger : undefined
+  );
   if (conditionErrors.length > 0) {
     return { valid: false, reason: "invalid-conditions", conditionErrors };
   }
@@ -242,6 +270,7 @@ function buildSubmissionValues({
         : null,
     instructions: draft.instructions.trim(),
     triggerType: draft.trigger.type,
+    providerSelections: draft.providerSelections,
   };
 
   if (draft.trigger.type === "schedule") {
@@ -266,11 +295,13 @@ export function evaluateAutomationForm({
   loadingModels,
   resolvedModel,
   targets,
+  originalTrigger,
 }: {
   mode: AutomationFormMode;
   draft: AutomationFormDraft;
   loadingModels: boolean;
   resolvedModel: string;
+  originalTrigger?: AutomationTriggerDraft;
   targets: {
     repositories: AutomationRepositoryInput[];
     environmentIds: string[];
@@ -282,6 +313,7 @@ export function evaluateAutomationForm({
     loadingModels,
     repositoryCount: targets.repositories.length,
     environmentCount: targets.environmentIds.length,
+    originalTrigger,
   });
   if (invalidEvaluation) return invalidEvaluation;
 

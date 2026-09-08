@@ -1,0 +1,7 @@
+# TLS in front of the control plane, for the compose "tls" profile.
+# Caddy obtains and renews a certificate for CADDY_DOMAIN and proxies
+# HTTP and WebSocket traffic to the app.
+
+{$CADDY_DOMAIN} {
+	reverse_proxy app:8787
+}

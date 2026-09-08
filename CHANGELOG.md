@@ -2,6 +2,253 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 1, 2026
+
+**Workspace audit log.** Owners, Administrators, and authorized custom roles can review paginated
+authorization activity from Settings, including allowed, denied, rejected, and no-op decisions with
+actor and resource snapshots, reasons, request context, and structured before-and-after details.
+
+**Safer event-triggered automations.** Slack, Sentry, and other event-driven automations now keep
+untrusted event content separate from authoritative workspace and automation instructions, reducing
+the risk that event payloads override unattended-run behavior.
+
+**Complete GitHub review feedback for Autofix.** Automated pull request reviews now submit their
+summary and inline findings together, ensuring Autofix receives all actionable feedback in one
+attempt while preserving comment-only reviews for bot-authored pull requests.
+
+**Larger follow-up queues.** Sessions can now retain up to 50 unfinished prompts, increased from 10,
+while preserving durable ordering and queue-full safeguards.
+
+## August 31, 2026
+
+**Workspace roles and access controls.** Every admitted user now has an Owner, Administrator,
+Member, or Viewer role, with permissions enforced across sessions, automations, settings,
+repositories, environments, and integrations. Owners and Administrators can manage member roles and
+suspensions from Settings; automation ownership and execution authority are enforced, and live
+session connections are revoked after access changes.
+
+## August 30, 2026
+
+**Dedicated, searchable settings.** Settings now use a responsive navigation surface with grouped
+category search instead of the session sidebar. The global command menu links directly to settings,
+automations, and analytics, with descriptions, keyboard guidance, and matching mobile navigation.
+
+## August 28, 2026
+
+**Faster long session timelines.** Session timelines now render only visible rows, keeping histories
+with tens of thousands of events responsive while preserving scroll position, older-history loading,
+unread observation, and expanded task details.
+
+**Simpler Slack app setup.** Self-hosted deployments now include a reusable Slack app manifest for
+the supported bot features, plus Terraform outputs for the generated event and interaction URLs.
+
+**Flexible Autofix attempt limits.** Pull request Autofix can now allow any positive per-PR attempt
+limit or no limit, with global and repository-specific settings preserved consistently.
+
+## August 27, 2026
+
+**Pull request feedback Autofix.** Opt in globally or per repository to resume a pull request's
+owning session when eligible human comments or actionable reviews arrive. Autofix supports reviews
+from the Open-Inspect GitHub App and allowlisted bots, deduplicates feedback, and enforces a rolling
+per-PR attempt limit.
+
+**GitHub Actions workflow automations.** Automations can now start when a GitHub Actions workflow
+run completes, with exact workflow-name and conclusion filters, run metadata in the agent context,
+and rerun-aware deduplication.
+
+**Configurable bot classifiers.** Slack and Linear target classifiers can now use Anthropic or
+OpenAI with provider-specific credentials. Classification requests are bounded to 15 seconds so a
+stalled provider falls back promptly to manual target selection.
+
+**Rich pull request timeline events.** Pull request tool calls now render dedicated previews for
+created, updated, draft, pending, manual, and failed outcomes, with sanitized descriptions, branch
+details, safe links, and expandable long bodies.
+
+## August 26, 2026
+
+**Reliable long-running tool calls.** Bridge heartbeats now renew sandbox activity while a prompt is
+processing, preventing event-silent work from being stopped by inactivity cleanup while preserving
+ordinary idle cleanup.
+
+## August 24, 2026
+
+**Import managed skills from repositories.** Import and re-import skills from connected GitHub or
+GitLab repositories with a complete file preview, pinned source revision, and provenance. Validation
+rejects changed, invalid, oversized, or unsupported repository content before saving.
+
+## August 22, 2026
+
+**Unified model and reasoning selection.** New-session and follow-up composers now combine model and
+reasoning-effort selection in one responsive control, with nested desktop menus and an in-place
+mobile drill-down.
+
+## August 21, 2026
+
+**Configurable keyboard shortcuts.** Set per-user shortcuts for sending prompts, opening search or a
+new session, and toggling the sidebar. Settings can record, validate, reset, and persist bindings.
+
+**Recent automation activity.** Automation rows now show the latest execution outcomes at a glance,
+alongside clearer compact schedules, responsive mobile actions, and confirmation before deletion.
+
+**OpenCode Zen GLM 5.2.** Adds `opencode/glm-5.2` to the opt-in OpenCode Zen catalog.
+
+## August 20, 2026
+
+**Managed provider accounts.** Connect and manage multiple ChatGPT and SuperGrok subscription
+accounts from Settings using device authorization, choose accounts for sessions and automations, and
+configure defaults for unattended runs. These installation-wide accounts and defaults are available
+to every admitted user, while sandboxes receive short-lived access without exposing stored refresh
+credentials.
+
+**Prebuilt images for E2B.** E2B can now build, snapshot, reuse, and delete repository and
+environment images, with reliable startup from prebuilt snapshots and configurable template CPU and
+memory.
+
+**Actionable sandbox failures.** Session status now shows the provider's startup or recovery error
+when available and preserves it across reloads, while clearing stale details when a retry begins.
+
+**Automatic retirement of stale sandbox snapshots.** Session snapshots now record their runtime
+version and restore only when compatible. Incompatible or unknown snapshots trigger a fresh sandbox
+instead of repeatedly reviving a broken runtime, which may discard uncommitted filesystem state.
+
+## August 16, 2026
+
+**Session attention inbox.** The sidebar now groups session trees into Needs attention, In progress,
+and Recent, prioritizing unread terminal outcomes. Each section has independent pagination and retry
+behavior while preserving parent and child-session grouping.
+
+**Managed skill autocomplete.** Type `/skill-name` or `$skill-name` in new-session and follow-up
+prompts to search applicable skills, with keyboard and pointer selection. Existing sessions suggest
+from their pinned skill manifest so completions stay reproducible.
+
+## August 15, 2026
+
+**Managed skills.** Create and edit reusable Agent Skills in Settings, assign them globally or to
+specific repositories and environments, and organize personal profiles. When starting a session,
+choose all applicable skills, none, or a profile; Open-Inspect pins and securely installs the exact
+revisions before the agent starts, while the session sidebar records each skill's revision and
+assignment source so existing sessions stay reproducible as the shared catalog changes.
+
+**Multiple pull requests per session.** The `create-pull-request` tool now opens one PR per head
+branch instead of one per repository: agents can create stacked PRs (each level passing the previous
+branch as `baseBranch`), open a fresh PR after the previous one merges, and calling the tool again
+from the same branch updates that branch's open PR with the latest commits instead of failing. Every
+PR is tracked with full lifecycle state and listed in the session sidebar with its live status, and
+stale artifacts heal when the provider reports a PR already merged. Sessions holding several PRs get
+a Pull requests sidebar section with one sync control for all of them, and the View PR action
+becomes a picker naming each PR by number and head branch.
+
+**Claude Sonnet 5 and Grok 4.6.** Adds `anthropic/claude-sonnet-5` to the model picker and
+integrations with adaptive thinking and reasoning efforts from low through max, and `xai/grok-4.6`
+to the opt-in xAI / SuperGrok catalog with low, medium, and high efforts.
+
+**Kimi K3 and GLM 5.3.** Adds `opencode/kimi-k3` to the opt-in OpenCode Zen catalog and
+`zai-coding-plan/glm-5.3` to the opt-in Z.AI Coding Plan catalog.
+
+**Cancel queued prompts.** Pending web prompts can now be removed before they start processing,
+freeing queue capacity and restoring the removed text to an empty composer after server
+confirmation.
+
+## August 14, 2026
+
+**OpenCode runtime upgraded to 1.18.18.** Newly built images across all sandbox providers now use a
+release that fixes a message-ID wraparound which prevented older sessions from recognizing new
+prompts after August 14. Sessions restored from pre-upgrade snapshots retain their existing runtime.
+
+**Automatic abandoned-draft cleanup.** Warmed sessions that never receive a prompt are archived
+after an eight-hour grace period, while sessions that have started work or contain messages or
+queued prompts are left untouched.
+
+**More adaptable session controls.** Desktop users can hide the session details sidebar, with the
+preference preserved across visits. Mobile headers now show separate connection and sandbox states,
+including lifecycle details and provider-dashboard access when available.
+
+**Search and paginate automations.** The automation list now supports URL-backed name search and
+stable cursor pagination, with responsive rows and distinct empty, no-results, and error states.
+
+## August 13, 2026
+
+**Cleaner, more responsive session timelines.** Completed turns collapse intermediate activity
+behind a “Worked for” disclosure while keeping the prompt and final response visible. Long text and
+expanded tool details now wrap or scroll within mobile layouts without widening the page.
+
+## August 12, 2026
+
+**Queue web follow-up prompts.** Submit up to ten follow-ups while a session is processing, with
+durable FIFO ordering, state synchronized across tabs and reloads, and idempotent retries that avoid
+duplicate work.
+
+**Correct child-session attribution.** Child sessions and parent-to-child follow-ups now use the
+active prompt author's identity and SCM credentials instead of always inheriting the parent session
+owner, including prompts started from bot integrations.
+
+## August 11, 2026
+
+**Clear Slack speaker attribution.** Slack-started sessions and follow-ups now label the current
+message with the sender's display name and stable Slack ID, preserving who gave an instruction in
+multi-person threads and across repository clarification.
+
+## August 9, 2026
+
+**Browser-based sandbox desktops.** Opt in to a full VNC desktop for sessions, available from the
+session sidebar through authenticated noVNC access. Desktop settings can be configured globally or
+overridden per environment and repository, and work across supported sandbox providers.
+
+**Follow up with child sessions.** Parent agents can queue additional instructions for direct child
+sessions with `send-child-prompt`, including resuming completed or failed children while preserving
+lineage, ownership, concurrency, and cancellation safeguards.
+
+## August 8, 2026
+
+**Context-aware Slack channel automations.** Runs triggered from Slack threads can now include the
+root and recent earlier replies, with bounded, safely attributed context. Text-bearing file-share
+messages can trigger runs too, while history failures fall back without blocking the automation.
+
+**Clearer, more resilient session timelines.** Session pages now server-render from a canonical
+snapshot, keep existing content visible through WebSocket reconnects, and show when OpenCode
+compacts context to continue a long-running session.
+
+## August 7, 2026
+
+**Labels for session-created pull requests.** Configure a label for pull and merge requests, with a
+global default and per-repository overrides. The policy applies to the actual target repository in
+multi-repo sessions, supports GitHub and GitLab, and creates missing GitHub labels when permitted.
+
+## August 5, 2026
+
+**Draft pull request policy.** Configure session-created pull requests to open as drafts by default,
+globally or per repository. The policy applies to the actual target repository in multi-repo
+sessions and works across GitHub and GitLab deployments.
+
+## August 3, 2026
+
+**Unread session outcomes.** Per-user unread indicators now highlight sessions and child sessions
+with new terminal results. Viewing meaningful output in an active tab marks it read automatically,
+with an explicit Mark as read action also available.
+
+## August 1, 2026
+
+**Grok models with your SuperGrok subscription.** Use Grok 4.5 or Grok Build 0.1 through managed xAI
+OAuth, with opt-in model controls and reasoning-effort settings for Grok 4.5. Refresh credentials
+stay encrypted in the control plane while sandboxes receive only short-lived access tokens.
+
+## July 31, 2026
+
+**Automatic prebuild refresh.** Repository and environment images now rebuild automatically when
+tracked branches move or the sandbox runtime changes, with provider-neutral scheduling and durable
+finalization across Modal, Vercel, and OpenComputer.
+
+**Configurable session lifetimes.** Set sandbox timeouts globally or per repository and environment;
+the setting applies to fresh, restored, and resumed sandboxes, and child sessions inherit it.
+
+**More control over child sessions.** Child-session tools now use consistent `spawn-child`,
+`get-child-status`, and `cancel-child` names. Spawned children inherit the parent's model and
+reasoning effort by default, with optional per-child overrides.
+
+**Better Slack session guidance.** Workspace-wide instructions can now apply to every Slack-started
+session. Watched-channel automations can also return `NO_REPLY` when no response is useful, while
+failures and runs with artifacts still post normally.
+
 ## July 30, 2026
 
 **Choose GitHub, Google, or both for sign-in.** Deployments can now enable either provider
@@ -445,8 +692,8 @@ from a dedicated settings page, and have them injected into the sandbox environm
 **Structured JSON logging.** Wide events and correlation IDs across the control plane, Modal
 infrastructure, and Slack bot.
 
-**D1 migration system.** A proper migration system replaces the single `schema.sql`, with a
-standalone script to migrate the session index and repository metadata from KV to D1.
+**D1 migration system.** A proper migration system replaces the single `schema.sql`, with session
+index and repository metadata storage moved from KV to D1.
 
 _Also:_ `.openinspect/setup.sh` repository setup support, an archived-chats section in settings, and
 bridge-timeout hardening with an inactivity-based SSE timeout.

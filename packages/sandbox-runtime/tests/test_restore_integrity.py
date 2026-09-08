@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from sandbox_runtime.runtime_config import BootMode
+
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
@@ -55,17 +57,16 @@ async def test_snapshot_restore_preserves_head_index_and_worktree(tmp_path: Path
         ),
     }
     with patch.dict(os.environ, environment, clear=False):
-        from sandbox_runtime.entrypoint import SandboxSupervisor
+        from tests.runtime_helpers import make_repository_boot
 
-        supervisor = SandboxSupervisor()
-    supervisor.boot_mode = "snapshot_restore"
+        supervisor = make_repository_boot()
     supervisor.repositories = [replace(supervisor.repositories[0], path=repo)]
-    supervisor._ensure_plain_origin = AsyncMock(return_value=True)
-    supervisor._fetch_branch = AsyncMock(return_value=True)
+    supervisor.synchronizer._ensure_plain_origin = AsyncMock(return_value=True)
+    supervisor.synchronizer._fetch_branch = AsyncMock(return_value=True)
 
-    failed = await supervisor.sync_repositories()
+    result = await supervisor.synchronizer.sync(supervisor.repositories, BootMode.SNAPSHOT_RESTORE)
 
-    assert failed == []
+    assert result.failures == ()
     assert _git(repo, "rev-parse", "HEAD") == feature_sha
     assert _git(repo, "branch", "--show-current") == "feature/session-work"
     assert "staged.txt" in _git(repo, "diff", "--cached", "--name-only")

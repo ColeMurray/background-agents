@@ -55,7 +55,7 @@ describe("ImageBuildStore finalization state", () => {
       completionHash: "completion-hash",
       repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 12_500,
+      buildDurationSeconds: 12.5,
       now,
     };
 
@@ -66,8 +66,10 @@ describe("ImageBuildStore finalization state", () => {
         tokenHash: "token-hash",
         now,
       })
-    ).toMatchObject({ authorization: "fresh" });
+    ).toMatchObject({ id: "build-1", status: "building" });
     expect(await store.finalization.acceptSuccessfulCompletion(completion)).toBe("accepted");
+    // The used token stays authorizable after acceptance so a lost HTTP
+    // response can republish the same Queue command.
     expect(
       await store.finalization.authorizeCompletionCallback({
         buildId: "build-1",
@@ -75,7 +77,7 @@ describe("ImageBuildStore finalization state", () => {
         tokenHash: "token-hash",
         now: now + 1,
       })
-    ).toMatchObject({ authorization: "accepted" });
+    ).toMatchObject({ id: "build-1" });
     expect(
       await store.finalization.acceptSuccessfulCompletion({ ...completion, now: now + 1 })
     ).toBe("replayed");
@@ -116,7 +118,7 @@ describe("ImageBuildStore finalization state", () => {
       completionHash: "completion-hash",
       repositoryShas: [],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 1_000,
+      buildDurationSeconds: 1,
       now,
     });
 
@@ -152,7 +154,7 @@ describe("ImageBuildStore finalization state", () => {
         completionHash: `completion-${index + 1}`,
         repositoryShas: [],
         runtimeVersion: "v53-runtime",
-        buildDurationMs: 1_000,
+        buildDurationSeconds: 1,
         now: callbackTime,
       });
     }
@@ -243,10 +245,14 @@ describe("ImageBuildStore finalization state", () => {
       completionHash,
     };
 
-    await expect(finalizer.process(job, { request_id: "queue-failed-1" })).resolves.toEqual({
+    await expect(
+      finalizer.process(job, { trace_id: "trace-failed-1", request_id: "queue-failed-1" })
+    ).resolves.toEqual({
       type: "completed",
     });
-    await expect(finalizer.process(job, { request_id: "queue-failed-2" })).resolves.toEqual({
+    await expect(
+      finalizer.process(job, { trace_id: "trace-failed-2", request_id: "queue-failed-2" })
+    ).resolves.toEqual({
       type: "completed",
     });
 
@@ -320,7 +326,7 @@ describe("ImageBuildStore finalization state", () => {
       completionHash: "completion-hash",
       repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 12_500,
+      buildDurationSeconds: 12.5,
       now,
     });
     await store.supersedeActiveImages(environmentScope(environmentId));
@@ -456,7 +462,7 @@ describe("ImageBuildStore finalization state", () => {
       completionHash: "completion-hash",
       repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 12_500,
+      buildDurationSeconds: 12.5,
       now,
     });
 
@@ -516,7 +522,7 @@ describe("ImageBuildStore finalization state", () => {
       completionHash: "completion-hash",
       repositoryShas: [],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 1,
+      buildDurationSeconds: 1,
       now,
     });
 

@@ -1,21 +1,40 @@
+import { parseBody } from "./body";
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   cancelChildSessionRequestSchema,
+  childFollowUpPromptRequestSchema,
+  sendPromptResponseSchema,
   type CancelChildSessionRequest,
-} from "@open-inspect/shared";
-import { SessionIndexStore } from "../db/session-index";
+} from "@open-inspect/shared/types/session-api";
+import { DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS } from "@open-inspect/shared/types/integrations";
+import { SessionIndexStore, type ChildAdmissionLease } from "../db/session-index";
+import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
+import { resolveSandboxSettings } from "../session/integration-settings-resolution";
+import { activePromptAuthorSchema } from "../session/active-prompt-author";
 import type { Env } from "../types";
-import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import {
+  error,
+  GITHUB_SANDBOX_FALLBACK_ROUTE,
+  json,
+  NO_AUTHORIZATION,
+  requirePermission,
+  SCM_AGNOSTIC_SANDBOX_ROUTE,
+  type RequestContext,
+} from "./shared";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
-async function handleListChildren(
+const logger = createLogger("router:session-children");
+
+export async function handleListChildren(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const parentId = match.groups?.id;
-  if (!parentId) return error("Parent session ID required");
+  const parentId = params.id;
 
   const sessionStore = new SessionIndexStore(ctx.db);
   const children = await sessionStore.listByParent(parentId);
@@ -23,14 +42,14 @@ async function handleListChildren(
   return json({ children });
 }
 
-async function handleGetChild(
+export async function handleGetChild(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; childId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const parentId = match.groups?.id;
-  const childId = match.groups?.childId;
+  const parentId = params.id;
+  const childId = params.childId;
   if (!parentId || !childId) return error("Parent and child session IDs required");
 
   const sessionStore = new SessionIndexStore(ctx.db);
@@ -48,14 +67,127 @@ async function handleGetChild(
   );
 }
 
+export async function handlePromptChild(
+  request: Request,
+  _env: Env,
+  params: { id: string; childId: string },
+  ctx: SessionRouteContext
+): Promise<Response> {
+  const parentId = params.id;
+  const childId = params.childId;
+  if (!parentId || !childId) return error("Parent and child session IDs required");
+
+  const parsed = await parseBody(request, childFollowUpPromptRequestSchema, "Invalid prompt body");
+  if (parsed instanceof Response) return parsed;
+
+  const sessionStore = new SessionIndexStore(ctx.db);
+  const childSession = await sessionStore.get(childId);
+  if (!childSession || childSession.parentSessionId !== parentId) {
+    return error("Child session not found", 404);
+  }
+
+  const authorResponse = await ctx.sessionRuntime.fetch(
+    parentId,
+    SessionInternalPaths.activePromptAuthor
+  );
+  if (!authorResponse.ok) return authorResponse;
+  const author = activePromptAuthorSchema.safeParse(await authorResponse.json());
+  if (!author.success) return error("Failed to get active prompt author", 500);
+
+  let admissionLease: ChildAdmissionLease | null = null;
+  if (childSession.status === "completed" || childSession.status === "failed") {
+    const parentSession = await sessionStore.get(parentId);
+    if (!parentSession) return error("Parent session not found", 404);
+    const parentSettings = await resolveSandboxSettings(
+      ctx.db,
+      parentSession.repoOwner,
+      parentSession.repoName,
+      parentSession.environmentId
+    );
+    const maxConcurrentChildren =
+      parentSettings.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
+    admissionLease = await sessionStore.acquireChildAdmissionLease(
+      parentId,
+      childId,
+      maxConcurrentChildren
+    );
+    if (!admissionLease) {
+      return error(`Maximum concurrent children (${maxConcurrentChildren}) reached`, 429);
+    }
+  }
+
+  // A transport error is ambiguous: the child may have accepted the prompt before the response
+  // was lost. Keep the lease until active-state finalization or its expiry rather than undercounting.
+  const response = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.parentPrompt, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      parentSessionId: parentId,
+      content: parsed.content,
+      author: author.data,
+    }),
+  });
+  if (response.ok) {
+    let messageId: string | undefined;
+    try {
+      const parsed = sendPromptResponseSchema.safeParse(await response.clone().json());
+      if (parsed.success) messageId = parsed.data.messageId;
+    } catch {
+      // The child response remains authoritative; logging is best-effort.
+    }
+    logger.info("session.child_prompt", {
+      event: "session.child_prompt",
+      outcome: "accepted",
+      parent_id: parentId,
+      child_id: childId,
+      message_id: messageId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    ctx.executionCtx.submit(
+      () =>
+        sessionStore.touchUpdatedAt(childId).catch((error) => {
+          logger.error("session_index.touch_updated_at.background_error", {
+            parent_id: parentId,
+            child_id: childId,
+            request_id: ctx.request_id,
+            trace_id: ctx.trace_id,
+            error,
+          });
+        }),
+      {
+        name: "session_index.touch_updated_at",
+        context: {
+          parent_id: parentId,
+          child_id: childId,
+          trace_id: ctx.trace_id,
+          request_id: ctx.request_id,
+        },
+      }
+    );
+  } else {
+    if (admissionLease) await sessionStore.releaseChildAdmissionLease(admissionLease);
+    logger.warn("session.child_prompt", {
+      event: "session.child_prompt",
+      outcome: "rejected",
+      parent_id: parentId,
+      child_id: childId,
+      http_status: response.status,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+  }
+  return response;
+}
+
 export async function handleCancelChild(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; childId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const parentId = match.groups?.id;
-  const childId = match.groups?.childId;
+  const parentId = params.id;
+  const childId = params.childId;
   if (!parentId || !childId) return error("Parent and child session IDs required");
 
   const sessionStore = new SessionIndexStore(ctx.db);
@@ -123,20 +255,28 @@ export async function handleCancelChild(
   return response;
 }
 
-export const sessionChildRoutes: Route[] = [
-  {
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/children"),
-    handler: handleListChildren,
-  },
-  sessionRoute({
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/children/:childId"),
-    handler: handleGetChild,
+export const sessionChildRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionChildRoutes.get(
+  "/sessions/:id/children",
+  admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requirePermission("sessions.read") }),
+  (c) => dispatch(c, handleListChildren)
+);
+sessionChildRoutes.get(
+  "/sessions/:id/children/:childId",
+  admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requirePermission("sessions.read") }),
+  (c) => dispatchSession(c, handleGetChild)
+);
+sessionChildRoutes.post(
+  "/sessions/:id/children/:childId/cancel",
+  admit({
+    ...GITHUB_SANDBOX_FALLBACK_ROUTE,
+    authorization: requirePermission("sessions.lifecycle"),
   }),
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/children/:childId/cancel"),
-    handler: handleCancelChild,
-  }),
-];
+  (c) => dispatchSession(c, handleCancelChild)
+);
+sessionChildRoutes.post(
+  "/sessions/:id/children/:childId/prompt",
+  admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, authorization: NO_AUTHORIZATION }),
+  (c) => dispatchSession(c, handlePromptChild)
+);

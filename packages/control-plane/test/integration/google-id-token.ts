@@ -25,7 +25,9 @@ export async function createSignedGoogleIdToken({
   claims: GoogleIdTokenClaims;
   keyId?: string;
 }) {
-  const keyPair = await crypto.subtle.generateKey(
+  // workers-types' generateKey/exportKey return unions (they cannot narrow on
+  // the algorithm/format arguments); RSA yields a pair and "jwk" yields a JWK.
+  const keyPair = (await crypto.subtle.generateKey(
     {
       name: "RSASSA-PKCS1-v1_5",
       modulusLength: 2048,
@@ -34,7 +36,7 @@ export async function createSignedGoogleIdToken({
     },
     true,
     ["sign", "verify"]
-  );
+  )) as CryptoKeyPair;
   const issuedAt = Math.floor(Date.now() / MS_PER_SECOND);
   const header = encodeBase64Url(JSON.stringify({ alg: "RS256", kid: keyId, typ: "JWT" }));
   const payload = encodeBase64Url(
@@ -52,7 +54,7 @@ export async function createSignedGoogleIdToken({
     keyPair.privateKey,
     new TextEncoder().encode(signingInput)
   );
-  const publicKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+  const publicKey = (await crypto.subtle.exportKey("jwk", keyPair.publicKey)) as JsonWebKey;
   return {
     token: `${signingInput}.${encodeBase64Url(new Uint8Array(signature))}`,
     publicKey: { ...publicKey, alg: "RS256", kid: keyId, use: "sig" },

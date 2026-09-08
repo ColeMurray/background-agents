@@ -69,6 +69,23 @@ describe("FilesChangedSection", () => {
     expect(screen.getByRole("button", { name: /api\/index\.ts/i })).toBeVisible();
   });
 
+  it("restores a collapsed repository after clearing a filter", async () => {
+    render(<FilesChangedSection repositories={repositories} onSelect={vi.fn()} />);
+    const summary = screen.getByText("acme/web");
+    const details = summary.closest("details");
+    const search = screen.getByRole("searchbox", { name: "Filter changed files" });
+
+    expect(details).toHaveAttribute("open");
+    await userEvent.click(summary);
+    expect(details).not.toHaveAttribute("open");
+
+    await userEvent.type(search, "api/");
+    expect(details).toHaveAttribute("open");
+
+    await userEvent.clear(search);
+    expect(details).not.toHaveAttribute("open");
+  });
+
   it("shows a repository-level error for a partial multi-repository bundle", () => {
     render(<FilesChangedSection repositories={repositories} onSelect={vi.fn()} />);
 

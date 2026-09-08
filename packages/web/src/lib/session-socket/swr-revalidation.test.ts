@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
-import type { SessionArtifact } from "@open-inspect/shared";
+import { isSessionInboxKey } from "@/lib/session-inbox-api";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { swrKeysToRevalidate } from "./swr-revalidation";
 
 const SESSION_ID = "session-1";
@@ -16,13 +17,64 @@ function artifact(type: SessionArtifact["type"]): SessionArtifact {
 }
 
 describe("swrKeysToRevalidate", () => {
+  it.each([
+    {
+      description: "child update",
+      message: {
+        type: "child_session_update" as const,
+        childSessionId: "child-1",
+        status: "active" as const,
+        title: null,
+      },
+    },
+    {
+      description: "session status update",
+      message: {
+        type: "session_status" as const,
+        status: "completed" as const,
+      },
+    },
+    {
+      description: "subscribed snapshot",
+      message: {
+        type: "subscribed" as const,
+        session: {
+          id: SESSION_ID,
+          title: null,
+          repoOwner: null,
+          repoName: null,
+          baseBranch: null,
+          branchName: null,
+          status: "active" as const,
+          sandboxStatus: "ready" as const,
+          messageCount: 0,
+          createdAt: 1,
+        },
+        artifacts: [],
+        participantId: "participant-1",
+        participant: { participantId: "participant-1", name: "User" },
+        timeline: { events: [], hasMore: false, cursor: null },
+        promptQueue: [],
+      },
+    },
+  ])("allows a $description invalidation to refresh the canonical inbox", ({ message }) => {
+    const inboxMatcher = swrKeysToRevalidate(message, SESSION_ID).find(
+      (key): key is (candidate: unknown) => boolean =>
+        typeof key === "function" && key === isSessionInboxKey
+    );
+
+    expect(inboxMatcher).toBe(isSessionInboxKey);
+    expect(inboxMatcher?.("/api/sessions/inbox")).toBe(true);
+    expect(inboxMatcher?.("/api/sessions/inbox?mine=true")).toBe(true);
+  });
+
   it("revalidates the session list for PR artifact creates and updates", () => {
     expect(
       swrKeysToRevalidate({ type: "artifact_created", artifact: artifact("pr") }, SESSION_ID)
-    ).toEqual([isUnarchivedSessionListKey]);
+    ).toEqual([isUnarchivedSessionListKey, isSessionInboxKey]);
     expect(
       swrKeysToRevalidate({ type: "artifact_updated", artifact: artifact("pr") }, SESSION_ID)
-    ).toEqual([isUnarchivedSessionListKey]);
+    ).toEqual([isUnarchivedSessionListKey, isSessionInboxKey]);
   });
 
   it("does not revalidate for non-PR artifacts", () => {
@@ -37,6 +89,7 @@ describe("swrKeysToRevalidate", () => {
   it("revalidates the session list on a non-empty title", () => {
     expect(swrKeysToRevalidate({ type: "session_title", title: "New title" }, SESSION_ID)).toEqual([
       isUnarchivedSessionListKey,
+      isSessionInboxKey,
     ]);
     expect(swrKeysToRevalidate({ type: "session_title", title: "" }, SESSION_ID)).toEqual([]);
   });
@@ -44,7 +97,7 @@ describe("swrKeysToRevalidate", () => {
   it("revalidates the session list on status changes", () => {
     expect(
       swrKeysToRevalidate({ type: "session_status", status: "completed" }, SESSION_ID)
-    ).toEqual([isUnarchivedSessionListKey]);
+    ).toEqual([isUnarchivedSessionListKey, isSessionInboxKey]);
   });
 
   it("revalidates the child list and the session list on child session updates", () => {
@@ -58,7 +111,29 @@ describe("swrKeysToRevalidate", () => {
         },
         SESSION_ID
       )
-    ).toEqual([`/api/sessions/${SESSION_ID}/children`, isUnarchivedSessionListKey]);
+    ).toEqual([
+      `/api/sessions/${SESSION_ID}/children`,
+      isUnarchivedSessionListKey,
+      isSessionInboxKey,
+    ]);
+  });
+
+  it("revalidates the inbox when terminal output completes", () => {
+    expect(
+      swrKeysToRevalidate(
+        {
+          type: "sandbox_event",
+          event: {
+            type: "execution_complete",
+            sandboxId: "sandbox-1",
+            timestamp: 1,
+            messageId: "message-1",
+            success: true,
+          },
+        },
+        SESSION_ID
+      )
+    ).toEqual([isSessionInboxKey]);
   });
 
   it("revalidates the canonical diff manifest on diff state changes", () => {
@@ -72,6 +147,39 @@ describe("swrKeysToRevalidate", () => {
         SESSION_ID
       )
     ).toEqual([`/api/sessions/${SESSION_ID}/diff`]);
+  });
+
+  it("revalidates client-only data when the authoritative snapshot arrives", () => {
+    expect(
+      swrKeysToRevalidate(
+        {
+          type: "subscribed",
+          session: {
+            id: SESSION_ID,
+            title: null,
+            repoOwner: null,
+            repoName: null,
+            baseBranch: null,
+            branchName: null,
+            status: "active",
+            sandboxStatus: "ready",
+            messageCount: 0,
+            createdAt: 1,
+          },
+          artifacts: [],
+          participantId: "participant-1",
+          participant: { participantId: "participant-1", name: "User" },
+          timeline: { events: [], hasMore: false, cursor: null },
+          promptQueue: [],
+        },
+        SESSION_ID
+      )
+    ).toEqual([
+      `/api/sessions/${SESSION_ID}/diff`,
+      `/api/sessions/${SESSION_ID}/children`,
+      `/api/sessions/${SESSION_ID}/participant-profiles`,
+      isSessionInboxKey,
+    ]);
   });
 
   it("returns nothing for view-only messages", () => {

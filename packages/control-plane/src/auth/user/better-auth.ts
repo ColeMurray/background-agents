@@ -1,7 +1,8 @@
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
 import { betterAuth } from "better-auth";
+import { createCanonicalBetterAuthAdapter } from "../../db/better-auth-adapter";
+import type { SqlDatabase } from "../../db/sql-database";
 import { generateId } from "../crypto";
-import type { CanonicalUserProjection } from "./canonical-user-projection";
 import type { ProviderProfileResolver } from "./provider-profile";
 
 const MS_PER_SECOND = 1000;
@@ -9,25 +10,31 @@ const MS_PER_SECOND = 1000;
 export const SESSION_EXPIRES_IN_MS = 7 * 24 * 60 * 60 * MS_PER_SECOND;
 export const SESSION_UPDATE_AGE_MS = 24 * 60 * 60 * MS_PER_SECOND;
 
+export interface SocialProviderAuthConfig {
+  readonly clientId: string;
+  readonly clientSecret: string;
+  readonly getUserInfo: ProviderProfileResolver;
+}
+
 export interface UserAuthConfig {
-  readonly database: D1Database;
+  readonly database: SqlDatabase;
   readonly publicWebOrigin: string;
   readonly secret: string;
-  readonly userProjection: CanonicalUserProjection;
-  readonly github?: {
-    readonly clientId: string;
-    readonly clientSecret: string;
-    readonly getUserInfo: ProviderProfileResolver;
-  };
-  readonly google?: {
-    readonly clientId: string;
-    readonly clientSecret: string;
-    readonly getUserInfo: ProviderProfileResolver;
-  };
+  readonly github?: SocialProviderAuthConfig;
+  readonly google?: SocialProviderAuthConfig;
 }
 
 /**
  * Creates the control plane's user-authentication authority.
+ *
+ * Better Auth persists directly into the canonical identity registry (issue
+ * #1290 consolidation): its user model IS `users` and its account model IS
+ * `user_identities`, via the field maps below and the canonical SQL adapter.
+ * With a single registry there is nothing to keep synchronized — a
+ * bot-created GitHub identity is an account, so `findOAuthUser`'s
+ * account-first lookup signs bot-first users into their canonical row
+ * natively. Sessions and OAuth-state verifications stay in Better Auth-owned
+ * tables (epoch-ms columns, same adapter).
  *
  * `publicWebOrigin` is deliberately the browser-visible web origin rather than
  * the control-plane origin. The web transparently proxies this handler, so all
@@ -36,7 +43,7 @@ export interface UserAuthConfig {
 export function createUserAuth(config: UserAuthConfig) {
   return betterAuth({
     baseURL: config.publicWebOrigin,
-    database: config.database,
+    database: createCanonicalBetterAuthAdapter(config.database),
     secret: config.secret,
     trustedOrigins: [config.publicWebOrigin],
     telemetry: { enabled: false },
@@ -82,7 +89,14 @@ export function createUserAuth(config: UserAuthConfig) {
         : {}),
     },
     user: {
-      modelName: "auth_users",
+      modelName: "users",
+      fields: {
+        name: "display_name",
+        emailVerified: "email_verified",
+        image: "avatar_url",
+        createdAt: "created_at",
+        updatedAt: "updated_at",
+      },
     },
     session: {
       modelName: "auth_sessions",
@@ -90,25 +104,32 @@ export function createUserAuth(config: UserAuthConfig) {
       updateAge: SESSION_UPDATE_AGE_MS / MS_PER_SECOND,
     },
     account: {
-      modelName: "auth_accounts",
-      accountLinking: {
-        disableImplicitLinking: true,
+      modelName: "user_identities",
+      fields: {
+        accountId: "provider_user_id",
+        providerId: "provider",
+        userId: "user_id",
+        accessToken: "access_token",
+        refreshToken: "refresh_token",
+        idToken: "id_token",
+        accessTokenExpiresAt: "access_token_expires_at",
+        refreshTokenExpiresAt: "refresh_token_expires_at",
+        createdAt: "created_at",
+        updatedAt: "updated_at",
       },
+      // Implicit linking is deliberately enabled (the Better Auth default):
+      // bot ingress links identities across providers by verified email on
+      // every request, and pre-cutover web sign-in did the same — refusing it
+      // at the web door locked out every canonical user without a sign-in
+      // identity (#1290). requireLocalEmailVerified stays at its default
+      // (true): `users.email_verified` — written by completed OAuth proof,
+      // attested bot ingress (EMAIL_ATTESTING_PROVIDERS in db/user-store.ts),
+      // or the one-time 0057 backlog verify — is the linking gate.
       encryptOAuthTokens: true,
     },
     verification: {
       modelName: "auth_verifications",
       storeIdentifier: "hashed",
-    },
-    databaseHooks: {
-      user: {
-        create: {
-          after: (user) => config.userProjection.project(user),
-        },
-        update: {
-          after: (user) => config.userProjection.project(user),
-        },
-      },
     },
   });
 }

@@ -3,11 +3,23 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { SessionArtifact, SessionState } from "@open-inspect/shared";
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
+import type {
+  ServerMessage,
+  SessionSnapshot,
+  SessionState,
+} from "@open-inspect/shared/types/server-messages";
 import type * as SwrModule from "swr";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { useSessionSocket } from "./use-session-socket";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
+
+const FULL_CAPABILITIES = {
+  read: true,
+  collaborate: true,
+  lifecycle: true,
+  sandboxAccess: true,
+} satisfies SessionCapabilities;
 
 type SubscribedMessage = Extract<ServerMessage, { type: "subscribed" }>;
 
@@ -55,7 +67,7 @@ class FakeWebSocket {
     this.onopen?.(new Event("open"));
   }
 
-  receive(message: ServerMessage) {
+  receive(message: unknown) {
     this.onmessage?.({
       data: JSON.stringify(message),
     } as MessageEvent);
@@ -81,29 +93,34 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
 function createSubscribedMessage(artifacts: SessionArtifact[] = []): SubscribedMessage {
   return {
     type: "subscribed",
-    sessionId: "session-1",
-    state: createSessionState(),
+    session: createSessionState(),
     artifacts,
     participantId: "participant-1",
     participant: {
       participantId: "participant-1",
       name: "Test User",
     },
-    replay: {
+    timeline: {
       events: [],
       hasMore: false,
       cursor: null,
     },
     spawnError: null,
+    promptQueue: [],
   };
 }
 
-function sendSandboxAccessMessages(socket: FakeWebSocket, sandboxId: string) {
-  socket.receive({
-    type: "code_server_info",
-    url: `https://code.example/${sandboxId}`,
-    password: "secret",
-  });
+function createSnapshot(): SessionSnapshot {
+  return {
+    session: createSessionState(),
+    artifacts: [],
+    timeline: { events: [], hasMore: false, cursor: null },
+    spawnError: null,
+    promptQueue: [],
+  };
+}
+
+function sendSandboxDashboard(socket: FakeWebSocket, sandboxId: string) {
   socket.receive({
     type: "sandbox_dashboard_url",
     url: `https://provider.example/${sandboxId}`,
@@ -130,8 +147,34 @@ describe("useSessionSocket", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps read synchronization available without collaboration or sandbox access", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const snapshot = createSnapshot();
+    snapshot.session.title = "Read-only snapshot";
+
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", snapshot, {
+        read: true,
+        collaborate: false,
+        lifecycle: false,
+        sandboxAccess: false,
+      })
+    );
+
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+
+    expect(result.current.sessionState?.title).toBe("Read-only snapshot");
+    expect(result.current.connected).toBe(false);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/sessions/session-1/ws-token",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
   it("keeps sendPrompt pending until the server acknowledges the queued prompt", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -143,7 +186,7 @@ describe("useSessionSocket", () => {
       socket.receive(createSubscribedMessage());
     });
 
-    let acknowledgement!: Promise<boolean>;
+    let acknowledgement!: ReturnType<typeof result.current.sendPrompt>;
     act(() => {
       acknowledgement = result.current.sendPrompt("Review this", "model-1", "high");
     });
@@ -151,6 +194,7 @@ describe("useSessionSocket", () => {
     await waitFor(() => {
       expect(socket.sentMessages).toContainEqual({
         type: "prompt",
+        clientRequestId: "client-id",
         content: "Review this",
         model: "model-1",
         reasoningEffort: "high",
@@ -165,19 +209,207 @@ describe("useSessionSocket", () => {
     expect(settled).toBe(false);
 
     act(() => {
-      socket.receive({ type: "prompt_queued", messageId: "message-1", position: 1 });
+      socket.receive({
+        type: "prompt_queued",
+        clientRequestId: "client-id",
+        messageId: "message-1",
+        position: 1,
+      } as ServerMessage);
     });
-    await expect(acknowledgement).resolves.toBe(true);
+    await expect(acknowledgement).resolves.toEqual({
+      ok: true,
+      clientRequestId: "client-id",
+      messageId: "message-1",
+      position: 1,
+    });
+  });
+
+  it("keeps cancelPrompt pending until the matching server acknowledgement", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    let cancellation!: ReturnType<typeof result.current.cancelPrompt>;
+    act(() => {
+      cancellation = result.current.cancelPrompt("message-1");
+    });
+    await waitFor(() => {
+      expect(socket.sentMessages).toContainEqual({
+        type: "cancel_prompt",
+        messageId: "message-1",
+        clientRequestId: "client-id",
+      });
+    });
+
+    let settled = false;
+    void cancellation.then(() => (settled = true));
+    act(() => {
+      socket.receive({
+        type: "prompt_cancelled",
+        clientRequestId: "another-request",
+        messageId: "message-1",
+      } as ServerMessage);
+      socket.receive({
+        type: "prompt_cancelled",
+        clientRequestId: "client-id",
+        messageId: "another-message",
+      } as ServerMessage);
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    act(() => {
+      socket.receive({
+        type: "prompt_cancelled",
+        clientRequestId: "client-id",
+        messageId: "message-1",
+      } as ServerMessage);
+    });
+    await expect(cancellation).resolves.toEqual({ ok: true, messageId: "message-1" });
+  });
+
+  it("returns a correlated cancellation race error without treating it as success", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    const cancellation = result.current.cancelPrompt("message-1");
+    await waitFor(() => expect(socket.sentMessages).toHaveLength(2));
+    act(() => {
+      socket.receive({
+        type: "error",
+        code: "PROMPT_NOT_CANCELLABLE",
+        message: "This prompt is no longer pending and cannot be removed",
+        clientRequestId: "client-id",
+      } as ServerMessage);
+    });
+
+    await expect(cancellation).resolves.toEqual({
+      ok: false,
+      reason: "rejected",
+      message: "This prompt is no longer pending and cannot be removed",
+    });
+  });
+
+  it("sends correlated prompts without feature negotiation", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    void result.current.sendPrompt("Correlate this");
+    await waitFor(() => {
+      expect(socket.sentMessages).toContainEqual({
+        type: "prompt",
+        clientRequestId: "client-id",
+        content: "Correlate this",
+      });
+    });
+  });
+
+  it("ignores unrelated acknowledgements and errors while a correlated prompt is pending", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    const acknowledgement = result.current.sendPrompt("Review this");
+    act(() => {
+      socket.receive({ type: "error", code: "other", message: "Unrelated failure" });
+      socket.receive({
+        type: "prompt_queued",
+        clientRequestId: "another-client-id",
+        messageId: "message-other",
+        position: 1,
+      } as ServerMessage);
+    });
+    let settled = false;
+    void acknowledgement.then(() => (settled = true));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    act(() => {
+      socket.receive({
+        type: "error",
+        code: "PROMPT_QUEUE_FULL",
+        message: "The prompt queue is full",
+        clientRequestId: "client-id",
+      } as ServerMessage);
+    });
+    await expect(acknowledgement).resolves.toEqual({
+      ok: false,
+      reason: "rejected",
+      message: "The prompt queue is full",
+    });
+  });
+
+  it("immediately rejects a correlated invalid prompt with the server message", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    const acknowledgement = result.current.sendPrompt("x".repeat(65_537));
+    await waitFor(() => expect(socket.sentMessages).toHaveLength(2));
+
+    act(() => {
+      socket.receive({
+        type: "error",
+        code: "INVALID_PROMPT",
+        message: "Prompt exceeds the server limit",
+        clientRequestId: "client-id",
+      } as ServerMessage);
+    });
+
+    await expect(acknowledgement).resolves.toEqual({
+      ok: false,
+      reason: "rejected",
+      message: "Prompt exceeds the server limit",
+    });
   });
 
   it("waits for subscription and reports when a prompt cannot be sent", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
     });
 
-    await expect(result.current.sendPrompt("Too early")).resolves.toBe(false);
+    await expect(result.current.sendPrompt("Too early")).resolves.toEqual({
+      ok: false,
+      reason: "disconnected",
+    });
 
     const socket = FakeWebSocket.instances[0];
     act(() => {
@@ -189,20 +421,92 @@ describe("useSessionSocket", () => {
       socket.receive(createSubscribedMessage());
     });
     await waitFor(() => {
-      expect(socket.sentMessages).toContainEqual({
-        type: "prompt",
-        content: "Wait for subscription",
-      });
+      expect(socket.sentMessages).toContainEqual(
+        expect.objectContaining({
+          type: "prompt",
+          content: "Wait for subscription",
+        })
+      );
     });
 
     act(() => {
       socket.close();
     });
-    await expect(acknowledgement).resolves.toBe(false);
+    await expect(acknowledgement).resolves.toEqual({ ok: false, reason: "disconnected" });
+  });
+
+  it("reuses the caller's request identity when retrying after a reconnect", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const firstSocket = FakeWebSocket.instances[0];
+    act(() => {
+      firstSocket.open();
+      firstSocket.receive(createSubscribedMessage());
+    });
+
+    const firstAttempt = result.current.sendPrompt(
+      "Review this",
+      "model-1",
+      "high",
+      [{ name: "shot.png", attachmentId: "attachment-1" }],
+      "stable-request-id"
+    );
+    await waitFor(() => expect(firstSocket.sentMessages).toHaveLength(2));
+    act(() => firstSocket.close());
+    await expect(firstAttempt).resolves.toEqual({ ok: false, reason: "disconnected" });
+
+    act(() => result.current.reconnect());
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const retrySocket = FakeWebSocket.instances[1];
+    act(() => {
+      retrySocket.open();
+      retrySocket.receive(createSubscribedMessage());
+    });
+    const retry = result.current.sendPrompt(
+      "Review this",
+      "model-1",
+      "high",
+      [{ name: "shot.png", attachmentId: "attachment-1" }],
+      "stable-request-id"
+    );
+
+    await waitFor(() => {
+      const prompts = [...firstSocket.sentMessages, ...retrySocket.sentMessages].filter(
+        (message) => message.type === "prompt"
+      );
+      expect(prompts).toHaveLength(2);
+      expect(prompts.map((message) => message.clientRequestId)).toEqual([
+        "stable-request-id",
+        "stable-request-id",
+      ]);
+      expect(prompts.map((message) => message.attachments)).toEqual([
+        [{ name: "shot.png", attachmentId: "attachment-1" }],
+        [{ name: "shot.png", attachmentId: "attachment-1" }],
+      ]);
+    });
+
+    act(() => {
+      retrySocket.receive({
+        type: "prompt_queued",
+        clientRequestId: "stable-request-id",
+        messageId: "message-1",
+        position: 1,
+      } as ServerMessage);
+    });
+    await expect(retry).resolves.toEqual({
+      ok: true,
+      clientRequestId: "stable-request-id",
+      messageId: "message-1",
+      position: 1,
+    });
   });
 
   it("hydrates artifacts from the subscribed payload", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -251,7 +555,9 @@ describe("useSessionSocket", () => {
   });
 
   it("hydrates screenshot metadata from subscribed artifacts", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -308,7 +614,9 @@ describe("useSessionSocket", () => {
   });
 
   it("revalidates the sidebar session list on title updates", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -329,7 +637,9 @@ describe("useSessionSocket", () => {
   });
 
   it("hydrates replayed assistant text before completion when storage ordering is tied", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -337,21 +647,29 @@ describe("useSessionSocket", () => {
 
     const socket = FakeWebSocket.instances[0];
     const subscribed = createSubscribedMessage();
-    subscribed.replay = {
+    subscribed.timeline = {
       events: [
         {
-          type: "execution_complete",
-          messageId: "msg-1",
-          success: true,
-          sandboxId: "sb-1",
-          timestamp: 2,
+          eventId: "event-1",
+          timelineSequence: 1,
+          event: {
+            type: "token",
+            content: "Final response",
+            messageId: "msg-1",
+            sandboxId: "sb-1",
+            timestamp: 1,
+          },
         },
         {
-          type: "token",
-          content: "Final response",
-          messageId: "msg-1",
-          sandboxId: "sb-1",
-          timestamp: 1,
+          eventId: "event-2",
+          timelineSequence: 2,
+          event: {
+            type: "execution_complete",
+            messageId: "msg-1",
+            success: true,
+            sandboxId: "sb-1",
+            timestamp: 2,
+          },
         },
       ],
       hasMore: false,
@@ -380,7 +698,9 @@ describe("useSessionSocket", () => {
   });
 
   it("hydrates video metadata from subscribed artifacts", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -445,7 +765,9 @@ describe("useSessionSocket", () => {
   });
 
   it("drops wrong-type metadata fields during narrowing", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -494,7 +816,9 @@ describe("useSessionSocket", () => {
   });
 
   it("replaces stale artifacts with the subscribed snapshot", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -530,7 +854,9 @@ describe("useSessionSocket", () => {
   });
 
   it("updates sessionState.branchName from session_branch without mutating the sidebar cache", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -541,6 +867,7 @@ describe("useSessionSocket", () => {
       socket.open();
       socket.receive(createSubscribedMessage());
     });
+    mutateMock.mockClear();
 
     act(() => {
       socket.receive({ type: "session_branch", branchName: "feature/live-update" });
@@ -553,7 +880,9 @@ describe("useSessionSocket", () => {
   });
 
   it("routes a repo-scoped session_branch to the matching member, mirroring the scalar only for the primary", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -590,7 +919,7 @@ describe("useSessionSocket", () => {
 
     act(() => {
       socket.open();
-      socket.receive({ ...createSubscribedMessage(), state: multiRepoState });
+      socket.receive({ ...createSubscribedMessage(), session: multiRepoState });
     });
 
     // Secondary push: update the member, leave the scalar (primary) branch alone.
@@ -632,7 +961,9 @@ describe("useSessionSocket", () => {
   });
 
   it("ignores an unscoped session_branch for a multi-repo session", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -669,7 +1000,7 @@ describe("useSessionSocket", () => {
 
     act(() => {
       socket.open();
-      socket.receive({ ...createSubscribedMessage(), state: multiRepoState });
+      socket.receive({ ...createSubscribedMessage(), session: multiRepoState });
     });
 
     // An identity-less update on a multi-repo session is anomalous — it must not
@@ -689,7 +1020,9 @@ describe("useSessionSocket", () => {
   });
 
   it("updates sessionState.sandboxDashboardUrl from sandbox_dashboard_url", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -716,7 +1049,9 @@ describe("useSessionSocket", () => {
   });
 
   it("clears credentials on spawn and terminal statuses without dropping diagnostic links early", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -726,14 +1061,13 @@ describe("useSessionSocket", () => {
     act(() => {
       socket.open();
       socket.receive(createSubscribedMessage());
-      sendSandboxAccessMessages(socket, "old-sandbox");
+      sendSandboxDashboard(socket, "old-sandbox");
     });
 
     await waitFor(() => {
       expect(result.current.sessionState?.sandboxDashboardUrl).toBe(
         "https://provider.example/old-sandbox"
       );
-      expect(result.current.sessionState?.codeServerUrl).toBe("https://code.example/old-sandbox");
     });
 
     act(() => {
@@ -745,7 +1079,6 @@ describe("useSessionSocket", () => {
       expect(result.current.sessionState?.sandboxDashboardUrl).toBe(
         "https://provider.example/old-sandbox"
       );
-      expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
     });
 
     act(() => {
@@ -755,11 +1088,10 @@ describe("useSessionSocket", () => {
     await waitFor(() => {
       expect(result.current.sessionState?.sandboxStatus).toBe("spawning");
       expect(result.current.sessionState?.sandboxDashboardUrl).toBeUndefined();
-      expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
     });
 
     act(() => {
-      sendSandboxAccessMessages(socket, "new-sandbox");
+      sendSandboxDashboard(socket, "new-sandbox");
       socket.receive({ type: "sandbox_status", status: "failed" });
     });
 
@@ -768,12 +1100,13 @@ describe("useSessionSocket", () => {
       expect(result.current.sessionState?.sandboxDashboardUrl).toBe(
         "https://provider.example/new-sandbox"
       );
-      expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
     });
   });
 
   it("clears dashboard URL only for replacement starts, not sandbox errors", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -783,14 +1116,13 @@ describe("useSessionSocket", () => {
     act(() => {
       socket.open();
       socket.receive(createSubscribedMessage());
-      sendSandboxAccessMessages(socket, "old-sandbox");
+      sendSandboxDashboard(socket, "old-sandbox");
     });
 
     await waitFor(() => {
       expect(result.current.sessionState?.sandboxDashboardUrl).toBe(
         "https://provider.example/old-sandbox"
       );
-      expect(result.current.sessionState?.codeServerUrl).toBe("https://code.example/old-sandbox");
     });
 
     act(() => {
@@ -800,18 +1132,16 @@ describe("useSessionSocket", () => {
     await waitFor(() => {
       expect(result.current.sessionState?.sandboxStatus).toBe("spawning");
       expect(result.current.sessionState?.sandboxDashboardUrl).toBeUndefined();
-      expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
     });
 
     act(() => {
-      sendSandboxAccessMessages(socket, "new-sandbox");
+      sendSandboxDashboard(socket, "new-sandbox");
     });
 
     await waitFor(() => {
       expect(result.current.sessionState?.sandboxDashboardUrl).toBe(
         "https://provider.example/new-sandbox"
       );
-      expect(result.current.sessionState?.codeServerUrl).toBe("https://code.example/new-sandbox");
     });
 
     act(() => {
@@ -828,7 +1158,9 @@ describe("useSessionSocket", () => {
   });
 
   it("prepends new artifacts and replaces duplicates by id", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -914,7 +1246,9 @@ describe("useSessionSocket", () => {
   });
 
   it("applies artifact_updated in place and revalidates the session list", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -978,7 +1312,9 @@ describe("useSessionSocket", () => {
   });
 
   it("does not revalidate the session list for non-PR artifacts", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -1013,7 +1349,9 @@ describe("useSessionSocket", () => {
   });
 
   it("derives prState from tracked lifecycle metadata over the legacy state key", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);

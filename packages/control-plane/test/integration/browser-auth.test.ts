@@ -1,6 +1,5 @@
 import { env } from "cloudflare:test";
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
-import { getMigrations } from "better-auth/db/migration";
 import { verifyGoogleIdToken } from "better-auth/social-providers";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -14,68 +13,72 @@ const PUBLIC_WEB_ORIGIN = "https://web.test.local";
 const SECRET = "test-only-better-auth-secret-with-at-least-32-characters";
 const MS_PER_SECOND = 1000;
 const UNUSED_PROFILE_RESOLVER = async () => null;
-const UNUSED_USER_PROJECTION = { project: async () => {} };
 
-const EXPECTED_COLUMNS = {
-  auth_users: [
-    ["id", "TEXT", 1, 1],
-    ["name", "TEXT", 1, 0],
-    ["email", "TEXT", 1, 0],
-    ["emailVerified", "INTEGER", 1, 0],
-    ["image", "TEXT", 0, 0],
-    ["createdAt", "DATE", 1, 0],
-    ["updatedAt", "DATE", 1, 0],
+/**
+ * Post-consolidation shapes the adapter's field maps depend on: Better Auth's
+ * user/account models live in the canonical tables, sessions/verifications in
+ * their own epoch-ms tables. Tuples are [name, type, notnull, pk] from
+ * PRAGMA table_info — the full column contract, not just names.
+ */
+const EXPECTED_COLUMNS: Record<string, [string, string, number, number][]> = {
+  users: [
+    ["id", "TEXT", 0, 1],
+    ["display_name", "TEXT", 0, 0],
+    ["email", "TEXT", 0, 0],
+    ["avatar_url", "TEXT", 0, 0],
+    ["created_at", "INTEGER", 1, 0],
+    ["updated_at", "INTEGER", 1, 0],
+    ["email_verified", "INTEGER", 1, 0],
+    ["suspended_at", "INTEGER", 0, 0],
+  ],
+  user_identities: [
+    ["id", "TEXT", 0, 1],
+    ["user_id", "TEXT", 1, 0],
+    ["provider", "TEXT", 1, 0],
+    ["provider_user_id", "TEXT", 1, 0],
+    ["provider_login", "TEXT", 0, 0],
+    ["provider_email", "TEXT", 0, 0],
+    ["created_at", "INTEGER", 1, 0],
+    ["provider_issuer", "TEXT", 0, 0],
+    ["access_token", "TEXT", 0, 0],
+    ["refresh_token", "TEXT", 0, 0],
+    ["id_token", "TEXT", 0, 0],
+    ["access_token_expires_at", "INTEGER", 0, 0],
+    ["refresh_token_expires_at", "INTEGER", 0, 0],
+    ["scope", "TEXT", 0, 0],
+    ["password", "TEXT", 0, 0],
+    ["updated_at", "INTEGER", 0, 0],
   ],
   auth_sessions: [
     ["id", "TEXT", 1, 1],
-    ["expiresAt", "DATE", 1, 0],
+    ["expiresAt", "INTEGER", 1, 0],
     ["token", "TEXT", 1, 0],
-    ["createdAt", "DATE", 1, 0],
-    ["updatedAt", "DATE", 1, 0],
+    ["createdAt", "INTEGER", 1, 0],
+    ["updatedAt", "INTEGER", 1, 0],
     ["ipAddress", "TEXT", 0, 0],
     ["userAgent", "TEXT", 0, 0],
     ["userId", "TEXT", 1, 0],
-  ],
-  auth_accounts: [
-    ["id", "TEXT", 1, 1],
-    ["accountId", "TEXT", 1, 0],
-    ["providerId", "TEXT", 1, 0],
-    ["userId", "TEXT", 1, 0],
-    ["accessToken", "TEXT", 0, 0],
-    ["refreshToken", "TEXT", 0, 0],
-    ["idToken", "TEXT", 0, 0],
-    ["accessTokenExpiresAt", "DATE", 0, 0],
-    ["refreshTokenExpiresAt", "DATE", 0, 0],
-    ["scope", "TEXT", 0, 0],
-    ["password", "TEXT", 0, 0],
-    ["createdAt", "DATE", 1, 0],
-    ["updatedAt", "DATE", 1, 0],
   ],
   auth_verifications: [
     ["id", "TEXT", 1, 1],
     ["identifier", "TEXT", 1, 0],
     ["value", "TEXT", 1, 0],
-    ["expiresAt", "DATE", 1, 0],
-    ["createdAt", "DATE", 1, 0],
-    ["updatedAt", "DATE", 1, 0],
+    ["expiresAt", "INTEGER", 1, 0],
+    ["createdAt", "INTEGER", 1, 0],
+    ["updatedAt", "INTEGER", 1, 0],
   ],
-} as const;
+};
 
 function createTestAuth() {
   return createUserAuth({
     database: env.DB,
     publicWebOrigin: PUBLIC_WEB_ORIGIN,
     secret: SECRET,
-    userProjection: UNUSED_USER_PROJECTION,
   });
 }
 
 describe("browser authentication", () => {
-  it("keeps the static schema aligned with the pinned Better Auth runtime", async () => {
-    const migrations = await getMigrations(createTestAuth().options);
-    expect(migrations.toBeCreated).toEqual([]);
-    expect(migrations.toBeAdded).toEqual([]);
-
+  it("keeps the consolidated schema aligned with the adapter's field maps", async () => {
     for (const [table, expectedColumns] of Object.entries(EXPECTED_COLUMNS)) {
       const columns = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{
         name: string;
@@ -88,12 +91,53 @@ describe("browser authentication", () => {
       ).toEqual(expectedColumns);
     }
 
+    // The account model's unique subject key — what lets identities serve as
+    // Better Auth accounts at all.
     const providerIdentityIndex = await env.DB.prepare(
       `SELECT "unique"
-       FROM pragma_index_list('auth_accounts')
-       WHERE name = 'idx_auth_accounts_provider_identity'`
+       FROM pragma_index_list('user_identities')
+       WHERE name = 'idx_user_identities_provider'`
     ).first<{ unique: number }>();
     expect(providerIdentityIndex?.unique).toBe(1);
+    // The email-linking key: unique over non-NULL emails only (bot-created
+    // users may have no email).
+    const emailIndex = await env.DB.prepare(
+      `SELECT "unique", partial
+       FROM pragma_index_list('users')
+       WHERE name = 'idx_users_email'`
+    ).first<{ unique: number; partial: number }>();
+    expect(emailIndex).toEqual({ unique: 1, partial: 1 });
+    // Session tokens are the bearer credential — must be unique.
+    const tokenUnique = await env.DB.prepare(
+      `SELECT COUNT(*) AS count
+       FROM pragma_index_list('auth_sessions') AS il
+       JOIN pragma_index_info(il.name) AS ii
+       WHERE il."unique" = 1 AND ii.name = 'token'`
+    ).first<{ count: number }>();
+    expect(tokenUnique?.count).toBe(1);
+    // Foreign keys target canonical users; deleting a user cascades their
+    // browser sessions but never silently drops identities.
+    const sessionForeignKeys = await env.DB.prepare(
+      `SELECT "table" AS target, "from" AS source_column, "to" AS target_column, on_delete
+       FROM pragma_foreign_key_list('auth_sessions')`
+    ).all();
+    expect(sessionForeignKeys.results).toEqual([
+      { target: "users", source_column: "userId", target_column: "id", on_delete: "CASCADE" },
+    ]);
+    const identityForeignKeys = await env.DB.prepare(
+      `SELECT "table" AS target, "from" AS source_column, "to" AS target_column, on_delete
+       FROM pragma_foreign_key_list('user_identities')`
+    ).all();
+    expect(identityForeignKeys.results).toEqual([
+      { target: "users", source_column: "user_id", target_column: "id", on_delete: "NO ACTION" },
+    ]);
+    // The pre-consolidation Better Auth tables must stay gone: their
+    // reappearance would mean sign-ins writing outside the canonical
+    // registry again (migration 0057 dropped them).
+    const legacyTables = await env.DB.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('auth_users', 'auth_accounts')`
+    ).all();
+    expect(legacyTables.results).toEqual([]);
   });
 
   it("serves an anonymous session through Better Auth on Workers and D1", async () => {
@@ -109,7 +153,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -159,7 +202,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -193,7 +235,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -232,7 +273,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: localOrigin,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -268,7 +308,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       google: {
         clientId: "google-client-id",
         clientSecret: "google-client-secret",
@@ -336,7 +375,6 @@ describe("browser authentication", () => {
         database: env.DB,
         publicWebOrigin: PUBLIC_WEB_ORIGIN,
         secret: SECRET,
-        userProjection: UNUSED_USER_PROJECTION,
         google: {
           clientId,
           clientSecret: "google-client-secret",
@@ -387,7 +425,7 @@ describe("browser authentication", () => {
     if (typeof generateId !== "function") {
       throw new Error("Better Auth canonical ID generator is not configured");
     }
-    expect(generateId({ model: "user" })).toMatch(/^[a-f0-9]{32}$/);
+    expect(generateId()).toMatch(/^[a-f0-9]{32}$/);
     expect(auth.options.session?.expiresIn).toBe(SESSION_EXPIRES_IN_MS / MS_PER_SECOND);
     expect(auth.options.session?.updateAge).toBe(SESSION_UPDATE_AGE_MS / MS_PER_SECOND);
   });

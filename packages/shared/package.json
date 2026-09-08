@@ -22,6 +22,10 @@
       "import": "./dist/models.js",
       "types": "./dist/models.d.ts"
     },
+    "./classification": {
+      "import": "./dist/classification.js",
+      "types": "./dist/classification.d.ts"
+    },
     "./logger": {
       "import": "./dist/logger.js",
       "types": "./dist/logger.d.ts"
@@ -34,13 +38,29 @@
       "import": "./dist/app-name.js",
       "types": "./dist/app-name.d.ts"
     },
+    "./http-body": {
+      "import": "./dist/http-body.js",
+      "types": "./dist/http-body.d.ts"
+    },
+    "./regex": {
+      "import": "./dist/regex.js",
+      "types": "./dist/regex.d.ts"
+    },
     "./user-id": {
       "import": "./dist/user-id.js",
       "types": "./dist/user-id.d.ts"
     },
+    "./rbac": {
+      "import": "./dist/rbac.js",
+      "types": "./dist/rbac.d.ts"
+    },
     "./browser-auth-routes": {
       "import": "./dist/browser-auth-routes.js",
       "types": "./dist/browser-auth-routes.d.ts"
+    },
+    "./session-list-query": {
+      "import": "./dist/session-list-query.js",
+      "types": "./dist/session-list-query.d.ts"
     },
     "./types/commit-signing": {
       "import": "./dist/types/commit-signing.js",
@@ -53,6 +73,10 @@
     "./types/github-identity": {
       "import": "./dist/types/github-identity.js",
       "types": "./dist/types/github-identity.d.ts"
+    },
+    "./types/github-autofix": {
+      "import": "./dist/types/github-autofix.js",
+      "types": "./dist/types/github-autofix.d.ts"
     },
     "./types/image-builds": {
       "import": "./dist/types/image-builds.js",
@@ -82,6 +106,10 @@
       "import": "./dist/slack/index.js",
       "types": "./dist/slack/index.d.ts"
     },
+    "./pull-request-tool": {
+      "import": "./dist/pull-request-tool.js",
+      "types": "./dist/pull-request-tool.d.ts"
+    },
     "./completion/extractor": {
       "import": "./dist/completion/extractor.js",
       "types": "./dist/completion/extractor.d.ts"
@@ -98,6 +126,10 @@
       "import": "./dist/types/automations.js",
       "types": "./dist/types/automations.d.ts"
     },
+    "./types/provider-accounts": {
+      "import": "./dist/types/provider-accounts.js",
+      "types": "./dist/types/provider-accounts.d.ts"
+    },
     "./types/websocket": {
       "import": "./dist/types/websocket.js",
       "types": "./dist/types/websocket.d.ts"
@@ -105,6 +137,30 @@
     "./types/server-messages": {
       "import": "./dist/types/server-messages.js",
       "types": "./dist/types/server-messages.d.ts"
+    },
+    "./types/sandbox-events": {
+      "import": "./dist/types/sandbox-events.js",
+      "types": "./dist/types/sandbox-events.d.ts"
+    },
+    "./types/sessions": {
+      "import": "./dist/types/sessions.js",
+      "types": "./dist/types/sessions.d.ts"
+    },
+    "./types/session-inbox": {
+      "import": "./dist/types/session-inbox.js",
+      "types": "./dist/types/session-inbox.d.ts"
+    },
+    "./types/session-activity": {
+      "import": "./dist/types/session-activity.js",
+      "types": "./dist/types/session-activity.d.ts"
+    },
+    "./types/artifacts": {
+      "import": "./dist/types/artifacts.js",
+      "types": "./dist/types/artifacts.d.ts"
+    },
+    "./types/session-api": {
+      "import": "./dist/types/session-api.js",
+      "types": "./dist/types/session-api.d.ts"
     },
     "./types/session-attachments": {
       "import": "./dist/types/session-attachments.js",
@@ -114,9 +170,25 @@
       "import": "./dist/types/session-diffs.js",
       "types": "./dist/types/session-diffs.d.ts"
     },
+    "./types/skills": {
+      "import": "./dist/types/skills.js",
+      "types": "./dist/types/skills.d.ts"
+    },
+    "./types/keyboard-shortcuts": {
+      "import": "./dist/types/keyboard-shortcuts.js",
+      "types": "./dist/types/keyboard-shortcuts.d.ts"
+    },
+    "./types/prompts": {
+      "import": "./dist/types/prompts.js",
+      "types": "./dist/types/prompts.d.ts"
+    },
     "./types/analytics": {
       "import": "./dist/types/analytics.js",
       "types": "./dist/types/analytics.d.ts"
+    },
+    "./types/audit-events": {
+      "import": "./dist/types/audit-events.js",
+      "types": "./dist/types/audit-events.d.ts"
     }
   },
   "scripts": {

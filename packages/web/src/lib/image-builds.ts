@@ -5,28 +5,69 @@
  * build-provenance accessor shared by both settings surfaces.
  */
 
-import type {
-  ImageBuildRecordView,
-  ImageBuildScopeKind,
-  ImageBuildStatus,
+import {
+  imageBuildScopeKindSchema,
+  imageBuildStatusResponseSchema,
+  type ImageBuildRecordView,
+  type ImageBuildScopeKind,
+  type ImageBuildStatus,
+  type RepositoryShaEntry,
 } from "@open-inspect/shared/types/image-builds";
+import { z } from "zod";
 
 /** SWR key for the unified image-build feed. */
 export const IMAGE_BUILDS_KEY = "/api/image-builds";
 
-/** One prebuild-enabled scope as served by GET /api/image-builds. */
-export interface ImageBuildUnitView {
-  scopeKind: ImageBuildScopeKind;
-  scopeId: string;
-  /** The scope's current repo-set fingerprint — build rows with any other fingerprint are stale. */
-  repositoriesFingerprint: string;
+/** Poll cadence for a build-row feed showing a build still in progress. */
+export const IMAGE_BUILD_POLL_INTERVAL_MS = 30_000;
+
+/**
+ * Background cadence for a loaded, all-terminal feed. Builds also start
+ * without any client action — the cron scheduler, and save hooks that run
+ * detached from the CRUD response that scheduled them — so a terminal feed
+ * keeps refreshing slowly to discover new builds.
+ */
+export const IMAGE_BUILD_IDLE_POLL_INTERVAL_MS = 120_000;
+
+/**
+ * SWR `refreshInterval` for build-row feeds: fast while a build is visibly in
+ * progress, slow discovery otherwise. Before the first response (or after an
+ * error) this returns 0 — SWR's own retry and revalidation own that phase.
+ */
+export function imageBuildPollInterval(images: ImageBuildRecordView[] | undefined): number {
+  if (!images) return 0;
+  return images.some((image) => image.status === "building")
+    ? IMAGE_BUILD_POLL_INTERVAL_MS
+    : IMAGE_BUILD_IDLE_POLL_INTERVAL_MS;
 }
 
+/** One prebuild-enabled scope as served by GET /api/image-builds. */
+export const imageBuildUnitViewSchema = z.object({
+  scopeKind: imageBuildScopeKindSchema,
+  scopeId: z.string(),
+  /** The scope's current repo-set fingerprint — build rows with any other fingerprint are stale. */
+  repositoriesFingerprint: z.string(),
+});
+
+export type ImageBuildUnitView = z.infer<typeof imageBuildUnitViewSchema>;
+
 /** One persisted repo prebuild flag as served by GET /api/image-builds. */
-export interface ImageBuildEnabledRepoView {
-  repoOwner: string;
-  repoName: string;
-}
+export const imageBuildEnabledRepoViewSchema = z.object({
+  repoOwner: z.string(),
+  repoName: z.string(),
+});
+
+export type ImageBuildEnabledRepoView = z.infer<typeof imageBuildEnabledRepoViewSchema>;
+
+export const imageBuildsEnabledResponseSchema = z.object({
+  units: z.array(imageBuildUnitViewSchema),
+});
+
+export const imageBuildsEnabledReposResponseSchema = z.object({
+  repos: z.array(imageBuildEnabledRepoViewSchema),
+});
+
+export const imageBuildsStatusResponseSchema = imageBuildStatusResponseSchema;
 
 /**
  * Response shape of GET /api/image-builds.
@@ -101,9 +142,9 @@ export function foldImageBuildStatusByScope(
   );
   const statusByScope = new Map<string, ImageBuildStatus>();
   for (const image of images) {
-    const key = imageBuildScopeKey(image.scope_kind, image.scope_id);
+    const key = imageBuildScopeKey(image.scopeKind, image.scopeId);
     const currentFingerprint = currentFingerprintByScope.get(key);
-    if (currentFingerprint !== undefined && image.repositories_fingerprint !== currentFingerprint) {
+    if (currentFingerprint !== undefined && image.repositoriesFingerprint !== currentFingerprint) {
       continue;
     }
     const current = statusByScope.get(key);
@@ -115,20 +156,18 @@ export function foldImageBuildStatusByScope(
 }
 
 /**
- * The primary repository's baseSha out of a build's provenance document
- * (`repository_shas`, the JSON-encoded RepositoryShaEntry[] column value).
+ * The primary repository's baseSha out of a build's decoded provenance.
  */
-export function parsePrimaryBuildSha(repositoryShas: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(repositoryShas);
-    if (!Array.isArray(parsed)) return null;
-    const primary: unknown = parsed[0];
-    if (primary && typeof primary === "object" && "baseSha" in primary) {
-      const sha = (primary as { baseSha?: unknown }).baseSha;
-      return typeof sha === "string" ? sha : null;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+export function parsePrimaryBuildSha(repositoryShas: RepositoryShaEntry[] | null): string | null {
+  return repositoryShas?.[0]?.baseSha ?? null;
+}
+
+/** Formats the ready-details line shared by both image families. */
+export function formatReadyDetails(
+  buildSha: string | null | undefined,
+  buildDurationSeconds: number | null | undefined
+): string {
+  const sha = buildSha ? buildSha.slice(0, 7) : "";
+  const duration = buildDurationSeconds ? `${Math.round(buildDurationSeconds)}s` : "";
+  return [sha, duration].filter(Boolean).join(" · ");
 }

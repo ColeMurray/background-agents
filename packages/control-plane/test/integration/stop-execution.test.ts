@@ -36,13 +36,21 @@ describe("POST /internal/stop", () => {
     const body = await res.json<{ status: string }>();
     expect(body.status).toBe("stopping");
 
-    const messages = await queryDO<{ status: string; completed_at: number | null }>(
+    const messages = await queryDO<{
+      status: string;
+      completed_at: number | null;
+      error_message: string | null;
+      stop_confirmation_deadline: number | null;
+    }>(
       stub,
-      "SELECT status, completed_at FROM messages WHERE id = ?",
+      `SELECT status, completed_at, error_message, stop_confirmation_deadline
+       FROM messages WHERE id = ?`,
       msgId
     );
     expect(messages[0].status).toBe("failed");
     expect(messages[0].completed_at).toEqual(expect.any(Number));
+    expect(messages[0].error_message).toBe("Execution was stopped");
+    expect(messages[0].stop_confirmation_deadline).toBeNull();
   });
 
   it("is idempotent with no processing message", async () => {
@@ -293,6 +301,13 @@ describe("POST /internal/stop", () => {
     if (sandboxWs) sandboxWs.accept();
     // Stop execution - marks A as failed
     await stub.fetch("http://internal/internal/stop", { method: "POST" });
+
+    const stopped = await queryDO<{
+      error_message: string | null;
+      stop_confirmation_deadline: number | null;
+    }>(stub, "SELECT error_message, stop_confirmation_deadline FROM messages WHERE id = ?", msgA);
+    expect(stopped[0].error_message).toBe("Execution was stopped");
+    expect(stopped[0].stop_confirmation_deadline).toEqual(expect.any(Number));
 
     // Bridge sends late execution_complete for A → triggers queue drain
     await stub.fetch("http://internal/internal/sandbox-event", {

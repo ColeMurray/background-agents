@@ -23,7 +23,7 @@ export type ResolvedDiffSelection =
     }
   | { status: "missing"; revisionId: string };
 
-export type SessionDiffViewKind =
+type SessionDiffViewKind =
   | "hidden"
   | "loading"
   | "error"

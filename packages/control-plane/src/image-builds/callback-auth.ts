@@ -3,17 +3,16 @@
  *
  * Every build callback authenticates with the single-use bearer token minted
  * at trigger time; only its HMAC hash is stored on the build row. The store
- * additionally binds every token to the exact provider session.
- *
- * Helpers here are log-free and throw ImageBuildCallbackAuthError; callers
- * (the workflow) log and map to the route-facing error taxonomy.
+ * additionally binds every token to the exact provider session. Helpers here
+ * are log-free; the workflow logs failures and maps them to the route-facing
+ * error taxonomy.
  */
 
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { Env } from "../types";
 
 export const IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
-export const IMAGE_BUILD_CALLBACK_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+const IMAGE_BUILD_CALLBACK_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 
 export function generateImageBuildCallbackToken(): string {
   const bytes = new Uint8Array(32);
@@ -57,14 +56,3 @@ export function getImageBuildCallbackBearerToken(request: Request): string | nul
  * callback-token pepper bound).
  */
 export type ImageBuildCallbackAuthFailure = "rejected" | "misconfigured";
-
-export class ImageBuildCallbackAuthError extends Error {
-  constructor(
-    readonly failure: ImageBuildCallbackAuthFailure,
-    message: string,
-    cause?: unknown
-  ) {
-    super(message, cause === undefined ? undefined : { cause });
-    this.name = "ImageBuildCallbackAuthError";
-  }
-}

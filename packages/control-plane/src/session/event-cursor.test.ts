@@ -20,6 +20,26 @@ describe("event cursor helpers", () => {
     });
   });
 
+  it("round-trips stable timeline sequences", () => {
+    const encoded = encodeEventTimelineCursor({
+      kind: "timeline",
+      createdAt: 5000,
+      sequence: 42,
+      id: "tool_call:task-1",
+    });
+
+    expect(encoded).toBe("5000:42:tool_call%3Atask-1");
+    expect(parseEventTimelineCursor(encoded)).toEqual({
+      ok: true,
+      cursor: {
+        kind: "timeline",
+        createdAt: 5000,
+        sequence: 42,
+        id: "tool_call:task-1",
+      },
+    });
+  });
+
   it("allows legacy timestamp cursors only on event lists", () => {
     expect(parseEventListCursor("5000")).toEqual({
       ok: true,

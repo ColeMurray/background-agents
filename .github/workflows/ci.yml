@@ -1,10 +1,79 @@
-name: CI
+name: CI (TypeScript)
 
 on:
   push:
     branches: [main]
+    paths:
+      - ".env.example"
+      - ".github/workflows/ci.yml"
+      - ".prettierignore"
+      - ".prettierrc"
+      - "eslint.config.js"
+      - "knip.json"
+      - "package-lock.json"
+      - "package.json"
+      - "packages/control-plane/**"
+      - "packages/github-bot/**"
+      - "packages/linear-bot/**"
+      - "packages/opencomputer-infra/**"
+      - "packages/sandbox-runtime/**"
+      - "packages/sandbox-images/**"
+      - "packages/vercel-infra/**"
+      - "packages/shared/**"
+      - "packages/slack-bot/**"
+      - "packages/web/**"
+      - "scripts/**"
+      - "terraform/d1/migrations/**"
+      # Unit tests hold the Worker's cron triggers and queue consumers equal
+      # to what Terraform declares, so a Terraform-only change must run them.
+      - "terraform/environments/production/**"
+      - "vitest.workspace.ts"
+      - "!**/*.md"
+      - "packages/sandbox-runtime/src/**"
+      - "packages/sandbox-images/**"
+      # Re-included after the exclusion above, which later patterns override: a
+      # unit test holds this document's quick start to the required variables.
+      - "docs/CONTROL_PLANE_CONTAINER.md"
   pull_request:
     branches: [main]
+    paths:
+      - ".env.example"
+      - ".github/workflows/ci.yml"
+      - ".prettierignore"
+      - ".prettierrc"
+      - "eslint.config.js"
+      - "knip.json"
+      - "package-lock.json"
+      - "package.json"
+      - "packages/control-plane/**"
+      - "packages/github-bot/**"
+      - "packages/linear-bot/**"
+      - "packages/opencomputer-infra/**"
+      - "packages/sandbox-runtime/**"
+      - "packages/sandbox-images/**"
+      - "packages/vercel-infra/**"
+      - "packages/shared/**"
+      - "packages/slack-bot/**"
+      - "packages/web/**"
+      - "scripts/**"
+      - "terraform/d1/migrations/**"
+      # Unit tests hold the Worker's cron triggers and queue consumers equal
+      # to what Terraform declares, so a Terraform-only change must run them.
+      - "terraform/environments/production/**"
+      - "vitest.workspace.ts"
+      - "!**/*.md"
+      - "packages/sandbox-runtime/src/**"
+      - "packages/sandbox-images/**"
+      # Re-included after the exclusion above, which later patterns override: a
+      # unit test holds this document's quick start to the required variables.
+      - "docs/CONTROL_PLANE_CONTAINER.md"
+
+permissions:
+  contents: read
+
+env:
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_PREFER_OFFLINE: "true"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,7 +83,7 @@ jobs:
   lint-typescript:
     name: Lint & Format (TypeScript)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -22,7 +91,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          # Minimum supported release: node:sqlite is available without an
+          # additional flag and --experimental-transform-types is present.
+          node-version: "22.13.0"
           cache: "npm"
 
       - name: Install dependencies
@@ -34,13 +105,31 @@ jobs:
       - name: Test complexity reporter
         run: npm run test:lint-complexity
 
+      - name: Check SQL portability
+        run: npm run lint:sql-portability
+
+      - name: Test SQL portability check
+        run: npm run test:lint-sql-portability
+
+      - name: Test Owner bootstrap CLI
+        run: npm run test:rbac-bootstrap-owner
+
+      - name: Test user merge CLI
+        run: npm run test:user-merge-cli
+
+      - name: Test Cloudflare logs CLI
+        run: npm run test:cf-logs-cli
+
       - name: Check Prettier formatting
         run: npm run format:check
+
+      - name: Run Knip (unused code detection)
+        run: npm run knip -- --no-exit-code
 
   typecheck-typescript:
     name: TypeCheck (TypeScript)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -83,121 +172,12 @@ jobs:
       - name: Build web package
         run: npm run build -w @open-inspect/web
 
-  lint-python-sandbox-runtime:
-    name: Lint & Format (Python - sandbox-runtime)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: packages/sandbox-runtime
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run Ruff linter
-        run: ruff check src/ tests/
-
-      - name: Run Ruff formatter check
-        run: ruff format --check src/ tests/
-
-  lint-python:
-    name: Lint & Format (Python - modal-infra)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: packages/modal-infra
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ../sandbox-runtime
-          pip install -e ".[dev]"
-
-      - name: Run Ruff linter
-        run: ruff check src/
-
-      - name: Run Ruff formatter check
-        run: ruff format --check src/
-
-  typecheck-python:
-    name: TypeCheck (Python)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: packages/modal-infra
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ../sandbox-runtime
-          pip install -e ".[dev]"
-
-      - name: Run MyPy
-        run: mypy src/
-        continue-on-error: true # Allow failures initially as types are added
-
-  typecheck-python-sandbox-runtime:
-    name: TypeCheck (Python - sandbox-runtime)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: [lint-python-sandbox-runtime]
-    defaults:
-      run:
-        working-directory: packages/sandbox-runtime
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run MyPy
-        run: mypy src/
-        continue-on-error: true # Allow failures initially as types are added
-
   test-cp-unit:
     name: Test (control-plane unit)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # The suite itself runs in under a minute; the budget is for a slow
+    # dependency install, which has taken over four minutes on a warm cache.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -217,6 +197,9 @@ jobs:
       - name: Run shared tests
         run: npm test -w @open-inspect/shared
 
+      # Runs the node:sqlite lane of the session-core conformance suite
+      # (test/conformance). The Durable Object lane of the same suite runs in
+      # test-cp-integration; a session repository or migration has to pass both.
       - name: Run control-plane unit tests
         run: npm test -w @open-inspect/control-plane
 
@@ -244,16 +227,15 @@ jobs:
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
 
-      - name: Install workerd runtime dependency
-        run: sudo apt-get update && sudo apt-get install -y libc++1
-
+      # Runs the Durable Object lane of the session-core conformance suite.
+      # The node:sqlite lane of the same suite runs in test-cp-unit.
       - name: Run control-plane integration tests
         run: npm run test:integration -w @open-inspect/control-plane -- --shard=${{ matrix.shard }}
 
   test-web:
     name: Test (web)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -276,7 +258,7 @@ jobs:
   test-bots:
     name: Test (bots)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -301,56 +283,3 @@ jobs:
 
       - name: Run linear-bot tests
         run: npm test -w @open-inspect/linear-bot
-
-  test-python-sandbox-runtime:
-    name: Test (Python - sandbox-runtime)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: [lint-python-sandbox-runtime]
-    defaults:
-      run:
-        working-directory: packages/sandbox-runtime
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run tests
-        run: pytest tests/ -v
-
-  test-python:
-    name: Test (Python - modal-infra)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: [lint-python]
-    defaults:
-      run:
-        working-directory: packages/modal-infra
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ../sandbox-runtime
-          pip install -e ".[dev]"
-
-      - name: Run tests
-        run: pytest tests/ -v

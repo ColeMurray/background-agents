@@ -9,7 +9,11 @@
  * then executes the appropriate side effects (API calls, broadcasts, etc.)
  */
 
-import type { SandboxStatus } from "../../types";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import {
+  MIN_COMPATIBLE_RUNTIME_VERSION,
+  parseRuntimeVersionNumber,
+} from "../../image-builds/model";
 
 // ==================== Dead-Sandbox Policy ====================
 
@@ -20,14 +24,20 @@ import type { SandboxStatus } from "../../types";
  * through to their own checks (e.g. token comparison) instead of locking out
  * every sandbox.
  */
-export const DEAD_SANDBOX_STATUSES: ReadonlySet<SandboxStatus> = new Set([
-  "stopped",
-  "stale",
-  "failed",
-]);
+const DEAD_SANDBOX_STATUSES: ReadonlySet<SandboxStatus> = new Set(["stopped", "stale", "failed"]);
 
 export function isDeadSandboxStatus(status: SandboxStatus): boolean {
   return DEAD_SANDBOX_STATUSES.has(status);
+}
+
+/**
+ * Whether a sandbox lifecycle state must reject bridge reconnects.
+ *
+ * Failed is intentionally reconnectable: a slow boot can outlive the
+ * connecting watchdog and then self-heal when its bridge arrives.
+ */
+export function isSandboxReconnectBlockedStatus(status: SandboxStatus): boolean {
+  return status === "stopped" || status === "stale";
 }
 
 // ==================== Circuit Breaker ====================
@@ -140,6 +150,12 @@ export interface SandboxState {
   providerObjectId?: string | null;
   /** Snapshot image ID if available for restore */
   snapshotImageId: string | null;
+  /**
+   * SANDBOX_VERSION of the runtime that produced `snapshotImageId`, or null
+   * when the snapshot predates version recording. Gates restore — see
+   * {@link isSnapshotRuntimeCompatible}.
+   */
+  snapshotRuntimeVersion: string | null;
   /** Whether an active WebSocket connection exists */
   hasActiveWebSocket: boolean;
 }
@@ -175,12 +191,34 @@ export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
 };
 
 /**
+ * Whether a filesystem snapshot may be booted again.
+ *
+ * A snapshot carries the whole sandbox filesystem, including the pinned agent
+ * binary, so restoring one silently resurrects the runtime that took it. A
+ * runtime fix therefore never reaches a session that keeps restoring — the
+ * failure mode that stranded every pre-existing session on the OpenCode
+ * message-ID wraparound. Bumping MIN_COMPATIBLE_RUNTIME_VERSION now retires
+ * those snapshots the same way it retires prebuilt images.
+ *
+ * Fails closed, matching image selection: a snapshot whose runtime version was
+ * never recorded (taken before this column existed) or does not parse is
+ * treated as below the floor. The cost is one fresh spawn — the sandbox's
+ * uncommitted filesystem state — after which the next snapshot records its
+ * version and restores resume as normal.
+ */
+export function isSnapshotRuntimeCompatible(snapshotRuntimeVersion: string | null): boolean {
+  if (!snapshotRuntimeVersion) return false;
+  const version = parseRuntimeVersionNumber(snapshotRuntimeVersion);
+  return version !== null && version >= MIN_COMPATIBLE_RUNTIME_VERSION;
+}
+
+/**
  * Possible spawn actions.
  */
 export type SpawnAction =
-  | { action: "spawn" }
+  | { action: "spawn"; reason?: string }
   | { action: "resume"; providerObjectId: string }
-  | { action: "restore"; snapshotImageId: string }
+  | { action: "restore"; snapshotImageId: string; snapshotRuntimeVersion: string }
   | { action: "skip"; reason: string }
   | { action: "wait"; reason: string };
 
@@ -188,7 +226,8 @@ export type SpawnAction =
  * Evaluate what spawn action to take.
  *
  * This function encapsulates the complex spawn decision logic:
- * - Restore from snapshot if available and sandbox is stopped/stale/failed
+ * - Restore from snapshot if available, compatible, and sandbox is
+ *   stopped/stale/failed
  * - Skip if already spawning/connecting
  * - Skip if ready with active WebSocket
  * - Wait if ready without WebSocket but recently spawned
@@ -205,7 +244,13 @@ export type SpawnAction =
  * @example
  * ```typescript
  * const decision = evaluateSpawnDecision(
- *   { status: "stopped", createdAt: ..., snapshotImageId: "img-123", hasActiveWebSocket: false },
+ *   {
+ *     status: "stopped",
+ *     createdAt: ...,
+ *     snapshotImageId: "img-123",
+ *     snapshotRuntimeVersion: "v59-runtime",
+ *     hasActiveWebSocket: false,
+ *   },
  *   { cooldownMs: 30000, readyWaitMs: 60000 },
  *   Date.now(),
  *   false
@@ -224,10 +269,10 @@ export function evaluateSpawnDecision(
 ): SpawnAction {
   const timeSinceLastSpawn = now - state.createdAt;
 
-  // In-memory flag first: it is set synchronously when a spawn/restore starts,
-  // but the persisted "spawning" status lands only after the first await. A
-  // second evaluation in that window must not pick resume/restore again, or
-  // concurrent prompts launch duplicate sandboxes.
+  // In-memory flag first: it is set synchronously when a spawn/restore starts
+  // and stays up until the provider call resolves. A second evaluation in
+  // that window must not pick resume/restore again, or concurrent prompts
+  // launch duplicate sandboxes.
   if (isSpawningInMemory) {
     return { action: "skip", reason: "spawn already in progress (in-memory flag)" };
   }
@@ -246,7 +291,19 @@ export function evaluateSpawnDecision(
     state.snapshotImageId &&
     (state.status === "stopped" || state.status === "stale" || state.status === "failed")
   ) {
-    return { action: "restore", snapshotImageId: state.snapshotImageId };
+    if (isSnapshotRuntimeCompatible(state.snapshotRuntimeVersion)) {
+      return {
+        action: "restore",
+        snapshotImageId: state.snapshotImageId,
+        // Non-null: the compatibility check above rejects a missing version.
+        snapshotRuntimeVersion: state.snapshotRuntimeVersion as string,
+      };
+    }
+    // Fall through to a fresh spawn rather than booting a retired runtime.
+    return {
+      action: "spawn",
+      reason: `snapshot runtime ${state.snapshotRuntimeVersion ?? "unknown"} is below the v${MIN_COMPATIBLE_RUNTIME_VERSION} floor`,
+    };
   }
 
   // Don't spawn if a spawn/connect is genuinely in progress (persisted status).
@@ -358,7 +415,7 @@ export type InactivityAction =
  * );
  * if (decision.action === "extend") {
  *   // Warn user and schedule next check
- *   await scheduleAlarm(now + decision.extensionMs);
+ *   await alarmScheduler.schedule(now + decision.extensionMs);
  * }
  * ```
  */
@@ -377,8 +434,8 @@ export function evaluateInactivityTimeout(
     return { action: "schedule", nextCheckMs: config.minCheckIntervalMs };
   }
 
-  // Only check inactivity for ready or running sandboxes
-  if (state.status !== "ready" && state.status !== "running") {
+  // Only check inactivity for a sandbox that is actually attached
+  if (state.status !== "ready") {
     return { action: "schedule", nextCheckMs: config.minCheckIntervalMs };
   }
 
@@ -601,10 +658,7 @@ export interface ExecutionTimeoutConfig {
 }
 
 /**
- * Default: 90 minutes — matches the bridge's PROMPT_MAX_DURATION.
- * The control plane timeout should never preempt the bridge's own timeout for
- * legitimate long-running prompts. It fires only when the bridge is dead and
- * can't enforce its own timeout.
+ * Legacy fallback for sessions without a configured sandbox timeout.
  */
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 90 * 60 * 1000;
 

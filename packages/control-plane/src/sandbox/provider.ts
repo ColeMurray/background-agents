@@ -5,12 +5,46 @@
  * enabling unit testing and future provider support.
  */
 
+import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../logger";
+import { RequestDeadlineError } from "./request-deadline";
 import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 
 /** Default sandbox lifetime in seconds (2 hours). */
 export const DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200;
+
+/**
+ * Provider-neutral configuration for triggering an image build inside a
+ * provider session. Every supported provider follows the same
+ * create-bind-launch contract: create the build sandbox, bind its provider
+ * session id via `onProviderSessionCreated`, then launch the build runtime.
+ * Providers that need extra fields extend this type (see
+ * ModalImageBuildTriggerConfig).
+ */
+export interface ImageBuildProviderTriggerConfig {
+  buildId: string;
+  scopeKind: ImageBuildScopeKind;
+  /** Build scope id; used only for sandbox naming/labels. */
+  scopeId: string;
+  /** Repositories in position order ([0] = primary), cloned at their base branches. */
+  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+  callbackUrl: string;
+  failureCallbackUrl: string;
+  callbackToken: string;
+  userEnvVars?: Record<string, string>;
+  cloneToken?: string;
+  buildExecutionTimeoutSeconds: number;
+  /**
+   * Provider-session lifetime in seconds, including deferred finalization
+   * headroom. Always resolved by the adapter layer
+   * (resolveImageBuildProviderSessionTimeoutSeconds) — providers apply it
+   * verbatim instead of choosing their own default.
+   */
+  providerSessionTimeoutSeconds: number;
+  onProviderSessionCreated: (providerSessionId: string) => Promise<void>;
+  correlation: CorrelationContext;
+}
 
 /**
  * Capabilities supported by a sandbox provider.
@@ -84,6 +118,8 @@ export interface CreateSandboxConfig {
   branch?: string | null;
   /** Whether to enable code-server (browser-based editor) in the sandbox */
   codeServerEnabled?: boolean;
+  /** Whether to enable browser-based VNC access to the sandbox */
+  vncEnabled?: boolean;
   /**
    * Whether to install the agent-initiated slack-notify tool. Fixed for the
    * lifetime of the sandbox; per-call authorization is re-evaluated by the
@@ -105,6 +141,20 @@ export interface CreateSandboxConfig {
   repositories?: SessionRepositoryInfo[];
 }
 
+/** Complete browser-desktop access credential returned by sandbox providers. */
+export interface VncAccess {
+  url: string;
+  password: string;
+}
+
+/** Build a complete VNC access credential, or omit incomplete provider data. */
+export function createVncAccess(
+  url: string | undefined,
+  password: string | undefined
+): VncAccess | undefined {
+  return url && password ? { url, password } : undefined;
+}
+
 /**
  * Result of creating a sandbox.
  */
@@ -113,8 +163,6 @@ export interface CreateSandboxResult {
   sandboxId: string;
   /** Provider's internal object ID (e.g., Modal's object ID for snapshot API) */
   providerObjectId?: string;
-  /** Initial sandbox status */
-  status: string;
   /** Creation timestamp */
   createdAt: number;
   /** Code-server tunnel URL (if available) */
@@ -123,6 +171,8 @@ export interface CreateSandboxResult {
   codeServerPassword?: string;
   /** ttyd proxy tunnel URL (if available) */
   ttydUrl?: string;
+  /** Complete browser-based VNC credential (if available) */
+  vncAccess?: VncAccess;
   /** Tunnel URLs for extra ports (port -> URL mapping) */
   tunnelUrls?: Record<string, string>;
 }
@@ -161,6 +211,8 @@ export interface RestoreConfig {
   correlation?: CorrelationContext;
   /** Whether to enable code-server (browser-based editor) in the sandbox */
   codeServerEnabled?: boolean;
+  /** Whether to enable browser-based VNC access to the sandbox */
+  vncEnabled?: boolean;
   /** Resolved fresh on each restore — see CreateSandboxConfig. */
   agentSlackNotifyEnabled?: boolean;
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
@@ -187,6 +239,8 @@ export interface RestoreResult {
   codeServerPassword?: string;
   /** ttyd proxy tunnel URL (if available) */
   ttydUrl?: string;
+  /** Complete browser-based VNC credential (if available) */
+  vncAccess?: VncAccess;
   /** Tunnel URLs for extra ports (port -> URL mapping) */
   tunnelUrls?: Record<string, string>;
 }
@@ -233,6 +287,8 @@ export interface ResumeConfig {
   timeoutSeconds?: number;
   /** Whether code-server should be exposed */
   codeServerEnabled?: boolean;
+  /** Whether browser-based VNC access should be exposed */
+  vncEnabled?: boolean;
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
   /** Correlation context for downstream tracing */
@@ -255,6 +311,8 @@ export interface ResumeResult {
   codeServerUrl?: string;
   /** Code-server password (if available) */
   codeServerPassword?: string;
+  /** Complete browser-based VNC credential (if available) */
+  vncAccess?: VncAccess;
   /** Tunnel URLs for extra ports (port -> URL mapping) */
   tunnelUrls?: Record<string, string>;
 }
@@ -334,6 +392,7 @@ export class SandboxProviderError extends Error {
    * Check if an error is likely a transient network error.
    */
   static isTransientNetworkError(error: unknown): boolean {
+    if (error instanceof RequestDeadlineError) return true;
     if (error instanceof Error) {
       const message = error.message.toLowerCase();
       return (

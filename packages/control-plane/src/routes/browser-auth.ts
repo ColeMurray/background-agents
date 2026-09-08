@@ -1,7 +1,16 @@
 import { BROWSER_AUTH_PROXY_ROUTES } from "@open-inspect/shared/browser-auth-routes";
+import { Hono } from "hono";
 import { type BetterAuthRuntime, UserAuthConfigurationError } from "../auth/user/runtime";
 import { createLogger } from "../logger";
-import { error, parsePattern, type Route } from "./shared";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { Env } from "../types";
+import {
+  error,
+  NO_AUTHORIZATION,
+  type RequestContext,
+  SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
+} from "./shared";
 
 const logger = createLogger("browser-auth");
 
@@ -43,21 +52,18 @@ export async function forwardBrowserAuthRequest(
   return auth.handler(request);
 }
 
-function requireWebService(route: Route["handler"]): Route["handler"] {
-  return async (request, env, match, ctx) => {
-    if (ctx.principal?.kind !== "service" || ctx.principal.service !== "web") {
-      return error("Unauthorized", 401);
-    }
-    return route(request, env, match, ctx);
-  };
-}
-
-const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) => {
+async function handleBrowserAuth(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   try {
     if (!ctx.getUserAuth) {
       throw new UserAuthConfigurationError("User authentication runtime is unavailable");
     }
-    const response = await forwardBrowserAuthRequest(ctx.getUserAuth(), request);
+    const auth = ctx.getUserAuth();
+    const response = await forwardBrowserAuthRequest(auth, request);
     const headers = copyBrowserAuthResponseHeaders(response.headers);
     headers.set("Cache-Control", "no-store");
     headers.set("Referrer-Policy", "no-referrer");
@@ -78,14 +84,16 @@ const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) =
     }
     throw cause;
   }
-};
+}
 
 /**
  * The browser can reach only this positive Better Auth allowlist, and only
  * through a freshly signed service:web proxy request.
  */
-export const browserAuthRoutes: Route[] = BROWSER_AUTH_PROXY_ROUTES.map(([method, path]) => ({
-  method,
-  pattern: parsePattern(path),
-  handler: requireWebService(handleBrowserAuth),
-}));
+export const browserAuthRoutes = new Hono<ControlPlaneHonoEnv>();
+
+const BROWSER_AUTH = admit({ ...SCM_AGNOSTIC_WEB_SERVICE_ROUTE, authorization: NO_AUTHORIZATION });
+
+for (const [method, path] of BROWSER_AUTH_PROXY_ROUTES) {
+  browserAuthRoutes.on(method, path, BROWSER_AUTH, (c) => dispatch(c, handleBrowserAuth));
+}

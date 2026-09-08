@@ -19,6 +19,23 @@ export function buildAuthenticatedUrl(
   return parsed.toString();
 }
 
+/** Build a noVNC client URL from a validated tunnel base URL. */
+export function buildVncUrl(
+  url: string | null | undefined,
+  password: string | null | undefined
+): string | null {
+  const safeUrl = getSafeExternalUrl(url);
+  if (!safeUrl || !password) return null;
+
+  const parsed = new URL(safeUrl);
+  parsed.pathname = `${parsed.pathname.replace(/\/?$/, "/")}vnc.html`;
+  parsed.searchParams.set("autoconnect", "true");
+  parsed.searchParams.set("resize", "scale");
+  parsed.searchParams.delete("password");
+  parsed.hash = new URLSearchParams({ password }).toString();
+  return parsed.toString();
+}
+
 export function getSafeExternalUrl(url: string | null | undefined): string | null {
   if (!url) {
     return null;

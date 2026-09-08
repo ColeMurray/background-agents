@@ -37,7 +37,7 @@ export type EnvironmentRepositoryInsert = Pick<
   "position" | "repo_owner" | "repo_name" | "repo_id" | "base_branch"
 >;
 
-export function toEnvironmentRepository(row: EnvironmentRepositoryRow): EnvironmentRepository {
+function toEnvironmentRepository(row: EnvironmentRepositoryRow): EnvironmentRepository {
   return {
     repoOwner: row.repo_owner,
     repoName: row.repo_name,

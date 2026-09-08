@@ -1,15 +1,16 @@
-"""Tests for _install_tools() and _install_bin_scripts() in SandboxSupervisor."""
+"""Tests for OpenCodeServer._install_tools() and _install_bin_scripts()."""
 
 import json
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from sandbox_runtime.entrypoint import SandboxSupervisor
+from sandbox_runtime.opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
+from tests.runtime_helpers import make_opencode_server
 
 
-def _make_supervisor() -> SandboxSupervisor:
-    """Create a SandboxSupervisor with default test config."""
+def _make_opencode_server() -> OpenCodeServer:
+    """Create an OpenCodeServer with default test config."""
     with patch.dict(
         "os.environ",
         {
@@ -20,7 +21,7 @@ def _make_supervisor() -> SandboxSupervisor:
             "REPO_NAME": "app",
         },
     ):
-        return SandboxSupervisor()
+        return make_opencode_server()
 
 
 @contextmanager
@@ -33,7 +34,7 @@ def _patch_paths(
     deps_cache: Path | str = "/nonexistent",
 ):
     """Patch entrypoint Path() calls to redirect legacy, tools, skills, and bin paths."""
-    with patch("sandbox_runtime.entrypoint.Path") as MockPath:
+    with patch("sandbox_runtime.opencode_server.Path") as MockPath:
         MockPath.side_effect = lambda p: Path(
             str(p)
             .replace("/app/sandbox_runtime/plugins/inspect-plugin.js", str(legacy))
@@ -52,7 +53,7 @@ class TestInstallTools:
 
     def test_legacy_tool_copied(self, tmp_path):
         """inspect-plugin.js should be copied as create-pull-request.js."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
 
@@ -70,7 +71,7 @@ class TestInstallTools:
 
     def test_tools_dir_files_copied(self, tmp_path):
         """All .js files from tools/ directory should be copied."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
 
@@ -93,7 +94,7 @@ class TestInstallTools:
 
     def test_non_js_files_skipped(self, tmp_path):
         """Non-.js files in tools/ directory should not be copied."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
 
@@ -113,7 +114,7 @@ class TestInstallTools:
 
     def test_graceful_without_tools_dir(self, tmp_path):
         """Only legacy tool should be copied when tools/ doesn't exist."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
 
@@ -131,7 +132,7 @@ class TestInstallTools:
 
     def test_no_tools_at_all(self, tmp_path):
         """Should be a no-op when neither legacy tool nor tools/ exist."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
 
@@ -142,7 +143,7 @@ class TestInstallTools:
 
     def test_copies_prebuilt_deps_from_cache(self, tmp_path):
         """Should copy package.json, package-lock.json, and node_modules from image cache."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
 
@@ -184,7 +185,7 @@ class TestInstallTools:
 
     def test_does_not_overwrite_existing_files(self, tmp_path):
         """Pre-existing package.json or node_modules in .opencode/ should not be overwritten."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
 
@@ -227,7 +228,7 @@ class TestInstallTools:
         user_lock = opencode_dir / "package-lock.json"
         user_lock.write_text('{"user": true}')
 
-        installed = SandboxSupervisor._stage_opencode_deps(deps_cache, opencode_dir)
+        installed = OpenCodeServer._stage_opencode_deps(deps_cache, opencode_dir)
 
         assert installed == {"package.json"}
         assert user_lock.read_text() == '{"user": true}'
@@ -245,14 +246,14 @@ class TestInstallTools:
         user_module = user_modules / "user-package.js"
         user_module.write_text("user module\n")
 
-        installed = SandboxSupervisor._stage_opencode_deps(deps_cache, opencode_dir)
+        installed = OpenCodeServer._stage_opencode_deps(deps_cache, opencode_dir)
 
         assert installed == {"package.json"}
         assert user_module.read_text() == "user module\n"
 
     def test_legacy_and_tools_dir_combined(self, tmp_path):
         """Both legacy tool and tools/ directory files should be installed together."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
 
@@ -277,7 +278,7 @@ class TestInstallTools:
 
     def test_repository_tools_skipped_without_repository(self, tmp_path):
         """Repo-only PR tools are skipped, but child-spawn tools remain available."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         sup.repo_owner = ""
         sup.repo_name = ""
         sup.has_repository = False
@@ -295,6 +296,7 @@ class TestInstallTools:
         (tools_dir / "get-child-status.js").write_text("// get")
         (tools_dir / "get-child-status-format.js").write_text("// format")
         (tools_dir / "cancel-child.js").write_text("// cancel")
+        (tools_dir / "send-child-prompt.js").write_text("// follow-up")
 
         with _patch_paths(legacy=legacy_tool, tools=tools_dir):
             sup._install_tools(workdir)
@@ -306,10 +308,11 @@ class TestInstallTools:
         assert (tool_dest / "get-child-status.js").exists()
         assert (tool_dest / "get-child-status-format.js").exists()
         assert (tool_dest / "cancel-child.js").exists()
+        assert (tool_dest / "send-child-prompt.js").exists()
 
     def test_slack_notify_installed_when_enabled(self, tmp_path):
         """slack-notify.js should be installed when AGENT_SLACK_NOTIFY_ENABLED=true."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
 
@@ -334,7 +337,7 @@ class TestInstallBinScripts:
 
     def test_scripts_installed_to_bin(self, tmp_path):
         """Checked-in bin scripts should be installed as executable commands."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
 
         src = tmp_path / "app" / "sandbox_runtime" / "bin"
         src.mkdir(parents=True)
@@ -360,7 +363,7 @@ class TestInstallBinScripts:
 
     def test_scripts_installed_to_configured_bin(self, tmp_path, monkeypatch):
         """OPENINSPECT_BIN_INSTALL_DIR can override the install directory."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
 
         src = tmp_path / "app" / "sandbox_runtime" / "bin"
         src.mkdir(parents=True)
@@ -386,7 +389,7 @@ class TestInstallBinScripts:
 
     def test_non_js_files_skipped(self, tmp_path):
         """Non-.js files in bin/ should not be installed."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
 
         src = tmp_path / "app" / "sandbox_runtime" / "bin"
         src.mkdir(parents=True)
@@ -406,7 +409,7 @@ class TestInstallBinScripts:
 
     def test_noop_when_bin_dir_missing(self, tmp_path):
         """Should be a no-op when bin/ directory doesn't exist."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
 
         dest = tmp_path / "usr-local-bin"
         dest.mkdir()
@@ -427,7 +430,7 @@ class TestInstallSkills:
 
     def test_complete_skill_directories_are_copied(self, tmp_path):
         """Bundled Skills should include companion files and directories."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
 
@@ -487,7 +490,7 @@ class TestInstallSkills:
 
     def test_skills_dir_non_directory_is_ignored(self, tmp_path):
         """A non-directory skills path should not raise or copy files."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
 
@@ -509,7 +512,7 @@ def _make_opencode_deps_staging(tmp_path: Path) -> Path:
     """Build a fake /app/opencode-deps staging tree (plugin-only, in sync)."""
     deps_cache = tmp_path / "opencode-deps"
     deps_cache.mkdir()
-    (deps_cache / "package.json").write_text('{"dependencies": {"@opencode-ai/plugin": "1.17.18"}}')
+    (deps_cache / "package.json").write_text('{"dependencies": {"@opencode-ai/plugin": "1.18.11"}}')
     (deps_cache / "package-lock.json").write_text('{"lockfileVersion": 3}')
     plugin = deps_cache / "node_modules" / "@opencode-ai" / "plugin"
     plugin.mkdir(parents=True)
@@ -518,31 +521,26 @@ def _make_opencode_deps_staging(tmp_path: Path) -> Path:
 
 
 class TestResolveGlobalConfigDir:
-    """Cases for _resolve_opencode_global_config_dir() — OpenCode's xdg-basedir resolution."""
+    """Cases for OpenCode's xdg-basedir resolution."""
 
     def test_uses_opencode_config_dir_override(self, tmp_path, monkeypatch):
         """OPENCODE_CONFIG_DIR wins over XDG_CONFIG_HOME and is used verbatim."""
         monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "custom"))
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-        assert SandboxSupervisor._resolve_opencode_global_config_dir() == tmp_path / "custom"
+        assert resolve_opencode_global_config_dir() == tmp_path / "custom"
 
     def test_uses_xdg_config_home(self, tmp_path, monkeypatch):
         """Without the override, $XDG_CONFIG_HOME/opencode is used."""
         monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-        assert (
-            SandboxSupervisor._resolve_opencode_global_config_dir() == tmp_path / "xdg" / "opencode"
-        )
+        assert resolve_opencode_global_config_dir() == tmp_path / "xdg" / "opencode"
 
     def test_falls_back_to_home_config(self, tmp_path, monkeypatch):
         """With neither set, ~/.config/opencode is used."""
         monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
         monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
-        assert (
-            SandboxSupervisor._resolve_opencode_global_config_dir()
-            == tmp_path / "home" / ".config" / "opencode"
-        )
+        assert resolve_opencode_global_config_dir() == tmp_path / "home" / ".config" / "opencode"
 
 
 class TestSeedGlobalOpencodeDeps:
@@ -550,7 +548,7 @@ class TestSeedGlobalOpencodeDeps:
 
     def test_seeds_empty_global_config_dir(self, tmp_path, monkeypatch):
         """The staged plugin tree is copied into $XDG_CONFIG_HOME/opencode when it is empty."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         deps_cache = _make_opencode_deps_staging(tmp_path)
         cfg = tmp_path / "xdg"
         monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
@@ -568,7 +566,7 @@ class TestSeedGlobalOpencodeDeps:
 
     def test_does_not_clobber_populated_global_dir(self, tmp_path, monkeypatch):
         """An existing global config dir that already has node_modules is left untouched."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         deps_cache = _make_opencode_deps_staging(tmp_path)
         cfg = tmp_path / "xdg"
         seeded = cfg / "opencode"
@@ -588,7 +586,7 @@ class TestSeedGlobalOpencodeDeps:
     def test_skips_when_manifest_present_without_node_modules(self, tmp_path, monkeypatch):
         """A global dir with a user package.json but no node_modules is left untouched —
         seeding our node_modules against a foreign manifest would be an out-of-sync tree."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         deps_cache = _make_opencode_deps_staging(tmp_path)
         cfg = tmp_path / "xdg"
         seeded = cfg / "opencode"
@@ -608,7 +606,7 @@ class TestSeedGlobalOpencodeDeps:
 
     def test_noop_when_staging_absent(self, tmp_path, monkeypatch):
         """No global dir is created when the /app/opencode-deps staging is missing."""
-        sup = _make_supervisor()
+        sup = _make_opencode_server()
         cfg = tmp_path / "xdg"
         monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
         monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg))

@@ -9,21 +9,19 @@ import type { ImageBuildProvider } from "./model";
  * from provider-neutral lifecycle terms instead of open-coded provider checks.
  */
 
-/** How the provider's build sandbox authenticates its git clones. */
-export type ImageBuildCloneAuthMode = "credential_helper" | "none";
-
-const IMAGE_BUILD_CLONE_AUTH_MODES = {
-  modal: "credential_helper",
-  vercel: "credential_helper",
-  opencomputer: "credential_helper",
-} satisfies Record<ImageBuildProvider, ImageBuildCloneAuthMode>;
+const IMAGE_BUILD_PROVIDERS = {
+  modal: true,
+  vercel: true,
+  opencomputer: true,
+  e2b: true,
+} satisfies Record<ImageBuildProvider, true>;
 
 export function getImageBuildsUnsupportedMessage(env: Env): string | null {
   if (resolveImageBuildProvider(env.SANDBOX_PROVIDER)) {
     return null;
   }
 
-  return "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer";
+  return "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, opencomputer, or e2b";
 }
 
 export function resolveImageBuildProvider(value: string | undefined): ImageBuildProvider | null {
@@ -31,18 +29,6 @@ export function resolveImageBuildProvider(value: string | undefined): ImageBuild
   return isImageBuildProvider(provider) ? provider : null;
 }
 
-export function getImageBuildProvider(env: Env): ImageBuildProvider {
-  const provider = resolveImageBuildProvider(env.SANDBOX_PROVIDER);
-  if (!provider) {
-    throw new Error(`Image builds are not supported for SANDBOX_PROVIDER=${env.SANDBOX_PROVIDER}`);
-  }
-  return provider;
-}
-
-export function getImageBuildCloneAuthMode(provider: ImageBuildProvider): ImageBuildCloneAuthMode {
-  return IMAGE_BUILD_CLONE_AUTH_MODES[provider];
-}
-
 function isImageBuildProvider(provider: SandboxBackendName): provider is ImageBuildProvider {
-  return provider in IMAGE_BUILD_CLONE_AUTH_MODES;
+  return provider in IMAGE_BUILD_PROVIDERS;
 }

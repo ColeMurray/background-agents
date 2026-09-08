@@ -6,10 +6,11 @@ import { SourceControlProviderError } from "../errors";
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-function makeResponse(body: unknown, status = 200): Response {
+function makeResponse(body: unknown, status = 200, headers: HeadersInit = {}): Response {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers(headers),
     json: () => Promise.resolve(body),
     text: () => Promise.resolve(JSON.stringify(body)),
   } as unknown as Response;
@@ -49,6 +50,21 @@ describe("GitLabSourceControlProvider", () => {
       await expect(
         provider.getBranchHead({ owner: "acme", name: "web", branch: "missing" })
       ).resolves.toBeNull();
+    });
+
+    it("rejects malformed branch responses", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse({ commit: {} }));
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+
+      const err = await provider
+        .getBranchHead({ owner: "acme", name: "web", branch: "main" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).message).toBe(
+        "Failed to resolve branch head: unexpected response shape (commit.id)"
+      );
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
     });
   });
 
@@ -312,6 +328,46 @@ describe("GitLabSourceControlProvider", () => {
       );
 
       expect(capturedBody?.title).toBe("Draft: WIP change");
+    });
+
+    it("passes labels through GitLab merge request creation", async () => {
+      let capturedBody: Record<string, unknown> | undefined;
+      mockFetch.mockImplementationOnce((_url: string, init: RequestInit) => {
+        capturedBody = JSON.parse(init.body as string) as Record<string, unknown>;
+        return Promise.resolve(
+          makeResponse({
+            iid: 6,
+            web_url: "https://gitlab.com/acme/web/-/merge_requests/6",
+            _links: { self: "https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/6" },
+            state: "opened",
+            draft: false,
+            source_branch: "feature/labels",
+            target_branch: "main",
+          })
+        );
+      });
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      await provider.createPullRequest(
+        { authType: "pat", token: "user-token" },
+        {
+          repository: {
+            owner: "acme",
+            name: "web",
+            fullName: "acme/web",
+            defaultBranch: "main",
+            isPrivate: true,
+            providerRepoId: 42,
+          },
+          title: "Labelled change",
+          body: "",
+          sourceBranch: "feature/labels",
+          targetBranch: "main",
+          labels: ["generated", "agent"],
+        }
+      );
+
+      expect(capturedBody?.labels).toBe("generated,agent");
     });
 
     it("does not double-prefix when title already starts with 'Draft: '", async () => {
@@ -792,6 +848,19 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(branches).toEqual([{ name: "main" }, { name: "develop" }, { name: "feature/foo" }]);
     });
+
+    it("throws permanent error when a listed branch shape is invalid", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse([{ name: "main" }, { commit: { id: "sha" } }]));
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .listBranches({ owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("unexpected response shape");
+    });
   });
 
   describe("generatePushAuth", () => {
@@ -1237,5 +1306,129 @@ describe("response validation (zod boundary)", () => {
     expect(err).toBeInstanceOf(SourceControlProviderError);
     expect((err as SourceControlProviderError).httpStatus).toBe(404);
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("managed-skill repository reads", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("classifies symlinks and submodules as unsupported tree entries", async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify([
+          { path: "SKILL.md", type: "blob", mode: "100644", id: "file" },
+          { path: "run.sh", type: "blob", mode: "100755", id: "exec" },
+          { path: "link", type: "blob", mode: "120000", id: "link" },
+          { path: "module", type: "commit", mode: "160000", id: "module" },
+        ]),
+        { headers: { "content-type": "application/json" } }
+      )
+    );
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    const tree = await provider.listTree({ owner: "acme", name: "skills", commitSha: "abc" });
+
+    expect(tree.entries.map(({ type, executable }) => ({ type, executable }))).toEqual([
+      { type: "file", executable: false },
+      { type: "file", executable: true },
+      { type: "other", executable: false },
+      { type: "other", executable: false },
+    ]);
+  });
+
+  it("scopes recursive tree reads to a repository-relative path", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse([
+        {
+          path: "skills/deploy/SKILL.md",
+          type: "blob",
+          mode: "100644",
+          id: "file",
+        },
+      ])
+    );
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    const tree = await provider.listTree({
+      owner: "acme",
+      name: "skills",
+      commitSha: "abc",
+      path: "skills/deploy",
+    });
+
+    expect(tree.entries[0]?.path).toBe("skills/deploy/SKILL.md");
+    const requestUrl = String(mockFetch.mock.calls[0]?.[0]);
+    expect(requestUrl).toContain("path=skills%2Fdeploy");
+    expect(requestUrl).toContain("recursive=true");
+    expect(requestUrl).toContain("per_page=100");
+    expect(requestUrl).toContain("page=1");
+  });
+
+  it("bounds scoped recursive tree reads with pagination", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      path: `skills/deploy/file-${index}`,
+      type: "blob",
+      mode: "100644",
+      id: `file-${index}`,
+    }));
+    mockFetch
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(firstPage), {
+          headers: { "content-type": "application/json", "x-next-page": "2" },
+        })
+      )
+      .mockResolvedValueOnce(makeResponse([]));
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    const tree = await provider.listTree({
+      owner: "acme",
+      name: "skills",
+      commitSha: "abc",
+      path: "skills/deploy",
+    });
+
+    expect(tree).toMatchObject({ truncated: false });
+    expect(tree.entries).toHaveLength(100);
+    expect(String(mockFetch.mock.calls[1]?.[0])).toContain("page=2");
+    expect(String(mockFetch.mock.calls[1]?.[0])).toContain("path=skills%2Fdeploy");
+  });
+
+  it("returns an empty scoped tree when GitLab reports a missing path", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({ message: "404 Tree Not Found" }, 404));
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    await expect(
+      provider.listTree({
+        owner: "acme",
+        name: "skills",
+        commitSha: "abc",
+        path: "missing",
+      })
+    ).resolves.toEqual({ entries: [], truncated: false });
+  });
+
+  it("cancels an undeclared oversized blob while streaming it", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.enqueue(new Uint8Array([4, 5, 6]));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    mockFetch.mockResolvedValueOnce(new Response(body));
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    const error = await provider
+      .readBlob({ owner: "acme", name: "skills", blobId: "big", maxBytes: 4 })
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(SourceControlProviderError);
+    expect((error as SourceControlProviderError).httpStatus).toBe(413);
+    expect(cancelled).toBe(true);
   });
 });

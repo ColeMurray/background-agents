@@ -1,6 +1,6 @@
 import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
 import type { CorrelationContext } from "../logger";
-import type { ImageBuildProvider, ImageBuildProviderImageRef, ImageBuildScope } from "./model";
+import type { ImageBuildProviderImageRef, ImageBuildScope } from "./model";
 
 export type ImageBuildWorkflowContext = CorrelationContext;
 
@@ -22,12 +22,16 @@ export type TriggerImageBuildResult =
   | { type: "already_building"; buildId: string }
   | { type: "up_to_date" };
 
-export type ImageBuildWorkflowResult =
-  | { type: "completion_accepted" }
-  | { type: "failure_accepted" };
+/** Clone auth handed to provider-session build sandboxes (provider-policy.ts). */
+export type ImageBuildCloneAuth =
+  | { type: "credential_helper"; host: string; username: string; token: string }
+  | { type: "unavailable" };
 
-/** Provider-neutral build request fields resolved before adapter-specific execution. */
-interface BaseImageBuildPlan {
+/**
+ * Provider-neutral build request resolved before adapter-specific execution.
+ * Every supported provider uses the same create-bind-launch session contract.
+ */
+export interface ImageBuildPlan {
   buildId: string;
   scope: ImageBuildScope;
   repositories: ImageBuildRepository[];
@@ -43,24 +47,8 @@ interface BaseImageBuildPlan {
   buildTimeoutMs: number;
   userEnvVars?: Record<string, string>;
   correlation: CorrelationContext;
-}
-
-/** Clone auth handed to provider-session build sandboxes (provider-policy.ts). */
-export type ImageBuildCloneAuth =
-  | { type: "credential_helper"; host: string; username: string; token: string }
-  | { type: "unavailable" };
-
-/** Every supported provider uses the same create-bind-launch session contract. */
-export interface ImageBuildPlan extends BaseImageBuildPlan {
-  provider: ImageBuildProvider;
   callbackToken: string;
   cloneAuth: ImageBuildCloneAuth;
-}
-
-export interface PlannedImageBuild {
-  plan: ImageBuildPlan;
-  /** Registration side of the callback token every build authenticates with. */
-  callbackAuth: { tokenHash: string; expiresAt: number };
 }
 
 /** Lets provider-session adapters bind the provider sandbox id before the runtime launches. */
@@ -71,20 +59,21 @@ export interface ImageBuildStartCallbacks {
 /**
  * Wire form of the build-complete callback after route-level parsing.
  * repository_shas and runtime_version are reported by the build itself —
- * registration fails closed when either is missing or unparseable, because an
- * unversioned image must never pass the floor check.
+ * the route fails closed (400) when either is missing or unparseable, because
+ * an unversioned image must never pass the floor check.
  */
 export interface CompleteImageBuildCallback {
   buildId: string;
-  providerSessionId?: string;
-  repositoryShas?: RepositoryShaEntry[];
-  runtimeVersion?: string;
-  buildDurationMs?: number;
+  providerSessionId: string;
+  repositoryShas: RepositoryShaEntry[];
+  runtimeVersion: string;
+  /** Wire seconds passed through unconverted — the D1 column is also seconds. */
+  buildDurationSeconds: number;
 }
 
 export interface FailImageBuildCallback {
   buildId: string;
-  providerSessionId?: string;
+  providerSessionId: string;
   errorMessage: string;
 }
 

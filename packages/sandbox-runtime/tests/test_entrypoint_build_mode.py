@@ -9,10 +9,29 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from sandbox_runtime.repository_sync import (
+    RepositorySyncOutcome,
+    RepositorySyncResult,
+    RepositorySyncStatus,
+)
+from sandbox_runtime.runtime_config import BootMode
+from sandbox_runtime.supervisor import ImageBuildExecutionCancelled
 
-def _repoint_primary(supervisor):
+
+@pytest.fixture(autouse=True)
+def isolate_optional_runtime_services(monkeypatch):
+    """Keep boot policy tests independent from optional service environment gates."""
+    monkeypatch.delenv("EXPECTED_TUNNEL_PORTS", raising=False)
+    monkeypatch.delenv("TERMINAL_ENABLED", raising=False)
+    monkeypatch.delenv("CODE_SERVER_PASSWORD", raising=False)
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
+    monkeypatch.delenv("FROM_REPO_IMAGE", raising=False)
+
+
+def _repoint_primary(repository):
     """Repoint the parsed primary entry at the test's reassigned repo_path."""
-    supervisor.repositories = [replace(supervisor.repositories[0], path=supervisor.repo_path)]
+    repository.repositories = [replace(repository.repositories[0], path=repository.repo_path)]
 
 
 @pytest.fixture
@@ -56,9 +75,34 @@ def no_repo_env(base_env):
 def _make_supervisor(env_vars: dict):
     """Create a SandboxSupervisor with the given env vars patched in."""
     with patch.dict(os.environ, env_vars, clear=False):
-        from sandbox_runtime.entrypoint import SandboxSupervisor
+        from tests.runtime_helpers import make_supervisor
 
-        return SandboxSupervisor()
+        return make_supervisor(env_vars)
+
+
+def _completion_callback(supervisor):
+    """Release the test only after build work reaches its success callback."""
+    callback = MagicMock()
+
+    async def report_success(**_kwargs):
+        supervisor.shutdown_event.set()
+        return True
+
+    callback.report_success = AsyncMock(side_effect=report_success)
+    callback.report_failure = AsyncMock(return_value=True)
+    return callback
+
+
+def _sync_result(repositories, status=RepositorySyncStatus.SUCCEEDED):
+    repositories = tuple(repositories)
+    return RepositorySyncResult(
+        repositories,
+        tuple(RepositorySyncOutcome(repo, status) for repo in repositories),
+    )
+
+
+def _successful_sync(repository_boot):
+    return _sync_result(repository_boot.repositories)
 
 
 class TestImageBuildMode:
@@ -69,48 +113,62 @@ class TestImageBuildMode:
         """Should return from run() after git sync + setup, before OpenCode."""
         supervisor = _make_supervisor(build_env)
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
 
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=True)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
-        # In build mode, entrypoint waits for shutdown_event (builder terminates sandbox).
-        # Pre-set so the test doesn't hang.
-        supervisor.shutdown_event.set()
-
         with patch.dict(os.environ, build_env, clear=False):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
-        supervisor.sync_repositories.assert_called_once()
-        supervisor.run_setup_script.assert_called_once()
-        supervisor.run_start_script.assert_not_called()
+        supervisor.repository_boot.synchronizer.sync.assert_called_once()
+        supervisor.repository_boot.hooks.run_setup.assert_called_once()
+        supervisor.repository_boot.hooks.run_start.assert_not_called()
         # OpenCode and bridge should NOT be started in build mode
-        supervisor.start_opencode.assert_not_called()
-        supervisor.start_bridge.assert_not_called()
+        supervisor.opencode_server.start.assert_not_called()
+        supervisor.agent_bridge.start.assert_not_called()
         supervisor.monitor_processes.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_preset_shutdown_does_not_create_operation(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor.shutdown_event.set()
+        operation_factory = MagicMock()
+
+        with pytest.raises(ImageBuildExecutionCancelled):
+            await supervisor._run_until_shutdown(operation_factory)
+
+        operation_factory.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_resolves_diff_baseline_after_sync_before_setup(self, build_env):
         supervisor = _make_supervisor(build_env)
-        supervisor.sync_repositories = AsyncMock(return_value=[])
-        supervisor._get_head_sha = AsyncMock(return_value="a" * 40)
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_sync_result(
+                tuple(
+                    replace(repo, base_sha="a" * 40)
+                    for repo in supervisor.repository_boot.repositories
+                )
+            )
+        )
         observed_baselines = []
 
-        async def assert_baseline_is_ready(_repo):
-            observed_baselines.append(supervisor.repositories[0].base_sha)
+        async def assert_baseline_is_ready(_repo, _boot_mode):
+            observed_baselines.append(supervisor.repository_boot.repositories[0].base_sha)
             return True
 
-        supervisor.run_setup_script = AsyncMock(side_effect=assert_baseline_is_ready)
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(side_effect=assert_baseline_is_ready)
         supervisor.shutdown = AsyncMock()
-        supervisor.shutdown_event.set()
 
         with patch.dict(os.environ, build_env, clear=False):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
-        supervisor.run_setup_script.assert_awaited_once()
+        supervisor.repository_boot.hooks.run_setup.assert_awaited_once()
         assert observed_baselines == ["a" * 40]
 
     @pytest.mark.asyncio
@@ -118,11 +176,8 @@ class TestImageBuildMode:
         """Build mode should clone with --depth 100, not --depth 1."""
         supervisor = _make_supervisor(build_env)
         # Point repo_path to a non-existent dir so clone branch is taken
-        supervisor.repo_path = tmp_path / "nonexistent"
-        _repoint_primary(supervisor)
-        # Pre-set so entrypoint doesn't hang waiting for builder to terminate
-        supervisor.shutdown_event.set()
-
+        supervisor.repository_boot.repo_path = tmp_path / "nonexistent"
+        _repoint_primary(supervisor.repository_boot)
         all_calls = []
 
         async def fake_subprocess(*args, **kwargs):
@@ -133,18 +188,18 @@ class TestImageBuildMode:
             mock_proc.returncode = 0
             return mock_proc
 
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
 
         with (
             patch.dict(os.environ, build_env, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
                 side_effect=fake_subprocess,
             ),
         ):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
         # Find the clone command (the one with "clone" in the args)
         clone_calls = [args for args in all_calls if "clone" in args]
@@ -156,8 +211,8 @@ class TestImageBuildMode:
     @pytest.mark.asyncio
     async def test_clone_cancellation_kills_the_owned_process_group(self, build_env, tmp_path):
         supervisor = _make_supervisor(build_env)
-        supervisor.repo_path = tmp_path / "nonexistent"
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path / "nonexistent"
+        _repoint_primary(supervisor.repository_boot)
         started = asyncio.Event()
 
         async def communicate_forever():
@@ -170,13 +225,17 @@ class TestImageBuildMode:
 
         with (
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
                 return_value=process,
             ) as create_process,
-            patch("sandbox_runtime.entrypoint.os.killpg") as kill_process_group,
+            patch("sandbox_runtime.repository_sync.os.killpg") as kill_process_group,
         ):
-            operation = asyncio.create_task(supervisor._clone_repo(supervisor.repositories[0]))
+            operation = asyncio.create_task(
+                supervisor.repository_boot.synchronizer._clone_repo(
+                    supervisor.repository_boot.repositories[0]
+                )
+            )
             await started.wait()
             operation.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -191,30 +250,31 @@ class TestImageBuildMode:
         """Setup script should run in build mode (it IS the build)."""
         supervisor = _make_supervisor(build_env)
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
 
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
-        # Pre-set so entrypoint doesn't hang waiting for builder to terminate
-        supervisor.shutdown_event.set()
-
         with patch.dict(os.environ, build_env, clear=False):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
-        supervisor.run_setup_script.assert_called_once()
-        supervisor.run_start_script.assert_not_called()
+        supervisor.repository_boot.hooks.run_setup.assert_called_once()
+        supervisor.repository_boot.hooks.run_start.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_setup_failure_is_fatal_in_build_mode(self, build_env):
         """Build mode should fail fast when setup hook fails."""
         supervisor = _make_supervisor(build_env)
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
-        supervisor.run_setup_script = AsyncMock(return_value=False)
-        supervisor.run_start_script = AsyncMock(return_value=True)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=False)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
@@ -223,21 +283,27 @@ class TestImageBuildMode:
             await supervisor.run()
 
         supervisor._report_fatal_error.assert_called_once()
-        supervisor.start_opencode.assert_not_called()
-        supervisor.start_bridge.assert_not_called()
+        supervisor.opencode_server.start.assert_not_called()
+        supervisor.agent_bridge.start.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_logs_git_sync_complete_with_head_sha(self, build_env, tmp_path):
         """Build mode should log git.sync_complete with head_sha for the image builder."""
         supervisor = _make_supervisor(build_env)
-        supervisor.repo_path = tmp_path  # Exists, so _get_head_sha proceeds
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path  # Exists, so _get_head_sha proceeds
+        _repoint_primary(supervisor.repository_boot)
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
-        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_sync_result(
+                tuple(
+                    replace(repo, base_sha="abc123def456")
+                    for repo in supervisor.repository_boot.repositories
+                )
+            )
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
-        supervisor.shutdown_event.set()
-        supervisor.log = MagicMock()
+        supervisor.repository_boot.log = MagicMock()
 
         async def fake_subprocess(*args, **kwargs):
             mock_proc = MagicMock()
@@ -248,16 +314,16 @@ class TestImageBuildMode:
         with (
             patch.dict(os.environ, build_env, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
                 side_effect=fake_subprocess,
             ),
         ):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
         # Verify git.sync_complete was logged with the SHA
         sync_calls = [
             c
-            for c in supervisor.log.info.call_args_list
+            for c in supervisor.repository_boot.log.info.call_args_list
             if c.args and c.args[0] == "git.sync_complete"
         ]
         assert len(sync_calls) == 1
@@ -279,18 +345,25 @@ class TestImageBuildMode:
             ),
         }
         supervisor = _make_supervisor(env)
-        supervisor.workspace_path = tmp_path
-        supervisor.repositories = [
-            replace(repo, path=tmp_path / repo.name) for repo in supervisor.repositories
+        supervisor.repository_boot.workspace_path = tmp_path
+        supervisor.repository_boot.repositories = [
+            replace(repo, path=tmp_path / repo.name)
+            for repo in supervisor.repository_boot.repositories
         ]
-        for repo in supervisor.repositories:
+        for repo in supervisor.repository_boot.repositories:
             repo.path.mkdir(parents=True, exist_ok=True)
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
-        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_sync_result(
+                (
+                    replace(supervisor.repository_boot.repositories[0], base_sha="aaa111"),
+                    replace(supervisor.repository_boot.repositories[1], base_sha="bbb222"),
+                )
+            )
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
-        supervisor.shutdown_event.set()
-        supervisor.log = MagicMock()
+        supervisor.repository_boot.log = MagicMock()
 
         shas_by_cwd = {tmp_path / "web": b"aaa111\n", tmp_path / "api": b"bbb222\n"}
 
@@ -305,15 +378,15 @@ class TestImageBuildMode:
         with (
             patch.dict(os.environ, env, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
                 side_effect=fake_subprocess,
             ),
         ):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
         sync_calls = [
             c
-            for c in supervisor.log.info.call_args_list
+            for c in supervisor.repository_boot.log.info.call_args_list
             if c.args and c.args[0] == "git.sync_complete"
         ]
         assert len(sync_calls) == 1
@@ -327,17 +400,21 @@ class TestImageBuildMode:
     async def test_reports_success_callback_from_build_mode(self, build_env, tmp_path):
         """Build mode should report completion itself when callback metadata is configured."""
         supervisor = _make_supervisor(build_env)
-        supervisor.repo_path = tmp_path
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path
+        _repoint_primary(supervisor.repository_boot)
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
-        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_sync_result(
+                tuple(
+                    replace(repo, base_sha="abc123def456")
+                    for repo in supervisor.repository_boot.repositories
+                )
+            )
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
-        supervisor.shutdown_event.set()
 
-        callback = MagicMock()
-        callback.report_success = AsyncMock(return_value=True)
-        callback.report_failure = AsyncMock(return_value=True)
+        callback = _completion_callback(supervisor)
 
         async def fake_subprocess(*args, **kwargs):
             mock_proc = MagicMock()
@@ -348,18 +425,17 @@ class TestImageBuildMode:
         with (
             patch.dict(os.environ, {**build_env, "SANDBOX_VERSION": "v99-test"}, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
                 side_effect=fake_subprocess,
             ),
             patch(
-                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
+                "sandbox_runtime.supervisor.RepoImageBuildCallback.from_env",
                 return_value=callback,
             ),
         ):
             await supervisor.run()
 
         callback.report_success.assert_awaited_once_with(
-            base_sha="abc123def456",
             build_duration_seconds=ANY,
             repository_shas=[
                 {"repoOwner": "acme", "repoName": "my-repo", "baseSha": "abc123def456"}
@@ -369,12 +445,72 @@ class TestImageBuildMode:
         callback.report_failure.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_injected_callback_bypasses_environment_fallback(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor._run_image_build_execution = AsyncMock(
+            return_value=MagicMock(head_sha="abc123", repository_shas=[])
+        )
+        supervisor.shutdown = AsyncMock()
+        callback = _completion_callback(supervisor)
+
+        with (
+            patch.dict(os.environ, build_env, clear=False),
+            patch("sandbox_runtime.supervisor.RepoImageBuildCallback.from_env") as from_env,
+        ):
+            await supervisor.run(callback)
+
+        from_env.assert_not_called()
+        callback.report_success.assert_awaited_once()
+        callback.report_failure.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_partial_callback_configuration_aborts_build(self, build_env, monkeypatch):
+        """Partial callback env aborts the build instead of silently disabling reporting."""
+        from sandbox_runtime.repo_image_callback import (
+            BUILD_ID_ENV,
+            CALLBACK_TOKEN_ENV,
+            CALLBACK_URL_ENV,
+            FAILURE_CALLBACK_URL_ENV,
+            PROVIDER_SESSION_ID_ENV,
+            RepoImageCallbackMisconfigured,
+        )
+
+        supervisor = _make_supervisor(build_env)
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.shutdown = AsyncMock()
+
+        partial_env = {
+            **build_env,
+            BUILD_ID_ENV: "build-1",
+            CALLBACK_URL_ENV: "https://cp.test/image-builds/build-complete",
+            FAILURE_CALLBACK_URL_ENV: "https://cp.test/image-builds/build-failed",
+            CALLBACK_TOKEN_ENV: "callback-token",
+        }
+        monkeypatch.delenv(PROVIDER_SESSION_ID_ENV, raising=False)
+
+        # The raise propagates out of run() (a nonzero exit for the build
+        # process) — a completed build must never sit waiting on a shutdown
+        # signal with no way to report completion.
+        with (
+            patch.dict(os.environ, partial_env, clear=False),
+            pytest.raises(RepoImageCallbackMisconfigured),
+        ):
+            await supervisor.run()
+
+        supervisor.repository_boot.synchronizer.sync.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_reports_failure_callback_from_build_mode(self, build_env):
         """Build mode should report failures itself when callback metadata is configured."""
         supervisor = _make_supervisor(build_env)
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
-        supervisor.run_setup_script = AsyncMock(return_value=False)
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=False)
         supervisor.shutdown = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 
@@ -385,12 +521,13 @@ class TestImageBuildMode:
         with (
             patch.dict(os.environ, build_env, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
+                "sandbox_runtime.supervisor.RepoImageBuildCallback.from_env",
                 return_value=callback,
             ),
         ):
-            await supervisor.run()
+            build_succeeded = await supervisor.run()
 
+        assert build_succeeded is False
         callback.report_success.assert_not_called()
         callback.report_failure.assert_awaited_once_with(
             "setup hook failed for acme/my-repo in build mode"
@@ -400,10 +537,10 @@ class TestImageBuildMode:
     async def test_enforces_execution_deadline_before_deferred_finalization(self, build_env):
         supervisor = _make_supervisor(build_env)
 
-        async def wait_forever():
+        async def wait_forever(_repositories, _boot_mode):
             await asyncio.sleep(3600)
 
-        supervisor.sync_repositories = AsyncMock(side_effect=wait_forever)
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(side_effect=wait_forever)
         supervisor.shutdown = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 
@@ -418,7 +555,7 @@ class TestImageBuildMode:
                 clear=False,
             ),
             patch(
-                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
+                "sandbox_runtime.supervisor.RepoImageBuildCallback.from_env",
                 return_value=callback,
             ),
         ):
@@ -434,11 +571,11 @@ class TestImageBuildMode:
         supervisor = _make_supervisor(build_env)
         started = asyncio.Event()
 
-        async def wait_for_cancellation():
+        async def wait_for_cancellation(_repositories, _boot_mode):
             started.set()
             await asyncio.Event().wait()
 
-        supervisor.sync_repositories = AsyncMock(side_effect=wait_for_cancellation)
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(side_effect=wait_for_cancellation)
         supervisor.shutdown = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 
@@ -453,7 +590,7 @@ class TestImageBuildMode:
                 clear=False,
             ),
             patch(
-                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
+                "sandbox_runtime.supervisor.RepoImageBuildCallback.from_env",
                 return_value=callback,
             ),
         ):
@@ -467,6 +604,116 @@ class TestImageBuildMode:
         callback.report_failure.assert_not_called()
         supervisor._report_fatal_error.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_signal_during_setup_cancels_build_without_callback(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+        setup_started = asyncio.Event()
+        setup_cancelled = asyncio.Event()
+
+        async def setup_until_cancelled(_repo, _boot_mode):
+            setup_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                setup_cancelled.set()
+
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(side_effect=setup_until_cancelled)
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with patch.dict(os.environ, build_env, clear=False):
+            operation = asyncio.create_task(supervisor.run(callback))
+            await setup_started.wait()
+            supervisor.request_shutdown(signal.SIGTERM)
+            await asyncio.wait_for(operation, timeout=1)
+
+        assert setup_cancelled.is_set()
+        callback.report_success.assert_not_called()
+        callback.report_failure.assert_not_called()
+        supervisor._report_fatal_error.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_signal_before_success_callback_suppresses_callback(self, build_env):
+        supervisor = _make_supervisor(build_env)
+
+        async def finish_as_shutdown_arrives(_expected_tunnel_ports):
+            supervisor.shutdown_event.set()
+            return MagicMock(head_sha="abc123", repository_shas=[])
+
+        supervisor._run_image_build_execution = AsyncMock(side_effect=finish_as_shutdown_arrives)
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with patch.dict(os.environ, build_env, clear=False):
+            await supervisor.run(callback)
+
+        callback.report_success.assert_not_called()
+        callback.report_failure.assert_not_called()
+        supervisor._report_fatal_error.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_signal_during_success_callback_cancels_callback(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor._run_image_build_execution = AsyncMock(
+            return_value=MagicMock(head_sha="abc123", repository_shas=[])
+        )
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+        callback_started = asyncio.Event()
+        callback_cancelled = asyncio.Event()
+
+        async def report_until_cancelled(**_kwargs):
+            callback_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                callback_cancelled.set()
+
+        callback = MagicMock()
+        callback.report_success = AsyncMock(side_effect=report_until_cancelled)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with patch.dict(os.environ, build_env, clear=False):
+            operation = asyncio.create_task(supervisor.run(callback))
+            await callback_started.wait()
+            supervisor.request_shutdown(signal.SIGTERM)
+            await asyncio.wait_for(operation, timeout=1)
+
+        assert callback_cancelled.is_set()
+        callback.report_failure.assert_not_called()
+        supervisor._report_fatal_error.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_signal_before_failure_callback_suppresses_callback(self, build_env):
+        supervisor = _make_supervisor(build_env)
+
+        async def fail_as_shutdown_arrives(_expected_tunnel_ports):
+            supervisor.shutdown_event.set()
+            raise RuntimeError("setup failed")
+
+        supervisor._run_image_build_execution = AsyncMock(side_effect=fail_as_shutdown_arrives)
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with patch.dict(os.environ, build_env, clear=False):
+            await supervisor.run(callback)
+
+        callback.report_success.assert_not_called()
+        callback.report_failure.assert_not_called()
+        supervisor._report_fatal_error.assert_not_called()
+
 
 class TestFromRepoImage:
     """FROM_REPO_IMAGE=true: update repo + start hook, skip setup."""
@@ -475,75 +722,83 @@ class TestFromRepoImage:
     async def test_updates_existing_checkout_without_cloning(self, repo_image_env, tmp_path):
         """The unified per-repo rule updates the baked checkout in place."""
         supervisor = _make_supervisor(repo_image_env)
-        supervisor.repo_path = tmp_path / "my-repo"
-        supervisor.repo_path.mkdir(parents=True)
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path / "my-repo"
+        supervisor.repository_boot.repo_path.mkdir(parents=True)
+        _repoint_primary(supervisor.repository_boot)
 
-        supervisor._clone_repo = AsyncMock(return_value=True)
-        supervisor._update_existing_repo = AsyncMock(return_value=True)
+        supervisor.repository_boot.synchronizer._clone_repo = AsyncMock(return_value=True)
+        supervisor.repository_boot.synchronizer._update_existing_repo = AsyncMock(return_value=True)
 
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=True)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
 
         with patch.dict(os.environ, repo_image_env, clear=False):
             await supervisor.run()
 
-        supervisor._update_existing_repo.assert_called_once_with(supervisor.repositories[0])
-        supervisor._clone_repo.assert_not_called()
+        supervisor.repository_boot.synchronizer._update_existing_repo.assert_called_once_with(
+            supervisor.repository_boot.repositories[0], BootMode.REPO_IMAGE
+        )
+        supervisor.repository_boot.synchronizer._clone_repo.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_skips_setup_and_runs_start_script(self, repo_image_env):
         """Setup is skipped for repo images, but start hook still runs."""
         supervisor = _make_supervisor(repo_image_env)
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
 
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=True)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
 
         with patch.dict(os.environ, repo_image_env, clear=False):
             await supervisor.run()
 
-        supervisor.run_setup_script.assert_not_called()
-        supervisor.run_start_script.assert_called_once()
+        supervisor.repository_boot.hooks.run_setup.assert_not_called()
+        supervisor.repository_boot.hooks.run_start.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_starts_opencode_and_bridge(self, repo_image_env):
         """Should still start OpenCode and bridge (unlike build mode)."""
         supervisor = _make_supervisor(repo_image_env)
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
 
-        supervisor.run_start_script = AsyncMock(return_value=True)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
 
         with patch.dict(os.environ, repo_image_env, clear=False):
             await supervisor.run()
 
-        supervisor.start_opencode.assert_called_once()
-        supervisor.start_bridge.assert_called_once()
+        supervisor.opencode_server.start.assert_called_once()
+        supervisor.agent_bridge.start.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_start_script_failure_is_fatal(self, repo_image_env):
         """Repo-image boot should fail fast when start hook fails."""
         supervisor = _make_supervisor(repo_image_env)
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=False)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=False)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
@@ -552,8 +807,8 @@ class TestFromRepoImage:
             await supervisor.run()
 
         supervisor._report_fatal_error.assert_called_once()
-        supervisor.start_opencode.assert_not_called()
-        supervisor.start_bridge.assert_not_called()
+        supervisor.opencode_server.start.assert_not_called()
+        supervisor.agent_bridge.start.assert_not_called()
 
 
 class TestNormalMode:
@@ -563,55 +818,61 @@ class TestNormalMode:
     async def test_uses_full_git_sync(self, base_env, tmp_path):
         """A fresh boot clones (repo missing) then updates — the unified rule."""
         supervisor = _make_supervisor(base_env)
-        supervisor.repo_path = tmp_path / "nonexistent"
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path / "nonexistent"
+        _repoint_primary(supervisor.repository_boot)
 
         async def fake_clone(repo):
             repo.path.mkdir(parents=True, exist_ok=True)
             return True
 
-        supervisor._clone_repo = AsyncMock(side_effect=fake_clone)
-        supervisor._update_existing_repo = AsyncMock(return_value=True)
+        supervisor.repository_boot.synchronizer._clone_repo = AsyncMock(side_effect=fake_clone)
+        supervisor.repository_boot.synchronizer._update_existing_repo = AsyncMock(return_value=True)
 
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=True)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
 
         with patch.dict(os.environ, base_env, clear=False):
             await supervisor.run()
 
-        supervisor._clone_repo.assert_called_once_with(supervisor.repositories[0])
-        supervisor._update_existing_repo.assert_called_once_with(supervisor.repositories[0])
+        supervisor.repository_boot.synchronizer._clone_repo.assert_called_once_with(
+            supervisor.repository_boot.repositories[0]
+        )
+        supervisor.repository_boot.synchronizer._update_existing_repo.assert_called_once_with(
+            supervisor.repository_boot.repositories[0], BootMode.FRESH
+        )
 
     @pytest.mark.asyncio
     async def test_runs_setup_script(self, base_env):
         """Setup script should run in normal mode."""
         supervisor = _make_supervisor(base_env)
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
 
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=True)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
 
         with patch.dict(os.environ, base_env, clear=False):
             await supervisor.run()
 
-        supervisor.run_setup_script.assert_called_once()
-        supervisor.run_start_script.assert_called_once()
+        supervisor.repository_boot.hooks.run_setup.assert_called_once()
+        supervisor.repository_boot.hooks.run_start.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_clone_depth_100_in_normal_mode(self, base_env, tmp_path):
         """Normal mode should clone with --depth 100."""
         supervisor = _make_supervisor(base_env)
-        supervisor.repo_path = tmp_path / "nonexistent"
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path / "nonexistent"
+        _repoint_primary(supervisor.repository_boot)
 
         all_calls = []
 
@@ -623,17 +884,17 @@ class TestNormalMode:
             mock_proc.returncode = 0
             return mock_proc
 
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=True)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
 
         with (
             patch.dict(os.environ, base_env, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
                 side_effect=fake_subprocess,
             ),
         ):
@@ -653,29 +914,33 @@ class TestSnapshotRestoreMode:
     async def test_skips_setup_and_runs_start(self, base_env):
         supervisor = _make_supervisor({**base_env, "RESTORED_FROM_SNAPSHOT": "true"})
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=True)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
 
         with patch.dict(os.environ, {"RESTORED_FROM_SNAPSHOT": "true"}, clear=False):
             await supervisor.run()
 
-        supervisor.run_setup_script.assert_not_called()
-        supervisor.run_start_script.assert_called_once()
+        supervisor.repository_boot.hooks.run_setup.assert_not_called()
+        supervisor.repository_boot.hooks.run_start.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_start_failure_is_fatal(self, base_env):
         supervisor = _make_supervisor({**base_env, "RESTORED_FROM_SNAPSHOT": "true"})
 
-        supervisor.sync_repositories = AsyncMock(return_value=[])
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=False)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=False)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
@@ -684,31 +949,39 @@ class TestSnapshotRestoreMode:
             await supervisor.run()
 
         supervisor._report_fatal_error.assert_called_once()
-        supervisor.start_opencode.assert_not_called()
+        supervisor.opencode_server.start.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_resync_failure_is_reported_but_not_fatal(self, base_env, tmp_path):
         supervisor = _make_supervisor({**base_env, "RESTORED_FROM_SNAPSHOT": "true"})
-        supervisor.log = MagicMock()
+        shared_log = MagicMock()
+        supervisor.log = shared_log
+        supervisor.repository_boot.log = shared_log
+        supervisor.repository_boot.warnings.log = shared_log
 
-        supervisor.sync_repositories = AsyncMock(return_value=list(supervisor.repositories))
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=True)
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_sync_result(
+                tuple(supervisor.repository_boot.repositories),
+                RepositorySyncStatus.FAILED,
+            )
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
 
         with (
             patch.dict(os.environ, {"RESTORED_FROM_SNAPSHOT": "true"}, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
             await supervisor.run()
 
-        supervisor.log.warn.assert_any_call(
+        supervisor.repository_boot.log.warn.assert_any_call(
             "supervisor.boot_warning",
             scope="sync",
             warning_message=ANY,
@@ -721,7 +994,7 @@ class TestSnapshotRestoreMode:
             if c.args and c.args[0] == "sandbox.startup"
         )
         assert startup_call.kwargs["git_sync_success"] is False
-        supervisor.start_opencode.assert_called_once()
+        supervisor.opencode_server.start.assert_called_once()
         # The warning is queued for the bridge to forward as a sandbox event.
         warning_lines = (tmp_path / "warnings.jsonl").read_text().splitlines()
         assert len(warning_lines) == 1
@@ -734,44 +1007,47 @@ class TestNoRepository:
     @pytest.mark.asyncio
     async def test_sync_skips_clone(self, no_repo_env):
         supervisor = _make_supervisor(no_repo_env)
-        supervisor.log = MagicMock()
+        supervisor.repository_boot.synchronizer.log = MagicMock()
 
-        with patch("sandbox_runtime.entrypoint.asyncio.create_subprocess_exec") as mock_exec:
-            failed = await supervisor.sync_repositories()
+        with patch("sandbox_runtime.repository_sync.asyncio.create_subprocess_exec") as mock_exec:
+            result = await supervisor.repository_boot.synchronizer.sync([], BootMode.FRESH)
 
-        assert failed == []
+        assert result.failures == ()
         mock_exec.assert_not_called()
-        supervisor.log.info.assert_any_call("git.skip_clone", reason="no_repo_configured")
+        supervisor.repository_boot.synchronizer.log.info.assert_any_call(
+            "git.skip_clone", reason="no_repo_configured"
+        )
 
     @pytest.mark.asyncio
     async def test_skips_repo_hooks_but_starts_agent(self, no_repo_env):
         supervisor = _make_supervisor(no_repo_env)
         supervisor.log = MagicMock()
 
-        supervisor._ensure_credential_helper_configured = AsyncMock()
-        supervisor.sync_repositories = AsyncMock(return_value=[])
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.run_start_script = AsyncMock(return_value=True)
-        supervisor.start_code_server = AsyncMock()
-        supervisor.start_ttyd = AsyncMock()
-        supervisor.start_ttyd_proxy = AsyncMock()
-        supervisor.start_opencode = AsyncMock()
-        supervisor.start_bridge = AsyncMock()
+        supervisor.repository_boot.synchronizer.ensure_credentials_configured = AsyncMock()
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+        supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
+        supervisor.code_server.start = AsyncMock()
+        supervisor.web_terminal.start = AsyncMock()
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
 
         with patch.dict(os.environ, no_repo_env, clear=False):
             await supervisor.run()
 
-        assert supervisor.has_repository is False
-        assert supervisor.boot_mode == "fresh"
+        assert supervisor.repository_boot.has_repository is False
+        assert supervisor.boot_mode.value == "fresh"
         supervisor.log.info.assert_any_call("supervisor.no_repo_configured")
-        supervisor._ensure_credential_helper_configured.assert_not_called()
-        supervisor.sync_repositories.assert_called_once()
-        supervisor.run_setup_script.assert_not_called()
-        supervisor.run_start_script.assert_not_called()
-        supervisor.start_opencode.assert_called_once()
-        supervisor.start_bridge.assert_called_once()
+        supervisor.repository_boot.synchronizer.ensure_credentials_configured.assert_not_called()
+        supervisor.repository_boot.synchronizer.sync.assert_called_once()
+        supervisor.repository_boot.hooks.run_setup.assert_not_called()
+        supervisor.repository_boot.hooks.run_start.assert_not_called()
+        supervisor.opencode_server.start.assert_called_once()
+        supervisor.agent_bridge.start.assert_called_once()
 
 
 class TestUpdateExistingRepo:
@@ -785,8 +1061,8 @@ class TestUpdateExistingRepo:
         snapshots taken before the credential-helper migration.
         """
         supervisor = _make_supervisor(base_env)
-        supervisor.repo_path = tmp_path
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path
+        _repoint_primary(supervisor.repository_boot)
 
         call_log = []
 
@@ -798,17 +1074,21 @@ class TestUpdateExistingRepo:
             return mock_proc
 
         with patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
-            result = await supervisor._update_existing_repo(supervisor.repositories[0])
+            result = await supervisor.repository_boot.synchronizer._update_existing_repo(
+                supervisor.repository_boot.repositories[0], BootMode.FRESH
+            )
 
         assert result is True
         # set-url (scrub stale embedded token), fetch, checkout
         assert len(call_log) == 3
         assert "set-url" in call_log[0]
         # The rewrite must use a token-free URL.
-        assert call_log[0][-1] == supervisor._build_repo_url(supervisor.repositories[0])
+        assert call_log[0][-1] == supervisor.repository_boot.synchronizer._build_repo_url(
+            supervisor.repository_boot.repositories[0]
+        )
         assert "@" not in call_log[0][-1]
         assert "fetch" in call_log[1]
         assert "checkout" in call_log[2]
@@ -818,11 +1098,13 @@ class TestUpdateExistingRepo:
     async def test_returns_false_when_no_repo_path(self, base_env, tmp_path):
         """Should return False when repo directory doesn't exist."""
         supervisor = _make_supervisor(base_env)
-        supervisor.repo_path = tmp_path / "nonexistent"
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path / "nonexistent"
+        _repoint_primary(supervisor.repository_boot)
 
-        with patch("sandbox_runtime.entrypoint.asyncio.create_subprocess_exec") as mock_exec:
-            result = await supervisor._update_existing_repo(supervisor.repositories[0])
+        with patch("sandbox_runtime.repository_sync.asyncio.create_subprocess_exec") as mock_exec:
+            result = await supervisor.repository_boot.synchronizer._update_existing_repo(
+                supervisor.repository_boot.repositories[0], BootMode.FRESH
+            )
             mock_exec.assert_not_called()
 
         assert result is False
@@ -832,8 +1114,8 @@ class TestUpdateExistingRepo:
         """Fetch must use explicit refspec for shallow/single-branch clones."""
         env = {**base_env, "SESSION_CONFIG": '{"branch": "feature/xyz"}'}
         supervisor = _make_supervisor(env)
-        supervisor.repo_path = tmp_path
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path
+        _repoint_primary(supervisor.repository_boot)
 
         call_log = []
 
@@ -845,10 +1127,12 @@ class TestUpdateExistingRepo:
             return mock_proc
 
         with patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
-            await supervisor._update_existing_repo(supervisor.repositories[0])
+            await supervisor.repository_boot.synchronizer._update_existing_repo(
+                supervisor.repository_boot.repositories[0], BootMode.FRESH
+            )
 
         fetch_call = next(c for c in call_log if "fetch" in c)
         assert "feature/xyz:refs/remotes/origin/feature/xyz" in fetch_call
@@ -858,8 +1142,8 @@ class TestUpdateExistingRepo:
         """Checkout must target the session's branch."""
         env = {**base_env, "SESSION_CONFIG": '{"branch": "develop"}'}
         supervisor = _make_supervisor(env)
-        supervisor.repo_path = tmp_path
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path
+        _repoint_primary(supervisor.repository_boot)
 
         call_log = []
 
@@ -871,10 +1155,12 @@ class TestUpdateExistingRepo:
             return mock_proc
 
         with patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
-            await supervisor._update_existing_repo(supervisor.repositories[0])
+            await supervisor.repository_boot.synchronizer._update_existing_repo(
+                supervisor.repository_boot.repositories[0], BootMode.FRESH
+            )
 
         checkout_call = next(c for c in call_log if "checkout" in c)
         assert "develop" in checkout_call
@@ -884,8 +1170,8 @@ class TestUpdateExistingRepo:
     async def test_returns_false_on_fetch_failure(self, base_env, tmp_path):
         """Should return False when fetch fails."""
         supervisor = _make_supervisor(base_env)
-        supervisor.repo_path = tmp_path
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path
+        _repoint_primary(supervisor.repository_boot)
 
         async def fake_subprocess(*args, **kwargs):
             mock_proc = MagicMock()
@@ -898,10 +1184,12 @@ class TestUpdateExistingRepo:
             return mock_proc
 
         with patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
-            result = await supervisor._update_existing_repo(supervisor.repositories[0])
+            result = await supervisor.repository_boot.synchronizer._update_existing_repo(
+                supervisor.repository_boot.repositories[0], BootMode.FRESH
+            )
 
         assert result is False
 
@@ -909,8 +1197,8 @@ class TestUpdateExistingRepo:
     async def test_returns_false_on_checkout_failure(self, base_env, tmp_path):
         """Should return False when checkout fails."""
         supervisor = _make_supervisor(base_env)
-        supervisor.repo_path = tmp_path
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path
+        _repoint_primary(supervisor.repository_boot)
 
         async def fake_subprocess(*args, **kwargs):
             mock_proc = MagicMock()
@@ -923,10 +1211,12 @@ class TestUpdateExistingRepo:
             return mock_proc
 
         with patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
-            result = await supervisor._update_existing_repo(supervisor.repositories[0])
+            result = await supervisor.repository_boot.synchronizer._update_existing_repo(
+                supervisor.repository_boot.repositories[0], BootMode.FRESH
+            )
 
         assert result is False
 
@@ -939,33 +1229,39 @@ class TestUpdateExistingRepo:
         self, base_env, tmp_path, ensure_origin_result, fetch_result
     ):
         supervisor = _make_supervisor(base_env)
-        supervisor.boot_mode = "snapshot_restore"
-        supervisor.repo_path = tmp_path
-        _repoint_primary(supervisor)
-        supervisor._ensure_plain_origin = AsyncMock(return_value=ensure_origin_result)
-        supervisor._fetch_branch = AsyncMock(return_value=fetch_result)
+        supervisor.repository_boot.repo_path = tmp_path
+        _repoint_primary(supervisor.repository_boot)
+        supervisor.repository_boot.synchronizer._ensure_plain_origin = AsyncMock(
+            return_value=ensure_origin_result
+        )
+        supervisor.repository_boot.synchronizer._fetch_branch = AsyncMock(return_value=fetch_result)
 
-        result = await supervisor._update_existing_repo(supervisor.repositories[0])
+        result = await supervisor.repository_boot.synchronizer._update_existing_repo(
+            supervisor.repository_boot.repositories[0], BootMode.SNAPSHOT_RESTORE
+        )
 
         assert result is False
         if ensure_origin_result:
-            supervisor._fetch_branch.assert_awaited_once()
+            supervisor.repository_boot.synchronizer._fetch_branch.assert_awaited_once()
         else:
-            supervisor._fetch_branch.assert_not_awaited()
+            supervisor.repository_boot.synchronizer._fetch_branch.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_snapshot_restore_reports_unexpected_refresh_errors(self, base_env, tmp_path):
         supervisor = _make_supervisor(base_env)
-        supervisor.boot_mode = "snapshot_restore"
-        supervisor.repo_path = tmp_path
-        _repoint_primary(supervisor)
-        supervisor._ensure_plain_origin = AsyncMock(side_effect=RuntimeError("refresh failed"))
-        supervisor.log.warn = MagicMock()
+        supervisor.repository_boot.repo_path = tmp_path
+        _repoint_primary(supervisor.repository_boot)
+        supervisor.repository_boot.synchronizer._ensure_plain_origin = AsyncMock(
+            side_effect=RuntimeError("refresh failed")
+        )
+        supervisor.repository_boot.synchronizer.log.warn = MagicMock()
 
-        result = await supervisor._update_existing_repo(supervisor.repositories[0])
+        result = await supervisor.repository_boot.synchronizer._update_existing_repo(
+            supervisor.repository_boot.repositories[0], BootMode.SNAPSHOT_RESTORE
+        )
 
         assert result is False
-        supervisor.log.warn.assert_called_once()
+        supervisor.repository_boot.synchronizer.log.warn.assert_called_once()
 
 
 class TestPerformGitSync:
@@ -979,8 +1275,8 @@ class TestPerformGitSync:
             "SESSION_CONFIG": '{"branch": "staging"}',
         }
         supervisor = _make_supervisor(env)
-        supervisor.repo_path = tmp_path / "nonexistent"
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path / "nonexistent"
+        _repoint_primary(supervisor.repository_boot)
 
         call_log = []
 
@@ -995,10 +1291,12 @@ class TestPerformGitSync:
             return mock_proc
 
         with patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
-            result = await supervisor._sync_repo(supervisor.repositories[0])
+            result = await supervisor.repository_boot.synchronizer._sync_repo(
+                supervisor.repository_boot.repositories[0], BootMode.FRESH
+            )
 
         assert result is True
 
@@ -1013,8 +1311,8 @@ class TestPerformGitSync:
             "SESSION_CONFIG": '{"branch": "feature/abc"}',
         }
         supervisor = _make_supervisor(env)
-        supervisor.repo_path = tmp_path  # Exists, so clone is skipped
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path  # Exists, so clone is skipped
+        _repoint_primary(supervisor.repository_boot)
 
         call_log = []
 
@@ -1027,10 +1325,12 @@ class TestPerformGitSync:
             return mock_proc
 
         with patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
-            result = await supervisor._sync_repo(supervisor.repositories[0])
+            result = await supervisor.repository_boot.synchronizer._sync_repo(
+                supervisor.repository_boot.repositories[0], BootMode.FRESH
+            )
 
         assert result is True
 
@@ -1045,8 +1345,8 @@ class TestPerformGitSync:
             "SESSION_CONFIG": '{"branch": "release/v2"}',
         }
         supervisor = _make_supervisor(env)
-        supervisor.repo_path = tmp_path  # Exists
-        _repoint_primary(supervisor)
+        supervisor.repository_boot.repo_path = tmp_path  # Exists
+        _repoint_primary(supervisor.repository_boot)
 
         call_log = []
 
@@ -1059,10 +1359,12 @@ class TestPerformGitSync:
             return mock_proc
 
         with patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
-            await supervisor._sync_repo(supervisor.repositories[0])
+            await supervisor.repository_boot.synchronizer._sync_repo(
+                supervisor.repository_boot.repositories[0], BootMode.FRESH
+            )
 
         checkout_calls = [c for c in call_log if "checkout" in c]
         assert len(checkout_calls) == 1
@@ -1088,9 +1390,9 @@ class TestPerformGitSync:
     ):
         env = {**base_env, "VCS_HOST": "github.com"}
         supervisor = _make_supervisor(env)
-        supervisor.repo_path = tmp_path
-        _repoint_primary(supervisor)
-        supervisor.log = MagicMock()
+        supervisor.repository_boot.repo_path = tmp_path
+        _repoint_primary(supervisor.repository_boot)
+        supervisor.repository_boot.synchronizer.log = MagicMock()
 
         # Simulate a redirect chain that leaks credentials from an upstream proxy.
         stderr_text = (
@@ -1104,12 +1406,14 @@ class TestPerformGitSync:
             return mock_proc
 
         with patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
-            await getattr(supervisor, method_name)(supervisor.repositories[0], *args)
+            await getattr(supervisor.repository_boot.synchronizer, method_name)(
+                supervisor.repository_boot.repositories[0], *args
+            )
 
-        log_call = getattr(supervisor.log, log_method_name).call_args
+        log_call = getattr(supervisor.repository_boot.synchronizer.log, log_method_name).call_args
         assert log_call.args[0] == event_name
         # The generic `user:password@` regex masks the upstream creds.
         assert "other-secret" not in log_call.kwargs["stderr"]
@@ -1119,13 +1423,20 @@ class TestPerformGitSync:
         supervisor = _make_supervisor(base_env)
 
         stderr_text = (
-            "fatal: redirected to https://other-user:other-secret@example.com/acme/my-repo.git"
+            b"fatal: redirected to https://other-user:other-secret@example.com/acme/my-repo.git"
         )
 
-        redacted_stderr = supervisor._redact_git_stderr(stderr_text)  # type: ignore[attr-defined]
+        redacted_stderr = supervisor.repository_boot.synchronizer._redact_git_stderr(stderr_text)
 
         assert "other-secret" not in redacted_stderr
         assert "https://***@example.com/acme/my-repo.git" in redacted_stderr
+
+    def test_redact_git_stderr_replaces_malformed_bytes(self, base_env):
+        supervisor = _make_supervisor(base_env)
+
+        redacted_stderr = supervisor.repository_boot.synchronizer._redact_git_stderr(b"fatal: \xff")
+
+        assert redacted_stderr == "fatal: �"
 
 
 class TestBaseBranchProperty:
@@ -1134,13 +1445,13 @@ class TestBaseBranchProperty:
     def test_defaults_to_main(self, base_env):
         """Should default to 'main' when no branch in SESSION_CONFIG."""
         supervisor = _make_supervisor(base_env)
-        assert supervisor.base_branch == "main"
+        assert supervisor.repository_boot.base_branch == "main"
 
     def test_reads_branch_from_session_config(self, base_env):
         """Should read branch from SESSION_CONFIG."""
         env = {**base_env, "SESSION_CONFIG": '{"branch": "develop"}'}
         supervisor = _make_supervisor(env)
-        assert supervisor.base_branch == "develop"
+        assert supervisor.repository_boot.base_branch == "develop"
 
 
 class TestEnsureCredentialHelperConfigured:
@@ -1156,7 +1467,7 @@ class TestEnsureCredentialHelperConfigured:
         green. This pins it at the boot-config layer.
         """
         supervisor = _make_supervisor(base_env)
-        supervisor.log = MagicMock()
+        supervisor.repository_boot.synchronizer.log = MagicMock()
 
         git_config_calls = []
 
@@ -1170,15 +1481,15 @@ class TestEnsureCredentialHelperConfigured:
 
         with (
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
                 side_effect=fake_subprocess,
             ),
-            patch("sandbox_runtime.entrypoint.Path.write_text"),
-            patch("sandbox_runtime.entrypoint.Path.chmod"),
-            patch("sandbox_runtime.entrypoint.Path.exists", return_value=False),
-            patch.object(supervisor, "_install_gh_wrapper"),
+            patch("sandbox_runtime.repository_sync.Path.write_text"),
+            patch("sandbox_runtime.repository_sync.Path.chmod"),
+            patch("sandbox_runtime.repository_sync.Path.exists", return_value=False),
+            patch.object(supervisor.repository_boot.synchronizer, "_install_gh_wrapper"),
         ):
-            await supervisor._ensure_credential_helper_configured()
+            await supervisor.repository_boot.synchronizer.ensure_credentials_configured()
 
         assert all("--replace-all" in c for c in git_config_calls)
         pairs = {(c[4], c[5]) for c in git_config_calls}
@@ -1188,7 +1499,7 @@ class TestEnsureCredentialHelperConfigured:
     @pytest.mark.asyncio
     async def test_warns_when_credential_helper_shim_cannot_be_written(self, base_env):
         supervisor = _make_supervisor(base_env)
-        supervisor.log = MagicMock()
+        supervisor.repository_boot.synchronizer.log = MagicMock()
         git_config_calls = []
 
         async def fake_subprocess(*args, **kwargs):
@@ -1201,16 +1512,18 @@ class TestEnsureCredentialHelperConfigured:
 
         with (
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
                 side_effect=fake_subprocess,
             ),
-            patch("sandbox_runtime.entrypoint.Path.write_text", side_effect=OSError("read-only")),
-            patch("sandbox_runtime.entrypoint.Path.exists", return_value=False),
-            patch.object(supervisor, "_install_gh_wrapper"),
+            patch(
+                "sandbox_runtime.repository_sync.Path.write_text", side_effect=OSError("read-only")
+            ),
+            patch("sandbox_runtime.repository_sync.Path.exists", return_value=False),
+            patch.object(supervisor.repository_boot.synchronizer, "_install_gh_wrapper"),
         ):
-            await supervisor._ensure_credential_helper_configured()
+            await supervisor.repository_boot.synchronizer.ensure_credentials_configured()
 
-        supervisor.log.warn.assert_any_call(
+        supervisor.repository_boot.synchronizer.log.warn.assert_any_call(
             "credential_helper.shim_write_failed",
             error="read-only",
         )

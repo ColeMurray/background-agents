@@ -155,7 +155,11 @@ export function AutomationTargetPicker({
   return (
     <>
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">
+        <label
+          id="automation-repository-configuration-label"
+          htmlFor="automation-repository-configuration"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
           Repository Configuration
         </label>
         <Popover
@@ -167,9 +171,10 @@ export function AutomationTargetPicker({
         >
           <PopoverTrigger asChild>
             <button
+              id="automation-repository-configuration"
               type="button"
               className="flex w-full items-center gap-2 rounded-sm border border-border bg-input px-3 py-2 text-sm text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              aria-label="Repository selection"
+              aria-labelledby="automation-repository-configuration-label"
             >
               {selectedEnvironmentIds.length > 0 && selectedRepoNames.length === 0 ? (
                 <BoxIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -224,8 +229,16 @@ export function AutomationTargetPicker({
 
       {usesSingleRepository && (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Branch</label>
+          <label
+            id="automation-branch-label"
+            htmlFor="automation-branch"
+            className="block text-sm font-medium text-foreground mb-1.5"
+          >
+            Branch
+          </label>
           <Combobox
+            id="automation-branch"
+            labelId="automation-branch-label"
             value={baseBranch}
             onChange={setBaseBranch}
             items={branches.map((branch) => ({

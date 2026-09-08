@@ -1,7 +1,11 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { createLogger } from "../logger";
 import { isSupportedScreenshotMimeType, isSupportedVideoMimeType } from "../media";
-import { createMediaObjectStorage, type ObjectStorageMetadata } from "../storage/object-storage";
-import type { ArtifactResponse, Env } from "../types";
+import type { NormalizedArtifactResponse } from "../session/artifacts";
+import type { ObjectStorageMetadata } from "../storage/object-storage";
+import type { Env } from "../types";
 import { parseByteRangeHeader, type ByteRange } from "./requests/byte-range";
 import {
   createPartialStoredObjectResponse,
@@ -9,14 +13,12 @@ import {
   createStoredObjectResponse,
 } from "./responses/stored-object-response";
 import { getSessionArtifactFromRuntime } from "./session-media-artifacts";
-import { error, parsePattern, type Route } from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
-export { parseByteRangeHeader } from "./requests/byte-range";
-
+import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 const logger = createLogger("router:session-media");
 
 function getMediaMimeType(
-  artifact: ArtifactResponse
+  artifact: NormalizedArtifactResponse
 ): "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | null {
   const mimeType = artifact.metadata?.mimeType;
   if (typeof mimeType !== "string") return null;
@@ -33,7 +35,7 @@ function getStoredContentType(metadata: ObjectStorageMetadata): string | null {
 }
 
 function resolveMediaContentType(
-  artifact: ArtifactResponse,
+  artifact: NormalizedArtifactResponse,
   metadata: ObjectStorageMetadata
 ): string | null {
   const storedContentType = getStoredContentType(metadata);
@@ -47,18 +49,18 @@ function resolveMediaContentType(
   return getMediaMimeType(artifact);
 }
 
-async function handleMediaGet(
+export async function handleMediaGet(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; artifactId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  const artifactId = match.groups?.artifactId;
+  const sessionId = params.id;
+  const artifactId = params.artifactId;
   if (!sessionId || !artifactId) {
     return error("Session ID and artifact ID are required", 400);
   }
-  const storage = createMediaObjectStorage(env);
+  const storage = env.MEDIA_BUCKET;
   if (!/^[A-Za-z0-9-]+$/.test(artifactId)) {
     return error("Invalid artifact ID", 400);
   }
@@ -136,10 +138,15 @@ async function handleMediaGet(
     : createStoredObjectResponse(body, metadata, contentType);
 }
 
-export const sessionMediaStreamRoutes: Route[] = [
-  sessionRoute({
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/media/:artifactId"),
-    handler: handleMediaGet,
+export const sessionMediaStreamRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionMediaStreamRoutes.get(
+  "/sessions/:id/media/:artifactId",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requirePermission("sessions.read", {
+      actorlessGrants: [{ service: "slack-bot" }],
+    }),
   }),
-];
+  (c) => dispatchSession(c, handleMediaGet)
+);

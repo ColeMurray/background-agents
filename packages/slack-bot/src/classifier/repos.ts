@@ -6,16 +6,18 @@
  * GitHub App installation to get the list of accessible repositories.
  */
 
-import type { Env, RepoConfig } from "../types";
+import type { Env } from "../types";
 import { normalizeRepoId } from "../utils/repo";
 import {
   normalizeRoutingRules,
-  type SlackGlobalConfig,
+  slackIntegrationSettingsRoutingResponseSchema,
+  slackRoutingRuleSchema,
   type SlackRoutingRule,
 } from "@open-inspect/shared/types/integrations";
 import {
   controlPlaneReposResponseSchema,
   repoConfigSchema,
+  type RepoConfig,
 } from "@open-inspect/shared/types/repository-catalog";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { createCachedResource } from "./cached-resource";
@@ -35,6 +37,20 @@ const log = createLogger("repos");
  * This ensures the bot doesn't completely break during outages.
  */
 const FALLBACK_REPOS: RepoConfig[] = [];
+
+/**
+ * Bound on the catalog fetch, because it sits on the critical path of every
+ * mention and those handlers run inside `waitUntil`. A cold control-plane cache
+ * can make `GET /repos` take tens of seconds; left unbounded it consumes the
+ * whole background-task budget and the platform cancels the remaining work
+ * mid-flight — after the "Working on..." ack has posted but before a session
+ * exists, so the request disappears with neither a session nor an error.
+ *
+ * Giving up early costs a possibly-stale catalog from the KV fallback, which is
+ * a far better outcome than dropping the request. A warm fetch takes well under
+ * a second, so this only trips when something is genuinely wrong.
+ */
+export const REPOS_FETCH_TIMEOUT_MS = 5_000;
 
 /**
  * Local in-memory cache for repos.
@@ -96,7 +112,7 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
 
   const startTime = Date.now();
   try {
-    const response = await controlPlaneFetch(env, "/repos", traceId);
+    const response = await controlPlaneFetch(env, "/repos", traceId, REPOS_FETCH_TIMEOUT_MS);
 
     if (!response.ok) {
       log.error("control_plane.fetch_repos", {
@@ -199,12 +215,19 @@ const routingRules = createCachedResource<SlackRoutingRule[]>({
   kvKey: "slack:routing-rules",
   load: async (env, traceId) => {
     const body = await fetchControlPlaneJson(env, "/integration-settings/slack", traceId);
+    const parsed = slackIntegrationSettingsRoutingResponseSchema.safeParse(body);
     return normalizeRoutingRules(
-      (body as { settings?: SlackGlobalConfig | null }).settings?.defaults?.routingRules
+      parsed.success ? parsed.data.settings?.defaults?.routingRules : []
     );
   },
-  deserialize: (cached) =>
-    Array.isArray(cached) ? normalizeRoutingRules(cached as SlackRoutingRule[]) : null,
+  deserialize: (cached) => {
+    if (!Array.isArray(cached)) return null;
+    const rules = cached.flatMap((entry) => {
+      const parsed = slackRoutingRuleSchema.safeParse(entry);
+      return parsed.success ? [parsed.data] : [];
+    });
+    return normalizeRoutingRules(rules);
+  },
   fallback: [],
 });
 
@@ -294,30 +317,6 @@ export function filterReposByQuery(repos: RepoConfig[], query: string | undefine
     return repos;
   }
   return repos.filter((repo) => repo.fullName.toLowerCase().includes(normalizedQuery));
-}
-
-/**
- * Find a repository by owner and name.
- */
-export async function getRepoByFullName(
-  env: Env,
-  fullName: string,
-  traceId?: string
-): Promise<RepoConfig | undefined> {
-  const repos = await getAvailableRepos(env, traceId);
-  return repos.find((r) => r.fullName.toLowerCase() === fullName.toLowerCase());
-}
-
-/**
- * Find a repository by its ID.
- */
-export async function getRepoById(
-  env: Env,
-  id: string,
-  traceId?: string
-): Promise<RepoConfig | undefined> {
-  const repos = await getAvailableRepos(env, traceId);
-  return repos.find((r) => r.id.toLowerCase() === id.toLowerCase());
 }
 
 /**

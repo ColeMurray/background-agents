@@ -5,10 +5,17 @@
 import type { TriggerSourceDefinition } from "../types";
 import { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
 
-export type { GitHubAutomationEvent } from "../types";
+export { githubConditions } from "./conditions";
 export { normalizeGitHubEvent } from "./normalizer";
-export { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
-
+export {
+  GITHUB_WEBHOOK_EVENT_CATALOG,
+  DEFAULT_GITHUB_CONCLUSION,
+  CHECK_SUITE_CONCLUSIONS,
+  WORKFLOW_RUN_CONCLUSIONS,
+  getGitHubConclusionOptions,
+  getGitHubEventConditionTypes,
+  isGitHubConditionSupported,
+} from "./webhook-types";
 export const githubSource: TriggerSourceDefinition = {
   source: "github",
   triggerType: "github_event",
@@ -22,11 +29,8 @@ export const githubSource: TriggerSourceDefinition = {
     description,
   })),
   supportedConditions: [
-    "branch",
-    "target_branch",
-    "label",
-    "path_glob",
-    "actor",
-    "check_conclusion",
+    ...new Set(
+      GITHUB_WEBHOOK_EVENT_CATALOG.flatMap(({ supportedConditions }) => supportedConditions)
+    ),
   ],
 };

@@ -1,14 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/server-auth-session", () => ({
-  getServerAuthSession: vi.fn(),
-}));
-
 vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: vi.fn(),
 }));
 
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET } from "./route";
 
@@ -17,8 +12,10 @@ describe("analytics summary API route", () => {
     vi.resetAllMocks();
   });
 
-  it("returns 401 when the user session is missing", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("delegates authentication to the resource request", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await GET(
       new Request("http://localhost/api/analytics/summary?days=14") as never
@@ -26,11 +23,10 @@ describe("analytics summary API route", () => {
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).toHaveBeenCalledTimes(1);
   });
 
   it("forwards only the allowed summary query params", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ totalSessions: 5 }, { status: 200 })
     );
@@ -45,7 +41,6 @@ describe("analytics summary API route", () => {
   });
 
   it("returns 500 when the control plane request throws", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockRejectedValue(new Error("boom"));
 
     const response = await GET(new Request("http://localhost/api/analytics/summary") as never);

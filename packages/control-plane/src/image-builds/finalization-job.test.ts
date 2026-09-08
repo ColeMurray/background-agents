@@ -14,7 +14,7 @@ describe("image build finalization jobs", () => {
         { repoOwner: "Acme", repoName: "Api", baseSha: "def456" },
       ],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 12_500,
+      buildDurationSeconds: 12.5,
     };
 
     const first = await createImageBuildFinalizationJob({ outcome: "success", completion });
@@ -34,6 +34,32 @@ describe("image build finalization jobs", () => {
     expect(JSON.stringify(first)).not.toContain("abc123");
   });
 
+  it("keeps the frozen hash canonicalization stable across refactors", async () => {
+    // Golden value computed from the pre-seconds-refactor canonical document
+    // ({... buildDurationMs: 12500}). The completion hash is a persisted
+    // idempotency contract: a deploy-straddling callback retry must hash
+    // identically before and after a refactor. If this fails, the hash
+    // schema changed — that requires an explicit version migration, not a
+    // fixture update.
+    const job = await createImageBuildFinalizationJob({
+      outcome: "success",
+      completion: {
+        buildId: "build-1",
+        providerSessionId: "session-1",
+        repositoryShas: [
+          { repoOwner: "Acme", repoName: "Web", baseSha: "abc123" },
+          { repoOwner: "Acme", repoName: "Api", baseSha: "def456" },
+        ],
+        runtimeVersion: "v53-runtime",
+        buildDurationSeconds: 12.5,
+      },
+    });
+
+    expect(job.completionHash).toBe(
+      "a38995471a349e98e513c04a4a8806b3275e2dcbbff53523ab50aee0d0644df9"
+    );
+  });
+
   it("treats repository SHA order as irrelevant to completion identity", async () => {
     const completion = {
       buildId: "build-1",
@@ -43,7 +69,7 @@ describe("image build finalization jobs", () => {
         { repoOwner: "Acme", repoName: "Api", baseSha: "def456" },
       ],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 12_500,
+      buildDurationSeconds: 12.5,
     };
 
     const ordered = await createImageBuildFinalizationJob({ outcome: "success", completion });

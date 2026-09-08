@@ -14,9 +14,15 @@ const sourceMessageSchema = z.object({
   threadTs: z.string().optional(),
 });
 
+const unattributedPromptSchema = z.object({
+  forwardedMessages: z.array(z.string()),
+});
+
 const pendingRequestSchema = z.object({
   message: z.string().min(1),
   userId: z.string().min(1),
+  /** Present when `message` still needs sender attribution before delivery. */
+  unattributedPrompt: unattributedPromptSchema.optional(),
   previousMessages: z.array(z.string()).optional(),
   channelName: z.string().optional(),
   channelDescription: z.string().optional(),

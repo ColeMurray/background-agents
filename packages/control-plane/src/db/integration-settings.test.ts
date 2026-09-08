@@ -298,6 +298,45 @@ describe("IntegrationSettingsStore", () => {
       expect(result?.defaults?.allowedTriggerUsers).toEqual(["alice", "bob"]);
     });
 
+    it("normalizes only explicitly configured Autofix settings", async () => {
+      await store.setGlobal("github", {
+        defaults: {
+          autofix: {
+            enabled: true,
+            allowedReviewBots: [" CodeRabbitAI[bot] ", "coderabbitai[bot]"],
+            maxAttemptsPerPrPer24Hours: 12,
+          },
+        },
+      });
+
+      const result = await store.getGlobal("github");
+      expect(result?.defaults?.autofix).toEqual({
+        enabled: true,
+        allowedReviewBots: ["coderabbitai[bot]"],
+        maxAttemptsPerPrPer24Hours: 12,
+      });
+    });
+
+    it.each([75, null])("accepts an Autofix attempt limit of %s", async (attemptLimit) => {
+      await store.setGlobal("github", {
+        defaults: { autofix: { maxAttemptsPerPrPer24Hours: attemptLimit } },
+      });
+
+      const result = await store.getGlobal("github");
+      expect(result?.defaults?.autofix?.maxAttemptsPerPrPer24Hours).toBe(attemptLimit);
+    });
+
+    it.each([0, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+      "rejects an invalid Autofix attempt limit of %s",
+      async (attemptLimit) => {
+        await expect(
+          store.setGlobal("github", {
+            defaults: { autofix: { maxAttemptsPerPrPer24Hours: attemptLimit } },
+          })
+        ).rejects.toThrow(IntegrationSettingsValidationError);
+      }
+    );
+
     it("rejects non-array defaults.allowedTriggerUsers", async () => {
       await expect(
         store.setGlobal("github", {
@@ -344,6 +383,27 @@ describe("IntegrationSettingsStore", () => {
           defaults: { model: "anthropic/claude-opus-4-6", reasoningEffort: "high" },
         })
       ).resolves.not.toThrow();
+    });
+
+    it("rejects malformed stored global settings", async () => {
+      (db as unknown as { globalRows: Map<string, GlobalRow> }).globalRows.set("github", {
+        integration_id: "github",
+        settings: JSON.stringify({ enabledRepos: [42] }),
+        created_at: 1,
+        updated_at: 1,
+      });
+
+      await expect(store.getGlobal("github")).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("does not persist structurally invalid global settings", async () => {
+      await expect(
+        store.setGlobal("github", {
+          defaults: { autoReviewOnOpen: "false" as unknown as boolean },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+
+      await expect(store.getGlobal("github")).resolves.toBeNull();
     });
   });
 
@@ -464,6 +524,44 @@ describe("IntegrationSettingsStore", () => {
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
+
+    it("rejects malformed stored repo settings", async () => {
+      (db as unknown as { repoRows: Map<string, RepoRow> }).repoRows.set("github:acme/widgets", {
+        integration_id: "github",
+        repo: "acme/widgets",
+        settings: JSON.stringify({ autoReviewOnOpen: "false" }),
+        created_at: 1,
+        updated_at: 1,
+      });
+
+      await expect(store.getRepoSettings("github", "acme/widgets")).rejects.toThrow(
+        IntegrationSettingsValidationError
+      );
+    });
+
+    it("rejects malformed stored repo settings from list reads", async () => {
+      (db as unknown as { repoRows: Map<string, RepoRow> }).repoRows.set("github:acme/widgets", {
+        integration_id: "github",
+        repo: "acme/widgets",
+        settings: JSON.stringify({ autoReviewOnOpen: "false" }),
+        created_at: 1,
+        updated_at: 1,
+      });
+
+      await expect(store.listRepoSettings("github")).rejects.toThrow(
+        IntegrationSettingsValidationError
+      );
+    });
+
+    it("does not persist structurally invalid repo settings", async () => {
+      await expect(
+        store.setRepoSettings("github", "acme/widgets", {
+          autoReviewOnOpen: "false" as unknown as boolean,
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+
+      await expect(store.getRepoSettings("github", "acme/widgets")).resolves.toBeNull();
+    });
   });
 
   describe("merge logic (getResolvedConfig)", () => {
@@ -502,6 +600,25 @@ describe("IntegrationSettingsStore", () => {
       expect(config.enabledRepos).toEqual(["acme/widgets"]);
       expect(config.settings.model).toBe("anthropic/claude-opus-4-6");
       expect(config.settings.reasoningEffort).toBe("high");
+    });
+
+    it("merges repository Autofix fields without replacing global policy", async () => {
+      await store.setGlobal("github", {
+        defaults: {
+          autofix: { enabled: true, reviewsEnabled: false, allowedReviewBots: ["trusted[bot]"] },
+        },
+      });
+      await store.setRepoSettings("github", "acme/widgets", {
+        autofix: { maxAttemptsPerPrPer24Hours: 5 },
+      });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.autofix).toEqual({
+        enabled: true,
+        reviewsEnabled: false,
+        allowedReviewBots: ["trusted[bot]"],
+        maxAttemptsPerPrPer24Hours: 5,
+      });
     });
 
     it("per-repo autoReviewOnOpen overrides global default", async () => {
@@ -672,6 +789,33 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("does not persist structurally invalid environment settings", async () => {
+      await expect(
+        store.setEnvironmentSettings("sandbox", "env_1", {
+          buildTimeoutSeconds: "3600" as unknown as number,
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+
+      await expect(store.getEnvironmentSettings("sandbox", "env_1")).resolves.toBeNull();
+    });
+
+    it("rejects malformed stored environment settings", async () => {
+      (db as unknown as { environmentRows: Map<string, EnvironmentRow> }).environmentRows.set(
+        "sandbox:env_1",
+        {
+          integration_id: "sandbox",
+          environment_id: "env_1",
+          settings: JSON.stringify({ buildTimeoutSeconds: "3600" }),
+          created_at: 1,
+          updated_at: 1,
+        }
+      );
+
+      await expect(store.getEnvironmentSettings("sandbox", "env_1")).rejects.toThrow(
+        IntegrationSettingsValidationError
+      );
+    });
+
     it("layers environment overrides on top of repo overrides and global defaults", async () => {
       await store.setGlobal("sandbox", {
         defaults: { buildTimeoutSeconds: 600, terminalEnabled: true, tunnelPorts: [3000] },
@@ -707,6 +851,14 @@ describe("IntegrationSettingsStore", () => {
       expect(config.settings.enabled).toBe(true);
     });
 
+    it("applies VNC environment overrides", async () => {
+      await store.setGlobal("vnc", { defaults: { enabled: false } });
+      await store.setEnvironmentSettings("vnc", "env_1", { enabled: true });
+
+      const config = await store.getResolvedConfig("vnc", "acme/widgets", "env_1");
+      expect(config.settings.enabled).toBe(true);
+    });
+
     it("skips the environment layer for integrations that don't support it", async () => {
       await store.setGlobal("github", { defaults: { autoReviewOnOpen: true } });
 
@@ -719,9 +871,16 @@ describe("IntegrationSettingsStore", () => {
     it("declares environment support for exactly the session-scoped integrations", () => {
       expect(supportsEnvironmentSettings("sandbox")).toBe(true);
       expect(supportsEnvironmentSettings("code-server")).toBe(true);
+      expect(supportsEnvironmentSettings("vnc")).toBe(true);
       expect(supportsEnvironmentSettings("github")).toBe(false);
       expect(supportsEnvironmentSettings("linear")).toBe(false);
       expect(supportsEnvironmentSettings("slack")).toBe(false);
+    });
+
+    it("rejects a non-boolean VNC enabled setting", async () => {
+      await expect(
+        store.setRepoSettings("vnc", "acme/widgets", { enabled: "yes" } as never)
+      ).rejects.toThrow("enabled must be a boolean");
     });
   });
 
@@ -753,6 +912,27 @@ describe("IntegrationSettingsStore", () => {
       const config = await store.getResolvedConfig("github", "acme/widgets");
       expect(config.settings.model).toBe("anthropic/claude-opus-4-6");
       expect(config.settings.reasoningEffort).toBe("low");
+    });
+  });
+
+  describe("SCM field-level overrides", () => {
+    it("keeps omitted repository fields inherited when global defaults change", async () => {
+      await store.setGlobal("scm", {
+        defaults: { alwaysUseDraftMode: false, pullRequestLabel: "global" },
+      });
+      await store.setRepoSettings("scm", "acme/widgets", {
+        pullRequestLabel: "repository",
+      });
+
+      await store.setGlobal("scm", {
+        defaults: { alwaysUseDraftMode: true, pullRequestLabel: "new-global" },
+      });
+      const config = await store.getResolvedConfig("scm", "acme/widgets");
+
+      expect(config.settings).toEqual({
+        alwaysUseDraftMode: true,
+        pullRequestLabel: "repository",
+      });
     });
   });
 

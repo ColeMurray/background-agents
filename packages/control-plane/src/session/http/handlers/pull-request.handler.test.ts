@@ -3,7 +3,10 @@ import type { Logger } from "../../../logger";
 import type { SessionRepositoryRow } from "../../types";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "../../repository-target";
 import type { ArtifactRow, ParticipantRow, SessionRow } from "../../types";
-import { createPullRequestHandler } from "./pull-request.handler";
+import { PullRequestHandler } from "./pull-request.handler";
+import type { SessionCoreRepository } from "../../session-core-repository";
+import type { ArtifactRepository } from "../../artifact-repository";
+import type { ParticipantService } from "../../participant-service";
 
 function createRepositoryRow(
   position: number,
@@ -42,7 +45,10 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user",
     spawn_depth: 0,
     code_server_enabled: 0,
+    vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1000,
@@ -74,7 +80,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 function createHandler() {
   const getSession = vi.fn<() => SessionRow | null>();
   let repositoryRows: SessionRepositoryRow[] = [];
-  // Mirrors SessionRepository.getSessionRepositories: members derive from the
+  // Mirrors SessionCoreRepository.getSessionRepositories: members derive from the
   // session scalars plus whatever rows the test seeds.
   const getSessionRepositories = vi.fn<() => SessionRepositoryEntry[]>(() => {
     const session = getSession();
@@ -91,7 +97,7 @@ function createHandler() {
   const getArtifactById = vi.fn<(artifactId: string) => ArtifactRow | null>(() => null);
   const updateArtifact = vi.fn();
   const broadcast = vi.fn();
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const now = vi.fn(() => 5000);
   const triggerPullRequestRefresh = vi.fn();
   const log = {
@@ -102,25 +108,24 @@ function createHandler() {
     child: vi.fn(),
   } as unknown as Logger;
 
-  const pullRequestHandler = createPullRequestHandler({
-    getSession,
-    getSessionRepositories,
-    getPromptingParticipantForPR,
-    resolveAuthForPR,
+  const pullRequestHandler = new PullRequestHandler(
+    { getSession, getSessionRepositories } as unknown as SessionCoreRepository,
+    { getPromptingParticipantForPR, resolveAuthForPR } as unknown as ParticipantService,
+    { getArtifactById, updateArtifact } as unknown as ArtifactRepository,
+    messenger,
     getSessionUrl,
     createPullRequest,
-    getArtifactById,
-    updateArtifact,
-    messenger,
-    now,
     triggerPullRequestRefresh,
-  });
+    now
+  );
 
   // Bind the request-scoped log so call sites exercise the threading without
   // repeating it at every invocation.
   const handler = {
-    ...pullRequestHandler,
     createPr: (request: Request) => pullRequestHandler.createPr(request, log),
+    pullRequestArtifactSnapshot: (request: Request, url: URL) =>
+      pullRequestHandler.pullRequestArtifactSnapshot(request, url),
+    refreshPullRequests: () => pullRequestHandler.refreshPullRequests(),
   };
 
   return {
@@ -143,7 +148,7 @@ function createHandler() {
   };
 }
 
-describe("createPullRequestHandler", () => {
+describe("PullRequestHandler", () => {
   it("returns 404 when session is missing", async () => {
     const { handler, getSession } = createHandler();
     getSession.mockReturnValue(null);
@@ -291,6 +296,7 @@ describe("createPullRequestHandler", () => {
         promptingUserId: "user-123",
         promptingAuth: { authType: "oauth", token: "token" },
         sessionUrl: "https://app.example.com/session/public-session-1",
+        draft: undefined,
       },
       log
     );
@@ -337,6 +343,7 @@ describe("createPullRequestHandler", () => {
         promptingUserId: "user-123",
         promptingAuth: null,
         sessionUrl: "https://app.example.com/session/public-session-1",
+        draft: undefined,
       },
       log
     );
@@ -363,6 +370,9 @@ describe("createPullRequestHandler", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/repo/pull/42",
       state: "open",
+      headBranch: "feature/pr",
+      baseBranch: "release",
+      updated: true,
     });
 
     const response = await handler.createPr(
@@ -374,6 +384,7 @@ describe("createPullRequestHandler", () => {
           body: "desc",
           baseBranch: "release",
           headBranch: "feature/pr",
+          draft: true,
         }),
       })
     );
@@ -383,6 +394,9 @@ describe("createPullRequestHandler", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/repo/pull/42",
       state: "open",
+      headBranch: "feature/pr",
+      baseBranch: "release",
+      updated: true,
     });
     expect(createPullRequest).toHaveBeenCalledWith(
       {
@@ -395,6 +409,7 @@ describe("createPullRequestHandler", () => {
         promptingUserId: "user-1",
         promptingAuth: null,
         sessionUrl: "https://app.example.com/session/public-session-1",
+        draft: true,
       },
       log
     );

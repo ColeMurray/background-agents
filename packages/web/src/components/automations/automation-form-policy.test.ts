@@ -8,6 +8,55 @@ import {
 } from "./automation-form-policy";
 
 describe("automation form policy", () => {
+  it("preserves unchanged legacy GitHub filters only on unrelated edits", () => {
+    const original = createAutomationFormDraft({
+      name: "Review",
+      instructions: "Review changes",
+      triggerType: "github_event",
+      eventType: "pull_request.opened",
+      triggerConfig: {
+        conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+      },
+    });
+    const input = {
+      mode: "edit" as const,
+      draft: { ...original, name: "Renamed review" },
+      originalTrigger: original.trigger,
+      loadingModels: false,
+      resolvedModel: original.agent.model,
+      targets: {
+        repositories: [{ repoOwner: "acme", repoName: "web" }],
+        environmentIds: [],
+      },
+    };
+    expect(evaluateAutomationForm(input).valid).toBe(true);
+    expect(evaluateAutomationForm({ ...input, mode: "create" })).toMatchObject({
+      valid: false,
+      reason: "invalid-conditions",
+    });
+    expect(
+      evaluateAutomationForm({
+        ...input,
+        draft: {
+          ...input.draft,
+          trigger: {
+            ...original.trigger,
+            conditions: [{ type: "workflow_name", operator: "eq", value: "Different" }],
+          },
+        },
+      })
+    ).toMatchObject({ valid: false, reason: "invalid-conditions" });
+    expect(
+      evaluateAutomationForm({
+        ...input,
+        draft: {
+          ...input.draft,
+          trigger: { ...original.trigger, eventType: "pull_request.synchronize" },
+        },
+      })
+    ).toMatchObject({ valid: false, reason: "invalid-conditions" });
+  });
+
   it("builds a trimmed scheduled automation submission", () => {
     const draft = createAutomationFormDraft({
       name: "  Daily review  ",
@@ -30,6 +79,7 @@ describe("automation form policy", () => {
       valid: true,
       values: {
         name: "Daily review",
+        providerSelections: {},
         repositories: [{ repoOwner: "openai", repoName: "codex", baseBranch: "main" }],
         environmentIds: [],
         model: draft.agent.model,
@@ -66,6 +116,7 @@ describe("automation form policy", () => {
       valid: true,
       values: {
         name: "Webhook review",
+        providerSelections: {},
         repositories: [],
         environmentIds: [],
         model: draft.agent.model,
@@ -256,7 +307,7 @@ describe("automation form policy", () => {
     });
   });
 
-  it("preserves conditions that are supported by the next trigger source", () => {
+  it("clears conditions when changing trigger source, even when both support them", () => {
     const draft = createAutomationFormDraft({
       triggerType: "github_event",
       eventType: "pull_request.opened",
@@ -268,9 +319,7 @@ describe("automation form policy", () => {
       },
     }).trigger;
 
-    expect(transitionAutomationTriggerType(draft, "linear_event").conditions).toEqual([
-      { type: "label", operator: "any_of", value: ["bug"] },
-    ]);
+    expect(transitionAutomationTriggerType(draft, "linear_event").conditions).toEqual([]);
   });
 
   it("drops unknown persisted conditions when changing trigger sources", () => {

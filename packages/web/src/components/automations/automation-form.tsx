@@ -4,7 +4,13 @@ import { useState, useMemo } from "react";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
-import { resolveEnabledModel } from "@/lib/model-selection";
+import { DEFAULT_MODEL, resolveEnabledModel } from "@open-inspect/shared/models";
+import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import { SUBSCRIPTION_PROVIDER_IDS } from "@open-inspect/shared/types/provider-accounts";
+import { useProviderAccounts } from "@/hooks/use-provider-accounts";
+import { ProviderAuthControls } from "@/components/provider-auth-controls";
+import { EMPTY_PROVIDER_SELECTIONS, setProviderSelection } from "@/lib/provider-selection";
+import { FieldDescription } from "./automation-form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAutomationTargets } from "./use-automation-targets";
@@ -35,6 +41,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const { repos, loading: loadingRepos } = useRepos();
   const { environments, loading: loadingEnvironments } = useEnvironments();
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
+  const providerAccounts = useProviderAccounts();
+  const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>(
+    initialValues?.providerSelections ?? EMPTY_PROVIDER_SELECTIONS
+  );
   const initialDraft = useMemo(() => createAutomationFormDraft(initialValues), [initialValues]);
   const initialRepositories = useMemo(
     () => initialValues?.repositories ?? [],
@@ -68,17 +78,26 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   // is blocked — keeping display, reasoning, and the payload in agreement
   // without relying on a post-load effect.
   const resolvedModel = useMemo(
-    () => (loadingModels ? agent.model : resolveEnabledModel(agent.model, enabledModels)),
+    () =>
+      loadingModels
+        ? agent.model
+        : resolveEnabledModel({
+            model: agent.model,
+            enabledModels,
+            fallbackModel: DEFAULT_MODEL,
+          }),
     [agent.model, enabledModels, loadingModels]
   );
 
   const formEvaluation = evaluateAutomationForm({
     mode,
+    originalTrigger: initialDraft.trigger,
     loadingModels,
     resolvedModel,
     draft: {
       name,
       instructions,
+      providerSelections,
       agent,
       trigger,
     },
@@ -146,7 +165,33 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         onChange={setAgent}
       />
 
+      <fieldset className="space-y-3 rounded-md border border-border-muted p-4">
+        <legend className="px-1 text-sm font-medium text-foreground">
+          Provider authentication
+        </legend>
+        <FieldDescription className="mb-3">
+          Unpinned providers use defaults when each run starts. Pins are retained when the
+          configured model changes and apply only to future sessions.
+        </FieldDescription>
+        {SUBSCRIPTION_PROVIDER_IDS.map((provider) => (
+          <ProviderAuthControls
+            key={provider}
+            provider={provider}
+            accounts={providerAccounts.accounts}
+            defaultValue={providerAccounts.defaults.find((item) => item.provider === provider)}
+            value={providerSelections[provider]}
+            policyLabel="Use defaults when each run starts"
+            unattended
+            disabled={submitting}
+            onChange={(selection) =>
+              setProviderSelections((current) => setProviderSelection(current, provider, selection))
+            }
+          />
+        ))}
+      </fieldset>
+
       <AutomationTriggerConfigurationFields
+        key={trigger.type}
         mode={mode}
         value={trigger}
         onChange={setTrigger}

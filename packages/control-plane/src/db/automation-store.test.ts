@@ -91,7 +91,7 @@ const sampleRow: AutomationRow = {
   next_run_at: now + 86400000,
   consecutive_failures: 0,
   created_by: "user-1",
-  user_id: null,
+  user_id: "11111111111111111111111111111111",
   created_at: now,
   updated_at: now,
   deleted_at: null,
@@ -111,7 +111,7 @@ const sampleRunRow: AutomationRunRow = {
   started_at: null,
   completed_at: null,
   created_at: now,
-  invocation_id: null,
+  invocation_id: "inv-test1",
   repo_owner: null,
   repo_name: null,
   repo_id: null,
@@ -123,17 +123,22 @@ const sampleRunRow: AutomationRunRow = {
 
 describe("toAutomation", () => {
   it("converts row to camelCase Automation", () => {
-    const automation = toAutomation(sampleRow, [
-      {
-        automation_id: "auto_test1",
-        repo_owner: "acme",
-        repo_name: "web-app",
-        repo_id: 12345,
-        base_branch: "main",
-        created_at: now,
-        updated_at: now,
-      },
-    ]);
+    const automation = toAutomation(
+      sampleRow,
+      [
+        {
+          automation_id: "auto_test1",
+          repo_owner: "acme",
+          repo_name: "web-app",
+          repo_id: 12345,
+          base_branch: "main",
+          created_at: now,
+          updated_at: now,
+        },
+      ],
+      [],
+      []
+    );
     expect(automation.id).toBe("auto_test1");
     expect(automation.repositories).toEqual([
       { repoOwner: "acme", repoName: "web-app", repoId: 12345, baseBranch: "main" },
@@ -147,6 +152,7 @@ describe("toAutomation", () => {
     expect(automation.triggerConfig).toBeNull();
     expect(automation.consecutiveFailures).toBe(0);
     expect(automation.createdBy).toBe("user-1");
+    expect(automation.userId).toBe("11111111111111111111111111111111");
     expect(automation.environmentIds).toEqual([]);
   });
 
@@ -167,19 +173,54 @@ describe("toAutomation", () => {
           created_at: now,
           updated_at: now,
         },
-      ]
+      ],
+      []
     );
     expect(automation.environmentIds).toEqual(["env_abc", "env_def"]);
   });
 
   it("converts enabled=0 to false", () => {
-    const automation = toAutomation({ ...sampleRow, enabled: 0 }, []);
+    const automation = toAutomation({ ...sampleRow, enabled: 0 }, [], [], []);
     expect(automation.enabled).toBe(false);
   });
 
   it("maps repo-less automations to an empty repository list", () => {
-    const automation = toAutomation(sampleRow, []);
+    const automation = toAutomation(sampleRow, [], [], []);
     expect(automation.repositories).toEqual([]);
+  });
+
+  it("hydrates provider selections from auth rows", () => {
+    const automation = toAutomation(
+      sampleRow,
+      [],
+      [],
+      [
+        {
+          automation_id: sampleRow.id,
+          provider: "openai",
+          auth_mode: "provider_account",
+          provider_account_id: "0123456789abcdef0123456789abcdef",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          automation_id: sampleRow.id,
+          provider: "xai",
+          auth_mode: "api_key",
+          provider_account_id: null,
+          created_at: now,
+          updated_at: now,
+        },
+      ]
+    );
+
+    expect(automation.providerSelections).toEqual({
+      openai: {
+        mode: "provider_account",
+        accountId: "0123456789abcdef0123456789abcdef",
+      },
+      xai: { mode: "api_key" },
+    });
   });
 });
 
@@ -245,14 +286,14 @@ describe("AutomationStore", () => {
   });
 
   describe("list", () => {
-    it("returns automations and total", async () => {
+    it("returns a bounded page", async () => {
       const { db } = createFakeD1({
         allResults: [sampleRow],
       });
       const store = new AutomationStore(db);
-      const result = await store.list();
-      expect(result.total).toBe(1);
+      const result = await store.list({ limit: 25 });
       expect(result.automations).toHaveLength(1);
+      expect(result.hasMore).toBe(false);
     });
   });
 
@@ -415,6 +456,72 @@ describe("AutomationStore", () => {
       const store = new AutomationStore(db);
       await store.updateRun("run_test1", {});
       expect(statements).toHaveLength(0);
+    });
+  });
+
+  describe("claimRunSession", () => {
+    it("claims only a starting run", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.claimRunSession("run_test1", "session-1", now);
+
+      expect(statements[0].sql).toContain("SET status = 'running'");
+      expect(statements[0].sql).toContain("WHERE id = ? AND status = 'starting'");
+      expect(statements[0].params).toEqual(["session-1", now, "run_test1"]);
+    });
+  });
+
+  describe("schedule advancement", () => {
+    const invocation = {
+      id: "inv-1",
+      automation_id: "auto_test1",
+      source: "schedule" as const,
+      scheduled_at: now,
+      trigger_key: null,
+      concurrency_key: null,
+      trigger_metadata: null,
+      skip_reason: null,
+      failure_counted_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    it("advances a guarded invocation only while it still owns the claimed slot", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.insertInvocationGuarded({
+        invocation,
+        children: [sampleRunRow],
+        overlapScope: { kind: "automation" },
+        advanceSchedule: { fromSlot: now, nextRunAt: now + 60_000 },
+      });
+
+      const advance = statements.find((statement) =>
+        statement.sql.includes("SET next_run_at = ?")
+      )!;
+      // Compare-and-set on the claimed slot, not a monotonic timestamp guard:
+      // "any later value wins" lets a loser advance again from the winner's
+      // successor and skip a slot entirely.
+      expect(advance.sql).toContain("next_run_at = ?");
+      expect(advance.sql).not.toContain("next_run_at < ?");
+      expect(advance.params.at(-1)).toBe(now);
+    });
+
+    it("advances a skipped invocation only while it still owns the claimed slot", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.insertSkippedInvocation(
+        { ...invocation, id: "inv-skipped", skip_reason: "concurrent_run_active" },
+        { fromSlot: now, nextRunAt: now + 60_000 }
+      );
+
+      const advance = statements.at(-1)!;
+      expect(advance.sql).toContain("next_run_at = ?");
+      expect(advance.sql).not.toContain("next_run_at < ?");
+      expect(advance.params.at(-1)).toBe(now);
     });
   });
 });

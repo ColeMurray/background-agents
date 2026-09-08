@@ -59,8 +59,16 @@ export function AutomationAgentFields({
   return (
     <>
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Model</label>
+        <label
+          id="automation-model-label"
+          htmlFor="automation-model"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Model
+        </label>
         <Combobox
+          id="automation-model"
+          labelId="automation-model-label"
           value={resolvedModel}
           onChange={changeModel}
           items={modelGroups}
@@ -77,7 +85,12 @@ export function AutomationAgentFields({
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Reasoning Effort</label>
+        <label
+          htmlFor="automation-reasoning-effort"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Reasoning Effort
+        </label>
         <Select
           value={reasoningConfig ? value.reasoningEffort || DEFAULT_REASONING_VALUE : ""}
           onValueChange={(reasoningEffort) =>
@@ -88,7 +101,7 @@ export function AutomationAgentFields({
           }
           disabled={!reasoningConfig}
         >
-          <SelectTrigger className="w-full">
+          <SelectTrigger id="automation-reasoning-effort" className="w-full">
             <SelectValue
               placeholder={reasoningConfig ? "Use model default" : "Not supported for this model"}
             />

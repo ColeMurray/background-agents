@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PullRequestSnapshot } from "../source-control";
 import { refreshSessionPullRequests } from "./pull-request-refresh";
+import type { ArtifactRepository } from "./artifact-repository";
 import type { ArtifactRow, SessionRow } from "./types";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -23,7 +24,10 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user" as const,
     spawn_depth: 0,
     code_server_enabled: 0,
+    vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1,
@@ -79,21 +83,25 @@ function createHarness(artifacts: ArtifactRow[], session: SessionRow | null = cr
   });
   const repository = {
     getSession: vi.fn(() => session),
+  };
+  const artifactRepository = {
     listArtifacts: vi.fn(() => [...rows]),
     getArtifactById: vi.fn(
       (artifactId: string) => rows.find((row) => row.id === artifactId) ?? null
     ),
     updateArtifact,
-  };
+  } as unknown as ArtifactRepository;
   const getPullRequest = vi.fn(async () => createSnapshot());
   const upsert = vi.fn(async () => ({ applied: true }));
 
   return {
     repository,
+    artifactRepository,
     rows,
     getPullRequest,
     upsert,
-    refresh: () => refreshSessionPullRequests(repository, { getPullRequest }, { upsert }),
+    refresh: () =>
+      refreshSessionPullRequests(repository, artifactRepository, { getPullRequest }, { upsert }),
   };
 }
 
@@ -145,7 +153,7 @@ describe("refreshSessionPullRequests", () => {
       createdAt: 1000,
       updatedAt: 100_000,
     });
-    expect(harness.repository.updateArtifact).toHaveBeenCalledTimes(1);
+    expect(harness.artifactRepository.updateArtifact).toHaveBeenCalledTimes(1);
   });
 
   it("skips non-PR artifacts and sessions without artifacts", async () => {
@@ -181,7 +189,7 @@ describe("refreshSessionPullRequests", () => {
 
     expect(result).toEqual({ updated: [], failures: [] });
     expect(harness.upsert).toHaveBeenCalledTimes(1);
-    expect(harness.repository.updateArtifact).not.toHaveBeenCalled();
+    expect(harness.artifactRepository.updateArtifact).not.toHaveBeenCalled();
   });
 
   it("falls back to the session's primary repo for legacy metadata without identity", async () => {
@@ -246,7 +254,7 @@ describe("refreshSessionPullRequests", () => {
         error: upsertError,
       }),
     ]);
-    expect(harness.repository.updateArtifact).toHaveBeenCalledTimes(1);
+    expect(harness.artifactRepository.updateArtifact).toHaveBeenCalledTimes(1);
   });
 
   it("does not regress a mirror that a webhook push advanced during the pass's awaits", async () => {
@@ -272,7 +280,7 @@ describe("refreshSessionPullRequests", () => {
     // The apply-time re-read sees the newer row, so the staleness guard
     // rejects this pass's snapshot instead of overwriting the webhook's.
     expect(result.updated).toEqual([]);
-    expect(harness.repository.updateArtifact).not.toHaveBeenCalled();
+    expect(harness.artifactRepository.updateArtifact).not.toHaveBeenCalled();
   });
 
   it("does not touch the DO mirror when the D1 monotonic guard rejects the snapshot", async () => {
@@ -282,21 +290,7 @@ describe("refreshSessionPullRequests", () => {
     const result = await harness.refresh();
 
     expect(result).toEqual({ updated: [], failures: [] });
-    expect(harness.repository.updateArtifact).not.toHaveBeenCalled();
-  });
-
-  it("updates the DO mirror without a D1 store", async () => {
-    const harness = createHarness([createPrArtifact()]);
-
-    const result = await refreshSessionPullRequests(
-      harness.repository,
-      { getPullRequest: harness.getPullRequest },
-      null
-    );
-
-    expect(result.updated).toHaveLength(1);
-    expect(result.failures).toEqual([]);
-    expect(harness.repository.updateArtifact).toHaveBeenCalledTimes(1);
+    expect(harness.artifactRepository.updateArtifact).not.toHaveBeenCalled();
   });
 
   it("no-ops without a session row", async () => {

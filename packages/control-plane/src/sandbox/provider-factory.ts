@@ -31,7 +31,8 @@ function createModalProviderFromEnv(env: Env): ModalSandboxProvider {
   const client = createModalClient(
     env.MODAL_API_SECRET,
     env.MODAL_WORKSPACE,
-    env.MODAL_ENVIRONMENT_WEB_SUFFIX
+    env.MODAL_ENVIRONMENT_WEB_SUFFIX,
+    env.MODAL_API_URL
   );
 
   return createModalProvider(client);
@@ -62,7 +63,7 @@ function createVercelProviderFromEnv(env: Env): VercelSandboxProvider {
       env.VERCEL_SNAPSHOT_EXPIRATION_MS,
       0
     ),
-    codeServerPasswordSecret: env.VERCEL_TOKEN,
+    sandboxAccessPasswordSecret: env.VERCEL_TOKEN,
   });
 }
 
@@ -87,7 +88,7 @@ function createOpenComputerProviderFromEnv(
 
   return createOpenComputerProvider(client, {
     scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
-    codeServerPasswordSecret: env.OPENCOMPUTER_API_KEY,
+    sandboxAccessPasswordSecret: env.OPENCOMPUTER_API_KEY,
     llmEnvVars: {
       ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
     },
@@ -121,7 +122,7 @@ function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
   return createDaytonaProvider(client, {
     scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
     gitlabAccessToken: env.GITLAB_ACCESS_TOKEN,
-    codeServerPasswordSecret: env.DAYTONA_API_KEY,
+    sandboxAccessPasswordSecret: env.DAYTONA_API_KEY,
   });
 }
 
@@ -138,7 +139,7 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
 
   return createE2BProvider(client, {
     scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
-    codeServerPasswordSecret: env.E2B_API_KEY,
+    sandboxAccessPasswordSecret: env.E2B_API_KEY,
     sandboxTimeoutSeconds: parseNumericEnv(
       "E2B_SANDBOX_TIMEOUT_SECONDS",
       env.E2B_SANDBOX_TIMEOUT_SECONDS,

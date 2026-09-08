@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ComponentProps } from "react";
-import type { Automation } from "@open-inspect/shared/types/automations";
+import type { AutomationListItem } from "@open-inspect/shared/types/automations";
 import { AutomationsList } from "./automations-list";
 
 expect.extend(matchers);
@@ -26,8 +26,24 @@ vi.mock("@/hooks/use-environments", () => ({
 }));
 
 const noop = () => {};
+const CURRENT_USER_ID = "11111111111111111111111111111111";
+let permissions = ["automations.create", "automations.manage.own", "automations.trigger.own"];
 
-function makeAutomation(overrides: Partial<Automation> = {}): Automation {
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    authorization: {
+      userId: CURRENT_USER_ID,
+      permissions,
+    },
+    hasPermission: (permission: string) => permissions.includes(permission),
+  }),
+}));
+
+beforeEach(() => {
+  permissions = ["automations.create", "automations.manage.own", "automations.trigger.own"];
+});
+
+function makeAutomation(overrides: Partial<AutomationListItem> = {}): AutomationListItem {
   return {
     id: "auto-1",
     name: "Nightly review",
@@ -41,6 +57,7 @@ function makeAutomation(overrides: Partial<Automation> = {}): Automation {
     nextRunAt: null,
     consecutiveFailures: 0,
     createdBy: "user-1",
+    userId: CURRENT_USER_ID,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     deletedAt: null,
@@ -48,15 +65,18 @@ function makeAutomation(overrides: Partial<Automation> = {}): Automation {
     triggerConfig: null,
     repositories: [{ repoOwner: "acme", repoName: "web-app", repoId: 1, baseBranch: "main" }],
     environmentIds: [],
+    providerSelections: {},
+    recentExecutions: [],
     ...overrides,
   };
 }
 
 describe("AutomationsList repository labels", () => {
-  const renderList = (automations: Automation[]) =>
+  const renderList = (automations: AutomationListItem[]) =>
     render(
       <AutomationsList
         automations={automations}
+        emptyState={{ kind: "no-automations" }}
         onPause={noop}
         onResume={noop}
         onTrigger={noop}
@@ -100,6 +120,7 @@ describe("AutomationsList schedule metadata", () => {
     render(
       <AutomationsList
         automations={[makeAutomation({ nextRunAt: Date.now() + 2 * 60 * 60 * 1000 })]}
+        emptyState={{ kind: "no-automations" }}
         onPause={noop}
         onResume={noop}
         onTrigger={noop}
@@ -108,6 +129,148 @@ describe("AutomationsList schedule metadata", () => {
     );
 
     expect(screen.getByText("Next: in 2h")).toBeInTheDocument();
+    expect(screen.getByText("Daily at 9 AM (UTC)")).toBeInTheDocument();
+  });
+});
+
+describe("AutomationsList actions", () => {
+  const renderListWithActions = (automation: AutomationListItem) =>
+    render(
+      <AutomationsList
+        automations={[automation]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+  it("uses canonical ownership for own-scoped controls", () => {
+    render(
+      <AutomationsList
+        automations={[
+          makeAutomation({
+            createdBy: CURRENT_USER_ID,
+            userId: "22222222222222222222222222222222",
+          }),
+        ]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Trigger" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /actions for/i })).not.toBeInTheDocument();
+  });
+
+  it("gates manage and trigger controls independently", () => {
+    permissions = ["automations.manage.any"];
+    renderListWithActions(makeAutomation({ userId: null }));
+
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Trigger" })).not.toBeInTheDocument();
+  });
+
+  it("offers row actions from the compact menu", async () => {
+    const onTrigger = vi.fn();
+    render(
+      <AutomationsList
+        automations={[makeAutomation()]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={onTrigger}
+        onDelete={noop}
+      />
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Nightly review" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Trigger now" }));
+
+    expect(onTrigger).toHaveBeenCalledWith("auto-1");
+  });
+
+  it("confirms deletion selected from the compact menu", async () => {
+    const onDelete = vi.fn();
+    render(
+      <AutomationsList
+        automations={[makeAutomation()]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={onDelete}
+      />
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Nightly review" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onDelete).toHaveBeenCalledWith("auto-1");
+  });
+});
+
+describe("AutomationsList execution activity", () => {
+  it("shows recent execution statuses from oldest to newest", () => {
+    render(
+      <AutomationsList
+        automations={[
+          makeAutomation({
+            recentExecutions: [
+              { id: "inv-new", status: "failed", createdAt: 200 },
+              { id: "inv-old", status: "completed", createdAt: 100 },
+            ],
+          }),
+        ]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    const activity = screen.getByRole("list", {
+      name: "Last 2 executions, oldest to newest",
+    });
+    expect(activity.children[0]).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("Completed")
+    );
+    expect(activity.children[1]).toHaveAttribute("aria-label", expect.stringContaining("Failed"));
+    expect(activity.children[0]).toHaveAttribute("data-status-shape", "completed");
+    expect(activity.children[1]).toHaveAttribute("data-status-shape", "failed");
+    expect(activity.children[0]).toHaveAttribute("tabindex", "0");
+  });
+
+  it("shows an explicit empty history state", () => {
+    render(
+      <AutomationsList
+        automations={[makeAutomation()]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    expect(screen.getByText("No runs")).toBeInTheDocument();
   });
 });
 
@@ -116,6 +279,7 @@ describe("AutomationsList empty state", () => {
     render(
       <AutomationsList
         automations={[]}
+        emptyState={{ kind: "no-automations" }}
         onPause={noop}
         onResume={noop}
         onTrigger={noop}
@@ -131,5 +295,38 @@ describe("AutomationsList empty state", () => {
       "href",
       "/automations/new"
     );
+  });
+
+  it("hides creation entry points without automations.create", () => {
+    permissions = [];
+    render(
+      <AutomationsList
+        automations={[]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    expect(screen.queryByRole("link", { name: /template/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /create automation/i })).not.toBeInTheDocument();
+  });
+
+  it("describes an empty name search without showing creation prompts", () => {
+    render(
+      <AutomationsList
+        automations={[]}
+        emptyState={{ kind: "no-search-results", nameSearch: "release" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    expect(screen.getByText('No automations match "release".')).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /create automation/i })).not.toBeInTheDocument();
   });
 });

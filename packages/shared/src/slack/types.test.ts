@@ -46,4 +46,14 @@ describe("slack notify tool envelope schema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("parses an indeterminate delivery envelope", () => {
+    const result = slackNotifyToolEnvelopeSchema.safeParse({
+      ok: false,
+      reason: "delivery_unknown",
+      agentMessage: "Check the channel before retrying.",
+    });
+
+    expect(result.success).toBe(true);
+  });
 });

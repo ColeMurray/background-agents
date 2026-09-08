@@ -8,8 +8,8 @@
  */
 
 export type SlackPlainText = { type: "plain_text"; text: string };
-export type SlackMrkdwnText = { type: "mrkdwn"; text: string };
-export type SlackText = SlackPlainText | SlackMrkdwnText;
+type SlackMrkdwnText = { type: "mrkdwn"; text: string };
+type SlackText = SlackPlainText | SlackMrkdwnText;
 
 export type SlackSelectOption = {
   text: SlackPlainText;
@@ -22,7 +22,7 @@ export type SlackSelectOptionGroup = {
   options: SlackSelectOption[];
 };
 
-export type SlackConfirmation = {
+type SlackConfirmation = {
   title: SlackPlainText;
   text: SlackText;
   confirm: SlackPlainText;
@@ -54,17 +54,14 @@ export type SlackExternalSelectElement = {
   min_query_length: number;
 };
 
-export type SlackPlainTextInputElement = {
+type SlackPlainTextInputElement = {
   type: "plain_text_input";
   action_id: string;
   initial_value: string;
   placeholder: SlackPlainText;
 };
 
-export type SlackBlockElement =
-  | SlackButtonElement
-  | SlackStaticSelectElement
-  | SlackExternalSelectElement;
+type SlackBlockElement = SlackButtonElement | SlackStaticSelectElement | SlackExternalSelectElement;
 
 export type SlackHeaderBlock = { type: "header"; text: SlackPlainText };
 export type SlackSectionBlock = {

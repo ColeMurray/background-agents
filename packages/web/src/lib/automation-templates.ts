@@ -23,7 +23,7 @@ export type TemplateCategory =
  * required so every template is complete by construction — making these
  * invariants compile-time rather than test-only.
  */
-export type AutomationTemplatePrefill = Omit<
+type AutomationTemplatePrefill = Omit<
   Partial<AutomationFormValues>,
   "repositories" | "scheduleTz"
 > & {
@@ -217,7 +217,7 @@ export const automationTemplates: AutomationTemplate[] = [
       eventType: "check_suite.completed",
       // Only fire on failed suites — avoids spawning a run on every green build.
       triggerConfig: {
-        conditions: [{ type: "check_conclusion", operator: "eq", value: "failure" }],
+        conditions: [{ type: "conclusion", operator: "eq", value: "failure" }],
       },
       instructions:
         "A CI check suite failed on this repository; the failing branch and commit are shown above.\n\n" +
@@ -291,15 +291,3 @@ export const automationTemplates: AutomationTemplate[] = [
     },
   },
 ];
-
-export function getTemplateById(id: string): AutomationTemplate | undefined {
-  return automationTemplates.find((t) => t.id === id);
-}
-
-export function getTemplatesForCategory(category: TemplateCategory): AutomationTemplate[] {
-  return automationTemplates.filter((t) => t.categories.includes(category));
-}
-
-export function getVisibleCategories(): Array<{ id: TemplateCategory; label: string }> {
-  return TEMPLATE_CATEGORIES.filter((c) => getTemplatesForCategory(c.id).length > 0);
-}

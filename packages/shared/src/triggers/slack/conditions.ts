@@ -47,6 +47,10 @@ function isNonEmptyStringArray(value: unknown): value is string[] {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /**
  * Parse an untrusted Slack Channel condition into its canonical persisted form.
  * Channel IDs are trimmed and unknown properties are discarded.
@@ -112,10 +116,10 @@ export const slackConditions = {
     appliesTo: ["slack"] as const,
     validate(c: { operator: "contains" | "exact" | "regex"; value: TextMatchValue }) {
       const value = c.value as unknown;
-      if (typeof value !== "object" || value === null) {
+      if (!isRecord(value)) {
         return "text_match value must be an object with a pattern";
       }
-      const { pattern, flags } = value as { pattern?: unknown; flags?: unknown };
+      const { pattern, flags } = value;
       if (typeof pattern !== "string" || pattern === "") return "Text match pattern is required";
       if (pattern.length > REGEX_PATTERN_MAX_LENGTH) {
         return `Pattern exceeds the ${REGEX_PATTERN_MAX_LENGTH}-character limit`;

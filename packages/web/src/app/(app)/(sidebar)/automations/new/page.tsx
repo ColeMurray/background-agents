@@ -1,0 +1,197 @@
+"use client";
+
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
+import {
+  AutomationForm,
+  type AutomationFormValues,
+} from "@/components/automations/automation-form";
+import { WebhookConfig } from "@/components/automations/webhook-config";
+import { automationTemplates } from "@/lib/automation-templates";
+import { Button } from "@/components/ui/button";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { BackIcon } from "@/components/ui/icons";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
+import Link from "next/link";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+
+function NewAutomationContent() {
+  const { isOpen } = useSidebarContext();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { hasPermission, loading: authorizationLoading } = useCurrentUserAuthorization();
+  const canCreate = hasPermission("automations.create");
+
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [webhookResult, setWebhookResult] = useState<{
+    automationId: string;
+    webhookApiKey?: string;
+    webhookUrl?: string;
+    sentryWebhookUrl?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!authorizationLoading && !canCreate) router.replace("/automations");
+  }, [authorizationLoading, canCreate, router]);
+
+  if (authorizationLoading || !canCreate) return null;
+
+  // A template id (from the gallery) pre-fills the form. Repository is never
+  // pre-filled, so the repo-required-at-creation invariant is untouched. The
+  // form coerces a template's suggested model against the user's enabled set.
+  const templateId = searchParams.get("template");
+  const template = automationTemplates.find((candidate) => candidate.id === templateId);
+  const initialValues: Partial<AutomationFormValues> | undefined = template?.prefill;
+
+  const handleSubmit = async (values: AutomationFormValues) => {
+    setSubmitting(true);
+    setError("");
+
+    try {
+      const res = await browserApiFetch("/api/automations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(values),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // For webhook/sentry automations, show post-create info before navigating
+        if (data.webhookApiKey || data.sentryWebhookUrl) {
+          setWebhookResult({
+            automationId: data.automation.id,
+            webhookApiKey: data.webhookApiKey,
+            webhookUrl: data.webhookUrl,
+            sentryWebhookUrl: data.sentryWebhookUrl,
+          });
+          setSubmitting(false);
+        } else {
+          router.push(`/automations/${data.automation.id}`);
+        }
+      } else {
+        const data = await res.json();
+        setError(data.error || "Failed to create automation");
+        setSubmitting(false);
+      }
+    } catch {
+      setError("Failed to create automation");
+      setSubmitting(false);
+    }
+  };
+
+  // After webhook creation, show the API key with a continue button
+  if (webhookResult) {
+    return (
+      <div className="h-full flex flex-col">
+        {!isOpen && (
+          <header className="border-b border-border-muted flex-shrink-0">
+            <div className="px-4 py-3 flex items-center gap-2">
+              <CollapsedSidebarControls />
+            </div>
+          </header>
+        )}
+
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+          <div className="max-w-2xl mx-auto">
+            <h1 className="mb-2 text-2xl font-semibold text-foreground sm:text-3xl">
+              Automation Created
+            </h1>
+            {webhookResult.sentryWebhookUrl ? (
+              <>
+                <p className="text-sm text-muted-foreground mb-6">
+                  Configure the webhook URL below in your Sentry Custom Integration settings.
+                </p>
+                <WebhookConfig
+                  webhookUrl={webhookResult.sentryWebhookUrl}
+                  automationId={webhookResult.automationId}
+                  variant="sentry"
+                />
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground mb-6">
+                  Save the webhook URL and API key below. The API key will not be shown again.
+                </p>
+                <WebhookConfig
+                  webhookUrl={webhookResult.webhookUrl}
+                  webhookApiKey={webhookResult.webhookApiKey}
+                  automationId={webhookResult.automationId}
+                />
+              </>
+            )}
+
+            <div className="mt-6">
+              <Link href={`/automations/${webhookResult.automationId}`}>
+                <Button size="sm">Go to Automation</Button>
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full flex flex-col">
+      {!isOpen && (
+        <header className="border-b border-border-muted flex-shrink-0">
+          <div className="px-4 py-3 flex items-center gap-2">
+            <CollapsedSidebarControls />
+            <Link
+              href="/automations"
+              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+              aria-label="Back to automations"
+            >
+              <BackIcon className="w-4 h-4" />
+            </Link>
+          </div>
+        </header>
+      )}
+
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        <div className="max-w-2xl mx-auto">
+          <h1 className="mb-6 text-2xl font-semibold text-foreground sm:text-3xl">
+            Create Automation
+          </h1>
+
+          {error && (
+            <ErrorBanner className="mb-4" role="alert">
+              {error}
+            </ErrorBanner>
+          )}
+
+          {template && (
+            <div className="mb-4 rounded-md border border-border-muted bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              Prefilled from the{" "}
+              <span className="font-medium text-foreground">{template.title}</span> template. Review
+              the details and choose a repository to create it.
+            </div>
+          )}
+
+          <AutomationForm
+            mode="create"
+            initialValues={initialValues}
+            onSubmit={handleSubmit}
+            submitting={submitting}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function NewAutomationPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="h-full flex items-center justify-center">
+          <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
+        </div>
+      }
+    >
+      <NewAutomationContent />
+    </Suspense>
+  );
+}

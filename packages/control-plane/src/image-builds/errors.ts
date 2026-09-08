@@ -11,7 +11,6 @@ export type ImageBuildErrorCode =
   | "workflow_unavailable"
   | "provider_unconfigured"
   | "trigger_failed"
-  | "invalid_callback"
   | "callback_auth_rejected"
   | "callback_auth_unavailable"
   | "completion_not_accepted"
@@ -57,10 +56,6 @@ export class ImageBuildTriggerFailedError extends ImageBuildError {
   }
 }
 
-export class ImageBuildInvalidCallbackError extends ImageBuildError {
-  readonly code = "invalid_callback";
-}
-
 export class ImageBuildCallbackAuthRejectedError extends ImageBuildError {
   readonly code = "callback_auth_rejected";
 }
@@ -75,4 +70,9 @@ export class ImageBuildCompletionNotAcceptedError extends ImageBuildError {
 
 export class ImageBuildFailureNotAcceptedError extends ImageBuildError {
   readonly code = "failure_not_accepted";
+}
+
+/** The message of an unknown thrown value. */
+export function errorMessage(errorValue: unknown): string {
+  return errorValue instanceof Error ? errorValue.message : String(errorValue);
 }

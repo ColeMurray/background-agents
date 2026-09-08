@@ -2,7 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
-import type { ParticipantPresence, SandboxEvent } from "@open-inspect/shared";
+import type { ParticipantPresence } from "@open-inspect/shared/types/server-messages";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { useSessionParticipantProfiles } from "./use-session-participant-profiles";
 
 const swrState = vi.hoisted(() => ({ data: undefined as unknown, mutate: vi.fn() }));

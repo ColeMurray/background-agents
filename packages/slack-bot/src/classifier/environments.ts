@@ -8,10 +8,8 @@
  * like rules targeting an inaccessible repository.
  */
 
-import type {
-  Environment,
-  ListEnvironmentsResponse,
-} from "@open-inspect/shared/types/environments";
+import { environmentSchema, listEnvironmentsResponseSchema } from "@open-inspect/shared";
+import type { Environment } from "@open-inspect/shared/types/environments";
 import type { Env } from "../types";
 import { createCachedResource } from "./cached-resource";
 import { fetchControlPlaneJson } from "./control-plane";
@@ -21,10 +19,19 @@ const environments = createCachedResource<Environment[]>({
   kvKey: "slack:environments",
   load: async (env, traceId) => {
     const body = await fetchControlPlaneJson(env, "/environments", traceId);
-    const list = (body as ListEnvironmentsResponse).environments;
-    return Array.isArray(list) ? list : [];
+    // Throw on malformed fresh data so the cache can fall back to the KV
+    // last-known-good copy instead of overwriting it with an empty list.
+    return listEnvironmentsResponseSchema.parse(body).environments;
   },
-  deserialize: (cached) => (Array.isArray(cached) ? (cached as Environment[]) : null),
+  // Validate the cached copy entry by entry: one malformed environment costs
+  // itself, not every other environment stored alongside it.
+  deserialize: (cached) => {
+    if (!Array.isArray(cached)) return null;
+    return cached.flatMap((entry) => {
+      const result = environmentSchema.safeParse(entry);
+      return result.success ? [result.data] : [];
+    });
+  },
   fallback: [],
 });
 

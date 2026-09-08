@@ -2,21 +2,28 @@
  * Session-specific type definitions.
  */
 
+import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import type {
-  ResolvedSessionAttachment,
   SessionStatus,
   SandboxStatus,
-  GitSyncStatus,
   MessageStatus,
   MessageSource,
   ParticipantRole,
   SpawnSource,
-  ArtifactType,
-  EventType,
-} from "../types";
+} from "@open-inspect/shared/types/sessions";
+import { artifactTypeSchema } from "@open-inspect/shared/types/artifacts";
+import type { EventType, GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { GitPushSpec } from "../source-control";
+import { z } from "zod";
 
 // Database row types (match SQLite schema)
+
+export class SessionStorageIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionStorageIntegrityError";
+  }
+}
 
 export type PromptGitIdentity =
   | {
@@ -45,8 +52,11 @@ export interface SessionRow {
   spawn_source: SpawnSource;
   spawn_depth: number;
   code_server_enabled: number; // 0 = disabled (default), 1 = enabled
+  vnc_enabled: number; // 0 = disabled (default), 1 = enabled
   total_cost: number; // Running aggregate of step_finish event costs
   sandbox_settings: string | null; // JSON blob of SandboxSettings
+  max_cost_usd: number | null; // Mutable effective session cost limit; NULL = unlimited
+  budget_exhausted: number; // 0 = promptable by budget, 1 = paused
   environment_id: string | null; // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at: number;
   updated_at: number;
@@ -75,23 +85,27 @@ export function sessionHasRepository(session: SessionRow): session is Repository
   return Boolean(session.repo_owner && session.repo_name);
 }
 
-export interface ParticipantRow {
-  id: string;
-  user_id: string;
-  canonical_user_id?: string | null;
-  scm_user_id: string | null;
-  scm_login: string | null;
-  scm_email: string | null;
-  scm_name: string | null;
-  auth_name: string | null;
-  role: ParticipantRole;
-  scm_access_token_encrypted: string | null;
-  scm_refresh_token_encrypted: string | null;
-  scm_token_expires_at: number | null;
-  ws_auth_token: string | null; // SHA-256 hash of WebSocket auth token
-  ws_token_created_at: number | null; // When the token was generated
-  joined_at: number;
-}
+const participantRoleSchema = z.enum(["owner", "member"]) satisfies z.ZodType<ParticipantRole>;
+
+export const participantRowSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  canonical_user_id: z.string().nullable().optional(),
+  scm_user_id: z.string().nullable(),
+  scm_login: z.string().nullable(),
+  scm_email: z.string().nullable(),
+  scm_name: z.string().nullable(),
+  auth_name: z.string().nullable(),
+  role: participantRoleSchema,
+  scm_access_token_encrypted: z.string().nullable(),
+  scm_refresh_token_encrypted: z.string().nullable(),
+  scm_token_expires_at: z.number().nullable(),
+  ws_auth_token: z.string().nullable(), // SHA-256 hash of WebSocket auth token
+  ws_token_created_at: z.number().nullable(), // When the token was generated
+  joined_at: z.number(),
+});
+
+export type ParticipantRow = z.infer<typeof participantRowSchema>;
 
 export interface MessageRow {
   id: string;
@@ -102,22 +116,30 @@ export interface MessageRow {
   reasoning_effort: string | null; // Reasoning effort for per-message override
   attachments: string | null; // JSON
   callback_context: string | null; // JSON: { channel, threadTs, repoFullName, model }
+  client_request_id: string | null;
+  request_fingerprint: string | null;
+  autofix_feedback_key: string | null;
+  autofix_pr_key: string | null;
+  origin_context: string | null;
   status: MessageStatus;
   error_message: string | null;
+  stop_confirmation_deadline: number | null;
   created_at: number;
   started_at: number | null;
   completed_at: number | null;
 }
 
-export interface SessionAttachmentRow {
-  id: string;
-  mime_type: string;
-  size_bytes: number;
-  object_key: string;
-  message_id: string | null; // Set once a prompt references this upload
-  cleanup_claimed_at: number | null; // Retained until object deletion is acknowledged
-  created_at: number;
-}
+export const sessionAttachmentRowSchema = z.object({
+  id: z.string(),
+  mime_type: z.string(),
+  size_bytes: z.number(),
+  object_key: z.string(),
+  message_id: z.string().nullable(), // Set once a prompt references this upload
+  cleanup_claimed_at: z.number().nullable(), // Retained until object deletion is acknowledged
+  created_at: z.number(),
+});
+
+export type SessionAttachmentRow = z.infer<typeof sessionAttachmentRowSchema>;
 
 export interface EventRow {
   id: string;
@@ -125,17 +147,20 @@ export interface EventRow {
   data: string; // JSON
   message_id: string | null;
   created_at: number;
+  timeline_sequence?: number;
 }
 
-export interface ArtifactRow {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: string | null; // JSON
-  created_at: number;
+export const artifactRowSchema = z.object({
+  id: z.string(),
+  type: artifactTypeSchema,
+  url: z.string().nullable(),
+  metadata: z.string().nullable(), // JSON
+  created_at: z.number(),
   /** Last content change; migration 34 backfills it to created_at. */
-  updated_at: number;
-}
+  updated_at: z.number(),
+});
+
+export type ArtifactRow = z.infer<typeof artifactRowSchema>;
 
 export interface SandboxRow {
   id: string;
@@ -143,6 +168,8 @@ export interface SandboxRow {
   modal_object_id: string | null; // Legacy column: provider object ID (Modal object ID or Daytona handle)
   snapshot_id: string | null;
   snapshot_image_id: string | null; // Modal Image ID for filesystem snapshot restoration
+  snapshot_runtime_version: string | null; // SANDBOX_VERSION that produced snapshot_image_id
+  runtime_version: string | null; // SANDBOX_VERSION reported by the running sandbox
   auth_token: string | null;
   auth_token_hash: string | null; // SHA-256 hash of sandbox auth token
   status: SandboxStatus;
@@ -153,15 +180,29 @@ export interface SandboxRow {
   last_spawn_error_at: number | null;
   code_server_url: string | null;
   code_server_password: string | null;
+  vnc_url: string | null;
+  vnc_password: string | null;
   tunnel_urls: string | null; // JSON mapping of port -> tunnel URL
   ttyd_url: string | null;
   ttyd_token: string | null;
+  /**
+   * The `socket:<id>` tag of the bridge socket the session dispatches to;
+   * `''` once revoked, NULL only on rows that predate persisted identities.
+   */
+  active_socket_id: string | null;
   created_at: number;
 }
 
+/**
+ * The sandbox access artifacts that pair a URL with an encrypted secret:
+ * code-server and VNC carry passwords, ttyd carries a minted JWT. Tunnel URLs
+ * are not a kind — they are a single JSON column with no secret.
+ */
+export type SandboxAccessKind = "codeServer" | "vnc" | "ttyd";
+
 // Command types for sandbox communication
 
-export interface PromptCommand {
+interface PromptCommand {
   type: "prompt";
   messageId: string;
   content: string;
@@ -174,29 +215,29 @@ export interface PromptCommand {
   attachments?: ResolvedSessionAttachment[];
 }
 
-export interface StopCommand {
+interface StopCommand {
   type: "stop";
 }
 
-export interface SnapshotCommand {
+interface SnapshotCommand {
   type: "snapshot";
 }
 
-export interface ShutdownCommand {
+interface ShutdownCommand {
   type: "shutdown";
 }
 
-export interface AckCommand {
+interface AckCommand {
   type: "ack";
   ackId: string;
 }
 
-export interface PushCommand {
+interface PushCommand {
   type: "push";
   pushSpec: GitPushSpec;
 }
 
-export interface RefreshDiffCommand {
+interface RefreshDiffCommand {
   type: "refresh_diff";
 }
 
@@ -208,21 +249,3 @@ export type SandboxCommand =
   | AckCommand
   | PushCommand
   | RefreshDiffCommand;
-
-// Internal session update types
-
-export interface SessionUpdate {
-  title?: string;
-  branchName?: string;
-  baseSha?: string;
-  currentSha?: string;
-  opencodeSessionId?: string;
-  status?: SessionStatus;
-}
-
-export interface SandboxUpdate {
-  modalSandboxId?: string;
-  snapshotId?: string;
-  status?: SandboxStatus;
-  gitSyncStatus?: GitSyncStatus;
-}

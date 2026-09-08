@@ -12,6 +12,7 @@ import { formatSessionEventTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { APP_NAME } from "@/lib/site-config";
 import { ChevronRightIcon, ErrorIcon, LinkIcon, SlackIcon } from "@/components/ui/icons";
+import { TimelineRowContent } from "./timeline-row-content";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
@@ -35,6 +36,10 @@ const DENIAL_COPY: Record<SlackDenialReason, { headline: string; hint?: string }
   },
   slack_api_error: {
     headline: "Slack returned an unexpected error.",
+  },
+  delivery_unknown: {
+    headline: "Slack may have posted the notification, but confirmation timed out.",
+    hint: "Check the channel before retrying to avoid posting it twice.",
   },
   invalid_input: {
     headline: "The notification arguments were invalid.",
@@ -103,26 +108,25 @@ export function SlackNotifyEvent({
       <button
         type="button"
         onClick={onToggle}
-        className="w-full flex items-center gap-1.5 text-sm text-left text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full min-w-0 items-start gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
-          className={`w-3.5 h-3.5 text-secondary-foreground transition-transform duration-200 ${
+          className={`w-3.5 h-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
             isExpanded ? "rotate-90" : ""
           }`}
         />
         {denial ? (
-          <ErrorIcon className="w-3.5 h-3.5 text-destructive" />
+          <ErrorIcon className="w-3.5 h-3.5 shrink-0 text-destructive" />
         ) : (
-          <SlackIcon className="w-3.5 h-3.5 text-secondary-foreground" />
+          <SlackIcon className="w-3.5 h-3.5 shrink-0 text-secondary-foreground" />
         )}
-        <span className="truncate">slack-notify {summaryLine}</span>
-        {showTime && (
-          <span className="text-xs text-secondary-foreground flex-shrink-0 ml-auto">{time}</span>
-        )}
+        <TimelineRowContent time={showTime ? time : undefined}>
+          slack-notify {summaryLine}
+        </TimelineRowContent>
       </button>
 
       {isExpanded && (
-        <div className="mt-2 ml-5 p-3 bg-card border border-border-muted text-xs overflow-hidden">
+        <div className="mt-2 ml-0 overflow-hidden border border-border-muted bg-card p-3 text-xs [overflow-wrap:anywhere] sm:ml-5">
           {success ? (
             <SlackNotifySuccessBody success={success} />
           ) : denial ? (

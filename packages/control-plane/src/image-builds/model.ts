@@ -17,12 +17,13 @@ import type {
   ImageBuildScopeKind,
   ImageBuildStatus,
 } from "@open-inspect/shared/types/image-builds";
+import { MIN_COMPATIBLE_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
 
 /**
  * Providers with image-build support: Modal images, Vercel snapshots,
- * OpenComputer checkpoints. Daytona has no image support.
+ * OpenComputer checkpoints, E2B snapshots. Daytona has no image support.
  */
-export type ImageBuildProvider = "modal" | "vercel" | "opencomputer";
+export type ImageBuildProvider = "modal" | "vercel" | "opencomputer" | "e2b";
 
 /**
  * What an image bakes. `id` is a lowercase `owner/name` pair for repo scopes
@@ -73,7 +74,6 @@ export interface ImageBuildCallbackBuild {
   id: string;
   scope: ImageBuildScope;
   provider: ImageBuildProvider;
-  providerSessionId: string | null;
   status: ImageBuildStatus;
 }
 
@@ -81,11 +81,10 @@ export interface ImageBuildCallbackBuild {
  * Compatibility floor for prebuilt-image runtimes.
  *
  * Bumped ONLY on breaking runtime changes, never on routine CACHE_BUSTER
- * bumps. v53 is the list-native runtime — the first that can boot a
- * multi-repo workspace — so no image baked by an earlier runtime may ever be
- * selected for a session.
+ * bumps. v60 is the first runtime whose managed-provider plugins use the
+ * generic token broker, so no image baked by an earlier runtime may be selected.
  */
-export const MIN_COMPATIBLE_RUNTIME_VERSION = 53;
+export const MIN_COMPATIBLE_RUNTIME_VERSION = MIN_COMPATIBLE_RUNTIME_GENERATION;
 
 /**
  * Parse the numeric prefix of a SANDBOX_VERSION ("v53-list-native-runtime"

@@ -12,10 +12,11 @@ Open-Inspect provides a hosted background coding agent that can:
 - Connect from anywhere — web UI, Slack, GitHub PRs, Linear issues, or webhooks
 - Enable multiplayer sessions where multiple people can collaborate in real time
 - Create PRs with proper commit attribution to the prompting user
-- Run on a schedule — cron jobs, Sentry alerts, and webhook-triggered automations
+- Run scheduled automations for cron jobs, or event-driven automations for GitHub events, Sentry
+  alerts, and webhooks
 - Spawn parallel sub-tasks that work in separate sandboxes simultaneously
-- Use your choice of AI model — Anthropic Claude, OpenAI Codex (via ChatGPT subscription), or
-  OpenCode Zen
+- Use your choice of AI model — Anthropic Claude, OpenAI Codex (via ChatGPT subscription), xAI Grok
+  (via SuperGrok subscription), or OpenCode Zen
 
 ## Security Model (Single-Tenant Only)
 
@@ -28,8 +29,9 @@ The system uses a shared GitHub App installation for git operations (clone, fetc
 control plane mints short-lived installation tokens server-side and brokers them to sandboxes
 through the git credential helper on demand. This means:
 
-- **All users share the same GitHub App credentials** - The GitHub App must be installed on your
-  organization's repositories, and any user of the system can access any repo the App has access to
+- **Authorized users share the same GitHub App credentials** - The GitHub App must be installed on
+  your organization's repositories, and active users whose role permits repository use can access
+  any repo the App has access to
 - **No per-user repository access validation** - The system does not verify that a user has
   permission to access a specific repository before creating a session
 - **GitHub users' OAuth tokens are used for PR creation** - For GitHub logins, PRs are created using
@@ -68,6 +70,9 @@ built for internal use where all employees are trusted and have access to compan
    organization membership (`ALLOWED_GITHUB_ORGS`)
 4. **Use GitHub's repository selection** - When installing the App, select specific repositories
    rather than "All repositories"
+
+See [Authentication and Authorization](docs/AUTH.md) for workspace roles, session access, automation
+ownership, bots, and member suspension.
 
 ## Architecture
 
@@ -139,6 +144,9 @@ To understand the architecture and core concepts, read
 
 To set up recurring scheduled tasks, see **[docs/AUTOMATIONS.md](docs/AUTOMATIONS.md)**.
 
+To create and use reusable agent instructions, see
+**[docs/MANAGED_SKILLS.md](docs/MANAGED_SKILLS.md)**.
+
 ## Key Features
 
 ### Fast Startup
@@ -162,6 +170,15 @@ One session can work across several repositories in a single sandbox:
   optional prebuilt images, then launch it from the picker like any repository
 - See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#environments) for the model and
   [docs/IMAGE_PREBUILD.md](docs/IMAGE_PREBUILD.md) for environment prebuilds
+
+### Managed Skills
+
+Create reusable instructions and supporting files that agents receive when a session starts:
+
+- Assign shared skills globally or to selected repositories and environments
+- Save personal profiles for frequently used skill sets
+- Pin exact skill revisions to each session for repeatable behavior
+- See [docs/MANAGED_SKILLS.md](docs/MANAGED_SKILLS.md) for the user guide
 
 ### Multiplayer Sessions
 
@@ -187,16 +204,19 @@ await configureGitIdentity({
 
 Choose the AI model that fits your task, with per-session reasoning effort controls:
 
-| Provider         | Models                                                            |
-| ---------------- | ----------------------------------------------------------------- |
-| Anthropic        | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6/4.7/4.8/5, Fable 5 |
-| OpenAI           | GPT 5.4, GPT 5.5, 5.3 Codex, 5.3 Codex Spark                      |
-| OpenCode Zen     | Kimi K2.5/K2.6, MiniMax M2.5, Qwen3.7 Max, GLM 5/5.1 (opt-in)     |
-| Z.AI Coding Plan | GLM 5.2 (opt-in)                                                  |
+| Provider         | Models                                                               |
+| ---------------- | -------------------------------------------------------------------- |
+| Anthropic        | Claude Haiku 4.5, Sonnet 4.5/4.6/5, Opus 4.5/4.6/4.7/4.8/5, Fable 5  |
+| OpenAI           | GPT 5.4, GPT 5.5, 5.3 Codex, 5.3 Codex Spark                         |
+| xAI / SuperGrok  | Grok models (opt-in)                                                 |
+| OpenCode Zen     | Kimi K2.5/K2.6/K3, MiniMax M2.5, Qwen3.7 Max, GLM 5/5.1/5.2 (opt-in) |
+| Z.AI Coding Plan | GLM 5.2/5.3 (opt-in)                                                 |
 
 OpenAI models work with your existing ChatGPT subscription via OAuth — no separate API key needed.
-See **[docs/AVAILABLE_MODELS.md](docs/AVAILABLE_MODELS.md)** for the full model list and
-**[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** for OpenAI setup instructions.
+Grok models work with an eligible SuperGrok subscription through control-plane-managed OAuth. See
+**[docs/AVAILABLE_MODELS.md](docs/AVAILABLE_MODELS.md)** for the full model list and
+**[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** or **[docs/GROK_MODELS.md](docs/GROK_MODELS.md)**
+for subscription setup instructions.
 
 ### Client Integrations
 
@@ -219,6 +239,8 @@ Schedule recurring tasks or react to external events — no human in the loop:
 
 - **Cron schedules** — Hourly, daily, weekly, monthly, or custom 5-field cron with timezone support
 - **Sentry alerts** — Auto-triage on new errors, regressions, or critical metric alerts
+- **GitHub workflow runs** — Start work when a GitHub Actions workflow finishes, with optional
+  workflow-name and conclusion filters
 - **Inbound webhooks** — JSONPath condition filters to gate which payloads spawn sessions
 - **Multi-repo fan-out** — One scheduled automation can run across up to 10 repositories, opening a
   separate session and pull request for each
@@ -247,6 +269,7 @@ Agents can decompose work into parallel child sessions:
 
 - `spawn-child` creates a child session in its own sandbox and returns immediately
 - Parent continues working while children run in parallel on separate branches
+- `send-child-prompt` queues follow-up instructions in an existing direct child session
 - `get-child-status` and `cancel-child` coordinate child sessions
 - Depth limits and per-repo guardrails enforced
 

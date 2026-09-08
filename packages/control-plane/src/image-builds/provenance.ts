@@ -1,4 +1,7 @@
-import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
+import {
+  repositoryShasSchema,
+  type RepositoryShaEntry,
+} from "@open-inspect/shared/types/image-builds";
 
 type RepositoryIdentity = Pick<RepositoryShaEntry, "repoOwner" | "repoName">;
 
@@ -9,25 +12,8 @@ export function repositoryIdentityKey(repository: RepositoryIdentity): string {
 
 /** Decode the repository SHA document used by callbacks and persisted build rows. */
 export function decodeRepositoryShas(value: unknown): RepositoryShaEntry[] | null {
-  if (!Array.isArray(value)) return null;
-
-  const repositories: RepositoryShaEntry[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
-    const { repoOwner, repoName, baseSha } = entry as Record<string, unknown>;
-    if (
-      typeof repoOwner !== "string" ||
-      repoOwner.length === 0 ||
-      typeof repoName !== "string" ||
-      repoName.length === 0 ||
-      typeof baseSha !== "string" ||
-      baseSha.length === 0
-    ) {
-      return null;
-    }
-    repositories.push({ repoOwner, repoName, baseSha });
-  }
-  return repositories;
+  const parsed = repositoryShasSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /** Parse and decode a D1 JSON provenance column without leaking exceptions. */

@@ -29,19 +29,23 @@ export function useMobileSidebarPull({
   const activePointerIdRef = useRef<number | null>(null);
   const isEnabled = isMobile && !isSidebarOpen;
 
-  const reset = useCallback(() => {
+  const cancelGesture = useCallback(() => {
     dragStartRef.current = null;
     dragDistanceRef.current = 0;
     sidebarWidthRef.current = 0;
     activePointerIdRef.current = null;
+  }, []);
+
+  const reset = useCallback(() => {
+    cancelGesture();
     setDragDistance(0);
     setDragProgress(0);
     setIsDragging(false);
-  }, []);
+  }, [cancelGesture]);
 
   useEffect(() => {
-    if (!isEnabled) reset();
-  }, [isEnabled, reset]);
+    if (!isEnabled) cancelGesture();
+  }, [cancelGesture, isEnabled]);
 
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
@@ -105,10 +109,12 @@ export function useMobileSidebarPull({
     [reset]
   );
 
+  const gestureIsActive = isEnabled && activePointerIdRef.current !== null;
+
   return {
-    dragDistance,
-    dragProgress,
-    isDragging,
+    dragDistance: gestureIsActive ? dragDistance : 0,
+    dragProgress: gestureIsActive ? dragProgress : 0,
+    isDragging: gestureIsActive && isDragging,
     reset,
     handlePointerDown,
     handlePointerMove,

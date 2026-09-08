@@ -2,10 +2,8 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import {
-  buildControlPlanePath,
-  SESSION_CONTROL_PLANE_QUERY_PARAMS,
-} from "@/lib/control-plane-query";
+import { SESSION_LIST_QUERY_PARAMS } from "@open-inspect/shared/session-list-query";
+import { buildControlPlanePath } from "@/lib/control-plane-query";
 
 export async function GET(request: NextRequest) {
   const routeStart = Date.now();
@@ -13,11 +11,7 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = new URLSearchParams(request.nextUrl.searchParams);
 
-    const path = buildControlPlanePath(
-      "/sessions",
-      searchParams,
-      SESSION_CONTROL_PLANE_QUERY_PARAMS
-    );
+    const path = buildControlPlanePath("/sessions", searchParams, SESSION_LIST_QUERY_PARAMS);
 
     const fetchStart = Date.now();
     const response = await controlPlaneUserFetch(path);
@@ -27,7 +21,10 @@ export async function GET(request: NextRequest) {
 
     console.log(`[sessions:GET] total=${totalMs}ms fetch=${fetchMs}ms status=${response.status}`);
 
-    return NextResponse.json(data, { status: response.status });
+    return NextResponse.json(data, {
+      status: response.status,
+      headers: { "Cache-Control": "private, no-store" },
+    });
   } catch (error) {
     console.error("Failed to fetch sessions:", error);
     return NextResponse.json({ error: "Failed to fetch sessions" }, { status: 500 });
@@ -57,6 +54,8 @@ export async function POST(request: NextRequest) {
       // side): a named environment or an ad-hoc repository list.
       environmentId: body.environmentId,
       repositories: body.repositories,
+      skillSelection: body.skillSelection,
+      providerSelections: body.providerSelections,
     };
 
     const response = await controlPlaneUserFetch("/sessions", {

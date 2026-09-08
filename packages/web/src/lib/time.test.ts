@@ -11,6 +11,10 @@ afterEach(() => {
 });
 
 describe("formatRelativeTime", () => {
+  it("formats timestamps less than one minute old as now", () => {
+    expect(formatRelativeTime(Date.now() - 30 * 1000)).toBe("now");
+  });
+
   it("keeps formatting past timestamps without future-time wording", () => {
     expect(formatRelativeTime(Date.now() - 2 * 60 * 60 * 1000)).toBe("2h");
   });

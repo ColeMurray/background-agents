@@ -15,6 +15,10 @@ const ALL_MODELS = MODEL_OPTIONS.flatMap((group) =>
   }))
 );
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function getDefaultModelOptions(): ModelOption[] {
   const defaultSet = new Set<string>(DEFAULT_ENABLED_MODELS);
   const defaultOptions = ALL_MODELS.filter((model) => defaultSet.has(model.value));
@@ -27,8 +31,9 @@ export async function getAvailableModels(env: Env, traceId?: string): Promise<Mo
     const response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
 
     if (response.ok) {
-      const data = (await response.json()) as { enabledModels?: unknown };
+      const data = await response.json();
       if (
+        isObject(data) &&
         Array.isArray(data.enabledModels) &&
         data.enabledModels.every((id): id is string => typeof id === "string")
       ) {

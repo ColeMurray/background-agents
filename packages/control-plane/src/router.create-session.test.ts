@@ -1,12 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Principal } from "./auth/principal";
+import { generateEncryptionKey } from "./auth/crypto";
 import { SessionIndexStore } from "./db/session-index";
 import { UserStore } from "./db/user-store";
-import { handleRequest } from "./router";
-import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
-import { sessionCreateRoutes } from "./routes/session-create";
+import {
+  fakeSessionRuntimeDispatch,
+  handleRequest,
+  signedServiceRequest,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "./router.test-support";
+import { handleCreateSession } from "./routes/session-create";
 import { HttpError, resolveRepoOrError } from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
+import { resolveManagedSkills } from "./session/skill-resolution";
+import { resolveSessionProviderAuth } from "./session/provider-account-resolution";
+import { ProviderAccountSelectionPolicyError } from "./model-provider-accounts/selection-policy";
+import { resolveEnvironmentTarget, resolveSessionRepositories } from "./repos/resolve";
 
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
@@ -16,6 +25,19 @@ vi.mock("./db/user-store", () => ({
   UserStore: vi.fn(),
 }));
 
+vi.mock("./session/skill-resolution", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    resolveManagedSkills: vi.fn(),
+  };
+});
+
+vi.mock("./session/provider-account-resolution", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, resolveSessionProviderAuth: vi.fn() };
+});
+
 vi.mock("./routes/shared", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -24,18 +46,43 @@ vi.mock("./routes/shared", async (importOriginal) => {
   };
 });
 
-const USER_PRINCIPAL: Principal = {
-  kind: "user",
-  userId: "user-1",
-};
+vi.mock("./repos/resolve", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    resolveEnvironmentTarget: vi.fn(),
+    resolveSessionRepositories: vi.fn(),
+  };
+});
 
 describe("handleCreateSession D1 ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(resolveManagedSkills).mockResolvedValue({
+      selection: { mode: "all" },
+      resolverVersion: 1,
+      manifestSha256: "0".repeat(64),
+      resolvedAt: 1,
+      skills: [],
+    });
+    vi.mocked(resolveSessionProviderAuth).mockResolvedValue([
+      { provider: "openai", authMode: "api_key", selectionSource: "fallback_api_key" },
+      { provider: "xai", authMode: "api_key", selectionSource: "fallback_api_key" },
+    ]);
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       defaultBranch: "main",
     } as never);
+    vi.mocked(resolveEnvironmentTarget).mockResolvedValue([
+      { repoOwner: "acme", repoName: "environment-repo", baseBranch: "main" },
+    ]);
+    vi.mocked(resolveSessionRepositories).mockImplementation(async (_env, repositories) =>
+      repositories.map((repository, index) => ({
+        ...repository,
+        repoId: 12345 + index,
+        baseBranch: repository.baseBranch ?? "main",
+      }))
+    );
     // Default identity fixture: the slack-bot's asserted actor resolves to an
     // already-known canonical user with no linked GitHub identity.
     vi.mocked(UserStore).mockImplementation(function () {
@@ -60,7 +107,8 @@ describe("handleCreateSession D1 ordering", () => {
         service: "slack-bot",
         actor: "slack:U0123",
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
   }
 
@@ -81,11 +129,15 @@ describe("handleCreateSession D1 ordering", () => {
         service: "slack-bot",
         actor: "slack:U0123",
       }),
-      createEnv(vi.fn()) as never
+      createEnv(vi.fn()) as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
   }
 
-  function createEnv(initFetch: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  function createEnv(
+    initFetch: (request: Request) => Promise<Response>,
+    permissions = ["sessions.create", "repositories.use", "environments.use"]
+  ): Record<string, unknown> {
     const statement = {
       bind: vi.fn(() => statement),
       first: vi.fn(async () => null),
@@ -96,18 +148,127 @@ describe("handleCreateSession D1 ordering", () => {
     return {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
+      // GitHub-identity enrichment reads the token store unconditionally, so
+      // the env must carry valid key material (the db stub answers "no rows").
+      TOKEN_ENCRYPTION_KEY: generateEncryptionKey(),
       DB: {
-        prepare: vi.fn(() => statement),
+        prepare: vi.fn((sql: string) => {
+          if (sql.includes("FROM users u") && sql.includes("user_role_assignments")) {
+            let authorizedUserId = "user-1";
+            const authorizationStatement = {
+              bind: vi.fn((userId: string) => {
+                authorizedUserId = userId;
+                return authorizationStatement;
+              }),
+              first: vi.fn(async () => ({
+                user_id: authorizedUserId,
+                suspended_at: null,
+                role_id: "role-1",
+                role_key: null,
+                role_name: "Test Role",
+              })),
+              all: vi.fn(async () => ({ results: [] })),
+            };
+            return authorizationStatement;
+          }
+          if (sql.includes("FROM role_permissions")) {
+            const permissionStatement = {
+              bind: vi.fn(() => permissionStatement),
+              first: vi.fn(async () => null),
+              all: vi.fn(async () => ({
+                results: permissions.map((permission_id) => ({ permission_id })),
+              })),
+            };
+            return permissionStatement;
+          }
+          if (sql.includes("suspended_at IS NULL")) {
+            const activeStatement = {
+              bind: vi.fn(() => activeStatement),
+              first: vi.fn(async () => ({ active: 1 })),
+              all: vi.fn(async () => ({ results: [] })),
+              run: vi.fn(async () => ({ meta: { changes: 0 } })),
+            };
+            return activeStatement;
+          }
+          return statement;
+        }),
         batch: vi.fn(),
         exec: vi.fn(),
         dump: vi.fn(),
       },
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => ({ fetch: initFetch }),
-      },
+      SESSION: fakeSessionRuntimeDispatch(initFetch),
     };
   }
+
+  it.each([
+    {
+      target: "environment",
+      body: { environmentId: "env_1" },
+      permissions: ["sessions.create", "environments.use"],
+      status: 201,
+      deniedPermission: null,
+    },
+    {
+      target: "environment",
+      body: { environmentId: "env_1" },
+      permissions: ["sessions.create", "repositories.use"],
+      status: 403,
+      deniedPermission: "environments.use",
+    },
+    {
+      target: "scalar repository",
+      body: { repoOwner: "acme", repoName: "widgets" },
+      permissions: ["sessions.create", "repositories.use"],
+      status: 201,
+      deniedPermission: null,
+    },
+    {
+      target: "scalar repository",
+      body: { repoOwner: "acme", repoName: "widgets" },
+      permissions: ["sessions.create", "environments.use"],
+      status: 403,
+      deniedPermission: "repositories.use",
+    },
+    {
+      target: "repository list",
+      body: { repositories: [{ repoOwner: "acme", repoName: "widgets" }] },
+      permissions: ["sessions.create", "repositories.use"],
+      status: 201,
+      deniedPermission: null,
+    },
+    {
+      target: "repository list",
+      body: { repositories: [{ repoOwner: "acme", repoName: "widgets" }] },
+      permissions: ["sessions.create", "environments.use"],
+      status: 403,
+      deniedPermission: "repositories.use",
+    },
+  ])(
+    "enforces the permission matrix for $target targets",
+    async ({ body, permissions, status, deniedPermission }) => {
+      const create = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(SessionIndexStore).mockImplementation(function () {
+        return { create } as never;
+      });
+      const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+
+      const response = await createSessionRequestWithBody(createEnv(initFetch, permissions), {
+        ...body,
+        title: "Permission matrix",
+      });
+
+      expect(response.status).toBe(status);
+      if (deniedPermission) {
+        await expect(response.json()).resolves.toMatchObject({
+          code: "permission_required",
+          permission: deniedPermission,
+        });
+        expect(create).not.toHaveBeenCalled();
+      } else {
+        expect(create).toHaveBeenCalledOnce();
+      }
+    }
+  );
 
   it("does not initialize the SessionDO when D1 session index creation fails", async () => {
     const create = vi.fn().mockRejectedValue(new Error("D1 unavailable"));
@@ -268,6 +429,51 @@ describe("handleCreateSession D1 ordering", () => {
     expect(create.mock.invocationCallOrder[0]).toBeLessThan(initFetch.mock.invocationCallOrder[0]);
   });
 
+  it("resolves explicit provider selections for a user-created session", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+    const explicit = {
+      openai: { mode: "provider_account" as const, accountId: "1".repeat(32) },
+    };
+
+    const response = await createSessionRequestWithBody(createEnv(initFetch), {
+      title: "Explicit provider",
+      providerSelections: explicit,
+    });
+
+    expect(response.status).toBe(201);
+    expect(resolveSessionProviderAuth).toHaveBeenCalledWith(expect.anything(), {
+      explicit,
+      unattended: true,
+    });
+  });
+
+  it.each([400, 404, 409] as const)(
+    "preserves provider account policy status %i",
+    async (status) => {
+      vi.mocked(resolveSessionProviderAuth).mockRejectedValueOnce(
+        new ProviderAccountSelectionPolicyError("Provider account rejected", status)
+      );
+      const create = vi.fn();
+      vi.mocked(SessionIndexStore).mockImplementation(function () {
+        return { create } as never;
+      });
+
+      const response = await createSessionRequestWithBody(createEnv(vi.fn()), {
+        title: "Rejected provider",
+        providerSelections: {
+          openai: { mode: "provider_account", accountId: "1".repeat(32) },
+        },
+      });
+
+      expect(response.status).toBe(status);
+      expect(create).not.toHaveBeenCalled();
+    }
+  );
+
   it("enriches SCM fields from the resolved user's linked GitHub identity", async () => {
     const create = vi.fn().mockResolvedValue(undefined);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
@@ -320,7 +526,7 @@ describe("handleCreateSession D1 ordering", () => {
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return { create } as never;
     });
-    const resolveOrCreateUser = vi.fn(async () => ({ id: "user-9" }));
+    const resolveOrCreateUser = vi.fn(async () => ({ id: "user-1" }));
     vi.mocked(UserStore).mockImplementation(function () {
       return {
         getIdentity: async () => null,
@@ -346,7 +552,7 @@ describe("handleCreateSession D1 ordering", () => {
       providerEmail: "ada@example.com",
       avatarUrl: "https://avatars.example.com/ada.png",
     });
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-9" }));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-1" }));
     expect(initFetch).toHaveBeenCalledOnce();
   });
 
@@ -370,9 +576,10 @@ describe("handleCreateSession D1 ordering", () => {
       model: "anthropic/claude-haiku-4-5",
     });
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
-      error: "Failed to resolve session identity",
+      error: "Authorization unavailable",
+      code: "authorization_unavailable",
     });
     expect(create).not.toHaveBeenCalled();
     expect(initFetch).not.toHaveBeenCalled();
@@ -410,7 +617,7 @@ describe("handleCreateSession D1 ordering", () => {
     const testEnv: Record<string, unknown> = createEnv(initFetch);
     testEnv.SCM_PROVIDER = "gitlab";
 
-    const response = await sessionCreateRoutes[0].handler(
+    const response = await handleCreateSession(
       new Request("https://test.local/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -425,14 +632,30 @@ describe("handleCreateSession D1 ordering", () => {
         }),
       }),
       testEnv as never,
-      [] as unknown as RegExpMatchArray,
+      {},
       {
         request_id: "test-request",
         trace_id: "test-trace",
-        principal: USER_PRINCIPAL,
+        principal: {
+          kind: "service",
+          service: "linear-bot",
+          actor: {
+            provider: "linear",
+            providerUserId: "linear-user-1",
+            canonicalUserId: "user-1",
+            participantUserId: "linear:linear-user-1",
+          },
+        },
+        authorization: {
+          userId: "user-1",
+          suspendedAt: null,
+          role: { id: "role-1", key: "member", name: "Member" },
+          permissions: ["sessions.create", "repositories.use", "environments.use"],
+        },
         db: testEnv["DB"] as never,
+        executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
         metrics: {
-          d1Queries: [],
+          sqlQueries: [],
           spans: {},
           time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
           summarize: () => ({}),

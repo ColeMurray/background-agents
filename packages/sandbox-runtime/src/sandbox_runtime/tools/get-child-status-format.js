@@ -16,14 +16,14 @@ export function formatTimestamp(ts) {
   return new Date(ts).toISOString();
 }
 
-export function indentBlock(text, indent = "    ") {
+function indentBlock(text, indent = "    ") {
   return String(text)
     .split("\n")
     .map((line) => `${indent}${line}`)
     .join("\n");
 }
 
-export function formatEventData(data) {
+function formatEventData(data) {
   try {
     return JSON.stringify(data);
   } catch {
@@ -74,7 +74,7 @@ export function buildChildDetailQuery(options = {}) {
   return query ? `?${query}` : "";
 }
 
-export function formatArtifacts(artifacts = []) {
+function formatArtifacts(artifacts = []) {
   if (artifacts.length === 0) return [];
 
   const lines = ["", "  Artifacts:"];
@@ -85,12 +85,15 @@ export function formatArtifacts(artifacts = []) {
   return lines;
 }
 
-export function formatFinalResponse(finalResponse, includeResponse) {
+export function formatFinalResponse(finalResponse, includeResponse, hasUnfinishedPrompt = false) {
   if (!finalResponse) {
     return includeResponse ? ["", "  Final response: not available yet"] : [];
   }
 
-  const lines = ["", "  Final response:"];
+  const label = hasUnfinishedPrompt
+    ? "  Latest completed response (newer prompt queued or running):"
+    : "  Final response:";
+  const lines = ["", label];
   lines.push(`    Success: ${finalResponse.success ? "yes" : "no"}`);
   if (finalResponse.error) {
     lines.push(`    Error: ${finalResponse.error}`);
@@ -168,7 +171,14 @@ export function formatChildDetail(detail, childId, options = {}) {
   }
 
   lines.push(...formatArtifacts(detail.artifacts));
-  lines.push(...formatFinalResponse(detail.finalResponse, Boolean(options.includeResponse)));
+  const hasUnfinishedPrompt = detail.hasUnfinishedPrompt === true;
+  lines.push(
+    ...formatFinalResponse(
+      detail.finalResponse,
+      Boolean(options.includeResponse),
+      hasUnfinishedPrompt
+    )
+  );
   lines.push(...formatTrajectory(detail.trajectory, options));
   lines.push(...formatRecentEvents(detail.recentEvents));
 

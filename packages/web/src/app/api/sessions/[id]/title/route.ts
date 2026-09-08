@@ -2,15 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-
-export function parseSessionTitlePatchBody(body: unknown): { title?: string } | null {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
-
-  const title = (body as { title?: unknown }).title;
-  if (title !== undefined && typeof title !== "string") return null;
-
-  return { title };
-}
+import { parseSessionTitlePatchBody } from "./parse-request";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerAuthSession();

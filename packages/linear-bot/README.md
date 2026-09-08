@@ -68,7 +68,8 @@ linear_webhook_secret = "your-webhook-signing-secret"
 
 The worker also requires these secrets (set via `wrangler secret put` or Terraform):
 
-- **`ANTHROPIC_API_KEY`** — used by the LLM classifier for repo resolution fallback
+- Exactly one classifier credential selected by `CLASSIFICATION_MODEL`: **`ANTHROPIC_API_KEY`** for
+  an Anthropic model (the default), or **`OPENAI_API_KEY`** for an OpenAI model
 - **`SERVICE_AUTH_SECRET`** — per-service sig1 signing secret; also verifies CP callbacks
 
 Then `terraform apply`.
@@ -161,20 +162,23 @@ On any Linear issue:
 - Assign the issue to `OpenInspect` → agent picks it up
 - Agent status is visible directly in Linear (thinking, working, done)
 - Add a `model:<name>` label to override the model (e.g., `model:opus`, `model:sonnet`,
-  `model:opus-5`, `model:haiku`, `model:gpt-5.4`, `model:gpt-5.3-codex`)
+  `model:opus-5`, `model:sonnet-5`, `model:haiku`, `model:gpt-5.4`, `model:gpt-5.3-codex`)
 
 ## Repo Resolution
 
-When an issue is triggered, the agent resolves the session target using a 4-step cascade:
+When an issue is triggered, the agent resolves the session target using a 5-step cascade:
 
 1. **Project → target mapping** — static mapping from Linear project IDs to a repository or a saved
    environment (highest priority)
 2. **Team → target mapping** — static mapping from Linear team IDs to repositories or saved
    environments, with optional label filtering
-3. **Linear's `issueRepositorySuggestions` API** — Linear's built-in repo suggestion (>= 70%
+3. **Explicit `owner/repo` mention** — deterministically selects a single available repository named
+   in the trigger comment or clarification reply
+4. **Linear's `issueRepositorySuggestions` API** — Linear's built-in repo suggestion (>= 70%
    confidence)
-4. **LLM classifier** — uses Claude Haiku to classify based on issue content, labels, and available
-   repo descriptions. Asks the user to clarify if confidence is low.
+5. **LLM classifier** — uses the model selected by `CLASSIFICATION_MODEL` (Anthropic by default) to
+   classify based on issue content, labels, and available repo descriptions. Asks the user to
+   clarify if confidence is low.
 
 Environment sessions clone the environment's full repository set; integration settings (model,
 enabled-repos allowlist) resolve from the environment's primary repository until environment-level

@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -31,10 +32,17 @@ from .attachment_processor import (
     HydratedSessionAttachment,
     parse_session_image_attachments,
 )
-from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
+from .constants import (
+    BOOT_WARNINGS_FILE_PATH,
+    DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+    MAX_SNAPSHOT_RESERVE_SECONDS,
+    REPO_MANIFEST_FILE_PATH,
+    SANDBOX_TIMEOUT_ENV_VAR,
+    SNAPSHOT_RESERVE_FRACTION,
+)
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
-from .git_signing import UNSIGNED_GIT_USER, GitSigningError, GitSigningRuntime
+from .git_signing import GitSigningError, GitSigningRuntime
 from .log_config import configure_logging, get_logger
 from .opencode_client import OpenCodeClient
 from .prompt_stream import OpenCodePromptStream
@@ -42,9 +50,6 @@ from .repo_config import find_repo_entry, load_repo_manifest
 from .types import GitUser
 
 configure_logging()
-
-# Compatibility alias for the runtime's unsigned fallback identity.
-FALLBACK_GIT_USER = UNSIGNED_GIT_USER
 
 
 def parse_prompt_git_author(author_data: object) -> GitUser | None:
@@ -167,7 +172,6 @@ class AgentBridge:
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     GIT_PUSH_TIMEOUT_SECONDS = 300.0
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
-    PROMPT_MAX_DURATION = 5400.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
     def __init__(
@@ -206,6 +210,22 @@ class AgentBridge:
             default=self.SSE_INACTIVITY_TIMEOUT,
             min_value=self.SSE_INACTIVITY_TIMEOUT_MIN,
             max_value=self.SSE_INACTIVITY_TIMEOUT_MAX,
+        )
+        sandbox_timeout_seconds = self._resolve_positive_timeout_seconds(
+            name=SANDBOX_TIMEOUT_ENV_VAR,
+            default=DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+        )
+        snapshot_reserve_seconds = min(
+            MAX_SNAPSHOT_RESERVE_SECONDS,
+            sandbox_timeout_seconds * SNAPSHOT_RESERVE_FRACTION,
+        )
+        self.prompt_cleanup_timeout_seconds = snapshot_reserve_seconds
+        self.prompt_max_duration_seconds = sandbox_timeout_seconds - snapshot_reserve_seconds
+        self.log.info(
+            "bridge.prompt_timeout_config",
+            timeout_ms=int(self.prompt_max_duration_seconds * 1000),
+            sandbox_timeout_ms=int(sandbox_timeout_seconds * 1000),
+            snapshot_reserve_ms=int(snapshot_reserve_seconds * 1000),
         )
 
         self.ws: ClientConnection | None = None
@@ -267,10 +287,15 @@ class AgentBridge:
 
     def _build_ready_event(self) -> dict[str, Any]:
         repositories = load_repo_manifest(self.repo_manifest_path)
+        # The image bakes SANDBOX_VERSION; reporting it lets the control plane
+        # stamp snapshots with the runtime that produced them and retire the
+        # ones a later compatibility floor rules out.
+        runtime_version = os.environ.get("SANDBOX_VERSION", "")
         return {
             "type": "ready",
             "sandboxId": self.sandbox_id,
             "opencodeSessionId": self.opencode_session_id,
+            **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
                     "position": position,
@@ -325,7 +350,9 @@ class AgentBridge:
                 except Exception as e:
                     error_str = str(e)
                     # Check for fatal HTTP errors that shouldn't trigger retry
-                    if self._is_fatal_connection_error(error_str):
+                    if (
+                        isinstance(e, GitSigningError) and not e.retryable
+                    ) or self._is_fatal_connection_error(error_str):
                         run_outcome = "fatal_error"
                         self.shutdown_event.set()
                         break
@@ -655,6 +682,9 @@ class AgentBridge:
         author_data = cmd.get("author", {})
         start_time = time.time()
         outcome = "success"
+        message_cost_usd: float | None = None
+        had_error = False
+        error_message = None
 
         self.log.info(
             "prompt.start",
@@ -684,8 +714,6 @@ class AgentBridge:
                 )
             attachments = await self.attachment_processor.process(session_attachments)
 
-            had_error = False
-            error_message = None
             emitted_output = False
             async for event in self._stream_opencode_response_sse(
                 message_id, content, model, reasoning_effort, attachments
@@ -695,6 +723,8 @@ class AgentBridge:
                     error_message = event.get("error")
                 elif event.get("type") in ("token", "tool_call", "step_finish"):
                     emitted_output = True
+                if event.get("type") == "step_finish" and "messageCostUsd" in event:
+                    message_cost_usd = event["messageCostUsd"]
                 await self._send_event(event)
 
             if not had_error and not emitted_output:
@@ -710,26 +740,18 @@ class AgentBridge:
             if had_error:
                 outcome = "error"
 
-            await self._send_event(
-                {
-                    "type": "execution_complete",
-                    "messageId": message_id,
-                    "success": not had_error,
-                    **({"error": error_message} if error_message else {}),
-                }
-            )
-
+        except asyncio.CancelledError:
+            # This top-level command boundary settles cancellation just like
+            # other prompt failures, while the turn's cost is still available.
+            # The done callback remains a fallback for cancellation before start.
+            outcome = "cancelled"
+            had_error = True
+            error_message = "Task was cancelled"
         except Exception as e:
             outcome = "error"
+            had_error = True
+            error_message = str(e)
             self.log.error("prompt.error", exc=e, message_id=message_id)
-            await self._send_event(
-                {
-                    "type": "execution_complete",
-                    "messageId": message_id,
-                    "success": False,
-                    "error": str(e),
-                }
-            )
         finally:
             duration_ms = int((time.time() - start_time) * 1000)
             self.log.info(
@@ -740,6 +762,16 @@ class AgentBridge:
                 outcome=outcome,
                 duration_ms=duration_ms,
             )
+
+        await self._send_event(
+            {
+                "type": "execution_complete",
+                "messageId": message_id,
+                "success": not had_error,
+                **({"error": error_message} if error_message else {}),
+                **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
+            }
+        )
 
     async def _create_opencode_session(self) -> None:
         """Create a new OpenCode session."""
@@ -760,7 +792,8 @@ class AgentBridge:
                 attachment_processor=self.attachment_processor,
                 log=self.log,
                 sse_inactivity_timeout_seconds=self.sse_inactivity_timeout,
-                prompt_max_duration_seconds=self.PROMPT_MAX_DURATION,
+                prompt_max_duration_seconds=self.prompt_max_duration_seconds,
+                prompt_cleanup_timeout_seconds=self.prompt_cleanup_timeout_seconds,
             )
         return self._prompt_stream
 
@@ -1108,6 +1141,28 @@ class AgentBridge:
             timeout_ms=int(value * 1000),
             min_ms=int(min_value * 1000),
             max_ms=int(max_value * 1000),
+        )
+        return value
+
+    def _resolve_positive_timeout_seconds(self, name: str, default: float) -> float:
+        raw = os.environ.get(name)
+        try:
+            value = default if raw is None or raw == "" else float(raw)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError
+        except ValueError:
+            self.log.warn(
+                "bridge.timeout_invalid",
+                timeout_name=name,
+                timeout_ms=int(default * 1000),
+                detail=f"invalid value '{raw}', using default",
+            )
+            value = default
+
+        self.log.info(
+            "bridge.timeout_config",
+            timeout_name=name,
+            timeout_ms=int(value * 1000),
         )
         return value
 

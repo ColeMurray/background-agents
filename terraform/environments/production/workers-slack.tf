@@ -70,18 +70,17 @@ module "slack_bot_worker" {
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
     { name = "APP_NAME", value = var.app_name },
     { name = "DEFAULT_MODEL", value = "claude-haiku-4-5" },
-    { name = "CLASSIFICATION_MODEL", value = "claude-haiku-4-5" },
-    # Kill switch for Slack channel-message triggers; the bot only ingests/
-    # forwards channel messages when this is exactly "true" (dark by default).
-    { name = "SLACK_TRIGGERS_ENABLED", value = var.slack_triggers_enabled ? "true" : "false" },
+    { name = "CLASSIFICATION_MODEL", value = var.classification_model },
   ]
 
-  secrets = [
-    { name = "SLACK_BOT_TOKEN", value = var.slack_bot_token },
-    { name = "SLACK_SIGNING_SECRET", value = var.slack_signing_secret },
-    { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-    { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_slack_bot.result },
-  ]
+  secrets = concat(
+    [
+      { name = "SLACK_BOT_TOKEN", value = var.slack_bot_token },
+      { name = "SLACK_SIGNING_SECRET", value = var.slack_signing_secret },
+      { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_slack_bot.result },
+    ],
+    local.classifier_secret_bindings
+  )
 
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]

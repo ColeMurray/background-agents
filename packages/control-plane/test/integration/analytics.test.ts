@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import type {
   AnalyticsBreakdownResponse,
+  AnalyticsDashboardResponse,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
 } from "@open-inspect/shared/types/analytics";
-import type { SpawnSource } from "@open-inspect/shared";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
@@ -73,6 +74,33 @@ async function seedUser(
 
 describe("Analytics API", () => {
   beforeEach(cleanD1Tables);
+
+  it("returns one coherently-windowed dashboard snapshot", async () => {
+    const before = Date.now();
+    const response = await serviceFetch("https://test.local/analytics/dashboard?days=7");
+    const after = Date.now();
+
+    expect(response.status).toBe(200);
+    const body = await response.json<AnalyticsDashboardResponse>();
+    expect(body.generatedAt).toBeGreaterThanOrEqual(before);
+    expect(body.generatedAt).toBeLessThanOrEqual(after);
+    expect(body.window).toEqual({
+      days: 7,
+      startAt: body.generatedAt - 7 * 24 * 60 * 60 * 1000,
+      endAt: body.generatedAt,
+    });
+    expect(body).toMatchObject({
+      summary: { totalSessions: 0, totalPrs: 0 },
+      timeseries: { series: [] },
+      breakdowns: { repository: { entries: [] }, user: { entries: [] } },
+      pullRequests: {
+        funnel: { created: 0, open: 0, draft: 0, merged: 0, closed: 0 },
+        timeseries: [],
+        repos: [],
+        sources: [],
+      },
+    });
+  });
 
   it("returns summary metrics for the requested window", async () => {
     const store = new SessionIndexStore(env.DB);
@@ -194,7 +222,7 @@ describe("Analytics API", () => {
 
   it("returns daily timeseries grouped by user", async () => {
     const store = new SessionIndexStore(env.DB);
-    const now = Date.now();
+    const now = new Date().setUTCHours(12, 0, 0, 0);
 
     const completedAt = now - 2 * 24 * 60 * 60 * 1000;
     const failedAt = completedAt + 60_000;
@@ -753,7 +781,7 @@ describe("Analytics API", () => {
 
   it("sums timeseries counts when distinct users share the same display name", async () => {
     const store = new SessionIndexStore(env.DB);
-    const now = Date.now();
+    const now = new Date().setUTCHours(12, 0, 0, 0);
     const dayAgo = now - 24 * 60 * 60 * 1000;
 
     // Two distinct users with the same display name
