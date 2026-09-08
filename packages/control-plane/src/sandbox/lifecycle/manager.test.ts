@@ -196,6 +196,7 @@ function createMockStorage(
         sandbox.created_at = data.createdAt;
         sandbox.auth_token_hash = "";
         sandbox.auth_token = null;
+        sandbox.last_heartbeat = null;
         sandbox.modal_sandbox_id = data.modalSandboxId;
         sandbox.runtime_version = null;
         if (!data.preserveProviderObjectId) sandbox.modal_object_id = null;
@@ -1990,6 +1991,56 @@ describe("SandboxLifecycleManager", () => {
   });
 
   describe("handleAlarm", () => {
+    it.each(["spawn", "restore"] as const)(
+      "%s does not inherit a stopped sandbox's heartbeat when an alarm fires during startup",
+      async (kind) => {
+        const sandbox = createMockSandbox({
+          status: "stopped",
+          created_at: Date.now() - 4_000_000,
+          last_heartbeat: Date.now() - 4_000_000,
+          snapshot_image_id: kind === "restore" ? "snapshot-old" : null,
+          snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
+        });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        const wsManager = createMockWebSocketManager(false);
+        const checkStartup = async () => {
+          expect(sandbox.status).toBe("spawning");
+          expect(await manager.handleAlarm()).toBe("no_action");
+          expect(sandbox.status).toBe("spawning");
+        };
+        const provider = createMockProvider({
+          createSandbox: vi.fn(async (config) => {
+            await checkStartup();
+            return { sandboxId: config.sandboxId, status: "connecting", createdAt: Date.now() };
+          }),
+          restoreFromSnapshot: vi.fn(async (config) => {
+            await checkStartup();
+            return { success: true, sandboxId: config.sandboxId };
+          }),
+        });
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          storage,
+          createMockBroadcaster(),
+          wsManager,
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        await manager.spawnSandbox();
+
+        expect(
+          kind === "restore" ? provider.restoreFromSnapshot : provider.createSandbox
+        ).toHaveBeenCalledOnce();
+        expect(sandbox.status).toBe("connecting");
+        expect(sandbox.last_heartbeat).toBeNull();
+        expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+        expect(provider.takeSnapshot).not.toHaveBeenCalled();
+      }
+    );
+
     it("detects heartbeat timeout and sets stale", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({

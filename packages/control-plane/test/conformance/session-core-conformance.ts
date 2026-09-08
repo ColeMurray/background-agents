@@ -469,7 +469,7 @@ export const STORAGE_CONTRACTS: Record<
 
           sql.exec(
             `UPDATE sandbox SET modal_object_id = 'provider-1', code_server_url = 'old',
-           vnc_url = 'old', tunnel_urls = '{}', ttyd_url = 'old'`
+           vnc_url = 'old', tunnel_urls = '{}', ttyd_url = 'old', last_heartbeat = 200`
           );
           repository.updateSandboxForSpawn({
             status: "connecting",
@@ -480,6 +480,7 @@ export const STORAGE_CONTRACTS: Record<
             status: "connecting",
             modal_object_id: null,
             modal_sandbox_id: "sandbox-provider-id",
+            last_heartbeat: null,
             code_server_url: null,
             vnc_url: null,
             tunnel_urls: null,
