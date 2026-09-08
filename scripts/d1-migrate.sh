@@ -104,3 +104,42 @@ for file in "$MIGRATIONS_DIR"/*.sql; do
 done
 
 echo "Done. Applied $COUNT migration(s)."
+
+# 4. Postcondition: the ledger must record exactly the migration files on disk.
+# Steps 1-3 can leave the schema silently incomplete — a lost wrangler response,
+# a provider that reports success on a partial batch, or any future early return
+# — and callers (Terraform's null_resource) then record a successful deploy over
+# a half-migrated database. Re-read the ledger from the database and compare it
+# to the files, so divergence fails the deploy instead of shipping it.
+EXPECTED_LEDGER_FILE="$MIGRATION_BATCH_DIR/ledger-expected"
+FINAL_LEDGER_FILE="$MIGRATION_BATCH_DIR/ledger-final"
+
+for file in "$MIGRATIONS_DIR"/*.sql; do
+  [ -f "$file" ] || continue
+  BASE=$(basename "$file")
+  printf '%s\t%s\n' "$(printf '%s' "$BASE" | grep -oE '^[0-9]+')" "$BASE"
+done | sort >"$EXPECTED_LEDGER_FILE"
+
+FINAL_JSON=$(
+  $WRANGLER d1 execute "$DATABASE_NAME" --remote \
+    --command "SELECT version, name FROM _schema_migrations" \
+    --json
+)
+# Prove the response is readable before diffing it. An empty or truncated
+# payload otherwise reads as "the database recorded nothing" and the report
+# below blames the ledger for what is really a lost wrangler response.
+printf '%s' "$FINAL_JSON" |
+  jq -e '.[0].results | type == "array"' >/dev/null
+printf '%s' "$FINAL_JSON" |
+  jq -r '.[0].results[]? | [.version, .name] | @tsv' | sort >"$FINAL_LEDGER_FILE"
+
+if ! cmp -s "$EXPECTED_LEDGER_FILE" "$FINAL_LEDGER_FILE"; then
+  echo "ERROR: migration ledger does not match $MIGRATIONS_DIR after applying." >&2
+  echo "Missing from the database (expected but not recorded):" >&2
+  comm -23 "$EXPECTED_LEDGER_FILE" "$FINAL_LEDGER_FILE" | sed 's/^/  /' >&2
+  echo "Unexpected in the database (recorded but no such file):" >&2
+  comm -13 "$EXPECTED_LEDGER_FILE" "$FINAL_LEDGER_FILE" | sed 's/^/  /' >&2
+  exit 1
+fi
+
+echo "Verified: ledger matches all $(wc -l <"$EXPECTED_LEDGER_FILE" | tr -d ' ') migration file(s)."

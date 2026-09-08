@@ -222,8 +222,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Wrangler prints human-readable progress lines ("├ Checking remote database...")
+// ahead of the JSON array for remote `--file` execution even with `--json` set, so
+// stdout is not itself the payload. Slice out the documented array — first
+// line-anchored "[" through the last "]" — so a progress line can never be read as
+// a result row. Anything without such an array is still handed to JSON.parse whole,
+// so a well-formed payload of the wrong shape reaches the shape check below instead
+// of being reported as missing output.
+function parseWranglerJson(stdout: string): unknown {
+  const start = stdout.search(/^[ \t]*\[/m);
+  const end = stdout.lastIndexOf("]");
+  if (start >= 0 && end > start) return JSON.parse(stdout.slice(start, end + 1));
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    throw new Error("Wrangler returned no JSON output");
+  }
+}
+
 function parseWranglerResults(stdout: string): WranglerResult[] {
-  const parsed: unknown = JSON.parse(stdout);
+  const parsed: unknown = parseWranglerJson(stdout);
   if (!Array.isArray(parsed)) throw new Error("Wrangler returned a malformed JSON result");
 
   return parsed.map((result) => {

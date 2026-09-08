@@ -382,6 +382,38 @@ describe("Owner bootstrap orchestration", () => {
     assert.equal(calls, 2);
   });
 
+  it("accepts Wrangler progress output before the execution JSON", async () => {
+    let calls = 0;
+    await run(
+      { database: "workspace", userId: USER_ID, execute: true },
+      {
+        randomUUID: () => "audit-exact",
+        now: () => 123,
+        runWrangler: (_database, operation) => {
+          calls += 1;
+          const report =
+            operation[0] === "--command"
+              ? { report: "preflight", status: "ready" }
+              : { report: "postcondition", status: "executed", audit_written: 1 };
+          const output = JSON.stringify([{ success: true, results: [report] }]);
+          return operation[0] === "--file" ? `├ Checking remote database...\n${output}` : output;
+        },
+      }
+    );
+
+    assert.equal(calls, 2);
+  });
+
+  it("rejects progress output that carries no JSON payload", async () => {
+    await assert.rejects(
+      run(
+        { database: "workspace", userId: USER_ID, execute: false },
+        { runWrangler: () => "├ Checking remote database...\n" }
+      ),
+      /no JSON output/
+    );
+  });
+
   it("reports a concurrent winner instead of claiming this invocation completed", async () => {
     await assert.rejects(
       run(
