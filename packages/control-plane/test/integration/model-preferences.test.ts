@@ -105,15 +105,26 @@ describe("Model preferences API", () => {
     expect(response.status).toBe(400);
   });
 
-  it("rejects non-object request bodies", async () => {
+  it.each([
+    null,
+    ["openai/gpt-5.4"],
+    "invalid",
+    42,
+    {},
+    { enabledModels: null },
+    { enabledModels: {} },
+  ])("rejects invalid request body %j without replacing preferences", async (body) => {
+    const stored = ["anthropic/claude-sonnet-4-6"];
+    await seedPreferences(stored);
     const response = await serviceFetch("https://test.local/model-preferences", {
       method: "PUT",
-      body: JSON.stringify(["openai/gpt-5.4"]),
+      body: JSON.stringify(body),
     });
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: "Request body must include enabledModels array",
     });
+    expect(await getStoredModels()).toEqual(stored);
   });
 });

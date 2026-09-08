@@ -2,7 +2,8 @@
  * Engine-neutral SQL port for the global data layer.
  *
  * The surface is exactly what the src/db stores use today — nothing more.
- * D1Database satisfies this interface structurally (proven below), so no
+ * D1Database satisfies this interface structurally (the Cloudflare platform
+ * passes the binding through unwrapped, see cloudflare/platform.ts), so no
  * wrapper object exists at runtime; the port is erased at build time.
  *
  * Members use method syntax deliberately: method parameters are checked
@@ -12,7 +13,7 @@
  *
  * Contract the type system cannot express: statements passed to batch() must
  * originate from the same database's prepare(). Adapters must tolerate or
- * unwrap foreign statements (see ORIGINAL_STMT in instrumented-d1.ts, which
+ * unwrap foreign statements (see ORIGINAL_STMT in instrumented-sql-database.ts, which
  * exists exactly because wrapped statements cross into the raw db.batch()).
  *
  * Not to be confused with the session Durable Object's synchronous
@@ -32,7 +33,7 @@ interface SqlResultMeta {
 
   /**
    * Optional observability metadata, read only by query instrumentation
-   * (instrumented-d1.ts). Engines may omit these; consumers must never gate
+   * (instrumented-sql-database.ts). Engines may omit these; consumers must never gate
    * correctness on them — `changes` is the only required field.
    */
   duration?: number;
@@ -64,12 +65,3 @@ export interface SqlDatabase {
    */
   batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]>;
 }
-
-/**
- * Compile-time proof that the Cloudflare types satisfy the port. If a
- * workers-types upgrade or a port edit ever breaks assignability, typecheck
- * fails here rather than at 100 call sites.
- */
-type _AssertExtends<A extends B, B> = A;
-type _D1SatisfiesDb = _AssertExtends<D1Database, SqlDatabase>;
-type _D1SatisfiesStmt = _AssertExtends<D1PreparedStatement, SqlStatement>;

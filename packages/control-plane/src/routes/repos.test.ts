@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as AuthenticateModule from "../auth/authenticate";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
-import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
-import { reposRoutes } from "./repos";
+import { REPOS_CACHE_KEY, reposCacheIdentity, reposRoutes } from "./repos";
 import type * as SharedRoutes from "./shared";
-import type { RequestContext } from "./shared";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import {
+  createTestRequestHandler,
+  ownerAuthorizationDatabase,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "../router.test-support";
 
 const {
   mockCacheDelete,
@@ -30,39 +34,22 @@ const {
   mockUpsert: vi.fn(),
 }));
 
+const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
+
+vi.mock("../auth/authenticate", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthenticateModule>()),
+  authenticate: mocks.authenticate,
+}));
+
 vi.mock("../db/repo-metadata", () => ({
   RepoMetadataStore: vi.fn().mockImplementation(function () {
     return { upsert: mockUpsert, getBatch: mockGetBatch };
   }),
 }));
 
-vi.mock("@open-inspect/shared/cache-store", () => ({
-  createKvCacheStore: vi.fn(() => ({
-    delete: mockCacheDelete,
-    get: mockCacheGet,
-    put: mockCachePut,
-  })),
-}));
-
 vi.mock("../logger", () => ({
   createLogger: vi.fn(() => mockLogger),
 }));
-
-function createContext(): RequestContext {
-  return {
-    trace_id: "trace-1",
-    request_id: "request-1",
-    principal: { kind: "user", userId: "user-1" },
-    db: {} as SqlDatabase,
-    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
-    metrics: {
-      d1Queries: [],
-      spans: {},
-      time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
-      summarize: () => ({}),
-    },
-  };
-}
 
 vi.mock("./shared", async () => {
   const actual = await vi.importActual<typeof SharedRoutes>("./shared");
@@ -74,27 +61,36 @@ vi.mock("./shared", async () => {
   };
 });
 
-function getListHandler() {
-  const route = reposRoutes.find(
-    (candidate) => candidate.method === "GET" && candidate.pattern.test("/repos")
-  );
-  if (!route) throw new Error("No repository list route found");
-  const match = "/repos".match(route.pattern);
-  if (!match) throw new Error("List route did not match /repos");
-  return { handler: route.handler, match };
+const handleRequest = createTestRequestHandler([reposRoutes]);
+
+function createEnv(): Env {
+  return {
+    ...TEST_SERVICE_SECRETS,
+    SCM_PROVIDER: "github",
+    DB: ownerAuthorizationDatabase(),
+    REPOS_CACHE: { delete: mockCacheDelete, get: mockCacheGet, put: mockCachePut },
+  } as unknown as Env;
 }
 
-function getUpdateHandler(path: string) {
-  const route = reposRoutes.find((candidate) => candidate.method === "PUT");
-  if (!route) throw new Error("No repository metadata update route found");
-  const match = path.match(route.pattern);
-  if (!match) throw new Error(`Update route did not match ${path}`);
-  return { handler: route.handler, match };
+/** Requests carry the trace id the handlers log under. */
+function request(path: string, init?: RequestInit): Request {
+  return new Request(`https://test.local${path}`, {
+    ...init,
+    headers: { "x-trace-id": "trace-1", ...(init?.headers ?? {}) },
+  });
+}
+
+function updateMetadata(path: string, body: string, env = createEnv()): Promise<Response> {
+  return handleRequest(request(path, { method: "PUT", body }), env, TEST_BACKGROUND_TASK_CONTEXT);
 }
 
 describe("repository list route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.authenticate.mockImplementation(async (request: Request) => ({
+      principal: { kind: "user", userId: "user-1" },
+      request,
+    }));
     mockCacheGet.mockResolvedValue(null);
     mockCachePut.mockResolvedValue(undefined);
     mockGetBatch.mockResolvedValue(new Map());
@@ -118,18 +114,8 @@ describe("repository list route", () => {
     // refresh is registered with waitUntil, the KV write never lands and every
     // later request repeats the same slow path against an empty cache.
     const backgroundTasks = createTestBackgroundTasks();
-    const { handler, match } = getListHandler();
-    const ctx = createContext();
 
-    const response = await handler(
-      new Request("https://test.local/repos"),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      {
-        ...ctx,
-        executionCtx: backgroundTasks,
-      }
-    );
+    const response = await handleRequest(request("/repos"), createEnv(), backgroundTasks);
 
     expect(response.status).toBe(200);
     expect(mockCachePut).toHaveBeenCalledTimes(1);
@@ -137,11 +123,104 @@ describe("repository list route", () => {
     await backgroundTasks.settle();
     expect(backgroundTasks.failures).toEqual([]);
   });
+
+  it("fingerprints the effective SCM catalogue identity", async () => {
+    const githubEnv = {
+      ...createEnv(),
+      GITHUB_APP_INSTALLATION_ID: "installation-1",
+    };
+    const otherGitHubEnv = {
+      ...githubEnv,
+      GITHUB_APP_INSTALLATION_ID: "installation-2",
+    };
+    const gitlabEnv = {
+      ...createEnv(),
+      SCM_PROVIDER: "gitlab",
+      GITLAB_NAMESPACE: "acme/platform",
+      GITLAB_ACCESS_TOKEN: "token-1",
+    };
+    const otherGitlabEnv = { ...gitlabEnv, GITLAB_NAMESPACE: "acme/services" };
+    const rotatedGitlabTokenEnv = { ...gitlabEnv, GITLAB_ACCESS_TOKEN: "token-2" };
+
+    const githubIdentity = await reposCacheIdentity(githubEnv);
+    const gitlabIdentity = await reposCacheIdentity(gitlabEnv);
+
+    expect(githubIdentity).toMatch(/^[0-9a-f]{64}$/);
+    expect(githubIdentity).not.toContain("installation-1");
+    await expect(reposCacheIdentity(otherGitHubEnv)).resolves.not.toBe(githubIdentity);
+    expect(gitlabIdentity).not.toBe(githubIdentity);
+    await expect(reposCacheIdentity(otherGitlabEnv)).resolves.not.toBe(gitlabIdentity);
+    await expect(reposCacheIdentity(rotatedGitlabTokenEnv)).resolves.not.toBe(gitlabIdentity);
+  });
+
+  it("stores the SCM identity in the singleton cache entry", async () => {
+    const env = { ...createEnv(), GITHUB_APP_INSTALLATION_ID: "installation-1" };
+    const expectedIdentity = await reposCacheIdentity(env);
+
+    const response = await handleRequest(request("/repos"), env, createTestBackgroundTasks());
+
+    expect(response.status).toBe(200);
+    expect(mockCacheGet).toHaveBeenCalledWith(REPOS_CACHE_KEY, "json");
+    expect(mockCachePut).toHaveBeenCalledWith(REPOS_CACHE_KEY, expect.any(String), {
+      expirationTtl: 3600,
+    });
+    const cached = JSON.parse(mockCachePut.mock.calls[0][1]) as { scmIdentity: string };
+    expect(cached.scmIdentity).toBe(expectedIdentity);
+  });
+
+  it("globally invalidates enriched metadata across SCM configuration changes", async () => {
+    let cached: unknown = null;
+    let description = "Original description";
+    mockCacheGet.mockImplementation(async () => cached);
+    mockCachePut.mockImplementation(async (_key, value) => {
+      cached = JSON.parse(value);
+    });
+    mockCacheDelete.mockImplementation(async () => {
+      cached = null;
+    });
+    mockGetBatch.mockImplementation(async () => new Map([["acme/widgets", { description }]]));
+    mockUpsert.mockImplementation(async (_owner, _name, metadata) => {
+      description = metadata.description;
+    });
+    const installationOne = {
+      ...createEnv(),
+      GITHUB_APP_INSTALLATION_ID: "installation-1",
+    };
+    const installationTwo = {
+      ...createEnv(),
+      GITHUB_APP_INSTALLATION_ID: "installation-2",
+    };
+
+    await handleRequest(request("/repos"), installationOne, createTestBackgroundTasks());
+    await handleRequest(request("/repos"), installationTwo, createTestBackgroundTasks());
+    await handleRequest(request("/repos"), installationOne, createTestBackgroundTasks());
+    await updateMetadata(
+      "/repos/acme/widgets/metadata",
+      JSON.stringify({ description: "Updated description" }),
+      installationTwo
+    );
+    const response = await handleRequest(
+      request("/repos"),
+      installationOne,
+      createTestBackgroundTasks()
+    );
+
+    expect(mockCacheDelete).toHaveBeenCalledWith(REPOS_CACHE_KEY);
+    expect(mockListRepositories).toHaveBeenCalledTimes(4);
+    await expect(response.json()).resolves.toMatchObject({
+      cached: false,
+      repos: [{ metadata: { description: "Updated description" } }],
+    });
+  });
 });
 
 describe("repository metadata routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.authenticate.mockImplementation(async (request: Request) => ({
+      principal: { kind: "user", userId: "user-1" },
+      request,
+    }));
     mockUpsert.mockResolvedValue(undefined);
     mockCacheDelete.mockResolvedValue(undefined);
   });
@@ -156,17 +235,9 @@ describe("repository metadata routes", () => {
     );
     const cacheError = new Error("KV unavailable");
     mockCacheDelete.mockRejectedValue(cacheError);
-    const path = "/repos/Acme/Widget/metadata";
-    const { handler, match } = getUpdateHandler(path);
-
-    const responsePromise = handler(
-      new Request(`https://test.local${path}`, {
-        method: "PUT",
-        body: JSON.stringify({ description: "Updated description" }),
-      }),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      createContext()
+    const responsePromise = updateMetadata(
+      "/repos/Acme/Widget/metadata",
+      JSON.stringify({ description: "Updated description" })
     );
 
     await vi.waitFor(() => expect(mockUpsert).toHaveBeenCalledOnce());
@@ -183,7 +254,7 @@ describe("repository metadata routes", () => {
     expect(mockUpsert).toHaveBeenCalledWith("Acme", "Widget", {
       description: "Updated description",
     });
-    expect(mockCacheDelete).toHaveBeenCalledOnce();
+    expect(mockCacheDelete).toHaveBeenCalledWith(REPOS_CACHE_KEY);
     expect(mockLogger.warn).toHaveBeenCalledWith("Failed to invalidate repos cache", {
       trace_id: "trace-1",
       error: cacheError,
@@ -196,17 +267,9 @@ describe("repository metadata routes", () => {
   it("returns an error and skips cache invalidation when the metadata update fails", async () => {
     const updateError = new Error("D1 unavailable");
     mockUpsert.mockRejectedValue(updateError);
-    const path = "/repos/acme/widget/metadata";
-    const { handler, match } = getUpdateHandler(path);
-
-    const response = await handler(
-      new Request(`https://test.local${path}`, {
-        method: "PUT",
-        body: JSON.stringify({ description: "Updated description" }),
-      }),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      createContext()
+    const response = await updateMetadata(
+      "/repos/acme/widget/metadata",
+      JSON.stringify({ description: "Updated description" })
     );
 
     expect(response.status).toBe(500);
@@ -219,17 +282,9 @@ describe("repository metadata routes", () => {
   });
 
   it("rejects malformed metadata before persistence", async () => {
-    const path = "/repos/acme/widget/metadata";
-    const { handler, match } = getUpdateHandler(path);
-
-    const response = await handler(
-      new Request(`https://test.local${path}`, {
-        method: "PUT",
-        body: JSON.stringify({ aliases: ["api", 42] }),
-      }),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      createContext()
+    const response = await updateMetadata(
+      "/repos/acme/widget/metadata",
+      JSON.stringify({ aliases: ["api", 42] })
     );
 
     expect(response.status).toBe(400);
@@ -239,15 +294,7 @@ describe("repository metadata routes", () => {
   });
 
   it("rejects malformed JSON with the same 400 as an invalid object", async () => {
-    const path = "/repos/acme/widget/metadata";
-    const { handler, match } = getUpdateHandler(path);
-
-    const response = await handler(
-      new Request(`https://test.local${path}`, { method: "PUT", body: "{" }),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      createContext()
-    );
+    const response = await updateMetadata("/repos/acme/widget/metadata", "{");
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid repository metadata" });
@@ -256,21 +303,13 @@ describe("repository metadata routes", () => {
   });
 
   it("persists only schema fields and drops unknown keys", async () => {
-    const path = "/repos/acme/widget/metadata";
-    const { handler, match } = getUpdateHandler(path);
-
-    const response = await handler(
-      new Request(`https://test.local${path}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          description: "Updated description",
-          keywords: ["billing"],
-          notAField: "dropped",
-        }),
-      }),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      createContext()
+    const response = await updateMetadata(
+      "/repos/acme/widget/metadata",
+      JSON.stringify({
+        description: "Updated description",
+        keywords: ["billing"],
+        notAField: "dropped",
+      })
     );
 
     expect(response.status).toBe(200);

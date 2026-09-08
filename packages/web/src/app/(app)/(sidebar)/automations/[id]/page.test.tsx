@@ -2,9 +2,10 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { Suspense } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
 import AutomationDetailPage from "./page";
 
 expect.extend(matchers);
@@ -12,6 +13,8 @@ expect.extend(matchers);
 const CURRENT_USER_ID = "11111111111111111111111111111111";
 const OTHER_USER_ID = "22222222222222222222222222222222";
 let permissions: string[] = [];
+/** How many invocations the automation has, and every limit the page asked for. */
+const history = vi.hoisted(() => ({ total: 0, requestedLimits: [] as number[] }));
 
 const automation = {
   id: "auto-1",
@@ -47,12 +50,17 @@ vi.mock("@/components/sidebar-layout", () => ({
 }));
 vi.mock("@/hooks/use-automations", () => ({
   useAutomation: () => ({ automation, loading: false, mutate: vi.fn() }),
-  useAutomationInvocations: () => ({
-    invocations: [],
-    total: 0,
-    loading: false,
-    mutate: vi.fn(),
-  }),
+  useAutomationInvocations: (_id: string, limit: number) => {
+    history.requestedLimits.push(limit);
+    return {
+      invocations: Array.from({ length: Math.min(limit, history.total) }, (_, i) => ({
+        id: `inv-${i}`,
+      })),
+      total: history.total,
+      loading: false,
+      mutate: vi.fn(),
+    };
+  },
 }));
 vi.mock("@/hooks/use-environments", () => ({
   useEnvironments: () => ({ environments: [] }),
@@ -65,7 +73,10 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
     },
   }),
 }));
-vi.mock("@/components/automations/run-history", () => ({ RunHistory: () => null }));
+vi.mock("@/components/automations/run-history", () => ({
+  RunHistory: ({ hasMore, onLoadMore }: { hasMore: boolean; onLoadMore?: () => void }) =>
+    hasMore ? <button onClick={onLoadMore}>Load more</button> : null,
+}));
 
 async function renderPage() {
   await act(async () => {
@@ -79,8 +90,30 @@ async function renderPage() {
 
 beforeEach(() => {
   permissions = [];
+  history.total = 0;
+  history.requestedLimits = [];
 });
 afterEach(cleanup);
+
+describe("AutomationDetailPage run history", () => {
+  it("stops offering more history at the largest page the endpoint serves", async () => {
+    history.total = MAX_AUTOMATION_INVOCATION_LIST_LIMIT + 50;
+    await renderPage();
+    await screen.findByRole("heading", { name: "Nightly review" });
+
+    for (let click = 0; click < 10; click += 1) {
+      const loadMore = screen.queryByRole("button", { name: "Load more" });
+      if (!loadMore) break;
+      await act(async () => {
+        fireEvent.click(loadMore);
+      });
+    }
+
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+    expect(Math.max(...history.requestedLimits)).toBe(MAX_AUTOMATION_INVOCATION_LIST_LIMIT);
+    expect(history.requestedLimits.at(-1)).toBe(MAX_AUTOMATION_INVOCATION_LIST_LIMIT);
+  });
+});
 
 describe("AutomationDetailPage authorization", () => {
   it("does not treat createdBy provenance as canonical ownership", async () => {

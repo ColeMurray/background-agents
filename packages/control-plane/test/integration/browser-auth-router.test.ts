@@ -1,9 +1,8 @@
 import { createExecutionContext, env } from "cloudflare:test";
-import { createCloudflareBackgroundTasks } from "../../src/cloudflare/background-tasks";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import { describe, expect, it } from "vitest";
-import { handleRequest as routeRequest } from "../../src/router";
-import type { Env } from "../../src/types";
+import { routeRequest } from "./helpers";
+import type { WorkerBindings } from "../../src/cloudflare/platform";
 
 const CONTROL_PLANE_ORIGIN = "https://control-plane.test.local";
 const PUBLIC_WEB_ORIGIN = "https://app.test.local";
@@ -13,11 +12,7 @@ function handleRequest(
   request: Request,
   requestEnv: Parameters<typeof routeRequest>[1]
 ): Promise<Response> {
-  return routeRequest(
-    request,
-    requestEnv,
-    createCloudflareBackgroundTasks(createExecutionContext())
-  );
+  return routeRequest(request, requestEnv, createExecutionContext());
 }
 
 async function signedServiceRequest(
@@ -79,7 +74,7 @@ describe("browser auth router", () => {
     const response = await handleRequest(request, {
       ...env,
       SCM_PROVIDER: "gitlab",
-    } as Env);
+    } as WorkerBindings);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -142,7 +137,7 @@ describe("browser auth router", () => {
       GITHUB_CLIENT_SECRET: undefined,
       GOOGLE_CLIENT_ID: undefined,
       GOOGLE_CLIENT_SECRET: undefined,
-    } as Env);
+    } as WorkerBindings);
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
@@ -178,7 +173,7 @@ describe("browser auth router", () => {
     const response = await handleRequest(request, {
       ...env,
       SCM_PROVIDER: "gitlab",
-    } as Env);
+    } as WorkerBindings);
 
     expect(response.status).toBe(200);
   });

@@ -1,34 +1,29 @@
+import { Hono } from "hono";
+import { z } from "zod";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { MAX_SANDBOX_SKILL_PAGE_SIZE } from "@open-inspect/shared/types/skills";
-import { SessionIndexStore } from "../db/session-index";
 import { SessionSkillStore } from "../db/session-skills";
-import { hashSessionSkillManifest } from "../skills/content-addressing";
 import type { Env } from "../types";
 import {
-  defineRoute,
   error,
   json,
-  parsePattern,
   NO_AUTHORIZATION,
   requirePermission,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type SandboxRouteContext,
-  type Route,
   type UserRouteContext,
 } from "./shared";
+import { parseQuery } from "./query";
 
-function sessionId(match: RegExpMatchArray): string | Response {
-  return match.groups?.id ?? error("Session ID required", 400);
-}
-
-async function handleSessionSkillsView(
+export async function handleSessionSkillsView(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
-  const id = sessionId(match);
-  if (id instanceof Response) return id;
+  const id = params.id;
   const view = await new SessionSkillStore(ctx.db).getSessionSkillsView(id);
   if (!view) return error("Session skill manifest not found", 404);
   const response = json(view);
@@ -41,67 +36,68 @@ async function handleSessionSkillsView(
  * installation in one response, which is how sandbox runtimes predating paging
  * call this endpoint.
  */
+const PAGE_LIMIT_ERROR = `limit must be an integer between 1 and ${MAX_SANDBOX_SKILL_PAGE_SIZE}`;
+
+/** The position before the first manifest entry: an omitted cursor pages from the start. */
+const BEFORE_FIRST_POSITION = -1;
+
+const installationPageQuerySchema = z.object({
+  limit: z
+    .string()
+    .regex(/^[1-9]\d*$/, { error: PAGE_LIMIT_ERROR })
+    .optional()
+    .transform((raw) => (raw === undefined ? undefined : Number(raw)))
+    .refine((limit) => limit === undefined || limit <= MAX_SANDBOX_SKILL_PAGE_SIZE, {
+      error: PAGE_LIMIT_ERROR,
+    }),
+  cursor: z
+    .string()
+    .regex(/^\d+$/, { error: "cursor is not a valid position" })
+    .optional()
+    .transform((raw) => (raw === undefined ? BEFORE_FIRST_POSITION : Number(raw)))
+    // A digit run long enough to overflow Number is not a position either.
+    .refine(Number.isSafeInteger, { error: "cursor is not a valid position" }),
+});
+
 function installationPage(request: Request): { after: number; limit: number } | Response | null {
-  const params = new URL(request.url).searchParams;
-  const rawLimit = params.get("limit");
-  if (rawLimit === null) return null;
-  const limit = Number(rawLimit);
-  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SANDBOX_SKILL_PAGE_SIZE) {
-    return error(`limit must be an integer between 1 and ${MAX_SANDBOX_SKILL_PAGE_SIZE}`, 400);
-  }
-  const rawCursor = params.get("cursor");
-  if (rawCursor === null) return { after: -1, limit };
-  const after = Number(rawCursor);
-  if (!Number.isInteger(after) || after < 0) return error("cursor is not a valid position", 400);
-  return { after, limit };
+  const query = parseQuery(request, installationPageQuerySchema);
+  if (query instanceof Response) return query;
+  if (query.limit === undefined) return null;
+  return { after: query.cursor, limit: query.limit };
 }
 
-async function handleSandboxInstallation(
+export async function handleSandboxInstallation(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SandboxRouteContext
 ): Promise<Response> {
-  const id = sessionId(match);
-  if (id instanceof Response) return id;
+  const id = params.id;
   const page = installationPage(request);
   if (page instanceof Response) return page;
   const manifest = await new SessionSkillStore(ctx.db).getSandboxInstallation(
     id,
     page ?? undefined
   );
-  // Sessions created before managed-skills shipped have no pinned row. Treat
-  // them as an empty legacy manifest so snapshot restores remain bootable.
-  const resolvedManifest =
-    manifest ??
-    ((await new SessionIndexStore(ctx.db).exists(id))
-      ? {
-          schemaVersion: 1 as const,
-          manifestSha256: await hashSessionSkillManifest({ mode: "all" }, []),
-          skills: [],
-          nextCursor: null,
-        }
-      : null);
-  if (!resolvedManifest) return error("Session skill manifest not found", 404);
-  const response = json(resolvedManifest);
+  if (!manifest) return error("Session skill manifest not found", 404);
+  const response = json(manifest);
   // The digest covers the whole manifest, so it is stable across pages and
   // cannot identify one. Only tag a response that is the entire installation.
-  if (page === null) response.headers.set("ETag", `"${resolvedManifest.manifestSha256}"`);
+  if (page === null) response.headers.set("ETag", `"${manifest.manifestSha256}"`);
   response.headers.set("Cache-Control", "private, no-store");
   return response;
 }
 
-export const sessionSkillRoutes: Route[] = [
-  defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/skills"),
-    authorization: requirePermission("sessions.read"),
-    handler: handleSessionSkillsView,
-  }),
-  defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/sandbox-skills"),
-    authorization: NO_AUTHORIZATION,
-    handler: handleSandboxInstallation,
-  }),
-];
+export const sessionSkillRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionSkillRoutes.get(
+  "/sessions/:id/skills",
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requirePermission("sessions.read") }),
+  (c) => dispatch(c, handleSessionSkillsView)
+);
+
+sessionSkillRoutes.get(
+  "/sessions/:id/sandbox-skills",
+  admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, authorization: NO_AUTHORIZATION }),
+  (c) => dispatch(c, handleSandboxInstallation)
+);

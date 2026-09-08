@@ -33,6 +33,9 @@ export type AutomationInvocationStatus = z.infer<typeof automationInvocationStat
 /** Maximum repositories an automation can fan out across per invocation. */
 export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
 
+/** Largest page `GET /automations/:id/invocations` serves; larger limits are refused. */
+export const MAX_AUTOMATION_INVOCATION_LIST_LIMIT = 100;
+
 /** A repository selected on an automation (response shape, resolved). */
 const automationRepositorySchema = z.object({
   repoOwner: z.string(),

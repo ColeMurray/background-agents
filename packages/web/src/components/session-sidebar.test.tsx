@@ -53,7 +53,7 @@ function session(id: string, title: string, parentSessionId: string | null = nul
     messageCount: 0,
     prCount: 0,
     environmentId: null,
-    readState: { latestMessageId: null, unread: false } as const,
+    readState: { latestMessageId: null, version: 0, unread: false } as const,
     createdAt: 1,
     updatedAt: 2,
   };

@@ -33,7 +33,7 @@ export interface ParticipantServiceDeps {
   env: ParticipantServiceEnv;
   log: Logger;
   generateId: () => string;
-  userScmTokenStore?: UserScmTokenStore | null;
+  userScmTokenStore: UserScmTokenStore;
 }
 
 /**
@@ -54,7 +54,7 @@ export class ParticipantService {
   private readonly env: ParticipantServiceEnv;
   private readonly log: Logger;
   private readonly generateId: () => string;
-  private readonly userScmTokenStore: UserScmTokenStore | null;
+  private readonly userScmTokenStore: UserScmTokenStore;
   private readonly getProcessingMessageAuthor: () => { author_id: string } | null;
 
   constructor(deps: ParticipantServiceDeps) {
@@ -62,7 +62,7 @@ export class ParticipantService {
     this.env = deps.env;
     this.log = deps.log;
     this.generateId = deps.generateId;
-    this.userScmTokenStore = deps.userScmTokenStore ?? null;
+    this.userScmTokenStore = deps.userScmTokenStore;
     this.getProcessingMessageAuthor = deps.getProcessingMessageAuthor;
   }
 
@@ -161,7 +161,7 @@ export class ParticipantService {
    * Dispatches to centralized (D1) or local (per-DO SQLite) refresh path.
    */
   async refreshToken(participant: ParticipantRow): Promise<ParticipantRow | null> {
-    if (this.userScmTokenStore && participant.scm_user_id) {
+    if (participant.scm_user_id) {
       return this.refreshTokenCentralized(participant);
     }
     return this.refreshTokenLocal(participant);
@@ -179,7 +179,7 @@ export class ParticipantService {
   private async refreshTokenCentralized(
     participant: ParticipantRow
   ): Promise<ParticipantRow | null> {
-    const store = this.userScmTokenStore!;
+    const store = this.userScmTokenStore;
     const scmUserId = participant.scm_user_id!;
 
     try {
@@ -289,7 +289,6 @@ export class ParticipantService {
    */
   private async seedD1AfterLocalRefresh(participant: ParticipantRow): Promise<void> {
     if (
-      !this.userScmTokenStore ||
       !participant.scm_user_id ||
       !participant.scm_access_token_encrypted ||
       !participant.scm_refresh_token_encrypted ||
@@ -321,8 +320,9 @@ export class ParticipantService {
   }
 
   /**
-   * Local-only refresh using the per-DO SQLite refresh token.
-   * Original refreshToken logic — used as fallback when D1 is unavailable.
+   * Local-only refresh using the per-DO SQLite refresh token. Taken by a
+   * participant with no `scm_user_id`, who has no row in the shared token
+   * store to refresh centrally, and as the fallback when that row is missing.
    */
   private async refreshTokenLocal(participant: ParticipantRow): Promise<ParticipantRow | null> {
     if (!participant.scm_refresh_token_encrypted) {

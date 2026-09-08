@@ -46,8 +46,6 @@ export class SandboxHandler {
     private readonly sandboxRepository: SandboxRepository,
     private readonly sandboxEventProcessor: SessionSandboxEventProcessor,
     private readonly messenger: SessionMessenger,
-    /** Fixed at composition time: managed secrets exist only when D1 is bound. */
-    private readonly managedSecretsConfigured: boolean,
     private readonly refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAIToken>,
     private readonly refreshXaiToken: (
       session: SessionRow,
@@ -244,10 +242,6 @@ export class SandboxHandler {
       return Response.json({ error: "No session" }, { status: 404 });
     }
 
-    if (!this.managedSecretsConfigured) {
-      return Response.json({ error: "Secrets not configured" }, { status: 500 });
-    }
-
     let token: OpenAIToken;
     try {
       token = await this.refreshOpenAIToken(session, log);
@@ -281,9 +275,6 @@ export class SandboxHandler {
     const session = this.sessionCoreRepository.getSession();
     if (!session) {
       return Response.json({ error: "No session" }, { status: 404 });
-    }
-    if (!this.managedSecretsConfigured) {
-      return Response.json({ error: "Secrets not configured" }, { status: 500 });
     }
     const result = await this.refreshXaiToken(session, log);
     if (!result.ok) {

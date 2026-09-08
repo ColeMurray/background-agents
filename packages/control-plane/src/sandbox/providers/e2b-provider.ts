@@ -103,7 +103,7 @@ const E2B_SUPERVISOR_LOG_PATH = "/tmp/oi-supervisor.log";
  * create-time envVars (applied by envd, inherited through nohup) — never on
  * this command line, which E2B platform-logs.
  */
-const E2B_ENTRYPOINT_COMMAND = `nohup python -m sandbox_runtime.entrypoint >${E2B_SUPERVISOR_LOG_PATH} 2>&1 &`;
+const E2B_ENTRYPOINT_COMMAND = `nohup /opt/openinspect/python/bin/python -m sandbox_runtime.entrypoint >${E2B_SUPERVISOR_LOG_PATH} 2>&1 &`;
 
 /**
  * Env the provider pins on every E2B sandbox (sessions and image builds),

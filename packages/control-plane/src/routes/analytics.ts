@@ -1,39 +1,45 @@
 import {
   ANALYTICS_BREAKDOWN_BY,
   ANALYTICS_DAYS,
-  type AnalyticsBreakdownBy,
   type AnalyticsDays,
 } from "@open-inspect/shared/types/analytics";
 import { type AnalyticsFilters, AnalyticsStore, HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
+import { AnalyticsDashboardStore } from "../db/analytics-dashboard-store";
 import {
   type PullRequestAnalyticsFilters,
   PullRequestAnalyticsStore,
 } from "../db/pull-request-analytics-store";
+import { Hono } from "hono";
+import { z } from "zod";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
+import { parseQuery } from "./query";
 import {
   type RequestContext,
-  type Route,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
-  error,
   json,
-  parsePattern,
   requirePermission,
 } from "./shared";
 
-function parseDaysParam(value: string | null): AnalyticsDays | null {
-  if (value === null) return 30;
+export const DEFAULT_ANALYTICS_DAYS: AnalyticsDays = 30;
 
-  const parsed = Number(value);
-  return ANALYTICS_DAYS.includes(parsed as AnalyticsDays) ? (parsed as AnalyticsDays) : null;
-}
+/** The reporting window; absent, the default. The value is read the way `Number()` reads it. */
+const daysQuery = z.object({
+  days: z
+    .string()
+    .optional()
+    .transform((raw) => (raw === undefined ? DEFAULT_ANALYTICS_DAYS : Number(raw)))
+    .pipe(
+      z.literal(ANALYTICS_DAYS, { error: `days must be one of: ${ANALYTICS_DAYS.join(", ")}` })
+    ),
+});
 
-function parseBreakdownBy(value: string | null): AnalyticsBreakdownBy | null {
-  if (!value) return null;
-  return ANALYTICS_BREAKDOWN_BY.includes(value as AnalyticsBreakdownBy)
-    ? (value as AnalyticsBreakdownBy)
-    : null;
-}
+const breakdownQuery = daysQuery.extend({
+  by: z.enum(ANALYTICS_BREAKDOWN_BY, {
+    error: `by must be one of: ${ANALYTICS_BREAKDOWN_BY.join(", ")}`,
+  }),
+});
 
 function getFilters(days: AnalyticsDays): AnalyticsFilters {
   const endAt = Date.now();
@@ -51,17 +57,36 @@ function getPullRequestFilters(days: AnalyticsDays): PullRequestAnalyticsFilters
   return { startAt: now - days * 24 * 60 * 60 * 1000, endAt: now, now };
 }
 
-async function handleSummary(
+async function handleDashboard(
   request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
+  _env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const days = parseDaysParam(url.searchParams.get("days"));
-  if (!days) {
-    return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
-  }
+  const query = parseQuery(request, daysQuery);
+  if (query instanceof Response) return query;
+  const { days } = query;
+
+  const generatedAt = Date.now();
+  const store = new AnalyticsDashboardStore(ctx.db);
+  return json(
+    await store.get({
+      days,
+      startAt: generatedAt - days * 24 * 60 * 60 * 1000,
+      endAt: generatedAt,
+    })
+  );
+}
+
+async function handleSummary(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
+  const query = parseQuery(request, daysQuery);
+  if (query instanceof Response) return query;
+  const { days } = query;
 
   const store = new AnalyticsStore(ctx.db);
   return json(await store.getSummary(getFilters(days)));
@@ -69,15 +94,13 @@ async function handleSummary(
 
 async function handleTimeseries(
   request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
+  _env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const days = parseDaysParam(url.searchParams.get("days"));
-  if (!days) {
-    return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
-  }
+  const query = parseQuery(request, daysQuery);
+  if (query instanceof Response) return query;
+  const { days } = query;
 
   const store = new AnalyticsStore(ctx.db);
   return json(await store.getTimeseries(getFilters(days)));
@@ -85,21 +108,13 @@ async function handleTimeseries(
 
 async function handleBreakdown(
   request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
+  _env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const days = parseDaysParam(url.searchParams.get("days"));
-  if (!days) {
-    return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
-  }
-
-  const byParam = url.searchParams.get("by");
-  const by = parseBreakdownBy(byParam);
-  if (!by) {
-    return error(`by must be one of: ${ANALYTICS_BREAKDOWN_BY.join(", ")}`, 400);
-  }
+  const query = parseQuery(request, breakdownQuery);
+  if (query instanceof Response) return query;
+  const { days, by } = query;
 
   const store = new AnalyticsStore(ctx.db);
   return json(await store.getBreakdown(getFilters(days), by));
@@ -107,43 +122,29 @@ async function handleBreakdown(
 
 async function handlePullRequests(
   request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
+  _env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const days = parseDaysParam(url.searchParams.get("days"));
-  if (!days) {
-    return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
-  }
+  const query = parseQuery(request, daysQuery);
+  if (query instanceof Response) return query;
+  const { days } = query;
 
   const store = new PullRequestAnalyticsStore(ctx.db);
   return json(await store.get(getPullRequestFilters(days)));
 }
 
-export const analyticsRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    pattern: parsePattern("/analytics/summary"),
-    authorization: requirePermission("analytics.read"),
-    handler: handleSummary,
-  },
-  {
-    method: "GET",
-    pattern: parsePattern("/analytics/timeseries"),
-    authorization: requirePermission("analytics.read"),
-    handler: handleTimeseries,
-  },
-  {
-    method: "GET",
-    pattern: parsePattern("/analytics/breakdown"),
-    authorization: requirePermission("analytics.read"),
-    handler: handleBreakdown,
-  },
-  {
-    method: "GET",
-    pattern: parsePattern("/analytics/pull-requests"),
-    authorization: requirePermission("analytics.read"),
-    handler: handlePullRequests,
-  },
-]);
+const ANALYTICS_READ = admit({
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("analytics.read"),
+});
+
+export const analyticsRoutes = new Hono<ControlPlaneHonoEnv>();
+
+analyticsRoutes.get("/analytics/dashboard", ANALYTICS_READ, (c) => dispatch(c, handleDashboard));
+analyticsRoutes.get("/analytics/summary", ANALYTICS_READ, (c) => dispatch(c, handleSummary));
+analyticsRoutes.get("/analytics/timeseries", ANALYTICS_READ, (c) => dispatch(c, handleTimeseries));
+analyticsRoutes.get("/analytics/breakdown", ANALYTICS_READ, (c) => dispatch(c, handleBreakdown));
+analyticsRoutes.get("/analytics/pull-requests", ANALYTICS_READ, (c) =>
+  dispatch(c, handlePullRequests)
+);

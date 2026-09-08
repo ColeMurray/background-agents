@@ -89,15 +89,31 @@ describe("Integration settings API", () => {
       expect(body.settings.enabledRepos).toEqual(["acme/widgets"]);
     });
 
-    it("rejects non-object settings", async () => {
-      const response = await serviceFetch("https://test.local/integration-settings/github", {
-        method: "PUT",
-        body: JSON.stringify({ settings: [] }),
-      });
+    it.each([null, [], "invalid", 42, {}, { settings: [] }, { settings: null }])(
+      "rejects invalid settings body %j without replacing stored settings",
+      async (invalidBody) => {
+        const endpoint = "https://test.local/integration-settings/github";
+        const settings = { defaults: { autoReviewOnOpen: false } };
+        expect(
+          (
+            await serviceFetch(endpoint, {
+              method: "PUT",
+              body: JSON.stringify({ settings }),
+            })
+          ).status
+        ).toBe(200);
+        const response = await serviceFetch("https://test.local/integration-settings/github", {
+          method: "PUT",
+          body: JSON.stringify(invalidBody),
+        });
 
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "Request body must include settings object" });
-    });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: "Request body must include settings object",
+        });
+        expect(await (await serviceFetch(endpoint)).json()).toMatchObject({ settings });
+      }
+    );
   });
 
   describe("DELETE /integration-settings/github", () => {
@@ -170,18 +186,23 @@ describe("Integration settings API", () => {
       expect(afterBody.settings).toBeNull();
     });
 
-    it("rejects non-object settings", async () => {
-      const response = await serviceFetch(
-        "https://test.local/integration-settings/github/repos/acme/widgets",
-        {
-          method: "PUT",
-          body: JSON.stringify({ settings: null }),
-        }
-      );
+    it.each([null, [], "invalid", 42, {}, { settings: [] }, { settings: null }])(
+      "rejects invalid settings body %j",
+      async (invalidBody) => {
+        const response = await serviceFetch(
+          "https://test.local/integration-settings/github/repos/acme/widgets",
+          {
+            method: "PUT",
+            body: JSON.stringify(invalidBody),
+          }
+        );
 
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "Request body must include settings object" });
-    });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: "Request body must include settings object",
+        });
+      }
+    );
 
     it("rejects invalid model ID with 400", async () => {
       const response = await serviceFetch(
@@ -777,20 +798,25 @@ describe("Integration settings API", () => {
       expect(afterDeleteBody.settings).toBeNull();
     });
 
-    it("rejects non-object settings", async () => {
-      await seedEnvironment("env_settings_shape");
+    it.each([null, [], "invalid", 42, {}, { settings: [] }, { settings: null }])(
+      "rejects invalid settings body %j",
+      async (invalidBody) => {
+        await seedEnvironment("env_settings_shape");
 
-      const response = await serviceFetch(
-        "https://test.local/integration-settings/sandbox/environments/env_settings_shape",
-        {
-          method: "PUT",
-          body: JSON.stringify({ settings: [] }),
-        }
-      );
+        const response = await serviceFetch(
+          "https://test.local/integration-settings/sandbox/environments/env_settings_shape",
+          {
+            method: "PUT",
+            body: JSON.stringify(invalidBody),
+          }
+        );
 
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "Request body must include settings object" });
-    });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: "Request body must include settings object",
+        });
+      }
+    );
 
     it("returns 404 for an environment that does not exist", async () => {
       const response = await serviceFetch(

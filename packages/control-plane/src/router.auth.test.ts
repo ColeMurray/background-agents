@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleRequest, routes } from "./router";
 import {
+  fakeSessionRuntimeDispatch,
+  handleRequest,
+  matchRoute,
+  routeContracts as routes,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "./router.test-support";
 
 function routeFor(method: string, path: string) {
-  return routes.find((route) => route.method === method && route.pattern.test(path));
+  return matchRoute(routes, method, path)?.route;
 }
 
 function createEnv(verifyStatus: number) {
@@ -32,10 +35,7 @@ function createEnv(verifyStatus: number) {
       exec: vi.fn(),
       dump: vi.fn(),
     },
-    SESSION: {
-      idFromName: (name: string) => name,
-      get: () => ({ fetch }),
-    },
+    SESSION: fakeSessionRuntimeDispatch(fetch),
   };
   return { env, doFetch: fetch };
 }

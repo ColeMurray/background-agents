@@ -1,9 +1,15 @@
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { RepositoryRef, RepositoryPair } from "@open-inspect/shared/types/repositories";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
-import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
+import {
+  applyIdentityEnforcement,
+  requireAdmittedCanonicalUserId,
+} from "../routing/identity-enforcement";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
 import { resolveScmProviderFromEnv } from "../source-control";
 import { EnvironmentStore } from "../db/environments";
@@ -25,13 +31,11 @@ import {
 import {
   error,
   json,
-  parsePattern,
   resolveRepoOrError,
   type RequestContext,
-  type Route,
   GITHUB_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   requirePermission,
+  type ServiceActorClaimsResult,
 } from "./shared";
 
 const logger = createLogger("router:session-create");
@@ -40,10 +44,32 @@ const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
 // Defense in depth on top of schema validation — matches git ref charsets.
 const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
 
-async function handleCreateSession(
+async function extractSessionActorProfileClaims(
+  request: Request,
+  ctx: RequestContext
+): Promise<ServiceActorClaimsResult> {
+  const parsed = await parseCreateSessionInput(request);
+  if (!parsed.ok) return { kind: "rejected", response: error(parsed.message, 400) };
+
+  // Keep the admission-time claim view aligned with the handler's raw-body
+  // identity guard; the same rejection ends admission before enrollment.
+  const enforcement = applyIdentityEnforcement(ctx, "session-create", parsed.raw);
+  if (enforcement.rejection) return { kind: "rejected", response: enforcement.rejection };
+
+  return {
+    kind: "claims",
+    claims: {
+      displayName: parsed.input.actorDisplayName,
+      email: parsed.input.actorEmail,
+      avatarUrl: parsed.input.actorAvatarUrl,
+    },
+  };
+}
+
+export async function handleCreateSession(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const parsed = await parseCreateSessionInput(request);
@@ -125,16 +151,13 @@ async function handleCreateSession(
   const participantUserId = enforced.participantUserId;
   const spawnSource = enforced.spawnSource ?? undefined;
 
-  // Resolve canonical user model ID (for D1 session index) from the verified
-  // principal, failing closed; body display fields stay cosmetic.
+  // Admission finalized the canonical subject before RBAC. The handler may
+  // consume only that exact subject; it must never perform late identity
+  // selection from body profile fields.
   const userStore = new UserStore(ctx.db);
-  const resolution = await resolveCanonicalUserId(userStore, ctx, enforced, {
-    displayName: body.actorDisplayName,
-    email: body.actorEmail,
-    avatarUrl: body.actorAvatarUrl,
-  });
+  const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
   if (resolution instanceof Response) return resolution;
-  const resolvedUserId = resolution.userId;
+  const resolvedUserId = resolution;
 
   const githubDeployment = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
   let scmLogin = body.scmLogin;
@@ -270,11 +293,14 @@ async function handleCreateSession(
   return json(result, 201);
 }
 
-export const sessionCreateRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "POST",
-    pattern: parsePattern("/sessions"),
+export const sessionCreateRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionCreateRoutes.post(
+  "/sessions",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("sessions.create"),
-    handler: handleCreateSession,
-  },
-]);
+    serviceActorClaims: extractSessionActorProfileClaims,
+  }),
+  (c) => dispatch(c, handleCreateSession)
+);

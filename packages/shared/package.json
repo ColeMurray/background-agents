@@ -185,6 +185,10 @@
     "./types/analytics": {
       "import": "./dist/types/analytics.js",
       "types": "./dist/types/analytics.d.ts"
+    },
+    "./types/audit-events": {
+      "import": "./dist/types/audit-events.js",
+      "types": "./dist/types/audit-events.d.ts"
     }
   },
   "scripts": {

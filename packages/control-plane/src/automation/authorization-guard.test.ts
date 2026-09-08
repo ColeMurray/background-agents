@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { SqlDatabase } from "../db/sql-database";
 import { isAutomationExecutionAuthorized, isPrincipalAuthorized } from "./authorization-guard";
 
-function recordingDb(): { db: SqlDatabase; bindings: unknown[][]; queries: string[] } {
+function recordingDb(result: { authorized: number } | null = { authorized: 1 }): {
+  db: SqlDatabase;
+  bindings: unknown[][];
+  queries: string[];
+} {
   const bindings: unknown[][] = [];
   const queries: string[] = [];
   const statement = {
@@ -10,7 +14,7 @@ function recordingDb(): { db: SqlDatabase; bindings: unknown[][]; queries: strin
       bindings.push(values);
       return statement;
     },
-    first: async () => ({ authorized: 1 }),
+    first: async () => result,
   };
   return {
     db: {
@@ -66,5 +70,29 @@ describe("automation execution authorization", () => {
 
     expect(bindings[0]?.[0]).toBe("actor-1");
     expect(queries[0]).not.toContain("automations");
+  });
+
+  it.each([
+    { name: "denied", result: { authorized: 0 } },
+    { name: "missing row", result: null },
+  ])("fails closed when automation execution is $name", async ({ result }) => {
+    const { db } = recordingDb(result);
+
+    await expect(
+      isAutomationExecutionAuthorized(db, {
+        automationId: "automation-1",
+        requiresRepositoryUse: true,
+        requiresEnvironmentUse: true,
+      })
+    ).resolves.toBe(false);
+  });
+
+  it.each([
+    { name: "denied", result: { authorized: 0 } },
+    { name: "missing row", result: null },
+  ])("fails closed when principal authorization is $name", async ({ result }) => {
+    const { db } = recordingDb(result);
+
+    await expect(isPrincipalAuthorized(db, "actor-1", "sessions.collaborate")).resolves.toBe(false);
   });
 });
