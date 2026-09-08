@@ -248,6 +248,17 @@ describe("recoverSessionDeadlines", () => {
     expect(recover()).toMatchObject({ previousStop: "no_marker", scanned: 1, rearmed: 1 });
   });
 
+  it("rejects a marker with the wrong field types as no marker", () => {
+    writeSessionDeadline("stranded", 4_242);
+    writeFileSync(
+      join(dataDir, HOST_STATE_FILE),
+      JSON.stringify({ indexedThroughMs: String(BOOT_MS), cleanShutdown: "true" })
+    );
+
+    expect(recover()).toMatchObject({ previousStop: "no_marker", scanned: 1, rearmed: 1 });
+    expect(index.get("stranded")).toBe(4_242);
+  });
+
   it("leaves no partial marker behind when it replaces one", () => {
     markCleanShutdown(dataDir, 500);
     expect(existsSync(join(dataDir, `${HOST_STATE_FILE}.tmp`))).toBe(false);

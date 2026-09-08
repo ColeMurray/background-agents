@@ -16,7 +16,7 @@ import type {
   AutomationRunStatus,
 } from "@open-inspect/shared/types/automations";
 import { automationInvocationStatusSchema } from "@open-inspect/shared/types/automations";
-import type { TriggerConfig } from "@open-inspect/shared/triggers";
+import { automationTriggerTypeSchema, triggerConfigSchema } from "@open-inspect/shared/triggers";
 import {
   toProviderSelections,
   type AutomationModelProviderAuthRow,
@@ -207,15 +207,16 @@ export function toAutomation(
   environmentRows: AutomationEnvironmentRow[],
   providerAuthRows: AutomationModelProviderAuthRow[]
 ): Automation {
-  const triggerConfig: TriggerConfig | null = row.trigger_config
-    ? JSON.parse(row.trigger_config)
+  const triggerConfig = row.trigger_config
+    ? triggerConfigSchema.parse(JSON.parse(row.trigger_config))
     : null;
+  const triggerType = automationTriggerTypeSchema.parse(row.trigger_type);
 
   return {
     id: row.id,
     name: row.name,
     instructions: row.instructions,
-    triggerType: row.trigger_type as Automation["triggerType"],
+    triggerType,
     scheduleCron: row.schedule_cron,
     scheduleTz: row.schedule_tz,
     model: row.model,
