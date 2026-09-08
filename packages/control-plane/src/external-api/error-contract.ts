@@ -6,7 +6,11 @@ import {
 } from "../db/managed-secret-redaction-history";
 import { decryptToken } from "../auth/crypto";
 import { decryptProviderAccountPayload } from "../auth/provider-account-crypto";
+import { createLogger } from "../logger";
 import type { ModelProviderId } from "../model-provider-accounts/provider-auth-contracts";
+
+const logger = createLogger("external-api");
+
 export async function withExternalErrorContract(
   response: Response,
   contract: RoutePolicy["errorContract"],
@@ -25,17 +29,34 @@ export async function withExternalErrorContract(
   const message = typeof payload.error === "string" ? payload.error : "Request failed";
   const code = typeof payload.code === "string" ? payload.code : externalErrorCode(response.status);
   let redactedPayload = { ...payload, error: message, code, message, requestId: ctx.request_id };
+  let status = response.status;
   if (env.REPO_SECRETS_ENCRYPTION_KEY) {
-    const values = new Set([
-      ...(await listCurrentManagedSecretValues(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY)),
-      ...(await listManagedSecretHistory(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY)),
-      ...(await externalCredentialRedactions(env, ctx)),
-    ]);
-    redactedPayload = redactExactStrings(redactedPayload, values) as typeof redactedPayload;
+    try {
+      const values = new Set([
+        ...(await listCurrentManagedSecretValues(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY)),
+        ...(await listManagedSecretHistory(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY)),
+        ...(await externalCredentialRedactions(env, ctx)),
+      ]);
+      redactedPayload = redactExactStrings(redactedPayload, values) as typeof redactedPayload;
+    } catch (cause) {
+      logger.error("external.redaction_unavailable", {
+        event: "external.redaction_unavailable",
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+        error: cause instanceof Error ? cause : String(cause),
+      });
+      status = 503;
+      redactedPayload = {
+        error: "Service unavailable",
+        code: "service_unavailable",
+        message: "Service unavailable",
+        requestId: ctx.request_id,
+      };
+    }
   }
   const headers = new Headers(response.headers);
   headers.set("Content-Type", "application/json");
-  return new Response(JSON.stringify(redactedPayload), { status: response.status, headers });
+  return new Response(JSON.stringify(redactedPayload), { status, headers });
 }
 
 async function externalCredentialRedactions(env: Env, ctx: RequestContext): Promise<string[]> {
@@ -48,14 +69,10 @@ async function externalCredentialRedactions(env: Env, ctx: RequestContext): Prom
     .all<{ encrypted_env: string }>();
   for (const { encrypted_env } of mcpRows.results ?? []) {
     if (!encrypted_env || ["{}", "null"].includes(encrypted_env)) continue;
-    try {
-      collectRedactionStrings(
-        JSON.parse(await decryptToken(encrypted_env, env.REPO_SECRETS_ENCRYPTION_KEY!)),
-        values
-      );
-    } catch {
-      collectRedactionStrings(JSON.parse(encrypted_env), values);
-    }
+    collectRedactionStrings(
+      JSON.parse(await decryptToken(encrypted_env, env.REPO_SECRETS_ENCRYPTION_KEY!)),
+      values
+    );
   }
   const scmRows = await ctx.db
     .prepare(
