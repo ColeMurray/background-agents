@@ -1,17 +1,13 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useIsMobile } from "@/hooks/use-media-query";
+import { MOBILE_BREAKPOINT, useMediaQuerySnapshot } from "@/hooks/use-media-query";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { SettingsViewportProvider } from "@/components/settings/settings-viewport-context";
 import { SettingsNav } from "@/components/settings/settings-nav";
 import { resolveSettingsCategory } from "@/components/settings/settings-registry";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-
-const subscribeToHydration = () => () => undefined;
-const getClientHydrationSnapshot = () => true;
-const getServerHydrationSnapshot = () => false;
 
 /**
  * Hosts responsive settings content and redirects routes whose category is unavailable to the current user.
@@ -20,12 +16,8 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const isMobile = useIsMobile();
-  const isHydrated = useSyncExternalStore(
-    subscribeToHydration,
-    getClientHydrationSnapshot,
-    getServerHydrationSnapshot
-  );
+  const isMobile = useMediaQuerySnapshot(MOBILE_BREAKPOINT);
+  const isHydrated = isMobile !== undefined;
   const tab = searchParams.get("tab");
   const { hasPermission, loading } = useCurrentUserAuthorization();
   const requestedCategory = pathname.startsWith("/settings/integrations/") ? "integrations" : tab;
