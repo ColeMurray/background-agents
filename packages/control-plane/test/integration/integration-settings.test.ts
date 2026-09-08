@@ -11,21 +11,21 @@ import { serviceFetch } from "./helpers";
 describe("Integration settings API", () => {
   beforeEach(cleanD1Tables);
 
-  it.each([
-    "/integration-settings/github",
-    "/integration-settings/github/repos/acme/widgets",
-  ])("accepts empty settings and rejects malformed JSON at %s", async (path) => {
-    const endpoint = `https://test.local${path}`;
-    const reset = await serviceFetch(endpoint, {
-      method: "PUT",
-      body: JSON.stringify({ settings: {} }),
-    });
-    expect(reset.status).toBe(200);
+  it.each(["/integration-settings/github", "/integration-settings/github/repos/acme/widgets"])(
+    "accepts empty settings and rejects malformed JSON at %s",
+    async (path) => {
+      const endpoint = `https://test.local${path}`;
+      const reset = await serviceFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({ settings: {} }),
+      });
+      expect(reset.status).toBe(200);
 
-    const malformed = await serviceFetch(endpoint, { method: "PUT", body: "{" });
-    expect(malformed.status).toBe(400);
-    expect(await malformed.json()).toEqual({ error: "Invalid JSON body" });
-  });
+      const malformed = await serviceFetch(endpoint, { method: "PUT", body: "{" });
+      expect(malformed.status).toBe(400);
+      expect(await malformed.json()).toEqual({ error: "Invalid JSON body" });
+    }
+  );
 
   describe("auth", () => {
     it("returns 401 without auth header", async () => {
