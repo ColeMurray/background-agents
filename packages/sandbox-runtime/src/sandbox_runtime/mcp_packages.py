@@ -132,6 +132,21 @@ class McpPackageInstaller:
             return None
 
     async def install(self, servers: list[Mapping[str, Any]]) -> None:
+        """Best-effort preinstall packages from supported local npx server commands.
+
+        Reuse exact version pins only when the installed manifest and executable
+        links validate. Floating specs (including unversioned packages) must be
+        installed once per installer lifetime before they can be reused, so a
+        new supervisor refreshes them even when restoring a sandbox snapshot.
+
+        Install only cache misses, recording their package names on disk before
+        invoking npm. Failed or interrupted installs leave that marker behind
+        so a later call retries them instead of trusting partial installations.
+
+        Installation errors are logged and do not abort server startup; npx
+        remains responsible for launching the server. Cancellation propagates
+        after the owned npm process is cleaned up.
+        """
         packages = _packages(servers)
         if not packages:
             return
@@ -155,6 +170,8 @@ class McpPackageInstaller:
             except (OSError, ValueError):
                 # A damaged marker cannot certify any existing installation.
                 incomplete.update(name for name, _ in specs.values())
+        # Keep conflicting specs in request order: filtering one out could change
+        # which version wins when npm installs several specs for the same name.
         counts = Counter(name for name, _ in specs.values())
         missing: list[str] = []
         for package, (name, requested) in specs.items():
@@ -179,6 +196,8 @@ class McpPackageInstaller:
         )
         if not missing:
             return
+        # Forget prior floating resolutions before retrying: failed npm work may
+        # mutate the installed package even if it exits unsuccessfully.
         for package in missing:
             self._resolved_this_boot.pop(package, None)
         if marker is not None:
@@ -210,6 +229,7 @@ class McpPackageInstaller:
                     stderr=stderr.decode(errors="replace")[:500],
                 )
                 return
+            # Remember only validated results for reuse within this supervisor.
             for package in missing:
                 version = self._installed_version(specs[package][0])
                 if version:
