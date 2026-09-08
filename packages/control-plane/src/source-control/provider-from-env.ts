@@ -1,5 +1,4 @@
 import { resolveAppName } from "@open-inspect/shared/app-name";
-import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { getGitHubAppConfig } from "../auth/github-app";
 import type { Env } from "../types";
 import { resolveScmProviderFromEnv } from "./config";
@@ -15,7 +14,7 @@ export function createSourceControlProviderFromEnv(env: Env): SourceControlProvi
     provider,
     github: {
       appConfig: appConfig ?? undefined,
-      cacheStore: createKvCacheStore(env.REPOS_CACHE),
+      cacheStore: env.REPOS_CACHE,
       userAgent,
     },
     ...(env.GITLAB_ACCESS_TOKEN

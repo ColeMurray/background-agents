@@ -317,6 +317,26 @@ describe("IntegrationSettingsStore", () => {
       });
     });
 
+    it.each([75, null])("accepts an Autofix attempt limit of %s", async (attemptLimit) => {
+      await store.setGlobal("github", {
+        defaults: { autofix: { maxAttemptsPerPrPer24Hours: attemptLimit } },
+      });
+
+      const result = await store.getGlobal("github");
+      expect(result?.defaults?.autofix?.maxAttemptsPerPrPer24Hours).toBe(attemptLimit);
+    });
+
+    it.each([0, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+      "rejects an invalid Autofix attempt limit of %s",
+      async (attemptLimit) => {
+        await expect(
+          store.setGlobal("github", {
+            defaults: { autofix: { maxAttemptsPerPrPer24Hours: attemptLimit } },
+          })
+        ).rejects.toThrow(IntegrationSettingsValidationError);
+      }
+    );
+
     it("rejects non-array defaults.allowedTriggerUsers", async () => {
       await expect(
         store.setGlobal("github", {

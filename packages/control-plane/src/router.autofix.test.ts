@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleRequest } from "./router";
 import {
+  handleRequest,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
@@ -36,6 +36,24 @@ describe("Autofix operator routes", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ records: [], nextCursor: null });
+  });
+
+  it.each([
+    ["?limit=0", "limit must be an integer from 1 to 100"],
+    ["?limit=abc", "limit must be an integer from 1 to 100"],
+    ["?limit=101", "limit must be an integer from 1 to 100"],
+    ["?limit=5&limit=6", "Invalid limit"],
+  ])("rejects the activity query %s", async (query, error) => {
+    const response = await handleRequest(
+      await signedServiceRequest(`https://test.local/autofix/activity${query}`, {
+        service: "web",
+      }),
+      createEnv() as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error });
   });
 
   it("rejects another authenticated service from deployment activity", async () => {

@@ -1,0 +1,60 @@
+# The container's deployment gate: boot the control-plane image the way a
+# deployment does and round-trip one session through it.
+#
+# Deliberately unfiltered by path, unlike CI (TypeScript). This check is meant
+# to be required for merge, and a required check that a path filter can skip
+# leaves those pull requests pending forever. Every pull request pays about
+# two and a half minutes for a check that is always present and always means
+# the same thing.
+name: Compose smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_PREFER_OFFLINE: "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose-smoke:
+    name: Compose smoke (container)
+    runs-on: ubuntu-latest
+    # The stack boots and the session round-trips in about a minute; the rest
+    # of the budget is the image build on a cold layer cache.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run build -w @open-inspect/shared
+
+      - name: Boot the container and round-trip a session
+        run: scripts/compose-smoke.sh
+
+      - name: Upload container logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-smoke-logs
+          path: smoke-logs/
+          if-no-files-found: ignore

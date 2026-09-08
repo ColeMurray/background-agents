@@ -30,6 +30,8 @@ const sessionStateSchema = z.object({
   isProcessing: z.boolean().optional(),
   parentSessionId: z.string().nullable().optional(),
   totalCost: z.number().optional(),
+  maxSessionCostUsd: z.number().nullable().optional(),
+  budgetExhausted: z.boolean().optional(),
   codeServerUrl: z.string().nullable().optional(),
   codeServerPassword: z.string().nullable().optional(),
   vncUrl: z.string().nullable().optional(),
@@ -118,12 +120,24 @@ export const sessionSnapshotSchema = z.object({
 });
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 
+/** Removes sandbox location data before a snapshot crosses a read-only boundary. */
+export function redactSessionSnapshotSandboxAccess(snapshot: SessionSnapshot): SessionSnapshot {
+  const session = { ...snapshot.session };
+  delete session.codeServerUrl;
+  delete session.vncUrl;
+  delete session.ttydUrl;
+  delete session.tunnelUrls;
+  delete session.sandboxDashboardUrl;
+  return { ...snapshot, session };
+}
+
 const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), timestamp: z.number() }),
   sessionSnapshotSchema.extend({
     type: z.literal("subscribed"),
     participantId: z.string(),
     participant: participantSummarySchema.optional(),
+    canManageBudget: z.boolean().optional(),
   }),
   z.object({
     type: z.literal("prompt_queued"),
@@ -169,6 +183,12 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_restored"), message: z.string() }),
   z.object({ type: z.literal("sandbox_warning"), message: z.string() }),
   z.object({ type: z.literal("processing_status"), isProcessing: z.boolean() }),
+  z.object({
+    type: z.literal("budget_status"),
+    totalCost: z.number(),
+    maxSessionCostUsd: z.number().nullable(),
+    budgetExhausted: z.boolean(),
+  }),
   z.object({
     type: z.literal("diff_state_changed"),
     revisionId: z.string().nullable(),

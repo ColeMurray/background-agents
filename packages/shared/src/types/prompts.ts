@@ -2,7 +2,7 @@ import { z } from "zod";
 import { sessionAttachmentReferencesSchema } from "./session-attachments";
 
 export const MAX_WEB_PROMPT_CHARS = 64_000;
-export const MAX_UNFINISHED_PROMPTS = 10;
+export const MAX_UNFINISHED_PROMPTS = 50;
 export const BLANK_PROMPT_MESSAGE = "Prompt content must not be blank without attachments";
 
 export const clientRequestIdSchema = z.string().min(1).max(128);

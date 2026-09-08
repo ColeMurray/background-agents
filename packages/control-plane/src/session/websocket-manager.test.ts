@@ -1,14 +1,16 @@
 /**
  * Unit tests for SessionWebSocketManagerImpl.
  *
- * Uses fake DurableObjectState and mock repositories to test
- * all WebSocket mechanics in isolation from the full DO.
+ * Uses a fake SessionWebSocketHost and mock repositories to test
+ * all WebSocket mechanics in isolation from the host.
  */
 
 import { describe, it, expect, vi } from "vitest";
 import { SessionWebSocketManagerImpl } from "./websocket-manager";
 import type { WebSocketManagerConfig } from "./websocket-manager";
 import type { Logger } from "../logger";
+import type { SessionWebSocket } from "../platform-ports";
+import type { SessionWebSocketHost } from "./platform";
 import type { ClientInfo } from "../types";
 import type { SandboxRepository } from "./sandbox-repository";
 import type {
@@ -52,34 +54,34 @@ function createFakeWebSocket(readyState = WebSocket.OPEN): WebSocket {
 }
 
 /** Type for the fake DurableObjectState with test helpers. */
-interface FakeCtx {
-  sockets: Map<WebSocket, string[]>;
-  state: DurableObjectState;
+interface FakeSocketHost {
+  sockets: Map<SessionWebSocket, string[]>;
+  host: SessionWebSocketHost;
 }
 
 /**
- * Fake DurableObjectState that tracks accepted WebSockets and their tags.
+ * Fake SessionWebSocketHost that tracks accepted WebSockets and their tags.
  */
-function createFakeCtx(): FakeCtx {
-  const sockets = new Map<WebSocket, string[]>();
+function createFakeSocketHost(): FakeSocketHost {
+  const sockets = new Map<SessionWebSocket, string[]>();
 
-  const state = {
-    acceptWebSocket(ws: WebSocket, tags: string[]) {
+  const host: SessionWebSocketHost = {
+    adopt(ws, tags) {
       sockets.set(ws, tags);
     },
-    getTags(ws: WebSocket): string[] {
+    tags(ws) {
       return sockets.get(ws) ?? [];
     },
-    getWebSockets(): WebSocket[] {
-      return Array.from(sockets.keys());
+    sockets(tag) {
+      const accepted = Array.from(sockets.keys());
+      return tag === undefined
+        ? accepted
+        : accepted.filter((ws) => (sockets.get(ws) ?? []).includes(tag));
     },
-    setWebSocketAutoResponse: vi.fn(),
-    storage: { setAlarm: vi.fn() },
-    id: { toString: () => "test-do-id" },
-    waitUntil: vi.fn(),
-  } as unknown as DurableObjectState;
+    setAutoResponse: vi.fn(),
+  };
 
-  return { sockets, state };
+  return { sockets, host };
 }
 
 /** Create a minimal mock Logger. */
@@ -102,10 +104,18 @@ function createMockRepository() {
     participantId: string;
     clientId: string;
     createdAt: number;
+    authorizationExpiresAt: number;
   }> = [];
 
   const repo = {
     getSandbox: () => sandboxRow,
+    setActiveSocketId: (socketId: string) => {
+      // Like the UPDATE it stands in for: nothing to write without a row.
+      if (sandboxRow) sandboxRow.active_socket_id = socketId;
+    },
+    revokeActiveSocketId: () => {
+      if (sandboxRow) sandboxRow.active_socket_id = "";
+    },
     getWsClientMapping: (wsId: string) => mappings.get(wsId) ?? null,
     hasWsClientMapping: (wsId: string) => mappings.has(wsId),
     upsertWsClientMapping: (data: {
@@ -113,6 +123,7 @@ function createMockRepository() {
       participantId: string;
       clientId: string;
       createdAt: number;
+      authorizationExpiresAt: number;
     }) => {
       upsertCalls.push(data);
       mappings.set(data.wsId, {
@@ -122,7 +133,20 @@ function createMockRepository() {
         scm_name: null,
         auth_name: null,
         scm_login: null,
+        authorization_expires_at: data.authorizationExpiresAt,
       });
+    },
+    deleteWsClientMapping: (wsId: string) => mappings.delete(wsId),
+    deleteExpiredMappings: (now: number) => {
+      for (const [wsId, mapping] of mappings) {
+        if (mapping.authorization_expires_at <= now) mappings.delete(wsId);
+      }
+    },
+    getNextAuthorizationExpiry: () => {
+      const expiries = Array.from(mappings.values()).map(
+        (mapping) => mapping.authorization_expires_at
+      );
+      return expiries.length > 0 ? Math.min(...expiries) : null;
     },
   } as unknown as SandboxRepository;
 
@@ -148,7 +172,7 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
     status: "active",
     lastSeen: Date.now(),
     clientId: "client-1",
-    ws: createFakeWebSocket(),
+    authorizationExpiresAt: Date.now() + 300_000,
     ...overrides,
   };
 }
@@ -178,6 +202,7 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,
+    active_socket_id: null,
     created_at: Date.now(),
   };
 }
@@ -186,19 +211,32 @@ const TEST_CONFIG: WebSocketManagerConfig = { authTimeoutMs: 100 };
 
 /** Create a fresh manager with all dependencies. */
 function createManager() {
-  const fakeCtx = createFakeCtx();
+  const fakeHost = createFakeSocketHost();
   const mockRepo = createMockRepository();
+  const alarmScheduler = {
+    schedule: vi.fn(async () => {}),
+    cancel: vi.fn(async () => {}),
+    current: vi.fn(async () => null),
+  };
   const log = createMockLogger();
 
   const manager = new SessionWebSocketManagerImpl(
-    fakeCtx.state,
+    fakeHost.host,
     mockRepo.repo,
     mockRepo.repo as unknown as WsClientMappingRepository,
+    alarmScheduler,
     log,
     TEST_CONFIG
   );
 
-  return { manager, sockets: fakeCtx.sockets, state: fakeCtx.state, mockRepo, log };
+  return {
+    manager,
+    sockets: fakeHost.sockets,
+    host: fakeHost.host,
+    mockRepo,
+    alarmScheduler,
+    log,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +312,35 @@ describe("SessionWebSocketManagerImpl", () => {
 
       manager.acceptAndSetSandboxSocket(ws);
 
-      expect(sockets.get(ws)).toEqual(["sandbox"]);
+      expect(sockets.get(ws)).toEqual(["sandbox", expect.stringMatching(/^socket:sbws-/)]);
+    });
+
+    it("persists the new socket's identity before closing the socket it replaces", () => {
+      const { manager, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
+      const order: string[] = [];
+      const oldWs = createFakeWebSocket();
+      vi.mocked(oldWs.close).mockImplementation(() => {
+        order.push(`close:${row.active_socket_id}`);
+      });
+      const newWs = createFakeWebSocket();
+
+      manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
+      const oldId = row.active_socket_id;
+      manager.acceptAndSetSandboxSocket(newWs, "sb-1");
+      const newId = row.active_socket_id;
+
+      expect(oldId).toMatch(/^sbws-/);
+      expect(newId).toMatch(/^sbws-/);
+      expect(newId).not.toBe(oldId);
+      // The row already named the replacement when the old socket was closed.
+      expect(order).toEqual([`close:${newId}`]);
+      expect(manager.classify(newWs)).toEqual({
+        kind: "sandbox",
+        sandboxId: "sb-1",
+        socketId: newId,
+      });
     });
 
     it("closes existing sandbox socket and returns replaced=true", () => {
@@ -284,6 +350,19 @@ describe("SessionWebSocketManagerImpl", () => {
 
       manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
       const result = manager.acceptAndSetSandboxSocket(newWs, "sb-2");
+
+      expect(result.replaced).toBe(true);
+      expect(oldWs.close).toHaveBeenCalledWith(1000, "New sandbox connecting");
+    });
+
+    it("closes an attached sandbox socket after the in-memory pointer is lost", () => {
+      const { manager } = createManager();
+      const oldWs = createFakeWebSocket();
+      const newWs = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
+      manager.clearSandboxSocket();
+
+      const result = manager.acceptAndSetSandboxSocket(newWs, "sb-1");
 
       expect(result.replaced).toBe(true);
       expect(oldWs.close).toHaveBeenCalledWith(1000, "New sandbox connecting");
@@ -302,7 +381,8 @@ describe("SessionWebSocketManagerImpl", () => {
     });
 
     it("sets new socket as active sandbox", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
       const ws = createFakeWebSocket();
 
       manager.acceptAndSetSandboxSocket(ws, "sb-1");
@@ -311,14 +391,161 @@ describe("SessionWebSocketManagerImpl", () => {
     });
   });
 
+  describe("isActiveSandboxSocket", () => {
+    it("is true only for the most recently accepted sandbox socket", () => {
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
+      const oldWs = createFakeWebSocket();
+      const newWs = createFakeWebSocket();
+
+      manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
+      expect(manager.isActiveSandboxSocket(oldWs)).toBe(true);
+
+      // Same sandbox reconnecting: the replaced socket is still OPEN while
+      // its close completes, and still tagged, but no longer authoritative.
+      manager.acceptAndSetSandboxSocket(newWs, "sb-1");
+      expect(manager.isActiveSandboxSocket(oldWs)).toBe(false);
+      expect(manager.isActiveSandboxSocket(newWs)).toBe(true);
+    });
+
+    it("is false for client sockets", () => {
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
+      const ws = createFakeWebSocket();
+      manager.acceptClientSocket(ws, "ws-1");
+
+      expect(manager.isActiveSandboxSocket(ws)).toBe(false);
+    });
+
+    it("is false once a spawn reservation has revoked the persisted identity", () => {
+      const { manager, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+
+      // What updateSandboxForSpawn writes.
+      row.active_socket_id = "";
+      row.modal_sandbox_id = "sb-2";
+
+      expect(manager.isActiveSandboxSocket(ws)).toBe(false);
+    });
+
+    it("is false for every socket once detach has revoked authority", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+
+      manager.detachSandboxSocket(1000, "Heartbeat stale");
+
+      expect(row.active_socket_id).toBe("");
+      expect(ws.close).toHaveBeenCalledWith(1000, "Heartbeat stale");
+      // The close is cleanup; the row is the fence, so a trailing frame from
+      // the still-tagged socket is refused whether or not the close landed.
+      expect(manager.isActiveSandboxSocket(ws)).toBe(false);
+      expect(manager.clearSandboxSocketIfMatch(ws)).toBe(false);
+      // Nor does a restart re-adopt it, even after an in-place resume.
+      row.status = "connecting";
+      expect(sockets.get(ws)).toBeDefined();
+      expect(manager.getSandboxSocket()).toBeNull();
+    });
+
+    it("revokes authority before closing on detach", () => {
+      const { manager, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
+      const ws = createFakeWebSocket();
+      vi.mocked(ws.close).mockImplementation(() => {
+        expect(row.active_socket_id).toBe("");
+      });
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+
+      manager.detachSandboxSocket(1011, "Fatal sandbox runtime error");
+
+      expect(ws.close).toHaveBeenCalledOnce();
+    });
+
+    it("keeps a socket accepted before identities were persisted authoritative", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
+      const legacyWs = createFakeWebSocket();
+      sockets.set(legacyWs, ["sandbox", "sid:sb-1"]);
+
+      expect(manager.isActiveSandboxSocket(legacyWs)).toBe(true);
+
+      const newWs = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(newWs, "sb-1");
+      expect(manager.isActiveSandboxSocket(legacyWs)).toBe(false);
+    });
+
+    it("requires a pre-identity socket to belong to the row's sandbox", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-2"));
+      const staleWs = createFakeWebSocket();
+      sockets.set(staleWs, ["sandbox", "sid:sb-1"]);
+
+      expect(manager.isActiveSandboxSocket(staleWs)).toBe(false);
+    });
+
+    it("refuses a pre-identity socket once a spawn reservation has revoked authority", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
+      const legacyWs = createFakeWebSocket();
+      sockets.set(legacyWs, ["sandbox", "sid:sb-1"]);
+      expect(manager.isActiveSandboxSocket(legacyWs)).toBe(true);
+
+      // The reservation revokes rather than clears, so the migration
+      // compatibility branch never reopens for a displaced sandbox.
+      row.active_socket_id = "";
+      row.modal_sandbox_id = "sb-2";
+
+      expect(manager.isActiveSandboxSocket(legacyWs)).toBe(false);
+      expect(manager.clearSandboxSocketIfMatch(legacyWs)).toBe(false);
+      expect(manager.getSandboxSocket()).toBeNull();
+      expect(legacyWs.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
+    });
+  });
+
   describe("getSandboxSocket", () => {
     it("returns cached socket if open", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
       const ws = createFakeWebSocket();
 
       manager.acceptAndSetSandboxSocket(ws, "sb-1");
 
       expect(manager.getSandboxSocket()).toBe(ws);
+    });
+
+    it("recovers the socket whose identity the row names, not the first open one", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      row.active_socket_id = "sbws-active";
+      mockRepo.setSandbox(row);
+      const replacedWs = createFakeWebSocket();
+      const activeWs = createFakeWebSocket();
+
+      // Both sockets belong to the same sandbox and both still look OPEN
+      // after a restart; the replaced one is enumerated first.
+      sockets.set(replacedWs, ["sandbox", "sid:sb-1", "socket:sbws-replaced"]);
+      sockets.set(activeWs, ["sandbox", "sid:sb-1", "socket:sbws-active"]);
+
+      expect(manager.getSandboxSocket()).toBe(activeWs);
+      expect(replacedWs.close).not.toHaveBeenCalled();
+    });
+
+    it("returns null when only replaced sockets survive a restart", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      row.active_socket_id = "sbws-active";
+      mockRepo.setSandbox(row);
+      const replacedWs = createFakeWebSocket();
+      sockets.set(replacedWs, ["sandbox", "sid:sb-1", "socket:sbws-replaced"]);
+
+      expect(manager.getSandboxSocket()).toBeNull();
     });
 
     it("returns null when no sandbox socket exists", () => {
@@ -357,6 +584,16 @@ describe("SessionWebSocketManagerImpl", () => {
 
       expect(manager.getSandboxSocket()).toBeNull();
       expect(untaggedWs.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
+    });
+
+    it("rejects a cached socket when the persisted sandbox ID changes", () => {
+      const { manager, mockRepo } = createManager();
+      const oldWs = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(oldWs, "old-id");
+      mockRepo.setSandbox(createSandboxRow("new-id"));
+
+      expect(manager.getSandboxSocket()).toBeNull();
+      expect(oldWs.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
     });
 
     it("returns null when cached socket is closed", () => {
@@ -455,7 +692,8 @@ describe("SessionWebSocketManagerImpl", () => {
 
   describe("clearSandboxSocketIfMatch", () => {
     it("clears and returns true when ws matches", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
       const ws = createFakeWebSocket();
 
       manager.acceptAndSetSandboxSocket(ws, "sb-1");
@@ -468,12 +706,13 @@ describe("SessionWebSocketManagerImpl", () => {
     });
 
     it("returns false and does not clear when ws does not match", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
       const oldWs = createFakeWebSocket();
       const newWs = createFakeWebSocket();
 
       manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
-      manager.acceptAndSetSandboxSocket(newWs, "sb-2");
+      manager.acceptAndSetSandboxSocket(newWs, "sb-1");
 
       // Try to clear with old socket — should not affect new socket
       const result = manager.clearSandboxSocketIfMatch(oldWs);
@@ -482,44 +721,86 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(manager.getSandboxSocket()).toBe(newWs);
     });
 
-    it("returns true when no sandbox socket is set (post-hibernation)", () => {
-      const { manager } = createManager();
-      const ws = createFakeWebSocket();
+    it("recognizes the active socket after a restart by its persisted identity", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      row.active_socket_id = "sbws-active";
+      mockRepo.setSandbox(row);
+      const activeWs = createFakeWebSocket();
+      const replacedWs = createFakeWebSocket();
+      sockets.set(activeWs, ["sandbox", "sid:sb-1", "socket:sbws-active"]);
+      sockets.set(replacedWs, ["sandbox", "sid:sb-1", "socket:sbws-replaced"]);
 
-      // When sandboxWs is null (e.g., post-hibernation), the closing socket
-      // is treated as active since there's no replacement to compare against.
-      expect(manager.clearSandboxSocketIfMatch(ws)).toBe(true);
+      expect(manager.clearSandboxSocketIfMatch(replacedWs)).toBe(false);
+      expect(manager.clearSandboxSocketIfMatch(activeWs)).toBe(true);
+    });
+
+    it("treats the close of a socket a spawn reservation displaced as a replacement", () => {
+      const { manager, mockRepo } = createManager();
+      const row = createSandboxRow("sb-1");
+      mockRepo.setSandbox(row);
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+      row.active_socket_id = "";
+      row.modal_sandbox_id = "sb-2";
+
+      expect(manager.clearSandboxSocketIfMatch(ws)).toBe(false);
+      // The pointer is still dropped: nothing may keep sending into it.
+      Object.defineProperty(ws, "readyState", { value: WebSocket.CLOSED });
+      expect(manager.getSandboxSocket()).toBeNull();
     });
   });
 
   describe("client registry", () => {
-    it("setClient / getClient round-trips", () => {
+    it("returns a cached live client", () => {
       const { manager } = createManager();
       const ws = createFakeWebSocket();
-      const info = createClientInfo({ ws });
+      const info = createClientInfo();
 
       manager.setClient(ws, info);
 
-      expect(manager.getClient(ws)).toBe(info);
+      expect(manager.lookupClient(ws)).toEqual({ kind: "cached", client: info });
     });
 
-    it("getClient returns null for unknown socket", () => {
+    it("returns missing for an unknown socket", () => {
       const { manager } = createManager();
       const ws = createFakeWebSocket();
 
-      expect(manager.getClient(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
     });
 
-    it("removeClient returns and removes the client", () => {
-      const { manager } = createManager();
+    it("rejects an expired live client on inbound lookup", () => {
+      const { manager, sockets } = createManager();
       const ws = createFakeWebSocket();
-      const info = createClientInfo({ ws });
+      sockets.set(ws, ["wsid:ws-expired"]);
+      manager.setClient(ws, createClientInfo({ authorizationExpiresAt: Date.now() - 1 }));
+
+      expect(manager.lookupClient(ws)).toEqual({ kind: "authorization_rejected" });
+      expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+    });
+
+    it("removeClient returns the client and removes every identity representation", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      const info = createClientInfo();
+      sockets.set(ws, ["wsid:ws-1"]);
+      mockRepo.addMapping("ws-1", {
+        participant_id: info.participantId,
+        client_id: info.clientId,
+        user_id: info.userId,
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: info.authorizationExpiresAt,
+      });
 
       manager.setClient(ws, info);
+      manager.setClientSynchronizing(ws, true);
       const removed = manager.removeClient(ws);
 
       expect(removed).toBe(info);
-      expect(manager.getClient(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
+      expect(manager.isClientSynchronizing(ws)).toBe(false);
+      expect(mockRepo.mappings.has("ws-1")).toBe(false);
     });
 
     it("removeClient returns null for unknown socket", () => {
@@ -530,7 +811,7 @@ describe("SessionWebSocketManagerImpl", () => {
     });
   });
 
-  describe("recoverClientMapping", () => {
+  describe("lookupClient", () => {
     it("returns mapping when wsId tag and DB mapping exist", () => {
       const { manager, sockets, mockRepo } = createManager();
       const ws = createFakeWebSocket();
@@ -543,10 +824,11 @@ describe("SessionWebSocketManagerImpl", () => {
         scm_name: "Test",
         auth_name: null,
         scm_login: "testuser",
+        authorization_expires_at: Date.now() + 300_000,
       };
       mockRepo.addMapping("ws-42", mapping);
 
-      expect(manager.recoverClientMapping(ws)).toEqual(mapping);
+      expect(manager.lookupClient(ws)).toEqual({ kind: "recovered", mapping });
     });
 
     it("returns null for sandbox-tagged sockets", () => {
@@ -555,7 +837,7 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(ws, ["sandbox"]);
 
-      expect(manager.recoverClientMapping(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
     });
 
     it("returns null when no wsId tag", () => {
@@ -564,7 +846,7 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(ws, []);
 
-      expect(manager.recoverClientMapping(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
     });
 
     it("returns null when no DB mapping found", () => {
@@ -573,22 +855,85 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(ws, ["wsid:ws-nonexistent"]);
 
-      expect(manager.recoverClientMapping(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
+    });
+
+    it("rejects an expired mapping during hibernation recovery", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-expired"]);
+      mockRepo.addMapping("ws-expired", {
+        participant_id: "p-1",
+        client_id: "c-1",
+        user_id: "u-1",
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: Date.now() - 1,
+      });
+
+      expect(manager.lookupClient(ws)).toEqual({ kind: "authorization_rejected" });
+      expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+    });
+
+    it("rejects an expired in-memory lease without attempting recovery", () => {
+      const { manager, sockets } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-expired"]);
+      manager.setClient(ws, createClientInfo({ authorizationExpiresAt: Date.now() - 1 }));
+
+      expect(manager.lookupClient(ws)).toEqual({ kind: "authorization_rejected" });
+      expect(ws.close).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe("persistClientMapping", () => {
-    it("calls repository.upsertWsClientMapping", () => {
-      const { manager, mockRepo } = createManager();
+  describe("activateClient", () => {
+    it("schedules then publishes one authorization lease", async () => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const { manager, alarmScheduler, mockRepo, sockets } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-1"]);
+      const info = createClientInfo({ authorizationExpiresAt: 301_000 });
 
-      manager.persistClientMapping("ws-1", "part-1", "client-1");
-
+      const synchronize = vi.fn(() => true);
+      await expect(manager.activateClient(ws, info, synchronize)).resolves.toBe(true);
+      expect(alarmScheduler.schedule).toHaveBeenCalledWith(301_000);
+      expect(synchronize).toHaveBeenCalledOnce();
       expect(mockRepo.upsertCalls).toHaveLength(1);
       expect(mockRepo.upsertCalls[0]).toMatchObject({
         wsId: "ws-1",
         participantId: "part-1",
         clientId: "client-1",
+        authorizationExpiresAt: 301_000,
       });
+      expect(manager.lookupClient(ws)).toEqual({ kind: "cached", client: info });
+      now.mockRestore();
+    });
+
+    it("does not publish client state when scheduling fails", async () => {
+      const { manager, alarmScheduler, mockRepo, sockets } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-1"]);
+      alarmScheduler.schedule.mockRejectedValueOnce(new Error("alarm unavailable"));
+
+      const synchronize = vi.fn(() => true);
+      await expect(manager.activateClient(ws, createClientInfo(), synchronize)).rejects.toThrow(
+        "alarm unavailable"
+      );
+      expect(synchronize).not.toHaveBeenCalled();
+      expect(mockRepo.upsertCalls).toHaveLength(0);
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
+    });
+
+    it("does not publish client state when snapshot synchronization fails", async () => {
+      const { manager, mockRepo, sockets } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-1"]);
+
+      await expect(manager.activateClient(ws, createClientInfo(), () => false)).resolves.toBe(
+        false
+      );
+      expect(mockRepo.upsertCalls).toHaveLength(0);
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
     });
   });
 
@@ -602,6 +947,7 @@ describe("SessionWebSocketManagerImpl", () => {
         scm_name: null,
         auth_name: null,
         scm_login: null,
+        authorization_expires_at: Date.now() + 300_000,
       });
 
       expect(manager.hasPersistedMapping("ws-1")).toBe(true);
@@ -684,7 +1030,7 @@ describe("SessionWebSocketManagerImpl", () => {
       sockets.set(clientWs2, ["wsid:ws-2"]);
       sockets.set(sandboxWs, ["sandbox"]);
 
-      const called: WebSocket[] = [];
+      const called: SessionWebSocket[] = [];
       manager.forEachClientSocket("all_clients", (ws) => called.push(ws));
 
       expect(called).toHaveLength(2);
@@ -701,9 +1047,9 @@ describe("SessionWebSocketManagerImpl", () => {
       sockets.set(authedWs, ["wsid:ws-1"]);
       sockets.set(unauthedWs, ["wsid:ws-2"]);
 
-      manager.setClient(authedWs, createClientInfo({ ws: authedWs }));
+      manager.setClient(authedWs, createClientInfo());
 
-      const called: WebSocket[] = [];
+      const called: SessionWebSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => called.push(ws));
 
       expect(called).toEqual([authedWs]);
@@ -723,9 +1069,10 @@ describe("SessionWebSocketManagerImpl", () => {
         scm_name: null,
         auth_name: null,
         scm_login: null,
+        authorization_expires_at: Date.now() + 300_000,
       });
 
-      const called: WebSocket[] = [];
+      const called: SessionWebSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => called.push(ws));
 
       expect(called).toEqual([ws]);
@@ -737,10 +1084,43 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(ws, ["wsid:ws-unknown"]);
 
-      const called: WebSocket[] = [];
+      const called: SessionWebSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => called.push(ws));
 
       expect(called).toHaveLength(0);
+    });
+
+    it("rejects an expired live client instead of broadcasting", () => {
+      const { manager, sockets } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-expired"]);
+      manager.setClient(ws, createClientInfo({ authorizationExpiresAt: Date.now() - 1 }));
+
+      const called: SessionWebSocket[] = [];
+      manager.forEachClientSocket("authenticated_only", (client) => called.push(client));
+
+      expect(called).toEqual([]);
+      expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+    });
+
+    it("rejects an expired hibernated mapping instead of broadcasting", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-expired"]);
+      mockRepo.addMapping("ws-expired", {
+        participant_id: "p-1",
+        client_id: "c-1",
+        user_id: "u-1",
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: Date.now() - 1,
+      });
+
+      const called: SessionWebSocket[] = [];
+      manager.forEachClientSocket("authenticated_only", (client) => called.push(client));
+
+      expect(called).toEqual([]);
+      expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
     });
 
     it("broadcast pattern delivers to authenticated clients and skips unauthenticated", () => {
@@ -749,7 +1129,7 @@ describe("SessionWebSocketManagerImpl", () => {
       // Authenticated client (in-memory)
       const authedWs = createFakeWebSocket();
       sockets.set(authedWs, ["wsid:ws-authed"]);
-      manager.setClient(authedWs, createClientInfo({ ws: authedWs }));
+      manager.setClient(authedWs, createClientInfo());
 
       // Post-hibernation client (persisted mapping only, no in-memory ClientInfo)
       const hibernatedWs = createFakeWebSocket();
@@ -761,6 +1141,7 @@ describe("SessionWebSocketManagerImpl", () => {
         scm_name: null,
         auth_name: null,
         scm_login: null,
+        authorization_expires_at: Date.now() + 300_000,
       });
 
       // Unauthenticated client (connected but never subscribed)
@@ -789,13 +1170,41 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(sandboxWs, ["sandbox"]);
 
-      const allClientsCalled: WebSocket[] = [];
+      const allClientsCalled: SessionWebSocket[] = [];
       manager.forEachClientSocket("all_clients", (ws) => allClientsCalled.push(ws));
       expect(allClientsCalled).toHaveLength(0);
 
-      const authOnlyCalled: WebSocket[] = [];
+      const authOnlyCalled: SessionWebSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => authOnlyCalled.push(ws));
       expect(authOnlyCalled).toHaveLength(0);
+    });
+  });
+
+  describe("expireAuthorizationLeases", () => {
+    it("closes expired live mappings and schedules the next deadline", async () => {
+      const { manager, sockets, mockRepo, alarmScheduler } = createManager();
+      const expired = createFakeWebSocket();
+      sockets.set(expired, ["wsid:expired"]);
+      mockRepo.addMapping("expired", {
+        participant_id: "p-1",
+        client_id: "c-1",
+        user_id: "u-1",
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: 1_000,
+      });
+      mockRepo.addMapping("future", {
+        participant_id: "p-2",
+        client_id: "c-2",
+        user_id: "u-2",
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: 3_000,
+      });
+
+      await manager.expireAuthorizationLeases(2_000);
+      expect(expired.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+      expect(alarmScheduler.schedule).toHaveBeenCalledWith(3_000);
     });
   });
 
@@ -805,7 +1214,7 @@ describe("SessionWebSocketManagerImpl", () => {
       const ws = createFakeWebSocket();
       sockets.set(ws, ["wsid:ws-1"]);
 
-      manager.setClient(ws, createClientInfo({ ws }));
+      manager.setClient(ws, createClientInfo());
 
       await manager.enforceAuthTimeout(ws, "ws-1");
 
@@ -824,6 +1233,7 @@ describe("SessionWebSocketManagerImpl", () => {
         scm_name: null,
         auth_name: null,
         scm_login: null,
+        authorization_expires_at: Date.now() + 300_000,
       });
 
       await manager.enforceAuthTimeout(ws, "ws-1");
@@ -856,8 +1266,8 @@ describe("SessionWebSocketManagerImpl", () => {
       const { manager } = createManager();
       const ws1 = createFakeWebSocket();
       const ws2 = createFakeWebSocket();
-      const info1 = createClientInfo({ ws: ws1, userId: "user-1" });
-      const info2 = createClientInfo({ ws: ws2, userId: "user-2" });
+      const info1 = createClientInfo({ userId: "user-1" });
+      const info2 = createClientInfo({ userId: "user-2" });
 
       manager.setClient(ws1, info1);
       manager.setClient(ws2, info2);
@@ -872,6 +1282,25 @@ describe("SessionWebSocketManagerImpl", () => {
       const { manager } = createManager();
       const clients = Array.from(manager.getAuthenticatedClients());
       expect(clients).toHaveLength(0);
+    });
+
+    it("tears down expired clients before projecting presence", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-expired"]);
+      manager.setClient(ws, createClientInfo({ authorizationExpiresAt: Date.now() - 1 }));
+      mockRepo.addMapping("ws-expired", {
+        participant_id: "part-1",
+        client_id: "client-1",
+        user_id: "user-1",
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: Date.now() - 1,
+      });
+
+      expect(Array.from(manager.getAuthenticatedClients())).toEqual([]);
+      expect(mockRepo.mappings.has("ws-expired")).toBe(false);
+      expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
     });
   });
 

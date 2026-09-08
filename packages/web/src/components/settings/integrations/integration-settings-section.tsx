@@ -11,7 +11,7 @@ export function IntegrationSettingsSection({
 }) {
   return (
     <section className="mb-8">
-      <h4 className="text-base font-semibold text-foreground mb-1">{title}</h4>
+      <h3 className="text-base font-semibold text-foreground mb-1">{title}</h3>
       <p className="text-sm text-muted-foreground mb-4">{description}</p>
       {children}
     </section>

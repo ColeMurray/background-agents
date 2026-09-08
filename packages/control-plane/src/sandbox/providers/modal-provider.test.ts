@@ -22,8 +22,6 @@ import type {
   CreateImageBuildSandboxResponse,
   StartImageBuildSandboxRequest,
   TerminateImageBuildSandboxRequest,
-  DeleteProviderImageRequest,
-  DeleteProviderImageResponse,
 } from "../client";
 
 // ==================== Mock Factories ====================
@@ -39,7 +37,6 @@ function createMockModalClient(
     ) => Promise<CreateImageBuildSandboxResponse>;
     startImageBuildSandbox: (req: StartImageBuildSandboxRequest) => Promise<void>;
     terminateImageBuildSandbox: (req: TerminateImageBuildSandboxRequest) => Promise<void>;
-    deleteProviderImage: (req: DeleteProviderImageRequest) => Promise<DeleteProviderImageResponse>;
   }> = {}
 ): ModalClient {
   return {
@@ -76,12 +73,6 @@ function createMockModalClient(
     ),
     startImageBuildSandbox: vi.fn(async () => undefined),
     terminateImageBuildSandbox: vi.fn(async () => undefined),
-    deleteProviderImage: vi.fn(
-      async (req: DeleteProviderImageRequest): Promise<DeleteProviderImageResponse> => ({
-        providerImageId: req.providerImageId,
-        deleted: true,
-      })
-    ),
     ...overrides,
   } as unknown as ModalClient;
 }
@@ -560,19 +551,6 @@ describe("ModalSandboxProvider", () => {
         vi.mocked(client.startImageBuildSandbox).mock.invocationCallOrder[0]
       );
     });
-
-    it("deletes provider images through the Modal client", async () => {
-      const client = createMockModalClient();
-      const provider = new ModalSandboxProvider(client);
-      const correlation = { request_id: "request-1", trace_id: "trace-1" };
-
-      await provider.deleteProviderImage("modal-image-1", correlation);
-
-      expect(client.deleteProviderImage).toHaveBeenCalledWith(
-        { providerImageId: "modal-image-1" },
-        correlation
-      );
-    });
   });
 
   describe("HTTP status handling", () => {
@@ -631,9 +609,10 @@ describe("ModalSandboxProvider", () => {
     });
 
     it("classifies HTTP 503 from takeSnapshot as transient", async () => {
+      const modalError = new ModalApiError("Modal API error: 503 Service Unavailable", 503);
       const client = createMockModalClient({
         snapshotSandbox: vi.fn(async () => {
-          throw new ModalApiError("Modal API error: 503 Service Unavailable", 503);
+          throw modalError;
         }),
       });
       const provider = new ModalSandboxProvider(client);
@@ -648,6 +627,10 @@ describe("ModalSandboxProvider", () => {
       } catch (e) {
         expect(e).toBeInstanceOf(SandboxProviderError);
         expect((e as SandboxProviderError).errorType).toBe("transient");
+        expect(e).toMatchObject({
+          message: "Snapshot failed with HTTP 503: Modal API error: 503 Service Unavailable",
+          cause: modalError,
+        });
       }
     });
 

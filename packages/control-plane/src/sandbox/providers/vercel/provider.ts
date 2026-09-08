@@ -268,10 +268,11 @@ export class VercelSandboxProvider implements SandboxProvider {
       }
 
       const identity = imageBuildSandboxIdentity(config, Date.now());
+      const sandboxName = identity.sandboxName.replace(/[^a-zA-Z0-9_-]+/g, "-");
       const env = this.buildBuildEnvVars(config, identity.sandboxId);
       const created = await this.client.createSandbox(
         {
-          name: identity.sandboxName,
+          name: sandboxName,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
           timeoutMs: resolveVercelTimeoutMs(config.providerSessionTimeoutSeconds),
           env,
@@ -298,7 +299,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         scope_id: config.scopeId,
         session_id: created.session.id,
         command_id: command.commandId,
-        sandbox_name: identity.sandboxName,
+        sandbox_name: sandboxName,
       });
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;

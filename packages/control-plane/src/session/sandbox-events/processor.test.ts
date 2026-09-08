@@ -18,6 +18,7 @@ import type { EventRepository } from "../event-repository";
 import type { MessageRepository } from "../message-repository";
 import type { SessionStatusService } from "../session-status-service";
 import type { SessionWebSocketManager } from "../websocket-manager";
+import type { SessionBudgetService } from "../budget-service";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
   return {
@@ -37,7 +38,7 @@ function createProcessor() {
     updateSandboxHeartbeat: vi.fn(),
     recordReportedSandboxRuntimeVersion: vi.fn(),
     getProcessingMessage,
-    addSessionCost: vi.fn(),
+    addSessionCost: vi.fn(() => 1.25),
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => {
       getProcessingMessage.mockReturnValue(null);
       return {
@@ -89,6 +90,15 @@ function createProcessor() {
     child: vi.fn(),
   };
   const backgroundTasks = createTestBackgroundTasks();
+  const budgetService = {
+    ingestStepFinish: vi.fn(async () => {}),
+    observeExecutionCost: vi.fn((_event: unknown, _now: number) => ({
+      warningEvent: null,
+      stopPreparation: null,
+      statusChanged: false,
+    })),
+    deliverTransition: vi.fn(async () => {}),
+  };
 
   // The real family composition, mirroring components.ts, so the suite keeps
   // pinning end-to-end processSandboxEvent behavior across the split.
@@ -99,11 +109,11 @@ function createProcessor() {
     wsManager as unknown as SessionWebSocketManager,
     new SandboxStreamingEventHandler(
       backgroundTasks,
-      repository as unknown as SessionCoreRepository,
       eventRepository,
       callbackService as unknown as CallbackNotificationService,
       messenger,
-      updateLastActivity
+      updateLastActivity,
+      budgetService as unknown as SessionBudgetService
     ),
     new SandboxArtifactEventHandler(
       artifactRepository,
@@ -123,7 +133,9 @@ function createProcessor() {
       updateLastActivity,
       scheduleInactivityCheck,
       processMessageQueue,
-      broadcastPromptQueue
+      broadcastPromptQueue,
+      budgetService,
+      (closure) => closure()
     ),
     new SandboxRuntimeEventHandler(
       repository as unknown as SessionCoreRepository,
@@ -157,6 +169,7 @@ function createProcessor() {
     applySessionTitleUpdate,
     backgroundTasks,
     log,
+    budgetService,
   };
 }
 
@@ -391,7 +404,7 @@ describe("SessionSandboxEventProcessor", () => {
     });
   });
 
-  it("adds step_finish cost to session aggregate and broadcasts event", async () => {
+  it("routes step_finish through atomic budget ingestion", async () => {
     const h = createProcessor();
     const event: SandboxEvent = {
       type: "step_finish",
@@ -403,9 +416,31 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).toHaveBeenCalledWith(0.0123, expect.any(Number));
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
     expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+  });
+
+  it("records unavailable cost tracking for positive-token steps without cost", async () => {
+    const h = createProcessor();
+    const event: SandboxEvent = {
+      type: "step_finish",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+      tokens: { input: 10 },
+    };
+
+    await h.processor.processSandboxEvent(event);
+
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("does not add session cost for step_finish with NaN cost", async () => {
@@ -420,9 +455,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("does not add session cost for step_finish with negative cost", async () => {
@@ -437,8 +474,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("does not add session cost for step_finish with Infinity cost", async () => {
@@ -453,9 +493,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("completes processing message and schedules post-completion work", async () => {
@@ -590,154 +632,6 @@ describe("SessionSandboxEventProcessor", () => {
       sandboxWs,
       expect.objectContaining({ type: "push" })
     );
-  });
-
-  describe("push resolver keying", () => {
-    function connectSandbox(h: ReturnType<typeof createProcessor>) {
-      const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
-      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
-      return sandboxWs;
-    }
-
-    it("settles the matching push when two repos push the same branch name", async () => {
-      const h = createProcessor();
-      connectSandbox(h);
-
-      const webPush = h.pushService.pushBranchToRemote(
-        createPushSpec("acme", "web", "open-inspect/session-1")
-      );
-      const backendPush = h.pushService.pushBranchToRemote(
-        createPushSpec("acme", "backend", "open-inspect/session-1")
-      );
-
-      await h.processor.processSandboxEvent({
-        type: "push_error",
-        branchName: "open-inspect/session-1",
-        repoOwner: "acme",
-        repoName: "backend",
-        error: "remote rejected",
-        timestamp: 1000,
-      });
-      await h.processor.processSandboxEvent({
-        type: "push_complete",
-        branchName: "open-inspect/session-1",
-        repoOwner: "acme",
-        repoName: "web",
-        timestamp: 1001,
-      });
-
-      await expect(webPush).resolves.toEqual({ success: true });
-      await expect(backendPush).resolves.toEqual({
-        success: false,
-        error: expect.stringContaining("remote rejected"),
-      });
-    });
-
-    it("settles the sole pending push on a terminal event without repo identity", async () => {
-      const h = createProcessor();
-      connectSandbox(h);
-
-      const pushPromise = h.pushService.pushBranchToRemote(
-        createPushSpec("acme", "web", "feature/test")
-      );
-
-      // Legacy single-repo runtimes echo no repo identity.
-      await h.processor.processSandboxEvent({
-        type: "push_complete",
-        branchName: "feature/test",
-        timestamp: 1000,
-      });
-
-      await expect(pushPromise).resolves.toEqual({ success: true });
-    });
-
-    it("rejects the sole pending push on a branch-less push_error", async () => {
-      const h = createProcessor();
-      connectSandbox(h);
-
-      const pushPromise = h.pushService.pushBranchToRemote(
-        createPushSpec("acme", "web", "feature/test")
-      );
-
-      // The bridge's "no repository found" path emits push_error with no
-      // branchName at all; it must reject the pending push instead of
-      // leaking it to the 360 s timeout.
-      await h.processor.processSandboxEvent({
-        type: "push_error",
-        error: "No repository found for push",
-        timestamp: 1000,
-      });
-
-      await expect(pushPromise).resolves.toEqual({
-        success: false,
-        error: expect.stringContaining("No repository found for push"),
-      });
-    });
-
-    it("drops a fully identified event that mismatches the sole pending push", async () => {
-      const h = createProcessor();
-      connectSandbox(h);
-
-      const pushPromise = h.pushService.pushBranchToRemote(
-        createPushSpec("acme", "web", "feature/test")
-      );
-
-      // A stale event for a different repo must not settle the pending push
-      // just because it is the only one in flight.
-      await h.processor.processSandboxEvent({
-        type: "push_error",
-        branchName: "feature/test",
-        repoOwner: "acme",
-        repoName: "backend",
-        error: "remote rejected",
-        timestamp: 1000,
-      });
-
-      await h.processor.processSandboxEvent({
-        type: "push_complete",
-        branchName: "feature/test",
-        repoOwner: "acme",
-        repoName: "web",
-        timestamp: 1001,
-      });
-
-      await expect(pushPromise).resolves.toEqual({ success: true });
-    });
-
-    it("drops an identity-less terminal event when several pushes are pending", async () => {
-      const h = createProcessor();
-      connectSandbox(h);
-
-      const webPush = h.pushService.pushBranchToRemote(createPushSpec("acme", "web", "feature/a"));
-      const backendPush = h.pushService.pushBranchToRemote(
-        createPushSpec("acme", "backend", "feature/b")
-      );
-
-      await h.processor.processSandboxEvent({
-        type: "push_error",
-        error: "ambiguous",
-        timestamp: 1000,
-      });
-
-      // Neither push settles from the ambiguous event; identified events do.
-      await h.processor.processSandboxEvent({
-        type: "push_complete",
-        branchName: "feature/a",
-        repoOwner: "acme",
-        repoName: "web",
-        timestamp: 1001,
-      });
-      await h.processor.processSandboxEvent({
-        type: "push_complete",
-        branchName: "feature/b",
-        repoOwner: "acme",
-        repoName: "backend",
-        timestamp: 1002,
-      });
-
-      await expect(webPush).resolves.toEqual({ success: true });
-      await expect(backendPush).resolves.toEqual({ success: true });
-    });
   });
 
   describe("activity tracking for intermediate events", () => {

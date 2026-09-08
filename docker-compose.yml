@@ -1,0 +1,122 @@
+# The control plane without Cloudflare: the Node host, MinIO for media and
+# backups, and a Litestream sidecar replicating the global store. This is
+# the stack the AWS instance runs and the local stand-in for it. The web app
+# is not part of it (it stays on Vercel; run `next dev` locally).
+#
+#   cp .env.example .env   # then fill it in
+#   docker compose up --build
+#
+# Only the app reads .env; the sidecars get the few variables they need by
+# name. The app's port is published on APP_BIND_ADDRESS (loopback unless
+# .env says otherwise) and MinIO's ports on loopback only, so nothing here
+# listens on a public interface by default. See docs/CONTROL_PLANE_CONTAINER.md.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: packages/control-plane/Dockerfile
+    image: open-inspect-control-plane:local
+    env_file: .env
+    # Pinned here so a .env edit cannot move the host off its volume, its
+    # published port, or its drain budget; PORT in .env is the host-side port
+    # below. The stop grace period must outlast SHUTDOWN_TIMEOUT_MS plus the
+    # 5 s the host keeps before forcing its own exit, so both live here.
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8787"
+      DATA_DIR: /data
+      SHUTDOWN_TIMEOUT_MS: "30000"
+    stop_grace_period: 40s
+    ports:
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${PORT:-8787}:8787"
+    volumes:
+      - control-plane-data:/data
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set; generate one with openssl rand -hex 16}
+    # Loopback only: the app and the sidecar reach MinIO over the compose
+    # network, and the console is a local convenience.
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  # Creates the media and backup buckets once, then exits. It sees only the
+  # variables named here, never the app's secrets.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set; generate one with openssl rand -hex 16}
+      MEDIA_BUCKET: ${OBJECT_STORE_BUCKET:?OBJECT_STORE_BUCKET must name the media bucket}
+      BACKUP_BUCKET: ${LITESTREAM_BUCKET:?LITESTREAM_BUCKET must name the backup bucket}
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mc mb --ignore-existing "local/$$MEDIA_BUCKET" "local/$$BACKUP_BUCKET"
+
+  litestream:
+    image: litestream/litestream:0.3.13
+    # The app's user, so the shadow WAL it writes beside the database is
+    # owned like the database.
+    user: "1000:1000"
+    command: replicate -config /etc/litestream.yml
+    environment:
+      LITESTREAM_BUCKET: ${LITESTREAM_BUCKET:?LITESTREAM_BUCKET must name the backup bucket}
+      LITESTREAM_ENDPOINT: ${LITESTREAM_ENDPOINT:-}
+      LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:-}
+      LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:-}
+    volumes:
+      - control-plane-data:/data
+      - ./packages/control-plane/docker/litestream.yml:/etc/litestream.yml:ro
+    depends_on:
+      app:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Optional TLS termination: `docker compose --profile tls up` with
+  # CADDY_DOMAIN set and ports 80/443 reachable from the internet.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./packages/control-plane/docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  control-plane-data:
+  minio-data:
+  caddy-data:
+  caddy-config:

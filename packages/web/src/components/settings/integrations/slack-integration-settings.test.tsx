@@ -14,6 +14,10 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { SlackIntegrationSettings } from "./slack-integration-settings";
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+}));
+
 expect.extend(matchers);
 
 interface RepoSettingsEntry {
@@ -536,7 +540,9 @@ describe("SlackIntegrationSettings", () => {
       render(<SlackIntegrationSettings />);
 
       const section = routingSection();
-      expect(within(section).getByDisplayValue("frontend")).toBeInTheDocument();
+      const keyword = within(section).getByDisplayValue("frontend");
+      expect(keyword).toHaveClass("w-full", "sm:w-48");
+      expect(keyword.parentElement).toHaveClass("flex-col", "sm:flex-row");
       expect(within(section).getByText("acme/web")).toBeInTheDocument();
     });
 

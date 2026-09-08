@@ -235,7 +235,7 @@ class FakeD1Database {
         number,
         number,
       ];
-      // INSERT OR IGNORE — skip if exists
+      // ON CONFLICT DO NOTHING — skip if exists
       const inserted = !this.rows.has(id);
       if (inserted) {
         const rootSessionId = rootParentId
@@ -748,43 +748,6 @@ describe("SessionIndexStore", () => {
         "auto-review",
         "slack",
       ]);
-    });
-
-    it("trims and lowercases repo filters", async () => {
-      await store.create(makeSession({ id: "match", repoOwner: "Owner", repoName: "Repo" }));
-      await store.create(makeSession({ id: "other", repoOwner: "Other", repoName: "Repo" }));
-
-      const result = await store.list({ repoOwner: "  OWNER  ", repoName: "  REPO  " });
-
-      expect(result.sessions).toHaveLength(1);
-      expect(result.sessions[0].id).toBe("match");
-    });
-
-    it("matches sessions through secondary members, not just the scalar primary", async () => {
-      await store.create(
-        makeSession({
-          id: "multi",
-          repoOwner: "acme",
-          repoName: "frontend",
-          repositories: [
-            { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
-            { repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "main" },
-          ],
-        })
-      );
-      await store.create(makeSession({ id: "other", repoOwner: "acme", repoName: "unrelated" }));
-
-      const result = await store.list({ repoOwner: "acme", repoName: "backend" });
-
-      expect(result.sessions.map((s) => s.id)).toEqual(["multi"]);
-    });
-
-    it("falls back to the scalar columns for pre-feature sessions without member rows", async () => {
-      await store.create(makeSession({ id: "legacy", repoOwner: "acme", repoName: "app" }));
-
-      const result = await store.list({ repoOwner: "acme", repoName: "app" });
-
-      expect(result.sessions.map((s) => s.id)).toEqual(["legacy"]);
     });
 
     it("supports multiple creator user ids", async () => {

@@ -42,10 +42,12 @@ Base image definition with:
 
 ### Sandbox (`src/sandbox/`)
 
-- **manager.py**: Sandbox lifecycle (create, warm, snapshot)
-- **entrypoint.py**: Supervisor process (runs as PID 1)
-- **bridge.py**: WebSocket bridge to control plane
-- **types.py**: Event and configuration types
+- **manager.py**: Sandbox lifecycle (create, restore, snapshot)
+- **build_session.py**: Tagged build-sandbox lifecycle for prebuilt-image builds
+- **vcs_env.py**: Clone-credential env-var injection
+
+The in-sandbox runtime (entrypoint supervisor, control-plane bridge, shared types) lives in
+`packages/sandbox-runtime`.
 
 ### Auth (`sandbox_runtime.auth`)
 
@@ -74,7 +76,9 @@ snapshot, terminate, and delete provider operations.
 3. Create secrets via Modal CLI:
 
 ```bash
-# LLM API keys
+# Fleet-wide LLM API keys. No key is required — pass an empty value to have
+# sandboxes take their model credentials from the control plane's secret store
+# instead. The secret itself must exist; Modal cannot hold one with no keys.
 modal secret create llm-api-keys ANTHROPIC_API_KEY="sk-ant-..."
 
 # GitHub App credentials (for repo access)
@@ -138,7 +142,6 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 | `api-start-build-sandbox` | POST | Yes | Start the bound build runtime; results POST back to the control plane's `/image-builds/*` callbacks |
 | `api-snapshot-build-sandbox` | POST | Yes | Snapshot the exact tagged build sandbox |
 | `api-terminate-build-sandbox` | POST | Yes | Terminate the exact tagged build sandbox (idempotent when already absent) |
-| `api-delete-provider-image` | POST | Yes | Best-effort delete of a replaced provider image |
 
 ### Example: Create Sandbox
 
@@ -168,7 +171,7 @@ Set via Modal secrets:
 
 | Variable | Secret | Description |
 |----------|--------|-------------|
-| `ANTHROPIC_API_KEY` | `llm-api-keys` | Anthropic API key for Claude |
+| `ANTHROPIC_API_KEY` | `llm-api-keys` | Anthropic API key for Claude; may be empty when sessions use other providers |
 | `GITHUB_APP_ID` | `github-app` | GitHub App ID for repo access |
 | `GITHUB_APP_PRIVATE_KEY` | `github-app` | GitHub App private key (PKCS#8) |
 | `GITHUB_APP_INSTALLATION_ID` | `github-app` | GitHub App installation ID |

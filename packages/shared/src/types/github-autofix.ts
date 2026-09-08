@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { githubAutofixAttemptLimitSchema } from "./integrations";
 
 const repositorySchema = z.object({
   id: z.string().min(1),
@@ -66,7 +67,7 @@ const enqueueFeedbackCommandSchema = z.object({
     login: z.string().min(1),
   }),
   origin: githubAutofixOriginSchema,
-  attemptLimit: z.number().int().min(1).max(50),
+  attemptLimit: githubAutofixAttemptLimitSchema,
 });
 
 const lookupFeedbackCommandSchema = z.object({
@@ -90,7 +91,7 @@ export const githubAutofixSessionResponseSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("rejected"),
-    reason: z.enum(["session_closed", "queue_full", "attempt_limit"]),
+    reason: z.enum(["session_closed", "budget_exhausted", "queue_full", "attempt_limit"]),
   }),
   z.object({
     kind: z.literal("found"),

@@ -14,8 +14,14 @@ import { IMAGE_BUILDS_KEY, formatReadyDetails, parsePrimaryBuildSha } from "@/li
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { ImageBuildStatus } from "./image-build-status";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
+/**
+ * Displays repository image configuration and limits image mutations to authorized users.
+ */
 export function ImagesSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManage = hasPermission("repositories.images.manage");
   const repoImagesSupported = supportsRepoImages();
   const { repos, loading: reposLoading } = useRepos();
   const { data, error: feedError, isLoading: imagesLoading } = useImageBuilds();
@@ -157,7 +163,7 @@ export function ImagesSettings() {
                   <Switch
                     checked={isEnabled}
                     onCheckedChange={(checked) => handleToggle(repo.owner, repo.name, checked)}
-                    disabled={isToggling}
+                    disabled={!canManage || isToggling}
                     aria-label={`Toggle pre-built images for ${repo.owner}/${repo.name}`}
                   />
                   <span className="text-sm font-medium text-foreground truncate">
@@ -180,15 +186,17 @@ export function ImagesSettings() {
                       }
                     }
                   />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleTrigger(repo.owner, repo.name)}
-                    disabled={!isEnabled || isTriggering || image?.status === "building"}
-                    title="Rebuild image"
-                  >
-                    <RefreshIcon className={`w-4 h-4 ${isTriggering ? "animate-spin" : ""}`} />
-                  </Button>
+                  {canManage && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleTrigger(repo.owner, repo.name)}
+                      disabled={!isEnabled || isTriggering || image?.status === "building"}
+                      title="Rebuild image"
+                    >
+                      <RefreshIcon className={`w-4 h-4 ${isTriggering ? "animate-spin" : ""}`} />
+                    </Button>
+                  )}
                 </div>
               </div>
             );

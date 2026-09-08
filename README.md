@@ -29,8 +29,9 @@ The system uses a shared GitHub App installation for git operations (clone, fetc
 control plane mints short-lived installation tokens server-side and brokers them to sandboxes
 through the git credential helper on demand. This means:
 
-- **All users share the same GitHub App credentials** - The GitHub App must be installed on your
-  organization's repositories, and any user of the system can access any repo the App has access to
+- **Authorized users share the same GitHub App credentials** - The GitHub App must be installed on
+  your organization's repositories, and active users whose role permits repository use can access
+  any repo the App has access to
 - **No per-user repository access validation** - The system does not verify that a user has
   permission to access a specific repository before creating a session
 - **GitHub users' OAuth tokens are used for PR creation** - For GitHub logins, PRs are created using
@@ -69,6 +70,9 @@ built for internal use where all employees are trusted and have access to compan
    organization membership (`ALLOWED_GITHUB_ORGS`)
 4. **Use GitHub's repository selection** - When installing the App, select specific repositories
    rather than "All repositories"
+
+See [Authentication and Authorization](docs/AUTH.md) for workspace roles, session access, automation
+ownership, bots, and member suspension.
 
 ## Architecture
 

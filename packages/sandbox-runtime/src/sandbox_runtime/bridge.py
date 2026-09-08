@@ -682,6 +682,9 @@ class AgentBridge:
         author_data = cmd.get("author", {})
         start_time = time.time()
         outcome = "success"
+        message_cost_usd: float | None = None
+        had_error = False
+        error_message = None
 
         self.log.info(
             "prompt.start",
@@ -711,8 +714,6 @@ class AgentBridge:
                 )
             attachments = await self.attachment_processor.process(session_attachments)
 
-            had_error = False
-            error_message = None
             emitted_output = False
             async for event in self._stream_opencode_response_sse(
                 message_id, content, model, reasoning_effort, attachments
@@ -722,6 +723,8 @@ class AgentBridge:
                     error_message = event.get("error")
                 elif event.get("type") in ("token", "tool_call", "step_finish"):
                     emitted_output = True
+                if event.get("type") == "step_finish" and "messageCostUsd" in event:
+                    message_cost_usd = event["messageCostUsd"]
                 await self._send_event(event)
 
             if not had_error and not emitted_output:
@@ -737,26 +740,18 @@ class AgentBridge:
             if had_error:
                 outcome = "error"
 
-            await self._send_event(
-                {
-                    "type": "execution_complete",
-                    "messageId": message_id,
-                    "success": not had_error,
-                    **({"error": error_message} if error_message else {}),
-                }
-            )
-
+        except asyncio.CancelledError:
+            # This top-level command boundary settles cancellation just like
+            # other prompt failures, while the turn's cost is still available.
+            # The done callback remains a fallback for cancellation before start.
+            outcome = "cancelled"
+            had_error = True
+            error_message = "Task was cancelled"
         except Exception as e:
             outcome = "error"
+            had_error = True
+            error_message = str(e)
             self.log.error("prompt.error", exc=e, message_id=message_id)
-            await self._send_event(
-                {
-                    "type": "execution_complete",
-                    "messageId": message_id,
-                    "success": False,
-                    "error": str(e),
-                }
-            )
         finally:
             duration_ms = int((time.time() - start_time) * 1000)
             self.log.info(
@@ -767,6 +762,16 @@ class AgentBridge:
                 outcome=outcome,
                 duration_ms=duration_ms,
             )
+
+        await self._send_event(
+            {
+                "type": "execution_complete",
+                "messageId": message_id,
+                "success": not had_error,
+                **({"error": error_message} if error_message else {}),
+                **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
+            }
+        )
 
     async def _create_opencode_session(self) -> None:
         """Create a new OpenCode session."""

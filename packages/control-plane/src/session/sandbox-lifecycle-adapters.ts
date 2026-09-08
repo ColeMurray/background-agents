@@ -15,6 +15,7 @@ import type { UserEnvResolver } from "./user-env-resolver";
 import type { SessionRow } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
+import type { SessionWebSocket } from "../platform-ports";
 
 /** The session-context reads owned by the session repositories and resolver. */
 export class LifecycleSessionContext implements SessionContextReader {
@@ -55,7 +56,7 @@ type LifecycleSockets = Pick<
 export class LifecycleSocketAdapter implements WebSocketManager {
   constructor(private readonly sockets: LifecycleSockets) {}
 
-  getSandboxWebSocket(): WebSocket | null {
+  getSandboxWebSocket(): SessionWebSocket | null {
     return this.sockets.getSandboxSocket();
   }
 

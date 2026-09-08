@@ -16,18 +16,18 @@ const IMAGE_BUILD_FINALIZATION_LEASE_MS = 6 * 60 * 1000;
 
 /** Hard deadline for one provider snapshot or checkpoint attempt. */
 export const IMAGE_BUILD_PROVIDER_ATTEMPT_MS = 5 * 60 * 1000;
-export const IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS = 15;
-const LEASE_EXPIRY_HEADROOM_SECONDS = 5;
+export const IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS = 15_000;
+const LEASE_EXPIRY_HEADROOM_MS = 5_000;
 
-/** Queue disposition returned after processing one finalization command. */
+/** Job disposition returned after processing one finalization command. */
 export type ImageBuildFinalizationResult =
   | { type: "completed" }
-  | { type: "retry"; delaySeconds: number };
+  | { type: "retry"; delayMs: number };
 
 const completed = (): ImageBuildFinalizationResult => ({ type: "completed" });
 const retrySoon = (): ImageBuildFinalizationResult => ({
   type: "retry",
-  delaySeconds: IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS,
+  delayMs: IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS,
 });
 
 /**
@@ -87,12 +87,12 @@ export class ImageBuildFinalizer {
     if (!claimed) {
       const current = await this.store.finalization.getBuild(build.id);
       const delayMs = Math.max(
-        IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS * 1000,
+        IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS,
         (current?.finalization_lease_expires_at ?? now) - now
       );
       return {
         type: "retry",
-        delaySeconds: Math.ceil(delayMs / 1000) + LEASE_EXPIRY_HEADROOM_SECONDS,
+        delayMs: delayMs + LEASE_EXPIRY_HEADROOM_MS,
       };
     }
 
