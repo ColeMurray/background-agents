@@ -120,6 +120,10 @@ which tfvars field receives it, then hand off the local write. The R2 API token 
 credential and goes into `backend.tfvars` alongside the R2 `endpoints` value; the other provider
 credentials go into `terraform.tfvars`.
 
+Do not run `terraform init` until `endpoints.s3` is exactly the direct HTTPS R2 endpoint for the
+confirmed account: `https://<CLOUDFLARE_ACCOUNT_ID>.r2.cloudflarestorage.com`, with no userinfo,
+path, query, fragment, or redirect. Reject HTTP and any endpoint that depends on a redirect.
+
 Two parts of this phase are commands rather than handoffs:
 
 ```bash
@@ -283,8 +287,11 @@ intended unsuspended user is already Owner. The dependency-free `/health` respon
 reports service availability:
 
 ```bash
-curl --fail-with-body --silent --show-error \
-  "$(terraform output -raw control_plane_url)/health" | jq -e '.status == "healthy"'
+health_response="$(
+  curl --fail-with-body --silent --show-error \
+    "$(terraform output -raw control_plane_url)/health"
+)" &&
+  jq -e '.status == "healthy"' <<<"$health_response"
 ```
 
 Present a short summary table of the deployed URLs, then hand off the end-to-end test to the user:

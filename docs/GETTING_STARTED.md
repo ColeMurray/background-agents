@@ -503,6 +503,11 @@ endpoints = {
 }
 ```
 
+Before running `terraform init`, verify that `endpoints.s3` is exactly the direct HTTPS R2 endpoint
+for the confirmed account: `https://<CLOUDFLARE_ACCOUNT_ID>.r2.cloudflarestorage.com`, with no
+userinfo, path, query, fragment, or redirect. Reject HTTP and any endpoint that depends on a
+redirect.
+
 ### Configure `terraform.tfvars`
 
 Fill in all the values you gathered. Here's the structure:
@@ -774,9 +779,11 @@ target's assignment. A no-op writes nothing.
    that the control plane is healthy:
 
 ```bash
-curl --fail-with-body --silent --show-error \
-  "$(terraform -chdir=terraform/environments/production output -raw control_plane_url)/health" \
-  | jq -e '.status == "healthy"'
+health_response="$(
+  curl --fail-with-body --silent --show-error \
+    "$(terraform -chdir=terraform/environments/production output -raw control_plane_url)/health"
+)" &&
+  jq -e '.status == "healthy"' <<<"$health_response"
 ```
 
 ---
