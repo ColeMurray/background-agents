@@ -194,6 +194,10 @@
       "import": "./dist/types/analytics.js",
       "types": "./dist/types/analytics.d.ts"
     },
+    "./types/client-api": {
+      "import": "./dist/types/client-api.js",
+      "types": "./dist/types/client-api.d.ts"
+    },
     "./types/cli-auth": {
       "import": "./dist/types/cli-auth.js",
       "types": "./dist/types/cli-auth.d.ts"

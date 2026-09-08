@@ -10,6 +10,7 @@ import {
 } from "@open-inspect/shared/types/session-attachments";
 import { applyIdentityEnforcement, mayAttachCallbackContext } from "../auth/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
+import { adaptExternalRuntimeFailure } from "../external-api/runtime-response";
 import { SessionIndexStore } from "../db/session-index";
 import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { UserStore } from "../db/user-store";
@@ -34,6 +35,36 @@ import {
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
+
+export async function dispatchUserSessionPrompt(
+  ctx: SessionRouteContext,
+  sessionId: string,
+  input: {
+    content: string;
+    attachments?: SessionAttachmentReference[];
+    model?: string;
+    reasoningEffort?: string;
+    clientRequestId: string;
+  },
+  preAdmittedModel?: { model: string; reasoningEffort?: string }
+): Promise<Response> {
+  return dispatchSessionPrompt(
+    ctx,
+    sessionId,
+    {
+      content: input.content,
+      attachments: input.attachments,
+      authorId: ctx.principal?.kind === "user" ? ctx.principal.userId : "anonymous",
+      canonicalUserId: ctx.principal?.kind === "user" ? ctx.principal.userId : undefined,
+      source: "extension",
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      clientRequestId: input.clientRequestId,
+    },
+    (response) => adaptExternalRuntimeFailure(response) ?? response,
+    preAdmittedModel
+  );
+}
 
 interface PromptModelAdmissionInput {
   sessionId?: string;

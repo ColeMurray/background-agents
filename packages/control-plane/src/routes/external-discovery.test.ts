@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { externalDiscoveryRoutes } from "./external-discovery";
 
 describe("external discovery route policy", () => {
-  it("defines only the six V1 read routes with external-user authentication", () => {
+  it("defines only the six V1 read routes with human-user authentication", () => {
     expect(
       externalDiscoveryRoutes.map((route) => ({
         method: route.method,
@@ -15,42 +15,42 @@ describe("external discovery route policy", () => {
       {
         method: "GET",
         pattern: "^\\/external\\/v1\\/repositories$",
-        authentication: "external-user",
+        authentication: "user",
         scm: "all",
         cacheControl: "private, no-store",
       },
       {
         method: "GET",
         pattern: "^\\/external\\/v1\\/environments$",
-        authentication: "external-user",
+        authentication: "user",
         scm: "all",
         cacheControl: "private, no-store",
       },
       {
         method: "GET",
         pattern: "^\\/external\\/v1\\/environments\\/(?<id>[^/]+)$",
-        authentication: "external-user",
+        authentication: "user",
         scm: "all",
         cacheControl: "private, no-store",
       },
       {
         method: "GET",
         pattern: "^\\/external\\/v1\\/models$",
-        authentication: "external-user",
+        authentication: "user",
         scm: "all",
         cacheControl: "private, no-store",
       },
       {
         method: "GET",
         pattern: "^\\/external\\/v1\\/skills$",
-        authentication: "external-user",
+        authentication: "user",
         scm: "all",
         cacheControl: "private, no-store",
       },
       {
         method: "GET",
         pattern: "^\\/external\\/v1\\/provider-accounts$",
-        authentication: "external-user",
+        authentication: "user",
         scm: "all",
         cacheControl: "private, no-store",
       },

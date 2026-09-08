@@ -3,8 +3,8 @@
  * typed `Principal` before any handler runs.
  *
  * A `sig1` service signature is verified against that service's own secret.
- * Browser users require a Better Auth session. Explicit external-user routes
- * instead accept a revocable CLI bearer. Anything else is not recognized.
+ * Browser users require a Better Auth session over the signed web channel.
+ * Explicit client resource routes also accept a revocable bearer credential.
  *
  * Sandbox tokens stay router-verified (they need the session id from the
  * path and a DO round-trip), so they are not dispatched here.
@@ -12,11 +12,11 @@
 
 import { SERVICE_SIGNATURE_HEADER } from "@open-inspect/shared/service-auth";
 import {
-  CLI_API_VERSION_HEADER,
-  CLI_CLIENT_SURFACE_HEADER,
-  CLI_CLIENT_VERSION_HEADER,
-  CLI_EXTERNAL_API_VERSION,
-} from "@open-inspect/shared/types/cli-auth";
+  CLIENT_API_VERSION,
+  CLIENT_API_VERSION_HEADER,
+  CLIENT_VERSION_HEADER,
+  CLIENT_SURFACE_HEADER,
+} from "@open-inspect/shared/types/client-api";
 import { authenticateSession, SessionIntegrityError } from "./user/session-authenticator";
 import { isAuthError, type AuthResult } from "./result";
 import { authenticateServiceRequest } from "./service/request-authenticator";
@@ -36,8 +36,8 @@ export interface AuthenticationRequirement {
    * as a user through a Better Auth session.
    */
   readonly webService?: "service" | "user";
-  /** Direct CLI bearer authentication is enabled only for explicit external routes. */
-  readonly userCredential?: "cli";
+  /** Direct bearer authentication is enabled only on explicitly opted-in routes. */
+  readonly userCredential?: "cli" | "browser-or-cli";
 }
 
 export async function authenticate(
@@ -47,17 +47,25 @@ export async function authenticate(
   requirement: AuthenticationRequirement = {}
 ): Promise<AuthResult> {
   const signatureHeader = request.headers.get(SERVICE_SIGNATURE_HEADER);
-  if (requirement.userCredential === "cli") {
+  if (
+    requirement.userCredential === "cli" ||
+    (requirement.userCredential === "browser-or-cli" && signatureHeader === null)
+  ) {
     if (signatureHeader !== null) {
       return { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
     }
-    const apiVersion = request.headers.get(CLI_API_VERSION_HEADER);
-    const clientVersion = request.headers.get(CLI_CLIENT_VERSION_HEADER);
-    const clientSurface = request.headers.get(CLI_CLIENT_SURFACE_HEADER);
-    if (apiVersion !== CLI_EXTERNAL_API_VERSION) {
+    const apiVersion = request.headers.get(CLIENT_API_VERSION_HEADER);
+    const clientVersion = request.headers.get(CLIENT_VERSION_HEADER);
+    const clientSurface = request.headers.get(CLIENT_SURFACE_HEADER);
+    if (apiVersion !== CLIENT_API_VERSION) {
       return { reason: "Incompatible client version", status: 426, failedScheme: "cli-bearer" };
     }
-    if (!clientVersion?.trim() || !["cli", "mcp"].includes(clientSurface ?? "")) {
+    // Surface is bounded diagnostic metadata, not a grant or a client allowlist.
+    if (
+      !clientVersion?.trim() ||
+      clientVersion.length > 100 ||
+      !/^[a-z][a-z0-9-]{0,31}$/.test(clientSurface ?? "")
+    ) {
       return { reason: "Invalid client metadata", status: 426, failedScheme: "cli-bearer" };
     }
     try {

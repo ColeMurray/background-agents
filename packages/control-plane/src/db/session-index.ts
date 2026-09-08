@@ -101,6 +101,10 @@ export interface SessionEntry {
   skillManifestSourceSessionId?: string;
   /** Complete immutable model-provider authentication snapshot. */
   providerAuth?: SessionModelProviderAuthInput[];
+}
+
+/** Internal creation state; never project it into resource or list responses. */
+export interface SessionCreationReservation extends SessionEntry {
   /** Canonical external create request reserved atomically with the session row. */
   externalRequestFingerprint?: string | null;
   /** Resolved external bootstrap state reserved atomically for deterministic retries. */
@@ -185,8 +189,6 @@ function toEntry(row: SessionRow): SessionEntry {
     messageCount: row.message_count,
     prCount: row.pr_count,
     environmentId: row.environment_id,
-    externalRequestFingerprint: row.external_request_fingerprint,
-    externalBootstrapSnapshot: row.external_bootstrap_snapshot,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -252,7 +254,7 @@ export class SessionIndexStore {
     return result !== null;
   }
 
-  async create(session: SessionEntry): Promise<void> {
+  async create(session: SessionCreationReservation): Promise<void> {
     const repository = normalizeSessionRepositoryFields(session);
 
     if (session.skillManifest && session.skillManifestSourceSessionId) {
@@ -442,6 +444,21 @@ export class SessionIndexStore {
       .first<SessionRow>();
 
     return result ? toEntry(result) : null;
+  }
+
+  /** Only creation retry recovery may read credential-bearing bootstrap state. */
+  async getCreationReservation(id: string): Promise<SessionCreationReservation | null> {
+    const result = await this.db
+      .prepare("SELECT * FROM sessions WHERE id = ?")
+      .bind(id)
+      .first<SessionRow>();
+    return result
+      ? {
+          ...toEntry(result),
+          externalRequestFingerprint: result.external_request_fingerprint,
+          externalBootstrapSnapshot: result.external_bootstrap_snapshot,
+        }
+      : null;
   }
 
   private async getProviderAuth(sessionId: string): Promise<SessionModelProviderAuthInput[]> {

@@ -4,6 +4,11 @@ The `oi` CLI and bundled local stdio MCP server provide the full V1 automation s
 targeted session creation, prompts and image attachments, event following, settlement waits, and
 read-only session outputs.
 
+These operations use the shared first-party `/external/v1` resource API, also available to the web
+BFF and future mobile/desktop clients. Device login is CLI-specific; session semantics are not.
+Response readers tolerate additive fields so installed clients need not upgrade with every server
+release. See [ADR 0004](../../docs/adr/0004-shared-first-party-client-api.md).
+
 Context metadata is stored separately from credentials. Immutable credential references make context
 rotation atomic: readers observe either the complete old URL/credential pair or the complete new
 pair. The CLI uses `@napi-rs/keyring` for macOS Keychain, Linux Secret Service, and Windows

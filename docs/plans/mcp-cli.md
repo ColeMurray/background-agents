@@ -226,10 +226,14 @@ to detect arbitrary secrets embedded in that content or in unstructured third-pa
 
 ### Surface Boundary
 
-V1's supported products are the CLI and local MCP server. They communicate with a versioned external
-control-plane contract. Direct use of the underlying HTTP contract by third-party applications is
-not a separately supported V1 product surface, although requests and responses remain structured and
-versioned so the first-party clients can evolve safely.
+The CLI and local MCP server are the first new consumers of a shared, versioned first-party
+control-plane resource contract. It also accepts authenticated web BFF requests and is the target
+contract for mobile and desktop clients, not a separate API per client. Legacy web routes migrate
+incrementally; human session creation already delegates to the same operation. Third-party HTTP use
+is not a separately supported V1 product. See
+[ADR 0004](../adr/0004-shared-first-party-client-api.md) for authentication boundaries,
+compatibility, the web migration, and the distinction between event consumption and UI
+synchronization.
 
 ## Authentication Experience
 
@@ -314,8 +318,8 @@ does not add a parallel external-client permission or per-credential scopes. It 
 code-owned permission registry, suspension state, route policy metadata, deny-by-default behavior,
 and user authorization service as web requests.
 
-- Every external request resolves to the canonical human principal represented by the CLI
-  credential.
+- Every resource request resolves to the canonical human principal represented by a revocable bearer
+  credential or the existing browser-session-over-signed-BFF authentication.
 - CLI credentials authenticate directly as `principal.kind: "user"`; they are not a first-party
   service and do not use bot/service capability ceilings. The explicit external V1 route allowlist
   is the product capability ceiling.
@@ -841,10 +845,11 @@ unnecessary local-only assumptions in shared session semantics without freezing 
 
 ## External Control-Plane Contract
 
-The first-party CLI and MCP server require a versioned server contract that covers authentication,
-discovery, sessions, prompts, events, and read-only outputs. The contract may adapt existing
-internal routes, but external callers must not be required to produce internal service signatures or
-forward browser cookies.
+First-party clients share a versioned server contract covering discovery, sessions, prompts, events,
+and read-only outputs. Login flows can differ by client. Native callers must not be required to
+produce internal service signatures or forward browser cookies; the web retains its authenticated
+BFF. Shared resource routes accept both verified credential mechanisms without accepting service
+actors or sandbox credentials.
 
 External routes are a new SCM-neutral route family, not aliases of current GitHub-only route
 metadata. Repository-less operations work independently of SCM. Repository/environment operations
@@ -854,7 +859,8 @@ Bitbucket remains unsupported until the product implements it.
 ### Contract Requirements
 
 - External routes are explicitly versioned.
-- Authentication uses the issued CLI credential or its short-lived derivative.
+- Resource authentication uses the issued bearer credential or the verified web BFF browser session.
+  Credential-management routes remain credential-specific.
 - Request identity comes from the verified principal, never caller-supplied user fields.
 - Existing internal callback context, service-only fields, sandbox credentials, and SCM credential
   brokerage remain unavailable.

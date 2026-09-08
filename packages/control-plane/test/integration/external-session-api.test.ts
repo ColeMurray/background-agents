@@ -7,7 +7,7 @@ import { EnvironmentSecretsStore } from "../../src/db/environment-secrets";
 import { RepoSecretsStore } from "../../src/db/repo-secrets";
 import { cleanD1Tables } from "./cleanup";
 import { SessionIndexStore } from "../../src/db/session-index";
-import { deriveExternalSessionId } from "../../src/routes/external-sessions";
+import { deriveUserSessionId } from "../../src/routes/session-create-user";
 import { encodeEventChangeCursor, parseEventChangeCursor } from "../../src/session/event-stream";
 import {
   deleteEvent,
@@ -63,6 +63,87 @@ describe("external v1 session API", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
 
+  it("shares human creation and reads across browser, mobile, desktop, and the legacy web adapter", async () => {
+    const input = {
+      title: "Shared client session",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "high",
+      idempotencyKey: "shared-create",
+    };
+    const created = await serviceFetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    expect(created.status).toBe(201);
+    const { sessionId } = await created.json<{ sessionId: string }>();
+    const session = await new SessionIndexStore(env.DB).get(sessionId);
+    const credential = `oi_cli_${"a".repeat(64)}`;
+    await env.DB.prepare(
+      `INSERT INTO cli_credentials (id, token_hash, user_id, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+      .bind(
+        "native-credential",
+        await hashToken(credential),
+        session!.userId,
+        Date.now(),
+        Date.now() + 60_000
+      )
+      .run();
+    const headers = {
+      Authorization: `Bearer ${credential}`,
+      "Content-Type": "application/json",
+      "X-Open-Inspect-API-Version": "1",
+      "X-Open-Inspect-Client-Version": "test",
+      "X-Open-Inspect-Client-Surface": "mobile",
+    };
+    for (const surface of ["mobile", "desktop"]) {
+      const retried = await SELF.fetch(API, {
+        method: "POST",
+        headers: { ...headers, "X-Open-Inspect-Client-Surface": surface },
+        body: JSON.stringify(input),
+      });
+      expect(retried.status).toBe(200);
+      await expect(retried.json()).resolves.toMatchObject({ sessionId });
+    }
+    const { idempotencyKey, ...legacyInput } = input;
+    const legacy = await serviceFetch("https://cp.test/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(legacyInput),
+    });
+    expect(legacy.status).toBe(200);
+    await expect(legacy.json()).resolves.toEqual({ sessionId, status: "created" });
+    const legacyList = await serviceFetch("https://cp.test/sessions");
+    expect(legacyList.status).toBe(200);
+    const legacyListBody = await legacyList.json<{ sessions: Array<Record<string, unknown>> }>();
+    expect(legacyListBody.sessions).toHaveLength(1);
+    expect(legacyListBody.sessions[0]).not.toHaveProperty("externalRequestFingerprint");
+    expect(legacyListBody.sessions[0]).not.toHaveProperty("externalBootstrapSnapshot");
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first()).toEqual({
+      count: 1,
+    });
+
+    const browserList = await serviceFetch(`${API}?createdBy=me`);
+    const nativeList = await SELF.fetch(`${API}?createdBy=me`, { headers });
+    expect(browserList.status).toBe(200);
+    expect(nativeList.status).toBe(200);
+    const browserBody = await browserList.json<{ sessions: Array<{ id: string }> }>();
+    expect(browserBody.sessions.map(({ id }) => id)).toEqual([sessionId]);
+    await expect(nativeList.json()).resolves.toEqual(browserBody);
+
+    // Resource access does not grant access to another credential's lifecycle.
+    expect((await serviceFetch("https://cp.test/external/v1/cli/me")).status).toBe(401);
+    expect((await SELF.fetch("https://cp.test/sessions", { headers })).status).toBe(401);
+
+    await env.DB.prepare("UPDATE users SET suspended_at = ? WHERE id = ?")
+      .bind(Date.now(), session!.userId)
+      .run();
+    expect((await serviceFetch(`${API}/${sessionId}`)).status).toBe(403);
+    expect((await SELF.fetch(`${API}/${sessionId}`, { headers })).status).toBe(403);
+  });
+
   it("rejects unsupported fields and invalid explicit model settings before side effects", async () => {
     const headers = await externalHeaders();
     for (const body of [
@@ -92,6 +173,17 @@ describe("external v1 session API", () => {
     await expect(deniedCreate.json()).resolves.toMatchObject({
       error: 'Model "openai/gpt-5.6-sol" is not enabled',
     });
+    for (const path of [API, "https://cp.test/sessions"]) {
+      const browserCreate = await serviceFetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: createBody(),
+      });
+      expect(browserCreate.status).toBe(400);
+      await expect(browserCreate.json()).resolves.toMatchObject({
+        error: 'Model "openai/gpt-5.6-sol" is not enabled',
+      });
+    }
     expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first()).toEqual({
       count: 0,
     });
@@ -306,11 +398,7 @@ describe("external v1 session API", () => {
     const fingerprint = await hashToken(
       JSON.stringify(externalCreateSessionRequestSchema.parse(JSON.parse(body)))
     );
-    const sessionId = await deriveExternalSessionId(
-      USER_ID,
-      idempotencyKey,
-      externalSessionIdSecret()
-    );
+    const sessionId = await deriveUserSessionId(USER_ID, idempotencyKey, externalSessionIdSecret());
     const now = Date.now();
     const originalRepositories = [
       {
@@ -456,11 +544,7 @@ describe("external v1 session API", () => {
     const fingerprint = await hashToken(
       JSON.stringify(externalCreateSessionRequestSchema.parse(JSON.parse(body)))
     );
-    const sessionId = await deriveExternalSessionId(
-      USER_ID,
-      idempotencyKey,
-      externalSessionIdSecret()
-    );
+    const sessionId = await deriveUserSessionId(USER_ID, idempotencyKey, externalSessionIdSecret());
     const now = Date.now();
     await new SessionIndexStore(env.DB).create({
       id: sessionId,
@@ -495,11 +579,9 @@ describe("external v1 session API", () => {
 
   it("derives IDs only from the dedicated external-session secret", async () => {
     const key = `secret-separation-${crypto.randomUUID()}`;
-    const expected = await deriveExternalSessionId(USER_ID, key, externalSessionIdSecret());
-    expect(await deriveExternalSessionId(USER_ID, key, externalSessionIdSecret())).toBe(expected);
-    expect(await deriveExternalSessionId(USER_ID, key, env.TOKEN_ENCRYPTION_KEY)).not.toBe(
-      expected
-    );
+    const expected = await deriveUserSessionId(USER_ID, key, externalSessionIdSecret());
+    expect(await deriveUserSessionId(USER_ID, key, externalSessionIdSecret())).toBe(expected);
+    expect(await deriveUserSessionId(USER_ID, key, env.TOKEN_ENCRYPTION_KEY)).not.toBe(expected);
   });
 
   it("converges concurrent identical creates onto one bootstrap aggregate", async () => {
@@ -723,9 +805,9 @@ describe("external v1 session API", () => {
     await expect(response.json()).resolves.toMatchObject({ code: "active_user_required" });
   });
 
-  it("rejects compound service:web and browser credentials on CLI-only routes", async () => {
-    const response = await serviceFetch(API);
-    expect(response.status).toBe(401);
+  it("rejects service principals on shared human resources", async () => {
+    const response = await serviceFetch(API, { service: "slack-bot" });
+    expect(response.status).toBe(403);
   });
 
   it("uses Durable Object idempotency for strict text follow-ups", async () => {

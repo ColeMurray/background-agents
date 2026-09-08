@@ -1,5 +1,5 @@
+import { CLIENT_API_VERSION } from "@open-inspect/shared/types/client-api";
 import {
-  CLI_EXTERNAL_API_VERSION,
   CLI_EXTERNAL_API_V1_PATH,
   approveCliDeviceAuthorizationRequestSchema,
   cliDeviceAuthorizationExchangeRequestSchema,
@@ -20,7 +20,7 @@ import type { Env } from "../types";
 import {
   ACTIVE_SELF,
   NO_AUTHORIZATION,
-  SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+  SCM_AGNOSTIC_CLI_USER_ROUTE,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   defineRoutes,
   error,
@@ -273,7 +273,7 @@ async function getMe(
     installation: { name: env.DEPLOYMENT_NAME },
     user: { id: user.id, displayName: user.displayName, email: user.email },
     credential: { id: authentication.credentialId, expiresAt: authentication.expiresAt },
-    serverVersion: CLI_EXTERNAL_API_VERSION,
+    serverVersion: CLIENT_API_VERSION,
   });
 }
 
@@ -340,7 +340,7 @@ export const cliAuthRoutes: Route[] = [
       handler: approveAuthorization,
     },
   ]),
-  ...defineRoutes(SCM_AGNOSTIC_EXTERNAL_USER_ROUTE, [
+  ...defineRoutes(SCM_AGNOSTIC_CLI_USER_ROUTE, [
     {
       method: "GET",
       pattern: new RegExp(`^${CLI_EXTERNAL_API_V1_PATH}/me$`),

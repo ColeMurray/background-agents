@@ -1,11 +1,13 @@
 import {
+  CLIENT_API_VERSION,
+  CLIENT_API_VERSION_HEADER,
+  CLIENT_VERSION_HEADER,
+  CLIENT_SURFACE_HEADER,
+} from "@open-inspect/shared/types/client-api";
+import {
   cliDeviceAuthorizationExchangeResponseSchema,
   cliMeResponseSchema,
-  CLI_API_VERSION_HEADER,
-  CLI_CLIENT_SURFACE_HEADER,
-  CLI_CLIENT_VERSION_HEADER,
   CLI_EXTERNAL_API_V1_PATH,
-  CLI_EXTERNAL_API_VERSION,
   revokeCliDeviceAuthorizationRequestSchema,
   startCliDeviceAuthorizationResponseSchema,
   type CliDeviceAuthorizationExchangeResponse,
@@ -71,7 +73,7 @@ export interface ApiClientOptions {
   baseUrl: string;
   authorize?: () => Promise<string | undefined>;
   fetch?: typeof globalThis.fetch;
-  clientSurface?: "cli" | "mcp";
+  clientSurface?: string;
 }
 
 /** Typed external API transport shared by CLI commands and MCP operations. */
@@ -79,7 +81,7 @@ export class ApiClient {
   private readonly baseUrl: string;
   private readonly authorize: () => Promise<string | undefined>;
   private readonly fetch: typeof globalThis.fetch;
-  private readonly clientSurface: "cli" | "mcp";
+  private readonly clientSurface: string;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -398,9 +400,9 @@ export class ApiClient {
   ): Promise<unknown> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
-    headers.set(CLI_API_VERSION_HEADER, CLI_EXTERNAL_API_VERSION);
-    headers.set(CLI_CLIENT_VERSION_HEADER, "0.1.0");
-    headers.set(CLI_CLIENT_SURFACE_HEADER, this.clientSurface);
+    headers.set(CLIENT_API_VERSION_HEADER, CLIENT_API_VERSION);
+    headers.set(CLIENT_VERSION_HEADER, "0.1.0");
+    headers.set(CLIENT_SURFACE_HEADER, this.clientSurface);
     if (init.body !== undefined && !(init.body instanceof FormData)) {
       headers.set("Content-Type", "application/json");
     }
@@ -432,9 +434,9 @@ export class ApiClient {
     try {
       const headers = new Headers(init.headers);
       headers.set("Authorization", `Bearer ${credential}`);
-      headers.set(CLI_API_VERSION_HEADER, CLI_EXTERNAL_API_VERSION);
-      headers.set(CLI_CLIENT_VERSION_HEADER, "0.1.0");
-      headers.set(CLI_CLIENT_SURFACE_HEADER, this.clientSurface);
+      headers.set(CLIENT_API_VERSION_HEADER, CLIENT_API_VERSION);
+      headers.set(CLIENT_VERSION_HEADER, "0.1.0");
+      headers.set(CLIENT_SURFACE_HEADER, this.clientSurface);
       response = await this.fetch(`${this.baseUrl}${path}`, { ...init, headers });
     } catch (cause) {
       throw new CliError("transport", "API request failed", undefined, undefined, { cause });

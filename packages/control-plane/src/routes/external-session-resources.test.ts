@@ -133,7 +133,7 @@ describe("external session resource routes", () => {
   it("exports the V1 read routes and scoped mutation routes", () => {
     expect(externalSessionResourceRoutes).toHaveLength(12);
     for (const candidate of externalSessionResourceRoutes) {
-      expect(candidate.authentication).toEqual({ kind: "external-user" });
+      expect(candidate.authentication).toEqual({ kind: "user", credential: "browser-or-cli" });
       expect(candidate.supportedScmProviders).toBe("all");
       expect(candidate.authorization).toMatchObject({
         kind: "active-user",

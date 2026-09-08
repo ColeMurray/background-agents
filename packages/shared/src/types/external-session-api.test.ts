@@ -137,12 +137,13 @@ describe("external session API schemas", () => {
       externalEventPageSchema.safeParse({ changes: [change], checkpoint: 1, hasMore: true }).success
     ).toBe(false);
     expect(
-      externalEventPageSchema.safeParse({
+      externalEventPageSchema.parse({
         changes: [{ ...change, internal: true }],
         checkpoint: 1,
         hasMore: false,
-      }).success
-    ).toBe(false);
+        futureMetadata: {},
+      })
+    ).toEqual({ changes: [change], checkpoint: 1, hasMore: false });
     expect(
       externalEventPageSchema.safeParse({
         changes: [{ kind: "delete", revision: 2, eventId: "event-1" }],

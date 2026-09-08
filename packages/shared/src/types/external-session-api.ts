@@ -2,7 +2,6 @@ import { z } from "zod";
 import { clientRequestIdSchema, promptContentSchema } from "./prompts";
 import { modelProviderSelectionsSchema } from "./provider-accounts";
 import { sessionRepositoriesInputSchema } from "./repositories";
-import { eventTypeSchema } from "./sandbox-events";
 import { sessionAttachmentReferencesSchema } from "./session-attachments";
 import { sessionSkillSelectionSchema } from "./skills";
 import { sessionStatusSchema } from "./sessions";
@@ -101,7 +100,7 @@ export const externalFollowUpRequestSchema = z
 
 export type ExternalFollowUpRequest = z.infer<typeof externalFollowUpRequestSchema>;
 
-export const externalSessionSchema = z.strictObject({
+export const externalSessionSchema = z.object({
   id: z.string(),
   title: z.string().nullable(),
   model: z.string(),
@@ -111,7 +110,7 @@ export const externalSessionSchema = z.strictObject({
   repoName: z.string().nullable().optional(),
   repositories: z
     .array(
-      z.strictObject({
+      z.object({
         repoOwner: z.string(),
         repoName: z.string(),
         repoId: z.number().nullable(),
@@ -126,7 +125,7 @@ export const externalSessionSchema = z.strictObject({
   url: z.string().optional(),
   sandboxStatus: z.string().nullable().optional(),
   resources: z
-    .strictObject({
+    .object({
       messages: z.string(),
       events: z.string(),
       artifacts: z.string(),
@@ -142,12 +141,12 @@ export const externalSessionSchema = z.strictObject({
 export type ExternalSession = z.infer<typeof externalSessionSchema>;
 
 export const externalCreateSessionResponseSchema = z.discriminatedUnion("status", [
-  z.strictObject({
+  z.object({
     sessionId: requiredTextSchema,
     status: z.literal("created"),
     url: z.string().optional(),
   }),
-  z.strictObject({
+  z.object({
     sessionId: requiredTextSchema,
     messageId: requiredTextSchema,
     status: z.literal("queued"),
@@ -157,13 +156,13 @@ export const externalCreateSessionResponseSchema = z.discriminatedUnion("status"
 
 export type ExternalCreateSessionResponse = z.infer<typeof externalCreateSessionResponseSchema>;
 
-export const externalFollowUpResponseSchema = z.strictObject({
+export const externalFollowUpResponseSchema = z.object({
   messageId: requiredTextSchema,
   status: z.literal("queued"),
 });
 
 export const externalSessionListResponseSchema = z
-  .strictObject({
+  .object({
     sessions: z.array(externalSessionSchema),
     hasMore: z.boolean(),
     continuationOffset: z.number().int().nonnegative().optional(),
@@ -173,7 +172,7 @@ export const externalSessionListResponseSchema = z
     path: ["continuationOffset"],
   });
 
-export const externalStopSessionResponseSchema = z.strictObject({
+export const externalStopSessionResponseSchema = z.object({
   status: z.literal("stopping"),
 });
 
@@ -196,9 +195,9 @@ const externalJsonValueSchema: z.ZodType<ExternalJsonValue> = z.lazy(() =>
   ])
 );
 
-export const externalEventSchema = z.strictObject({
+export const externalEventSchema = z.object({
   id: requiredTextSchema,
-  type: eventTypeSchema,
+  type: requiredTextSchema,
   messageId: z.string().nullable(),
   createdAt: z.number(),
   data: z.record(z.string(), externalJsonValueSchema),
@@ -207,12 +206,12 @@ export const externalEventSchema = z.strictObject({
 export type ExternalEvent = z.infer<typeof externalEventSchema>;
 
 export const externalEventChangeSchema = z.discriminatedUnion("kind", [
-  z.strictObject({
+  z.object({
     kind: z.literal("upsert"),
     revision: externalEventCheckpointSchema,
     event: externalEventSchema,
   }),
-  z.strictObject({
+  z.object({
     kind: z.literal("delete"),
     revision: externalEventCheckpointSchema,
     eventId: requiredTextSchema,
@@ -223,7 +222,7 @@ export type ExternalEventChange = z.infer<typeof externalEventChangeSchema>;
 
 /** Event changes are retained for 24 hours or 50,000 revisions, whichever is reached first. */
 export const externalEventPageSchema = z
-  .strictObject({
+  .object({
     changes: z.array(externalEventChangeSchema),
     checkpoint: externalEventCheckpointSchema,
     cursor: requiredTextSchema.optional(),
@@ -237,7 +236,7 @@ export const externalEventPageSchema = z
 export type ExternalEventPage = z.infer<typeof externalEventPageSchema>;
 
 export const externalApiErrorResponseSchema = z
-  .strictObject({
+  .object({
     error: requiredTextSchema,
     code: requiredTextSchema.optional(),
     message: requiredTextSchema.optional(),
@@ -250,13 +249,13 @@ export const externalApiErrorResponseSchema = z
     path: ["message"],
   });
 
-export const externalSessionWaitResponseSchema = z.strictObject({
+export const externalSessionWaitResponseSchema = z.object({
   sessionId: requiredTextSchema,
   status: sessionStatusSchema,
   settled: z.boolean(),
   timedOut: z.boolean().optional(),
   latestAssistantMessage: z
-    .strictObject({ id: z.string(), content: z.string(), completedAt: z.number().nullable() })
+    .object({ id: z.string(), content: z.string(), completedAt: z.number().nullable() })
     .nullable()
     .optional(),
   artifactIds: z.array(z.string()).optional(),

@@ -31,7 +31,7 @@ import { sessionRoute, type SessionRouteContext, type SessionRouteHandler } from
 import { handleAttachmentGet, handleAttachmentPost } from "./session-attachments";
 import { handleMediaGet } from "./session-media-stream";
 import { dispatchSessionPrompt } from "./session-prompt";
-import { enforceExternalRateLimit } from "./external-sessions";
+import { enforceExternalRateLimit } from "../external-api/rate-limit";
 
 const EXTERNAL_SESSION_PATH = "/external/v1/sessions/:id";
 const DEFAULT_MESSAGE_LIMIT = 50;
@@ -545,7 +545,7 @@ async function promptChild(
   match: RegExpMatchArray,
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const rateLimit = await enforceExternalRateLimit(request, ctx, "mutation");
+  const rateLimit = await enforceExternalRateLimit(ctx, "mutation");
   if (rateLimit) return rateLimit;
   const parentId = routeId(match, "id");
   const childId = routeId(match, "childId");
@@ -613,7 +613,7 @@ externalSessionResourceRoutes.push(
       authorization: requirePermission("sessions.collaborate", { service: "deny" }),
       cacheControl: "private, no-store",
       handler: withStrictQuery(async (request, env, match, ctx) => {
-        const rateLimit = await enforceExternalRateLimit(request, ctx, "mutation");
+        const rateLimit = await enforceExternalRateLimit(ctx, "mutation");
         return rateLimit ?? handleAttachmentPost(request, env, match, ctx);
       }),
     }),

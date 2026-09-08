@@ -51,6 +51,7 @@ describe("CLI authentication contracts", () => {
     expect(
       cliDeviceAuthorizationExchangeResponseSchema.parse({
         status: "authorized",
+        future: true,
         credential: CREDENTIAL,
         credentialId: "credential-id",
         expiresAt: 5678,
@@ -71,29 +72,35 @@ describe("CLI authentication contracts", () => {
       expiresAt: 1234,
     });
     expect(
-      pendingCliDeviceAuthorizationResponseSchema.safeParse({
+      pendingCliDeviceAuthorizationResponseSchema.parse({
         installation: { name: "Acme Open-Inspect" },
         deviceName: "dev laptop",
         expiresAt: 1234,
         deviceSecretHash: "secret",
-      }).success
-    ).toBe(false);
+      })
+    ).not.toHaveProperty("deviceSecretHash");
     expect(
-      pendingCliDeviceAuthorizationResponseSchema.safeParse({
+      pendingCliDeviceAuthorizationResponseSchema.parse({
         installation: { name: "Acme Open-Inspect", internalId: "secret" },
         deviceName: "dev laptop",
         expiresAt: 1234,
-      }).success
-    ).toBe(false);
+      }).installation
+    ).toEqual({ name: "Acme Open-Inspect" });
   });
 
   it("validates credential and current-user responses without exposing hashes", () => {
     expect(CLI_CREDENTIAL_PATTERN.test(CREDENTIAL)).toBe(true);
     expect(
       cliMeResponseSchema.parse({
-        installation: { name: "Acme Open-Inspect" },
-        user: { id: "1".repeat(32), displayName: "Alice", email: "alice@example.com" },
-        credential: { id: "credential-id", expiresAt: 5678 },
+        installation: { name: "Acme Open-Inspect", future: true },
+        user: {
+          id: "1".repeat(32),
+          displayName: "Alice",
+          email: "alice@example.com",
+          future: true,
+        },
+        credential: { id: "credential-id", expiresAt: 5678, future: true },
+        future: true,
       })
     ).toMatchObject({ user: { id: "1".repeat(32) } });
   });

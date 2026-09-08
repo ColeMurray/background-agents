@@ -36,6 +36,30 @@ const routing = (
 describe("useWarmDraftSession", () => {
   beforeEach(() => vi.resetAllMocks());
 
+  it("reuses the creation key after an unknown result and rotates it after consumption", async () => {
+    vi.mocked(browserApiFetch)
+      .mockRejectedValueOnce(new Error("connection lost"))
+      .mockResolvedValueOnce(Response.json({ sessionId: "session-1", status: "created" }))
+      .mockResolvedValueOnce(Response.json({ sessionId: "session-2", status: "created" }));
+    const { result } = renderHook(() => useWarmDraftSession(request()));
+    await act(async () => {
+      expect(await result.current.warm()).toBeNull();
+    });
+    await act(async () => {
+      expect(await result.current.warm()).toBe("session-1");
+    });
+    act(() => result.current.consume("session-1"));
+    await act(async () => {
+      expect(await result.current.warm()).toBe("session-2");
+    });
+    const keys = vi
+      .mocked(browserApiFetch)
+      .mock.calls.map(([, options]) => new Headers(options?.headers).get("Idempotency-Key"));
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
   it("derives one stable identity from the complete launch request", () => {
     expect(warmDraftSessionIdentity(request(), routing())).toBe(
       warmDraftSessionIdentity(

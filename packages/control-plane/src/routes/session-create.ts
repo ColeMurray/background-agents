@@ -1,3 +1,8 @@
+import {
+  externalCreateSessionRequestSchema,
+  externalCreateSessionResponseSchema,
+} from "@open-inspect/shared/types/external-session-api";
+import { createUserSession } from "./session-create-user";
 import type { RepositoryRef, RepositoryPair } from "@open-inspect/shared/types/repositories";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
@@ -56,6 +61,34 @@ async function handleCreateSession(
   const enforcement = applyIdentityEnforcement(ctx, "session-create", parsed.raw);
   if (enforcement.rejection) return enforcement.rejection;
   const enforced = enforcement.enforced;
+
+  // Preserve the legacy web wire shape, but share admission and retry ownership with
+  // every first-party human client. Service actors retain their integration adapter.
+  if (ctx.principal?.kind === "user") {
+    const input = externalCreateSessionRequestSchema.safeParse({
+      repoOwner: body.repoOwner ?? undefined,
+      repoName: body.repoName ?? undefined,
+      branch: body.branch,
+      repositories: body.repositories,
+      environmentId: body.environmentId ?? undefined,
+      title: body.title,
+      model: body.model,
+      reasoningEffort: body.reasoningEffort,
+      skillSelection: body.skillSelection,
+      providerSelections: body.providerSelections,
+      idempotencyKey: request.headers.get("Idempotency-Key") ?? generateId(),
+    });
+    if (!input.success) return error(INVALID_SESSION_REQUEST_BODY_ERROR, 400);
+    const response = await createUserSession(
+      request,
+      env,
+      { ...ctx, principal: ctx.principal },
+      input.data
+    );
+    if (!response.ok) return response;
+    const result = externalCreateSessionResponseSchema.parse(await response.json());
+    return json({ sessionId: result.sessionId, status: "created" }, response.status);
+  }
 
   let repositoryContext: RepositoryPair | null;
   try {

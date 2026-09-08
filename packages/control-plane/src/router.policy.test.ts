@@ -35,19 +35,16 @@ describe("route policy table", () => {
           authentication
         );
       } else if (authorization.kind === "authenticated" || authorization.kind === "active-self") {
-        expect(["user", "external-user"]).toContain(authentication);
+        expect(["user"]).toContain(authentication);
       } else if (authorization.kind === "service") {
         expect(authentication).toBe("service");
         expect(authorization.services.length).toBeGreaterThan(0);
       } else if (authorization.kind === "active-global") {
-        expect(["user", "external-user", "user-or-service"]).toContain(authentication);
+        expect(["user", "user-or-service"]).toContain(authentication);
       } else {
-        expect([
-          "user",
-          "external-user",
-          "user-or-service",
-          "user-or-service-with-sandbox-fallback",
-        ]).toContain(authentication);
+        expect(["user", "user-or-service", "user-or-service-with-sandbox-fallback"]).toContain(
+          authentication
+        );
         expect(authorization.allOf.length).toBeGreaterThan(0);
         for (const requirement of authorization.allOf) {
           if (requirement.kind === "automation") {
@@ -251,8 +248,8 @@ describe("route policy table", () => {
     ["POST", "/external/v1/cli/device-authorizations/revoke", "public"],
     ["GET", "/external/v1/cli/device-authorizations/pending", "user"],
     ["POST", "/external/v1/cli/device-authorizations/approve", "user"],
-    ["GET", "/external/v1/cli/me", "external-user"],
-    ["DELETE", "/external/v1/cli/credentials/current", "external-user"],
+    ["GET", "/external/v1/cli/me", "user"],
+    ["DELETE", "/external/v1/cli/credentials/current", "user"],
     ["POST", "/webhooks/sentry/automation-1", "handler-authenticated"],
     ["POST", "/webhooks/automation/automation-1", "handler-authenticated"],
     ["POST", "/image-builds/build-complete", "handler-authenticated"],
@@ -297,9 +294,9 @@ describe("route policy table", () => {
     ["POST", "/external/v1/sessions/session-1/stop", "sessions.lifecycle"],
     ["GET", "/external/v1/sessions/session-1/events", "sessions.read"],
     ["GET", "/external/v1/sessions/session-1/wait", "sessions.read"],
-  ])("keeps external v1 session route %s %s CLI-only", (method, path, permission) => {
+  ])("shares external v1 session route %s %s across human clients", (method, path, permission) => {
     const route = routeFor(method, path);
-    expect(route?.authentication).toEqual({ kind: "external-user" });
+    expect(route?.authentication).toEqual({ kind: "user", credential: "browser-or-cli" });
     expect(route?.supportedScmProviders).toBe("all");
     expect(route?.authorization).toMatchObject({
       kind: "active-user",
@@ -527,10 +524,10 @@ describe("route principal policy", () => {
     expect(enforceRoutePrincipal(authentication, principal)).toBeNull();
   });
 
-  it("requires CLI credential provenance for external users", () => {
+  it("requires bearer provenance for credential management", () => {
     expect(
       enforceRoutePrincipal(
-        { kind: "external-user" },
+        { kind: "user", credential: "cli" },
         { kind: "user", userId: "user-1" },
         {
           mechanism: "cli_credential",
@@ -541,8 +538,8 @@ describe("route principal policy", () => {
       )
     ).toBeNull();
     expect(
-      enforceRoutePrincipal({ kind: "external-user" }, { kind: "user", userId: "user-1" })?.response
-        .status
+      enforceRoutePrincipal({ kind: "user", credential: "cli" }, { kind: "user", userId: "user-1" })
+        ?.response.status
     ).toBe(403);
   });
 

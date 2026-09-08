@@ -367,10 +367,7 @@ export function enforceRoutePrincipal(
   ) {
     return { response: error("Unauthorized", 401) };
   }
-  if (
-    (authentication.kind === "user" || authentication.kind === "external-user") &&
-    principal.kind !== "user"
-  ) {
+  if (authentication.kind === "user" && principal.kind !== "user") {
     return authorizationDenial(
       error("Human user authentication required", 403),
       evidence,
@@ -380,7 +377,8 @@ export function enforceRoutePrincipal(
     );
   }
   if (
-    authentication.kind === "external-user" &&
+    authentication.kind === "user" &&
+    authentication.credential === "cli" &&
     authenticationContext?.mechanism !== "cli_credential"
   ) {
     return authorizationDenial(
@@ -964,7 +962,7 @@ export async function handleRequest(
   const finalize = async (response: Response): Promise<Response> =>
     withCorsAndTraceHeaders(
       withRouteCachePolicy(
-        await withExternalErrorContract(response, matchedRoute.route.authentication.kind, env, ctx),
+        await withExternalErrorContract(response, matchedRoute.route.errorContract, env, ctx),
         matchedRoute.route
       ),
       ctx
@@ -990,7 +988,7 @@ export async function handleRequest(
           authentication.kind === "web-service" || authentication.kind === "service"
             ? "service"
             : "user",
-        ...(authentication.kind === "external-user" ? { userCredential: "cli" } : {}),
+        ...(authentication.kind === "user" ? { userCredential: authentication.credential } : {}),
       });
 
       if (isAuthError(authResult)) {
@@ -1102,11 +1100,11 @@ export async function handleRequest(
 
 async function withExternalErrorContract(
   response: Response,
-  authentication: RouteAuthentication["kind"],
+  contract: Route["errorContract"],
   env: Env,
   ctx: RequestContext
 ): Promise<Response> {
-  if (authentication !== "external-user" || response.ok) return response;
+  if (contract !== "external-v1" || response.ok) return response;
   const payload: Record<string, unknown> = await response
     .clone()
     .json<Record<string, unknown>>()

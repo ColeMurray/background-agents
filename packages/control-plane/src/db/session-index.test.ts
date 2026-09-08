@@ -504,6 +504,23 @@ describe("SessionIndexStore", () => {
   });
 
   describe("create", () => {
+    it("keeps creation recovery state out of ordinary reads and lists", async () => {
+      await store.create({
+        ...makeSession(),
+        externalRequestFingerprint: "fingerprint",
+        externalBootstrapSnapshot: JSON.stringify({ scmTokenEncrypted: "encrypted-test-value" }),
+      });
+      const reservation = await store.getCreationReservation("test-id");
+      expect(reservation?.externalRequestFingerprint).toBe("fingerprint");
+      expect(reservation?.externalBootstrapSnapshot).toContain("encrypted-test-value");
+      const session = await store.get("test-id");
+      const listed = await store.list();
+      for (const entry of [session, ...listed.sessions]) {
+        expect(entry).not.toHaveProperty("externalRequestFingerprint");
+        expect(entry).not.toHaveProperty("externalBootstrapSnapshot");
+      }
+    });
+
     it("inserts a new session", async () => {
       const session = makeSession();
       await store.create(session);
@@ -511,8 +528,6 @@ describe("SessionIndexStore", () => {
       const result = await store.get("test-id");
       expect(result).toEqual({
         ...session,
-        externalRequestFingerprint: null,
-        externalBootstrapSnapshot: null,
         // Defaults applied for missing optional fields
         parentSessionId: null,
         spawnSource: "user",

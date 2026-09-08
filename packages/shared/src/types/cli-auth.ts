@@ -2,10 +2,6 @@ import { z } from "zod";
 import { isCanonicalUserId } from "../user-id";
 
 export const CLI_EXTERNAL_API_V1_PATH = "/external/v1/cli";
-export const CLI_EXTERNAL_API_VERSION = "1";
-export const CLI_API_VERSION_HEADER = "X-Open-Inspect-API-Version";
-export const CLI_CLIENT_VERSION_HEADER = "X-Open-Inspect-Client-Version";
-export const CLI_CLIENT_SURFACE_HEADER = "X-Open-Inspect-Client-Surface";
 export const CLI_DEVICE_SECRET_PATTERN = /^[0-9a-f]{64}$/;
 export const CLI_CREDENTIAL_PATTERN = /^oi_cli_[0-9a-f]{64}$/;
 export const CLI_USER_CODE_PATTERN = /^[A-Z0-9]{4}-[A-Z0-9]{4}$/;
@@ -21,7 +17,7 @@ export const startCliDeviceAuthorizationRequestSchema = z.strictObject({
   deviceName: z.string().trim().min(1).max(100),
 });
 
-export const startCliDeviceAuthorizationResponseSchema = z.strictObject({
+export const startCliDeviceAuthorizationResponseSchema = z.object({
   deviceSecret: z.string().regex(CLI_DEVICE_SECRET_PATTERN),
   userCode: z.string().regex(CLI_USER_CODE_PATTERN),
   verificationUrl: z.url(),
@@ -36,8 +32,8 @@ export const approveCliDeviceAuthorizationRequestSchema = z.strictObject({
     .pipe(z.string().regex(CLI_USER_CODE_PATTERN)),
 });
 
-export const pendingCliDeviceAuthorizationResponseSchema = z.strictObject({
-  installation: z.strictObject({ name: z.string().min(1) }),
+export const pendingCliDeviceAuthorizationResponseSchema = z.object({
+  installation: z.object({ name: z.string().min(1) }),
   deviceName: z.string().min(1).max(100),
   expiresAt: timestampSchema,
 });
@@ -51,18 +47,18 @@ export const revokeCliDeviceAuthorizationRequestSchema = z.strictObject({
 });
 
 export const cliDeviceAuthorizationExchangeResponseSchema = z.discriminatedUnion("status", [
-  z.strictObject({ status: z.literal("pending"), expiresAt: timestampSchema }),
-  z.strictObject({ status: z.literal("authorized"), ...credentialFields }),
+  z.object({ status: z.literal("pending"), expiresAt: timestampSchema }),
+  z.object({ status: z.literal("authorized"), ...credentialFields }),
 ]);
 
-export const cliMeResponseSchema = z.strictObject({
-  installation: z.strictObject({ name: z.string().min(1) }),
-  user: z.strictObject({
+export const cliMeResponseSchema = z.object({
+  installation: z.object({ name: z.string().min(1) }),
+  user: z.object({
     id: z.string().refine(isCanonicalUserId, "Invalid canonical user ID"),
     displayName: z.string().nullable(),
     email: z.string().nullable(),
   }),
-  credential: z.strictObject({ id: z.string().min(1), expiresAt: timestampSchema }),
+  credential: z.object({ id: z.string().min(1), expiresAt: timestampSchema }),
   serverVersion: z.string().min(1).optional(),
 });
 

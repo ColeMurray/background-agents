@@ -1,10 +1,12 @@
+import {
+  CLIENT_API_VERSION,
+  CLIENT_API_VERSION_HEADER,
+  CLIENT_VERSION_HEADER,
+  CLIENT_SURFACE_HEADER,
+} from "@open-inspect/shared/types/client-api";
 import { SELF, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  CLI_API_VERSION_HEADER,
-  CLI_CLIENT_SURFACE_HEADER,
-  CLI_CLIENT_VERSION_HEADER,
-  CLI_EXTERNAL_API_VERSION,
   cliDeviceAuthorizationExchangeResponseSchema,
   cliMeResponseSchema,
   pendingCliDeviceAuthorizationResponseSchema,
@@ -21,9 +23,9 @@ import { serviceFetch } from "./helpers";
 
 const API = "https://cp.test/external/v1/cli";
 const clientMetadata = {
-  [CLI_API_VERSION_HEADER]: CLI_EXTERNAL_API_VERSION,
-  [CLI_CLIENT_VERSION_HEADER]: "integration-test",
-  [CLI_CLIENT_SURFACE_HEADER]: "cli",
+  [CLIENT_API_VERSION_HEADER]: CLIENT_API_VERSION,
+  [CLIENT_VERSION_HEADER]: "integration-test",
+  [CLIENT_SURFACE_HEADER]: "cli",
 };
 
 function authorization(credential: string) {

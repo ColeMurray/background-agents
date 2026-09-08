@@ -9,6 +9,67 @@ function json(value: unknown, status = 200): Response {
 }
 
 describe("ApiClient", () => {
+  it("tolerates additive fields at every response boundary without weakening required fields", async () => {
+    const session = {
+      id: "session-1",
+      title: null,
+      model: "model-1",
+      reasoningEffort: null,
+      status: "created",
+      repositories: [
+        { repoOwner: "acme", repoName: "app", repoId: 1, baseBranch: "main", future: true },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+      future: true,
+    };
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(json({ sessions: [session], hasMore: false, future: true }))
+      .mockResolvedValueOnce(
+        json({
+          changes: [
+            {
+              kind: "upsert",
+              revision: 1,
+              future: true,
+              event: {
+                id: "event-1",
+                type: "future_event",
+                messageId: null,
+                createdAt: 1,
+                data: { type: "future_event", value: 1 },
+                future: true,
+              },
+            },
+          ],
+          checkpoint: 1,
+          hasMore: false,
+          future: true,
+        })
+      )
+      .mockResolvedValueOnce(json({ sessionId: "session-1", status: "created", future: true }))
+      .mockResolvedValueOnce(json({ sessions: [{}], hasMore: false, future: true }));
+    const client = new ApiClient({
+      baseUrl: "https://api.example.com",
+      fetch,
+      authorize: async () => credential,
+    });
+    const listed = await client.listSessions();
+    expect(listed.sessions[0]).toMatchObject({ id: "session-1" });
+    expect(listed).not.toHaveProperty("future");
+    expect(listed.sessions[0]).not.toHaveProperty("future");
+    expect(listed.sessions[0]?.repositories?.[0]).not.toHaveProperty("future");
+    const events = await client.events("session-1");
+    expect(events.changes[0]).toMatchObject({ event: { type: "future_event" } });
+    expect(events.changes[0]).not.toHaveProperty("future");
+    await expect(client.createSession({ idempotencyKey: "create-1" })).resolves.toEqual({
+      sessionId: "session-1",
+      status: "created",
+    });
+    await expect(client.listSessions()).rejects.toMatchObject({ name: "ZodError" });
+  });
+
   it("uses public device auth endpoints without persisting or authorizing the device secret", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()

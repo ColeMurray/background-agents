@@ -20,8 +20,9 @@ function request(path: string) {
   } as NextRequest;
 }
 
-function postRequest(body: unknown) {
+function postRequest(body: unknown, headers = new Headers()) {
   return {
+    headers,
     json: async () => body,
   } as unknown as NextRequest;
 }
@@ -120,6 +121,21 @@ describe("sessions API route", () => {
 describe("sessions API route (POST)", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it("preserves the browser's creation key across the signed BFF hop", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ sessionId: "session-1", status: "created" }, { status: 201 })
+    );
+    const response = await POST(postRequest({}, new Headers({ "Idempotency-Key": "create-1" })));
+    expect(response.status).toBe(201);
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/sessions",
+      expect.objectContaining({
+        headers: { "Idempotency-Key": "create-1" },
+      })
+    );
   });
 
   it("returns 401 when the user session is missing", async () => {

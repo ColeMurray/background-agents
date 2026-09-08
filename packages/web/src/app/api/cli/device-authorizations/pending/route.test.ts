@@ -66,16 +66,24 @@ describe("CLI pending device authorization BFF", () => {
     });
   });
 
-  it("rejects malformed or unsafe upstream data", async () => {
+  it("rejects malformed metadata and strips unknown upstream fields", async () => {
     expect((await GET(request("bad"))).status).toBe(400);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ deviceName: "laptop" }));
+    expect((await GET(request("ABCD-EFGH"))).status).toBe(503);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({
-        installation: { name: "Acme Open-Inspect" },
+        installation: { name: "Acme Open-Inspect", futureMetadata: true },
         deviceName: "laptop",
         expiresAt: 1234,
         deviceSecret: "leak",
       })
     );
-    expect((await GET(request("ABCD-EFGH"))).status).toBe(503);
+    const response = await GET(request("ABCD-EFGH"));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      installation: { name: "Acme Open-Inspect" },
+      deviceName: "laptop",
+      expiresAt: 1234,
+    });
   });
 });

@@ -270,14 +270,13 @@ export type RouteAuthentication =
   | { kind: "handler-authenticated" }
   | { kind: "web-service" }
   | { kind: "service" }
-  | { kind: "user" }
-  | { kind: "external-user" }
+  | { kind: "user"; credential?: "cli" | "browser-or-cli" }
   | { kind: "user-or-service" }
   | ({ kind: "sandbox" } & SandboxSessionBinding)
   | ({ kind: "user-or-service-with-sandbox-fallback" } & SandboxSessionBinding);
 
 export type RouteContext<Authentication extends RouteAuthentication> = RequestContext & {
-  principal: Authentication extends { kind: "user" | "external-user" }
+  principal: Authentication extends { kind: "user" }
     ? UserPrincipal
     : Authentication extends { kind: "sandbox" }
       ? SandboxPrincipal
@@ -298,6 +297,7 @@ export type SandboxRouteContext = RouteContext<{ kind: "sandbox" } & SandboxSess
 export interface RoutePolicy {
   authentication: RouteAuthentication;
   supportedScmProviders: "all" | readonly SourceControlProviderName[];
+  errorContract?: "external-v1";
 }
 
 export interface Route extends RouteDefinition, RoutePolicy {}
@@ -326,10 +326,17 @@ export const SCM_AGNOSTIC_HUMAN_USER_ROUTE = {
   supportedScmProviders: "all",
 } as const satisfies RoutePolicy;
 
-/** Direct human CLI credential route under the versioned external API. */
+/** Shared first-party resources; both credentials resolve to the same human principal. */
 export const SCM_AGNOSTIC_EXTERNAL_USER_ROUTE = {
-  authentication: { kind: "external-user" },
+  authentication: { kind: "user", credential: "browser-or-cli" },
   supportedScmProviders: "all",
+  errorContract: "external-v1",
+} as const satisfies RoutePolicy;
+
+/** Credential inspection/revocation must identify the bearer being managed. */
+export const SCM_AGNOSTIC_CLI_USER_ROUTE = {
+  ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+  authentication: { kind: "user", credential: "cli" },
 } as const satisfies RoutePolicy;
 
 export const SCM_AGNOSTIC_WEB_SERVICE_ROUTE = {
