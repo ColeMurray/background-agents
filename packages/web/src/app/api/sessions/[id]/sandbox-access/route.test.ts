@@ -62,7 +62,9 @@ describe("sandbox access BFF", () => {
   );
 
   it("preserves a non-JSON conflict body", async () => {
-    vi.mocked(controlPlaneUserFetch).mockResolvedValue(new Response("unavailable", { status: 409 }));
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      new Response("unavailable", { status: 409 })
+    );
     const response = await GET({} as Request, {
       params: Promise.resolve({ id: "session-1" }),
     });
