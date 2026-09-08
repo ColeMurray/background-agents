@@ -283,7 +283,8 @@ describe("Operations", () => {
     };
     const controller = new AbortController();
     const seen: ExternalEventChange[] = [];
-    const operations = new Operations(api as never, { sleep: () => Promise.resolve() });
+    const sleep = vi.fn(() => Promise.resolve());
+    const operations = new Operations(api as never, { sleep });
 
     for await (const change of operations.followEvents("s1", { signal: controller.signal })) {
       seen.push(change);
@@ -292,6 +293,18 @@ describe("Operations", () => {
 
     expect(seen).toEqual([first, upsert(6, event("event-1", 1, "newer"))]);
     expect(api.events.mock.calls.map((call) => call[1]?.after)).toEqual([undefined, 5, undefined]);
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry an expired full event snapshot", async () => {
+    const expired = new CliError("expired", "checkpoint expired");
+    const api = { events: vi.fn().mockRejectedValue(expired) };
+    const sleep = vi.fn(() => Promise.resolve());
+    const operations = new Operations(api as never, { sleep });
+
+    await expect(operations.followEvents("s1").next()).rejects.toBe(expired);
+    expect(api.events).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("waits until settled", async () => {

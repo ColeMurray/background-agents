@@ -216,7 +216,9 @@ export class Operations {
         snapshot = await this.readEventSnapshot(id, checkpoint, options.signal);
       } catch (cause) {
         if (cause instanceof CliError && cause.kind === "expired") {
+          if (checkpoint === undefined) throw cause;
           checkpoint = undefined;
+          await this.sleep(interval, options.signal);
           continue;
         }
         if (!isRetryableFeedError(cause)) throw cause;
