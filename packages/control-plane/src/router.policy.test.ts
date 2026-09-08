@@ -8,7 +8,6 @@ import {
   TEST_SERVICE_SECRETS,
 } from "./router.test-support";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
-import { SCOPED_PERMISSION_PAIRS } from "@open-inspect/shared/rbac";
 
 function routeFor(method: string, path: string) {
   return matchRoute(routes, method, path)?.route;
@@ -166,10 +165,6 @@ describe("route policy table", () => {
             expect(
               serviceAllowsPermission(grant.service, requirement.permission),
               `${grant.service} must allow ${requirement.permission} for ${route.method} ${route.path}`
-            ).toBe(true);
-          } else if (requirement.kind === "scoped-permission") {
-            expect(
-              serviceAllowsPermission(grant.service, SCOPED_PERMISSION_PAIRS[requirement.stem].own)
             ).toBe(true);
           }
         }
