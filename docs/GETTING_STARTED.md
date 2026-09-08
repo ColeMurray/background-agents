@@ -64,6 +64,9 @@ brew install python@3.12 uv
 
 # Wrangler CLI (for initial R2 bucket setup)
 npm install -g wrangler
+
+# jq (for fail-closed JSON response checks)
+brew install jq
 ```
 
 ---
@@ -748,8 +751,9 @@ npm run rbac:bootstrap-owner -- \
   --user "<canonical-user-id>"
 ```
 
-5. Confirm the preflight result is `ready` (or `no-op` when the target is already the current
-   unsuspended Owner), then execute the same command with `--execute`:
+5. Confirm the preflight result. If it is `ready`, execute the same command with `--execute`. If it
+   is `no-op`, the target is already the current unsuspended Owner; do not claim an audit was
+   written:
 
 ```bash
 npm run rbac:bootstrap-owner -- \
@@ -764,14 +768,16 @@ assignment, or another unsuspended Owner. There is no force option. Execution is
 SQL file: it writes one redacted `workspace.owner_bootstrapped` service audit event and replaces the
 target's assignment. A no-op writes nothing.
 
-6. Verify the control-plane health response contains `"rbac":{"ownerAssignment":"present"}`:
+6. An `--execute` run that prints `"report":"postcondition"` with `"status":"executed"` has verified
+   the exact owner assignment and audit event against remote D1. A `no-op` preflight executes and
+   audits nothing; it reports that the intended unsuspended user is already Owner. Separately verify
+   that the control plane is healthy:
 
 ```bash
-curl "$(terraform -chdir=terraform/environments/production output -raw control_plane_url)/health"
+curl --fail-with-body --silent --show-error \
+  "$(terraform -chdir=terraform/environments/production output -raw control_plane_url)/health" \
+  | jq -e '.status == "healthy"'
 ```
-
-This health value reports current state: `present` means at least one Owner assignment belongs to an
-unsuspended user.
 
 ---
 

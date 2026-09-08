@@ -315,9 +315,7 @@ export async function run(
   if (postcondition?.status !== "executed" || Number(postcondition.audit_written) !== 1) {
     throw new Error("Owner bootstrap execution did not prove its exact audit and assignment");
   }
-  console.error(
-    "Owner bootstrap command completed; verify /health reports ownerAssignment=present."
-  );
+  console.error("Owner bootstrap completed and verified exact audit and assignment.");
 }
 
 async function main(): Promise<void> {
