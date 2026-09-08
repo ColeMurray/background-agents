@@ -111,6 +111,31 @@ describe("createAlarmHandler", () => {
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
   });
 
+  it("completes lifecycle recovery before propagating a projection failure for retry", async () => {
+    const {
+      handler,
+      repository,
+      messageQueue,
+      executionStop,
+      lifecycleManager,
+      terminalMessageProjection,
+    } = createHandler();
+    const error = new Error("Malformed pending terminal message projection row");
+    terminalMessageProjection.flushPending.mockRejectedValue(error);
+    repository.getProcessingMessageWithStartedAt.mockReturnValue({
+      id: "message-1",
+      started_at: 500,
+    });
+    lifecycleManager.handleAlarm.mockResolvedValue("sandbox_terminated");
+
+    await expect(handler.handle()).rejects.toBe(error);
+
+    expect(executionStop.recoverStopConfirmationTimeout).toHaveBeenCalledOnce();
+    expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledTimes(2);
+    expect(lifecycleManager.handleAlarm).toHaveBeenCalledOnce();
+    expect(executionStop.resumeAfterSandboxTermination).toHaveBeenCalledOnce();
+  });
+
   it("keeps the execution deadline ahead of a later lifecycle check", async () => {
     let currentAlarm: number | null = null;
     const storage = {

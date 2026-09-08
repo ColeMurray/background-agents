@@ -38,7 +38,14 @@ export interface AlarmHandler {
 export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
   return {
     async handle(): Promise<void> {
-      await deps.terminalMessageProjection.flushPending();
+      let projectionFailure: { error: unknown } | undefined;
+      try {
+        await deps.terminalMessageProjection.flushPending();
+      } catch (error) {
+        // A malformed unread projection must not prevent lifecycle recovery.
+        // Rethrow after recovery so transient storage failures still retry.
+        projectionFailure = { error };
+      }
       await deps.executionStop.recoverStopConfirmationTimeout();
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was
@@ -76,6 +83,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       if (lifecycleResult === "sandbox_terminated") {
         await deps.executionStop.resumeAfterSandboxTermination();
       }
+      if (projectionFailure) throw projectionFailure.error;
     },
   };
 }
