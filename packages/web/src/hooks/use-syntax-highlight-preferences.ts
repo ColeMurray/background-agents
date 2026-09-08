@@ -43,7 +43,8 @@ export const HLJS_THEME_REGISTRY: SyntaxHighlightThemeDefinition[] = [
 export const LIGHT_THEMES = HLJS_THEME_REGISTRY.filter((t) => t.colorScheme === "light");
 export const DARK_THEMES = HLJS_THEME_REGISTRY.filter((t) => t.colorScheme === "dark");
 
-const STORAGE_KEY = "syntax-highlight-preferences";
+const STORAGE_KEY = "syntax-highlight-preferences:v1";
+const LEGACY_STORAGE_KEY = "syntax-highlight-preferences";
 const CHANGE_EVENT = "syntax-highlight-preferences-change";
 
 export interface SyntaxHighlightPreferences {
@@ -61,9 +62,15 @@ const DEFAULTS: SyntaxHighlightPreferences = {
 function read(): SyntaxHighlightPreferences {
   if (typeof window === "undefined") return DEFAULTS;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const stored = localStorage.getItem(STORAGE_KEY);
+    const raw = stored ?? localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return DEFAULTS;
-    return { ...DEFAULTS, ...JSON.parse(raw) };
+    const preferences = { ...DEFAULTS, ...JSON.parse(raw) };
+    if (!stored) {
+      localStorage.setItem(STORAGE_KEY, raw);
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
+    }
+    return preferences;
   } catch {
     return DEFAULTS;
   }

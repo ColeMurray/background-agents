@@ -1,4 +1,4 @@
-import type { RepositoryRef } from "@open-inspect/shared";
+import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import type { AutomationRunRow } from "../db/automation-store";
 import type { Env } from "../types";
 import type { Logger } from "../logger";

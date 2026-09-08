@@ -1,8 +1,8 @@
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
-} from "@open-inspect/shared";
-import type { SessionRepositoryRow } from "./repository";
+} from "@open-inspect/shared/types/repositories";
+import type { SessionRepositoryRow } from "./types";
 
 /** A repository identified by owner and name (canonical casing unless noted). */
 export interface RepoIdentity {
@@ -25,8 +25,8 @@ export interface SessionRepositoryEntry {
   /**
    * The entry's base branch: the row's, or the scalar mirror's for
    * synthesized entries. Null only for legacy sessions without a stored
-   * base branch — consumers apply their own default ("main" for state and
-   * spawn, the repo's default branch for PR creation).
+   * base branch — consumers apply their own default (DEFAULT_BASE_BRANCH
+   * for state and spawn, the repo's default branch for PR creation).
    */
   baseBranch: string | null;
   /** Whether this member is the session's primary (scalar-mirror) repo. */

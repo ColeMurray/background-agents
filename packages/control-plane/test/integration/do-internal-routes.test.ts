@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, queryDO, seedEvents } from "./helpers";
-import type { SpawnContext, ChildSessionDetail } from "@open-inspect/shared";
+import { initSession, queryDO, seedEvents, seedMessage } from "./helpers";
+import type { ChildSessionDetail } from "@open-inspect/shared/types/session-api";
+import type { SpawnContext } from "../../src/session/spawn-context";
 
 const originalFetch = globalThis.fetch;
 
@@ -67,6 +68,21 @@ describe("DO internal sub-session routes", () => {
         userId: "user-1",
         scmLogin: "acmedev",
         model: "anthropic/claude-sonnet-4-6",
+        sandboxSettings: { sandboxTimeoutMs: 14_400_000 },
+      });
+      const [owner] = await queryDO<{ id: string }>(
+        stub,
+        "SELECT id FROM participants WHERE role = 'owner'"
+      );
+      if (!owner) throw new Error("Expected owner participant");
+      await seedMessage(stub, {
+        id: "processing-spawn-context",
+        authorId: owner.id,
+        content: "Spawn a child",
+        source: "web",
+        status: "processing",
+        createdAt: Date.now(),
+        startedAt: Date.now(),
       });
 
       const res = await stub.fetch("http://internal/internal/spawn-context");
@@ -79,15 +95,16 @@ describe("DO internal sub-session routes", () => {
       expect(context.repoId).toBe(12345);
       expect(context.model).toBe("anthropic/claude-sonnet-4-6");
       expect(context.reasoningEffort).toBeNull();
+      expect(context.sandboxTimeoutMs).toBe(14_400_000);
 
-      // Owner fields
-      expect(context.owner).toBeDefined();
-      expect(context.owner.userId).toBe("user-1");
-      expect(context.owner.scmLogin).toBe("acmedev");
+      // Active prompt author fields
+      expect(context.promptAuthor).toBeDefined();
+      expect(context.promptAuthor.userId).toBe("user-1");
+      expect(context.promptAuthor.scmLogin).toBe("acmedev");
       // Encrypted token fields may be null in tests (no SCM token provided at init)
-      expect(context.owner).toHaveProperty("scmAccessTokenEncrypted");
-      expect(context.owner).toHaveProperty("scmRefreshTokenEncrypted");
-      expect(context.owner).toHaveProperty("scmTokenExpiresAt");
+      expect(context.promptAuthor).toHaveProperty("scmAccessTokenEncrypted");
+      expect(context.promptAuthor).toHaveProperty("scmRefreshTokenEncrypted");
+      expect(context.promptAuthor).toHaveProperty("scmTokenExpiresAt");
     });
 
     it("returns 404 when session is not initialized", async () => {
@@ -383,6 +400,118 @@ describe("DO internal sub-session routes", () => {
       // Verify sandbox was stopped
       const sandbox = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox LIMIT 1");
       expect(sandbox[0].status).toBe("stopped");
+    });
+  });
+
+  describe("POST /internal/expire-draft", () => {
+    it("archives a session that never left the draft status", async () => {
+      const { stub } = await initSession();
+
+      const res = await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ outcome: "archived", status: "archived" });
+      const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+      expect(rows[0].status).toBe("archived");
+    });
+
+    it("spares a session that started work after the sweep selected it", async () => {
+      const { stub } = await initSession();
+      // The sweep reads candidates from D1, so the session may have been
+      // prompted between that read and this call. The DO is the authority.
+      await queryDO(stub, "UPDATE session SET status = 'active'");
+
+      const res = await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ outcome: "not_draft", status: "active" });
+      const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+      expect(rows[0].status).toBe("active");
+    });
+
+    async function seedMessage(
+      stub: DurableObjectStub,
+      id: string,
+      status: "pending" | "completed" | "failed"
+    ): Promise<void> {
+      const [{ id: participantId }] = await queryDO<{ id: string }>(
+        stub,
+        "SELECT id FROM participants LIMIT 1"
+      );
+      await queryDO(
+        stub,
+        `INSERT INTO messages (id, author_id, content, source, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        id,
+        participantId,
+        "Ship it",
+        "web",
+        status,
+        100
+      );
+    }
+
+    // Holding messages while still `created` is a broken aggregate — enqueueing
+    // inserts the message and transitions in one turn — so the session settles
+    // to what its messages say. Leaving `created` behind is the whole point: the
+    // sweep reads oldest-first, so a row that answers without changing anything
+    // is re-read every run and starves everything queued behind it.
+    it("settles a draft that has a message queued", async () => {
+      const { stub } = await initSession();
+      await seedMessage(stub, "msg-draft-1", "pending");
+
+      const res = await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ outcome: "has_work", status: "active" });
+      const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+      expect(rows[0].status).toBe("active");
+    });
+
+    it("settles a draft whose messages have all finished", async () => {
+      const { stub } = await initSession();
+      await seedMessage(stub, "msg-draft-2", "completed");
+
+      const res = await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ outcome: "has_work", status: "completed" });
+      const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+      expect(rows[0].status).toBe("completed");
+    });
+
+    it("settles a draft whose latest terminal message failed", async () => {
+      const { stub } = await initSession();
+      await seedMessage(stub, "msg-draft-4", "failed");
+
+      const res = await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ outcome: "has_work", status: "failed" });
+      const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+      expect(rows[0].status).toBe("failed");
+    });
+
+    it("never archives a draft that holds work", async () => {
+      // Archiving would discard a real queued request, and `archived` is not
+      // promptable, so the author could not resume it either.
+      const { stub } = await initSession();
+      await seedMessage(stub, "msg-draft-3", "pending");
+
+      await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+      expect(rows[0].status).not.toBe("archived");
+    });
+
+    it("is idempotent across repeated sweeps", async () => {
+      const { stub } = await initSession();
+
+      await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+      const second = await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      expect(second.status).toBe(200);
+      expect(await second.json()).toEqual({ outcome: "not_draft", status: "archived" });
     });
   });
 });

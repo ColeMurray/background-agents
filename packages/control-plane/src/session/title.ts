@@ -2,7 +2,7 @@ export interface SessionTitleUpdateOptions {
   onlyIfUnset?: boolean;
 }
 
-export type SessionTitleUpdateErrorReason = "invalid" | "not_found" | "already_set";
+type SessionTitleUpdateErrorReason = "invalid" | "not_found" | "already_set";
 
 export type SessionTitleValidationResult =
   | { ok: true; title: string }

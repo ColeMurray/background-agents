@@ -6,10 +6,20 @@ locals {
   use_opencomputer_backend = var.sandbox_provider == "opencomputer"
   use_e2b_backend          = var.sandbox_provider == "e2b"
 
-  # Google login is enabled only when both OAuth credentials are configured.
-  # Drives the build-time NEXT_PUBLIC_GOOGLE_ENABLED flag (sign-in button) and
-  # mirrors the control plane's conditional Better Auth Google provider.
-  google_enabled = trimspace(var.google_client_id) != "" && trimspace(var.google_client_secret) != ""
+  # A complete OAuth credential pair is the deployment's provider enablement
+  # declaration. Runtime validation mirrors these plan-time invariants.
+  github_oauth_enabled = trimspace(var.github_client_id) != "" && trimspace(var.github_client_secret) != ""
+  google_enabled       = trimspace(var.google_client_id) != "" && trimspace(var.google_client_secret) != ""
+  provider_neutral_admission_enabled = (
+    length([for item in split(",", var.allowed_email_domains) : trimspace(item) if trimspace(item) != ""]) > 0 ||
+    length([for item in split(",", var.allowed_emails) : trimspace(item) if trimspace(item) != ""]) > 0
+  )
+  github_admission_enabled = (
+    length([for item in split(",", var.allowed_users) : trimspace(item) if trimspace(item) != ""]) > 0 ||
+    length([for item in split(",", var.allowed_github_orgs) : trimspace(item) if trimspace(item) != ""]) > 0
+  )
+  admission_allowlist_enabled = local.provider_neutral_admission_enabled || local.github_admission_enabled
+  unsafe_allow_all_effective  = var.unsafe_allow_all_users && !local.admission_allowlist_enabled
 
   # URLs for cross-service configuration
   control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
@@ -32,6 +42,35 @@ locals {
     local.web_custom_domain_zone_id != ""
   )
 
+  # The bots derive their classifier's provider from the model id, so the
+  # deployment binds exactly one provider credential to them: an Anthropic model
+  # gets ANTHROPIC_API_KEY, an OpenAI model gets OPENAI_API_KEY. This is scoped
+  # to the classifier — var.anthropic_api_key is still what Claude coding
+  # sessions and the opencomputer control-plane path use.
+  classifier_uses_openai = (
+    startswith(var.classification_model, "openai/") ||
+    startswith(var.classification_model, "gpt-")
+  )
+
+  # Exactly one provider binding for the classifier bots.
+  classifier_secret_bindings = (local.classifier_uses_openai
+    ? [{ name = "OPENAI_API_KEY", value = var.classification_openai_api_key }]
+    : [{ name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key }]
+  )
+
+  # Deployment-wide LLM keys injected into Modal session sandboxes. Every key stays
+  # present with an empty value when unconfigured, so clearing one reconciles the
+  # old credential away on the next apply; Modal rejects a secret with no keys at
+  # all. An empty value means sandboxes take that provider's credential from the
+  # per-repository secret store, which overrides this secret either way.
+  modal_llm_secret_values = {
+    ANTHROPIC_API_KEY = trimspace(var.anthropic_api_key)
+  }
+
+  # OpenComputer reads its sandbox credentials from the control plane rather than
+  # from a provider-side secret, so its bindings are set together.
+  opencomputer_enabled = trimspace(var.opencomputer_api_key) != "" && trimspace(var.opencomputer_api_url) != ""
+
   # Host the Cloudflare web Worker is served from: custom domain when configured,
   # otherwise its default workers.dev hostname.
   web_cloudflare_host = (local.web_custom_domain_enabled
@@ -45,6 +84,9 @@ locals {
   web_app_url = (var.web_platform == "cloudflare"
     ? "https://${local.web_cloudflare_host}"
     : (var.web_app_custom_domain != "" ? "https://${var.web_app_custom_domain}" : "https://open-inspect-${local.name_suffix}.vercel.app")
+  )
+  effective_web_app_url = (
+    var.web_platform == "vercel" ? module.web_app[0].production_url : local.web_app_url
   )
 
   # Worker script paths (deterministic output locations)

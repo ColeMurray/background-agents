@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import { supportsRepoImages } from "@/lib/sandbox-provider";
+import { REPO_IMAGES_UNSUPPORTED_MESSAGE, supportsRepoImages } from "@/lib/sandbox-provider";
 
 export async function POST(
   _request: NextRequest,
@@ -14,13 +14,7 @@ export async function POST(
   }
 
   if (!supportsRepoImages()) {
-    return NextResponse.json(
-      {
-        error:
-          "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer",
-      },
-      { status: 501 }
-    );
+    return NextResponse.json({ error: REPO_IMAGES_UNSUPPORTED_MESSAGE }, { status: 501 });
   }
 
   const { owner, name } = await params;

@@ -4,10 +4,18 @@
 
 import type { TriggerSourceDefinition } from "../types";
 
-export type { SentryAutomationEvent } from "../types";
+export type {
+  SentryIssueAlertPayload,
+  SentryIssueWebhookPayload,
+  SentryMetricAlertPayload,
+} from "./payloads";
 export { conditions as sentryConditions } from "./conditions";
 export { normalizeSentryEvent } from "./normalizer";
-export { buildSentryContextBlock } from "./context";
+export {
+  buildSentryContextBlock,
+  buildSentryIssueWebhookContextBlock,
+  buildSentryMetricContextBlock,
+} from "./context";
 export { verifySentrySignature } from "./signature";
 
 export const sentrySource: TriggerSourceDefinition = {

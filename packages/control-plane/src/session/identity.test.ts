@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { generateEncryptionKey } from "../auth/crypto";
 import type { UserStore } from "../db/user-store";
 import type { Env } from "../types";
 import {
@@ -6,6 +7,7 @@ import {
   resolveBrowserGitHubEnrichment,
   resolveGitAuthorIdentity,
   resolveGitHubEnrichment,
+  resolveGitHubEnrichmentForRequest,
 } from "./identity";
 
 describe("resolveGitAuthorIdentity", () => {
@@ -120,9 +122,15 @@ describe("parseAuthorId", () => {
 describe("resolveGitHubEnrichment", () => {
   // This is the fire-time F1/F2 gate: a resolved user with no linked GitHub
   // identity must yield null so no SCM token is attached (bot-attributed
-  // fallback). With no TOKEN_ENCRYPTION_KEY the token-store branch is skipped,
-  // so these unit tests need no D1 — they pin the identity-selection boundary.
-  const env = { DB: {}, TOKEN_ENCRYPTION_KEY: "" } as unknown as Env;
+  // fallback). The db stub answers the token-store lookup with "no stored
+  // tokens", so these tests pin the identity-selection boundary without D1.
+  const emptyTokenDb = {
+    prepare: () => ({ bind: () => ({ first: async () => null }) }),
+  } as unknown as Env["DB"];
+  const env = {
+    DB: emptyTokenDb,
+    TOKEN_ENCRYPTION_KEY: generateEncryptionKey(),
+  } as unknown as Env;
 
   function fakeStore(
     identities: Array<{
@@ -167,7 +175,7 @@ describe("resolveGitHubEnrichment", () => {
     // The SCM identifier is the GitHub provider id — never the Google sub.
     expect(enrichment!.scmUserId).toBe("gh-42");
     expect(enrichment!.scmLogin).toBe("pm-dev");
-    // No token-encryption key configured → no token material leaks in.
+    // No stored tokens for this identity → no token material leaks in.
     expect(enrichment!.accessTokenEncrypted).toBeUndefined();
   });
 
@@ -187,6 +195,24 @@ describe("resolveGitHubEnrichment", () => {
     const enrichment = await resolveGitHubEnrichment(env, env.DB, store, "user-1");
 
     expect(enrichment?.email).toBe("42+pm-dev@users.noreply.github.com");
+  });
+});
+
+describe("resolveGitHubEnrichmentForRequest", () => {
+  it("rejects invalid token-encryption key material before any authority branch runs", async () => {
+    const env = { DB: {}, TOKEN_ENCRYPTION_KEY: "dG9vc2hvcnQ=" } as unknown as Env;
+    const store = { getIdentitiesForUser: vi.fn(), getUserById: vi.fn() } as unknown as UserStore;
+    const authority = {
+      kind: "browser_session",
+      accountClient: {},
+      githubAccount: null,
+    } as unknown as Parameters<typeof resolveGitHubEnrichmentForRequest>[4];
+
+    await expect(
+      resolveGitHubEnrichmentForRequest(env, env.DB, store, "user-1", authority)
+    ).rejects.toThrow(/TOKEN_ENCRYPTION_KEY must decode to 32 bytes/);
+    // The guard fires before either branch touches identity or account state.
+    expect(store.getIdentitiesForUser).not.toHaveBeenCalled();
   });
 });
 

@@ -5,11 +5,10 @@
  * pre-binding the "linear-bot" service name so callers don't repeat it.
  */
 
-import { createLogger as _createLogger, type LogLevel } from "@open-inspect/shared";
-import type { Logger } from "@open-inspect/shared";
-export type { Logger } from "@open-inspect/shared";
-export type { LogLevel } from "@open-inspect/shared";
-export { parseLogLevel } from "@open-inspect/shared";
+import { createLogger as _createLogger, type LogLevel } from "@open-inspect/shared/logger";
+import type { Logger } from "@open-inspect/shared/logger";
+export type { Logger } from "@open-inspect/shared/logger";
+export type { LogLevel } from "@open-inspect/shared/logger";
 
 const SERVICE_NAME = "linear-bot";
 

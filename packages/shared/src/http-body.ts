@@ -7,7 +7,7 @@
 export async function readBodyCapped(
   body: ReadableStream<Uint8Array> | null,
   maxBytes: number
-): Promise<Uint8Array | null> {
+): Promise<Uint8Array<ArrayBuffer> | null> {
   if (body === null) return new Uint8Array();
 
   const reader = body.getReader();

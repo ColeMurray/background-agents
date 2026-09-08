@@ -68,6 +68,7 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 | Binding                      | Type                  | Description                                                                         |
 | ---------------------------- | --------------------- | ----------------------------------------------------------------------------------- |
 | `GITHUB_KV`                  | KV namespace          | Delivery dedupe store keyed by `X-GitHub-Delivery`                                  |
+| `AUTOFIX_QUEUE`              | Queue                 | Durable handoff for pull request feedback eligible for Autofix                      |
 | `CONTROL_PLANE`              | Service binding       | Fetcher to the control plane worker                                                 |
 | `DEPLOYMENT_NAME`            | Plain text            | Deployment identifier for logging                                                   |
 | `DEFAULT_MODEL`              | Plain text            | Model ID for new sessions (e.g., `anthropic/claude-haiku-4-5`)                      |
@@ -81,11 +82,18 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 
 ### GitHub App Configuration
 
-The existing GitHub App needs these additions:
+The GitHub bot uses the same repository permissions configured for the main GitHub App setup. In
+particular, it requires:
 
 **Permissions**: `Pull requests: Read & write`, `Issues: Read & write`
 
-**Event subscriptions**: `Pull request`, `Issue comment`, `Pull request review comment`
+The control plane does not need Issues permission to label session-created pull requests; the
+required `Pull requests: Read & write` permission authorizes those label operations. See the
+[GitHub App setup](../../docs/GETTING_STARTED.md#step-3-create-github-app) for the complete
+permission list.
+
+**Event subscriptions**: `Pull request`, `Issue comment`, `Pull request review`,
+`Pull request review comment`
 
 **Webhook URL**: `https://open-inspect-github-bot-{suffix}.{account}.workers.dev/webhooks/github`
 

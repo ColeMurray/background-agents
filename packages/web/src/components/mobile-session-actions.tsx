@@ -7,6 +7,8 @@ import {
   useSessionActionControls,
   type SessionActionProps,
 } from "@/components/session-actions";
+import { Badge } from "@/components/ui/badge";
+import { prBadgeVariant } from "@/components/ui/badge-variants";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -37,7 +39,7 @@ export function MobileSessionActions({
   onOpenMedia,
   ...actions
 }: MobileSessionActionsProps) {
-  const { previewArtifact, previewUrl, prUrl, mediaCount } = resolveSessionActions(
+  const { previewArtifact, previewUrl, prLinks, mediaCount } = resolveSessionActions(
     actions.artifacts,
     actions.primaryRepo
   );
@@ -72,14 +74,28 @@ export function MobileSessionActions({
                 </a>
               </DropdownMenuItem>
             )}
-            {prUrl && (
+            {prLinks.length === 1 && (
               <DropdownMenuItem asChild>
-                <a href={prUrl} target="_blank" rel="noopener noreferrer">
+                <a href={prLinks[0].url} target="_blank" rel="noopener noreferrer">
                   <GitPrIcon className="w-4 h-4" />
                   View PR
                 </a>
               </DropdownMenuItem>
             )}
+            {prLinks.length > 1 &&
+              prLinks.map((link) => (
+                <DropdownMenuItem key={link.id} asChild>
+                  <a href={link.url} target="_blank" rel="noopener noreferrer">
+                    <GitPrIcon className="w-4 h-4" />
+                    <span className="min-w-0 truncate">{link.label}</span>
+                    {link.prState && (
+                      <Badge variant={prBadgeVariant(link.prState)} className="capitalize">
+                        {link.prState}
+                      </Badge>
+                    )}
+                  </a>
+                </DropdownMenuItem>
+              ))}
             {mediaCount > 0 && (
               <DropdownMenuItem onClick={onOpenMedia}>
                 <FolderIcon className="w-4 h-4" />
@@ -90,23 +106,27 @@ export function MobileSessionActions({
               <LinkIcon className="w-4 h-4" />
               Copy link
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={controls.handleArchiveToggle}
-              disabled={controls.isArchiving}
-            >
-              <ArchiveIcon className="w-4 h-4" />
-              {controls.isArchived ? "Unarchive" : "Archive"}
-            </DropdownMenuItem>
+            {actions.capabilities.lifecycle && <DropdownMenuSeparator />}
+            {actions.capabilities.lifecycle && (
+              <DropdownMenuItem
+                onClick={controls.handleArchiveToggle}
+                disabled={controls.isArchiving}
+              >
+                <ArchiveIcon className="w-4 h-4" />
+                {controls.isArchived ? "Unarchive" : "Archive"}
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
 
-      <ArchiveSessionDialog
-        open={controls.showArchiveDialog}
-        onOpenChange={controls.setShowArchiveDialog}
-        onConfirm={controls.handleConfirmArchive}
-      />
+      {actions.capabilities.lifecycle && (
+        <ArchiveSessionDialog
+          open={controls.showArchiveDialog}
+          onOpenChange={controls.setShowArchiveDialog}
+          onConfirm={controls.handleConfirmArchive}
+        />
+      )}
     </>
   );
 }

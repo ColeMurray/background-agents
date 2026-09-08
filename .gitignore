@@ -101,3 +101,14 @@ terraform/environments/production/tfplan
 # Local scratch notes (may contain secrets)
 notes.txt
 notes*.md
+
+# The compose smoke bundles its driver here at run time.
+packages/control-plane/test/smoke/run-smoke.bundle.mjs
+smoke-logs/
+
+# AWS environments (see terraform/environments/aws-*); state files and
+# *_override.tf are already covered globally above.
+terraform/environments/aws-staging/plan.out
+terraform/environments/aws-production/plan.out
+
+# Stable local advisory-lock inode for sandbox release selection writers.

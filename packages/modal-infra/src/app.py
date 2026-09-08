@@ -13,6 +13,8 @@ import modal
 
 import sandbox_runtime
 
+from .app_config import APP_NAME
+from .images.base import deployed_image_environment
 from .log_config import get_logger
 
 # Path to sandbox_runtime source — bundled into function_image so shims can resolve
@@ -21,13 +23,12 @@ _SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 log = get_logger("app")
 
 # Main Modal application
-app = modal.App("open-inspect")
+app = modal.App(APP_NAME)
 
 # Image for Modal functions (not sandbox)
 # Includes all dependencies needed by the function modules at import time
 function_image = (
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git")  # For scheduler git ls-remote checks
     .pip_install(
         "pydantic>=2.0",
         "httpx",
@@ -36,15 +37,15 @@ function_image = (
         "PyJWT[crypto]",  # For GitHub App token generation
     )
     # Bundle sandbox_runtime so modal-infra shims can import from it at runtime
-    .add_local_dir(str(_SANDBOX_RUNTIME_DIR), remote_path="/root/sandbox_runtime")
+    .add_local_dir(str(_SANDBOX_RUNTIME_DIR), remote_path="/root/sandbox_runtime", copy=True)
+    .env(deployed_image_environment())
 )
 
-# Secrets for LLM API keys - defined in Modal dashboard or CLI
-# These are injected into sandboxes but never stored in snapshots
-llm_secrets = modal.Secret.from_name(
-    "llm-api-keys",
-    required_keys=["ANTHROPIC_API_KEY"],
-)
+# Deployment-wide LLM API keys, injected into sandboxes but never stored in
+# snapshots. No key is required: the secret holds whichever providers the
+# deployment configured, and a value left empty means sandboxes take that
+# provider's credential from the control plane's secret store instead.
+llm_secrets = modal.Secret.from_name("llm-api-keys")
 
 # Secrets for GitHub App - used for git operations (clone, push)
 # These are used to generate installation tokens, NOT injected into sandboxes
@@ -56,14 +57,13 @@ github_app_secrets = modal.Secret.from_name(
 # Secret for internal API authentication and deployment configuration.
 # Required keys:
 #   MODAL_API_SECRET: verify requests from control plane to Modal endpoints
-#   SERVICE_AUTH_SECRET: sign requests from Modal to control plane (sig1)
 # Optional keys (add to the same secret as needed):
 #   ALLOWED_CONTROL_PLANE_HOSTS: comma-separated list of permitted callback hosts
 #   SCM_PROVIDER: "github" (default) or "gitlab" — selects the clone credential type
 #   GITLAB_ACCESS_TOKEN: GitLab PAT used as clone credential when SCM_PROVIDER=gitlab
 internal_api_secret = modal.Secret.from_name(
     "internal-api",
-    required_keys=["MODAL_API_SECRET", "SERVICE_AUTH_SECRET"],
+    required_keys=["MODAL_API_SECRET"],
 )
 
 

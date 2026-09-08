@@ -4,27 +4,19 @@ import { useState } from "react";
 import { copyToClipboard } from "@/lib/format";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { TerminalIcon, KeyIcon, CheckIcon } from "@/components/ui/icons";
-import type { SandboxStatus } from "@open-inspect/shared";
-import { ACTIVE_SANDBOX_STATUSES } from "./sandbox-statuses";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import { ACTIVE_SANDBOX_STATUSES, STARTING_SANDBOX_STATUSES } from "./sandbox-statuses";
 
 interface CodeServerSectionProps {
   url: string;
   password: string | null;
   sandboxStatus: SandboxStatus;
 }
-const STARTING_STATUSES: Set<SandboxStatus> = new Set([
-  "pending",
-  "spawning",
-  "connecting",
-  "warming",
-  "syncing",
-]);
-
 export function CodeServerSection({ url, password, sandboxStatus }: CodeServerSectionProps) {
   const [copiedPassword, setCopiedPassword] = useState(false);
 
   const isActive = ACTIVE_SANDBOX_STATUSES.has(sandboxStatus);
-  const isStarting = STARTING_STATUSES.has(sandboxStatus);
+  const isStarting = STARTING_SANDBOX_STATUSES.has(sandboxStatus);
   const safeUrl = getSafeExternalUrl(url);
 
   const handleCopyPassword = async () => {

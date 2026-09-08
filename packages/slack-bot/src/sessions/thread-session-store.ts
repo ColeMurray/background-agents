@@ -1,4 +1,4 @@
-import { createKvCacheStore } from "@open-inspect/shared";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { z } from "zod";
 import { createLogger } from "../logger";
 import { targetId, targetLabel, type SlackSessionTarget } from "../targets";

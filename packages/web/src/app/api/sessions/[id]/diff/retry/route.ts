@@ -1,4 +1,4 @@
-import { SESSION_DIFF_ID_PATTERN } from "@open-inspect/shared";
+import { SESSION_DIFF_ID_PATTERN } from "@open-inspect/shared/types/session-diffs";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";

@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
+import { runInSessionDO } from "./session-do-access";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { ModelPreferencesStore } from "../../src/db/model-preferences";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, queryDO, seedSandboxAuth } from "./helpers";
+import { initNamedSessionDO, queryDO, seedMessage, seedSandboxAuth } from "./helpers";
 
 describe("POST /sessions/:parentId/children — spawn child", () => {
   beforeEach(cleanD1Tables);
@@ -16,25 +18,14 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     scmLogin?: string;
     spawnDepth?: number;
     parentSessionId?: string;
-    spawnSource?: "user" | "agent";
+    spawnSource?: "user" | "agent" | "automation";
+    automationId?: string;
+    automationRunId?: string;
     environmentId?: string | null;
     model?: string;
     reasoningEffort?: string | null;
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const { stub } = await initNamedSession(parentName, {
-      repoOwner: "acme",
-      repoName: "web-app",
-      ...(opts?.repoId != null && { repoId: opts.repoId }),
-      ...(opts?.userId != null && { userId: opts.userId }),
-      ...(opts?.scmLogin != null && { scmLogin: opts.scmLogin }),
-      ...(opts?.model != null && { model: opts.model }),
-      ...(opts?.reasoningEffort != null && { reasoningEffort: opts.reasoningEffort }),
-    });
-
-    const sandboxToken = `sb-tok-${Date.now()}`;
-    await seedSandboxAuth(stub, { authToken: sandboxToken, sandboxId: `sb-${Date.now()}` });
-
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();
     await store.create({
@@ -49,13 +40,62 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       parentSessionId: opts?.parentSessionId ?? null,
       spawnSource: opts?.spawnSource ?? "user",
       spawnDepth: opts?.spawnDepth ?? 0,
+      automationId: opts?.automationId ?? null,
+      automationRunId: opts?.automationRunId ?? null,
       environmentId: opts?.environmentId ?? null,
       userId: opts?.canonicalUserId ?? null,
+      providerAuth: [
+        { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+        { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+      ],
       createdAt: now,
       updatedAt: now,
     });
 
+    const { stub } = await initNamedSessionDO(parentName, {
+      repoOwner: "acme",
+      repoName: "web-app",
+      ...(opts?.repoId != null && { repoId: opts.repoId }),
+      ...(opts?.userId != null && { userId: opts.userId }),
+      ...(opts?.canonicalUserId != null && { canonicalUserId: opts.canonicalUserId }),
+      ...(opts?.scmLogin != null && { scmLogin: opts.scmLogin }),
+      ...(opts?.model != null && { model: opts.model }),
+      ...(opts?.reasoningEffort != null && { reasoningEffort: opts.reasoningEffort }),
+    });
+
+    const sandboxToken = `sb-tok-${Date.now()}`;
+    await seedSandboxAuth(stub, { authToken: sandboxToken, sandboxId: `sb-${Date.now()}` });
+    const [owner] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE role = 'owner'"
+    );
+    if (!owner) throw new Error("Expected parent owner participant");
+    await seedMessage(stub, {
+      id: `processing-${parentName}`,
+      authorId: owner.id,
+      content: "Spawn a child",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+    });
+
     return { parentName, stub, sandboxToken, store, now };
+  }
+
+  async function markChildPromptProcessing(stub: DurableObjectStub): Promise<void> {
+    const [message] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM messages ORDER BY created_at DESC LIMIT 1"
+    );
+    if (!message) throw new Error("Expected child prompt");
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
+        "UPDATE messages SET status = 'processing', started_at = ? WHERE id = ?",
+        Date.now(),
+        message.id
+      );
+    });
   }
 
   it("spawns a child session with sandbox auth (201)", async () => {
@@ -102,6 +142,92 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.repoOwner).toBe("acme");
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
+  });
+
+  it("attributes a child to the active prompt author instead of the parent owner", async () => {
+    const { parentName, stub, sandboxToken, store } = await setupParent({
+      repoId: 12345,
+      userId: "slack:U1",
+      canonicalUserId: "canonical-user-1",
+    });
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO participants (
+           id, user_id, canonical_user_id, scm_user_id, scm_login, scm_name, scm_email,
+           role, scm_access_token_encrypted, joined_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'member', ?, ?)`,
+        "participant-second-user",
+        "slack:U2",
+        "canonical-user-2",
+        "222",
+        "second-user",
+        "Second User",
+        "second@example.com",
+        "second-access",
+        Date.now()
+      );
+      state.storage.sql.exec(
+        "UPDATE messages SET author_id = ? WHERE status = 'processing'",
+        "participant-second-user"
+      );
+    });
+
+    const res = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Teammate child", prompt: "Handle this as user two" }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json<{ sessionId: string }>();
+    expect((await store.get(body.sessionId))?.userId).toBe("canonical-user-2");
+    const childStub = env.SESSION.get(env.SESSION.idFromName(body.sessionId));
+    const owners = await queryDO<{
+      user_id: string;
+      canonical_user_id: string | null;
+      scm_login: string | null;
+      scm_access_token_encrypted: string | null;
+    }>(
+      childStub,
+      `SELECT user_id, canonical_user_id, scm_login, scm_access_token_encrypted
+       FROM participants WHERE role = 'owner'`
+    );
+    expect(owners).toEqual([
+      {
+        user_id: "slack:U2",
+        canonical_user_id: "canonical-user-2",
+        scm_login: "second-user",
+        scm_access_token_encrypted: "second-access",
+      },
+    ]);
+  });
+
+  it("inherits automation lineage from the parent", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      userId: "user-1",
+      canonicalUserId: "canonical-abc123",
+      spawnSource: "automation",
+      automationId: "automation-1",
+      automationRunId: "run-1",
+    });
+
+    const res = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Investigate", prompt: "Investigate the failure" }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json<{ sessionId: string }>();
+    const child = await store.get(body.sessionId);
+    expect(child?.automationId).toBe("automation-1");
+    expect(child?.automationRunId).toBe("run-1");
   });
 
   it("persists environment provenance for spawned children", async () => {
@@ -166,6 +292,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       authToken: childSandboxToken,
       sandboxId: `child-sb-${Date.now()}`,
     });
+    await markChildPromptProcessing(childStub);
 
     const grandchildRes = await SELF.fetch(
       `https://test.local/sessions/${childBody.sessionId}/children`,
@@ -198,6 +325,57 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(session.environment_id).toBe("env_parent");
   });
 
+  it("persists inherited reasoning effort for children and grandchildren", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({ reasoningEffort: "high" });
+
+    const childRes = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Child", prompt: "Spawn another child" }),
+    });
+    expect(childRes.status).toBe(201);
+    const child = await childRes.json<{ sessionId: string }>();
+    expect((await store.get(child.sessionId))?.reasoningEffort).toBe("high");
+
+    const childStub = env.SESSION.get(env.SESSION.idFromName(child.sessionId));
+    const [childSession] = await queryDO<{ reasoning_effort: string | null }>(
+      childStub,
+      "SELECT reasoning_effort FROM session"
+    );
+    expect(childSession.reasoning_effort).toBe("high");
+
+    const childSandboxToken = `child-sb-tok-${Date.now()}`;
+    await seedSandboxAuth(childStub, {
+      authToken: childSandboxToken,
+      sandboxId: `child-sb-${Date.now()}`,
+    });
+    await markChildPromptProcessing(childStub);
+    const grandchildRes = await SELF.fetch(
+      `https://test.local/sessions/${child.sessionId}/children`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${childSandboxToken}`,
+        },
+        body: JSON.stringify({ title: "Grandchild", prompt: "Verify inherited reasoning" }),
+      }
+    );
+    expect(grandchildRes.status).toBe(201);
+    const grandchild = await grandchildRes.json<{ sessionId: string }>();
+    expect((await store.get(grandchild.sessionId))?.reasoningEffort).toBe("high");
+
+    const grandchildStub = env.SESSION.get(env.SESSION.idFromName(grandchild.sessionId));
+    const [grandchildSession] = await queryDO<{ reasoning_effort: string | null }>(
+      grandchildStub,
+      "SELECT reasoning_effort FROM session"
+    );
+    expect(grandchildSession.reasoning_effort).toBe("high");
+  });
+
   it("rejects a disabled model override for grandchildren", async () => {
     const { parentName, sandboxToken } = await setupParent();
 
@@ -220,6 +398,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       authToken: childSandboxToken,
       sandboxId: `child-sb-${Date.now()}`,
     });
+    await markChildPromptProcessing(childStub);
 
     const grandchildRes = await SELF.fetch(
       `https://test.local/sessions/${child.sessionId}/children`,

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { Environment, ImageBuildRecordView, ImageBuildStatus } from "@open-inspect/shared";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type {
+  ImageBuildRecordView,
+  ImageBuildStatus,
+} from "@open-inspect/shared/types/image-builds";
 import { foldImageBuildStatusByScope, imageBuildScopeKey } from "@/lib/image-builds";
 import type { Repo } from "@/hooks/use-repos";
 import { describeEnvironment, describeRepository } from "./use-session-target-picker";
@@ -56,16 +60,16 @@ describe("describeEnvironment", () => {
   it("surfaces a failed-only aggregate through the fold", () => {
     const failedRow: ImageBuildRecordView = {
       id: "build-1",
-      scope_kind: "environment",
-      scope_id: "env-1",
+      scopeKind: "environment",
+      scopeId: "env-1",
       provider: "modal",
       status: "failed",
-      repositories_fingerprint: "fp-current",
-      repository_shas: "[]",
-      runtime_version: "60",
-      build_duration_seconds: null,
-      error_message: "boom",
-      created_at: 1700000000000,
+      repositoriesFingerprint: "fp-current",
+      repositoryShas: [],
+      runtimeVersion: "60",
+      buildDurationSeconds: null,
+      errorMessage: "boom",
+      createdAt: 1700000000000,
     };
 
     const folded = foldImageBuildStatusByScope(

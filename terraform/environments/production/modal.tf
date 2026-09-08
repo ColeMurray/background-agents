@@ -4,21 +4,12 @@
 
 # Calculate hash of Modal source files for change detection
 # Uses sha256sum (Linux) or shasum (macOS) for cross-platform compatibility
-# Includes .py/.js/.ts under src/ AND modal-infra's pyproject.toml + uv.lock, so
-# dependency-only changes (e.g. a modal version bump) also trigger a redeploy.
+# Includes every bundled source file, including skill Markdown and companion
+# assets, plus dependency and deployment inputs.
 data "external" "modal_source_hash" {
   count = local.use_modal_backend ? 1 : 0
 
-  program = ["bash", "-c", <<-EOF
-    cd ${var.project_root}
-    if command -v sha256sum &> /dev/null; then
-      hash=$( ( find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) -exec sha256sum {} \; ; sha256sum packages/modal-infra/pyproject.toml packages/modal-infra/uv.lock ) | sha256sum | cut -d' ' -f1)
-    else
-      hash=$( ( find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) -exec shasum -a 256 {} \; ; shasum -a 256 packages/modal-infra/pyproject.toml packages/modal-infra/uv.lock ) | shasum -a 256 | cut -d' ' -f1)
-    fi
-    echo "{\"hash\": \"$hash\"}"
-  EOF
-  ]
+  program = ["python3", "${var.project_root}/packages/sandbox-images/cli.py", "hash", "--root", var.project_root, "--provider", "modal"]
 }
 
 module "modal_app" {
@@ -38,10 +29,8 @@ module "modal_app" {
 
   secrets = [
     {
-      name = "llm-api-keys"
-      values = {
-        ANTHROPIC_API_KEY = var.anthropic_api_key
-      }
+      name   = "llm-api-keys"
+      values = local.modal_llm_secret_values
     },
     {
       name = "github-app"
@@ -55,9 +44,7 @@ module "modal_app" {
       name = "internal-api"
       values = {
         MODAL_API_SECRET            = var.modal_api_secret
-        SERVICE_AUTH_SECRET         = random_password.service_auth_secret_modal.result
         ALLOWED_CONTROL_PLANE_HOSTS = local.control_plane_host
-        CONTROL_PLANE_URL           = local.control_plane_url
       }
     }
   ]

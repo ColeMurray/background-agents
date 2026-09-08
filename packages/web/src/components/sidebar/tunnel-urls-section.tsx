@@ -2,7 +2,7 @@
 
 import { getSafeExternalUrl } from "@/lib/urls";
 import { GlobeIcon } from "@/components/ui/icons";
-import type { SandboxStatus } from "@open-inspect/shared";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { ACTIVE_SANDBOX_STATUSES } from "./sandbox-statuses";
 
 interface TunnelUrlsSectionProps {

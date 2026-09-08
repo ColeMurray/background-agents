@@ -11,6 +11,7 @@ ensuring:
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock
@@ -25,7 +26,10 @@ from sandbox_runtime.prompt_stream import (
     OpenCodePromptStream,
     _PromptState,
 )
-from tests.conftest import MockResponse, wire_opencode_transport
+from tests.conftest import MockResponse, oc_message_id, wire_opencode_transport
+
+MOCK_HTTP_TIMEOUT_SECONDS = 30.0
+PROMPT_TIMEOUT_TEST_BUDGET_SECONDS = 0.8
 
 
 class MockSSEResponse:
@@ -67,7 +71,12 @@ class MockHttpClient:
         self._post_call_count = 0
         self._get_call_count = 0
 
-    async def post(self, url: str, json: dict | None = None, timeout: float = 30.0) -> Any:
+    async def post(
+        self,
+        url: str,
+        json: dict | None = None,
+        timeout: float = MOCK_HTTP_TIMEOUT_SECONDS,
+    ) -> Any:
         self._post_call_count += 1
         if self.post_responses:
             return self.post_responses.pop(0)
@@ -90,25 +99,34 @@ def create_sse_event(event_type: str, properties: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
+def created_after_prompt_start_ms() -> int:
+    """A message creation time comfortably after the boundary `_PromptState`
+    records when the stream starts, for post-compaction fixtures whose parentID
+    no longer matches the prompt's user message."""
+    return int(time.time() * 1000) + 60_000
+
+
 def make_prompt_state(
     message_id: str,
     opencode_message_id: str,
     *,
     cumulative_text: dict[str, str] | None = None,
     compaction_occurred: bool = False,
+    start_time: float = 0.0,
 ) -> _PromptState:
     """Per-prompt state as stream_prompt would build it, for direct
-    reconciliation calls."""
+    reconciliation calls. `start_time` is the boundary the compaction fallback
+    orders message creation times against."""
     state = _PromptState(
         opencode_session_id="oc-session-123",
         message_id=message_id,
         opencode_message_id=opencode_message_id,
-        start_time=0.0,
+        start_time=start_time,
     )
-    state.user_message_ids.add(opencode_message_id)
     if cumulative_text is not None:
         state.cumulative_text = cumulative_text
-    state.compaction_occurred = compaction_occurred
+    if compaction_occurred:
+        state.attribution.mark_compacted()
     return state
 
 
@@ -1055,6 +1073,83 @@ class TestFetchFinalMessageState:
         assert len(events) == 1
         assert events[0]["content"] == "Assistant response"
 
+    @pytest.mark.asyncio
+    async def test_compaction_fallback_skips_prior_prompt_messages(
+        self, bridge_with_mock_client: AgentBridge
+    ):
+        """After compaction the API's full-history response must not replay
+        prior turns' text: their parts were never streamed this prompt, so
+        every one of them reads as "longer than sent" and the last re-emitted
+        part would overwrite this prompt's final output. Only messages created
+        after this prompt's user message are eligible."""
+        bridge = bridge_with_mock_client
+
+        prompt_ts_ms = 1_754_000_000_000
+        prompt_user_id = oc_message_id(prompt_ts_ms, 2, "p")
+        prior_assistant_id = oc_message_id(prompt_ts_ms - 60_000, 1, "a")
+        prior_user_id = oc_message_id(prompt_ts_ms - 61_000, 1, "u")
+        compaction_user_id = oc_message_id(prompt_ts_ms + 900, 1, "w")
+        summary_id = oc_message_id(prompt_ts_ms + 1_000, 1, "s")
+        continue_user_id = oc_message_id(prompt_ts_ms + 1_500, 1, "v")
+        continuation_id = oc_message_id(prompt_ts_ms + 2_000, 1, "c")
+
+        all_messages = [
+            {
+                "info": {
+                    "id": prior_assistant_id,
+                    "role": "assistant",
+                    "parentID": prior_user_id,
+                    "time": {"created": prompt_ts_ms - 60_000},
+                },
+                "parts": [{"id": "part-prior", "type": "text", "text": "Prior turn final report"}],
+            },
+            {
+                "info": {
+                    "id": summary_id,
+                    "role": "assistant",
+                    "parentID": compaction_user_id,
+                    "summary": True,
+                    "time": {"created": prompt_ts_ms + 1_000},
+                },
+                "parts": [{"id": "part-summary", "type": "text", "text": "Internal summary"}],
+            },
+            {
+                "info": {
+                    "id": continuation_id,
+                    "role": "assistant",
+                    "parentID": continue_user_id,
+                    "time": {"created": prompt_ts_ms + 2_000},
+                },
+                "parts": [
+                    {
+                        "id": "part-continue",
+                        "type": "text",
+                        "text": "Final answer after compaction",
+                    }
+                ],
+            },
+        ]
+
+        bridge.http_client.get = AsyncMock(return_value=MockResponse(200, all_messages))
+
+        # The continuation's text was partially streamed before idle.
+        cumulative_text = {"part-continue": "Final answer"}
+
+        events = []
+        state = make_prompt_state(
+            "cp-msg-1",
+            prompt_user_id,
+            cumulative_text=cumulative_text,
+            compaction_occurred=True,
+            start_time=prompt_ts_ms / 1000,
+        )
+        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+            events.append(event)
+
+        assert len(events) == 1
+        assert events[0]["content"] == "Final answer after compaction"
+        assert events[0]["messageId"] == "cp-msg-1"
+
 
 class TestExtractErrorMessage:
     """Tests for _extract_error_message static method."""
@@ -1301,6 +1396,11 @@ class HangingMockSSEResponse:
         pass
 
 
+class HangingHandshakeSSEResponse(DelayedMockSSEResponse):
+    async def __aenter__(self):
+        await asyncio.sleep(3600)
+
+
 class DelayedMockHttpClient:
     """Mock HTTP client that uses delayed/hanging SSE responses."""
 
@@ -1313,7 +1413,12 @@ class DelayedMockHttpClient:
         self._post_call_count = 0
         self._get_call_count = 0
 
-    async def post(self, url: str, json: dict | None = None, timeout: float = 30.0) -> Any:
+    async def post(
+        self,
+        url: str,
+        json: dict | None = None,
+        timeout: float = MOCK_HTTP_TIMEOUT_SECONDS,
+    ) -> Any:
         self._post_call_count += 1
         self.post_urls.append(url)
         if self.post_responses:
@@ -1329,6 +1434,32 @@ class DelayedMockHttpClient:
 
     def stream(self, method: str, url: str, timeout: Any = None):
         return self._sse_response
+
+
+class HangingPromptPostHttpClient(DelayedMockHttpClient):
+    async def post(
+        self,
+        url: str,
+        json: dict | None = None,
+        timeout: float = MOCK_HTTP_TIMEOUT_SECONDS,
+    ) -> Any:
+        if url.endswith("/prompt_async"):
+            self.post_urls.append(url)
+            await asyncio.sleep(3600)
+        return await super().post(url, json=json, timeout=timeout)
+
+
+class HangingAbortHttpClient(DelayedMockHttpClient):
+    async def post(
+        self,
+        url: str,
+        json: dict | None = None,
+        timeout: float = MOCK_HTTP_TIMEOUT_SECONDS,
+    ) -> Any:
+        if url.endswith("/abort"):
+            self.post_urls.append(url)
+            await asyncio.sleep(3600)
+        return await super().post(url, json=json, timeout=timeout)
 
 
 class TestInactivityTimeout:
@@ -1496,6 +1627,176 @@ class TestInactivityTimeout:
 class TestPromptMaxDuration:
     """Tests for prompt max duration timeout behavior."""
 
+    def test_default_preserves_legacy_snapshot_reserve(self, monkeypatch):
+        monkeypatch.delenv("SANDBOX_TIMEOUT_SECONDS", raising=False)
+
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+
+        assert bridge.prompt_max_duration_seconds == 6300
+
+    def test_uses_configured_sandbox_timeout_with_snapshot_reserve(self, monkeypatch):
+        monkeypatch.setenv("SANDBOX_TIMEOUT_SECONDS", "14400")
+
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+
+        assert bridge.prompt_max_duration_seconds == 13500
+
+    def test_uses_proportional_snapshot_reserve_for_short_sandboxes(self, monkeypatch):
+        monkeypatch.setenv("SANDBOX_TIMEOUT_SECONDS", "600")
+
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+
+        assert bridge.prompt_max_duration_seconds == 450
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("hang_stage", ["sse_handshake", "prompt_post"])
+    async def test_prompt_deadline_covers_stream_setup(self, hang_stage: str):
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.prompt_max_duration_seconds = 0.1
+
+        if hang_stage == "sse_handshake":
+            http_client = DelayedMockHttpClient(HangingHandshakeSSEResponse([]))
+        else:
+            http_client = HangingPromptPostHttpClient(DelayedMockSSEResponse([]))
+        http_client.get_responses = [MockResponse(200, [])]
+        wire_opencode_transport(bridge, http_client)
+
+        started_at = time.monotonic()
+        with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
+            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+                pass
+
+        assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
+        assert any(url.endswith("/abort") for url in http_client.post_urls)
+
+    @pytest.mark.asyncio
+    async def test_prompt_timeout_does_not_wait_for_next_sse_event(self):
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.sse_inactivity_timeout = 2.0
+        bridge.prompt_max_duration_seconds = 0.1
+
+        sse_response = DelayedMockSSEResponse([(create_sse_event("server.heartbeat", {}), 1.0)])
+        http_client = DelayedMockHttpClient(sse_response)
+        http_client.get_responses = [MockResponse(200, [])]
+        wire_opencode_transport(bridge, http_client)
+
+        started_at = time.monotonic()
+        with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
+            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+                pass
+
+        assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
+
+    @pytest.mark.asyncio
+    async def test_prompt_timeout_bounds_cleanup(self):
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.prompt_max_duration_seconds = 0.1
+        bridge.prompt_cleanup_timeout_seconds = 0.1
+
+        http_client = HangingAbortHttpClient(
+            DelayedMockSSEResponse([(create_sse_event("server.heartbeat", {}), 1.0)])
+        )
+        wire_opencode_transport(bridge, http_client)
+
+        started_at = time.monotonic()
+        with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
+            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+                pass
+
+        assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
+        assert any(url.endswith("/abort") for url in http_client.post_urls)
+
+    @pytest.mark.asyncio
+    async def test_prompt_timeout_does_not_cancel_suspended_consumer(
+        self, opencode_message_id: str
+    ):
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.prompt_max_duration_seconds = 0.1
+
+        sse_response = DelayedMockSSEResponse(
+            [
+                (
+                    create_sse_event(
+                        "message.updated",
+                        {
+                            "info": {
+                                "id": "oc-msg-1",
+                                "role": "assistant",
+                                "sessionID": "oc-session-123",
+                                "parentID": opencode_message_id,
+                            }
+                        },
+                    ),
+                    0,
+                ),
+                (
+                    create_sse_event(
+                        "message.part.updated",
+                        {
+                            "part": {
+                                "type": "text",
+                                "id": "part-1",
+                                "sessionID": "oc-session-123",
+                                "messageID": "oc-msg-1",
+                                "text": "Hello",
+                            }
+                        },
+                    ),
+                    0,
+                ),
+            ]
+        )
+        http_client = DelayedMockHttpClient(sse_response)
+        http_client.get_responses = [MockResponse(200, [])]
+        wire_opencode_transport(bridge, http_client)
+        stream = bridge._stream_opencode_response_sse("msg-1", "test")
+
+        assert (await anext(stream))["type"] == "token"
+        await asyncio.sleep(0.2)
+        with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
+            await anext(stream)
+
+        assert any(url.endswith("/abort") for url in http_client.post_urls)
+
     @pytest.mark.asyncio
     async def test_prompt_max_duration_timeout(self):
         """Prompt should stop when it exceeds max duration."""
@@ -1507,7 +1808,7 @@ class TestPromptMaxDuration:
         )
         bridge.opencode_session_id = "oc-session-123"
         bridge.sse_inactivity_timeout = 2.0
-        bridge.PROMPT_MAX_DURATION = 0.25
+        bridge.prompt_max_duration_seconds = 0.25
 
         sse_response = DelayedMockSSEResponse(
             [
@@ -1535,7 +1836,7 @@ class TestSubtaskStreaming:
     async def test_child_session_tool_events_streamed(
         self, bridge: AgentBridge, opencode_message_id: str
     ):
-        """Child session tool events should be forwarded with isSubtask=True."""
+        """Child tools emitted before Task completion should retain Task ownership."""
         http_client = bridge.http_client
 
         http_client.sse_events = [
@@ -1611,6 +1912,27 @@ class TestSubtaskStreaming:
                     }
                 },
             ),
+            # Foreground Tasks expose their child metadata on the completed tool state,
+            # after the child activity has already streamed.
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "parent-part-1",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-1",
+                        "tool": "task",
+                        "callID": "task-call-1",
+                        "state": {
+                            "status": "completed",
+                            "input": {"prompt": "inspect files"},
+                            "output": '<task id="child-1" state="completed">...</task>',
+                            "metadata": {"sessionId": "child-1"},
+                        },
+                    }
+                },
+            ),
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
@@ -1619,12 +1941,17 @@ class TestSubtaskStreaming:
             events.append(event)
 
         tool_events = [e for e in events if e["type"] == "tool_call"]
-        assert len(tool_events) == 2
-        assert tool_events[0]["status"] == "running"
-        assert tool_events[0]["isSubtask"] is True
-        assert tool_events[0]["messageId"] == "cp-msg-1"
-        assert tool_events[1]["status"] == "completed"
+        assert len(tool_events) == 3
+        assert tool_events[0]["tool"] == "task"
+        assert tool_events[0]["childSessionId"] == "child-1"
+        assert tool_events[1]["status"] == "running"
         assert tool_events[1]["isSubtask"] is True
+        assert tool_events[1]["childSessionId"] == "child-1"
+        assert tool_events[1]["taskCallId"] == "task-call-1"
+        assert tool_events[1]["messageId"] == "cp-msg-1"
+        assert tool_events[2]["status"] == "completed"
+        assert tool_events[2]["isSubtask"] is True
+        assert tool_events[2]["taskCallId"] == "task-call-1"
 
     @pytest.mark.asyncio
     async def test_child_text_events_not_forwarded(
@@ -1864,6 +2191,7 @@ class TestSubtaskStreaming:
         assert len(error_events) == 1
         assert error_events[0]["error"] == "Sub-task failed"
         assert error_events[0]["isSubtask"] is True
+        assert error_events[0]["childSessionId"] == "child-1"
 
         token_events = [e for e in events if e["type"] == "token"]
         assert len(token_events) == 1
@@ -1961,7 +2289,7 @@ class TestSubtaskStreaming:
                 },
             ),
             # NO session.created — child was resumed via task_id
-            # Parent task tool part with metadata.sessionId
+            # Parent task tool part with state.metadata.sessionId
             create_sse_event(
                 "message.part.updated",
                 {
@@ -1972,11 +2300,11 @@ class TestSubtaskStreaming:
                         "messageID": "oc-msg-1",
                         "tool": "task",
                         "callID": "task-call-1",
-                        "metadata": {"sessionId": "child-1"},
                         "state": {
                             "status": "running",
                             "input": {"prompt": "do something"},
                             "output": "",
+                            "metadata": {"sessionId": "child-1"},
                         },
                     }
                 },
@@ -2023,9 +2351,12 @@ class TestSubtaskStreaming:
         child_tools = [e for e in tool_events if e.get("isSubtask")]
         assert len(parent_tools) == 1
         assert parent_tools[0]["tool"] == "task"
+        assert parent_tools[0]["childSessionId"] == "child-1"
         assert len(child_tools) == 1
         assert child_tools[0]["tool"] == "Bash"
         assert child_tools[0]["isSubtask"] is True
+        assert child_tools[0]["childSessionId"] == "child-1"
+        assert child_tools[0]["taskCallId"] == "task-call-1"
 
     @pytest.mark.asyncio
     async def test_parent_child_callid_collision(
@@ -2260,6 +2591,7 @@ class TestCompactionHandling:
                         "sessionID": "oc-session-123",
                         "parentID": "msg_compaction_user",
                         "summary": True,
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -2272,6 +2604,7 @@ class TestCompactionHandling:
                         "role": "assistant",
                         "sessionID": "oc-session-123",
                         "parentID": "msg_synthetic_continue",
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -2360,6 +2693,7 @@ class TestCompactionHandling:
                         "sessionID": "oc-session-123",
                         "parentID": "msg_compaction_user",
                         "summary": True,
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -2384,6 +2718,7 @@ class TestCompactionHandling:
                         "role": "assistant",
                         "sessionID": "oc-session-123",
                         "parentID": "msg_synthetic_continue",
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -2414,6 +2749,15 @@ class TestCompactionHandling:
         assert [event["content"] for event in events if event["type"] == "token"] == [
             "Before compaction",
             "After compaction",
+        ]
+        assert [event for event in events if event["type"] == "context_compacted"] == [
+            {"type": "context_compacted", "messageId": "cp-msg-1"}
+        ]
+        assert [event["type"] for event in events] == [
+            "token",
+            "context_compacted",
+            "token",
+            "execution_complete",
         ]
         assert [event for event in events if event["type"] == "error"] == []
         assert events[-1] == {
@@ -2551,6 +2895,7 @@ class TestCompactionHandling:
                         "sessionID": "oc-session-123",
                         "parentID": "msg_compaction_user",
                         "summary": True,
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -2671,6 +3016,7 @@ class TestCompactionHandling:
                         "role": "assistant",
                         "sessionID": "oc-session-123",
                         "parentID": "msg_synthetic_continue",
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -2697,6 +3043,8 @@ class TestCompactionHandling:
         bridge.opencode_session_id = "oc-session-123"
         wire_opencode_transport(bridge, AsyncMock())
 
+        prompt_ts_ms = 1_754_000_000_000
+
         # API returns: compaction summary + post-compaction response
         messages = [
             {
@@ -2705,6 +3053,7 @@ class TestCompactionHandling:
                     "role": "assistant",
                     "parentID": "msg_compaction_user",
                     "summary": True,
+                    "time": {"created": prompt_ts_ms + 1_000},
                 },
                 "parts": [
                     {"id": "summary-part", "type": "text", "text": "## Goal\nSummary..."},
@@ -2715,6 +3064,7 @@ class TestCompactionHandling:
                     "id": "oc-msg-post",
                     "role": "assistant",
                     "parentID": "msg_synthetic_continue",
+                    "time": {"created": prompt_ts_ms + 2_000},
                 },
                 "parts": [
                     {"id": "post-part", "type": "text", "text": "Here is the answer."},
@@ -2725,7 +3075,12 @@ class TestCompactionHandling:
         bridge.http_client.get = AsyncMock(return_value=MockResponse(200, messages))
 
         events = []
-        state = make_prompt_state("cp-msg-1", "msg_original_id", compaction_occurred=True)
+        state = make_prompt_state(
+            "cp-msg-1",
+            "msg_original_id",
+            compaction_occurred=True,
+            start_time=prompt_ts_ms / 1000,
+        )
         async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
             events.append(event)
 

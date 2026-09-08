@@ -16,7 +16,7 @@ export function formatSessionEventTime(timestampSeconds: number): string {
 
 /**
  * Format a timestamp as a relative time string (e.g., "2d", "3h", "5m").
- * Returns "just now" for very recent timestamps.
+ * Returns "now" for very recent timestamps.
  */
 export function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -36,7 +36,7 @@ export function formatRelativeTime(timestamp: number): string {
   if (minutes > 0) {
     return `${minutes}m`;
   }
-  return "just now";
+  return "now";
 }
 
 /**
@@ -57,13 +57,4 @@ export function formatFutureRelativeTime(timestamp: number): string {
     return `in ${minutes}m`;
   }
   return "in <1m";
-}
-
-/**
- * Group sessions by activity status.
- * Sessions older than 7 days are considered "inactive".
- */
-export function isInactiveSession(updatedAt: number, now: number): boolean {
-  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
-  return updatedAt < sevenDaysAgo;
 }

@@ -1,15 +1,40 @@
 import { z } from "zod";
-import { sessionAttachmentReferencesSchema } from "./session-attachments";
+import { clientRequestIdSchema, webPromptPayloadSchema } from "./prompts";
+
+export { clientRequestIdSchema, MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS } from "./prompts";
+
+/** Standard close code for a peer that is shutting down or navigating away. */
+export const WS_CLOSE_GOING_AWAY = 1001;
+
+/** Standard close code for a transient server-side failure. */
+export const WS_CLOSE_INTERNAL_ERROR = 1011;
+
+/** Standard close code for a host that is restarting; the peer should reconnect. */
+export const WS_CLOSE_SERVICE_RESTART = 1012;
+
+/** Standard close code for a host that is temporarily overloaded; the peer should reconnect. */
+export const WS_CLOSE_TRY_AGAIN_LATER = 1013;
+
+/** Signals that the browser must discard its credential and reconnect fresh. */
+export const WS_CLOSE_AUTHORIZATION_REVOKED = 4010;
+
+export const WS_AUTHORIZATION_REVOKED_REASON = "Authorization expired or changed";
 
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ping") }),
-  z.object({ type: z.literal("subscribe"), token: z.string(), clientId: z.string() }),
   z.object({
+    type: z.literal("subscribe"),
+    token: z.string(),
+    clientId: z.string(),
+  }),
+  webPromptPayloadSchema.extend({
     type: z.literal("prompt"),
-    content: z.string(),
-    model: z.string().optional(),
-    reasoningEffort: z.string().optional(),
-    attachments: sessionAttachmentReferencesSchema.optional(),
+    clientRequestId: clientRequestIdSchema,
+  }),
+  z.object({
+    type: z.literal("cancel_prompt"),
+    messageId: z.string().min(1),
+    clientRequestId: clientRequestIdSchema,
   }),
   z.object({ type: z.literal("stop") }),
   z.object({ type: z.literal("typing") }),
@@ -20,7 +45,13 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("fetch_history"),
-    cursor: z.object({ timestamp: z.number(), id: z.string() }).optional(),
+    cursor: z
+      .object({
+        timestamp: z.number(),
+        id: z.string(),
+        sequence: z.number().int().nonnegative().optional(),
+      })
+      .optional(),
     limit: z.number().optional(),
   }),
 ]);

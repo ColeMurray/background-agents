@@ -5,7 +5,7 @@ import {
   type SessionDiffManifest,
   type SessionDiffRepository,
   type SessionDiffState,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 
 type ReadySessionDiffRepository = Extract<SessionDiffRepository, { status: "ready" }>;
 
@@ -23,7 +23,7 @@ export type ResolvedDiffSelection =
     }
   | { status: "missing"; revisionId: string };
 
-export type SessionDiffViewKind =
+type SessionDiffViewKind =
   | "hidden"
   | "loading"
   | "error"

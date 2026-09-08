@@ -1,4 +1,4 @@
-import { createLogger as createStructuredLogger, parseLogLevel } from "@open-inspect/shared";
+import { createLogger as createStructuredLogger, parseLogLevel } from "@open-inspect/shared/logger";
 
 const SERVICE_NAME = "web";
 

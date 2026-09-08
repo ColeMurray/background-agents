@@ -19,16 +19,20 @@ export interface SessionInternalRoute {
   handler: SessionInternalRouteHandler;
 }
 
+/** Handlers required to serve every internal SessionDO HTTP route. */
 export interface SessionInternalRouteHandlers {
   init: SessionInternalRouteHandler;
   state: SessionInternalRouteHandler;
+  snapshot: SessionInternalRouteHandler;
+  sandboxAccess: SessionInternalRouteHandler;
   prompt: SessionInternalRouteHandler;
+  autofix: SessionInternalRouteHandler;
   stop: SessionInternalRouteHandler;
   sandboxEvent: SessionInternalRouteHandler;
+  sandboxError: SessionInternalRouteHandler;
   createMediaArtifact: SessionInternalRouteHandler;
   recordAttachment: SessionInternalRouteHandler;
   listParticipants: SessionInternalRouteHandler;
-  addParticipant: SessionInternalRouteHandler;
   listEvents: SessionInternalRouteHandler;
   listArtifacts: SessionInternalRouteHandler;
   listMessages: SessionInternalRouteHandler;
@@ -37,14 +41,19 @@ export interface SessionInternalRouteHandlers {
   pullRequestsRefresh: SessionInternalRouteHandler;
   wsToken: SessionInternalRouteHandler;
   updateTitle: SessionInternalRouteHandler;
+  budget: SessionInternalRouteHandler;
   archive: SessionInternalRouteHandler;
   unarchive: SessionInternalRouteHandler;
+  expireDraft: SessionInternalRouteHandler;
   verifySandboxToken: SessionInternalRouteHandler;
   openaiTokenRefresh: SessionInternalRouteHandler;
+  xaiTokenRefresh: SessionInternalRouteHandler;
   scmCredentials: SessionInternalRouteHandler;
   tunnelUrls: SessionInternalRouteHandler;
   spawnContext: SessionInternalRouteHandler;
+  activePromptAuthor: SessionInternalRouteHandler;
   childSummary: SessionInternalRouteHandler;
+  parentPrompt: SessionInternalRouteHandler;
   cancel: SessionInternalRouteHandler;
   childSessionUpdate: SessionInternalRouteHandler;
   diffState: SessionInternalRouteHandler;
@@ -64,9 +73,17 @@ export function createSessionInternalRoutes(
   return [
     { method: "POST", path: SessionInternalPaths.init, handler: handlers.init },
     { method: "GET", path: SessionInternalPaths.state, handler: handlers.state },
+    { method: "GET", path: SessionInternalPaths.snapshot, handler: handlers.snapshot },
+    {
+      method: "GET",
+      path: SessionInternalPaths.sandboxAccess,
+      handler: handlers.sandboxAccess,
+    },
     { method: "POST", path: SessionInternalPaths.prompt, handler: handlers.prompt },
+    { method: "POST", path: SessionInternalPaths.autofix, handler: handlers.autofix },
     { method: "POST", path: SessionInternalPaths.stop, handler: handlers.stop },
     { method: "POST", path: SessionInternalPaths.sandboxEvent, handler: handlers.sandboxEvent },
+    { method: "POST", path: SessionInternalPaths.sandboxError, handler: handlers.sandboxError },
     {
       method: "POST",
       path: SessionInternalPaths.createMediaArtifact,
@@ -77,11 +94,6 @@ export function createSessionInternalRoutes(
       method: "GET",
       path: SessionInternalPaths.participants,
       handler: handlers.listParticipants,
-    },
-    {
-      method: "POST",
-      path: SessionInternalPaths.participants,
-      handler: handlers.addParticipant,
     },
     { method: "GET", path: SessionInternalPaths.events, handler: handlers.listEvents },
     { method: "GET", path: SessionInternalPaths.artifacts, handler: handlers.listArtifacts },
@@ -99,8 +111,10 @@ export function createSessionInternalRoutes(
     },
     { method: "POST", path: SessionInternalPaths.wsToken, handler: handlers.wsToken },
     { method: "POST", path: SessionInternalPaths.updateTitle, handler: handlers.updateTitle },
+    { method: "POST", path: SessionInternalPaths.budget, handler: handlers.budget },
     { method: "POST", path: SessionInternalPaths.archive, handler: handlers.archive },
     { method: "POST", path: SessionInternalPaths.unarchive, handler: handlers.unarchive },
+    { method: "POST", path: SessionInternalPaths.expireDraft, handler: handlers.expireDraft },
     {
       method: "POST",
       path: SessionInternalPaths.verifySandboxToken,
@@ -113,12 +127,23 @@ export function createSessionInternalRoutes(
     },
     {
       method: "POST",
+      path: SessionInternalPaths.xaiTokenRefresh,
+      handler: handlers.xaiTokenRefresh,
+    },
+    {
+      method: "POST",
       path: SessionInternalPaths.scmCredentials,
       handler: handlers.scmCredentials,
     },
     { method: "GET", path: SessionInternalPaths.tunnelUrls, handler: handlers.tunnelUrls },
     { method: "GET", path: SessionInternalPaths.spawnContext, handler: handlers.spawnContext },
+    {
+      method: "GET",
+      path: SessionInternalPaths.activePromptAuthor,
+      handler: handlers.activePromptAuthor,
+    },
     { method: "GET", path: SessionInternalPaths.childSummary, handler: handlers.childSummary },
+    { method: "POST", path: SessionInternalPaths.parentPrompt, handler: handlers.parentPrompt },
     { method: "POST", path: SessionInternalPaths.cancel, handler: handlers.cancel },
     {
       method: "POST",

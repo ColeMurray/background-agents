@@ -1,4 +1,4 @@
-import { createKvCacheStore } from "@open-inspect/shared";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { z } from "zod";
 import type { Env } from "../types";
 
@@ -14,9 +14,15 @@ const sourceMessageSchema = z.object({
   threadTs: z.string().optional(),
 });
 
+const unattributedPromptSchema = z.object({
+  forwardedMessages: z.array(z.string()),
+});
+
 const pendingRequestSchema = z.object({
   message: z.string().min(1),
   userId: z.string().min(1),
+  /** Present when `message` still needs sender attribution before delivery. */
+  unattributedPrompt: unattributedPromptSchema.optional(),
   previousMessages: z.array(z.string()).optional(),
   channelName: z.string().optional(),
   channelDescription: z.string().optional(),

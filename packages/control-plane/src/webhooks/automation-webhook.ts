@@ -2,24 +2,40 @@
  * Generic automation webhook route — per-automation inbound HTTP endpoint.
  */
 
-import { normalizeWebhookEvent } from "@open-inspect/shared";
+import { normalizeWebhookEvent } from "@open-inspect/shared/triggers";
 import { AutomationStore } from "../db/automation-store";
 import { verifyWebhookApiKey } from "../auth/webhook-key";
-import type { Route, RequestContext } from "../routes/shared";
-import { parsePattern, json, error } from "../routes/shared";
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { RequestContext } from "../routes/shared";
+import {
+  error,
+  json,
+  NO_AUTHORIZATION,
+  SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
+} from "../routes/shared";
 import type { Env } from "../types";
+import { Scheduler } from "../scheduler/scheduler";
 
 /** Maximum webhook payload size (64KB). */
 const MAX_PAYLOAD_SIZE = 64 * 1024;
 
+export function parseWebhookIdempotencyKey(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body) || !("idempotencyKey" in body)) {
+    return undefined;
+  }
+
+  return typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined;
+}
+
 async function handleAutomationWebhook(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const automationId = match.groups?.id;
-  if (!automationId) return error("Automation ID required", 400);
+  const automationId = params.id;
 
   // 1. Validate content type
   const contentType = request.headers.get("content-type");
@@ -64,33 +80,18 @@ async function handleAutomationWebhook(
     return error("Invalid JSON body", 400);
   }
 
-  const idempotencyKey =
-    body && typeof body === "object"
-      ? ((body as Record<string, unknown>).idempotencyKey as string | undefined)
-      : undefined;
+  const idempotencyKey = parseWebhookIdempotencyKey(body);
 
-  // 6. Normalize and forward to SchedulerDO
+  // 6. Normalize and process the event.
   const event = normalizeWebhookEvent(automationId, body, idempotencyKey);
-
-  if (!env.SCHEDULER) {
-    return error("Scheduler not configured", 503);
-  }
-
-  const doId = env.SCHEDULER.idFromName("global-scheduler");
-  const stub = env.SCHEDULER.get(doId);
-
-  const response = await stub.fetch("http://internal/internal/event", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(event),
-  });
-
-  const result = await response.json<{ triggered: number; skipped: number }>();
-  return json({ ok: true, ...result }, response.status === 200 ? 200 : response.status);
+  const result = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
+  return json({ ok: true, ...result });
 }
 
-export const automationWebhookRoute: Route = {
-  method: "POST",
-  pattern: parsePattern("/webhooks/automation/:id"),
-  handler: handleAutomationWebhook,
-};
+export const automationWebhookRoutes = new Hono<ControlPlaneHonoEnv>();
+
+automationWebhookRoutes.post(
+  "/webhooks/automation/:id",
+  admit({ ...SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, authorization: NO_AUTHORIZATION }),
+  (c) => dispatch(c, handleAutomationWebhook)
+);

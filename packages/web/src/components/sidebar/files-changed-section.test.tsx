@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionDiffRepository } from "@open-inspect/shared";
+import type { SessionDiffRepository } from "@open-inspect/shared/types/session-diffs";
 import { FilesChangedSection } from "./files-changed-section";
 
 afterEach(cleanup);
@@ -67,6 +67,23 @@ describe("FilesChangedSection", () => {
 
     expect(screen.queryByRole("button", { name: /web\/index\.ts/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /api\/index\.ts/i })).toBeVisible();
+  });
+
+  it("restores a collapsed repository after clearing a filter", async () => {
+    render(<FilesChangedSection repositories={repositories} onSelect={vi.fn()} />);
+    const summary = screen.getByText("acme/web");
+    const details = summary.closest("details");
+    const search = screen.getByRole("searchbox", { name: "Filter changed files" });
+
+    expect(details).toHaveAttribute("open");
+    await userEvent.click(summary);
+    expect(details).not.toHaveAttribute("open");
+
+    await userEvent.type(search, "api/");
+    expect(details).toHaveAttribute("open");
+
+    await userEvent.clear(search);
+    expect(details).not.toHaveAttribute("open");
   });
 
   it("shows a repository-level error for a partial multi-repository bundle", () => {

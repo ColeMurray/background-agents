@@ -49,7 +49,8 @@ Use AskUserQuestion to gather:
    `open-inspect-{deployment_name}.vercel.app` and must be unique across all Vercel users.
 4. **Slack integration** - Yes or No
 5. **GitHub bot integration** - Yes or No (automated PR reviews and comment-triggered actions)
-6. **Prerequisites confirmation** - Confirm they have accounts on Cloudflare, Vercel, Modal,
+6. **Sign-in providers** - GitHub, Google, or both. At least one is required.
+7. **Prerequisites confirmation** - Confirm they have accounts on Cloudflare, Vercel, Modal,
    Anthropic
 
 ## Phase 2: Repository Setup
@@ -119,20 +120,29 @@ modal profile current
 
 ## Phase 4: GitHub App Setup
 
-Guide user through creating a GitHub App (handles both OAuth and repo access):
+Guide the user through creating a GitHub App. Its App ID, private key, and installation ID are
+always required for repository access. Its client ID and secret enable GitHub sign-in only when the
+user selected GitHub:
 
 1. Go to https://github.com/settings/apps → "New GitHub App"
 2. **Name**: `Open-Inspect-{YourName}` (globally unique)
-3. **Homepage URL**: `https://open-inspect-{deployment_name}.vercel.app`
+3. **Homepage URL**: The deployed web app URL for the selected platform:
+   - Vercel: `https://open-inspect-{deployment_name}.vercel.app`
+   - Cloudflare workers.dev: `https://open-inspect-web-{deployment_name}.{subdomain}.workers.dev`
+   - Cloudflare custom domain: `https://{your-custom-domain}`
 4. **Webhook**: Uncheck "Active"
-5. **Callback URL** (under "Identifying and authorizing users"):
-   `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/github`
-   - **CRITICAL**: Must match deployed Vercel URL exactly!
-6. **Repository permissions**: Contents (Read & Write), Issues (Read & Write), Pull requests (Read &
-   Write), Metadata (Read-only)
-7. **Account permissions**: Email addresses (Read-only)
+5. If GitHub sign-in is selected, set the **Callback URL** (under "Identifying and authorizing
+   users"): `{deployed-web-app-url}/api/auth/callback/github`
+   - **CRITICAL**: The origin must exactly match the Homepage URL selected above.
+6. **Repository permissions**: Contents (Read & Write), Pull requests (Read & Write), Metadata
+   (Read-only), and Issues (Read & Write) only if the GitHub bot is enabled. Pull requests
+   permission also authorizes creating and applying labels to session-created pull requests;
+   labeling does not require Issues permission.
+7. If GitHub sign-in uses email/domain admission, set **Account permissions**: Email addresses
+   (Read-only)
 8. Create app, note **App ID**
-9. Generate **Client Secret**, note **Client ID** and **Client Secret**
+9. If GitHub sign-in is selected, generate a **Client Secret** and note the **Client ID** and
+   **Client Secret**. Otherwise leave both Terraform values empty.
 10. Generate **Private Key** (downloads .pem file)
 11. Install app on account, note **Installation ID** from URL
 
@@ -145,8 +155,8 @@ cat /tmp/github-app-key-pkcs8.pem
 
 ## Phase 4b: Google OAuth Setup (If Enabled)
 
-Only if the user wants Google login for non-developer users (PMs, support agents). Skip for
-GitHub-only deployments — leave `google_client_id` and `google_client_secret` empty.
+Only if the user selected Google sign-in. Skip for GitHub-only deployments and leave
+`google_client_id` and `google_client_secret` empty.
 
 Guide user:
 
@@ -166,19 +176,21 @@ Then in `terraform.tfvars`:
   disable)
 - Add at least one entry to `allowed_emails` (exact addresses, e.g. `pm@gmail.com`) or
   `allowed_email_domains`. Prefer `allowed_emails` for shared domains like gmail.com.
+- If Google is the only sign-in provider, leave `github_client_id` and `github_client_secret` empty.
+  Keep the GitHub App ID, private key, and installation ID configured for repository access.
 
-Terraform derives `NEXT_PUBLIC_GOOGLE_ENABLED` automatically when both Google credentials are set,
-which reveals the "Sign in with Google" button. Google users get the same flat access; their PRs
-fall back to the App bot unless the same verified email is also a linked GitHub identity.
+The next request to `/login` shows Google after both credentials are deployed; no separate web flag
+or rebuild is required. Google users get the same flat access; their PRs fall back to the App bot
+unless the same verified email is also a linked GitHub identity.
 
 ## Phase 5: Slack App Setup (If Enabled)
 
 Guide user:
 
 1. https://api.slack.com/apps → "Create New App" → "From scratch"
-2. OAuth & Permissions → Add scopes: `app_mentions:read`, `chat:write`, `channels:history`,
-   `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `files:read`,
-   `files:write`, `reactions:write`
+2. OAuth & Permissions → Add scopes: `assistant:write`, `app_mentions:read`, `chat:write`,
+   `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`, `files:read`,
+   `files:write`, `reactions:write`, `users:read`, `users:read.email`
 3. Install to Workspace, note **Bot Token** (`xoxb-...`)
 4. Basic Information → note **Signing Secret**
 5. **App Home and Event Subscriptions configured AFTER deployment** (worker must be running for URL
@@ -252,27 +264,41 @@ terraform apply
 
 After Terraform deployment, guide user:
 
+The user can apply `packages/slack-bot/slack-app-manifest.yaml` instead of configuring the following
+settings individually. Replace `SLACK_EVENTS_URL` with the worker's `/events` URL and
+`SLACK_INTERACTIONS_URL` with its `/interactions` URL first. The template includes
+`message.channels` and `message.groups` for channel-message automations; remove them if the
+deployment will not use that feature.
+
+OAuth scopes, app installation, the bot token, and the signing secret must be configured before
+`terraform apply`. Apply the URL-dependent manifest after deployment.
+
+### Enable Agents
+
+1. Agents → Enable the agent feature
+2. Set the agent description to `AI coding assistant for your codebase`
+
 ### Enable App Home
 
 1. App Home → Show Tabs → Enable **"Home Tab"**
-2. Save Changes
+2. Enable **"Messages Tab"** and allow users to send messages
+3. Save Changes
 
-The App Home provides a settings interface where users can configure their preferred Claude model.
+The App Home provides settings for users' preferred model, reasoning effort, and branch. The
+writable Messages tab lets users start direct-message sessions.
 
 ### Configure Event Subscriptions
 
-1. Event Subscriptions → Enable → Request URL:
-   `https://open-inspect-slack-bot-{deployment_name}.{subdomain}.workers.dev/events`
+1. Event Subscriptions → Enable → Request URL from `terraform output -raw slack_bot_events_url`
 2. Wait for "Verified" checkmark
-3. Subscribe to bot events: `app_home_opened`, `app_mention`, `message.im`
+3. Subscribe to bot events: `app_home_opened`, `app_mention`, `message.channels`, `message.groups`,
+   `message.im`
 
 ### Configure Interactivity
 
-4. Interactivity → Enable → Request URL:
-   `https://open-inspect-slack-bot-{deployment_name}.{subdomain}.workers.dev/interactions`
-5. Select Menus → Options Load URL:
-   `https://open-inspect-slack-bot-{deployment_name}.{subdomain}.workers.dev/interactions` Required
-   for searchable Slack repository pickers that use external data sources.
+4. Interactivity → Enable → Request URL from `terraform output -raw slack_bot_interactions_url`
+5. Select Menus → Use the same URL for **Options Load URL**. This is required for searchable Slack
+   repository pickers that use external data sources.
 
 ### Invite Bot to Channels
 
@@ -316,11 +342,11 @@ npx vercel --prod
 ```bash
 curl https://open-inspect-control-plane-{deployment_name}.{subdomain}.workers.dev/health
 curl https://{workspace}--open-inspect-api-health.modal.run
-curl -I https://open-inspect-{deployment_name}.vercel.app
+curl -I "$(terraform output -raw web_app_url)"
 ```
 
-Present deployment summary table. Instruct user to test: visit web app, sign in with GitHub, create
-session, send prompt.
+Present a deployment summary table. Instruct the user to test: visit the web app, sign in with each
+configured provider, create a session, and send a prompt.
 
 ## Phase 13: CI/CD Setup (Optional)
 
@@ -343,5 +369,5 @@ Ask if user wants GitHub Actions CI/CD. If yes, use `gh secret set` for all requ
 
 - Track all collected credentials securely throughout the process
 - Never log sensitive values
-- The callback URL MUST match the actual deployed Vercel URL
+- The callback URL MUST match the actual deployed web app URL
 - Two-phase Terraform deployment is required due to Cloudflare Durable Object constraints

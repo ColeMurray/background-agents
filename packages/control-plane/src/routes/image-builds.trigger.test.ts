@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createRequestMetrics } from "../db/instrumented-d1";
+import type * as AuthenticateModule from "../auth/authenticate";
+import {
+  createTestBackgroundTasks,
+  type TestBackgroundTasks,
+} from "../background-tasks.test-support";
 import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { imageBuildRoutes } from "./image-builds";
 import type { Env } from "../types";
-import type { RequestContext, Route } from "./shared";
-import type { SqlDatabase } from "../db/sql-database";
 import type { RepositoryAccessResult } from "../source-control";
 import type * as SourceControlModule from "../source-control";
 import type * as SandboxClientModule from "../sandbox/client";
@@ -14,6 +16,12 @@ import type * as VercelClientModule from "../sandbox/providers/vercel/client";
 import type * as OpenComputerProviderModule from "../sandbox/providers/opencomputer-provider";
 import type * as OpenComputerClientModule from "../sandbox/opencomputer-rest-client";
 import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
+import {
+  createTestEnv,
+  createTestRequestHandler,
+  ownerAuthorizationDatabase,
+  TEST_BACKGROUND_TASK_CONTEXT,
+} from "../router.test-support";
 
 // The repo trigger resolves the repo's actual default branch (never assumes
 // "main") and threads it into the build's repository set + fingerprint + the
@@ -23,26 +31,39 @@ import type * as IntegrationSettingsResolutionModule from "../session/integratio
 // "main". The toggle tests pin the save-hook parity change: toggling a repo's
 // prebuild on triggers a build immediately instead of waiting for the cron.
 
+const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
+
+vi.mock("../auth/authenticate", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthenticateModule>()),
+  authenticate: mocks.authenticate,
+}));
+
 const scmProvider = vi.hoisted(() => ({
   checkRepositoryAccess: vi.fn(),
   generateCredentialHelperAuth: vi.fn(),
 }));
 
 const modalClient = vi.hoisted(() => ({
-  buildImage: vi.fn(),
+  createImageBuildSandbox: vi.fn(),
+  startImageBuildSandbox: vi.fn(),
+  terminateImageBuildSandbox: vi.fn(),
 }));
 
 const vercelProvider = vi.hoisted(() => ({
-  triggerEnvironmentImageBuild: vi.fn(),
+  triggerImageBuild: vi.fn(),
 }));
 
 const openComputerProvider = vi.hoisted(() => ({
-  triggerEnvironmentImageBuild: vi.fn(),
+  triggerImageBuild: vi.fn(),
 }));
 
 const integrationSettings = vi.hoisted(() => ({
   resolveSandboxSettings: vi.fn(),
 }));
+
+const jobs = {
+  send: vi.fn(async () => undefined),
+};
 
 vi.mock("../source-control", async (importOriginal) => {
   const actual = await importOriginal<typeof SourceControlModule>();
@@ -103,63 +124,37 @@ vi.mock("../session/integration-settings-resolution", async (importOriginal) => 
 const TRIGGER_PATH = "/image-builds/trigger/repo/acme/repo";
 const TOGGLE_PATH = "/image-builds/toggle/repo/acme/repo";
 
-function findRoute(method: string, path: string): Route {
-  // Match on method as well as pattern so a same-pattern route of another
-  // method (or a reordering) can never resolve to the wrong handler.
-  const route = imageBuildRoutes.find(
-    (candidate) => candidate.method === method && candidate.pattern.test(path)
-  );
-  if (!route) throw new Error(`route not found: ${method} ${path}`);
-  return route;
-}
-
-function matchFor(route: Route, path: string): RegExpMatchArray {
-  const match = path.match(route.pattern);
-  if (!match) throw new Error("path did not match route pattern");
-  return match;
-}
-
-function createContext(waitUntilTasks?: Promise<unknown>[]): RequestContext {
-  return {
-    request_id: "request-1",
-    trace_id: "trace-1",
-    db: {} as SqlDatabase,
-    metrics: createRequestMetrics(),
-    executionCtx: {
-      waitUntil: (task: Promise<unknown>) => {
-        waitUntilTasks?.push(task);
-      },
-    } as unknown as ExecutionContext,
-  };
-}
+const handleRequest = createTestRequestHandler([imageBuildRoutes]);
 
 function createModalEnv(): Env {
-  return {
-    DB: {} as unknown as D1Database,
+  return createTestEnv({
+    DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "modal",
     WORKER_URL: "https://cp.test",
     MODAL_API_SECRET: "modal-secret",
     MODAL_WORKSPACE: "modal-ws",
+    JOBS: jobs,
     // Modal builds mint callback tokens like every provider.
     IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
-  } as Env;
+  });
 }
 
 function createVercelEnv(): Env {
-  return {
-    DB: {} as unknown as D1Database,
+  return createTestEnv({
+    DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "vercel",
     SCM_PROVIDER: "github",
     WORKER_URL: "https://cp.test",
     IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
     VERCEL_TOKEN: "vercel-token",
     VERCEL_PROJECT_ID: "project-123",
-  } as Env;
+    JOBS: jobs,
+  });
 }
 
 function createOpenComputerEnv(): Env {
-  return {
-    DB: {} as unknown as D1Database,
+  return createTestEnv({
+    DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "opencomputer",
     SCM_PROVIDER: "github",
     WORKER_URL: "https://cp.test",
@@ -167,34 +162,31 @@ function createOpenComputerEnv(): Env {
     OPENCOMPUTER_API_URL: "https://opencomputer.test",
     OPENCOMPUTER_API_KEY: "oc-token",
     OPENCOMPUTER_TEMPLATE: "openinspect-runtime",
-  } as Env;
+    JOBS: jobs,
+  });
 }
 
 async function callTrigger(env: Env): Promise<Response> {
-  const route = findRoute("POST", TRIGGER_PATH);
-  return route.handler(
+  return handleRequest(
     new Request(`https://test.local${TRIGGER_PATH}`, { method: "POST" }),
     env,
-    matchFor(route, TRIGGER_PATH),
-    createContext()
+    TEST_BACKGROUND_TASK_CONTEXT
   );
 }
 
 async function callToggle(
   env: Env,
   body: unknown,
-  waitUntilTasks?: Promise<unknown>[]
+  backgroundTasks: TestBackgroundTasks = createTestBackgroundTasks()
 ): Promise<Response> {
-  const route = findRoute("PUT", TOGGLE_PATH);
-  return route.handler(
+  return handleRequest(
     new Request(`https://test.local${TOGGLE_PATH}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
     env,
-    matchFor(route, TOGGLE_PATH),
-    createContext(waitUntilTasks)
+    backgroundTasks
   );
 }
 
@@ -213,18 +205,28 @@ const registerBuildSpy = vi.spyOn(ImageBuildStore.prototype, "registerBuild");
 const getActiveBuildSpy = vi.spyOn(ImageBuildStore.prototype, "getActiveBuild");
 const hasReadyImageSpy = vi.spyOn(ImageBuildStore.prototype, "hasReadyImageForFingerprint");
 const markBuildFailedSpy = vi.spyOn(ImageBuildStore.prototype, "markBuildFailed");
+const bindProviderSessionSpy = vi.spyOn(ImageBuildStore.prototype, "bindProviderSession");
 const setImageBuildEnabledSpy = vi.spyOn(RepoMetadataStore.prototype, "setImageBuildEnabled");
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.authenticate.mockImplementation(async (request: Request) => ({
+    principal: { kind: "user", userId: "user-1" },
+    request,
+  }));
   registerBuildSpy.mockResolvedValue(true);
   getActiveBuildSpy.mockResolvedValue(null);
   hasReadyImageSpy.mockResolvedValue(false);
   markBuildFailedSpy.mockResolvedValue(true);
   setImageBuildEnabledSpy.mockResolvedValue(undefined);
-  modalClient.buildImage.mockResolvedValue({ buildId: "build-1", status: "building" });
-  vercelProvider.triggerEnvironmentImageBuild.mockResolvedValue(undefined);
-  openComputerProvider.triggerEnvironmentImageBuild.mockResolvedValue(undefined);
+  bindProviderSessionSpy.mockResolvedValue(true);
+  modalClient.createImageBuildSandbox.mockResolvedValue({
+    providerSessionId: "modal-session-1",
+  });
+  modalClient.startImageBuildSandbox.mockResolvedValue(undefined);
+  modalClient.terminateImageBuildSandbox.mockResolvedValue(undefined);
+  vercelProvider.triggerImageBuild.mockResolvedValue(undefined);
+  openComputerProvider.triggerImageBuild.mockResolvedValue(undefined);
   integrationSettings.resolveSandboxSettings.mockResolvedValue({});
   scmProvider.generateCredentialHelperAuth.mockResolvedValue({
     username: "x-access-token",
@@ -253,17 +255,24 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
 
     // The resolved branch — not "main" — reaches the Modal backend as the
     // one-element repository set...
-    expect(modalClient.buildImage).toHaveBeenCalledTimes(1);
-    expect(modalClient.buildImage).toHaveBeenCalledWith(
+    expect(modalClient.createImageBuildSandbox).toHaveBeenCalledTimes(1);
+    expect(modalClient.createImageBuildSandbox).toHaveBeenCalledWith(
       expect.objectContaining({
         scopeKind: "repo",
         scopeId: "acme/repo",
         repositories: REPO_REPOSITORIES,
-        buildTimeoutSeconds: 1800,
+        providerSessionTimeoutSeconds: 2400,
+        cloneToken: "clone-token",
       }),
       expect.any(Object)
     );
-    expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
+    expect(bindProviderSessionSpy).toHaveBeenCalledWith(
+      expect.stringContaining("imgb-acme-repo-"),
+      "modal",
+      "modal-session-1"
+    );
+    expect(modalClient.startImageBuildSandbox).toHaveBeenCalledTimes(1);
+    expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalled();
 
     // ...and is baked into the persisted fingerprint.
     expect(registerBuildSpy).toHaveBeenCalledWith(
@@ -281,10 +290,11 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     const response = await callTrigger(createVercelEnv());
 
     expect(response.status).toBe(200);
-    expect(vercelProvider.triggerEnvironmentImageBuild).toHaveBeenCalledTimes(1);
-    expect(vercelProvider.triggerEnvironmentImageBuild).toHaveBeenCalledWith(
+    expect(vercelProvider.triggerImageBuild).toHaveBeenCalledTimes(1);
+    expect(vercelProvider.triggerImageBuild).toHaveBeenCalledWith(
       expect.objectContaining({
-        environmentId: "acme/repo",
+        scopeKind: "repo",
+        scopeId: "acme/repo",
         repositories: REPO_REPOSITORIES,
         cloneToken: "clone-token",
       })
@@ -305,10 +315,11 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
 
     expect(response.status).toBe(200);
     expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalled();
-    expect(openComputerProvider.triggerEnvironmentImageBuild).toHaveBeenCalledTimes(1);
-    expect(openComputerProvider.triggerEnvironmentImageBuild).toHaveBeenCalledWith(
+    expect(openComputerProvider.triggerImageBuild).toHaveBeenCalledTimes(1);
+    expect(openComputerProvider.triggerImageBuild).toHaveBeenCalledWith(
       expect.objectContaining({
-        environmentId: "acme/repo",
+        scopeKind: "repo",
+        scopeId: "acme/repo",
         repositories: REPO_REPOSITORIES,
         cloneToken: "clone-token",
       })
@@ -330,8 +341,8 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
       "acme",
       "repo"
     );
-    expect(modalClient.buildImage).toHaveBeenCalledWith(
-      expect.objectContaining({ buildTimeoutSeconds: 3600 }),
+    expect(modalClient.createImageBuildSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerSessionTimeoutSeconds: 4200 }),
       expect.any(Object)
     );
   });
@@ -349,7 +360,7 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
       alreadyBuilding: true,
     });
     expect(registerBuildSpy).not.toHaveBeenCalled();
-    expect(modalClient.buildImage).not.toHaveBeenCalled();
+    expect(modalClient.createImageBuildSandbox).not.toHaveBeenCalled();
   });
 
   it("returns 404 without building when the repository is not installed", async () => {
@@ -358,7 +369,7 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     const response = await callTrigger(createModalEnv());
 
     expect(response.status).toBe(404);
-    expect(modalClient.buildImage).not.toHaveBeenCalled();
+    expect(modalClient.createImageBuildSandbox).not.toHaveBeenCalled();
     expect(registerBuildSpy).not.toHaveBeenCalled();
   });
 
@@ -368,17 +379,36 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     const response = await callTrigger(createModalEnv());
 
     expect(response.status).toBe(500);
-    expect(modalClient.buildImage).not.toHaveBeenCalled();
+    expect(modalClient.createImageBuildSandbox).not.toHaveBeenCalled();
     expect(registerBuildSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /image-builds/status", () => {
+  it.each([
+    ["?scope_kind=environment", "scope_id is required with scope_kind"],
+    ["?scope_kind=repo&scope_id=", "scope_id is required with scope_kind"],
+    ["?scope_id=env_x", "scope_kind must be 'repo' or 'environment'"],
+    ["?scope_kind=bogus&scope_id=x", "scope_kind must be 'repo' or 'environment'"],
+    ["?scope_kind=repo&scope_kind=repo&scope_id=x", "Invalid scope_kind"],
+  ])("rejects the half-pair or malformed scope %s", async (query, error) => {
+    const response = await handleRequest(
+      new Request(`https://test.local/image-builds/status${query}`),
+      createModalEnv(),
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error });
   });
 });
 
 describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
   it("writes the flag and triggers a stale-checked build on toggle-on", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
-    const waitUntilTasks: Promise<unknown>[] = [];
+    const backgroundTasks = createTestBackgroundTasks();
 
-    const response = await callToggle(createModalEnv(), { enabled: true }, waitUntilTasks);
+    const response = await callToggle(createModalEnv(), { enabled: true }, backgroundTasks);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, enabled: true });
@@ -386,36 +416,36 @@ describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
 
     // Save-hook parity with environments: the detached triggerBuildIfStale
     // runs behind waitUntil.
-    expect(waitUntilTasks).toHaveLength(1);
-    await Promise.all(waitUntilTasks);
+    expect(backgroundTasks.submissions).toHaveLength(1);
+    await backgroundTasks.settle();
     expect(registerBuildSpy).toHaveBeenCalledWith(
       expect.objectContaining({ scope: { kind: "repo", id: "acme/repo" } })
     );
-    expect(modalClient.buildImage).toHaveBeenCalledTimes(1);
+    expect(modalClient.createImageBuildSandbox).toHaveBeenCalledTimes(1);
   });
 
   it("skips the build when a ready image already matches the repository set", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
     hasReadyImageSpy.mockResolvedValue(true);
-    const waitUntilTasks: Promise<unknown>[] = [];
+    const backgroundTasks = createTestBackgroundTasks();
 
-    const response = await callToggle(createModalEnv(), { enabled: true }, waitUntilTasks);
+    const response = await callToggle(createModalEnv(), { enabled: true }, backgroundTasks);
 
     expect(response.status).toBe(200);
-    await Promise.all(waitUntilTasks);
+    await backgroundTasks.settle();
     expect(registerBuildSpy).not.toHaveBeenCalled();
-    expect(modalClient.buildImage).not.toHaveBeenCalled();
+    expect(modalClient.createImageBuildSandbox).not.toHaveBeenCalled();
   });
 
   it("writes the flag without triggering on toggle-off", async () => {
-    const waitUntilTasks: Promise<unknown>[] = [];
+    const backgroundTasks = createTestBackgroundTasks();
 
-    const response = await callToggle(createModalEnv(), { enabled: false }, waitUntilTasks);
+    const response = await callToggle(createModalEnv(), { enabled: false }, backgroundTasks);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, enabled: false });
     expect(setImageBuildEnabledSpy).toHaveBeenCalledWith("acme", "repo", false);
-    expect(waitUntilTasks).toHaveLength(0);
+    expect(backgroundTasks.submissions).toHaveLength(0);
     expect(scmProvider.checkRepositoryAccess).not.toHaveBeenCalled();
   });
 
@@ -426,26 +456,34 @@ describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
     expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects a malformed toggle body", async () => {
+    const response = await callToggle(createModalEnv(), null);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "enabled must be a boolean" });
+    expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
+  });
+
   it("returns 404 without writing the flag when enabling an uninstalled repo", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(null);
-    const waitUntilTasks: Promise<unknown>[] = [];
+    const backgroundTasks = createTestBackgroundTasks();
 
-    const response = await callToggle(createModalEnv(), { enabled: true }, waitUntilTasks);
+    const response = await callToggle(createModalEnv(), { enabled: true }, backgroundTasks);
 
     expect(response.status).toBe(404);
     expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
-    expect(waitUntilTasks).toHaveLength(0);
+    expect(backgroundTasks.submissions).toHaveLength(0);
   });
 
   it("returns 500 without writing the flag when enabling and resolution fails", async () => {
     scmProvider.checkRepositoryAccess.mockRejectedValue(new Error("github unavailable"));
-    const waitUntilTasks: Promise<unknown>[] = [];
+    const backgroundTasks = createTestBackgroundTasks();
 
-    const response = await callToggle(createModalEnv(), { enabled: true }, waitUntilTasks);
+    const response = await callToggle(createModalEnv(), { enabled: true }, backgroundTasks);
 
     expect(response.status).toBe(500);
     expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
-    expect(waitUntilTasks).toHaveLength(0);
+    expect(backgroundTasks.submissions).toHaveLength(0);
   });
 
   it("disables without resolving so an unresolvable repo stays disableable", async () => {

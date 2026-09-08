@@ -9,6 +9,7 @@ import {
   buildIssueContextBlock,
   buildPullRequestContextBlock,
   buildReviewCommentContextBlock,
+  buildWorkflowRunContextBlock,
 } from "./context";
 import {
   GITHUB_WEBHOOK_EVENT_CATALOG,
@@ -17,12 +18,14 @@ import {
   issuesEventSchema,
   pullRequestEventSchema,
   pullRequestReviewCommentEventSchema,
+  workflowRunEventSchema,
   type CheckSuitePayload,
   type GitHubEventBase,
   type IssueCommentPayload,
   type IssuesPayload,
   type PullRequestPayload,
   type PullRequestReviewCommentPayload,
+  type WorkflowRunPayload,
 } from "./webhook-types";
 
 // ─── Supported event type map ─────────────────────────────────────────────────
@@ -101,6 +104,12 @@ export function normalizeGitHubEvent(
       const parsed = checkSuiteEventSchema.safeParse(payload);
       if (!parsed.success) return null;
       return normalizeCheckSuite(eventType, parsed.data);
+    }
+
+    case "workflow_run": {
+      const parsed = workflowRunEventSchema.safeParse(payload);
+      if (!parsed.success) return null;
+      return normalizeWorkflowRun(eventType, parsed.data);
     }
 
     case "issues": {
@@ -254,10 +263,43 @@ function normalizeCheckSuite(eventType: string, payload: CheckSuitePayload): Git
     repoName: getRepoName(payload),
     branch: checkSuite.head_branch ?? undefined,
     actor: getActor(payload),
+    conclusion,
     checkConclusion: conclusion,
     contextBlock: buildCheckSuiteContextBlock(payload),
     meta: {
       checkSuiteId: checkSuite.id,
+      conclusion,
+    },
+  };
+}
+
+/**
+ * Normalize `workflow_run.completed`. The attempt number deduplicates each
+ * attempt independently, while the run id keeps all attempts in one concurrency scope.
+ */
+function normalizeWorkflowRun(
+  eventType: string,
+  payload: WorkflowRunPayload
+): GitHubAutomationEvent {
+  const run = payload.workflow_run;
+  const conclusion = run.conclusion ?? undefined;
+
+  return {
+    source: "github",
+    eventType,
+    triggerKey: `workflow_run:${run.id}:${run.run_attempt}`,
+    concurrencyKey: `workflow_run:${run.id}`,
+    repoOwner: getRepoOwner(payload),
+    repoName: getRepoName(payload),
+    branch: run.head_branch ?? undefined,
+    actor: getActor(payload),
+    conclusion,
+    workflowName: run.name,
+    contextBlock: buildWorkflowRunContextBlock(payload),
+    meta: {
+      workflowRunId: run.id,
+      workflowRunAttempt: run.run_attempt,
+      workflowName: run.name,
       conclusion,
     },
   };

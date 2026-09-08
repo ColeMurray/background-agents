@@ -9,8 +9,8 @@ This package provides the data plane for Open-Inspect:
 - **Sandboxes**: Isolated development environments running OpenCode
 - **Images**: Pre-built container images with all development tools
 - **Snapshots**: Filesystem snapshots for fast startup and session persistence
-- **Scheduler**: Cron-based rebuilds of prebuilt scope images — repositories and environments alike
-  (every 30 minutes)
+- **Image builds**: Short-lived provider sessions that the control plane creates, starts, snapshots,
+  and terminates
 
 ## Architecture
 
@@ -42,12 +42,16 @@ Base image definition with:
 
 ### Sandbox (`src/sandbox/`)
 
-- **manager.py**: Sandbox lifecycle (create, warm, snapshot)
-- **entrypoint.py**: Supervisor process (runs as PID 1)
-- **bridge.py**: WebSocket bridge to control plane
-- **types.py**: Event and configuration types
+- **manager.py**: Sandbox lifecycle (create, restore, snapshot)
+- **build_session.py**: Tagged build-sandbox lifecycle for prebuilt-image builds
+- **vcs_env.py**: Clone-credential env-var injection
 
-### Auth (`src/auth/`)
+The in-sandbox runtime (entrypoint supervisor, control-plane bridge, shared types) lives in
+`packages/sandbox-runtime`.
+
+### Auth (`sandbox_runtime.auth`)
+
+Provided by `packages/sandbox-runtime/src/sandbox_runtime/auth/`:
 
 - **github_app.py**: GitHub App token generation for repo access
 - **internal.py**: HMAC authentication for control plane requests
@@ -56,15 +60,9 @@ Base image definition with:
 
 - **web_api.py**: HTTP endpoints called by the control plane
 
-### Scheduler (`src/scheduler/`)
-
-- **image_builder.py**: The `build_image` worker (spawned by `api_build_image`) plus the 30-minute
-  rebuild cron. A build clones every repository of its scope — a single repository or an
-  environment's ordered set — runs each setup script in position order, snapshots the filesystem,
-  and reports the result (per-repository SHAs + runtime version) back to the control plane.
-  `rebuild_images` runs one pass over all prebuild-enabled scope units from
-  `GET /image-builds/enabled`, rebuilding on fingerprint mismatch, runtime-floor violation, or
-  branch-tip drift, capped at `TRIGGER_CAP_PER_TICK` builds per tick across all units
+Image rebuild evaluation and residual cleanup run in the provider-neutral
+control-plane scheduler. Modal only owns its short-lived create, start,
+snapshot, terminate, and delete provider operations.
 
 ## Usage
 
@@ -78,7 +76,9 @@ Base image definition with:
 3. Create secrets via Modal CLI:
 
 ```bash
-# LLM API keys
+# Fleet-wide LLM API keys. No key is required — pass an empty value to have
+# sandboxes take their model credentials from the control plane's secret store
+# instead. The secret itself must exist; Modal cannot hold one with no keys.
 modal secret create llm-api-keys ANTHROPIC_API_KEY="sk-ant-..."
 
 # GitHub App credentials (for repo access)
@@ -108,18 +108,20 @@ pip install -e ".[dev]"
 ### Deploy
 
 ```bash
-# Deploy the app (recommended)
-modal deploy deploy.py
+# Build the dynamic Sandbox image, then deploy the app (recommended)
+uv run python deploy.py --build-sandbox-image
+uv run modal deploy deploy.py
 
-# Alternative: deploy the src package directly
-modal deploy -m src
+# Alternative app deployment after the same eager image-build step
+uv run modal deploy -m src
 
 # Run locally for development
 modal run src/
 ```
 
 > **Note**: Never deploy `src/app.py` directly - it only defines the app and shared resources.
-> Use `deploy.py` or `-m src` to ensure all function modules are registered.
+> Build the Sandbox image first, then use `deploy.py` or `-m src` to ensure all function modules
+> are registered.
 
 ## HTTP API
 
@@ -136,8 +138,10 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 | `api-create-sandbox` | POST | Yes | Create a new sandbox |
 | `api-snapshot-sandbox` | POST | Yes | Take filesystem snapshot |
 | `api-restore-sandbox` | POST | Yes | Restore sandbox from snapshot |
-| `api-build-image` | POST | Yes | Spawn an async prebuilt-image build for a scope (repo or environment); results POST back to the control plane's `/image-builds/*` callbacks |
-| `api-delete-provider-image` | POST | Yes | Best-effort delete of a replaced provider image |
+| `api-create-build-sandbox` | POST | Yes | Create a dormant, tagged sandbox for a prebuilt-image build |
+| `api-start-build-sandbox` | POST | Yes | Start the bound build runtime; results POST back to the control plane's `/image-builds/*` callbacks |
+| `api-snapshot-build-sandbox` | POST | Yes | Snapshot the exact tagged build sandbox |
+| `api-terminate-build-sandbox` | POST | Yes | Terminate the exact tagged build sandbox (idempotent when already absent) |
 
 ### Example: Create Sandbox
 
@@ -167,7 +171,7 @@ Set via Modal secrets:
 
 | Variable | Secret | Description |
 |----------|--------|-------------|
-| `ANTHROPIC_API_KEY` | `llm-api-keys` | Anthropic API key for Claude |
+| `ANTHROPIC_API_KEY` | `llm-api-keys` | Anthropic API key for Claude; may be empty when sessions use other providers |
 | `GITHUB_APP_ID` | `github-app` | GitHub App ID for repo access |
 | `GITHUB_APP_PRIVATE_KEY` | `github-app` | GitHub App private key (PKCS#8) |
 | `GITHUB_APP_INSTALLATION_ID` | `github-app` | GitHub App installation ID |

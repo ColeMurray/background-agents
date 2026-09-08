@@ -11,10 +11,9 @@ import type {
   LinearAutomationEvent,
   SlackAutomationEvent,
 } from "./types";
-import type { TriggerCondition } from "./conditions";
 import { matchesConditions } from "./conditions";
+import type { TriggerCondition } from "./types";
 import { conditionRegistry } from "./registry";
-import type { Automation } from "../types/automations";
 
 type EventForSource<S extends AutomationEventSource> = Extract<AutomationEvent, { source: S }>;
 
@@ -103,34 +102,4 @@ export function assertConditionMatch(
       `Expected condition ${condition.type}/${condition.operator} to ${expected ? "match" : "not match"}, but got ${result}`
     );
   }
-}
-
-/**
- * Build a minimal trigger automation for testing.
- */
-export function makeTriggerAutomation(overrides?: Partial<Automation>): Automation {
-  return {
-    id: "auto-test",
-    name: "Test Automation",
-    repositories: [
-      { repoOwner: "test-owner", repoName: "test-repo", repoId: 1, baseBranch: "main" },
-    ],
-    instructions: "Test instructions",
-    triggerType: "sentry",
-    scheduleCron: null,
-    scheduleTz: "UTC",
-    model: "anthropic/claude-sonnet-4-6",
-    reasoningEffort: null,
-    enabled: true,
-    nextRunAt: null,
-    consecutiveFailures: 0,
-    createdBy: "test-user",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    deletedAt: null,
-    eventType: "issue.created",
-    triggerConfig: { conditions: [] },
-    environmentIds: [],
-    ...overrides,
-  };
 }

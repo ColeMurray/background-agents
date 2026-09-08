@@ -66,14 +66,12 @@ def bridge() -> AgentBridge:
 
 def make_state(message_id: str) -> _PromptState:
     """Per-prompt state as stream_prompt would build it."""
-    state = _PromptState(
+    return _PromptState(
         opencode_session_id="oc-session-123",
         message_id=message_id,
         opencode_message_id="msg_test",
         start_time=0.0,
     )
-    state.user_message_ids.add("msg_test")
-    return state
 
 
 class TestToolCallEvent:
@@ -176,11 +174,40 @@ class TestHandlePartTranslation:
             {
                 "type": "step_finish",
                 "cost": 0.001,
+                "messageCostUsd": 0.001,
                 "tokens": 150,
                 "reason": "end_turn",
                 "messageId": "cp-message-123",
             }
         ]
+
+    def test_step_finish_omits_unknown_cost(self, bridge: AgentBridge):
+        stream = bridge._ensure_prompt_stream()
+        events = stream._handle_part(
+            make_state("cp-message-123"),
+            {"type": "step-finish", "id": "step-1", "cost": None, "tokens": 150},
+            None,
+        )
+
+        assert "cost" not in events[0]
+        assert events[0]["messageCostUsd"] == 0.0
+
+    def test_step_finish_reports_cumulative_turn_cost(self, bridge: AgentBridge):
+        """Each step carries the turn total; a re-emitted part replaces its own cost."""
+        stream = bridge._ensure_prompt_stream()
+        state = make_state("cp-message-123")
+
+        first = stream._handle_part(state, {"type": "step-finish", "id": "s1", "cost": 0.5}, None)
+        second = stream._handle_part(state, {"type": "step-finish", "id": "s2", "cost": 0.25}, None)
+        corrected = stream._handle_part(
+            state, {"type": "step-finish", "id": "s1", "cost": 0.75}, None
+        )
+        unpriced = stream._handle_part(state, {"type": "step-finish", "id": "s3"}, None)
+
+        assert first[0]["messageCostUsd"] == 0.5
+        assert second[0]["messageCostUsd"] == 0.75
+        assert corrected[0]["messageCostUsd"] == 1.0
+        assert unpriced[0]["messageCostUsd"] == 1.0
 
 
 class TestBuildPromptRequestBody:
@@ -236,58 +263,55 @@ class TestBuildPromptRequestBody:
             "modelID": "claude-3-opus",
         }
 
-    def test_with_anthropic_manual_thinking(self, bridge: AgentBridge):
-        """Non-Opus-4.6 Claude models should use manual thinking budgets."""
+    @pytest.mark.parametrize(
+        "model,effort",
+        [
+            ("anthropic/claude-sonnet-4-5", "max"),
+            ("claude-haiku-4-5", "high"),
+            ("anthropic/claude-opus-4-5", "max"),
+            ("anthropic/claude-opus-4-6", "medium"),
+            ("anthropic/claude-opus-5", "xhigh"),
+            ("anthropic/claude-sonnet-4-6", "high"),
+            ("anthropic/claude-sonnet-5", "xhigh"),
+            ("openai/gpt-5.6-sol", "none"),
+            ("openai/gpt-5.6-sol", "low"),
+            ("openai/gpt-5.6-sol", "xhigh"),
+            ("openai/gpt-5.6-luna", "max"),
+        ],
+    )
+    def test_reasoning_effort_uses_variant(self, bridge: AgentBridge, model: str, effort: str):
         body = bridge._ensure_prompt_stream()._build_prompt_request_body(
-            "Hello",
-            "anthropic/claude-sonnet-4-5",
-            reasoning_effort="max",
+            "Hello", model, reasoning_effort=effort
         )
+        assert body["variant"] == effort
+        assert set(body["model"]) == {"providerID", "modelID"}
 
-        assert body["model"]["options"] == {"thinking": {"type": "enabled", "budgetTokens": 31_999}}
-
-    def test_with_opus_4_6_adaptive_thinking(self, bridge: AgentBridge):
-        """Opus 4.6 should use adaptive thinking instead of manual budgets."""
+    def test_no_effort_preserves_opencode_default(self, bridge: AgentBridge):
         body = bridge._ensure_prompt_stream()._build_prompt_request_body(
-            "Hello",
-            "anthropic/claude-opus-4-6",
-            reasoning_effort="medium",
+            "Hello", "openai/gpt-5.6-sol"
         )
+        assert "variant" not in body
+        assert "options" not in body["model"]
 
-        assert body["model"]["options"] == {
-            "thinking": {"type": "adaptive"},
-            "outputConfig": {"effort": "medium"},
-        }
-
-    def test_with_opus_5_adaptive_thinking(self, bridge: AgentBridge):
-        """Opus 5 should use adaptive thinking instead of manual budgets."""
+    def test_with_xai_reasoning_effort(self, bridge: AgentBridge):
         body = bridge._ensure_prompt_stream()._build_prompt_request_body(
             "Hello",
-            "anthropic/claude-opus-5",
-            reasoning_effort="xhigh",
-        )
-
-        assert body["model"] == {
-            "providerID": "anthropic",
-            "modelID": "claude-opus-5",
-            "options": {
-                "thinking": {"type": "adaptive"},
-                "outputConfig": {"effort": "xhigh"},
-            },
-        }
-
-    def test_with_sonnet_4_6_adaptive_thinking(self, bridge: AgentBridge):
-        """Sonnet 4.6 should use adaptive thinking instead of manual budgets."""
-        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
-            "Hello",
-            "anthropic/claude-sonnet-4-6",
+            "xai/grok-4.5",
             reasoning_effort="high",
         )
 
-        assert body["model"]["options"] == {
-            "thinking": {"type": "adaptive"},
-            "outputConfig": {"effort": "high"},
-        }
+        assert body["variant"] == "high"
+        assert "options" not in body["model"]
+
+    def test_with_grok_4_6_reasoning_effort(self, bridge: AgentBridge):
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
+            "Hello",
+            "xai/grok-4.6",
+            reasoning_effort="medium",
+        )
+
+        assert body["variant"] == "medium"
+        assert body["model"] == {"providerID": "xai", "modelID": "grok-4.6"}
 
 
 class TestOpenCodeIdentifier:
@@ -303,8 +327,24 @@ class TestOpenCodeIdentifier:
         ids = [OpenCodeIdentifier.ascending("message") for _ in range(100)]
         assert len(set(ids)) == 100  # All unique
 
-    def test_ascending_ids_are_lexicographically_ordered(self):
-        """IDs generated later should be lexicographically greater."""
+    def test_ascending_ids_increase_within_one_rollover_window(self, monkeypatch):
+        """Consecutive IDs increase — but only inside a rollover window.
+
+        The encoded value is truncated to 48 bits and wraps roughly every 795
+        days, so this is not an ordering guarantee callers may rely on: nothing
+        may compare these IDs to order messages. The clock is pinned inside one
+        window so the assertion cannot straddle a rollover, and it ticks once so
+        both the same-millisecond counter and the millisecond advance are
+        covered.
+        """
+        pinned_epoch_seconds = 1_754_000_000.0
+        next_millisecond = pinned_epoch_seconds + 0.5
+        ticks = iter([pinned_epoch_seconds, pinned_epoch_seconds, next_millisecond])
+        monkeypatch.setattr(
+            "sandbox_runtime.opencode_identifier.time.time",
+            lambda: next(ticks, next_millisecond),
+        )
+
         id1 = OpenCodeIdentifier.ascending("message")
         id2 = OpenCodeIdentifier.ascending("message")
         id3 = OpenCodeIdentifier.ascending("message")

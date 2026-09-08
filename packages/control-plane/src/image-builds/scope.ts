@@ -29,7 +29,7 @@ import {
   type RepositoryAccessResult,
 } from "../source-control";
 import type { Env } from "../types";
-import { ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
+import { errorMessage, ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
 import { computeRepositoriesFingerprint } from "./fingerprint";
 import { parseRepoScopeId, repoImageBuildScope, type ImageBuildScope } from "./model";
 import type { ImageBuildRepository } from "./types";
@@ -60,7 +60,7 @@ export type ResolvedImageBuildTarget =
       repoId: number;
     });
 
-/** An enabled scope with everything the cron's trigger checks need. */
+/** An enabled scope resolved to its current repositories and fingerprint. */
 export interface EnabledScopeUnit {
   scope: ImageBuildScope;
   repositories: ImageBuildRepository[];
@@ -193,10 +193,9 @@ export async function listEnabledScopes(db: SqlDatabase): Promise<ImageBuildScop
 
 /**
  * Every prebuild-enabled scope with its current repositories and fingerprint —
- * everything the rebuild cron's trigger checks need, so the fingerprint
- * algorithm never leaves the control plane. A repo scope whose repository
- * cannot be resolved (uninstalled, source-control outage) is skipped with a
- * warning rather than failing the whole feed.
+ * used by the settings feed to distinguish current and stale build rows. A
+ * repo scope whose repository cannot be resolved (uninstalled, source-control
+ * outage) is skipped with a warning rather than failing the whole feed.
  */
 export async function listEnabledScopeUnits(
   env: Env,
@@ -380,8 +379,4 @@ async function loadScopeSecretSources(
       };
     }
   }
-}
-
-function errorMessage(errorValue: unknown): string {
-  return errorValue instanceof Error ? errorValue.message : String(errorValue);
 }

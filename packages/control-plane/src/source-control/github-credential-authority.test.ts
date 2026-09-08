@@ -25,7 +25,7 @@ function createContext(
   return {
     principal: {
       kind: "service",
-      service: "modal",
+      service: "linear-bot",
       actor: null,
     },
     ...overrides,

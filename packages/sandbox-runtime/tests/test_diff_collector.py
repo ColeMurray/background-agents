@@ -151,13 +151,13 @@ async def test_checkout_local_runtime_excludes_do_not_hide_other_opencode_change
     tmp_path: Path,
 ) -> None:
     repository, base_sha = _repository(tmp_path)
-    runtime_file = repository.path / ".opencode" / "tool" / "spawn-task.js"
+    runtime_file = repository.path / ".opencode" / "tool" / "spawn-child.js"
     runtime_file.parent.mkdir(parents=True)
     runtime_file.write_text("// runtime\n")
     user_file = repository.path / ".opencode" / "command" / "review.md"
     user_file.parent.mkdir(parents=True)
     user_file.write_text("user-authored command\n")
-    install_runtime_git_excludes(repository.path, {".opencode/tool/spawn-task.js"})
+    install_runtime_git_excludes(repository.path, {".opencode/tool/spawn-child.js"})
 
     capture = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
 
@@ -167,17 +167,17 @@ async def test_checkout_local_runtime_excludes_do_not_hide_other_opencode_change
 @pytest.mark.asyncio
 async def test_runtime_ownership_overrides_gitignore_negation(tmp_path: Path) -> None:
     repository, _ = _repository(tmp_path)
-    (repository.path / ".gitignore").write_text("!.opencode/tool/spawn-task.js\n")
+    (repository.path / ".gitignore").write_text("!.opencode/tool/spawn-child.js\n")
     _git(repository.path, "add", ".gitignore")
     _git(repository.path, "commit", "-m", "re-include runtime tool")
     base_sha = _git(repository.path, "rev-parse", "HEAD")
-    runtime_file = repository.path / ".opencode" / "tool" / "spawn-task.js"
+    runtime_file = repository.path / ".opencode" / "tool" / "spawn-child.js"
     runtime_file.parent.mkdir(parents=True)
     runtime_file.write_text("// runtime\n")
-    install_runtime_git_excludes(repository.path, {".opencode/tool/spawn-task.js"})
+    install_runtime_git_excludes(repository.path, {".opencode/tool/spawn-child.js"})
 
     assert _git(repository.path, "ls-files", "--others", "--exclude-standard") == (
-        ".opencode/tool/spawn-task.js"
+        ".opencode/tool/spawn-child.js"
     )
 
     capture = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
@@ -188,18 +188,18 @@ async def test_runtime_ownership_overrides_gitignore_negation(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_checkout_local_excludes_do_not_hide_tracked_changes(tmp_path: Path) -> None:
     repository, _ = _repository(tmp_path)
-    runtime_file = repository.path / ".opencode" / "tool" / "spawn-task.js"
+    runtime_file = repository.path / ".opencode" / "tool" / "spawn-child.js"
     runtime_file.parent.mkdir(parents=True)
     runtime_file.write_text("// checked in\n")
-    _git(repository.path, "add", ".opencode/tool/spawn-task.js")
+    _git(repository.path, "add", ".opencode/tool/spawn-child.js")
     _git(repository.path, "commit", "-m", "track opencode tool")
     base_sha = _git(repository.path, "rev-parse", "HEAD")
-    install_runtime_git_excludes(repository.path, {".opencode/tool/spawn-task.js"})
+    install_runtime_git_excludes(repository.path, {".opencode/tool/spawn-child.js"})
     runtime_file.write_text("// runtime overwrite\n")
 
     capture = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
 
-    assert [changed.path for changed in capture.files] == [".opencode/tool/spawn-task.js"]
+    assert [changed.path for changed in capture.files] == [".opencode/tool/spawn-child.js"]
 
 
 @pytest.mark.asyncio

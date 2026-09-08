@@ -5,6 +5,8 @@
 import { describe, it, expect } from "vitest";
 import { evaluateImageBuildForSpawn, type ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
+import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
+import { MIN_COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/model";
 
 const SESSION_REPOSITORIES = [
   { repoOwner: "acme", repoName: "web", baseBranch: "main" },
@@ -22,7 +24,7 @@ async function readyImage(
       { repoOwner: "acme", repoName: "web", baseSha: "sha-web" },
       { repoOwner: "acme", repoName: "api", baseSha: "sha-api" },
     ]),
-    runtime_version: "v53-list-native-runtime",
+    runtime_version: COMPATIBLE_RUNTIME_VERSION,
     ...overrides,
   };
 }
@@ -37,7 +39,7 @@ describe("evaluateImageBuildForSpawn", () => {
         imageBuildId: "imgb-1",
         providerImageId: "im-abc123",
         primaryBaseSha: "sha-web",
-        runtimeVersion: "v53-list-native-runtime",
+        runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
       },
     });
   });
@@ -83,8 +85,23 @@ describe("evaluateImageBuildForSpawn", () => {
     });
   });
 
-  it("misses below the runtime floor and fails closed on an unparseable version", async () => {
-    for (const runtimeVersion of ["v52-pre-list-runtime", "dev", ""]) {
+  it("enforces the runtime compatibility floor", async () => {
+    expect(
+      (
+        await evaluateImageBuildForSpawn(
+          await readyImage({
+            runtime_version: `v${MIN_COMPATIBLE_RUNTIME_VERSION}-compatible-runtime`,
+          }),
+          SESSION_REPOSITORIES
+        )
+      ).outcome
+    ).toBe("selected");
+
+    for (const runtimeVersion of [
+      `v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-legacy-runtime`,
+      "dev",
+      "",
+    ]) {
       const image = await readyImage({ runtime_version: runtimeVersion });
 
       expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES)).toEqual({
@@ -119,7 +136,14 @@ describe("evaluateImageBuildForSpawn", () => {
   });
 
   it("still selects when the provenance document is malformed — the SHA is informational", async () => {
-    for (const repositoryShas of ["not json", "[]", '[{"repoOwner":"acme"}]', '"scalar"']) {
+    for (const repositoryShas of [
+      "not json",
+      "[]",
+      '[{"repoOwner":"acme"}]',
+      '[{"baseSha":"sha-without-identity"}]',
+      "[[]]",
+      '"scalar"',
+    ]) {
       const image = await readyImage({ repository_shas: repositoryShas });
       const result = await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES);
 

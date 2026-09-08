@@ -3,6 +3,13 @@ import { env } from "cloudflare:test";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
 
+const providerIssuers = [
+  ["github", "https://github.com"],
+  ["google", "https://accounts.google.com"],
+  ["slack", null],
+  ["linear", null],
+] as const;
+
 describe("UserStore", () => {
   let store: UserStore;
 
@@ -14,6 +21,16 @@ describe("UserStore", () => {
   // ── resolveOrCreateUser ─────────────────────────────────────────
 
   describe("resolveOrCreateUser", () => {
+    it.each(providerIssuers)("stores the canonical issuer for %s", async (provider, issuer) => {
+      await store.resolveOrCreateUser({
+        provider,
+        providerUserId: `${provider}-subject`,
+      });
+
+      const identity = await store.getIdentity(provider, `${provider}-subject`);
+      expect(identity?.providerIssuer).toBe(issuer);
+    });
+
     it("creates a new user with no email", async () => {
       const result = await store.resolveOrCreateUser({
         provider: "github",
@@ -50,6 +67,82 @@ describe("UserStore", () => {
       expect(identity!.providerEmail).toBe("alice@example.com");
     });
 
+    it("treats whitespace-only provider emails as absent instead of persisting empty strings", async () => {
+      // idx_users_email is unique: two users persisting "" would collide on
+      // one slot. A blank email must normalize to NULL at every boundary.
+      const first = await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "U1BLANK",
+        providerEmail: "   ",
+      });
+      const second = await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "U2BLANK",
+        providerEmail: "   ",
+      });
+
+      expect(first.email).toBeNull();
+      expect(second.email).toBeNull();
+      expect(second.id).not.toBe(first.id);
+      expect((await store.getUserById(first.id))!.email).toBeNull();
+      expect((await store.getIdentity("slack", "U1BLANK"))!.providerEmail).toBeNull();
+      // A blank lookup matches nothing rather than an empty-string row.
+      expect(await store.getUserByEmail("   ")).toBeNull();
+    });
+
+    it("attests slack- and linear-attributed emails as verified at creation", async () => {
+      // Both platforms verify mailbox ownership (Slack confirms address
+      // changes; Linear's email is its login credential), and the bots fetch
+      // the address server-side — so ingress writes count as proof.
+      const slack = await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "U1ATTEST",
+        providerEmail: "slack.person@example.com",
+      });
+      const linear = await store.resolveOrCreateUser({
+        provider: "linear",
+        providerUserId: "linear-attest",
+        providerEmail: "linear.person@example.com",
+      });
+
+      expect((await store.getUserById(slack.id))!.emailVerified).toBe(true);
+      expect((await store.getUserById(linear.id))!.emailVerified).toBe(true);
+    });
+
+    it("stores non-attesting attribution as a claim, not proof", async () => {
+      const result = await store.resolveOrCreateUser({
+        provider: "github",
+        providerUserId: "12345",
+        providerEmail: "octocat@example.com",
+      });
+
+      const user = await store.getUserById(result.id);
+      expect(user!.email).toBe("octocat@example.com");
+      expect(user!.emailVerified).toBe(false);
+    });
+
+    it("carries attestation through the late email backfill", async () => {
+      // Slack user first seen without an email, whose profile later reports
+      // one: the backfill write carries the same attestation as creation.
+      const first = await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "U1LATE",
+      });
+      expect(first.email).toBeNull();
+
+      const second = await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "U1LATE",
+        providerEmail: "late.person@example.com",
+      });
+
+      expect(second.id).toBe(first.id);
+      expect(await store.getUserById(first.id)).toMatchObject({
+        email: "late.person@example.com",
+        emailVerified: true,
+      });
+    });
+
     it("returns existing user for known identity and updates display_name", async () => {
       const first = await store.resolveOrCreateUser({
         provider: "github",
@@ -71,6 +164,28 @@ describe("UserStore", () => {
       const user = await store.getUserById(first.id);
       expect(user!.displayName).toBe("Alice Updated");
       expect(user!.updatedAt).toBeGreaterThanOrEqual(beforeUpdate!.updatedAt);
+    });
+
+    it("does not repair a missing role assignment during identity resolution", async () => {
+      const first = await store.resolveOrCreateUser({
+        provider: "github",
+        providerUserId: "missing-assignment",
+      });
+      await env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?")
+        .bind(first.id)
+        .run();
+
+      await store.resolveOrCreateUser({
+        provider: "github",
+        providerUserId: "missing-assignment",
+      });
+
+      const assignment = await env.DB.prepare(
+        "SELECT role_id FROM user_role_assignments WHERE user_id = ?"
+      )
+        .bind(first.id)
+        .first();
+      expect(assignment).toBeNull();
     });
 
     it("links new identity to existing user by matching email", async () => {
@@ -249,6 +364,23 @@ describe("UserStore", () => {
         cnt: number;
       }>();
       expect(allUsers!.cnt).toBe(1);
+    });
+  });
+
+  // ── createIdentity ──────────────────────────────────────────────
+
+  describe("createIdentity", () => {
+    it.each(providerIssuers)("stores the canonical issuer for %s", async (provider, issuer) => {
+      const user = await store.createUser({ displayName: "Alice" });
+
+      await store.createIdentity({
+        userId: user.id,
+        provider,
+        providerUserId: `${provider}-subject`,
+      });
+
+      const identity = await store.getIdentity(provider, `${provider}-subject`);
+      expect(identity?.providerIssuer).toBe(issuer);
     });
   });
 

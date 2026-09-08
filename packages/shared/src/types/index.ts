@@ -18,35 +18,37 @@ export {
   sessionAttachmentReferencesSchema,
   resolvedSessionAttachmentSchema,
   resolvedSessionAttachmentsSchema,
+  sessionAttachmentUploadResponseSchema,
 } from "./session-attachments";
 export type {
   SessionAttachmentMimeType,
   SessionAttachmentReference,
   ResolvedSessionAttachment,
+  SessionAttachmentUploadResponse,
 } from "./session-attachments";
 
-export { clientMessageSchema } from "./websocket";
-export type { ClientMessage } from "./websocket";
-
-export { sessionStatusSchema } from "./statuses";
+export {
+  githubAutofixEnvelopeSchema,
+  githubAutofixOriginSchema,
+  githubAutofixSessionCommandSchema,
+  githubAutofixSessionResponseSchema,
+} from "./github-autofix";
 export type {
-  SessionStatus,
-  SandboxStatus,
-  GitSyncStatus,
-  MessageStatus,
-  MessageSource,
-  ArtifactType,
-  EventType,
-  ParticipantRole,
-  SpawnSource,
-  ConfidenceLevel,
-} from "./statuses";
+  GitHubAutofixEnvelope,
+  GitHubAutofixOrigin,
+  GitHubAutofixSessionCommand,
+  GitHubAutofixSessionResponse,
+} from "./github-autofix";
+
+export { clientMessageSchema, clientRequestIdSchema } from "./websocket";
+export type { ClientMessage } from "./websocket";
 
 export {
   MAX_TARGET_REPOSITORIES,
   MAX_SESSION_REPOSITORIES,
   sessionRepositoryStateSchema,
   prArtifactBelongsToRepo,
+  repositoryPairInputSchema,
   repositoryInputSchema,
   repositoriesInputSchema,
   sessionRepositoriesInputSchema,
@@ -55,6 +57,7 @@ export {
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
   parseRepositoryFullName,
+  validateRepositoryPathSegments,
   normalizeOptionalRepositoryPair,
 } from "./repositories";
 export type {
@@ -80,41 +83,24 @@ export type {
   ControlPlaneRepo,
   ControlPlaneReposResponse,
   ClassificationResult,
+  ConfidenceLevel,
 } from "./repository-catalog";
 
-export { toDisplayStatus } from "./artifacts";
+export {
+  serverMessageSchema,
+  sessionSnapshotSchema,
+  sessionSnapshotStateSchema,
+  sessionTimelineEventSchema,
+} from "./server-messages";
 export type {
-  SessionArtifact,
-  ManualPullRequestArtifactMetadata,
-  ScreenshotArtifactMetadata,
-  VideoArtifactMetadata,
-  PullRequest,
-  PullRequestLifecycleState,
-  PullRequestStatus,
-  PullRequestDisplayStatus,
-  PullRequestArtifactMetadata,
-  ArtifactResponse,
-  ListArtifactsResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-  MediaArtifactInfo,
-  AgentResponse,
-} from "./artifacts";
-
-export { sandboxEventSchema } from "./sandbox-events";
-export type { AgentEvent, SandboxEvent, EventResponse, ListEventsResponse } from "./sandbox-events";
-
-export type {
-  SessionParticipant,
-  Session,
-  SessionMessage,
-  SessionState,
   ParticipantPresence,
-  PullRequestSummary,
-} from "./sessions";
-
-export { serverMessageSchema } from "./server-messages";
-export type { ServerMessage } from "./server-messages";
+  PromptQueueItem,
+  ServerMessage,
+  SessionSnapshot,
+  SessionSnapshotState,
+  SessionState,
+  SessionTimelineEvent,
+} from "./server-messages";
 
 export {
   SESSION_DIFF_VERSION,
@@ -161,49 +147,14 @@ export type {
 } from "./session-diffs";
 
 export {
-  automationCallbackContextSchema,
-  callbackContextSchema,
-  linearCallbackContextSchema,
-  linearStartCallbackSchema,
-  sendPromptRequestSchema,
-  slackCallbackContextSchema,
-  createSessionRequestSchema,
-  createSessionInputSchema,
-  createMediaArtifactRequestSchema,
-  createSessionResponseSchema,
-  sendPromptResponseSchema,
-  spawnChildSessionRequestSchema,
-  cancelChildSessionRequestSchema,
-  spawnContextSchema,
-} from "./session-api";
-export type {
-  UserPreferences,
-  SlackCallbackContext,
-  LinearCallbackContext,
-  LinearStartCallback,
-  AutomationCallbackContext,
-  CallbackContext,
-  SendPromptRequest,
-  CreateSessionRequest,
-  CreateSessionInput,
-  CreateMediaArtifactRequest,
-  CreateSessionResponse,
-  SendPromptResponse,
-  ListSessionsResponse,
-  SpawnChildSessionRequest,
-  CancelChildSessionRequest,
-  SpawnContext,
-  ChildSessionFinalResponse,
-  ChildSessionTrajectory,
-  ChildSessionDetail,
-} from "./session-api";
-
-export {
   MAX_ENVIRONMENT_NAME_LENGTH,
   MAX_ENVIRONMENT_DESCRIPTION_LENGTH,
   MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS,
   isEnvironmentId,
   environmentRepositoriesInputSchema,
+  environmentRepositorySchema,
+  environmentSchema,
+  listEnvironmentsResponseSchema,
   createEnvironmentInputSchema,
   updateEnvironmentInputSchema,
 } from "./environments";
@@ -216,22 +167,49 @@ export type {
 } from "./environments";
 
 export type {
-  AutomationTriggerType,
   AutomationRunStatus,
   AutomationInvocationSource,
   AutomationInvocationStatus,
 } from "./automations";
+export type { AutomationTriggerType } from "../triggers/types";
 
 export {
+  MAX_AUDIT_EVENT_TIMESTAMP_MS,
+  auditEventTimestampSchema,
+  auditOperationResultSchema,
+  auditPrincipalKindSchema,
+  auditEventMetadataSchema,
+  auditEventSchema,
+  auditEventListResponseSchema,
+} from "./audit-events";
+export type {
+  AuditOperationResult,
+  AuditPrincipalKind,
+  AuditEventMetadata,
+  AuditEvent,
+  AuditEventListResponse,
+} from "./audit-events";
+
+export {
+  MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
   MAX_AUTOMATION_REPOSITORIES,
+  MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
+  validateAutomationTargetCounts,
+  sentryClientSecretSchema,
+  createAutomationRequestSchema,
+  updateAutomationRequestSchema,
+  listAutomationsResponseSchema,
+  automationInvocationStatusSchema,
 } from "./automations";
 export type {
   AutomationRepository,
   AutomationRepositoryInput,
   Automation,
+  AutomationExecutionSummary,
+  AutomationListItem,
   CreateAutomationRequest,
   UpdateAutomationRequest,
   AutomationRun,
@@ -240,14 +218,63 @@ export type {
   ListAutomationInvocationsResponse,
 } from "./automations";
 
+export {
+  SUBSCRIPTION_PROVIDER_IDS,
+  SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
+  MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
+  subscriptionProviderIdSchema,
+  modelProviderAccountIdSchema,
+  providerAuthSelectionSchema,
+  providerAuthModeSchema,
+  modelProviderSelectionsSchema,
+  modelProviderAccountStatusSchema,
+  modelProviderAccountSchema,
+  modelProviderAccountResponseSchema,
+  createModelProviderAccountResponseSchema,
+  modelProviderAccountsResponseSchema,
+  modelProviderAccountDefaultSchema,
+  modelProviderAccountDefaultRequestSchema,
+  modelProviderAccountDisplayNameSchema,
+  modelProviderAccountDefaultsResponseSchema,
+  sessionModelProviderAuthSchema,
+  sessionModelProviderAuthResponseSchema,
+  legacyProviderKeyLocationSchema,
+  legacyProviderCredentialsResponseSchema,
+  connectOpenAIModelProviderAccountRequestSchema,
+  connectXaiModelProviderAccountRequestSchema,
+  connectModelProviderAccountRequestSchema,
+  reconnectOpenAIModelProviderAccountRequestSchema,
+  reconnectXaiModelProviderAccountRequestSchema,
+  reconnectModelProviderAccountRequestSchema,
+} from "./provider-accounts";
+export type {
+  SubscriptionProviderId,
+  ProviderAuthSelection,
+  ProviderAuthMode,
+  SessionProviderAuthMode,
+  ModelProviderSelections,
+  ModelProviderAccountStatus,
+  ModelProviderAccount,
+  ModelProviderAccountResponse,
+  CreateModelProviderAccountResponse,
+  ModelProviderAccountsResponse,
+  ModelProviderAccountDefault,
+  ModelProviderAccountDefaultsResponse,
+  SessionModelProviderAuth,
+  SessionModelProviderAuthResponse,
+  LegacyProviderKeyLocation,
+  LegacyProviderCredentialsResponse,
+  ConnectModelProviderAccountRequest,
+  ReconnectModelProviderAccountRequest,
+} from "./provider-accounts";
+
 export type {
   ImageBuildStatus,
   ImageBuildScopeKind,
   RepositoryShaEntry,
   ImageBuildRecordView,
-  ImageBuildCompleteCallback,
-  ImageBuildFailedCallback,
 } from "./image-builds";
+export { repositoryShaEntrySchema, repositoryShasSchema } from "./image-builds";
 
 export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";
 export type {
@@ -264,6 +291,7 @@ export type {
   AnalyticsPullRequestRepoEntry,
   AnalyticsPullRequestSourceEntry,
   AnalyticsPullRequestsResponse,
+  AnalyticsDashboardResponse,
 } from "./analytics";
 
 export {
@@ -272,6 +300,61 @@ export {
   commitSigningWriteRequestSchema,
 } from "./commit-signing";
 export type { CommitSigningMetadata, CommitSigningWriteRequest } from "./commit-signing";
+
+export {
+  MAX_SKILL_NAME_LENGTH,
+  MAX_SKILL_DESCRIPTION_LENGTH,
+  MAX_SKILL_COMPATIBILITY_LENGTH,
+  MAX_SKILL_FILES,
+  MAX_SKILL_FILE_BYTES,
+  MAX_SKILL_REVISION_BYTES,
+  MAX_SKILL_PATH_BYTES,
+  MAX_SKILL_PATH_DEPTH,
+  MAX_MANAGED_SKILL_MANIFEST_BYTES,
+  skillNameSchema,
+  skillFileInputSchema,
+  skillMetadataSchema,
+  skillContentInputSchema,
+  skillAssignmentInputSchema,
+  createSkillInputSchema,
+  setSkillEnabledInputSchema,
+  replaceSkillContentAndAssignmentsInputSchema,
+  skillFileSchema,
+  skillAssignmentSchema,
+  skillSummarySchema,
+  skillSchema,
+  listSkillsResponseSchema,
+  skillResponseSchema,
+  createSkillProfileInputSchema,
+  updateSkillProfileInputSchema,
+  skillProfileSchema,
+  listSkillProfilesResponseSchema,
+  skillProfileResponseSchema,
+  sessionSkillSelectionSchema,
+  skillResolutionPreviewInputSchema,
+  resolvedSkillSchema,
+  skillResolutionPreviewResponseSchema,
+  sessionSkillsViewSchema,
+  sandboxSkillInstallationSchema,
+} from "./skills";
+export type {
+  SkillFileInput,
+  SkillContentInput,
+  SkillAssignmentInput,
+  CreateSkillInput,
+  SetSkillEnabledInput,
+  ReplaceSkillContentAndAssignmentsInput,
+  SkillFile,
+  SkillAssignment,
+  SkillSummary,
+  Skill,
+  SkillProfile,
+  SessionSkillSelection,
+  SessionSkillManifestSelection,
+  ResolvedSkill,
+  SessionSkillsView,
+  SandboxSkillInstallation,
+} from "./skills";
 
 export { formatGitHubNoreplyEmail, githubLoginSchema } from "./github-identity";
 

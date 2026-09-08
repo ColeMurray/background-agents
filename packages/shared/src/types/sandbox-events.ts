@@ -1,16 +1,11 @@
 import { z } from "zod";
-import { recordSchema } from "./artifacts";
 import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
-import { gitSyncStatusSchema, type EventType } from "./statuses";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
+import { githubAutofixOriginSchema } from "./github-autofix";
 
-export interface AgentEvent {
-  id: string;
-  type: EventType;
-  data: Record<string, unknown>;
-  messageId: string | null;
-  createdAt: number;
-}
+const recordSchema = z.record(z.string(), z.unknown());
+const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+export type GitSyncStatus = z.infer<typeof gitSyncStatusSchema>;
 
 const tokenUsageDetailsSchema = z
   .object({
@@ -61,6 +56,9 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     // Present in essentially every session's replay history.
     type: z.literal("ready"),
     opencodeSessionId: z.string().nullable().optional(),
+    // SANDBOX_VERSION of the image this sandbox booted from. Stamped onto any
+    // snapshot it produces so a later restore can be gated on it.
+    runtimeVersion: z.string().optional(),
     repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),
   }),
   messageSandboxEventBaseSchema.extend({
@@ -74,17 +72,27 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     callId: z.string(),
     status: z.string().optional(),
     output: z.string().optional(),
+    isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_start"),
     isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_finish"),
-    cost: z.number().optional(),
+    /** Cost of this step alone; absent when the runtime could not price it. */
+    cost: z.number().nullable().optional(),
+    /** Cumulative reported cost of the whole turn so far; idempotent on resend. */
+    messageCostUsd: z.number().nonnegative().optional(),
     tokens: tokenUsageSchema.optional(),
     reason: z.string().optional(),
     isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("tool_result"),
@@ -100,11 +108,19 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   messageSandboxEventBaseSchema.extend({
     type: z.literal("error"),
     error: z.string(),
+    isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("execution_complete"),
     success: z.boolean(),
     error: z.string().optional(),
+    /** Final cumulative reported cost of the turn. */
+    messageCostUsd: z.number().nonnegative().optional(),
+  }),
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("context_compacted"),
   }),
   sandboxEventBaseSchema.extend({
     type: z.literal("artifact"),
@@ -143,7 +159,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   // unknown union entries, so this entry must exist before runtimes emit it.
   z.object({
     type: z.literal("warning"),
-    scope: z.enum(["sync", "setup", "start", "assembly", "secrets", "media"]),
+    scope: z.enum(["sync", "setup", "start", "assembly", "secrets", "media", "budget"]),
     message: z.string(),
     repoOwner: z.string().optional(),
     repoName: z.string().optional(),
@@ -164,6 +180,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     author: z
       .object({
         participantId: z.string(),
+        userId: z.string().optional(),
         name: z.string(),
         avatar: z.string().optional(),
       })
@@ -171,27 +188,14 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     // Attachment metadata only — never inline content, which would bloat the
     // events table and every broadcast. attachmentId lets clients stream attachments.
     attachments: resolvedSessionAttachmentsSchema.optional(),
+    origin: githubAutofixOriginSchema.optional(),
   }),
 ]);
 
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
+export type EventType = SandboxEvent["type"];
 
-/**
- * Sandbox event arrays for session hydration — both the initial `subscribed`
- * replay and paginated `history_page` items, which read from the same event
- * store. Resilient to unknown/legacy event shapes: each event is validated
- * individually and dropped if it doesn't match, instead of failing the whole
- * message. A single unrecognized event must never wedge session hydration and
- * strand the client on "loading session" forever.
- */
-export const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((events) =>
-  events.flatMap((event) => {
-    const result = sandboxEventSchema.safeParse(event);
-    return result.success ? [result.data] : [];
-  })
-);
-
-export interface EventResponse {
+export interface AgentEvent {
   id: string;
   type: EventType;
   data: Record<string, unknown>;
@@ -199,8 +203,57 @@ export interface EventResponse {
   createdAt: number;
 }
 
-export interface ListEventsResponse {
-  events: EventResponse[];
-  cursor?: string;
-  hasMore: boolean;
+type ToolCallIdentityEvent = Pick<
+  Extract<SandboxEvent, { type: "tool_call" }>,
+  "messageId" | "callId" | "isSubtask" | "childSessionId" | "taskCallId"
+>;
+
+export function toolCallIdentityTuple(
+  event: ToolCallIdentityEvent
+): readonly [messageId: string, scope: string, callId: string] {
+  const scope = event.isSubtask
+    ? event.childSessionId || event.taskCallId || "unassociated-subtask"
+    : "parent";
+  return [event.messageId, scope, event.callId];
 }
+
+export function toolCallIdentityKey(event: ToolCallIdentityEvent): string {
+  return JSON.stringify(toolCallIdentityTuple(event));
+}
+
+/**
+ * Runtime companion to `EventType`: the enum is derived from the canonical
+ * `sandboxEventSchema` discriminator values, so it can never drift from the
+ * event union that owns the contract.
+ */
+export const eventTypeSchema = z.enum(
+  sandboxEventSchema.options.map((option) => option.shape.type.value) as [EventType, ...EventType[]]
+);
+
+export const eventResponseSchema = z.object({
+  id: z.string(),
+  type: eventTypeSchema,
+  data: recordSchema,
+  messageId: z.string().nullable(),
+  createdAt: z.number(),
+});
+
+/**
+ * Pagination invariant: a page that reports more results must carry the cursor
+ * needed to fetch them. Consumers stop paginating when `cursor` is absent, so a
+ * `hasMore: true` page without a cursor would silently truncate the history and
+ * can produce a false completion from partial events.
+ */
+export const listEventsResponseSchema = z
+  .object({
+    events: z.array(eventResponseSchema),
+    cursor: z.string().min(1).optional(),
+    hasMore: z.boolean(),
+  })
+  .refine((page) => !page.hasMore || page.cursor !== undefined, {
+    message: "cursor is required when hasMore is true",
+    path: ["cursor"],
+  });
+
+export type EventResponse = z.infer<typeof eventResponseSchema>;
+export type ListEventsResponse = z.infer<typeof listEventsResponseSchema>;

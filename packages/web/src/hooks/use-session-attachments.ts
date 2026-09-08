@@ -4,8 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   SESSION_ATTACHMENT_MIME_TYPES,
+  sessionAttachmentUploadResponseSchema,
   type SessionAttachmentReference,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-attachments";
 import { WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@/lib/session-attachment-limits";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 
@@ -24,6 +25,14 @@ export const DEFAULT_ATTACHMENT_ONLY_MESSAGE = "See the attached files.";
 export const SESSION_ATTACHMENT_UPLOAD_TIMEOUT_MS = 60_000;
 const ATTACHMENTS_CHANGED_DURING_UPLOAD = "Attachments changed during upload; please retry";
 const ATTACHMENT_UPLOAD_TIMED_OUT = "Attachment upload timed out; please retry";
+
+function parseUploadErrorMessage(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || !("error" in value)) {
+    return null;
+  }
+  const error = value.error;
+  return typeof error === "string" && error.length > 0 ? error : null;
+}
 
 function isSupportedAttachment(file: File): boolean {
   // Some browsers report an empty type for .md; the server sniffs content, so
@@ -138,6 +147,8 @@ export function useSessionAttachments() {
     setAttachments([]);
   }, []);
 
+  const hasAttachments = useCallback(() => attachmentsRef.current.length > 0, []);
+
   /**
    * Upload all pending attachments and return the references to send with the
    * prompt. Throws (with a user-readable message) if any upload fails; the
@@ -198,15 +209,18 @@ export function useSessionAttachments() {
           }
           assertCurrent();
           if (!response.ok) {
-            const data = (await response.json().catch(() => null)) as { error?: string } | null;
-            throw new Error(data?.error || `Failed to upload ${fileName}`);
+            const message = parseUploadErrorMessage(await response.json().catch(() => null));
+            throw new Error(message || `Failed to upload ${fileName}`);
           }
-          const { attachmentId } = (await response.json()) as {
-            attachmentId: string;
-          };
+          const uploadResult = sessionAttachmentUploadResponseSchema.safeParse(
+            await response.json().catch(() => null)
+          );
+          if (!uploadResult.success) {
+            throw new Error(`Failed to upload ${fileName}`);
+          }
           const attachment: SessionAttachmentReference = {
             name: fileName || "image-attachment",
-            attachmentId,
+            attachmentId: uploadResult.data.attachmentId,
           };
           uploadedByIdRef.current.set(pendingAttachment.id, { sessionId, attachment });
           uploaded.push(attachment);
@@ -242,6 +256,7 @@ export function useSessionAttachments() {
     addFiles,
     removeAttachment,
     clearAttachments,
+    hasAttachments,
     uploadAll,
   };
 }

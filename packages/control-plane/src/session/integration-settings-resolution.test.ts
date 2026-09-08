@@ -36,7 +36,11 @@ describe("resolveSessionScopedSettings", () => {
 
   it("resolves both settings from the primary (position 0) member", async () => {
     mockState.resolved["code-server"] = { enabledRepos: null, settings: { enabled: true } };
-    mockState.resolved["sandbox"] = { enabledRepos: null, settings: { tunnelPorts: [8080] } };
+    mockState.resolved["vnc"] = { enabledRepos: null, settings: { enabled: true } };
+    mockState.resolved["sandbox"] = {
+      enabledRepos: null,
+      settings: { tunnelPorts: [8080], cpuCores: null },
+    };
 
     const result = await resolveSessionScopedSettings(DB, [
       { repoOwner: "acme", repoName: "web" },
@@ -45,17 +49,27 @@ describe("resolveSessionScopedSettings", () => {
 
     expect(result).toEqual({
       codeServerEnabled: true,
-      sandboxSettings: { tunnelPorts: [8080] },
+      vncEnabled: true,
+      sandboxSettings: { tunnelPorts: [8080], cpuCores: null },
     });
     // Every resolution targets the primary member; the secondary is never asked about.
-    expect(mockState.resolvedCalls.map((c) => c.repo)).toEqual(["acme/web", "acme/web"]);
-    expect(mockState.resolvedCalls.map((c) => c.id).sort()).toEqual(["code-server", "sandbox"]);
+    expect(mockState.resolvedCalls.map((c) => c.repo)).toEqual([
+      "acme/web",
+      "acme/web",
+      "acme/web",
+    ]);
+    expect(mockState.resolvedCalls.map((c) => c.id).sort()).toEqual([
+      "code-server",
+      "sandbox",
+      "vnc",
+    ]);
     // No environment layer unless the session launched from one.
-    expect(mockState.resolvedCalls.map((c) => c.environmentId)).toEqual([null, null]);
+    expect(mockState.resolvedCalls.map((c) => c.environmentId)).toEqual([null, null, null]);
   });
 
   it("passes the environment id through to both resolutions (design §13.5)", async () => {
     mockState.resolved["code-server"] = { enabledRepos: null, settings: { enabled: true } };
+    mockState.resolved["vnc"] = { enabledRepos: null, settings: { enabled: true } };
     mockState.resolved["sandbox"] = { enabledRepos: null, settings: { buildTimeoutSeconds: 3600 } };
 
     const result = await resolveSessionScopedSettings(
@@ -66,9 +80,14 @@ describe("resolveSessionScopedSettings", () => {
 
     expect(result).toEqual({
       codeServerEnabled: true,
+      vncEnabled: true,
       sandboxSettings: { buildTimeoutSeconds: 3600 },
     });
-    expect(mockState.resolvedCalls.map((c) => c.environmentId)).toEqual(["env_1", "env_1"]);
+    expect(mockState.resolvedCalls.map((c) => c.environmentId)).toEqual([
+      "env_1",
+      "env_1",
+      "env_1",
+    ]);
   });
 
   it("falls back to global sandbox defaults and disabled code-server for a repo-less session", async () => {
@@ -77,9 +96,24 @@ describe("resolveSessionScopedSettings", () => {
     const result = await resolveSessionScopedSettings(DB, []);
 
     expect(result.codeServerEnabled).toBe(false);
+    expect(result.vncEnabled).toBe(false);
     expect(result.sandboxSettings).toEqual({ tunnelPorts: [3000] });
     // No per-repo resolution happens without a primary member.
     expect(mockState.resolvedCalls).toEqual([]);
     expect(mockState.globalCalls).toContain("sandbox");
+  });
+
+  it("rejects malformed persisted settings and falls back to disabled/defaults", async () => {
+    mockState.resolved["code-server"] = { enabledRepos: null, settings: { enabled: "true" } };
+    mockState.resolved["vnc"] = { enabledRepos: null, settings: { enabled: "true" } };
+    mockState.resolved["sandbox"] = { enabledRepos: null, settings: { tunnelPorts: ["8080"] } };
+
+    const result = await resolveSessionScopedSettings(DB, [{ repoOwner: "acme", repoName: "web" }]);
+
+    expect(result).toEqual({
+      codeServerEnabled: false,
+      vncEnabled: false,
+      sandboxSettings: {},
+    });
   });
 });

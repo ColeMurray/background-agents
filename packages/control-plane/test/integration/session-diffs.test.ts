@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SELF } from "cloudflare:test";
-import { SESSION_DIFF_FAILURE_BODY_MAX_BYTES } from "@open-inspect/shared";
+import { SESSION_DIFF_FAILURE_BODY_MAX_BYTES } from "@open-inspect/shared/types/session-diffs";
 import { SESSION_DIFF_UPLOAD_BODY_MAX_BYTES } from "../../src/routes/session-diffs";
 import {
   collectMessages,

@@ -5,24 +5,19 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CollapsedSidebarControls, SidebarLayout } from "./sidebar-layout";
-import { useAuthSession } from "@/lib/auth-session";
 import { useRouter } from "next/navigation";
 
 expect.extend(matchers);
 
 const mocks = vi.hoisted(() => ({
   isMobile: false,
+  canCreateSession: true,
   sidebar: {
     isOpen: true,
     toggle: vi.fn(),
     open: vi.fn(),
     close: vi.fn(),
   },
-}));
-
-vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: vi.fn(),
-  signIn: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -38,19 +33,23 @@ vi.mock("@/hooks/use-sidebar", () => ({
   useSidebar: () => mocks.sidebar,
 }));
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      permission === "sessions.create" && mocks.canCreateSession,
+  }),
+}));
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   mocks.isMobile = false;
+  mocks.canCreateSession = true;
   mocks.sidebar.isOpen = true;
 });
 
 describe("CollapsedSidebarControls", () => {
   it("renders the sidebar, search, and new session actions inline", () => {
-    vi.mocked(useAuthSession).mockReturnValue({
-      data: { user: { id: "user-1", name: "Test User" } },
-      status: "authenticated",
-    });
     const push = vi.fn();
     vi.mocked(useRouter).mockReturnValue({ push } as never);
 
@@ -73,16 +72,25 @@ describe("CollapsedSidebarControls", () => {
     fireEvent.click(buttons![2]);
     expect(push).toHaveBeenCalledWith("/");
   });
+
+  it("hides the new session action without session creation permission", () => {
+    mocks.canCreateSession = false;
+    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
+
+    render(
+      <SidebarLayout>
+        <CollapsedSidebarControls />
+      </SidebarLayout>
+    );
+
+    expect(screen.queryByRole("button", { name: /New session/ })).not.toBeInTheDocument();
+  });
 });
 
 describe("mobile sidebar drag", () => {
-  it("opens after swiping right from the left edge", () => {
+  it("opens after swiping right from the inset activation zone", () => {
     mocks.isMobile = true;
     mocks.sidebar.isOpen = false;
-    vi.mocked(useAuthSession).mockReturnValue({
-      data: { user: { id: "user-1", name: "Test User" } },
-      status: "authenticated",
-    });
     vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
 
     render(<SidebarLayout>Session</SidebarLayout>);
@@ -90,23 +98,24 @@ describe("mobile sidebar drag", () => {
     vi.spyOn(screen.getByTestId("mobile-sidebar-drawer"), "getBoundingClientRect").mockReturnValue({
       width: 288,
     } as DOMRect);
-    const dragHandle = screen.getByTestId("mobile-sidebar-drag-handle");
-    fireEvent.pointerDown(dragHandle, {
+    const gestureBoundary = screen.getByTestId("mobile-sidebar-gesture-boundary");
+    expect(gestureBoundary).toHaveClass("touch-pan-y");
+    fireEvent.pointerDown(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 8,
+      clientX: 32,
       clientY: 200,
     });
-    fireEvent.pointerMove(dragHandle, {
+    fireEvent.pointerMove(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 100,
+      clientX: 124,
       clientY: 202,
     });
-    fireEvent.pointerUp(dragHandle, {
+    fireEvent.pointerUp(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 100,
+      clientX: 124,
       clientY: 202,
     });
 
@@ -116,10 +125,6 @@ describe("mobile sidebar drag", () => {
   it("does not open when the swipe is too short", () => {
     mocks.isMobile = true;
     mocks.sidebar.isOpen = false;
-    vi.mocked(useAuthSession).mockReturnValue({
-      data: { user: { id: "user-1", name: "Test User" } },
-      status: "authenticated",
-    });
     vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
 
     render(<SidebarLayout>Session</SidebarLayout>);
@@ -127,21 +132,56 @@ describe("mobile sidebar drag", () => {
     vi.spyOn(screen.getByTestId("mobile-sidebar-drawer"), "getBoundingClientRect").mockReturnValue({
       width: 288,
     } as DOMRect);
-    const dragHandle = screen.getByTestId("mobile-sidebar-drag-handle");
-    fireEvent.pointerDown(dragHandle, {
+    const gestureBoundary = screen.getByTestId("mobile-sidebar-gesture-boundary");
+    fireEvent.pointerDown(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 8,
+      clientX: 32,
       clientY: 200,
     });
-    fireEvent.pointerMove(dragHandle, {
+    fireEvent.pointerMove(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 50,
+      clientX: 74,
       clientY: 200,
     });
-    fireEvent.pointerUp(dragHandle, { pointerId: 1, pointerType: "touch" });
+    fireEvent.pointerUp(gestureBoundary, { pointerId: 1, pointerType: "touch" });
 
+    expect(mocks.sidebar.open).not.toHaveBeenCalled();
+  });
+
+  it("delivers taps in the activation zone to underlying content", () => {
+    mocks.isMobile = true;
+    mocks.sidebar.isOpen = false;
+    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
+    const onPointerDown = vi.fn();
+    const onClick = vi.fn();
+
+    render(
+      <SidebarLayout>
+        <button onPointerDown={onPointerDown} onClick={onClick}>
+          Content action
+        </button>
+      </SidebarLayout>
+    );
+
+    const contentAction = screen.getByRole("button", { name: "Content action" });
+    fireEvent.pointerDown(contentAction, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 32,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(contentAction, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 32,
+      clientY: 200,
+    });
+    fireEvent.click(contentAction);
+
+    expect(onPointerDown).toHaveBeenCalledOnce();
+    expect(onClick).toHaveBeenCalledOnce();
     expect(mocks.sidebar.open).not.toHaveBeenCalled();
   });
 });

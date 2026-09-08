@@ -1,10 +1,10 @@
-export const VALID_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const VALID_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const MAX_KEY_LENGTH = 256;
 export const MAX_VALUE_SIZE = 16384;
 export const MAX_TOTAL_VALUE_SIZE = 65536;
 export const MAX_SECRETS_PER_SCOPE = 50;
 
-export const RESERVED_KEYS = new Set([
+const RESERVED_KEYS = new Set([
   "PYTHONUNBUFFERED",
   "SANDBOX_ID",
   "CONTROL_PLANE_URL",
@@ -45,7 +45,7 @@ export function validateKey(key: string): void {
     throw new SecretsValidationError(`Key '${key}' is reserved`);
 }
 
-export function validateValue(value: string): void {
+export function validateValue(value: unknown): asserts value is string {
   if (typeof value !== "string") throw new SecretsValidationError("Value must be a string");
   const bytes = new TextEncoder().encode(value).length;
   if (bytes > MAX_VALUE_SIZE)
@@ -72,7 +72,7 @@ export interface SecretSourceAttribution {
 }
 
 /** A key defined by more than one source; the higher-precedence source wins. */
-export interface SecretKeyCollision {
+interface SecretKeyCollision {
   key: string;
   /** Label of the source whose value is used. */
   winner: string;

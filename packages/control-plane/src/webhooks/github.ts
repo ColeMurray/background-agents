@@ -1,23 +1,27 @@
 /**
  * GitHub automation event webhook route — internal endpoint that receives
  * pre-normalized GitHubAutomationEvents from the github-bot, proxies them to
- * the SchedulerDO for automation matching, and piggybacks PR lifecycle
+ * the scheduler for automation matching, and piggybacks PR lifecycle
  * tracking (design §5.2) on the same forward. The lifecycle step runs in the
  * background and is additive: its failure never affects automation matching.
  */
 
-import { automationEventSchema } from "@open-inspect/shared";
+import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
+import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { createLogger, parseLogLevel } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
-import type { RequestContext, Route } from "../routes/shared";
-import { error, parsePattern } from "../routes/shared";
-import { requireEventPoster } from "../auth/identity-enforcement";
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { RequestContext } from "../routes/shared";
+import { error, GITHUB_SERVICE_ROUTE, serviceAuthorized } from "../routes/shared";
 import {
   forwardAutomationEventToScheduler,
+  logAutomationEventRejection,
   validateAutomationEventEnvelope,
 } from "./automation-event";
 import {
@@ -26,19 +30,13 @@ import {
   type SessionArtifactSummary,
 } from "./pull-request-lifecycle";
 
-function validateGitHubEvent(event: Record<string, unknown>): string | null {
-  return !event.repoOwner || !event.repoName
-    ? "Invalid event: repoOwner and repoName are required"
-    : null;
-}
-
 /**
  * Best-effort PR lifecycle tracking for one normalized event. Runs in
  * waitUntil off the request path; every failure is logged and swallowed.
  */
 async function trackPullRequestLifecycle(
   env: Env,
-  rawEvent: Record<string, unknown>,
+  event: GitHubAutomationEvent,
   ctx: RequestContext
 ): Promise<void> {
   const log = createLogger(
@@ -47,23 +45,7 @@ async function trackPullRequestLifecycle(
     parseLogLevel(env.LOG_LEVEL)
   );
   try {
-    if (!env.SESSION) return;
-
-    const parsed = automationEventSchema.safeParse(rawEvent);
-    if (!parsed.success) {
-      // Distinguish schema drift from the benign "not a PR event" skip: if
-      // the bot and control plane ever disagree on the envelope shape, PR
-      // tracking would otherwise go dark with zero signal.
-      if (typeof rawEvent.eventType === "string" && rawEvent.eventType.startsWith("pull_request")) {
-        log.warn("pull_request_lifecycle.envelope_parse_failed", {
-          event_type: rawEvent.eventType,
-          issues: parsed.error.issues.slice(0, 5).map((issue) => issue.path.join(".")),
-        });
-      }
-      return;
-    }
-    if (parsed.data.source !== "github" || !parsed.data.pullRequest) return;
-    const event = parsed.data;
+    if (!event.pullRequest) return;
 
     const sessionRuntime = createSessionRuntimeClient(env, ctx);
     const deps: PullRequestLifecycleDeps = {
@@ -73,9 +55,18 @@ async function trackPullRequestLifecycle(
         const response = await sessionRuntime.fetch(sessionId, SessionInternalPaths.artifacts, {
           method: "GET",
         });
-        if (!response.ok) return [];
-        const body = await response.json<{ artifacts?: SessionArtifactSummary[] }>();
-        return body.artifacts ?? [];
+        if (!response.ok) {
+          throw new Error(`List session artifacts failed (status ${response.status})`);
+        }
+        let raw: unknown;
+        try {
+          raw = await response.json();
+        } catch {
+          throw new Error("List session artifacts returned invalid JSON");
+        }
+        const parsed = listArtifactsResponseSchema.safeParse(raw);
+        if (!parsed.success) throw new Error("List session artifacts returned invalid shape");
+        return parsed.data.artifacts ?? [];
       },
       pushSnapshotToSession: async (sessionId, artifactId, snapshot) => {
         const response = await sessionRuntime.fetch(
@@ -116,34 +107,34 @@ async function trackPullRequestLifecycle(
 async function handleGitHubAutomationEvent(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const authFailure = requireEventPoster(ctx, "github");
-  if (authFailure) return authFailure;
-
   let body: unknown;
   try {
     body = await request.json();
   } catch {
+    logAutomationEventRejection(undefined, "github", ["body"], ctx);
     return error("Invalid JSON", 400);
   }
 
-  const validated = validateAutomationEventEnvelope(body, "github", validateGitHubEvent);
-  if (validated.response) return validated.response;
-
-  const lifecycleWork = trackPullRequestLifecycle(env, validated.event, ctx);
-  if (ctx.executionCtx) {
-    ctx.executionCtx.waitUntil(lifecycleWork);
-  } else {
-    await lifecycleWork;
+  const validated = validateAutomationEventEnvelope(body, "github");
+  if (validated.response) {
+    logAutomationEventRejection(body, "github", validated.issuePaths, ctx);
+    return validated.response;
   }
 
-  return forwardAutomationEventToScheduler(env, validated.event);
+  ctx.executionCtx.submit(() => trackPullRequestLifecycle(env, validated.event, ctx), {
+    name: "github_webhook.lifecycle",
+  });
+
+  return forwardAutomationEventToScheduler(env, validated.event, ctx);
 }
 
-export const githubAutomationEventRoute: Route = {
-  method: "POST",
-  pattern: parsePattern("/internal/github-event"),
-  handler: handleGitHubAutomationEvent,
-};
+export const githubAutomationEventRoutes = new Hono<ControlPlaneHonoEnv>();
+
+githubAutomationEventRoutes.post(
+  "/internal/github-event",
+  admit({ ...GITHUB_SERVICE_ROUTE, authorization: serviceAuthorized("github-bot") }),
+  (c) => dispatch(c, handleGitHubAutomationEvent)
+);

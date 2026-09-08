@@ -1,20 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   automationRepositoriesInputSchema,
-  createSessionRequestSchema,
-  MAX_AUTOMATION_REPOSITORIES,
-  MAX_SESSION_REPOSITORIES,
   MAX_TARGET_REPOSITORIES,
   decodeRepositoryPathSegments,
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
   parseRepositoryFullName,
   prArtifactBelongsToRepo,
-  sandboxEventSchema,
   serverMessageSchema,
   sessionRepositoriesInputSchema,
   toRepositoryRef,
+  validateRepositoryPathSegments,
 } from "./index";
+import { sandboxEventSchema } from "./sandbox-events";
+import { createSessionRequestSchema } from "./session-api";
 
 describe("repository full names", () => {
   it("round-trips a repository with a nested owner namespace", () => {
@@ -43,12 +42,27 @@ describe("repository full names", () => {
   ])("rejects a non-canonical repository API path (%s/%s)", (owner, name) => {
     expect(decodeRepositoryPathSegments(owner, name)).toBeNull();
   });
-});
 
-describe("MAX_TARGET_REPOSITORIES aliases", () => {
-  it("keeps automation and session caps as the same constant", () => {
-    expect(MAX_AUTOMATION_REPOSITORIES).toBe(MAX_TARGET_REPOSITORIES);
-    expect(MAX_SESSION_REPOSITORIES).toBe(MAX_TARGET_REPOSITORIES);
+  it("validates already-decoded segments with the same rules the decoder applies", () => {
+    expect(validateRepositoryPathSegments("group/subgroup", "web app")).toEqual({
+      repoOwner: "group/subgroup",
+      repoName: "web app",
+    });
+    // A once-decoded escape is data, not a separator.
+    expect(validateRepositoryPathSegments("acme", "web%2Fapp")).toEqual({
+      repoOwner: "acme",
+      repoName: "web%2Fapp",
+    });
+  });
+
+  it.each([
+    ["group", "web/api"],
+    ["group//subgroup", "web"],
+    ["", "web"],
+    ["group", ""],
+    ["/group", "web"],
+  ])("rejects a non-canonical decoded pair (%j/%j)", (owner, name) => {
+    expect(validateRepositoryPathSegments(owner, name)).toBeNull();
   });
 });
 
@@ -253,6 +267,17 @@ describe("warning event schema", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("accepts control-plane budget warnings", () => {
+    expect(
+      sandboxEventSchema.safeParse({
+        type: "warning",
+        scope: "budget",
+        message: "Session cost reached 80% of its limit",
+        timestamp: 1,
+      }).success
+    ).toBe(true);
   });
 
   it("rejects unknown scopes", () => {

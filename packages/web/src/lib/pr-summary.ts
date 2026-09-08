@@ -1,4 +1,5 @@
-import type { PullRequestDisplayStatus, PullRequestSummary } from "@open-inspect/shared";
+import type { PullRequestSummary } from "@open-inspect/shared/types/sessions";
+import type { PullRequestDisplayStatus } from "@open-inspect/shared/types/artifacts";
 
 /**
  * Everything a session-list row shows for its PRs, computed in one pass so

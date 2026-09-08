@@ -1,9 +1,6 @@
-import {
-  SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
-  sha256Hex,
-  verifyServiceSignature,
-  type SlackMessageFile,
-} from "@open-inspect/shared";
+import { SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@open-inspect/shared/types/session-attachments";
+import type { SlackMessageFile } from "@open-inspect/shared/slack";
+import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   notifyDroppedAttachments,
@@ -59,7 +56,7 @@ function uploadCreatedResponse(attachmentId = "att-1"): Response {
 /** Download + upload in one step, as the delivery pipeline runs them. */
 async function prepareAndUpload(env: Env, sessionId: string, files: SlackMessageFile[]) {
   const prepared = await prepareImageAttachments(env, toImageAttachments(files));
-  return uploadPreparedAttachments(env, sessionId, prepared);
+  return uploadPreparedAttachments(env, sessionId, prepared, "slack:U1");
 }
 
 afterEach(() => {
@@ -273,7 +270,7 @@ describe("uploadPreparedAttachments", () => {
       method: "POST",
       url: uploadUrl,
       bodySha256Hex: await sha256Hex(uploadInit.body as Uint8Array),
-      actor: "",
+      actor: "slack:U1",
     });
     expect(verified).toMatchObject({ ok: true });
   });
@@ -294,6 +291,36 @@ describe("uploadPreparedAttachments", () => {
 
     expect(result.references).toEqual([]);
     expect(result.dropped).toEqual(["download_failed", "upload_rejected"]);
+    expect(result.sessionMissing).toBe(false);
+  });
+
+  it("counts malformed upload responses as dropped", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(imageBytesResponse());
+    const controlPlaneFetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ attachmentId: null }), { status: 201 }));
+    const env = makeEnv(controlPlaneFetch);
+
+    const result = await prepareAndUpload(env, "sess-1", [pngFile]);
+
+    expect(result.references).toEqual([]);
+    expect(result.dropped).toEqual(["upload_rejected"]);
+    expect(result.sessionMissing).toBe(false);
+  });
+
+  it("counts syntactically invalid attachment ids as dropped", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(imageBytesResponse());
+    const controlPlaneFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ attachmentId: "bad id" }), { status: 201 })
+      );
+    const env = makeEnv(controlPlaneFetch);
+
+    const result = await prepareAndUpload(env, "sess-1", [pngFile]);
+
+    expect(result.references).toEqual([]);
+    expect(result.dropped).toEqual(["upload_rejected"]);
     expect(result.sessionMissing).toBe(false);
   });
 

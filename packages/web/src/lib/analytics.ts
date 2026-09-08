@@ -4,7 +4,7 @@ import type {
   AnalyticsPullRequestFunnel,
   AnalyticsPullRequestsResponse,
   AnalyticsTimeseriesResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/analytics";
 
 export const ANALYTICS_REFRESH_INTERVAL_MS = 30_000;
 export const ANALYTICS_DAYS: AnalyticsDays[] = [7, 14, 30, 90];

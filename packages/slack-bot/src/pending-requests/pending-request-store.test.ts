@@ -28,6 +28,7 @@ describe("pending request store", () => {
     const request: PendingRequest = {
       message: "Fix the tests",
       userId: "U123",
+      unattributedPrompt: { forwardedMessages: ["Forwarded body"] },
       previousMessages: ["Earlier context"],
       channelName: "engineering",
       channelDescription: "Build discussion",
@@ -66,6 +67,8 @@ describe("pending request store", () => {
     { message: 123, userId: "U123" },
     { message: "Fix it", userId: "" },
     { message: "Fix it", userId: "U123", previousMessages: ["valid", 123] },
+    { message: "Fix it", userId: "U123", unattributedPrompt: {} },
+    { message: "Fix it", userId: "U123", unattributedPrompt: { forwardedMessages: [123] } },
     { message: "Fix it", userId: "U123", channelName: 123 },
   ])("rejects malformed records: %j", async (record) => {
     mocks.get.mockResolvedValue(record);
@@ -77,6 +80,7 @@ describe("pending request store", () => {
     const minimal = { message: "Fix it", userId: "U123" };
     const complete = {
       ...minimal,
+      unattributedPrompt: { forwardedMessages: ["Forwarded body"] },
       previousMessages: ["Earlier context"],
       channelName: "engineering",
       channelDescription: "Build discussion",

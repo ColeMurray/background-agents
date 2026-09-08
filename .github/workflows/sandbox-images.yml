@@ -1,0 +1,47 @@
+name: Sandbox Images
+
+on:
+  pull_request:
+    paths:
+      - "packages/sandbox-images/**"
+      - "packages/sandbox-runtime/**"
+      - "packages/*-infra/**"
+      - "terraform/modules/*/scripts/**"
+      - "package-lock.json"
+      - ".github/workflows/sandbox-images.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: e2b
+            base: python:3.12-slim-bookworm
+          - provider: vercel
+            base: amazonlinux:2023
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.7"
+      - name: Check frozen image inputs and planner regressions
+        run: |
+          python3 packages/sandbox-images/cli.py lock --check
+          uv run --frozen --project packages/sandbox-images --extra dev pytest packages/sandbox-images/tests
+      - name: Build and verify the reference image on native amd64
+        run: |
+          bundle=$(python3 packages/sandbox-images/cli.py pack --provider ${{ matrix.provider }})
+          docker build --platform linux/amd64 --build-arg BASE_IMAGE=${{ matrix.base }} -f packages/sandbox-images/Dockerfile -t openinspect-image-contract "$bundle"
+          docker run --rm --platform linux/amd64 openinspect-image-contract

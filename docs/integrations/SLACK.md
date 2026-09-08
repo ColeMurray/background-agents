@@ -40,13 +40,11 @@ notification controls and safety notes are covered near the end.
 | Follow the result           | Read the completion reply or open the full session with **View Session**   |
 | Review generated media      | Optionally attach charts, screenshots, and small recordings to the thread  |
 | Ask the agent to post Slack | Enable agent notifications, then explicitly ask the agent to post to Slack |
-| Auto-trigger from a channel | Opt-in: watch a channel so matching messages start an automation           |
+| Auto-trigger from a channel | Watch a channel so matching messages start an automation                   |
 
-Open-Inspect does not use slash commands today. In channels, it normally responds only to
-`@mentions`, not to every message. The optional
-[channel-message triggers](#channel-message-triggers) feature can additionally start an
-**automation** from non-mention messages that match conditions you configure; it is disabled by
-default and must be enabled by an operator.
+Open-Inspect does not use slash commands today. In channels, interactive requests require an
+`@mention`. [Channel-message triggers](#channel-message-triggers) can additionally start an
+**automation** from non-mention messages that match conditions you configure.
 
 All completion replies are delivered asynchronously through a Cloudflare Queue. Open-Inspect
 attaches generated PNG, JPEG, WebP, or MP4 session artifacts to the completion thread. Delivery is
@@ -164,6 +162,16 @@ How matching works:
 
 Routing rules do not override an active thread: a keyword in a thread reply does not move that
 conversation to a different repository.
+
+### Session instructions
+
+Administrators can define workspace-wide instructions for Slack-started sessions under **Settings →
+Integrations → Slack → Session Instructions** in the web app. When set, the instructions are
+appended to the first prompt of every new Slack-initiated session as an `## Additional Instructions`
+section — use them for standing guidance such as coding standards, preferred tools, or PR
+conventions. They apply to new sessions only (thread follow-ups continue with the session's existing
+context), are limited to 10,000 characters, and mirror the Linear integration's **Issue Session
+Instructions**.
 
 ---
 
@@ -284,14 +292,24 @@ in a watched channel — without `@mentioning` the bot. This is distinct from th
 `@mention` flow: it is driven by [automations](../AUTOMATIONS.md#slack-message-triggers) with
 keyword, substring, or regex conditions.
 
-The feature is **disabled by default** and gated by the `SLACK_TRIGGERS_ENABLED` deployment flag.
-When the flag is off, the bot ignores channel messages and forwards nothing; authoring a Slack
-automation in the web app is still allowed, but it will not run until the flag is enabled.
+Slack Message automations ingest message text only. A message that carries an attachment does start
+an automation, but on its text alone — the attachment itself is not forwarded, so an image-only
+message with no text starts nothing. Attachments on automation thread replies are likewise not
+forwarded to the session, and the body of a forwarded message is not read. Use an interactive DM or
+`@mention` when the agent needs an image or a forwarded message.
 
-Slack Message automations currently ingest the message's own text only. File uploads, including
-image-only `file_share` messages, do not start these automations; attachments on automation thread
-replies are not forwarded to the session; and the body of a forwarded message is not read. Use an
-interactive DM or `@mention` when the agent needs an image or a forwarded message.
+When the triggering message is a **reply**, the agent also receives the thread it was posted in, so
+it can read the reply in context rather than as an isolated sentence. The thread is read only once a
+run has actually been admitted — never for messages that match no automation, for follow-ups that
+continue an existing session, or for firings dropped as concurrent or duplicate — and once per
+message however many automations match it. Top-level messages have no thread to read.
+
+The context contains up to 20 earlier messages total; on long threads, the opening message is
+preserved alongside the most recent replies. Each message is truncated to 1,024 characters, and its
+speaker record identifies people, apps, and the bot's own earlier turns without relying on a display
+name alone. It is passed as JSON and labelled untrusted: Slack text is written by people who may not
+be asking the agent anything, so it is presented as a record of the conversation rather than as
+instructions. If Slack cannot be read, the run starts with no thread history rather than failing.
 
 ### Slack app setup
 
@@ -315,6 +333,15 @@ condition to filter by content. See
 - When the run finishes, the agent's final response is posted into the triggering message's thread
   (with links to any pull requests and the full session), and the reaction is cleared. A failed run
   posts a short failure notice instead.
+- A run can **decline to reply**. If the agent's entire final message is `NO_REPLY` (or empty),
+  nothing is posted and only the 👀 reaction is cleared. This lets an automation that watches a busy
+  channel stay quiet on messages that turn out to need nothing from it — chatter between people, or
+  a follow-up addressed to someone else — instead of posting its reasoning about why it has nothing
+  to say. It applies to thread follow-ups as much as to the first trigger, which is where it matters
+  most: every reply in the thread wakes the automation. Tell the agent about the sentinel in the
+  automation's instructions; without an explicit instruction it will answer every message it is
+  woken for. A run that opened a pull request or produced other artifacts always posts, and
+  interactive `@mention` sessions never decline — a person is waiting on a visible answer there.
 - Every reply in a thread continues the same session — during the run and after it finishes — for up
   to 7 days after the thread's first trigger, like replying in an `@mention` thread. The reply is
   routed to that session as a follow-up prompt (re-spawned from a snapshot if it had gone idle),
@@ -324,7 +351,8 @@ condition to filter by content. See
 
 ### Threat model
 
-Channel triggers widen who can start a coding session, so weigh the following before enabling them:
+Channel triggers widen who can start a coding session, so weigh the following before configuring
+them:
 
 - **Any member of a watched channel can trigger a run** simply by posting a matching message. Treat
   every watched channel as a list of people authorized to start sessions against the automation's
@@ -336,10 +364,7 @@ Channel triggers widen who can start a coding session, so weigh the following be
   the same GitHub App installation limits used elsewhere apply here too.
 - **Regex conditions run untimed.** Conditions are evaluated with the native regex engine and no
   per-match timeout; a pathological pattern is an operator-authored risk. Patterns are length-capped
-  and validated at save time, and the `SLACK_TRIGGERS_ENABLED` flag is the kill switch if a bad
-  pattern degrades automation dispatch.
-- **The kill switch is immediate.** Setting `SLACK_TRIGGERS_ENABLED` back to `false` stops the bot
-  from ingesting or forwarding channel messages right away.
+  and validated at save time.
 
 ---
 
@@ -366,8 +391,9 @@ These notes are most useful for workspace admins deciding where the Slack bot sh
 
 ### The bot does not respond in a channel
 
-Check that the bot has been invited to the channel and that your message mentions the bot. The bot
-does not act on ordinary channel messages.
+For an interactive request, check that the bot has been invited to the channel and that your message
+mentions the bot. An ordinary channel message only starts a session when it matches a configured
+Slack Message automation; verify its watched channel and conditions.
 
 If setup was just changed, confirm the Slack app event subscriptions and interactivity URLs in
 [Complete Slack Setup](../GETTING_STARTED.md#step-7b-complete-slack-setup-if-using-slack).

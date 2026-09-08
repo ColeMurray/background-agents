@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { SessionDiffManifest, SessionDiffState } from "@open-inspect/shared";
+import type {
+  SessionDiffManifest,
+  SessionDiffState,
+} from "@open-inspect/shared/types/session-diffs";
 import {
   buildUniquePathLabels,
   deriveSessionDiffView,

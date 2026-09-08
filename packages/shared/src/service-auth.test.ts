@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { computeHmacHex, verifyCallbackFromControlPlane } from "./auth";
+import { computeHmacHex, isSignedCallbackPayload, verifyCallbackFromControlPlane } from "./auth";
 import {
   ACTOR_HEADER,
   buildCanonicalRequestString,
@@ -58,7 +58,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("golden vectors (cross-language contract with service_auth.py)", () => {
+describe("golden vectors", () => {
   it.each(vectors.map((v) => [v.name, v] as const))("%s", async (_name, vector) => {
     const url = new URL(vector.url);
     expect(url.pathname).toBe(vector.expected.pathname);
@@ -339,12 +339,20 @@ describe("verifyCallbackFromControlPlane", () => {
   });
 });
 
+describe("isSignedCallbackPayload", () => {
+  it("accepts only objects with string signatures", () => {
+    expect(isSignedCallbackPayload({ signature: "signed" })).toBe(true);
+    expect(isSignedCallbackPayload({ signature: 42 })).toBe(false);
+    expect(isSignedCallbackPayload(null)).toBe(false);
+  });
+});
+
 describe("isServiceName", () => {
   it("accepts exactly the registered services", () => {
-    for (const name of ["web", "slack-bot", "github-bot", "linear-bot", "modal"]) {
+    for (const name of ["web", "slack-bot", "github-bot", "linear-bot"]) {
       expect(isServiceName(name)).toBe(true);
     }
-    for (const name of ["", "WEB", "sandbox", "slackbot", "unknown"]) {
+    for (const name of ["", "WEB", "modal", "sandbox", "slackbot", "unknown"]) {
       expect(isServiceName(name)).toBe(false);
     }
   });

@@ -1,8 +1,8 @@
 import {
   formatRepositoryFullName,
   parseRepositoryFullName,
-  type AutomationRepositoryInput,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repositories";
+import type { AutomationRepositoryInput } from "@open-inspect/shared/types/automations";
 import type { SessionTarget } from "@/lib/session-target";
 
 /**

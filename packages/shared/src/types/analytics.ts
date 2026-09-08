@@ -1,4 +1,4 @@
-import type { SpawnSource } from "./statuses";
+import type { SpawnSource } from "./sessions";
 
 export const ANALYTICS_DAYS = [7, 14, 30, 90] as const;
 export type AnalyticsDays = (typeof ANALYTICS_DAYS)[number];
@@ -113,4 +113,23 @@ export interface AnalyticsPullRequestsResponse {
   timeseries: AnalyticsPullRequestTimeseriesPoint[];
   repos: AnalyticsPullRequestRepoEntry[];
   sources: AnalyticsPullRequestSourceEntry[];
+}
+
+/** One coherently-windowed analytics dashboard snapshot. */
+export interface AnalyticsDashboardResponse {
+  /** Request time used to anchor the window and open-PR age calculations. */
+  generatedAt: number;
+  /** Half-open interval [startAt, endAt) shared by every windowed metric. */
+  window: {
+    days: AnalyticsDays;
+    startAt: number;
+    endAt: number;
+  };
+  summary: AnalyticsSummaryResponse;
+  timeseries: AnalyticsTimeseriesResponse;
+  breakdowns: {
+    repository: AnalyticsBreakdownResponse;
+    user: AnalyticsBreakdownResponse;
+  };
+  pullRequests: AnalyticsPullRequestsResponse;
 }

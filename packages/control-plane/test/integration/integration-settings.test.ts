@@ -3,13 +3,29 @@ import { SELF, env } from "cloudflare:test";
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 import { EnvironmentStore } from "../../src/db/environments";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 
 describe("Integration settings API", () => {
   beforeEach(cleanD1Tables);
+
+  it.each(["/integration-settings/github", "/integration-settings/github/repos/acme/widgets"])(
+    "accepts empty settings and rejects malformed JSON at %s",
+    async (path) => {
+      const endpoint = `https://test.local${path}`;
+      const reset = await serviceFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({ settings: {} }),
+      });
+      expect(reset.status).toBe(200);
+
+      const malformed = await serviceFetch(endpoint, { method: "PUT", body: "{" });
+      expect(malformed.status).toBe(400);
+      expect(await malformed.json()).toEqual({ error: "Invalid JSON body" });
+    }
+  );
 
   describe("auth", () => {
     it("returns 401 without auth header", async () => {
@@ -88,6 +104,32 @@ describe("Integration settings API", () => {
       expect(body.settings.defaults.autoReviewOnOpen).toBe(false);
       expect(body.settings.enabledRepos).toEqual(["acme/widgets"]);
     });
+
+    it.each([null, [], "invalid", 42, {}, { settings: [] }, { settings: null }])(
+      "rejects invalid settings body %j without replacing stored settings",
+      async (invalidBody) => {
+        const endpoint = "https://test.local/integration-settings/github";
+        const settings = { defaults: { autoReviewOnOpen: false } };
+        expect(
+          (
+            await serviceFetch(endpoint, {
+              method: "PUT",
+              body: JSON.stringify({ settings }),
+            })
+          ).status
+        ).toBe(200);
+        const response = await serviceFetch("https://test.local/integration-settings/github", {
+          method: "PUT",
+          body: JSON.stringify(invalidBody),
+        });
+
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: "Request body must include settings object",
+        });
+        expect(await (await serviceFetch(endpoint)).json()).toMatchObject({ settings });
+      }
+    );
   });
 
   describe("DELETE /integration-settings/github", () => {
@@ -159,6 +201,24 @@ describe("Integration settings API", () => {
       const afterBody = await afterRes.json<{ settings: unknown }>();
       expect(afterBody.settings).toBeNull();
     });
+
+    it.each([null, [], "invalid", 42, {}, { settings: [] }, { settings: null }])(
+      "rejects invalid settings body %j",
+      async (invalidBody) => {
+        const response = await serviceFetch(
+          "https://test.local/integration-settings/github/repos/acme/widgets",
+          {
+            method: "PUT",
+            body: JSON.stringify(invalidBody),
+          }
+        );
+
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: "Request body must include settings object",
+        });
+      }
+    );
 
     it("rejects invalid model ID with 400", async () => {
       const response = await serviceFetch(
@@ -459,6 +519,31 @@ describe("Integration settings API", () => {
       expect(body.config.enabled).toBe(false);
       expect(body.config.enabledRepos).toEqual(["acme/widgets"]);
     });
+
+    it("returns VNC resolved config with merged settings", async () => {
+      await serviceFetch("https://test.local/integration-settings/vnc", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            enabledRepos: ["acme/widgets"],
+            defaults: { enabled: true },
+          },
+        }),
+      });
+      await serviceFetch("https://test.local/integration-settings/vnc/repos/acme/widgets", {
+        method: "PUT",
+        body: JSON.stringify({ settings: { enabled: false } }),
+      });
+
+      const res = await serviceFetch(
+        "https://test.local/integration-settings/vnc/resolved/acme/widgets"
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: { enabled: boolean; enabledRepos: string[] };
+      }>();
+      expect(body.config).toEqual({ enabled: false, enabledRepos: ["acme/widgets"] });
+    });
   });
 
   describe("sandbox settings API", () => {
@@ -516,6 +601,7 @@ describe("Integration settings API", () => {
           maxTotalChildSessions: number;
           cpuCores: number | null;
           memoryMib: number | null;
+          sandboxTimeoutMs: number | null;
           enabledRepos: string[] | null;
         };
       }>();
@@ -525,7 +611,42 @@ describe("Integration settings API", () => {
       // Unset resource reservations resolve to null → provider default applies.
       expect(body.config.cpuCores).toBeNull();
       expect(body.config.memoryMib).toBeNull();
+      expect(body.config.sandboxTimeoutMs).toBeNull();
       expect(body.config.enabledRepos).toBeNull();
+    });
+
+    it("stores and resolves a sandbox session timeout", async () => {
+      const putRes = await serviceFetch("https://test.local/integration-settings/sandbox", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: { sandboxTimeoutMs: 14_400_000 },
+          },
+        }),
+      });
+      expect(putRes.status).toBe(200);
+
+      const res = await serviceFetch(
+        "https://test.local/integration-settings/sandbox/resolved/testowner/testrepo"
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{ config: { sandboxTimeoutMs: number | null } }>();
+      expect(body.config.sandboxTimeoutMs).toBe(14_400_000);
+    });
+
+    it("rejects an invalid sandbox session timeout", async () => {
+      const response = await serviceFetch("https://test.local/integration-settings/sandbox", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: { sandboxTimeoutMs: 0 },
+          },
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      const body = await response.json<{ error: string }>();
+      expect(body.error).toContain("sandboxTimeoutMs must be a positive whole number of seconds");
     });
 
     it("GET /integration-settings/sandbox/resolved returns configured cpuCores and memoryMib", async () => {
@@ -692,6 +813,26 @@ describe("Integration settings API", () => {
       const afterDeleteBody = await afterDelete.json<{ settings: unknown }>();
       expect(afterDeleteBody.settings).toBeNull();
     });
+
+    it.each([null, [], "invalid", 42, {}, { settings: [] }, { settings: null }])(
+      "rejects invalid settings body %j",
+      async (invalidBody) => {
+        await seedEnvironment("env_settings_shape");
+
+        const response = await serviceFetch(
+          "https://test.local/integration-settings/sandbox/environments/env_settings_shape",
+          {
+            method: "PUT",
+            body: JSON.stringify(invalidBody),
+          }
+        );
+
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: "Request body must include settings object",
+        });
+      }
+    );
 
     it("returns 404 for an environment that does not exist", async () => {
       const response = await serviceFetch(

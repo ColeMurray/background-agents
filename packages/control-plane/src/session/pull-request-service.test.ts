@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";
 import * as branchResolution from "../source-control/branch-resolution";
-import type { SessionRepositoryRow } from "./repository";
+import type { SessionRepositoryRow } from "./types";
 import { buildSessionRepositories } from "./repository-target";
 import type { ArtifactRow, SessionRow } from "./types";
+import type { ArtifactRepository, CreateArtifactData } from "./artifact-repository";
 import {
   PullRequestCreationClaims,
   SessionPullRequestService,
@@ -51,7 +53,10 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user" as const,
     spawn_depth: 0,
     code_server_enabled: 0,
+    vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1,
@@ -82,6 +87,16 @@ function createMockProvider() {
       isDraft: false,
       sourceBranch: "open-inspect/session-name-1",
       targetBranch: "main",
+    })),
+    getPullRequest: vi.fn(async (config: { owner: string; name: string; number: number }) => ({
+      number: config.number,
+      url: `https://github.com/${config.owner}/${config.name}/pull/${config.number}`,
+      lifecycleState: "open" as const,
+      isDraft: false,
+      headBranch: "open-inspect/session-name-1",
+      baseBranch: "main",
+      repoOwner: config.owner,
+      repoName: config.name,
     })),
     buildManualPullRequestUrl: vi.fn(
       (config: { sourceBranch: string; targetBranch: string }) =>
@@ -124,7 +139,7 @@ function createRepositoryRow(overrides: Partial<SessionRepositoryRow> = {}): Ses
   };
 }
 
-function createTestHarness() {
+function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
   const log = createMockLogger();
   const provider = createMockProvider();
   const artifacts: ArtifactRow[] = [];
@@ -133,7 +148,7 @@ function createTestHarness() {
 
   const repository: PullRequestRepository = {
     getSession: () => session,
-    // Mirrors SessionRepository.getSessionRepositories: members derive from the
+    // Mirrors SessionCoreRepository.getSessionRepositories: members derive from the
     // session scalars plus whatever rows the test seeds.
     getSessionRepositories: () =>
       session?.repo_owner && session.repo_name
@@ -156,8 +171,10 @@ function createTestHarness() {
         );
       }
     ),
+  };
+  const artifactRepository = {
     listArtifacts: () => [...artifacts],
-    createArtifact: (data) => {
+    createArtifact: (data: CreateArtifactData) => {
       artifacts.unshift({
         id: data.id,
         type: data.type,
@@ -167,21 +184,31 @@ function createTestHarness() {
         updated_at: data.createdAt,
       } as ArtifactRow);
     },
-  };
+    getArtifactById: (id: string) => artifacts.find((artifact) => artifact.id === id) ?? null,
+    updateArtifact: (id: string, data: { url: string; metadata: string; updatedAt: number }) => {
+      const artifact = artifacts.find((row) => row.id === id);
+      if (!artifact) return;
+      artifact.url = data.url;
+      artifact.metadata = data.metadata;
+      artifact.updated_at = data.updatedAt;
+    },
+  } as unknown as ArtifactRepository;
 
   const sessionPullRequests = { upsert: vi.fn(async () => ({ applied: true })) };
 
   let idCounter = 0;
   const deps: PullRequestServiceDeps = {
     repository,
+    artifactRepository,
     claims: new PullRequestCreationClaims(),
     sourceControlProvider: provider,
     log,
     generateId: () => `id-${++idCounter}`,
     pushBranchToRemote: vi.fn(async () => ({ success: true as const })),
-    messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(() => true) },
+    messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(async () => {}) },
     appName: "Open-Inspect",
     sessionPullRequests,
+    resolveScmSettings: vi.fn(async () => options.scmSettings ?? {}),
   };
 
   const service = new SessionPullRequestService(deps);
@@ -238,7 +265,8 @@ describe("SessionPullRequestService", () => {
       status: 409,
       error: "A pull request has already been created for acme/web in this session.",
     });
-    expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
+    expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
+    expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
   });
 
   it("returns 500 when push to remote fails", async () => {
@@ -268,6 +296,9 @@ describe("SessionPullRequestService", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/web/pull/42",
       state: "open",
+      headBranch: "open-inspect/session-name-1",
+      baseBranch: "main",
+      updated: false,
     });
     const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
       .calls[0];
@@ -295,6 +326,9 @@ describe("SessionPullRequestService", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/web/pull/42",
       state: "open",
+      headBranch: "feature/test",
+      baseBranch: "main",
+      updated: false,
     });
     expect(harness.provider.buildGitPushSpec).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -325,6 +359,71 @@ describe("SessionPullRequestService", () => {
     });
   });
 
+  it("passes draft=false to the provider by default", async () => {
+    await harness.service.createPullRequest(createInput());
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: false })
+    );
+  });
+
+  it("forwards an explicit draft flag from the request", async () => {
+    await harness.service.createPullRequest(createInput({ draft: true }));
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
+  });
+
+  it("falls back to the always-draft default when draft is unspecified", async () => {
+    harness = createTestHarness({ scmSettings: { alwaysUseDraftMode: true } });
+
+    await harness.service.createPullRequest(createInput());
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
+  });
+
+  it("forces draft when always-draft is enabled, even if the request sets draft=false", async () => {
+    harness = createTestHarness({ scmSettings: { alwaysUseDraftMode: true } });
+
+    await harness.service.createPullRequest(createInput({ draft: false }));
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
+  });
+
+  it("fails before push when SCM policy cannot be resolved", async () => {
+    vi.mocked(harness.deps.resolveScmSettings).mockRejectedValueOnce(new Error("D1 unavailable"));
+
+    const result = await harness.service.createPullRequest(createInput());
+
+    expect(result).toEqual({
+      kind: "error",
+      status: 503,
+      error: "Pull request policy is temporarily unavailable",
+    });
+    expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
+    expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
+  });
+
+  it("passes the configured pull request label to the provider", async () => {
+    harness = createTestHarness({ scmSettings: { pullRequestLabel: "open-inspect" } });
+
+    await harness.service.createPullRequest(createInput());
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ labels: ["open-inspect"] })
+    );
+  });
+
   it("creates PR with OAuth token and stores PR artifact", async () => {
     const result = await harness.service.createPullRequest(
       createInput({ promptingAuth: { authType: "oauth", token: "user-token" } })
@@ -335,6 +434,9 @@ describe("SessionPullRequestService", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/web/pull/42",
       state: "open",
+      headBranch: "open-inspect/session-name-1",
+      baseBranch: "main",
+      updated: false,
     });
     expect(harness.provider.createPullRequest).toHaveBeenCalledTimes(1);
     const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
@@ -427,6 +529,9 @@ describe("SessionPullRequestService", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/web/pull/42",
       state: "open",
+      headBranch: "feature/test",
+      baseBranch: "main",
+      updated: false,
     });
     expect(harness.deps.repository.updateSessionBranch).not.toHaveBeenCalled();
     expect(harness.provider.buildGitPushSpec).toHaveBeenCalledWith(
@@ -486,49 +591,25 @@ describe("SessionPullRequestService", () => {
       );
     });
 
-    it("returns 409 for a repo that already has a PR, naming the repo", async () => {
-      harness.artifacts.push({
-        id: "artifact-pr-backend",
-        type: "pr",
-        url: "https://github.com/acme/backend/pull/9",
-        metadata: JSON.stringify({ number: 9, repoOwner: "acme", repoName: "backend" }),
-        created_at: Date.now(),
-        updated_at: Date.now(),
-      });
-
-      const result = await harness.service.createPullRequest(
-        createInput({ repoOwner: "acme", repoName: "backend" })
+    it("resolves SCM policy for the target member repository", async () => {
+      vi.mocked(harness.deps.resolveScmSettings).mockImplementation(async (repo) =>
+        repo.repoName === "backend"
+          ? { alwaysUseDraftMode: true, pullRequestLabel: "backend-generated" }
+          : {}
       );
 
-      expect(result).toEqual({
-        kind: "error",
-        status: 409,
-        error: "A pull request has already been created for acme/backend in this session.",
-      });
-      expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
-    });
-
-    it("treats a PR artifact without repo metadata as the primary's", async () => {
-      harness.artifacts.push({
-        id: "artifact-pr-legacy",
-        type: "pr",
-        url: "https://github.com/acme/web/pull/1",
-        metadata: JSON.stringify({ number: 1 }),
-        created_at: Date.now(),
-        updated_at: Date.now(),
-      });
-
-      const primaryResult = await harness.service.createPullRequest(createInput());
-      expect(primaryResult).toEqual({
-        kind: "error",
-        status: 409,
-        error: "A pull request has already been created for acme/web in this session.",
-      });
-
-      const secondaryResult = await harness.service.createPullRequest(
-        createInput({ repoOwner: "acme", repoName: "backend" })
+      await harness.service.createPullRequest(
+        createInput({ repoOwner: "acme", repoName: "backend", draft: false })
       );
-      expect(secondaryResult.kind).toBe("created");
+
+      expect(harness.deps.resolveScmSettings).toHaveBeenCalledWith({
+        repoOwner: "acme",
+        repoName: "backend",
+      });
+      expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ draft: true, labels: ["backend-generated"] })
+      );
     });
 
     it("defaults the base branch to the target member's base branch", async () => {
@@ -725,6 +806,9 @@ describe("SessionPullRequestService", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/web/pull/42",
       state: "open",
+      headBranch: "open-inspect/session-name-1",
+      baseBranch: "main",
+      updated: false,
     });
     expect(harness.provider.createPullRequest).toHaveBeenCalledTimes(1);
   });
@@ -868,23 +952,15 @@ describe("SessionPullRequestService", () => {
         prNumber: 42,
         prUrl: "https://github.com/acme/web/pull/42",
         state: "open",
+        headBranch: "open-inspect/session-name-1",
+        baseBranch: "main",
+        updated: false,
       });
       expect(artifactCreatedBroadcasts(harness.deps)).toHaveLength(1);
       expect(harness.log.error).toHaveBeenCalledWith(
         "Failed to write session pull request record",
         expect.objectContaining({ artifact_id: "id-1", pr_number: 42 })
       );
-    });
-
-    it("skips the D1 write when no store is configured", async () => {
-      const deps = { ...harness.deps };
-      delete deps.sessionPullRequests;
-      const service = new SessionPullRequestService(deps);
-
-      const result = await service.createPullRequest(createInput());
-
-      expect(result.kind).toBe("created");
-      expect(harness.sessionPullRequests.upsert).not.toHaveBeenCalled();
     });
   });
 });

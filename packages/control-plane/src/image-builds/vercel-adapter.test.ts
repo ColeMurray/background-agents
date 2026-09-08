@@ -1,21 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import type { VercelSandboxProvider } from "../sandbox/providers/vercel/provider";
 import { VercelImageBuildAdapter } from "./vercel-adapter";
-import type { VercelImageBuildPlan } from "./types";
+import type { ImageBuildPlan } from "./types";
 
 function createProvider(): VercelSandboxProvider {
   return {
-    triggerEnvironmentImageBuild: vi.fn(async () => undefined),
+    triggerImageBuild: vi.fn(async () => undefined),
     takeSnapshot: vi.fn(async () => ({ success: true, imageId: "vercel-snapshot-1" })),
     stopSandbox: vi.fn(async () => ({ success: true })),
     deleteProviderImage: vi.fn(async () => undefined),
   } as unknown as VercelSandboxProvider;
 }
 
-function createPlan(): VercelImageBuildPlan {
+function createPlan(buildTimeoutMs = 1_800_001): ImageBuildPlan {
   return {
-    provider: "vercel",
-    callbackMode: "provider_session",
     buildId: "build-1",
     scope: { kind: "repo", id: "acme/repo" },
     repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
@@ -23,8 +21,13 @@ function createPlan(): VercelImageBuildPlan {
     callbackUrl: "https://worker.test/image-builds/build-complete",
     failureCallbackUrl: "https://worker.test/image-builds/build-failed",
     callbackToken: "callback-token",
-    cloneAuth: { type: "credential_helper", token: "clone-token" },
-    buildTimeoutMs: 1_800_001,
+    cloneAuth: {
+      type: "credential_helper",
+      host: "github.com",
+      username: "x-access-token",
+      token: "clone-token",
+    },
+    buildTimeoutMs,
     userEnvVars: { FOO: "bar" },
     correlation: {
       request_id: "request-1",
@@ -41,15 +44,17 @@ describe("VercelImageBuildAdapter", () => {
 
     await adapter.startBuild(createPlan(), { bindProviderSession });
 
-    expect(provider.triggerEnvironmentImageBuild).toHaveBeenCalledWith({
-      environmentId: "acme/repo",
+    expect(provider.triggerImageBuild).toHaveBeenCalledWith({
+      scopeKind: "repo",
+      scopeId: "acme/repo",
       buildId: "build-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       callbackUrl: "https://worker.test/image-builds/build-complete",
       failureCallbackUrl: "https://worker.test/image-builds/build-failed",
       callbackToken: "callback-token",
       cloneToken: "clone-token",
-      buildTimeoutSeconds: 1801,
+      buildExecutionTimeoutSeconds: 1801,
+      providerSessionTimeoutSeconds: 2401,
       userEnvVars: { FOO: "bar" },
       onProviderSessionCreated: bindProviderSession,
       correlation: {
@@ -59,7 +64,31 @@ describe("VercelImageBuildAdapter", () => {
     });
   });
 
-  it("snapshots and stops completed build sandboxes", async () => {
+  it.each([
+    [1, 1, 11],
+    [35, 35, 45],
+    [45, 35, 45],
+    [60, 35, 45],
+  ])(
+    "preserves ten minutes of finalization headroom for a %d-minute configured budget",
+    async (configuredMinutes, expectedExecutionMinutes, expectedSessionMinutes) => {
+      const provider = createProvider();
+      const adapter = new VercelImageBuildAdapter(provider);
+
+      await adapter.startBuild(createPlan(configuredMinutes * 60_000), {
+        bindProviderSession: vi.fn(),
+      });
+
+      expect(provider.triggerImageBuild).toHaveBeenCalledWith(
+        expect.objectContaining({
+          buildExecutionTimeoutSeconds: expectedExecutionMinutes * 60,
+          providerSessionTimeoutSeconds: expectedSessionMinutes * 60,
+        })
+      );
+    }
+  );
+
+  it("snapshots and then explicitly cleans up completed build sandboxes", async () => {
     const provider = createProvider();
     const adapter = new VercelImageBuildAdapter(provider);
     const correlation = { request_id: "request-1", trace_id: "trace-1" };
@@ -83,6 +112,14 @@ describe("VercelImageBuildAdapter", () => {
         trace_id: "trace-1",
         sandbox_id: "vercel-session-1",
       },
+      signal: undefined,
+    });
+    expect(provider.stopSandbox).not.toHaveBeenCalled();
+
+    await adapter.cleanupCompletedBuild?.({
+      buildId: "build-1",
+      providerSessionId: "vercel-session-1",
+      correlation,
     });
     expect(provider.stopSandbox).toHaveBeenCalledWith({
       providerObjectId: "vercel-session-1",

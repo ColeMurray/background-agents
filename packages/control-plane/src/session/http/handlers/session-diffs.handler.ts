@@ -1,7 +1,7 @@
 import {
   SESSION_DIFF_FILE_NOT_FOUND_CODE,
   SESSION_DIFF_REVISION_STALE_CODE,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 import {
   DiffBaselineMismatchError,
   DiffBaselineUnavailableError,
@@ -68,9 +68,9 @@ export class SessionDiffsHandler {
   }
 
   /** Request a non-blocking diff refresh from the session sandbox. */
-  retry(): Response {
+  async retry(): Promise<Response> {
     try {
-      this.diffService.requestRefresh();
+      await this.diffService.requestRefresh();
       return Response.json({ accepted: true }, { status: 202 });
     } catch (e) {
       return this.errorResponse(e);
