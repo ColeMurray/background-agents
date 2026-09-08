@@ -126,7 +126,7 @@ describe("ImageBuildFinalizer", () => {
 
     await expect(finalizer.process(job, correlation)).resolves.toEqual({
       type: "retry",
-      delaySeconds: 365,
+      delayMs: 365_000,
     });
     expect(factory.create).not.toHaveBeenCalled();
   });
@@ -187,7 +187,7 @@ describe("ImageBuildFinalizer", () => {
 
     await expect(finalizer.process(job, correlation)).resolves.toEqual({
       type: "retry",
-      delaySeconds: 15,
+      delayMs: 15_000,
     });
     expect(finalization.clearLease).toHaveBeenCalledOnce();
     expect(finalization.markFailed).not.toHaveBeenCalled();
@@ -226,7 +226,7 @@ describe("ImageBuildFinalizer", () => {
 
     await expect(finalizer.process(job, correlation)).resolves.toEqual({
       type: "retry",
-      delaySeconds: 15,
+      delayMs: 15_000,
     });
     expect(adapter.deleteImage).toHaveBeenCalledWith({
       image: { providerImageId: "image-1", providerSessionId: "session-1" },

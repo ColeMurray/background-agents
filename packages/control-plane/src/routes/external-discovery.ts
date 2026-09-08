@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   DEFAULT_ENABLED_MODELS,
   MODEL_OPTIONS,
@@ -17,12 +20,9 @@ import { handleListRepos } from "./repos";
 import {
   SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
   activeGlobal,
-  defineRoutes,
   error,
   json,
-  parsePattern,
   requirePermission,
-  type Route,
   type UserRouteContext,
 } from "./shared";
 
@@ -91,12 +91,12 @@ function projectEnvironment({ channelAssociations: _channels, ...environment }: 
 async function listRepositories(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const query = listQuery(request);
   if (query instanceof Response) return query;
-  const response = await handleListRepos(request, env, match, ctx);
+  const response = await handleListRepos(request, env, params, ctx);
   if (!response.ok) return response;
   const result = (await response.json()) as { repos: EnrichedRepository[] };
   const repositories = page(
@@ -135,7 +135,7 @@ async function listRepositories(
 async function listEnvironments(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const query = listQuery(request);
@@ -158,11 +158,11 @@ async function listEnvironments(
 async function getEnvironment(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
   if (!hasOnlyQueryParams(request, [])) return error("Invalid query", 400);
-  const id = match.groups?.id;
+  const id = params.id;
   if (!id) return error("Environment ID required", 400);
   const store = new EnvironmentStore(ctx.db);
   const row = await store.getById(id);
@@ -177,7 +177,7 @@ async function getEnvironment(
 async function listModels(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   if (!hasOnlyQueryParams(request, [])) return error("Invalid query", 400);
@@ -200,7 +200,7 @@ async function listModels(
 async function listSkills(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const query = listQuery(request);
@@ -225,7 +225,7 @@ async function listSkills(
 async function listProviderAccounts(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const query = listQuery(request);
@@ -257,47 +257,64 @@ async function listProviderAccounts(
   });
 }
 
-export const externalDiscoveryRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_EXTERNAL_USER_ROUTE, [
-  {
-    method: "GET",
-    pattern: parsePattern(`${EXTERNAL_V1_PATH}/repositories`),
+export const externalDiscoveryRoutes = new Hono<ControlPlaneHonoEnv>();
+
+externalDiscoveryRoutes.get(
+  `${EXTERNAL_V1_PATH}/repositories`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("repositories.read", { service: "deny" }),
     cacheControl: PRIVATE_NO_STORE,
-    handler: listRepositories,
-  },
-  {
-    method: "GET",
-    pattern: parsePattern(`${EXTERNAL_V1_PATH}/environments`),
+  }),
+  (c) => dispatch(c, listRepositories)
+);
+
+externalDiscoveryRoutes.get(
+  `${EXTERNAL_V1_PATH}/environments`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("environments.read", { service: "deny" }),
     cacheControl: PRIVATE_NO_STORE,
-    handler: listEnvironments,
-  },
-  {
-    method: "GET",
-    pattern: parsePattern(`${EXTERNAL_V1_PATH}/environments/:id`),
+  }),
+  (c) => dispatch(c, listEnvironments)
+);
+
+externalDiscoveryRoutes.get(
+  `${EXTERNAL_V1_PATH}/environments/:id`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("environments.read", { service: "deny" }),
     cacheControl: PRIVATE_NO_STORE,
-    handler: getEnvironment,
-  },
-  {
-    method: "GET",
-    pattern: parsePattern(`${EXTERNAL_V1_PATH}/models`),
+  }),
+  (c) => dispatch(c, getEnvironment)
+);
+
+externalDiscoveryRoutes.get(
+  `${EXTERNAL_V1_PATH}/models`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: activeGlobal(),
     cacheControl: PRIVATE_NO_STORE,
-    handler: listModels,
-  },
-  {
-    method: "GET",
-    pattern: parsePattern(`${EXTERNAL_V1_PATH}/skills`),
+  }),
+  (c) => dispatch(c, listModels)
+);
+
+externalDiscoveryRoutes.get(
+  `${EXTERNAL_V1_PATH}/skills`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("skills.read", { service: "deny" }),
     cacheControl: PRIVATE_NO_STORE,
-    handler: listSkills,
-  },
-  {
-    method: "GET",
-    pattern: parsePattern(`${EXTERNAL_V1_PATH}/provider-accounts`),
+  }),
+  (c) => dispatch(c, listSkills)
+);
+
+externalDiscoveryRoutes.get(
+  `${EXTERNAL_V1_PATH}/provider-accounts`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("provider_accounts.read", { service: "deny" }),
     cacheControl: PRIVATE_NO_STORE,
-    handler: listProviderAccounts,
-  },
-]);
+  }),
+  (c) => dispatch(c, listProviderAccounts)
+);

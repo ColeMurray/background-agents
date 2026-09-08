@@ -1,0 +1,22 @@
+# Copy to terraform.tfvars and fill in.
+
+# Must resolve to the module's Elastic IP before Caddy can get a certificate.
+# On a first apply the address does not exist yet, so the usual order is:
+# apply, read `terraform output public_ip`, create the record, then restart the
+# stack over SSM. docs/AWS_BRING_UP.md walks through it.
+hostname = "staging.example.com"
+
+# Moves as CI pushes images.
+control_plane_image_tag = "latest"
+
+# Optional: have Terraform create the A record instead.
+# route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# Optional: page someone when the instance fails its status check.
+# alarm_topic_arn = "arn:aws:sns:us-west-2:123456789012:open-inspect-alarms"
+
+# Non-secret .env entries. Secrets go to SSM, never here.
+# config = {
+#   ALLOWED_GITHUB_ORGS = "your-org"
+#   WEB_APP_URL         = "https://staging-app.example.com"
+# }

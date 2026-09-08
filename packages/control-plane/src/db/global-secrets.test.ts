@@ -16,7 +16,7 @@ const QUERY_PATTERNS = {
   SELECT_KEYS_WITH_VALUES: /^SELECT key, encrypted_value FROM global_secrets$/,
   UPSERT_SECRET: /^INSERT INTO global_secrets/,
   DELETE_SECRET: /^DELETE FROM global_secrets/,
-  ARCHIVE_SECRET: /^INSERT OR IGNORE INTO managed_secret_redaction_history/,
+  ARCHIVE_SECRET: /^INSERT INTO managed_secret_redaction_history.*ON CONFLICT DO NOTHING$/,
 } as const;
 
 function normalizeQuery(query: string): string {

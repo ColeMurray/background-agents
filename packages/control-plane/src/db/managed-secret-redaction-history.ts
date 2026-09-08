@@ -13,8 +13,8 @@ export function archiveManagedSecretStatements(
   return rows.map(({ encrypted_value }) =>
     db
       .prepare(
-        `INSERT OR IGNORE INTO managed_secret_redaction_history (encrypted_value, created_at)
-         VALUES (?, ?)`
+        `INSERT INTO managed_secret_redaction_history (encrypted_value, created_at)
+         VALUES (?, ?) ON CONFLICT DO NOTHING`
       )
       .bind(encrypted_value, now)
   );

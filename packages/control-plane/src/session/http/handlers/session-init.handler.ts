@@ -128,6 +128,17 @@ export class SessionInitHandler {
       reasoningEffort,
     } = prepared;
 
+    // Sessions initialized before fingerprints existed still accept legacy
+    // init retries without rebuilding participants, sandbox, or live budget.
+    const existing = this.sessionCoreRepository.getSession();
+    if (
+      existing &&
+      !body.requestFingerprint &&
+      !this.sessionCoreRepository.getInitializationFingerprint()
+    ) {
+      return Response.json({ sessionId, status: existing.status });
+    }
+
     let encryptedToken = body.scmTokenEncrypted ?? null;
     if (body.scmToken) {
       try {
@@ -179,6 +190,7 @@ export class SessionInitHandler {
         codeServerEnabled: body.codeServerEnabled ?? false,
         vncEnabled: body.vncEnabled ?? false,
         sandboxSettings,
+        maxCostUsd: prepared.maxCostUsd,
         environmentId: body.environmentId ?? null,
         createdAt: now,
         updatedAt: now,
@@ -280,6 +292,7 @@ interface InitializationFingerprintInput {
 }
 
 interface PreparedSessionBootstrap {
+  maxCostUsd: number | null;
   repoOwner: string | null;
   repoName: string | null;
   hasRepoOwner: boolean;
@@ -338,7 +351,11 @@ function prepareSessionBootstrap(
       default_model: model,
     });
   }
+  const normalizedSandboxSettings = body.sandboxSettings
+    ? normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" })
+    : null;
   return {
+    maxCostUsd: normalizedSandboxSettings?.maxSessionCostUsd ?? null,
     repoOwner,
     repoName,
     hasRepoOwner,
@@ -351,9 +368,7 @@ function prepareSessionBootstrap(
           : [],
     model,
     reasoningEffort: validateReasoningEffort(model, body.reasoningEffort ?? undefined, log),
-    sandboxSettings: body.sandboxSettings
-      ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
-      : null,
+    sandboxSettings: normalizedSandboxSettings ? JSON.stringify(normalizedSandboxSettings) : null,
   };
 }
 

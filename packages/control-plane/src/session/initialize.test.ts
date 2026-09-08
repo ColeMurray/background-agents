@@ -6,6 +6,8 @@ import {
 } from "./initialize";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "./contracts";
+import type { SqlDatabase } from "../db/sql-database";
+import { fakeSessionRuntimeDispatch } from "../router.test-support";
 
 vi.mock("../db/session-index", () => ({
   SessionIndexStore: vi.fn(),
@@ -39,6 +41,13 @@ describe("initializeSession", () => {
     sandboxSettings: {},
     automationId: null,
     automationRunId: null,
+    managedSkillsManifest: {
+      selection: { mode: "all" },
+      resolverVersion: 1,
+      manifestSha256: "0".repeat(64),
+      resolvedAt: 1,
+      skills: [],
+    },
     providerAuth: [
       {
         provider: "openai",
@@ -58,15 +67,12 @@ describe("initializeSession", () => {
 
   let createMock: ReturnType<typeof vi.fn>;
   let updateStatusMock: ReturnType<typeof vi.fn>;
-  let stubFetchMock: ReturnType<typeof vi.fn>;
+  let stubFetchMock: ReturnType<typeof vi.fn<(request: Request) => Promise<Response>>>;
 
   function createEnv() {
     return {
-      DB: {} as D1Database,
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => ({ fetch: stubFetchMock }),
-      },
+      DB: {} as SqlDatabase,
+      SESSION: fakeSessionRuntimeDispatch((request) => stubFetchMock(request)),
     } as never;
   }
 
@@ -132,6 +138,23 @@ describe("initializeSession", () => {
       expect(createMock.mock.calls[0][0].repositories).toEqual(retried.repositories);
     }
   );
+  it("requires exactly one resolved or inherited managed skills manifest", async () => {
+    await expect(
+      initializeSession(
+        createEnv(),
+        { ...baseInput, managedSkillsManifest: undefined },
+        ctx as never
+      )
+    ).rejects.toThrow("Session must resolve or inherit exactly one managed skills manifest");
+    await expect(
+      initializeSession(
+        createEnv(),
+        { ...baseInput, managedSkillsSourceSessionId: "parent-session" },
+        ctx as never
+      )
+    ).rejects.toThrow("Session must resolve or inherit exactly one managed skills manifest");
+    expect(createMock).not.toHaveBeenCalled();
+  });
 
   it("throws when D1 write fails and does not call DO init", async () => {
     createMock.mockRejectedValue(new Error("D1 unavailable"));

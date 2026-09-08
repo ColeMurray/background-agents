@@ -1,14 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
-import { enforceRoutePrincipal, handleRequest, routes } from "./router";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
+import { enforceRoutePrincipal } from "./routing/route-admission";
+import {
+  handleRequest,
+  matchRoute,
+  routeContracts as routes,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "./router.test-support";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
-import { SCOPED_PERMISSION_PAIRS } from "@open-inspect/shared/rbac";
 
 function routeFor(method: string, path: string) {
-  return routes.find((route) => route.method === method && route.pattern.test(path));
+  return matchRoute(routes, method, path)?.route;
 }
 
 describe("route policy table", () => {
+  it("publishes the complete canonical route catalog", () => {
+    expect(routes).toHaveLength(204);
+
+    const paths = routes.map((route) => route.path);
+    expect(new Set(paths).size).toBe(161);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(204);
+  });
+
+  it("declares every path in the literal-or-parameter grammar", () => {
+    // Hono gives `*`, `?`, `{...}` and `.` routing meaning, and raw parameters
+    // are read back from the pathname by position, so a path outside this
+    // grammar could be selected by Hono and yield the wrong parameters.
+    for (const route of routes) {
+      expect(route.path, `${route.method} ${route.path}`).toMatch(/^(\/([A-Za-z0-9_-]+|:\w+))+$/);
+    }
+  });
+
+  it.each([
+    ["GET", "/sessions/inbox", "/sessions/:id"],
+    ["GET", "/model-provider-accounts/legacy-credentials", "/model-provider-accounts/:id"],
+  ])("orders the static overlap %s %s before %s", (method, staticPath, dynamicPath) => {
+    const staticIndex = routes.findIndex(
+      (route) => route.method === method && route.path === staticPath
+    );
+    const dynamicIndex = routes.findIndex(
+      (route) => route.method === method && route.path === dynamicPath
+    );
+
+    expect(staticIndex).toBeGreaterThanOrEqual(0);
+    expect(dynamicIndex).toBeGreaterThanOrEqual(0);
+    expect(staticIndex).toBeLessThan(dynamicIndex);
+  });
+
   it("has complete metadata", () => {
     expect(routes.length).toBeGreaterThan(0);
     expect(
@@ -22,7 +60,7 @@ describe("route policy table", () => {
   });
 
   it("has no duplicate method and pattern declarations", () => {
-    const identities = routes.map((route) => `${route.method}:${route.pattern}`);
+    const identities = routes.map((route) => `${route.method}:${route.path}`);
     expect(new Set(identities).size).toBe(identities.length);
   });
 
@@ -48,13 +86,13 @@ describe("route policy table", () => {
         expect(authorization.allOf.length).toBeGreaterThan(0);
         for (const requirement of authorization.allOf) {
           if (requirement.kind === "automation") {
-            expect(route.pattern.source).toContain(`?<${requirement.automationIdParam}>`);
+            expect(route.path.split("/")).toContain(`:${requirement.automationIdParam}`);
           }
         }
         if (authorization.service.kind === "actor") {
           for (const grant of authorization.service.actorlessGrants ?? []) {
             for (const pathParam of Object.keys(grant.pathParams ?? {})) {
-              expect(route.pattern.source).toContain(`?<${pathParam}>`);
+              expect(route.path.split("/")).toContain(`:${pathParam}`);
             }
           }
         }
@@ -126,11 +164,7 @@ describe("route policy table", () => {
           if (requirement.kind === "permission") {
             expect(
               serviceAllowsPermission(grant.service, requirement.permission),
-              `${grant.service} must allow ${requirement.permission} for ${route.method} ${route.pattern}`
-            ).toBe(true);
-          } else if (requirement.kind === "scoped-permission") {
-            expect(
-              serviceAllowsPermission(grant.service, SCOPED_PERMISSION_PAIRS[requirement.stem].own)
+              `${grant.service} must allow ${requirement.permission} for ${route.method} ${route.path}`
             ).toBe(true);
           }
         }
@@ -205,24 +239,20 @@ describe("route policy table", () => {
     });
   });
 
-  it("returns 400 for a malformed percent-encoded role ID before querying D1", async () => {
-    const path = "/roles/%E0%A4%A";
-    const route = routeFor("GET", path);
-    const match = path.match(route!.pattern)!;
+  it("refuses a malformed percent-encoded role ID before authentication or D1", async () => {
+    // Hono leaves the segment undecoded; admission refuses it before the
+    // principal is resolved, so neither authentication nor the role lookup
+    // touches D1.
     const prepare = vi.fn();
 
-    const response = await route!.handler(
-      new Request(`https://test.local${path}`),
-      {} as never,
-      match,
-      {
-        principal: { kind: "user", userId: "user-1" },
-        db: { prepare },
-      } as never
+    const response = await handleRequest(
+      new Request("https://test.local/roles/%E0%A4%A"),
+      { ...TEST_SERVICE_SECRETS, DB: { prepare } } as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid role ID" });
+    await expect(response.json()).resolves.toEqual({ error: "Invalid path encoding" });
     expect(prepare).not.toHaveBeenCalled();
   });
 
@@ -318,13 +348,12 @@ describe("route policy table", () => {
     ["PUT", "/sessions/session-1/diff"],
     ["POST", "/sessions/session-1/diff/failure"],
   ])("allows user/service auth with sandbox fallback for %s %s", (method, path) => {
-    const route = routeFor(method, path);
-    const match = path.match(route!.pattern)!;
-    expect(route?.authentication.kind).toBe("user-or-service-with-sandbox-fallback");
-    if (route?.authentication.kind === "user-or-service-with-sandbox-fallback") {
-      expect(route.authentication.getSessionId(match)).toBe("session-1");
+    const { route, params } = matchRoute(routes, method, path)!;
+    expect(route.authentication.kind).toBe("user-or-service-with-sandbox-fallback");
+    if (route.authentication.kind === "user-or-service-with-sandbox-fallback") {
+      expect(route.authentication.getSessionId(params)).toBe("session-1");
     }
-    expect(route?.authorization.kind).toBe("active-user");
+    expect(route.authorization.kind).toBe("active-user");
   });
 
   it.each([
@@ -337,11 +366,10 @@ describe("route policy table", () => {
     ["GET", "/sessions/session-1/sandbox-skills"],
     ["POST", "/sessions/session-1/provider-auth/openai/access-token"],
   ])("requires the bound sandbox for %s %s", (method, path) => {
-    const route = routeFor(method, path);
-    const match = path.match(route!.pattern)!;
-    expect(route?.authentication.kind).toBe("sandbox");
-    if (route?.authentication.kind === "sandbox") {
-      expect(route.authentication.getSessionId(match)).toBe(
+    const { route, params } = matchRoute(routes, method, path)!;
+    expect(route.authentication.kind).toBe("sandbox");
+    if (route.authentication.kind === "sandbox") {
+      expect(route.authentication.getSessionId(params)).toBe(
         path.includes("/children/") ? "parent-1" : "session-1"
       );
     }
@@ -392,6 +420,7 @@ describe("route policy table", () => {
   it.each([
     ["GET", "/scm-settings"],
     ["GET", "/analytics/summary"],
+    ["GET", "/analytics/dashboard"],
     ["GET", "/skills"],
     ["GET", "/skill-profiles"],
     ["GET", "/sessions/session-1"],
@@ -529,6 +558,7 @@ describe("route principal policy", () => {
       enforceRoutePrincipal(
         { kind: "user", credential: "cli" },
         { kind: "user", userId: "user-1" },
+        undefined,
         {
           mechanism: "cli_credential",
           credentialId: "credential-1",

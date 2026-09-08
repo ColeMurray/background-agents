@@ -32,6 +32,7 @@ type SessionPromptComposerProps = {
     isProcessing: boolean;
     draftLocked: boolean;
     sendBlocked: boolean;
+    blockedReason?: string;
     submitError: string | null;
     inputRef: React.RefObject<HTMLTextAreaElement | null>;
     onSubmit: (e: React.FormEvent) => void;
@@ -223,6 +224,11 @@ export function SessionPromptComposer({
               className="border-t border-destructive-border px-4 py-2 text-sm text-destructive"
             >
               {prompt.submitError}
+            </p>
+          )}
+          {prompt.blockedReason && (
+            <p className="border-t border-warning/30 bg-warning/5 px-4 py-2 text-sm text-warning">
+              {prompt.blockedReason}
             </p>
           )}
         </div>

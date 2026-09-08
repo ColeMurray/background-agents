@@ -1,5 +1,5 @@
 CREATE TABLE managed_secret_redaction_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id INTEGER PRIMARY KEY,
   encrypted_value TEXT NOT NULL UNIQUE,
   created_at INTEGER NOT NULL
 );
@@ -7,8 +7,9 @@ CREATE TABLE managed_secret_redaction_history (
 CREATE TRIGGER archive_deleted_environment_secret_for_redaction
 BEFORE DELETE ON environment_secrets
 BEGIN
-  INSERT OR IGNORE INTO managed_secret_redaction_history (encrypted_value, created_at)
-  VALUES (OLD.encrypted_value, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+  INSERT INTO managed_secret_redaction_history (encrypted_value, created_at)
+  VALUES (OLD.encrypted_value, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+  ON CONFLICT DO NOTHING;
 END;
 
 CREATE TABLE provider_credential_redaction_history (

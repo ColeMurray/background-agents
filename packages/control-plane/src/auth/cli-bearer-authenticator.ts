@@ -1,13 +1,13 @@
 import { CLI_CREDENTIAL_PATTERN } from "@open-inspect/shared/types/cli-auth";
 import { hashToken } from "./crypto";
 import { CliAuthStore } from "../db/cli-auth-store";
-import type { RequestContext } from "../routes/shared";
+import type { AuthenticationRequestServices } from "./request-services";
 import type { AuthResult } from "./result";
 
 /** Authenticates a direct CLI bearer as its canonical human user, never as a service. */
 export async function authenticateCliBearer(
   request: Request,
-  ctx: RequestContext
+  ctx: AuthenticationRequestServices
 ): Promise<AuthResult> {
   const header = request.headers.get("Authorization");
   const token = header?.startsWith("Bearer ") ? header.slice(7) : "";

@@ -90,6 +90,8 @@ export type SessionHeaderProps = {
   };
   connected: boolean;
   connecting: boolean;
+  /** A reconnect is scheduled and has not started yet. */
+  reconnecting: boolean;
   isDetailsOpen: boolean;
   isDesktopDetailsOpen: boolean;
   showDesktopDetailsToggle: boolean;
@@ -110,6 +112,7 @@ export function SessionHeader({
   fallbackSessionInfo,
   connected,
   connecting,
+  reconnecting,
   isDetailsOpen,
   isDesktopDetailsOpen,
   showDesktopDetailsToggle,
@@ -232,7 +235,11 @@ export function SessionHeader({
           />
           <div className="flex items-center gap-1">
             {capabilities.read && (
-              <ConnectionStatusIcon connected={connected} connecting={connecting} />
+              <ConnectionStatusIcon
+                connected={connected}
+                connecting={connecting}
+                reconnecting={reconnecting}
+              />
             )}
             <SandboxStatusIcon
               status={sessionState?.sandboxStatus}
@@ -267,12 +274,23 @@ export function SessionHeader({
 function ConnectionStatusIcon({
   connected,
   connecting,
+  reconnecting,
 }: {
   connected: boolean;
   connecting: boolean;
+  reconnecting: boolean;
 }) {
-  const label = connecting ? "Connecting..." : connected ? "Connected" : "Disconnected";
-  const color = connecting ? "bg-warning" : connected ? "bg-success" : "bg-destructive";
+  // A pending reconnect is a wait, not a dead connection: say so rather than
+  // showing "Disconnected" while the backoff timer runs.
+  const pending = connecting || reconnecting;
+  const label = reconnecting
+    ? "Reconnecting..."
+    : connecting
+      ? "Connecting..."
+      : connected
+        ? "Connected"
+        : "Disconnected";
+  const color = pending ? "bg-warning" : connected ? "bg-success" : "bg-destructive";
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -286,7 +304,7 @@ function ConnectionStatusIcon({
           >
             <span
               aria-hidden="true"
-              className={`h-2.5 w-2.5 rounded-full ${color}${connecting ? " animate-pulse motion-reduce:animate-none" : ""}`}
+              className={`h-2.5 w-2.5 rounded-full ${color}${pending ? " animate-pulse motion-reduce:animate-none" : ""}`}
             />
           </span>
         </TooltipTrigger>

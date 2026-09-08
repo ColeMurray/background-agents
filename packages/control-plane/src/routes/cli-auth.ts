@@ -1,3 +1,7 @@
+import { parseJsonBody } from "./body";
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { CLIENT_API_VERSION } from "@open-inspect/shared/types/client-api";
 import {
   CLI_EXTERNAL_API_V1_PATH,
@@ -22,12 +26,9 @@ import {
   NO_AUTHORIZATION,
   SCM_AGNOSTIC_CLI_USER_ROUTE,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
-  defineRoutes,
   error,
   json,
-  parseJsonBody,
   type RequestContext,
-  type Route,
   type UserRouteContext,
 } from "./shared";
 
@@ -106,7 +107,7 @@ async function enforceRateLimits(
 async function startAuthorization(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const limited = await enforceRateLimits(ctx, [
@@ -117,7 +118,7 @@ async function startAuthorization(
     },
   ]);
   if (limited) return limited;
-  const body = await parseJsonBody<unknown>(request);
+  const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
   try {
     const input = startCliDeviceAuthorizationRequestSchema.parse(body);
@@ -139,10 +140,10 @@ async function startAuthorization(
 async function exchangeAuthorization(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<unknown>(request);
+  const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
   try {
     const input = cliDeviceAuthorizationExchangeRequestSchema.parse(body);
@@ -174,10 +175,10 @@ async function exchangeAuthorization(
 async function revokeIssuedCredential(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<unknown>(request);
+  const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
   try {
     const input = revokeCliDeviceAuthorizationRequestSchema.parse(body);
@@ -204,7 +205,7 @@ async function revokeIssuedCredential(
 async function getPendingAuthorization(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   try {
@@ -229,10 +230,10 @@ async function getPendingAuthorization(
 async function approveAuthorization(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
-  const body = await parseJsonBody<unknown>(request);
+  const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
   try {
     const input = approveCliDeviceAuthorizationRequestSchema.parse(body);
@@ -263,7 +264,7 @@ function cliAuthentication(
 async function getMe(
   _request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const authentication = cliAuthentication(ctx);
@@ -280,7 +281,7 @@ async function getMe(
 async function revokeCurrent(
   _request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const authentication = cliAuthentication(ctx);
@@ -292,68 +293,74 @@ async function revokeCurrent(
   return new Response(null, { status: 204 });
 }
 
-const publicRoutes: Route[] = [
-  {
-    authentication: { kind: "public" },
-    supportedScmProviders: "all",
-    method: "POST",
-    pattern: new RegExp(`^${CLI_EXTERNAL_API_V1_PATH}/device-authorizations$`),
-    authorization: NO_AUTHORIZATION,
-    cacheControl: "no-store",
-    handler: startAuthorization,
-  },
-  {
-    authentication: { kind: "public" },
-    supportedScmProviders: "all",
-    method: "POST",
-    pattern: new RegExp(`^${CLI_EXTERNAL_API_V1_PATH}/device-authorizations/exchange$`),
-    authorization: NO_AUTHORIZATION,
-    cacheControl: "no-store",
-    handler: exchangeAuthorization,
-  },
-  {
-    authentication: { kind: "public" },
-    supportedScmProviders: "all",
-    method: "POST",
-    pattern: new RegExp(`^${CLI_EXTERNAL_API_V1_PATH}/device-authorizations/revoke$`),
-    authorization: NO_AUTHORIZATION,
-    cacheControl: "no-store",
-    handler: revokeIssuedCredential,
-  },
-];
+export const cliAuthRoutes = new Hono<ControlPlaneHonoEnv>();
 
-export const cliAuthRoutes: Route[] = [
-  ...publicRoutes,
-  ...defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
-    {
-      method: "GET",
-      pattern: new RegExp(`^${CLI_EXTERNAL_API_V1_PATH}/device-authorizations/pending$`),
-      authorization: ACTIVE_SELF,
-      cacheControl: "private, no-store",
-      handler: getPendingAuthorization,
-    },
-    {
-      method: "POST",
-      pattern: new RegExp(`^${CLI_EXTERNAL_API_V1_PATH}/device-authorizations/approve$`),
-      authorization: ACTIVE_SELF,
-      cacheControl: "private, no-store",
-      handler: approveAuthorization,
-    },
-  ]),
-  ...defineRoutes(SCM_AGNOSTIC_CLI_USER_ROUTE, [
-    {
-      method: "GET",
-      pattern: new RegExp(`^${CLI_EXTERNAL_API_V1_PATH}/me$`),
-      authorization: ACTIVE_SELF,
-      cacheControl: "private, no-store",
-      handler: getMe,
-    },
-    {
-      method: "DELETE",
-      pattern: new RegExp(`^${CLI_EXTERNAL_API_V1_PATH}/credentials/current$`),
-      authorization: ACTIVE_SELF,
-      cacheControl: "private, no-store",
-      handler: revokeCurrent,
-    },
-  ]),
-];
+cliAuthRoutes.post(
+  `${CLI_EXTERNAL_API_V1_PATH}/device-authorizations`,
+  admit({
+    ...{ authentication: { kind: "public" }, supportedScmProviders: "all" },
+    authorization: NO_AUTHORIZATION,
+    cacheControl: "no-store",
+  }),
+  (c) => dispatch(c, startAuthorization)
+);
+
+cliAuthRoutes.post(
+  `${CLI_EXTERNAL_API_V1_PATH}/device-authorizations/exchange`,
+  admit({
+    ...{ authentication: { kind: "public" }, supportedScmProviders: "all" },
+    authorization: NO_AUTHORIZATION,
+    cacheControl: "no-store",
+  }),
+  (c) => dispatch(c, exchangeAuthorization)
+);
+
+cliAuthRoutes.post(
+  `${CLI_EXTERNAL_API_V1_PATH}/device-authorizations/revoke`,
+  admit({
+    ...{ authentication: { kind: "public" }, supportedScmProviders: "all" },
+    authorization: NO_AUTHORIZATION,
+    cacheControl: "no-store",
+  }),
+  (c) => dispatch(c, revokeIssuedCredential)
+);
+
+cliAuthRoutes.get(
+  `${CLI_EXTERNAL_API_V1_PATH}/device-authorizations/pending`,
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    authorization: ACTIVE_SELF,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatch(c, getPendingAuthorization)
+);
+
+cliAuthRoutes.post(
+  `${CLI_EXTERNAL_API_V1_PATH}/device-authorizations/approve`,
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    authorization: ACTIVE_SELF,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatch(c, approveAuthorization)
+);
+
+cliAuthRoutes.get(
+  `${CLI_EXTERNAL_API_V1_PATH}/me`,
+  admit({
+    ...SCM_AGNOSTIC_CLI_USER_ROUTE,
+    authorization: ACTIVE_SELF,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatch(c, getMe)
+);
+
+cliAuthRoutes.delete(
+  `${CLI_EXTERNAL_API_V1_PATH}/credentials/current`,
+  admit({
+    ...SCM_AGNOSTIC_CLI_USER_ROUTE,
+    authorization: ACTIVE_SELF,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatch(c, revokeCurrent)
+);

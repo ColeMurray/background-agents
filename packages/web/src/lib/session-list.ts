@@ -5,7 +5,7 @@ import {
   SESSION_LIST_CURRENT_USER,
   type SessionListQuery,
 } from "@open-inspect/shared/session-list-query";
-import { sessionStatusSchema, type SessionReadState } from "@open-inspect/shared/types/sessions";
+import { sessionStatusSchema } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
@@ -44,8 +44,16 @@ const sessionListItemSchema = z.object({
     .optional(),
   readState: z
     .union([
-      z.object({ latestMessageId: z.null(), unread: z.literal(false) }),
-      z.object({ latestMessageId: z.string(), unread: z.boolean() }),
+      z.object({
+        latestMessageId: z.null(),
+        unread: z.literal(false),
+        version: z.number().default(0),
+      }),
+      z.object({
+        latestMessageId: z.string(),
+        unread: z.boolean(),
+        version: z.number().default(0),
+      }),
     ])
     .optional(),
 });
@@ -109,29 +117,6 @@ export function applyTitleUpdate(
     sessions: data.sessions.map((session) =>
       session.id === sessionId ? { ...session, title } : session
     ),
-  };
-}
-
-export function applySessionReadState(
-  data: SessionListResponse | undefined,
-  sessionId: string,
-  readState: SessionReadState | undefined
-): SessionListResponse | undefined {
-  if (!data) return data;
-  return {
-    ...data,
-    sessions: data.sessions.map((session) => {
-      if (session.id !== sessionId) return session;
-      if (!readState) return session;
-      const currentMessageId = session.readState?.latestMessageId;
-      if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId) {
-        return session;
-      }
-      return {
-        ...session,
-        readState,
-      };
-    }),
   };
 }
 

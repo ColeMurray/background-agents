@@ -447,7 +447,7 @@ export function ChildSessionListItem({
               className={`absolute right-0 top-0 h-10 w-10 items-center justify-center text-muted-foreground ${
                 isMobile
                   ? "flex"
-                  : "hidden opacity-0 group-hover:flex group-hover:opacity-100 group-focus-within:flex group-focus-within:opacity-100"
+                  : "invisible flex opacity-0 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 data-[state=open]:visible data-[state=open]:opacity-100"
               }`}
             >
               <MoreIcon className="h-4 w-4" />

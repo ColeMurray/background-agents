@@ -320,9 +320,24 @@ describe("external v1 session API", () => {
     expect(first.status).toBe(201);
     const result = (await first.json()) as { sessionId: string; messageId: string };
 
+    const stub = env.SESSION.get(env.SESSION.idFromName(result.sessionId));
+    await queryDO(
+      stub,
+      "UPDATE session SET max_cost_usd = 15, total_cost = 20, budget_exhausted = 1"
+    );
     const retry = await SELF.fetch(API, { method: "POST", headers, body });
     expect(retry.status).toBe(200);
     await expect(retry.json()).resolves.toEqual(result);
+    expect(
+      await queryDO(stub, "SELECT max_cost_usd, total_cost, budget_exhausted FROM session")
+    ).toEqual([{ max_cost_usd: 15, total_cost: 20, budget_exhausted: 1 }]);
+    const overBudget = await SELF.fetch(`${API}/${result.sessionId}/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ content: "New work", clientRequestId: "over-budget" }),
+    });
+    expect(overBudget.status).toBe(409);
+    await expect(overBudget.json()).resolves.toMatchObject({ code: "runtime_conflict" });
     const conflict = await SELF.fetch(API, {
       method: "POST",
       headers,
@@ -341,7 +356,6 @@ describe("external v1 session API", () => {
         JSON.stringify(externalCreateSessionRequestSchema.parse(JSON.parse(body)))
       ),
     });
-    const stub = env.SESSION.get(env.SESSION.idFromName(result.sessionId));
     expect((await queryDO(stub, "SELECT id FROM messages")).length).toBe(1);
   });
 

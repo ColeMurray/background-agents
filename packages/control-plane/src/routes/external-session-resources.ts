@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { externalChildPromptRequestSchema } from "@open-inspect/shared/types/external-resources-api";
 import { sendPromptResponseSchema } from "@open-inspect/shared/types/session-api";
@@ -18,16 +21,8 @@ import { SessionInternalPaths } from "../session/contracts";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
-import {
-  SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
-  defineRoutes,
-  error,
-  json,
-  parsePattern,
-  requirePermission,
-  type Route,
-} from "./shared";
-import { sessionRoute, type SessionRouteContext, type SessionRouteHandler } from "./session-route";
+import { SCM_AGNOSTIC_EXTERNAL_USER_ROUTE, error, json, requirePermission } from "./shared";
+import { dispatchSession, type SessionRouteContext } from "./session-route";
 import { handleAttachmentGet, handleAttachmentPost } from "./session-attachments";
 import { handleMediaGet } from "./session-media-stream";
 import { dispatchSessionPrompt } from "./session-prompt";
@@ -82,10 +77,17 @@ function offsetPage(request: Request): { limit: number; offset: number } | Respo
     : error("Invalid list pagination", 400);
 }
 
-function withStrictQuery(
-  handler: SessionRouteHandler,
+type ResourceHandler<Params> = (
+  request: Request,
+  env: Env,
+  params: Params,
+  ctx: SessionRouteContext
+) => Promise<Response>;
+
+function withStrictQuery<Params>(
+  handler: ResourceHandler<Params>,
   allowedNames: readonly string[] = []
-): SessionRouteHandler {
+): ResourceHandler<Params> {
   const allowed = new Set(allowedNames);
   return async (request, env, match, ctx) => {
     const seen = new Set<string>();
@@ -105,11 +107,6 @@ function slicePage<T>(items: T[], options: { limit: number; offset: number }) {
     hasMore,
     ...(hasMore ? { continuationOffset: options.offset + values.length } : {}),
   };
-}
-
-function routeId(match: RegExpMatchArray, name: string): string | null {
-  const value = match.groups?.[name];
-  return value?.trim() ? value : null;
 }
 
 async function requireSession(
@@ -250,10 +247,10 @@ function projectPullRequest(record: SessionPullRequestRecord, provider: string) 
 async function listMessages(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = routeId(match, "id");
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required", 400);
   if ((await requireSession(ctx, sessionId)) instanceof Response)
     return error("Session not found", 404);
@@ -278,10 +275,10 @@ async function listMessages(
 async function listArtifacts(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = routeId(match, "id");
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required", 400);
   if ((await requireSession(ctx, sessionId)) instanceof Response)
     return error("Session not found", 404);
@@ -317,10 +314,10 @@ async function listArtifacts(
 async function getDiffState(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = routeId(match, "id");
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required", 400);
   if ((await requireSession(ctx, sessionId)) instanceof Response)
     return error("Session not found", 404);
@@ -384,12 +381,12 @@ async function getDiffState(
 async function getDiffFile(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; revisionId: string; fileId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = routeId(match, "id");
-  const revisionId = routeId(match, "revisionId");
-  const fileId = routeId(match, "fileId");
+  const sessionId = params.id;
+  const revisionId = params.revisionId;
+  const fileId = params.fileId;
   if (
     !sessionId ||
     !revisionId ||
@@ -462,10 +459,10 @@ async function getDiffFile(
 async function listPullRequests(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = routeId(match, "id");
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required", 400);
   if ((await requireSession(ctx, sessionId)) instanceof Response)
     return error("Session not found", 404);
@@ -486,11 +483,11 @@ async function listPullRequests(
 async function getPullRequest(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; pullRequestId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = routeId(match, "id");
-  const pullRequestId = routeId(match, "pullRequestId");
+  const sessionId = params.id;
+  const pullRequestId = params.pullRequestId;
   if (!sessionId || !pullRequestId) return error("Session and pull request IDs required", 400);
   if ((await requireSession(ctx, sessionId)) instanceof Response)
     return error("Session not found", 404);
@@ -502,10 +499,10 @@ async function getPullRequest(
 async function listChildren(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const parentId = routeId(match, "id");
+  const parentId = params.id;
   if (!parentId) return error("Parent session ID required", 400);
   if ((await requireSession(ctx, parentId)) instanceof Response)
     return error("Parent session not found", 404);
@@ -525,11 +522,11 @@ async function listChildren(
 async function getChild(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; childId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const parentId = routeId(match, "id");
-  const childId = routeId(match, "childId");
+  const parentId = params.id;
+  const childId = params.childId;
   if (!parentId || !childId) return error("Parent and child session IDs required", 400);
   if ((await requireSession(ctx, parentId)) instanceof Response)
     return error("Parent session not found", 404);
@@ -542,13 +539,13 @@ async function getChild(
 async function promptChild(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; childId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
   const rateLimit = await enforceExternalRateLimit(ctx, "mutation");
   if (rateLimit) return rateLimit;
-  const parentId = routeId(match, "id");
-  const childId = routeId(match, "childId");
+  const parentId = params.id;
+  const childId = params.childId;
   if (!parentId || !childId) return error("Parent and child session IDs required", 400);
   const child = (await new SessionIndexStore(ctx.db).listByParent(parentId)).find(
     (candidate) => candidate.id === childId
@@ -573,70 +570,131 @@ async function promptChild(
 }
 
 const readAuthorization = requirePermission("sessions.read", { service: "deny" });
-const resources: Array<{
-  suffix: string;
-  handler: SessionRouteHandler;
-  query?: readonly string[];
-}> = [
-  { suffix: "/messages", handler: listMessages, query: ["limit", "cursor", "status"] },
-  { suffix: "/artifacts", handler: listArtifacts, query: ["limit", "cursor"] },
-  { suffix: "/diff", handler: getDiffState, query: ["limit", "offset", "revisionId"] },
-  {
-    suffix: "/diff/:revisionId/files/:fileId",
-    handler: getDiffFile,
-    query: ["limit", "offset"],
-  },
-  { suffix: "/pull-requests", handler: listPullRequests, query: ["limit", "offset"] },
-  { suffix: "/pull-requests/:pullRequestId", handler: getPullRequest },
-  { suffix: "/children", handler: listChildren, query: ["limit", "offset"] },
-  { suffix: "/children/:childId", handler: getChild },
-];
+export const externalSessionResourceRoutes = new Hono<ControlPlaneHonoEnv>();
 
-export const externalSessionResourceRoutes: Route[] = defineRoutes(
-  SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
-  resources.map(({ suffix, handler, query }) =>
-    sessionRoute({
-      method: "GET",
-      pattern: parsePattern(`${EXTERNAL_SESSION_PATH}${suffix}`),
-      authorization: readAuthorization,
-      cacheControl: "private, no-store",
-      handler: withStrictQuery(handler, query),
-    })
-  )
+externalSessionResourceRoutes.get(
+  `${EXTERNAL_SESSION_PATH}/messages`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: readAuthorization,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, withStrictQuery(listMessages, ["limit", "cursor", "status"]))
 );
 
-externalSessionResourceRoutes.push(
-  ...defineRoutes(SCM_AGNOSTIC_EXTERNAL_USER_ROUTE, [
-    sessionRoute({
-      method: "POST",
-      pattern: parsePattern(`${EXTERNAL_SESSION_PATH}/attachments`),
-      authorization: requirePermission("sessions.collaborate", { service: "deny" }),
-      cacheControl: "private, no-store",
-      handler: withStrictQuery(async (request, env, match, ctx) => {
+externalSessionResourceRoutes.get(
+  `${EXTERNAL_SESSION_PATH}/artifacts`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: readAuthorization,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, withStrictQuery(listArtifacts, ["limit", "cursor"]))
+);
+
+externalSessionResourceRoutes.get(
+  `${EXTERNAL_SESSION_PATH}/diff`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: readAuthorization,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, withStrictQuery(getDiffState, ["limit", "offset", "revisionId"]))
+);
+
+externalSessionResourceRoutes.get(
+  `${EXTERNAL_SESSION_PATH}/diff/:revisionId/files/:fileId`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: readAuthorization,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, withStrictQuery(getDiffFile, ["limit", "offset"]))
+);
+
+externalSessionResourceRoutes.get(
+  `${EXTERNAL_SESSION_PATH}/pull-requests`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: readAuthorization,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, withStrictQuery(listPullRequests, ["limit", "offset"]))
+);
+
+externalSessionResourceRoutes.get(
+  `${EXTERNAL_SESSION_PATH}/pull-requests/:pullRequestId`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: readAuthorization,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, withStrictQuery(getPullRequest))
+);
+
+externalSessionResourceRoutes.get(
+  `${EXTERNAL_SESSION_PATH}/children`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: readAuthorization,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, withStrictQuery(listChildren, ["limit", "offset"]))
+);
+
+externalSessionResourceRoutes.get(
+  `${EXTERNAL_SESSION_PATH}/children/:childId`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: readAuthorization,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, withStrictQuery(getChild))
+);
+
+externalSessionResourceRoutes.post(
+  `${EXTERNAL_SESSION_PATH}/attachments`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: requirePermission("sessions.collaborate", { service: "deny" }),
+    cacheControl: "private, no-store",
+  }),
+  (c) =>
+    dispatchSession(
+      c,
+      withStrictQuery(async (request, env, params: { id: string }, ctx) => {
         const rateLimit = await enforceExternalRateLimit(ctx, "mutation");
-        return rateLimit ?? handleAttachmentPost(request, env, match, ctx);
-      }),
-    }),
-    sessionRoute({
-      method: "GET",
-      pattern: parsePattern(`${EXTERNAL_SESSION_PATH}/attachments/:attachmentId`),
-      authorization: readAuthorization,
-      cacheControl: "private, no-store",
-      handler: withStrictQuery(handleAttachmentGet),
-    }),
-    sessionRoute({
-      method: "POST",
-      pattern: parsePattern(`${EXTERNAL_SESSION_PATH}/children/:childId/messages`),
-      authorization: requirePermission("sessions.collaborate", { service: "deny" }),
-      cacheControl: "private, no-store",
-      handler: withStrictQuery(promptChild),
-    }),
-    sessionRoute({
-      method: "GET",
-      pattern: parsePattern(`${EXTERNAL_SESSION_PATH}/artifacts/:artifactId/content`),
-      authorization: readAuthorization,
-      cacheControl: "private, no-store",
-      handler: withStrictQuery(handleMediaGet),
-    }),
-  ])
+        return rateLimit ?? handleAttachmentPost(request, env, params, ctx);
+      })
+    )
+);
+
+externalSessionResourceRoutes.get(
+  `${EXTERNAL_SESSION_PATH}/attachments/:attachmentId`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: readAuthorization,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, withStrictQuery(handleAttachmentGet))
+);
+
+externalSessionResourceRoutes.post(
+  `${EXTERNAL_SESSION_PATH}/children/:childId/messages`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: requirePermission("sessions.collaborate", { service: "deny" }),
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, withStrictQuery(promptChild))
+);
+
+externalSessionResourceRoutes.get(
+  `${EXTERNAL_SESSION_PATH}/artifacts/:artifactId/content`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
+    authorization: readAuthorization,
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, withStrictQuery(handleMediaGet))
 );

@@ -1,3 +1,7 @@
+import { parseJsonBody } from "./body";
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   externalCreateSessionRequestSchema,
   externalFollowUpRequestSchema,
@@ -28,16 +32,12 @@ import { adaptExternalRuntimeFailure } from "../external-api/runtime-response";
 import type { Env } from "../types";
 import {
   SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
-  defineRoutes,
   error,
   json,
-  parseJsonBody,
-  parsePattern,
   requirePermission,
-  type Route,
   type UserRouteContext,
 } from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { dispatchSession, type SessionRouteContext } from "./session-route";
 import { dispatchUserSessionPrompt } from "./session-prompt";
 import { createUserSession } from "./session-create-user";
 import { enforceExternalRateLimit } from "../external-api/rate-limit";
@@ -216,7 +216,7 @@ function collectStrings(value: unknown, target: string[]): void {
 async function listExternalSessions(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -273,10 +273,10 @@ async function listExternalSessions(
 async function getExternalSession(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required", 400);
   const session = await externalSession(ctx, sessionId);
   if (session instanceof Response) return session;
@@ -295,16 +295,16 @@ async function getExternalSession(
 async function followUp(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
   const rateLimit = await enforceExternalRateLimit(ctx, "mutation");
   if (rateLimit) return rateLimit;
-  const sessionId = match.groups?.id;
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required", 400);
   const session = await externalSession(ctx, sessionId);
   if (session instanceof Response) return session;
-  const raw = await parseJsonBody<unknown>(request);
+  const raw = await parseJsonBody(request);
   if (raw instanceof Response) return raw;
   const parsed = externalFollowUpRequestSchema.safeParse(raw);
   if (!parsed.success) return error("Invalid external follow-up request body", 400);
@@ -317,12 +317,12 @@ async function followUp(
 async function stopExternalSession(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
   const rateLimit = await enforceExternalRateLimit(ctx, "mutation");
   if (rateLimit) return rateLimit;
-  const sessionId = match.groups?.id;
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required", 400);
   const session = await externalSession(ctx, sessionId);
   if (session instanceof Response) return session;
@@ -337,12 +337,12 @@ async function stopExternalSession(
 async function externalEvents(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
   const rateLimit = await enforceExternalRateLimit(ctx, "events");
   if (rateLimit) return rateLimit;
-  const sessionId = match.groups?.id;
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required", 400);
   const session = await externalSession(ctx, sessionId);
   if (session instanceof Response) return session;
@@ -392,10 +392,10 @@ async function externalEvents(
 async function waitExternalSession(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required", 400);
   const session = await externalSession(ctx, sessionId);
   if (session instanceof Response) return session;
@@ -459,60 +459,81 @@ async function waitExternalSession(
   });
 }
 
-export const externalSessionsRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_EXTERNAL_USER_ROUTE, [
-  {
-    method: "POST",
-    pattern: parsePattern(EXTERNAL_SESSIONS_PATH),
+export const externalSessionsRoutes = new Hono<ControlPlaneHonoEnv>();
+
+externalSessionsRoutes.post(
+  EXTERNAL_SESSIONS_PATH,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("sessions.create", { service: "deny" }),
     cacheControl: "private, no-store",
-    handler: async (request, env, _match, ctx) => {
-      const raw = await parseJsonBody<unknown>(request);
+  }),
+  (c) =>
+    dispatch(c, async (request, env, _match, ctx) => {
+      const raw = await parseJsonBody(request);
       if (raw instanceof Response) return raw;
       const parsed = externalCreateSessionRequestSchema.safeParse(raw);
       if (!parsed.success) return error("Invalid external session request body", 400);
       return createUserSession(request, env, ctx, parsed.data);
-    },
-  },
-  {
-    method: "GET",
-    pattern: parsePattern(EXTERNAL_SESSIONS_PATH),
+    })
+);
+
+externalSessionsRoutes.get(
+  EXTERNAL_SESSIONS_PATH,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("sessions.read", { service: "deny" }),
     cacheControl: "private, no-store",
-    handler: listExternalSessions,
-  },
-  {
-    method: "GET",
-    pattern: parsePattern(`${EXTERNAL_SESSIONS_PATH}/:id`),
+  }),
+  (c) => dispatch(c, listExternalSessions)
+);
+
+externalSessionsRoutes.get(
+  `${EXTERNAL_SESSIONS_PATH}/:id`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("sessions.read", { service: "deny" }),
     cacheControl: "private, no-store",
-    handler: getExternalSession,
-  },
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern(`${EXTERNAL_SESSIONS_PATH}/:id/messages`),
+  }),
+  (c) => dispatch(c, getExternalSession)
+);
+
+externalSessionsRoutes.post(
+  `${EXTERNAL_SESSIONS_PATH}/:id/messages`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("sessions.collaborate", { service: "deny" }),
     cacheControl: "private, no-store",
-    handler: followUp,
   }),
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern(`${EXTERNAL_SESSIONS_PATH}/:id/stop`),
+  (c) => dispatchSession(c, followUp)
+);
+
+externalSessionsRoutes.post(
+  `${EXTERNAL_SESSIONS_PATH}/:id/stop`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("sessions.lifecycle", { service: "deny" }),
     cacheControl: "private, no-store",
-    handler: stopExternalSession,
   }),
-  sessionRoute({
-    method: "GET",
-    pattern: parsePattern(`${EXTERNAL_SESSIONS_PATH}/:id/events`),
+  (c) => dispatchSession(c, stopExternalSession)
+);
+
+externalSessionsRoutes.get(
+  `${EXTERNAL_SESSIONS_PATH}/:id/events`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("sessions.read", { service: "deny" }),
     cacheControl: "private, no-store",
-    handler: externalEvents,
   }),
-  {
-    method: "GET",
-    pattern: parsePattern(`${EXTERNAL_SESSIONS_PATH}/:id/wait`),
+  (c) => dispatchSession(c, externalEvents)
+);
+
+externalSessionsRoutes.get(
+  `${EXTERNAL_SESSIONS_PATH}/:id/wait`,
+  admit({
+    ...SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
     authorization: requirePermission("sessions.read", { service: "deny" }),
     cacheControl: "private, no-store",
-    handler: waitExternalSession,
-  },
-]);
+  }),
+  (c) => dispatch(c, waitExternalSession)
+);

@@ -1,3 +1,8 @@
+import { Hono } from "hono";
+import type { HandlerEnv } from "../routing/admit";
+import { listRouteContracts } from "../routing/route-contracts";
+import { matchRoute, fakeSessionRuntimeDispatch } from "../router.test-support";
+import type { RouteParams } from "./shared";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import { describe, expect, it, vi } from "vitest";
 import type { SqlDatabase } from "../db/sql-database";
@@ -103,7 +108,7 @@ function createContext(
       permissions,
     },
     metrics: {
-      d1Queries: [],
+      sqlQueries: [],
       spans: {},
       time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
       summarize: () => ({}),
@@ -114,25 +119,47 @@ function createContext(
 function createEnv(fetch: (request: Request) => Promise<Response>): Env {
   return {
     SCM_PROVIDER: "gitlab",
-    SESSION: {
-      idFromName: vi.fn((name: string) => `do-${name}`),
-      get: vi.fn(() => ({ fetch })),
-    },
+    SESSION: fakeSessionRuntimeDispatch(fetch),
   } as unknown as Env;
 }
 
+const contracts = listRouteContracts(externalSessionResourceRoutes);
+
+// These projection tests supply an already-admitted context. Integration tests
+// exercise the full authentication/admission pipeline through the production app.
 function route(method: string, path: string) {
-  for (const candidate of externalSessionResourceRoutes) {
-    const match = path.match(candidate.pattern);
-    if (candidate.method === method && match) return { candidate, match };
-  }
-  throw new Error(`No route for ${method} ${path}`);
+  const matched = matchRoute(contracts, method, path);
+  if (!matched) throw new Error(`No route for ${method} ${path}`);
+  const terminal = externalSessionResourceRoutes.routes.find(
+    (entry) =>
+      entry.method === method && entry.path === matched.route.path && !("policy" in entry.handler)
+  );
+  if (!terminal) throw new Error("Missing route handler");
+  return {
+    match: matched.params,
+    candidate: {
+      async handler(
+        request: Request,
+        env: Env,
+        _params: RouteParams,
+        ctx: RequestContext
+      ): Promise<Response> {
+        const app = new Hono<HandlerEnv<RequestContext>>();
+        app.use("*", async (c, next) => {
+          c.set("admitted", { request: c.req.raw, ctx });
+          await next();
+        });
+        app.on(method, matched.route.path, terminal.handler);
+        return app.request(request, undefined, env);
+      },
+    },
+  };
 }
 
 describe("external session resource routes", () => {
   it("exports the V1 read routes and scoped mutation routes", () => {
-    expect(externalSessionResourceRoutes).toHaveLength(12);
-    for (const candidate of externalSessionResourceRoutes) {
+    expect(contracts).toHaveLength(12);
+    for (const candidate of contracts) {
       expect(candidate.authentication).toEqual({ kind: "user", credential: "browser-or-cli" });
       expect(candidate.supportedScmProviders).toBe("all");
       expect(candidate.authorization).toMatchObject({

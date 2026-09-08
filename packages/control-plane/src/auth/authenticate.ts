@@ -22,13 +22,13 @@ import { isAuthError, type AuthResult } from "./result";
 import { authenticateServiceRequest } from "./service/request-authenticator";
 import { authenticateCliBearer } from "./cli-bearer-authenticator";
 import { createLogger } from "../logger";
-import type { RequestContext } from "../routes/shared";
+import type { AuthenticationRequestServices } from "./request-services";
 import type { Env } from "../types";
 
 const logger = createLogger("auth");
 
 export { isAuthError, type AuthResult } from "./result";
-export { SERVICE_REQUEST_MAX_BODY_BYTES } from "./service/request-authenticator";
+export { SERVICE_REQUEST_MAX_BODY_BYTES } from "@open-inspect/shared/service-auth";
 
 export interface AuthenticationRequirement {
   /**
@@ -43,7 +43,7 @@ export interface AuthenticationRequirement {
 export async function authenticate(
   request: Request,
   env: Env,
-  ctx: RequestContext,
+  ctx: AuthenticationRequestServices,
   requirement: AuthenticationRequirement = {}
 ): Promise<AuthResult> {
   const signatureHeader = request.headers.get(SERVICE_SIGNATURE_HEADER);

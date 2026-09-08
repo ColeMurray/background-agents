@@ -219,11 +219,25 @@ describe("ConfigStore", () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     await Promise.all(
       Array.from({ length: 20 }, (_, index) =>
-        seedContext(new ConfigStore(directory), `context-${index}`, {
-          url: `https://host-${index}.example.com`,
-          credential: `oi_cli_${String(index).padStart(64, "a")}`,
-          expiresAt: index,
-        })
+        (async () => {
+          // Exercise concurrent store updates, not login's global recovery drain,
+          // which deliberately consumes other outstanding authorization markers.
+          const store = new ConfigStore(directory);
+          const name = `context-${index}`;
+          const url = `https://host-${index}.example.com`;
+          const deviceSecretRef = await store.stageDeviceAuthorization({
+            url,
+            contextName: name,
+            deviceSecret: String(index).padStart(64, "b"),
+          });
+          const staged = await store.stageCredential({
+            url,
+            credential: `oi_cli_${String(index).padStart(64, "a")}`,
+            credentialId: `credential-${index}`,
+            expiresAt: index,
+          });
+          await store.promoteStagedContext(name, staged, deviceSecretRef);
+        })()
       )
     );
     expect(Object.keys((await new ConfigStore(directory).read()).contexts)).toHaveLength(20);

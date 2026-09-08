@@ -15,6 +15,7 @@ import type {
   AutomationRun,
   AutomationRunStatus,
 } from "@open-inspect/shared/types/automations";
+import { automationInvocationStatusSchema } from "@open-inspect/shared/types/automations";
 import type { TriggerConfig } from "@open-inspect/shared/triggers";
 import {
   toProviderSelections,
@@ -22,6 +23,7 @@ import {
 } from "./automation-model-provider-auth";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { AutomationListCursor } from "./automation-list-cursor";
+import { z } from "zod";
 import { UserStore } from "./user-store";
 
 function escapeLikePattern(value: string): string {
@@ -143,6 +145,21 @@ export interface AutomationInvocationRow {
   created_at: number;
   updated_at: number;
 }
+
+const enrichedAutomationInvocationRowSchema = z.object({
+  id: z.string(),
+  automation_id: z.string(),
+  source: z.enum(["schedule", "manual", "event"]),
+  scheduled_at: z.number().nullable(),
+  skip_reason: z.string().nullable(),
+  created_at: z.number(),
+  derived_status: automationInvocationStatusSchema,
+  derived_completed_at: z.number().nullable(),
+});
+
+type EnrichedAutomationInvocationRow = z.infer<typeof enrichedAutomationInvocationRowSchema>;
+
+const countRowSchema = z.object({ count: z.number() });
 
 /**
  * Overlap scope for a new invocation: schedule/manual firings block on any
@@ -296,14 +313,14 @@ export function deriveInvocationStatus(counts: {
 }
 
 function toAutomationInvocation(
-  row: AutomationInvocationRow & { derived_status: string; derived_completed_at: number | null },
+  row: EnrichedAutomationInvocationRow,
   runs: AutomationRun[]
 ): AutomationInvocation {
   const skipped = row.skip_reason !== null;
   return {
     id: row.id,
     automationId: row.automation_id,
-    status: row.derived_status as AutomationInvocationStatus,
+    status: row.derived_status,
     source: row.source,
     scheduledAt: row.scheduled_at,
     skipReason: row.skip_reason,
@@ -1030,7 +1047,7 @@ export class AutomationStore {
   /**
    * Record a skipped firing: a childless invocation carrying skip_reason,
    * atomically paired with the schedule advance when the skip serves a cron
-   * slot. INSERT OR IGNORE tolerates an idempotency-index race without
+   * slot. The conflict-tolerant insert absorbs an idempotency-index race without
    * blocking the advance — a skip recorded without the advance would
    * re-collide on (automation_id, scheduled_at) every tick thereafter. The
    * advance is a compare-and-set on the claimed slot, so a firing that lost
@@ -1043,10 +1060,11 @@ export class AutomationStore {
     const statements: SqlStatement[] = [
       this.db
         .prepare(
-          `INSERT OR IGNORE INTO automation_invocations
+          `INSERT INTO automation_invocations
            (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT DO NOTHING`
         )
         .bind(
           invocation.id,
@@ -1091,10 +1109,11 @@ export class AutomationStore {
     const results = await this.db.batch([
       this.db
         .prepare(
-          `INSERT OR IGNORE INTO automation_invocations
+          `INSERT INTO automation_invocations
            (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT DO NOTHING`
         )
         .bind(
           invocation.id,
@@ -1202,11 +1221,10 @@ export class AutomationStore {
         .bind(automationId, options.limit, options.offset),
     ]);
 
-    const total = (countResult.results?.[0] as { count: number } | undefined)?.count ?? 0;
-    const rows = (pageResult.results ?? []) as (AutomationInvocationRow & {
-      derived_status: string;
-      derived_completed_at: number | null;
-    })[];
+    const total = countRowSchema.parse(countResult.results?.[0]).count;
+    // A malformed stored row is an integrity error, not a missing invocation.
+    // Reject the page instead of silently returning incomplete history.
+    const rows = enrichedAutomationInvocationRowSchema.array().parse(pageResult.results ?? []);
     if (rows.length === 0) return { invocations: [], total };
 
     const placeholders = rows.map(() => "?").join(", ");

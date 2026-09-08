@@ -468,8 +468,9 @@ describe("RBAC routes", () => {
         headers: { "Content-Type": "application/json" },
       });
 
+      // Admission refuses a segment Hono cannot decode before the handler runs.
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: "Invalid user ID" });
+      await expect(response.json()).resolves.toEqual({ error: "Invalid path encoding" });
     }
   );
 

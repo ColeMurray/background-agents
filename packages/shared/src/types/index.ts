@@ -54,6 +54,7 @@ export {
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
   parseRepositoryFullName,
+  validateRepositoryPathSegments,
   normalizeOptionalRepositoryPair,
 } from "./repositories";
 export type {
@@ -191,6 +192,7 @@ export type {
 
 export {
   MAX_AUTOMATION_REPOSITORIES,
+  MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
@@ -287,6 +289,7 @@ export type {
   AnalyticsPullRequestRepoEntry,
   AnalyticsPullRequestSourceEntry,
   AnalyticsPullRequestsResponse,
+  AnalyticsDashboardResponse,
 } from "./analytics";
 
 export {

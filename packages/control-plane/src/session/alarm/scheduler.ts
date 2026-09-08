@@ -1,5 +1,7 @@
 import type { AlarmScheduler } from "../../platform-ports";
 import type { SqlStorage } from "../sql-storage";
+import { SessionStorageIntegrityError } from "../types";
+import { z } from "zod";
 
 /** Storage-independent access to the runtime's single scheduled wake-up. */
 export interface AlarmScheduleStore {
@@ -13,17 +15,20 @@ export interface AlarmDeadlineStore {
   earliest(): number | null;
   cancelled(): boolean;
   setPending(deadline: number): void;
+  setPendingEarliest(deadline: number): void;
   activate(): void;
   clear(): void;
   beginDelivery(): number | "cancelled" | null;
   completeDelivery(): void;
 }
 
-interface AlarmStateRow {
-  pending_deadline: number | null;
-  in_flight_deadline: number | null;
-  cancelled: number;
-}
+const alarmStateRowSchema = z.object({
+  pending_deadline: z.number().nullable(),
+  in_flight_deadline: z.number().nullable(),
+  cancelled: z.union([z.literal(0), z.literal(1)]),
+});
+
+type AlarmStateRow = z.infer<typeof alarmStateRowSchema>;
 
 export class PersistedAlarmDeadlineStore implements AlarmDeadlineStore {
   constructor(private readonly sql: SqlStorage) {}
@@ -49,6 +54,18 @@ export class PersistedAlarmDeadlineStore implements AlarmDeadlineStore {
     this.sql.exec(
       `INSERT INTO session_alarm_state (singleton, pending_deadline) VALUES (1, ?)
        ON CONFLICT(singleton) DO UPDATE SET pending_deadline = excluded.pending_deadline`,
+      deadline
+    );
+  }
+
+  setPendingEarliest(deadline: number): void {
+    this.sql.exec(
+      `INSERT INTO session_alarm_state (singleton, pending_deadline) VALUES (1, ?)
+       ON CONFLICT(singleton) DO UPDATE SET pending_deadline =
+         CASE
+           WHEN session_alarm_state.pending_deadline IS NULL THEN excluded.pending_deadline
+           ELSE MIN(session_alarm_state.pending_deadline, excluded.pending_deadline)
+         END`,
       deadline
     );
   }
@@ -86,8 +103,12 @@ export class PersistedAlarmDeadlineStore implements AlarmDeadlineStore {
         `SELECT pending_deadline, in_flight_deadline, cancelled
          FROM session_alarm_state WHERE singleton = 1`
       )
-      .toArray() as AlarmStateRow[];
-    return rows[0] ?? null;
+      .toArray();
+    const row = rows[0];
+    if (row === undefined) return null;
+    const parsed = alarmStateRowSchema.safeParse(row);
+    if (parsed.success) return parsed.data;
+    throw new SessionStorageIntegrityError("Malformed persisted alarm state row");
   }
 }
 

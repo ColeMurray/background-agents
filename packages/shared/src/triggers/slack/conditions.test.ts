@@ -239,6 +239,15 @@ describe("validateConditions (slack)", () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 
+  it("rejects a text_match value that is an array (no throw)", () => {
+    const errors = validateConditions(
+      [{ type: "text_match", operator: "contains", value: [] } as unknown as TriggerCondition],
+      "slack",
+      conditionRegistry
+    );
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
   it("rejects a text_match pattern that is not a string", () => {
     const errors = validateConditions(
       [

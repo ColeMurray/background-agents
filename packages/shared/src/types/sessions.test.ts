@@ -25,6 +25,24 @@ describe("session read contracts", () => {
     ).toBe(false);
   });
 
+  it("reads a result without a version as version 0 and ignores additive fields", () => {
+    expect(
+      sessionReadResultSchema.parse({
+        sessionId: "session-1",
+        outcome: "marked_read",
+        unread: false,
+        latestMessageId: "message-1",
+        extra: true,
+      })
+    ).toEqual({
+      sessionId: "session-1",
+      outcome: "marked_read",
+      unread: false,
+      latestMessageId: "message-1",
+      version: 0,
+    });
+  });
+
   it("rejects unread state without a terminal message", () => {
     expect(
       sessionReadResultSchema.safeParse({

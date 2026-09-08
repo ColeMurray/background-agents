@@ -216,7 +216,24 @@ WHERE u.id = ${userId};
 
 interface WranglerResult {
   results?: Array<Record<string, unknown>>;
-  success?: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseWranglerResults(stdout: string): WranglerResult[] {
+  const parsed: unknown = JSON.parse(stdout);
+  if (!Array.isArray(parsed)) throw new Error("Wrangler returned a malformed JSON result");
+
+  return parsed.map((result) => {
+    if (!isRecord(result)) throw new Error("Wrangler returned a malformed JSON result");
+    const rows = result.results;
+    if (rows !== undefined && (!Array.isArray(rows) || !rows.every(isRecord))) {
+      throw new Error("Wrangler returned a malformed JSON result");
+    }
+    return { results: rows };
+  });
 }
 
 type WranglerRunner = (database: string, operation: readonly string[]) => string;
@@ -229,7 +246,7 @@ export interface BootstrapRunDependencies {
 }
 
 function reportRows(stdout: string): Array<Record<string, unknown>> {
-  const parsed = JSON.parse(stdout) as WranglerResult[];
+  const parsed = parseWranglerResults(stdout);
   const rows = parsed.flatMap((result) => result.results ?? []).filter((row) => row.report);
   for (const row of rows) console.log(JSON.stringify(row));
   return rows;

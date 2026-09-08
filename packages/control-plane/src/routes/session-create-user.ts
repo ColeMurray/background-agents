@@ -386,9 +386,11 @@ export async function createUserSession(
       { model: prepared.model, reasoningEffort: prepared.reasoningEffort ?? undefined }
     );
     if (!response.ok) {
-      const failure: Record<string, unknown> = await response
-        .json<Record<string, unknown>>()
-        .catch(() => ({}));
+      const raw: unknown = await response.json().catch(() => ({}));
+      const failure =
+        typeof raw === "object" && raw !== null && !Array.isArray(raw)
+          ? (raw as Record<string, unknown>)
+          : {};
       return json(
         {
           ...failure,

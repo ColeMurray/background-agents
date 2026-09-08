@@ -1,3 +1,7 @@
+import { parseBody } from "./body";
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { spawnChildSessionRequestSchema } from "@open-inspect/shared/types/session-api";
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
@@ -28,16 +32,13 @@ import {
 import { spawnContextSchema } from "../session/spawn-context";
 import type { Env } from "../types";
 import {
-  defineRoutes,
   error,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
-  parsePattern,
   permissionRequirement,
   requireAll,
-  type Route,
 } from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 import { authorizeSessionTarget } from "./session-target-authorization";
 
@@ -48,20 +49,20 @@ function isJsonRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function handleSpawnChild(
+export async function handleSpawnChild(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const parentId = match.groups?.id;
-  if (!parentId) return error("Parent session ID required");
+  const parentId = params.id;
 
-  const parsedBody = spawnChildSessionRequestSchema.safeParse(await request.json());
-  if (!parsedBody.success) {
-    return error("title and prompt are required");
-  }
-  const body = parsedBody.data;
+  const body = await parseBody(
+    request,
+    spawnChildSessionRequestSchema,
+    "title and prompt are required"
+  );
+  if (body instanceof Response) return body;
 
   if (!body.title || !body.prompt) {
     return error("title and prompt are required");
@@ -351,14 +352,16 @@ async function handleSpawnChild(
   return json({ sessionId: childId, status: "created" }, 201);
 }
 
-export const sessionChildSpawnRoutes: Route[] = defineRoutes(GITHUB_SANDBOX_FALLBACK_ROUTE, [
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/children"),
+export const sessionChildSpawnRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionChildSpawnRoutes.post(
+  "/sessions/:id/children",
+  admit({
+    ...GITHUB_SANDBOX_FALLBACK_ROUTE,
     authorization: requireAll(
       permissionRequirement("sessions.create"),
       permissionRequirement("sessions.collaborate")
     ),
-    handler: handleSpawnChild,
   }),
-]);
+  (c) => dispatchSession(c, handleSpawnChild)
+);
