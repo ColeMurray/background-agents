@@ -622,9 +622,12 @@ describe("managed skills persistence and resolution", () => {
     // not be created at all.
     const environments = new EnvironmentStore(env.DB);
     const ids = Array.from({ length: 101 }, (_, index) => `env_${String(index).padStart(3, "0")}`);
-    for (const id of ids) {
-      await environments.create(
-        {
+    // Seed in one batch. One `create()` per environment is 101 sequential D1
+    // round-trips (each its own transaction), which starves past the 5s test
+    // budget when every other integration file is contending for the pool.
+    await env.DB.batch(
+      ids.map((id) =>
+        environments.bindEnvironmentInsert({
           id,
           name: id,
           description: null,
@@ -632,10 +635,9 @@ describe("managed skills persistence and resolution", () => {
           channel_associations: null,
           created_at: 1,
           updated_at: 1,
-        },
-        []
-      );
-    }
+        })
+      )
+    );
 
     const skills = new SkillStore(env.DB);
     const skill = await skills.create(
