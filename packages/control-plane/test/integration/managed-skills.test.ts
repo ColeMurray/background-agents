@@ -8,7 +8,7 @@ import { EnvironmentStore } from "../../src/db/environments";
 import { resolveManagedSkills } from "../../src/session/skill-resolution";
 import { buildSkillRevision, hashSessionSkillManifest } from "../../src/skills/content-addressing";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSessionDO, seedSandboxAuthHash, serviceFetch } from "./helpers";
+import { initNamedSessionDO, seedSandboxAuthHash, serviceFetch, sqlDatabase } from "./helpers";
 
 const content = {
   description: "Managed deployment instructions",
@@ -620,18 +620,22 @@ describe("managed skills persistence and resolution", () => {
     // one parameter per environment failed outright past the engine ceiling, so
     // a skill assigned to more than MAX_D1_QUERY_PARAMETERS environments could
     // not be created at all.
+    const environments = new EnvironmentStore(env.DB);
     const ids = Array.from({ length: 101 }, (_, index) => `env_${String(index).padStart(3, "0")}`);
-    // Seed in one batch, as seedGlobalCatalog does. One EnvironmentStore.create()
-    // per environment is 101 sequential D1 round-trips, each its own transaction,
-    // which starves past the 5s test budget when every other integration file is
-    // contending for the pool.
-    await env.DB.batch(
+    // Seed in one batch. One EnvironmentStore.create() per environment is 101
+    // sequential D1 round-trips, each its own transaction, which starves past the
+    // 5s test budget when every other integration file is contending for the pool.
+    await sqlDatabase(env.DB).batch(
       ids.map((id) =>
-        env.DB.prepare(
-          `INSERT INTO environments
-           (id, name, description, prebuild_enabled, channel_associations, created_at, updated_at)
-           VALUES (?, ?, NULL, 0, NULL, 1, 1)`
-        ).bind(id, id)
+        environments.bindEnvironmentInsert({
+          id,
+          name: id,
+          description: null,
+          prebuild_enabled: 0,
+          channel_associations: null,
+          created_at: 1,
+          updated_at: 1,
+        })
       )
     );
 
