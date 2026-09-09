@@ -15,8 +15,9 @@ Open-Inspect provides a hosted background coding agent that can:
 - Run scheduled automations for cron jobs, or event-driven automations for GitHub events, Sentry
   alerts, and webhooks
 - Spawn parallel sub-tasks that work in separate sandboxes simultaneously
-- Use your choice of AI model — Anthropic Claude, OpenAI Codex (via ChatGPT subscription), xAI Grok
-  (via SuperGrok subscription), or OpenCode Zen
+- Use your choice of AI model — Anthropic Claude (via API key or a connected Claude subscription on
+  the Claude Agent harness), OpenAI Codex (via ChatGPT subscription), xAI Grok (via SuperGrok
+  subscription), or OpenCode Zen
 
 ## Security Model (Single-Tenant Only)
 
@@ -107,7 +108,9 @@ ownership, bots, and member suspension.
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │                     Session Sandbox                          │  │
 │  │  ┌───────────┐  ┌───────────┐  ┌───────────┐                 │  │
-│  │  │ Supervisor│──│  OpenCode │──│   Bridge  │─────────────────┼──┼──▶ Control Plane
+│  │  │ Supervisor│──│  Harness  │──│   Bridge  │─────────────────┼──┼──▶ Control Plane
+│  │  └───────────┘  │ (OpenCode │  └───────────┘                 │  │
+│  │                 │ or Claude)│                                │  │
 │  │  └───────────┘  └───────────┘  └───────────┘                 │  │
 │  │                      │                                       │  │
 │  │              Full Dev Environment                            │  │
@@ -213,7 +216,9 @@ Choose the AI model that fits your task, with per-session reasoning effort contr
 | Z.AI Coding Plan | GLM 5.2/5.3 (opt-in)                                                    |
 
 OpenAI models work with your existing ChatGPT subscription via OAuth — no separate API key needed.
-Grok models work with an eligible SuperGrok subscription through control-plane-managed OAuth. See
+Anthropic models can run on the **Claude Agent** harness with a connected Claude subscription; see
+[Using the Claude Agent Harness](docs/CLAUDE_AGENT.md). Grok models work with an eligible SuperGrok
+subscription through control-plane-managed OAuth. See
 **[docs/AVAILABLE_MODELS.md](docs/AVAILABLE_MODELS.md)** for the full model list and
 **[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** or **[docs/GROK_MODELS.md](docs/GROK_MODELS.md)**
 for subscription setup instructions.
@@ -317,5 +322,7 @@ built with:
 - [OpenComputer](https://www.opencomputer.dev) - Cloud sandbox infrastructure
 - [E2B](https://e2b.dev) - Cloud sandbox infrastructure
 - [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
-- [OpenCode](https://opencode.ai) - Coding agent runtime
+- [OpenCode](https://opencode.ai) - Coding agent runtime (built-in harness)
+- [Claude Agent SDK](https://docs.anthropic.com/en/docs/agent-sdk) - Coding agent runtime (Claude
+  Agent harness)
 - [Next.js](https://nextjs.org) - Web framework
