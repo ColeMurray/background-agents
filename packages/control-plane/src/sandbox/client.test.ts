@@ -99,6 +99,36 @@ describe("ModalClient", () => {
     vi.restoreAllMocks();
   });
 
+  describe("endpoint URLs", () => {
+    async function urlCalledBy(client: ReturnType<typeof createModalClient>): Promise<string> {
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("not reached in this test"));
+      await expect(
+        client.snapshotSandbox({ providerObjectId: "mo-1", sessionId: "session-1" })
+      ).rejects.toThrow();
+      return String(fetchMock.mock.calls[0][0]);
+    }
+
+    it("derives one Modal host per function from the workspace slug", async () => {
+      expect(await urlCalledBy(createModalClient("secret", "acme", "prod-web"))).toBe(
+        "https://acme-prod-web--open-inspect-api-snapshot-sandbox.modal.run"
+      );
+    });
+
+    it("serves the same function names by path when an API URL is configured", async () => {
+      expect(
+        await urlCalledBy(createModalClient("secret", "acme", "prod-web", "http://stub:9900"))
+      ).toBe("http://stub:9900/api-snapshot-sandbox");
+    });
+
+    it("does not double the separator on an API URL with a trailing slash", async () => {
+      expect(
+        await urlCalledBy(createModalClient("secret", "acme", undefined, "http://stub:9900/"))
+      ).toBe("http://stub:9900/api-snapshot-sandbox");
+    });
+  });
+
   it("times out image-build creation when response headers stall", async () => {
     vi.useFakeTimers();
     let markFetchStarted!: () => void;
@@ -142,7 +172,6 @@ describe("ModalClient", () => {
     const request = createModalClient("secret", "acme").snapshotSandbox({
       providerObjectId: "mo-1",
       sessionId: "session-1",
-      reason: "manual",
     });
 
     const rejection = expect(request).rejects.toThrow(
@@ -165,7 +194,6 @@ describe("ModalClient", () => {
     const request = createModalClient("secret", "acme").snapshotSandbox({
       providerObjectId: "mo-1",
       sessionId: "session-1",
-      reason: "manual",
       signal: caller.signal,
     });
     caller.abort(callerReason);
@@ -532,7 +560,6 @@ describe("ModalClient", () => {
       client.snapshotSandbox({
         providerObjectId: "mo-1",
         sessionId: "session-123",
-        reason: "manual",
       })
     ).resolves.toEqual({ success: true, imageId: "img-1" });
   });
@@ -578,7 +605,6 @@ describe("ModalClient", () => {
       client.snapshotSandbox({
         providerObjectId: "mo-1",
         sessionId: "session-123",
-        reason: "manual",
       })
     ).rejects.toThrow("Modal API error: Invalid response");
   });
@@ -706,40 +732,5 @@ describe("ModalClient", () => {
         callbackToken: "cb-token-1",
       })
     ).rejects.toThrow("Modal API error: Invalid response");
-  });
-
-  it("parses valid provider image delete responses", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          success: true,
-          data: { provider_image_id: "img-1", deleted: true },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    );
-
-    const client = createModalClient("secret", "acme", "prod-web");
-    await expect(client.deleteProviderImage({ providerImageId: "img-1" })).resolves.toEqual({
-      providerImageId: "img-1",
-      deleted: true,
-    });
-  });
-
-  it("rejects malformed provider image delete responses instead of trusting the payload", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          success: true,
-          data: { provider_image_id: "img-1", deleted: "yes" },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    );
-
-    const client = createModalClient("secret", "acme", "prod-web");
-    await expect(client.deleteProviderImage({ providerImageId: "img-1" })).rejects.toThrow(
-      "Modal API error: Invalid response"
-    );
   });
 });

@@ -66,8 +66,10 @@ describe("ImageBuildStore finalization state", () => {
         tokenHash: "token-hash",
         now,
       })
-    ).toMatchObject({ authorization: "fresh" });
+    ).toMatchObject({ id: "build-1", status: "building" });
     expect(await store.finalization.acceptSuccessfulCompletion(completion)).toBe("accepted");
+    // The used token stays authorizable after acceptance so a lost HTTP
+    // response can republish the same Queue command.
     expect(
       await store.finalization.authorizeCompletionCallback({
         buildId: "build-1",
@@ -75,7 +77,7 @@ describe("ImageBuildStore finalization state", () => {
         tokenHash: "token-hash",
         now: now + 1,
       })
-    ).toMatchObject({ authorization: "accepted" });
+    ).toMatchObject({ id: "build-1" });
     expect(
       await store.finalization.acceptSuccessfulCompletion({ ...completion, now: now + 1 })
     ).toBe("replayed");

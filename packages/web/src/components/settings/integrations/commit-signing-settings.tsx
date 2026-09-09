@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const SETTINGS_KEY = "/api/commit-signing";
 
@@ -22,7 +23,12 @@ const STATUS_LABELS: Record<SigningViewStateKind, string> = {
   enabled: "Configured",
 };
 
+/**
+ * Displays commit-signing settings and makes the configuration read-only without management permission.
+ */
 export function CommitSigningSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManage = hasPermission("commit_signing.manage");
   const { data: rawData, error, isLoading, mutate } = useSWR<unknown>(SETTINGS_KEY);
   const viewState = useMemo(() => {
     if (isLoading) return { kind: "loading" } as const;
@@ -107,9 +113,9 @@ export function CommitSigningSettings() {
 
   return (
     <section className="border-t border-border pt-6 mt-6" aria-labelledby="commit-signing-title">
-      <h4 id="commit-signing-title" className="text-base font-medium text-foreground">
+      <h3 id="commit-signing-title" className="text-base font-medium text-foreground">
         Commit signing
-      </h4>
+      </h3>
       <p className="mt-1 text-sm text-muted-foreground">
         Sign agent commits with one dedicated GitHub machine account while retaining trusted users
         as commit authors.
@@ -140,7 +146,7 @@ export function CommitSigningSettings() {
         </dl>
       )}
 
-      <div className="mt-4 grid gap-4 max-w-2xl">
+      <fieldset disabled={!canManage} className="mt-4 grid min-w-0 max-w-2xl gap-4">
         <label className="grid gap-1.5 text-sm">
           <span>Committer name</span>
           <Input
@@ -192,7 +198,7 @@ export function CommitSigningSettings() {
             </Button>
           )}
         </div>
-      </div>
+      </fieldset>
     </section>
   );
 }

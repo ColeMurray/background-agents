@@ -13,8 +13,11 @@ import {
   mcpServerTypeSchema,
   normalizeRoutingRules,
   resolveBuildTimeoutSeconds,
+  scmGlobalConfigSchema,
+  scmSettingsSchema,
   integrationSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
+  validateSandboxChildSessionLimits,
   type SlackRoutingRule,
 } from "./integrations";
 
@@ -40,6 +43,36 @@ describe("isValidSandboxTimeoutMs", () => {
       expect(isValidSandboxTimeoutMs(value)).toBe(false);
     }
   );
+});
+
+describe("validateSandboxChildSessionLimits", () => {
+  it.each([4, 5])("accepts concurrent limit %i at or below the total", (concurrent) => {
+    expect(
+      validateSandboxChildSessionLimits({
+        maxConcurrentChildSessions: concurrent,
+        maxTotalChildSessions: 5,
+      })
+    ).toBeUndefined();
+  });
+
+  it("rejects a concurrent limit above the total with the existing message", () => {
+    expect(
+      validateSandboxChildSessionLimits({
+        maxConcurrentChildSessions: 6,
+        maxTotalChildSessions: 5,
+      })
+    ).toBe("maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions");
+  });
+
+  it.each([
+    {},
+    { maxConcurrentChildSessions: 100 },
+    { maxTotalChildSessions: 1 },
+    { maxConcurrentChildSessions: 100, maxTotalChildSessions: undefined },
+    { maxConcurrentChildSessions: undefined, maxTotalChildSessions: 1 },
+  ])("accepts sparse limits %j without applying defaults", (settings) => {
+    expect(validateSandboxChildSessionLimits(settings)).toBeUndefined();
+  });
 });
 
 describe("resolveBuildTimeoutSeconds", () => {
@@ -74,6 +107,28 @@ describe("resolveBuildTimeoutSeconds", () => {
 
   it("keeps the default below the maximum", () => {
     expect(DEFAULT_BUILD_TIMEOUT_SECONDS).toBeLessThan(MAX_BUILD_TIMEOUT_SECONDS);
+  });
+});
+
+describe("SCM settings schemas", () => {
+  it("parses and normalizes valid global and repo settings", () => {
+    expect(
+      scmGlobalConfigSchema.parse({
+        defaults: { alwaysUseDraftMode: true, pullRequestLabel: "  agent  " },
+      })
+    ).toEqual({ defaults: { alwaysUseDraftMode: true, pullRequestLabel: "agent" } });
+    expect(scmSettingsSchema.parse({ alwaysUseDraftMode: false, pullRequestLabel: "   " })).toEqual(
+      { alwaysUseDraftMode: false }
+    );
+  });
+
+  it("rejects malformed global and repo settings", () => {
+    expect(scmGlobalConfigSchema.safeParse({ enabledRepos: ["acme/web"] }).success).toBe(false);
+    expect(scmGlobalConfigSchema.safeParse({ defaults: { pullRequestLabel: 123 } }).success).toBe(
+      false
+    );
+    expect(scmSettingsSchema.safeParse({ alwaysUseDraftMode: "yes" }).success).toBe(false);
+    expect(scmSettingsSchema.safeParse({ pullRequestLabel: "release,agent" }).success).toBe(false);
   });
 });
 
@@ -258,6 +313,22 @@ describe("integration settings schemas", () => {
     expect(
       integrationSettingsSchemas.sandbox.repo.safeParse({ cpuCores: null, memoryMib: null }).success
     ).toBe(true);
+  });
+
+  it("parses valid session cost limits", () => {
+    expect(
+      integrationSettingsSchemas.sandbox.repo.safeParse({
+        maxSessionCostUsd: 12.5,
+      }).success
+    ).toBe(true);
+  });
+
+  it.each([
+    { maxSessionCostUsd: 0 },
+    { maxSessionCostUsd: -1 },
+    { maxSessionCostUsd: Number.POSITIVE_INFINITY },
+  ])("rejects invalid session cost settings %#", (settings) => {
+    expect(integrationSettingsSchemas.sandbox.repo.safeParse(settings).success).toBe(false);
   });
 });
 

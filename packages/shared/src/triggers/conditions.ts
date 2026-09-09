@@ -8,21 +8,24 @@
 import type {
   AutomationEvent,
   AutomationEventSource,
+  AutomationTriggerType,
   ConditionType,
   TriggerCondition,
 } from "./types";
+import { TRIGGER_TYPE_TO_SOURCE } from "./types";
+import { getGitHubConclusionOptions, isGitHubConditionSupported } from "./github/webhook-types";
 
 type ConditionOf<K extends ConditionType> = Extract<TriggerCondition, { type: K }>;
 
 export interface ConditionHandler<K extends ConditionType> {
   /** Validate at automation creation time. Returns null if valid, error string otherwise. */
-  validate(condition: ConditionOf<K>): string | null;
+  validate(condition: ConditionOf<K>, eventType?: string): string | null;
 
   /** Evaluate at event matching time. Returns true if the condition passes. */
   evaluate(condition: ConditionOf<K>, event: AutomationEvent): boolean;
 
   /** Which event sources this condition can be used with. */
-  appliesTo: AutomationEventSource[];
+  appliesTo: readonly AutomationEventSource[];
 }
 
 // ─── Typed Registry ──────────────────────────────────────────────────────────
@@ -30,6 +33,31 @@ export interface ConditionHandler<K extends ConditionType> {
 export type ConditionRegistry = {
   [K in ConditionType]: ConditionHandler<K>;
 };
+
+export function getConditionSemanticKey(type: ConditionType): ConditionType {
+  return type === "check_conclusion" ? "conclusion" : type;
+}
+
+export function dedupeConditionsBySemanticKey(
+  conditions: readonly TriggerCondition[]
+): TriggerCondition[] {
+  const seen = new Set<ConditionType>();
+  return conditions.filter((condition) => {
+    const key = getConditionSemanticKey(condition.type);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function isGitHubConditionCompatible(
+  eventType: string,
+  condition: TriggerCondition
+): boolean {
+  if (!isGitHubConditionSupported(eventType, condition.type)) return false;
+  if (condition.type !== "conclusion" && condition.type !== "check_conclusion") return true;
+  return getGitHubConclusionOptions(eventType).includes(condition.value);
+}
 
 // ─── Dispatch ────────────────────────────────────────────────────────────────
 
@@ -46,10 +74,51 @@ export function matchesConditions(
 
 // ─── Validation (called at automation creation time) ────────────────────────
 
+interface TriggerConditionConfiguration {
+  type: AutomationTriggerType;
+  eventType?: string;
+  conditions: TriggerCondition[];
+}
+
+/**
+ * Validate a proposed trigger configuration. Unchanged legacy GitHub filters
+ * may survive an edit, but each existing occurrence can exempt only one filter.
+ * Callers parse stored data and provide the previous configuration only for edits.
+ */
+export function validateTriggerConditions(
+  proposed: TriggerConditionConfiguration,
+  registry: ConditionRegistry,
+  previous?: TriggerConditionConfiguration
+): string[] {
+  const source = TRIGGER_TYPE_TO_SOURCE[proposed.type];
+  if (!source) return [];
+  const eventType = proposed.eventType;
+  const unchangedGitHubEvent =
+    proposed.type === "github_event" &&
+    previous?.type === proposed.type &&
+    eventType !== undefined &&
+    eventType !== "" &&
+    previous.eventType === eventType;
+  const remainingOriginalConditions = unchangedGitHubEvent
+    ? previous.conditions.map((condition) => JSON.stringify(condition))
+    : [];
+  return proposed.conditions.flatMap((condition) => {
+    if (unchangedGitHubEvent && !isGitHubConditionSupported(eventType, condition.type)) {
+      const index = remainingOriginalConditions.indexOf(JSON.stringify(condition));
+      if (index !== -1) {
+        remainingOriginalConditions.splice(index, 1);
+        return [];
+      }
+    }
+    return validateConditions([condition], source, registry, eventType);
+  });
+}
+
 export function validateConditions(
   conditions: TriggerCondition[],
   triggerSource: AutomationEventSource,
-  registry: ConditionRegistry
+  registry: ConditionRegistry,
+  eventType?: string
 ): string[] {
   const errors: string[] = [];
   for (const condition of conditions) {
@@ -58,7 +127,17 @@ export function validateConditions(
       errors.push(`Condition "${condition.type}" does not apply to ${triggerSource} triggers`);
       continue;
     }
-    const err = handler.validate(condition);
+    if (triggerSource === "github") {
+      if (!eventType) {
+        errors.push(`Condition "${condition.type}" requires a GitHub event type`);
+        continue;
+      }
+      if (!isGitHubConditionSupported(eventType, condition.type)) {
+        errors.push(`Condition "${condition.type}" does not apply to GitHub event ${eventType}`);
+        continue;
+      }
+    }
+    const err = handler.validate(condition, eventType);
     if (err) errors.push(err);
   }
   return errors;

@@ -2,10 +2,11 @@
  * Unit tests for schema migration tracking.
  */
 
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyMigrations, initSchema, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import { createNodeSqlStorage } from "../node/sqlite-storage";
 
 /**
  * Create a mock SqlStorage that tracks calls and supports per-query data.
@@ -39,21 +40,7 @@ function createMockSql() {
 }
 
 function createDatabaseSql(db: DatabaseSync): SqlStorage {
-  return {
-    exec(query: string, ...params: unknown[]): SqlResult {
-      const sqliteParams = params as SQLInputValue[];
-      if (/^\s*(?:PRAGMA|SELECT)\b/i.test(query)) {
-        const rows = db.prepare(query).all(...sqliteParams);
-        return { toArray: () => rows, one: () => rows[0] ?? null };
-      }
-      if (params.length > 0) {
-        db.prepare(query).run(...sqliteParams);
-      } else {
-        db.exec(query);
-      }
-      return { toArray: () => [], one: () => null };
-    },
-  };
+  return createNodeSqlStorage(db).sql;
 }
 
 function expectClientRequestIdIndex(db: DatabaseSync): void {
@@ -76,6 +63,12 @@ describe("applyMigrations", () => {
     vi.setSystemTime(1000);
   });
 
+  it("has unique, strictly increasing migration ids", () => {
+    const ids = MIGRATIONS.map((migration) => migration.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+  });
+
   it("runs all migrations on a fresh DO", () => {
     // No applied IDs → SELECT returns empty
     applyMigrations(mock.sql);
@@ -89,9 +82,7 @@ describe("applyMigrations", () => {
     expect(selectCall).toBeDefined();
 
     // Each migration produces an exec call + an INSERT
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(MIGRATIONS.length);
 
     // Verify all IDs are recorded
@@ -107,9 +98,7 @@ describe("applyMigrations", () => {
     applyMigrations(mock.sql);
 
     // Should only have CREATE TABLE + SELECT, no migration execs or inserts
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(0);
 
     const alterCalls = mock.calls.filter((c) => c.query.includes("ALTER TABLE"));
@@ -123,9 +112,7 @@ describe("applyMigrations", () => {
 
     applyMigrations(mock.sql);
 
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     // Migrations 11 through MIGRATIONS.length
     const unappliedCount = MIGRATIONS.length - 10;
     expect(inserts).toHaveLength(unappliedCount);
@@ -157,8 +144,7 @@ describe("applyMigrations", () => {
 
     expect(
       mock.calls.some(
-        ({ query, params }) =>
-          query.includes("INSERT OR IGNORE INTO _schema_migrations") && params[0] === 23
+        ({ query, params }) => query.includes("INSERT INTO _schema_migrations") && params[0] === 23
       )
     ).toBe(false);
   });
@@ -206,9 +192,7 @@ describe("applyMigrations", () => {
     expect(() => applyMigrations(mock.sql)).not.toThrow();
 
     // All migrations should still be recorded
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(MIGRATIONS.length);
   });
 
@@ -222,9 +206,7 @@ describe("applyMigrations", () => {
 
     applyMigrations(mock.sql);
 
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(0);
   });
 
@@ -242,9 +224,7 @@ describe("applyMigrations", () => {
   it("records applied_at timestamp", () => {
     applyMigrations(mock.sql);
 
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     // Second param should be the timestamp
     for (const insert of inserts) {
       expect(insert.params[1]).toBe(1000);
@@ -267,6 +247,30 @@ describe("applyMigrations", () => {
     const migration = MIGRATIONS.find((m) => m.id === 31);
     expect(migration).toBeDefined();
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_repositories");
+  });
+
+  it("adds WebSocket authorization lease state for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("authorization_expires_at INTEGER NOT NULL");
+    expect(SCHEMA_SQL).not.toContain("authorization_version");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 46);
+    expect(typeof migration?.run).toBe("function");
+    const run = migration!.run as (sql: SqlStorage) => void;
+    run(mock.sql);
+    expect(
+      mock.calls.filter(({ query }) => query.includes("ALTER TABLE")).map(({ query }) => query)
+    ).toEqual([
+      expect.stringContaining(
+        "ws_client_mapping ADD COLUMN authorization_expires_at INTEGER NOT NULL DEFAULT 0"
+      ),
+    ]);
+  });
+
+  it("adds sandbox.active_socket_id for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("active_socket_id TEXT");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 48);
+    expect(migration?.run).toBe("ALTER TABLE sandbox ADD COLUMN active_socket_id TEXT");
   });
 
   it("keeps repository context consistent at the session table boundary", () => {
@@ -465,6 +469,55 @@ describe("applyMigrations", () => {
     expect(MIGRATIONS.find((entry) => entry.id === 41)?.run).toContain(
       "ADD COLUMN stop_confirmation_deadline INTEGER"
     );
+  });
+
+  it("adds session budget fields for fresh and migrated sessions", () => {
+    const sessionTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS session")[1]?.split(");")[0];
+    expect(sessionTable).toContain("max_cost_usd REAL");
+    expect(sessionTable).not.toContain("cost_warning_sent");
+    expect(sessionTable).toContain("budget_exhausted INTEGER NOT NULL DEFAULT 0");
+    expect(sessionTable).not.toContain("cost_tracking_unavailable");
+
+    expect(SCHEMA_SQL).toContain("reported_cost_usd REAL NOT NULL DEFAULT 0");
+    expect(SCHEMA_SQL).not.toContain("capabilities TEXT");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 49);
+    expect(typeof migration?.run).toBe("function");
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+      db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY)");
+      db.exec(`CREATE TABLE ws_client_mapping (
+        ws_id TEXT PRIMARY KEY,
+        authorization_expires_at INTEGER NOT NULL DEFAULT 0
+      )`);
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+      expect(db.prepare("PRAGMA table_info(session)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "max_cost_usd", type: "REAL" }),
+          expect.objectContaining({ name: "budget_exhausted", type: "INTEGER" }),
+        ])
+      );
+      expect(db.prepare("PRAGMA table_info(ws_client_mapping)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "capabilities", type: "TEXT" })])
+      );
+      expect(db.prepare("PRAGMA table_info(session)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "cost_warning_sent" })])
+      );
+      expect(db.prepare("PRAGMA table_info(session)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "cost_tracking_unavailable" })])
+      );
+      expect(db.prepare("PRAGMA table_info(messages)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "reported_cost_usd", type: "REAL" }),
+        ])
+      );
+    } finally {
+      db.close();
+    }
   });
 
   it("adds Autofix admission metadata and indexes for fresh and migrated sessions", () => {

@@ -12,6 +12,17 @@ describe("secret request schemas", () => {
     if (parsed.success) expect(parsed.data.secrets.TOKEN).toBe("value");
   });
 
+  it("preserves an own __proto__ key for canonical secret normalization", () => {
+    const input = JSON.parse('{"secrets":{"__proto__":"value"}}') as unknown;
+    const parsed = secretsRequestBodySchema.safeParse(input);
+
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(Object.prototype.hasOwnProperty.call(parsed.data.secrets, "__proto__")).toBe(true);
+      expect(parsed.data.secrets.__proto__).toBe("value");
+    }
+  });
+
   it("rejects malformed secrets write bodies", () => {
     expect(secretsRequestBodySchema.safeParse({}).success).toBe(false);
     expect(secretsRequestBodySchema.safeParse({ secrets: { TOKEN: 123 } }).success).toBe(false);

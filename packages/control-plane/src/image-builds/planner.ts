@@ -31,6 +31,24 @@ export interface PlannedCallbackAuth {
 
 export type { ResolvedImageBuildTarget } from "./scope";
 
+/** Inputs for planBuild; the target is resolved before registration, secrets after. */
+export interface ImageBuildPlanRequest {
+  buildId: string;
+  scope: ImageBuildScope;
+  callbackUrl: string;
+  failureCallbackUrl: string;
+  correlation: CorrelationContext;
+  target: ResolvedImageBuildTarget;
+  callbackAuth: PlannedCallbackAuth;
+}
+
+/** The planning operations the workflow sequences a build through. */
+export interface ImageBuildPlannerPort {
+  resolveTarget(scope: ImageBuildScope): Promise<ResolvedImageBuildTarget>;
+  createCallbackAuth(): Promise<PlannedCallbackAuth>;
+  planBuild(params: ImageBuildPlanRequest): Promise<ImageBuildPlan>;
+}
+
 /**
  * Resolves a trigger request into a concrete provider build plan.
  *
@@ -44,7 +62,7 @@ export type { ResolvedImageBuildTarget } from "./scope";
  * timeout honors the primary repository's sandbox settings with the scope's
  * own overrides layered on top.
  */
-export class ImageBuildPlanner {
+export class ImageBuildPlanner implements ImageBuildPlannerPort {
   constructor(
     private readonly env: Env,
     private readonly db: SqlDatabase
@@ -63,15 +81,7 @@ export class ImageBuildPlanner {
     };
   }
 
-  async planBuild(params: {
-    buildId: string;
-    scope: ImageBuildScope;
-    callbackUrl: string;
-    failureCallbackUrl: string;
-    correlation: CorrelationContext;
-    target: ResolvedImageBuildTarget;
-    callbackAuth: PlannedCallbackAuth;
-  }): Promise<ImageBuildPlan> {
+  async planBuild(params: ImageBuildPlanRequest): Promise<ImageBuildPlan> {
     const { repositories, repositoriesFingerprint } = params.target;
     const primary = repositories[0];
 

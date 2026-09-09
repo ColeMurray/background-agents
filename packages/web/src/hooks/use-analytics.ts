@@ -1,55 +1,25 @@
 import { useAuthSession } from "@/lib/auth-session";
 import useSWR from "swr";
 import type {
-  AnalyticsBreakdownResponse,
+  AnalyticsDashboardResponse,
   AnalyticsDays,
-  AnalyticsPullRequestsResponse,
-  AnalyticsSummaryResponse,
-  AnalyticsTimeseriesResponse,
 } from "@open-inspect/shared/types/analytics";
 import { ANALYTICS_REFRESH_INTERVAL_MS } from "@/lib/analytics";
 
 export function useAnalyticsDashboard(days: AnalyticsDays) {
   const { data: session } = useAuthSession();
-  const refreshInterval = ANALYTICS_REFRESH_INTERVAL_MS;
-
-  const summary = useSWR<AnalyticsSummaryResponse>(
-    session ? `/api/analytics/summary?days=${days}` : null,
-    { refreshInterval }
-  );
-
-  const timeseries = useSWR<AnalyticsTimeseriesResponse>(
-    session ? `/api/analytics/timeseries?days=${days}` : null,
-    { refreshInterval }
-  );
-
-  const repos = useSWR<AnalyticsBreakdownResponse>(
-    session ? `/api/analytics/breakdown?days=${days}&by=repo` : null,
-    { refreshInterval }
-  );
-
-  const users = useSWR<AnalyticsBreakdownResponse>(
-    session ? `/api/analytics/breakdown?days=${days}&by=user` : null,
-    { refreshInterval }
-  );
-
-  const pullRequests = useSWR<AnalyticsPullRequestsResponse>(
-    session ? `/api/analytics/pull-requests?days=${days}` : null,
-    { refreshInterval }
+  const dashboard = useSWR<AnalyticsDashboardResponse>(
+    session ? `/api/analytics/dashboard?days=${days}` : null,
+    { refreshInterval: ANALYTICS_REFRESH_INTERVAL_MS }
   );
 
   return {
-    summary: summary.data,
-    timeseries: timeseries.data,
-    repoBreakdown: repos.data,
-    userBreakdown: users.data,
-    pullRequests: pullRequests.data,
-    loading:
-      (!summary.data && summary.isLoading) ||
-      (!timeseries.data && timeseries.isLoading) ||
-      (!repos.data && repos.isLoading) ||
-      (!users.data && users.isLoading) ||
-      (!pullRequests.data && pullRequests.isLoading),
-    error: summary.error ?? timeseries.error ?? repos.error ?? users.error ?? pullRequests.error,
+    summary: dashboard.data?.summary,
+    timeseries: dashboard.data?.timeseries,
+    repoBreakdown: dashboard.data?.breakdowns.repository,
+    userBreakdown: dashboard.data?.breakdowns.user,
+    pullRequests: dashboard.data?.pullRequests,
+    loading: !dashboard.data && dashboard.isLoading,
+    error: dashboard.error,
   };
 }

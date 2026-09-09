@@ -47,6 +47,15 @@ const SESSION_ALARM_STATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_alarm_
   cancelled INTEGER NOT NULL DEFAULT 0
 );`;
 
+const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS terminal_message_projection_pending (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  message_id TEXT NOT NULL,
+  message_created_at INTEGER NOT NULL,
+  completed_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL
+);`;
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -71,6 +80,8 @@ CREATE TABLE IF NOT EXISTS session (
   vnc_enabled INTEGER NOT NULL DEFAULT 0,           -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
+  max_cost_usd REAL,                                -- Mutable effective session cost limit; NULL = unlimited
+  budget_exhausted INTEGER NOT NULL DEFAULT 0,      -- Pauses prompt admission and dispatch
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -122,6 +133,7 @@ CREATE TABLE IF NOT EXISTS messages (
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
+  reported_cost_usd REAL NOT NULL DEFAULT 0,        -- Highest cumulative cost the runtime reported for this turn
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
   completed_at INTEGER,                             -- When processing finished
@@ -180,6 +192,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   tunnel_urls TEXT,                                 -- JSON mapping of port -> tunnel URL for extra ports
   ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
+  active_socket_id TEXT,                            -- Bridge socket the session dispatches to (socket:<id> tag)
   created_at INTEGER NOT NULL
 );
 
@@ -197,12 +210,17 @@ ${SESSION_DIFF_TABLE_SQL}
 -- Runtime alarm recovery source for hosts that can be adopted by another process.
 ${SESSION_ALARM_STATE_TABLE_SQL}
 
+-- A terminal message whose D1 projection has not landed yet. Only the newest
+-- is kept: the projection is monotonic, so an older one would be a no-op.
+${TERMINAL_MESSAGE_PROJECTION_TABLE_SQL}
+
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
   ws_id TEXT PRIMARY KEY,
   participant_id TEXT NOT NULL,
   client_id TEXT,
   created_at INTEGER NOT NULL,
+  authorization_expires_at INTEGER NOT NULL,
   FOREIGN KEY (participant_id) REFERENCES participants(id)
 );
 `;
@@ -619,6 +637,41 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         ON messages(autofix_pr_key, created_at) WHERE autofix_pr_key IS NOT NULL`);
     },
   },
+  {
+    id: 46,
+    description: "Add WebSocket authorization leases",
+    run: (sql) => {
+      runMigration(
+        sql,
+        `ALTER TABLE ws_client_mapping ADD COLUMN authorization_expires_at INTEGER NOT NULL DEFAULT 0`
+      );
+    },
+  },
+  {
+    id: 47,
+    description: "Persist terminal message projections awaiting retry",
+    run: TERMINAL_MESSAGE_PROJECTION_TABLE_SQL,
+  },
+  {
+    id: 48,
+    description: "Add active_socket_id to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN active_socket_id TEXT`,
+  },
+  {
+    id: 49,
+    description: "Add session budget state and message reported cost",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN max_cost_usd REAL`);
+      runMigration(
+        sql,
+        `ALTER TABLE session ADD COLUMN budget_exhausted INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN reported_cost_usd REAL NOT NULL DEFAULT 0`
+      );
+    },
+  },
 ];
 
 /**
@@ -660,7 +713,7 @@ export function applyMigrations(sql: SqlStorage): void {
     }
 
     sql.exec(
-      `INSERT OR IGNORE INTO _schema_migrations (id, applied_at) VALUES (?, ?)`,
+      `INSERT INTO _schema_migrations (id, applied_at) VALUES (?, ?) ON CONFLICT DO NOTHING`,
       migration.id,
       Date.now()
     );

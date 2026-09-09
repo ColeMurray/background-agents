@@ -18,13 +18,15 @@ export interface IntegrationEntry<
 }
 
 /** Overridable behavior settings for GitHub Autofix. */
+export const githubAutofixAttemptLimitSchema = z.number().int().positive().safe().nullable();
+
 export const githubAutofixSettingsSchema = z.strictObject({
   enabled: z.boolean().optional(),
   reviewsEnabled: z.boolean().optional(),
   prCommentsEnabled: z.boolean().optional(),
   openInspectReviewsEnabled: z.boolean().optional(),
   allowedReviewBots: z.array(z.string()).optional(),
-  maxAttemptsPerPrPer24Hours: z.number().optional(),
+  maxAttemptsPerPrPer24Hours: githubAutofixAttemptLimitSchema.optional(),
 });
 
 export type GitHubAutofixSettings = z.infer<typeof githubAutofixSettingsSchema>;
@@ -35,8 +37,11 @@ export interface ResolvedGitHubAutofixSettings {
   prCommentsEnabled: boolean;
   openInspectReviewsEnabled: boolean;
   allowedReviewBots: string[];
-  maxAttemptsPerPrPer24Hours: number;
+  /** A positive attempt cap, or null for no rolling limit. */
+  maxAttemptsPerPrPer24Hours: number | null;
 }
+
+export const GITHUB_AUTOFIX_DEFAULT_ATTEMPT_LIMIT = 30;
 
 export const GITHUB_AUTOFIX_DEFAULTS: ResolvedGitHubAutofixSettings = {
   enabled: false,
@@ -44,7 +49,7 @@ export const GITHUB_AUTOFIX_DEFAULTS: ResolvedGitHubAutofixSettings = {
   prCommentsEnabled: true,
   openInspectReviewsEnabled: true,
   allowedReviewBots: [],
-  maxAttemptsPerPrPer24Hours: 10,
+  maxAttemptsPerPrPer24Hours: GITHUB_AUTOFIX_DEFAULT_ATTEMPT_LIMIT,
 };
 
 /** Overridable behavior settings for the GitHub bot. Used at both global and repo levels. */
@@ -65,14 +70,36 @@ export type GitHubBotSettings = z.infer<typeof githubBotSettingsSchema>;
  *
  * Provider-agnostic: applies to both GitHub and GitLab.
  */
-export const scmSettingsSchema = z.strictObject({
-  /** Always open pull/merge requests created by sessions as drafts. */
-  alwaysUseDraftMode: z.boolean().optional(),
-  /** Label applied to pull/merge requests created by sessions. */
-  pullRequestLabel: z.string().optional(),
-});
+export const scmSettingsSchema = z
+  .object({
+    /** Always open pull/merge requests created by sessions as drafts. */
+    alwaysUseDraftMode: z.boolean({ error: "alwaysUseDraftMode must be a boolean" }).optional(),
+    /** Label applied to pull/merge requests created by sessions. */
+    pullRequestLabel: z
+      .string({ error: "pullRequestLabel must be a string" })
+      .trim()
+      .refine((label) => !label.includes(","), {
+        message: "pullRequestLabel must not contain commas",
+      })
+      .optional(),
+  })
+  .strict()
+  .transform(({ alwaysUseDraftMode, pullRequestLabel }) => ({
+    ...(alwaysUseDraftMode !== undefined ? { alwaysUseDraftMode } : {}),
+    ...(pullRequestLabel ? { pullRequestLabel } : {}),
+  }));
 
 export type ScmSettings = z.infer<typeof scmSettingsSchema>;
+
+/** SCM has no per-repository enable/disable allowlist. */
+export type ScmGlobalConfig = {
+  enabledRepos?: never;
+  defaults?: ScmSettings;
+};
+
+export const scmGlobalConfigSchema: z.ZodType<ScmGlobalConfig> = z.strictObject({
+  defaults: scmSettingsSchema.optional(),
+});
 
 /** Repository SCM settings are field-level overrides; omitted fields inherit globally. */
 export type ScmRepoSettings = ScmSettings;
@@ -238,9 +265,26 @@ export const sandboxSettingsSchema = z.strictObject({
   sandboxTimeoutMs: z.number().optional(),
   /** Repo-image build timeout (the build sandbox lifetime), in seconds. */
   buildTimeoutSeconds: z.number().optional(),
+  /** Maximum OpenCode-reported session cost in USD. */
+  maxSessionCostUsd: z.number().finite().positive().optional(),
 });
 
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
+
+/** Validate the relationship only when both child-session limits are provided. */
+export function validateSandboxChildSessionLimits(
+  settings: Pick<SandboxSettings, "maxConcurrentChildSessions" | "maxTotalChildSessions">
+): string | undefined {
+  const { maxConcurrentChildSessions, maxTotalChildSessions } = settings;
+  if (
+    maxConcurrentChildSessions !== undefined &&
+    maxTotalChildSessions !== undefined &&
+    maxConcurrentChildSessions > maxTotalChildSessions
+  ) {
+    return "maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions";
+  }
+  return undefined;
+}
 
 /**
  * Resolve the effective repo-image build timeout (seconds) from sandbox
@@ -429,10 +473,7 @@ export const integrationSettingsSchemas = {
     repo: slackRepoSettingsSchema,
   },
   scm: {
-    global: z.strictObject({
-      enabledRepos: z.never().optional(),
-      defaults: scmSettingsSchema.optional(),
-    }),
+    global: scmGlobalConfigSchema,
     repo: scmSettingsSchema,
   },
 } as const;
@@ -477,7 +518,6 @@ export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 export type VncGlobalConfig = IntegrationSettingsMap["vnc"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
-export type ScmGlobalConfig = IntegrationSettingsMap["scm"]["global"];
 export type SlackGlobalConfig = IntegrationSettingsMap["slack"]["global"];
 
 /** Full MCP server config with decrypted credentials. Internal use only. */

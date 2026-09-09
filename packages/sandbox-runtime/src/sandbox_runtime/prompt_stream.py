@@ -39,28 +39,6 @@ if TYPE_CHECKING:
 MAX_PENDING_PART_EVENTS: Final = 2000
 CONTEXT_OVERFLOW_ERROR_NAME: Final = "ContextOverflowError"
 
-# Anthropic extended thinking budget tokens by reasoning effort level.
-# "max" uses 31,999 — the API maximum for streaming responses.
-# "high" uses 16,000 — a balanced level for faster responses with good reasoning.
-ANTHROPIC_THINKING_BUDGETS: Final[dict[str, int]] = {
-    "high": 16_000,
-    "max": 31_999,
-}
-ANTHROPIC_ADAPTIVE_THINKING_MODELS: Final[frozenset[str]] = frozenset(
-    {
-        "claude-fable-5",
-        "claude-opus-4-6",
-        "claude-opus-4-7",
-        "claude-opus-4-8",
-        "claude-opus-5",
-        "claude-sonnet-4-6",
-        "claude-sonnet-5",
-    }
-)
-ANTHROPIC_ADAPTIVE_EFFORTS: Final[frozenset[str]] = frozenset(
-    {"low", "medium", "high", "xhigh", "max"}
-)
-
 OPENCODE_DEFAULT_TITLE_RE: Final = re.compile(
     r"^(new session|child session) - " r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
     re.IGNORECASE,
@@ -91,6 +69,9 @@ class _PromptState:
     pending_drop_logged: bool = False
     child_activity: ChildActivityCorrelator = field(default_factory=ChildActivityCorrelator)
     emitted_error_messages: set[str] = field(default_factory=set)
+    # Priced step costs keyed by OpenCode part id. Last write wins, so a part
+    # OpenCode re-emits with a corrected cost replaces its earlier value.
+    step_costs: dict[str, float] = field(default_factory=dict)
     # Set when a parent context-overflow announcement was swallowed; cleared by
     # session.compacted. If still set at idle with no error emitted, the
     # promised compaction never happened and the prompt must fail.
@@ -103,6 +84,10 @@ class _PromptState:
             # OpenCode creates for this prompt can predate it.
             int(self.start_time * 1000),
         )
+
+    def message_cost_usd(self) -> float:
+        """Cumulative priced cost of this turn, including subtask steps."""
+        return sum(self.step_costs.values())
 
 
 class _Disposition(Enum):
@@ -684,15 +669,19 @@ class OpenCodePromptStream:
             )
 
         elif part_type == "step-finish":
-            events.append(
-                {
-                    "type": "step_finish",
-                    "cost": part.get("cost"),
-                    "tokens": part.get("tokens"),
-                    "reason": part.get("reason"),
-                    "messageId": state.message_id,
-                }
-            )
+            cost = part.get("cost")
+            if isinstance(cost, int | float) and not isinstance(cost, bool):
+                state.step_costs[str(part.get("id", ""))] = float(cost)
+            finish_event = {
+                "type": "step_finish",
+                "tokens": part.get("tokens"),
+                "reason": part.get("reason"),
+                "messageId": state.message_id,
+                "messageCostUsd": state.message_cost_usd(),
+            }
+            if cost is not None:
+                finish_event["cost"] = cost
+            events.append(finish_event)
 
         if is_subtask:
             child_session_id = part.get("sessionID", "")
@@ -894,28 +883,8 @@ class OpenCodePromptStream:
                 "modelID": model_id,
             }
 
-            if reasoning_effort:
-                if provider_id == "anthropic":
-                    if model_id in ANTHROPIC_ADAPTIVE_THINKING_MODELS:
-                        anthropic_options: dict[str, Any] = {
-                            "thinking": {"type": "adaptive"},
-                        }
-                        if reasoning_effort in ANTHROPIC_ADAPTIVE_EFFORTS:
-                            anthropic_options["outputConfig"] = {"effort": reasoning_effort}
-                        model_spec["options"] = anthropic_options
-                    else:
-                        budget = ANTHROPIC_THINKING_BUDGETS.get(reasoning_effort)
-                        if budget is not None:
-                            model_spec["options"] = {
-                                "thinking": {"type": "enabled", "budgetTokens": budget}
-                            }
-                elif provider_id == "openai":
-                    model_spec["options"] = {
-                        "reasoningEffort": reasoning_effort,
-                        "reasoningSummary": "auto",
-                    }
-                elif provider_id == "xai":
-                    request_body["variant"] = reasoning_effort
+            if reasoning_effort and provider_id in {"anthropic", "openai", "xai"}:
+                request_body["variant"] = reasoning_effort
 
             request_body["model"] = model_spec
 

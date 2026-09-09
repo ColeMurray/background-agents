@@ -1,13 +1,6 @@
-/**
- * Shared Vercel Sandbox runtime bootstrap script.
- *
- * Used by CI when building the managed Vercel base-runtime snapshot.
- */
-
+/** Runtime launch contract; image construction lives in packages/vercel-infra. */
 import { SANDBOX_RUNTIME_VERSION } from "../../runtime-manifest";
 
-export const VERCEL_PYTHON_BIN = "/usr/bin/python3.12";
-export const DEFAULT_VERCEL_RUNTIME = "node24";
 export const VERCEL_SANDBOX_VERSION = SANDBOX_RUNTIME_VERSION;
 export const VERCEL_RUNTIME_WORKDIR = "/tmp/open-inspect-runtime";
 export const VERCEL_LOCAL_RUNTIME_EXTRACT_DIR = `${VERCEL_RUNTIME_WORKDIR}/packages`;

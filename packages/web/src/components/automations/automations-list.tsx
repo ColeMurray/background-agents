@@ -26,6 +26,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { FolderIcon, BoxIcon, ClockIcon, BoltIcon, MoreIcon } from "@/components/ui/icons";
 import { useEnvironments } from "@/hooks/use-environments";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { canAccessAutomation } from "@/lib/automation-authorization";
 import { formatFutureRelativeTime } from "@/lib/time";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 
@@ -92,7 +94,13 @@ export function AutomationsList({
 }: AutomationsListProps) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const { environments } = useEnvironments();
-  const automationToDelete = automations.find((automation) => automation.id === confirmDeleteId);
+  const { authorization, hasPermission } = useCurrentUserAuthorization();
+  const canCreate = hasPermission("automations.create");
+  const automationToDelete = automations.find(
+    (automation) =>
+      automation.id === confirmDeleteId &&
+      canAccessAutomation("automations.manage", authorization, automation)
+  );
 
   if (automations.length === 0) {
     if (emptyState.kind === "no-search-results") {
@@ -112,14 +120,16 @@ export function AutomationsList({
         <p className="text-sm text-muted-foreground mt-1">
           Start from a template, or create one to run tasks on a schedule or in response to events.
         </p>
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-          <Button size="sm" asChild>
-            <Link href="/automations/templates">Start from a template</Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/automations/new">Create Automation</Link>
-          </Button>
-        </div>
+        {canCreate && (
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            <Button size="sm" asChild>
+              <Link href="/automations/templates">Start from a template</Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/automations/new">Create Automation</Link>
+            </Button>
+          </div>
+        )}
       </div>
     );
   }
@@ -127,105 +137,122 @@ export function AutomationsList({
   return (
     <>
       <div className="border border-border-muted rounded-md bg-card divide-y divide-border-muted">
-        {automations.map((automation) => (
-          <div key={automation.id} className="px-4 py-4">
-            {/* Header: Name + badge | Actions */}
-            <div className="flex items-start justify-between gap-3 sm:items-center sm:gap-4">
-              <div className="flex min-w-0 items-center gap-2">
-                <Link
-                  href={`/automations/${automation.id}`}
-                  className="font-medium text-foreground hover:text-accent transition truncate"
-                >
-                  {automation.name}
-                </Link>
-                <AutomationStatusBadge automation={automation} />
-                <ExecutionActivity executions={automation.recentExecutions} />
-              </div>
-              <div className="hidden flex-shrink-0 items-center gap-1 sm:flex">
-                {automation.enabled ? (
-                  <Button variant="ghost" size="xs" onClick={() => onPause(automation.id)}>
-                    Pause
-                  </Button>
-                ) : (
-                  <Button variant="ghost" size="xs" onClick={() => onResume(automation.id)}>
-                    Resume
-                  </Button>
+        {automations.map((automation) => {
+          const canManage = canAccessAutomation("automations.manage", authorization, automation);
+          const canTrigger = canAccessAutomation("automations.trigger", authorization, automation);
+          return (
+            <div key={automation.id} className="px-4 py-4">
+              {/* Header: Name + badge | Actions */}
+              <div className="flex items-start justify-between gap-3 sm:items-center sm:gap-4">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Link
+                    href={`/automations/${automation.id}`}
+                    className="font-medium text-foreground hover:text-accent transition truncate"
+                  >
+                    {automation.name}
+                  </Link>
+                  <AutomationStatusBadge automation={automation} />
+                  <ExecutionActivity executions={automation.recentExecutions} />
+                </div>
+                <div className="hidden flex-shrink-0 items-center gap-1 sm:flex">
+                  {canManage &&
+                    (automation.enabled ? (
+                      <Button variant="ghost" size="xs" onClick={() => onPause(automation.id)}>
+                        Pause
+                      </Button>
+                    ) : (
+                      <Button variant="ghost" size="xs" onClick={() => onResume(automation.id)}>
+                        Resume
+                      </Button>
+                    ))}
+                  {canTrigger && (
+                    <Button variant="ghost" size="xs" onClick={() => onTrigger(automation.id)}>
+                      <span className="flex items-center gap-1">
+                        <BoltIcon className="w-3 h-3" aria-hidden="true" />
+                        Trigger
+                      </span>
+                    </Button>
+                  )}
+                  {canManage && (
+                    <Button
+                      variant="destructive"
+                      size="xs"
+                      onClick={() => setConfirmDeleteId(automation.id)}
+                    >
+                      Delete
+                    </Button>
+                  )}
+                </div>
+                {(canManage || canTrigger) && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label={`Actions for ${automation.name}`}
+                        className="-mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-muted hover:text-foreground sm:hidden"
+                      >
+                        <MoreIcon className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="sm:hidden">
+                      {canManage && (
+                        <DropdownMenuItem
+                          onSelect={() =>
+                            automation.enabled ? onPause(automation.id) : onResume(automation.id)
+                          }
+                        >
+                          {automation.enabled ? "Pause" : "Resume"}
+                        </DropdownMenuItem>
+                      )}
+                      {canTrigger && (
+                        <DropdownMenuItem onSelect={() => onTrigger(automation.id)}>
+                          <BoltIcon aria-hidden="true" />
+                          Trigger now
+                        </DropdownMenuItem>
+                      )}
+                      {canManage && (
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() => setConfirmDeleteId(automation.id)}
+                        >
+                          Delete
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
-                <Button variant="ghost" size="xs" onClick={() => onTrigger(automation.id)}>
-                  <span className="flex items-center gap-1">
-                    <BoltIcon className="w-3 h-3" aria-hidden="true" />
-                    Trigger
-                  </span>
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="xs"
-                  onClick={() => setConfirmDeleteId(automation.id)}
-                >
-                  Delete
-                </Button>
               </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label={`Actions for ${automation.name}`}
-                    className="-mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-muted hover:text-foreground sm:hidden"
-                  >
-                    <MoreIcon className="h-4 w-4" aria-hidden="true" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="sm:hidden">
-                  <DropdownMenuItem
-                    onSelect={() =>
-                      automation.enabled ? onPause(automation.id) : onResume(automation.id)
-                    }
-                  >
-                    {automation.enabled ? "Pause" : "Resume"}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => onTrigger(automation.id)}>
-                    <BoltIcon aria-hidden="true" />
-                    Trigger now
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="text-destructive focus:text-destructive"
-                    onSelect={() => setConfirmDeleteId(automation.id)}
-                  >
-                    Delete
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
 
-            {/* Metadata: icon-paired items */}
-            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-              <span className="inline-flex items-center gap-1">
-                {automation.environmentIds.length > 0 && automation.repositories.length === 0 ? (
-                  <BoxIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
-                ) : (
-                  <FolderIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
-                )}
-                {formatAutomationTargetsLabel(automation, environments)}
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <ClockIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
-                <span
-                  className="sm:hidden"
-                  title={describeTrigger(automation)}
-                  aria-label={describeTrigger(automation)}
-                >
-                  {describeCompactTrigger(automation)}
-                </span>
-                <span className="hidden sm:inline">{describeTrigger(automation)}</span>
-              </span>
-              {automation.triggerType === "schedule" && automation.nextRunAt && (
+              {/* Metadata: icon-paired items */}
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1">
-                  Next: {formatFutureRelativeTime(automation.nextRunAt)}
+                  {automation.environmentIds.length > 0 && automation.repositories.length === 0 ? (
+                    <BoxIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+                  ) : (
+                    <FolderIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+                  )}
+                  {formatAutomationTargetsLabel(automation, environments)}
                 </span>
-              )}
+                <span className="inline-flex items-center gap-1">
+                  <ClockIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+                  <span
+                    className="sm:hidden"
+                    title={describeTrigger(automation)}
+                    aria-label={describeTrigger(automation)}
+                  >
+                    {describeCompactTrigger(automation)}
+                  </span>
+                  <span className="hidden sm:inline">{describeTrigger(automation)}</span>
+                </span>
+                {automation.triggerType === "schedule" && automation.nextRunAt && (
+                  <span className="inline-flex items-center gap-1">
+                    Next: {formatFutureRelativeTime(automation.nextRunAt)}
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <AlertDialog
         open={automationToDelete !== undefined}

@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { SandboxDeliveryUnavailableError, SessionMessengerImpl } from "./messenger";
 
 function harness(overrides: { sandboxSocket?: WebSocket | null; sendResult?: boolean } = {}) {
-  const clientA = { readyState: WebSocket.OPEN } as WebSocket;
-  const clientB = { readyState: WebSocket.OPEN } as WebSocket;
+  const clientA = { readyState: WebSocket.OPEN, url: "ws://client-a" } as WebSocket;
+  const clientB = { readyState: WebSocket.OPEN, url: "ws://client-b" } as WebSocket;
   const sandbox =
     overrides.sandboxSocket === undefined
       ? ({ readyState: WebSocket.OPEN } as WebSocket)
@@ -32,6 +32,34 @@ describe("SessionMessengerImpl", () => {
       "authenticated_only",
       expect.any(Function)
     );
+    expect(wsManager.send).toHaveBeenCalledWith(clientA, message);
+    expect(wsManager.send).toHaveBeenCalledWith(clientB, message);
+  });
+
+  it("broadcasts budget status to every authenticated client without negotiation", () => {
+    const { messenger, wsManager, clientA, clientB } = harness();
+    const message = {
+      type: "budget_status",
+      totalCost: 5,
+      maxSessionCostUsd: 10,
+      budgetExhausted: false,
+    } as const;
+
+    messenger.broadcast(message);
+
+    expect(wsManager.send).toHaveBeenCalledWith(clientA, message);
+    expect(wsManager.send).toHaveBeenCalledWith(clientB, message);
+  });
+
+  it("broadcasts budget warnings to every authenticated client without negotiation", () => {
+    const { messenger, wsManager, clientA, clientB } = harness();
+    const message = {
+      type: "sandbox_event",
+      event: { type: "warning", scope: "budget", message: "Work paused.", timestamp: 1 },
+    } as const;
+
+    messenger.broadcast(message);
+
     expect(wsManager.send).toHaveBeenCalledWith(clientA, message);
     expect(wsManager.send).toHaveBeenCalledWith(clientB, message);
   });

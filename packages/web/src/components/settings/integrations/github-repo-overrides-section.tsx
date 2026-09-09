@@ -7,6 +7,7 @@ import {
   encodeRepositoryPathSegments,
   parseRepositoryFullName,
   type EnrichedRepository,
+  type GitHubAutofixSettings,
   type GitHubBotSettings,
   type ResolvedGitHubAutofixSettings,
 } from "@open-inspect/shared";
@@ -168,10 +169,13 @@ function RepoOverrideRow({
   const [autofixMode, setAutofixMode] = useState<"global" | "override">(
     entry.settings.autofix === undefined ? "global" : "override"
   );
-  const [autofix, setAutofix] = useState<ResolvedGitHubAutofixSettings>({
+  const [autofixOverrides, setAutofixOverrides] = useState<GitHubAutofixSettings>(
+    entry.settings.autofix ?? {}
+  );
+  const autofix: ResolvedGitHubAutofixSettings = {
     ...defaultAutofix,
-    ...entry.settings.autofix,
-  });
+    ...autofixOverrides,
+  };
   const [newUsername, setNewUsername] = useState("");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -207,7 +211,7 @@ function RepoOverrideRow({
     if (commentActionMode === "override")
       settings.commentActionInstructions = commentActionInstructions;
     if (autoReviewMode === "override") settings.autoReviewOnOpen = autoReviewOnOpen;
-    if (autofixMode === "override") settings.autofix = autofix;
+    if (autofixMode === "override") settings.autofix = autofixOverrides;
 
     try {
       const res = await browserApiFetch(
@@ -357,7 +361,7 @@ function RepoOverrideRow({
             onValueChange={(value: "global" | "override") => {
               setAutofixMode(value);
               if (value === "override" && entry.settings.autofix === undefined) {
-                setAutofix({ ...defaultAutofix });
+                setAutofixOverrides({});
               }
               setDirty(true);
             }}
@@ -376,8 +380,11 @@ function RepoOverrideRow({
             value={autofix}
             compact
             onDirty={() => setDirty(true)}
-            onChange={(value) => {
-              setAutofix(value);
+            onChange={(value, changedKey) => {
+              setAutofixOverrides((current) => ({
+                ...current,
+                [changedKey]: value[changedKey],
+              }));
               setDirty(true);
             }}
           />

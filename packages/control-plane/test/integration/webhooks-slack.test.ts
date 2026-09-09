@@ -7,6 +7,8 @@ import { serviceFetch, sqlDatabase } from "./helpers";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const AUTOMATION_OWNER_ID = "11111111111111111111111111111111";
+
 function makeSlackEventBody(overrides?: Record<string, unknown>): Record<string, unknown> {
   const ts = `${Date.now()}.${Math.floor(Math.random() * 1e6)}`;
   return {
@@ -38,8 +40,8 @@ function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow 
     enabled: 1,
     next_run_at: null,
     consecutive_failures: 0,
-    created_by: "user-1",
-    user_id: null,
+    created_by: AUTOMATION_OWNER_ID,
+    user_id: AUTOMATION_OWNER_ID,
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -56,6 +58,13 @@ function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow 
 }
 
 async function seedSlackAutomation(): Promise<string> {
+  await env.DB.prepare(
+    `INSERT INTO users
+      (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+     VALUES (?, 'Slack Owner', NULL, 0, NULL, ?, ?)`
+  )
+    .bind(AUTOMATION_OWNER_ID, Date.now(), Date.now())
+    .run();
   const store = new AutomationStore(env.DB);
   const automation = makeSlackAutomation();
   await store.create(automation);

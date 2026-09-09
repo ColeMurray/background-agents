@@ -21,7 +21,7 @@ import {
 
 export interface ApplyPullRequestSnapshotDeps {
   artifactRepository: Pick<ArtifactRepository, "getArtifactById" | "updateArtifact">;
-  sessionPullRequests: Pick<SessionPullRequestStore, "upsert"> | null;
+  sessionPullRequests: Pick<SessionPullRequestStore, "upsert">;
 }
 
 export interface ApplyPullRequestSnapshotTarget {
@@ -44,19 +44,17 @@ export async function applyPullRequestSnapshot(
   snapshot: PullRequestSnapshotInput
 ): Promise<ApplyPullRequestSnapshotResult> {
   let recordWriteError: unknown | null = null;
-  if (deps.sessionPullRequests) {
-    const record = snapshotToRecord(snapshot, {
-      artifactId: target.artifactId,
-      sessionId: target.sessionId,
-      createdAt: target.artifactCreatedAt,
-      updatedAt: Date.now(),
-    });
-    try {
-      const { applied } = await deps.sessionPullRequests.upsert(record);
-      if (!applied) return { updatedArtifact: null, recordWriteError: null };
-    } catch (error) {
-      recordWriteError = error ?? new Error("session pull request upsert failed");
-    }
+  const record = snapshotToRecord(snapshot, {
+    artifactId: target.artifactId,
+    sessionId: target.sessionId,
+    createdAt: target.artifactCreatedAt,
+    updatedAt: Date.now(),
+  });
+  try {
+    const { applied } = await deps.sessionPullRequests.upsert(record);
+    if (!applied) return { updatedArtifact: null, recordWriteError: null };
+  } catch (error) {
+    recordWriteError = error ?? new Error("session pull request upsert failed");
   }
 
   const currentArtifact = deps.artifactRepository.getArtifactById(target.artifactId);

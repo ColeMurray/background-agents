@@ -678,6 +678,58 @@ describe("POST /webhooks/github", () => {
       },
     });
   });
+
+  it("forwards a completed workflow run", async () => {
+    const body = JSON.stringify({
+      action: "completed",
+      repository: { owner: { login: "acme-org" }, name: "my-app" },
+      sender: { login: "github-actions[bot]" },
+      workflow_run: {
+        id: 123456789,
+        run_attempt: 1,
+        name: "CI",
+        conclusion: "failure",
+        head_branch: "main",
+        head_sha: "abc1234def5678",
+        path: ".github/workflows/ci.yml",
+        html_url: "https://github.com/acme-org/my-app/actions/runs/123456789",
+      },
+    });
+    const signature = await sign(SECRET, body);
+    const ctx = makeCtx();
+    const env = makeEnv();
+
+    const response = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "workflow_run",
+          "X-GitHub-Delivery": "delivery-workflow-run-123456789",
+        },
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
+      .fetch;
+    expect(controlPlaneFetch).toHaveBeenCalledOnce();
+    const [url, init] = controlPlaneFetch.mock.calls[0];
+    expect(url).toBe("https://internal/internal/github-event");
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      eventType: "workflow_run.completed",
+      repoOwner: "acme-org",
+      repoName: "my-app",
+      workflowName: "CI",
+      conclusion: "failure",
+      triggerKey: "workflow_run:123456789:1",
+    });
+  });
 });
 
 describe("GET /health", () => {

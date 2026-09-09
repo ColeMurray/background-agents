@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { formatSessionEventTime } from "@/lib/time";
 import { formatToolCall } from "@/lib/tool-formatters";
 import type { ToolCallEvent } from "@/lib/timeline-items";
@@ -22,15 +22,23 @@ function cleanTaskResult(output: string | undefined): string | null {
   return envelope ? envelope[2].trim() : output;
 }
 
-function TaskDisclosure({ label, content }: { label: string; content: string }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-
+function TaskDisclosure({
+  label,
+  content,
+  isExpanded,
+  onToggle,
+}: {
+  label: string;
+  content: string;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
   return (
     <div className="border border-border-muted bg-card overflow-hidden">
       <button
         type="button"
         aria-expanded={isExpanded}
-        onClick={() => setIsExpanded((expanded) => !expanded)}
+        onClick={onToggle}
         className="w-full flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-left text-muted-foreground hover:text-foreground transition-colors"
       >
         <ChevronRightIcon
@@ -53,12 +61,19 @@ export function TaskActivityItem({
   event,
   hasActivity,
   children,
+  expansionKey,
+  expandedSections,
+  onToggleSection,
 }: {
   event: ToolCallEvent;
   hasActivity: boolean;
   children: ReactNode;
+  expansionKey: string;
+  expandedSections: ReadonlySet<string>;
+  onToggleSection: (key: string) => void;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const sectionKey = (section: "task" | "instructions" | "result") => `${expansionKey}:${section}`;
+  const isExpanded = expandedSections.has(sectionKey("task"));
   const formatted = formatToolCall(event);
   const prompt = stringArg(event, "prompt");
   const agent = stringArg(event, "subagent_type");
@@ -70,7 +85,7 @@ export function TaskActivityItem({
       <button
         type="button"
         aria-expanded={isExpanded}
-        onClick={() => setIsExpanded((expanded) => !expanded)}
+        onClick={() => onToggleSection(sectionKey("task"))}
         className="flex w-full min-w-0 items-start gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
@@ -111,8 +126,22 @@ export function TaskActivityItem({
               {children}
             </div>
           )}
-          {prompt && <TaskDisclosure label="Instructions" content={prompt} />}
-          {result && <TaskDisclosure label="Result" content={result} />}
+          {prompt && (
+            <TaskDisclosure
+              label="Instructions"
+              content={prompt}
+              isExpanded={expandedSections.has(sectionKey("instructions"))}
+              onToggle={() => onToggleSection(sectionKey("instructions"))}
+            />
+          )}
+          {result && (
+            <TaskDisclosure
+              label="Result"
+              content={result}
+              isExpanded={expandedSections.has(sectionKey("result"))}
+              onToggle={() => onToggleSection(sectionKey("result"))}
+            />
+          )}
         </div>
       )}
     </div>

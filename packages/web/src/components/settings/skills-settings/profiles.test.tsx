@@ -79,7 +79,7 @@ describe("Profiles", () => {
     });
     useSkillsMock.mockReturnValue({ skills: [], loading, error, mutate: vi.fn() });
 
-    render(<Profiles />);
+    render(<Profiles canManage />);
 
     expect(screen.getByRole("button", { name: /Frontend work/ })).toHaveTextContent(message);
     expect(screen.queryByText(/Unavailable/)).not.toBeInTheDocument();

@@ -283,11 +283,163 @@ describe("automation cron submission", () => {
     );
 
     expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+    expect(screen.getByText("Event type is required.")).toBeInTheDocument();
 
     fireEvent.submit(container.querySelector("form")!);
 
-    expect(screen.getByText("Event type is required.")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("drops conditions the newly picked event type cannot answer, and says which", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "CI watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Look at the failing workflow.",
+          triggerType: "github_event",
+          eventType: "workflow_run.completed",
+          triggerConfig: {
+            conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByPlaceholderText(/Exact workflow name/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /PR Opened/ }));
+
+    expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Removed Workflow Name — not available for this event type."
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      eventType: "pull_request.opened",
+      triggerConfig: { conditions: [] },
+    });
+  });
+
+  it("restores conditions when switching back to a compatible GitHub event", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "CI watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Look at the failing workflow.",
+          triggerType: "github_event",
+          eventType: "workflow_run.completed",
+          triggerConfig: {
+            conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+          },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /PR Opened/ }));
+    expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /Workflow Run Completed/ }));
+
+    expect(screen.getByPlaceholderText(/Exact workflow name/)).toHaveValue("CI");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("drops and restores conclusions based on event-specific values", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Check suite watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Inspect failed check suites.",
+          triggerType: "github_event",
+          eventType: "check_suite.completed",
+          triggerConfig: {
+            conditions: [{ type: "conclusion", operator: "eq", value: "startup_failure" }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getAllByText("startup_failure").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /Workflow Run Completed/ }));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Removed Conclusion — not available for this event type."
+    );
+
+    fireEvent.click(screen.getByText("Add condition..."));
+    fireEvent.click(screen.getByRole("option", { name: "Conclusion" }));
+    const conclusionSelect = screen
+      .getAllByRole("combobox")
+      .find((element) => element.textContent?.includes("success"));
+    expect(conclusionSelect).toBeDefined();
+    fireEvent.click(conclusionSelect!);
+    fireEvent.click(screen.getByRole("option", { name: "failure" }));
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /Check Suite Completed/ }));
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      eventType: "check_suite.completed",
+      triggerConfig: {
+        conditions: [{ type: "conclusion", operator: "eq", value: "failure" }],
+      },
+    });
+  });
+
+  it("clears active and dropped conditions when changing trigger source", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "CI watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Look at the failing workflow.",
+          triggerType: "github_event",
+          eventType: "workflow_run.completed",
+          triggerConfig: {
+            conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByPlaceholderText(/Exact workflow name/)).toHaveValue("CI");
+
+    fireEvent.click(screen.getByRole("radio", { name: /^Sentry / }));
+
+    expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("submits triggerConfig with empty conditions for non-schedule automations", () => {
@@ -315,6 +467,30 @@ describe("automation cron submission", () => {
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       triggerConfig: { conditions: [] },
     });
+  });
+
+  it("renders condition validation errors beside the condition builder", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Review PRs",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          triggerConfig: {
+            conditions: [{ type: "branch", operator: "glob_match", value: [] }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("At least one branch pattern required")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
   });
 });
 
@@ -833,6 +1009,44 @@ describe("slack_event automation", () => {
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).not.toHaveBeenCalled();
     expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
+  });
+
+  it("shows the Slack channel message only when it is the policy failure", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          ...slackBase,
+          name: "",
+          triggerConfig: { conditions: [] },
+        }}
+      />
+    );
+
+    expect(screen.queryByText(/require at least one Slack Channel/)).not.toBeInTheDocument();
+  });
+
+  it("explains why an empty slack_channel condition cannot be submitted", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          ...slackBase,
+          triggerConfig: {
+            conditions: [{ type: "slack_channel", operator: "any_of", value: [] }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    expect(
+      screen.getByText("Slack Channel requires at least one nonblank channel ID")
+    ).toBeInTheDocument();
   });
 
   it("submits a valid slack_event", () => {

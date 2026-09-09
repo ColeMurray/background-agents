@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  validateAutomationTargetCounts,
   createAutomationRequestSchema,
   listAutomationsResponseSchema,
   updateAutomationRequestSchema,
 } from "./automations";
 
 const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
+const USER_ID = "11111111111111111111111111111111";
 
 const automation = {
   id: "auto-1",
@@ -20,6 +22,7 @@ const automation = {
   nextRunAt: 123,
   consecutiveFailures: 0,
   createdBy: "user-1",
+  userId: USER_ID,
   createdAt: 1,
   updatedAt: 2,
   deletedAt: null,
@@ -65,6 +68,17 @@ describe("listAutomationsResponseSchema", () => {
         nextCursor: null,
       }).success
     ).toBe(false);
+  });
+
+  it("requires a canonical owner ID when ownership is present", () => {
+    const response = (userId: string | null) => ({
+      automations: [{ ...automation, userId }],
+      hasMore: false as const,
+      nextCursor: null,
+    });
+
+    expect(listAutomationsResponseSchema.safeParse(response(null)).success).toBe(true);
+    expect(listAutomationsResponseSchema.safeParse(response("user-1")).success).toBe(false);
   });
 
   it("validates recent execution summaries", () => {
@@ -207,5 +221,30 @@ describe("automation request boundary contracts", () => {
         sentryClientSecret: " secret ",
       }).sentryClientSecret
     ).toBe(" secret ");
+  });
+});
+
+describe("validateAutomationTargetCounts", () => {
+  it("keeps repository-scoped triggers bound to one repository", () => {
+    expect(validateAutomationTargetCounts("github_event", 0, 0)).toBe(
+      "Repository-scoped triggers require exactly one repository"
+    );
+    expect(validateAutomationTargetCounts("github_event", 1, 1)).toBe(
+      "Repository-scoped triggers cannot target environments"
+    );
+    expect(validateAutomationTargetCounts("github_event", 1, 0)).toBeNull();
+  });
+
+  it("allows fan-out only for schedules", () => {
+    expect(validateAutomationTargetCounts("webhook", 2, 0)).toBe(
+      "Multi-target selections require a schedule trigger"
+    );
+    expect(validateAutomationTargetCounts("schedule", 2, 1)).toBeNull();
+  });
+
+  it("enforces the combined target cap", () => {
+    expect(validateAutomationTargetCounts("schedule", 10, 1)).toBe(
+      "At most 10 repositories and environments combined"
+    );
   });
 });
