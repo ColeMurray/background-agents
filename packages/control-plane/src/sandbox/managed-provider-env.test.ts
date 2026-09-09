@@ -51,6 +51,69 @@ describe("prepareLegacyManagedProviderEnv", () => {
       })
     ).toEqual({ USER_VALUE: "visible", OPENAI_OAUTH_MANAGED: "1" });
   });
+
+  it("makes provider-account mode override legacy OAuth and canonical API keys", () => {
+    expect(
+      prepareManagedProviderEnv({
+        exposedSecrets: {
+          OPENAI_API_KEY: "sk-openai",
+          OPENAI_OAUTH_REFRESH_TOKEN: "legacy-openai",
+          OPENAI_OAUTH_MANAGED: "user-controlled",
+          XAI_API_KEY: "xai-key",
+          XAI_OAUTH_REFRESH_TOKEN: "legacy-xai",
+          USER_VALUE: "visible",
+        },
+        brokerSecrets: {
+          OPENAI_OAUTH_REFRESH_TOKEN: "legacy-openai",
+          XAI_OAUTH_REFRESH_TOKEN: "legacy-xai",
+        },
+        providerAuthModes: {
+          openai: "provider_account",
+          xai: "api_key",
+        },
+      })
+    ).toEqual({
+      OPENAI_OAUTH_MANAGED: "1",
+      XAI_API_KEY: "xai-key",
+      USER_VALUE: "visible",
+    });
+  });
+
+  it("retains canonical API keys and removes managed state in explicit API-key mode", () => {
+    expect(
+      prepareManagedProviderEnv({
+        exposedSecrets: {
+          OPENAI_API_KEY: "sk-openai",
+          OPENAI_OAUTH_ACCESS_TOKEN: "legacy-access",
+          OPENAI_OAUTH_MANAGED: "1",
+          XAI_API_KEY: "xai-key",
+          XAI_OAUTH_ACCESS_TOKEN: "legacy-access",
+          XAI_OAUTH_MANAGED: "1",
+        },
+        brokerSecrets: {
+          OPENAI_OAUTH_REFRESH_TOKEN: "legacy-openai",
+          XAI_OAUTH_REFRESH_TOKEN: "legacy-xai",
+        },
+        providerAuthModes: {
+          openai: "api_key",
+          xai: "api_key",
+        },
+      })
+    ).toEqual({ OPENAI_API_KEY: "sk-openai", XAI_API_KEY: "xai-key" });
+  });
+
+  it("uses scoped OAuth only when a legacy-bound provider has a compatible refresh token", () => {
+    expect(
+      prepareManagedProviderEnv({
+        exposedSecrets: { OPENAI_API_KEY: "sk-openai", XAI_API_KEY: "xai-key" },
+        brokerSecrets: { OPENAI_OAUTH_REFRESH_TOKEN: "legacy-openai" },
+        providerAuthModes: {
+          openai: "legacy_scoped_oauth",
+          xai: "legacy_scoped_oauth",
+        },
+      })
+    ).toEqual({ OPENAI_OAUTH_MANAGED: "1", XAI_API_KEY: "xai-key" });
+  });
 });
 
 describe("prepareManagedProviderEnv", () => {

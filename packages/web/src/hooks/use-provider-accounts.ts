@@ -232,9 +232,3 @@ export async function setProviderAccountDefault(
     )
   ).default;
 }
-
-export async function clearProviderAccountDefault(provider: SubscriptionProviderId) {
-  return requestProviderResourceWithoutContent(`${DEFAULTS_KEY}/${provider}`, {
-    method: "DELETE",
-  });
-}

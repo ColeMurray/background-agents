@@ -16,9 +16,14 @@ export interface ConnectedClient {
   lastFetchHistoryAtMs?: number;
 }
 
-/** Result of classifying an opaque runtime connection. */
+/**
+ * Result of classifying an opaque runtime connection. A sandbox socket
+ * carries the sandbox it authenticated as and its own accept-time identity;
+ * only the socket whose identity the session persisted as active is
+ * authoritative (see `SocketRegistry.isActiveSandbox`).
+ */
 export type ConnectionClassification =
-  | { kind: "sandbox"; sandboxId?: string }
+  | { kind: "sandbox"; sandboxId?: string; socketId?: string }
   | { kind: "client"; wsId?: string };
 
 /** Wall and monotonic time sources used by session application code. */
@@ -33,6 +38,12 @@ export interface SocketRegistry<Connection, Client extends ConnectedClient> {
   send(connection: Connection, message: ServerMessage): boolean;
   getClient(connection: Connection): Client | null;
   close(connection: Connection, code: number, reason: string): void;
+  /**
+   * Whether `connection` is the sandbox socket the session currently
+   * dispatches to. A replaced bridge keeps its tags until its close
+   * completes; its frames carry no authority.
+   */
+  isActiveSandbox(connection: Connection): boolean;
   clearSandboxIfMatch(connection: Connection): boolean;
   removeClient(connection: Connection): Client | null;
   hasParticipant(participantId: string): boolean;

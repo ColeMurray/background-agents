@@ -73,6 +73,7 @@ if [ "${DEPLOY_MODULE}" = "deploy" ] || [ "${DEPLOY_MODULE}" = "src" ]; then
         echo "Error: Modal sandbox image build failed for ${APP_NAME}"
         exit 1
     }
+    export OPENINSPECT_REQUIRE_BUILT_IMAGE=true
 fi
 
 if [ "${DEPLOY_MODULE}" = "deploy" ]; then

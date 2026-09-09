@@ -7,6 +7,67 @@ function result(results: Record<string, unknown>[], changes = 0): string {
 }
 
 describe("Wrangler user-merge database adapter", () => {
+  for (const malformed of [
+    null,
+    {},
+    [null],
+    [{ success: "true", results: [] }],
+    [{ success: true }],
+    [{ success: true, results: {} }],
+    [{ success: true, results: [{ count: 1 }, null] }],
+    [{ success: true, results: [42] }],
+    [{ success: true, results: [[]] }],
+    [{ success: true, results: [], meta: null }],
+    [{ success: true, results: [], meta: { changes: "1" } }],
+    [{ success: true, results: [], meta: { changes: -1 } }],
+    [{ success: true, results: [], meta: { changes: 1.5 } }],
+  ]) {
+    it(`rejects malformed query data: ${JSON.stringify(malformed)}`, async () => {
+      const database = new WranglerD1Database("workspace", true, false, () => ({
+        status: 0,
+        stderr: "",
+        stdout: JSON.stringify(malformed),
+      }));
+      await assert.rejects(
+        database.prepare("SELECT count(*) AS count FROM users").first(),
+        /malformed/
+      );
+    });
+  }
+
+  it("does not report an omitted verification result as an empty table", async () => {
+    const database = new WranglerD1Database("workspace", true, false, () => ({
+      status: 0,
+      stderr: "",
+      stdout: "[]",
+    }));
+    await assert.rejects(
+      database.prepare("SELECT count(*) AS count FROM users").first(),
+      /returned 0 results/
+    );
+  });
+
+  it("preserves failure diagnostics even when an error has no rows", async () => {
+    const database = new WranglerD1Database("workspace", true, false, () => ({
+      status: 0,
+      stderr: "",
+      stdout: JSON.stringify([{ success: false, error: "query failed" }]),
+    }));
+    await assert.rejects(database.prepare("SELECT 1").first(), /Statement failed:.*query failed/);
+  });
+
+  it("preserves empty rows and optional metadata on successful queries", async () => {
+    const database = new WranglerD1Database("workspace", true, false, () => ({
+      status: 0,
+      stderr: "",
+      stdout: JSON.stringify([{ success: true, results: [] }]),
+    }));
+    assert.deepEqual(await database.prepare("SELECT 1 WHERE 0").all(), {
+      results: [],
+      meta: { changes: 0 },
+    });
+  });
+
   it("uses the result-bearing command batch and preserves positional results", async () => {
     let invokedArgs: string[] = [];
     const runner: WranglerRunner = (args) => {

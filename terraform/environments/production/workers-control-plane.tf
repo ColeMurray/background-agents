@@ -55,8 +55,10 @@ module "control_plane_worker" {
     }
   ]
 
-  # These bindings provide read-only queue metrics to the operator health
-  # check. Autofix production remains owned by the GitHub bot.
+  # One producer binding per job kind (packages/control-plane/src/jobs.ts;
+  # the mapping lives in src/cloudflare/job-queue.ts). The autofix bindings
+  # also feed the operator health check its read-only queue metrics; autofix
+  # production itself remains with the GitHub bot.
   queue_bindings = concat(
     [
       {
@@ -121,7 +123,7 @@ module "control_plane_worker" {
     ] : [],
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_URL", value = var.daytona_api_url },
-      { name = "DAYTONA_BASE_SNAPSHOT", value = var.daytona_base_snapshot },
+      { name = "DAYTONA_BASE_SNAPSHOT", value = module.daytona_infra[0].snapshot_name },
     ] : [],
     local.use_daytona_backend && var.daytona_target != "" ? [
       { name = "DAYTONA_TARGET", value = var.daytona_target },
@@ -155,7 +157,7 @@ module "control_plane_worker" {
     ] : [],
     local.use_e2b_backend ? [
       { name = "E2B_API_URL", value = var.e2b_api_url },
-      { name = "E2B_TEMPLATE_ID", value = var.e2b_template_id },
+      { name = "E2B_TEMPLATE_ID", value = module.e2b_infra[0].template_id },
       { name = "E2B_SANDBOX_TIMEOUT_SECONDS", value = tostring(var.e2b_sandbox_timeout_seconds) },
       { name = "E2B_AUTO_PAUSE", value = tostring(var.e2b_auto_pause) },
     ] : []
@@ -194,8 +196,13 @@ module "control_plane_worker" {
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_KEY", value = var.daytona_api_key },
     ] : [],
-    var.opencomputer_api_key != "" && trimspace(var.opencomputer_api_url) != "" ? [
+    local.opencomputer_enabled ? [
       { name = "OPENCOMPUTER_API_KEY", value = var.opencomputer_api_key },
+    ] : [],
+    # OpenComputer sandboxes take the deployment-wide Anthropic key from the
+    # control plane. It is optional, and an unset one must not shadow the key a
+    # repository supplies through the secret store.
+    local.opencomputer_enabled && trimspace(var.anthropic_api_key) != "" ? [
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
     ] : [],
     var.vercel_sandbox_token != "" && trimspace(var.vercel_sandbox_project_id) != "" ? [
@@ -229,15 +236,14 @@ module "control_plane_worker" {
   # and the draft sweep ABANDONED_DRAFT_SWEEP_CRON in abandoned-draft-sweep.ts.
   cron_triggers = ["* * * * *", "7,37 * * * *", "23 * * * *"]
 
-  # module.e2b_infra is deliberately absent: its template build depends on THIS
-  # worker instead (see e2b.tf), so control-plane deploys land before template
-  # rebuilds — the compatible order for E2B boots.
+  # Base artifacts are verified before the Worker switches its provider references.
   depends_on = [
     null_resource.control_plane_build,
     module.session_index_kv,
     null_resource.d1_migrations,
     module.linear_bot_worker,
     module.daytona_infra,
+    module.e2b_infra,
     module.vercel_sandbox_infra,
     module.opencomputer_infra,
     module.modal_app,

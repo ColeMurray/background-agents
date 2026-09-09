@@ -1,15 +1,7 @@
+import type { QueueMetrics, QueueMetricsSource } from "../platform-ports";
+
 const PRIMARY_BACKLOG_ALERT_THRESHOLD = 25;
 const PRIMARY_OLDEST_MESSAGE_ALERT_MS = 5 * 60 * 1_000;
-
-interface QueueMetrics {
-  backlogCount: number;
-  backlogBytes: number;
-  oldestMessageTimestamp?: Date;
-}
-
-interface QueueMetricsSource {
-  metrics(): Promise<QueueMetrics>;
-}
 
 interface AutofixQueueBindings {
   AUTOFIX_QUEUE?: QueueMetricsSource;

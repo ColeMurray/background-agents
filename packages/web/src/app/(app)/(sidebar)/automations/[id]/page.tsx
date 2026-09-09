@@ -3,6 +3,7 @@
 import { useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
 import { describeCron } from "@open-inspect/shared/cron";
 import { getReasoningConfig } from "@open-inspect/shared/models";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
@@ -31,15 +32,20 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { environments } = useEnvironments();
   // "Load more" grows the fetch limit rather than paging by offset: the
   // endpoint returns newest-first, so a larger limit re-fetches the head plus
-  // the next page in one request. Fine at automation-history scale; revisit
-  // with real offset pagination if histories grow large.
+  // the next page in one request. The endpoint refuses limits past its
+  // maximum, so the history stops there; revisit with real offset pagination
+  // if histories grow large.
   const [extraHistoryLimit, setExtraHistoryLimit] = useState(0);
+  const historyLimit = Math.min(
+    HISTORY_PAGE_SIZE + extraHistoryLimit,
+    MAX_AUTOMATION_INVOCATION_LIST_LIMIT
+  );
   const {
     invocations,
     total: totalInvocations,
     loading: loadingInvocations,
     mutate: mutateInvocations,
-  } = useAutomationInvocations(id, HISTORY_PAGE_SIZE + extraHistoryLimit, 0);
+  } = useAutomationInvocations(id, historyLimit, 0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const reasoningLabel = automation
@@ -334,7 +340,10 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
               invocations={invocations}
               total={totalInvocations}
               loading={loadingInvocations}
-              hasMore={invocations.length < totalInvocations}
+              hasMore={
+                invocations.length < totalInvocations &&
+                historyLimit < MAX_AUTOMATION_INVOCATION_LIST_LIMIT
+              }
               onLoadMore={() => setExtraHistoryLimit((prev) => prev + HISTORY_PAGE_SIZE)}
             />
           </div>

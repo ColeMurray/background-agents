@@ -8,9 +8,11 @@
 import type {
   AutomationEvent,
   AutomationEventSource,
+  AutomationTriggerType,
   ConditionType,
   TriggerCondition,
 } from "./types";
+import { TRIGGER_TYPE_TO_SOURCE } from "./types";
 import { getGitHubConclusionOptions, isGitHubConditionSupported } from "./github/webhook-types";
 
 type ConditionOf<K extends ConditionType> = Extract<TriggerCondition, { type: K }>;
@@ -71,6 +73,46 @@ export function matchesConditions(
 }
 
 // ─── Validation (called at automation creation time) ────────────────────────
+
+interface TriggerConditionConfiguration {
+  type: AutomationTriggerType;
+  eventType?: string;
+  conditions: TriggerCondition[];
+}
+
+/**
+ * Validate a proposed trigger configuration. Unchanged legacy GitHub filters
+ * may survive an edit, but each existing occurrence can exempt only one filter.
+ * Callers parse stored data and provide the previous configuration only for edits.
+ */
+export function validateTriggerConditions(
+  proposed: TriggerConditionConfiguration,
+  registry: ConditionRegistry,
+  previous?: TriggerConditionConfiguration
+): string[] {
+  const source = TRIGGER_TYPE_TO_SOURCE[proposed.type];
+  if (!source) return [];
+  const eventType = proposed.eventType;
+  const unchangedGitHubEvent =
+    proposed.type === "github_event" &&
+    previous?.type === proposed.type &&
+    eventType !== undefined &&
+    eventType !== "" &&
+    previous.eventType === eventType;
+  const remainingOriginalConditions = unchangedGitHubEvent
+    ? previous.conditions.map((condition) => JSON.stringify(condition))
+    : [];
+  return proposed.conditions.flatMap((condition) => {
+    if (unchangedGitHubEvent && !isGitHubConditionSupported(eventType, condition.type)) {
+      const index = remainingOriginalConditions.indexOf(JSON.stringify(condition));
+      if (index !== -1) {
+        remainingOriginalConditions.splice(index, 1);
+        return [];
+      }
+    }
+    return validateConditions([condition], source, registry, eventType);
+  });
+}
 
 export function validateConditions(
   conditions: TriggerCondition[],

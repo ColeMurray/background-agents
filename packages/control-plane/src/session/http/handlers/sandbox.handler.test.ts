@@ -15,7 +15,7 @@ import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { SessionSandboxEventProcessor } from "../../sandbox-events/processor";
 
-function createHandler({ managedSecretsConfigured = true } = {}) {
+function createHandler() {
   const repository = {
     createEvent: vi.fn(),
     getProcessingMessage: vi.fn(),
@@ -50,7 +50,6 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     { getSandbox } as unknown as SandboxRepository,
     { processSandboxEvent } as unknown as SessionSandboxEventProcessor,
     messenger,
-    managedSecretsConfigured,
     refreshOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
@@ -540,16 +539,6 @@ describe("SandboxHandler", () => {
     expect(await response.json()).toEqual({ error: "No session" });
   });
 
-  it("returns 500 when openai secrets are not configured", async () => {
-    const { handler, getSession } = createHandler({ managedSecretsConfigured: false });
-    getSession.mockReturnValue({} as SessionRow);
-
-    const response = await handler.openaiTokenRefresh();
-
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: "Secrets not configured" });
-  });
-
   it.each([
     [OpenAITokenNotConfiguredError, 404, "OPENAI_OAUTH_REFRESH_TOKEN not configured"],
     [OpenAITokenUnauthorizedError, 401, "OpenAI token refresh failed: unauthorized"],
@@ -624,16 +613,6 @@ describe("SandboxHandler", () => {
 
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "No session" });
-  });
-
-  it("returns 500 when managed secrets are not configured for xAI", async () => {
-    const { handler, getSession } = createHandler({ managedSecretsConfigured: false });
-    getSession.mockReturnValue({} as SessionRow);
-
-    const response = await handler.xaiTokenRefresh();
-
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: "Secrets not configured" });
   });
 
   it("returns mapped service error from xAI token refresh", async () => {

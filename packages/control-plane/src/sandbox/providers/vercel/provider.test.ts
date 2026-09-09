@@ -232,7 +232,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "sudo",
-        args: ["-E", "/usr/bin/python3.12", "-m", "sandbox_runtime.entrypoint"],
+        args: ["-E", "/opt/openinspect/python/bin/python", "-m", "sandbox_runtime.entrypoint"],
         cwd: "/workspace",
       }),
       undefined
@@ -471,7 +471,7 @@ describe("VercelSandboxProvider", () => {
         sessionId: "vercel-session-1",
         command: "sudo",
         args: expect.arrayContaining([
-          "/usr/bin/python3.12",
+          "/opt/openinspect/python/bin/python",
           "-c",
           // Tagged with the logical sandbox ID (first line) so the supervisor's
           // stale-file cleanup keeps this write, then the port URLs.
@@ -689,7 +689,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "sudo",
-        args: ["-E", "/usr/bin/python3.12", "-m", "sandbox_runtime.entrypoint"],
+        args: ["-E", "/opt/openinspect/python/bin/python", "-m", "sandbox_runtime.entrypoint"],
         cwd: "/workspace",
         env: {
           OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS: "1800",
@@ -767,6 +767,29 @@ describe("VercelSandboxProvider", () => {
         },
       }),
       { trace_id: "trace-1", request_id: "request-1" }
+    );
+  });
+
+  it("sanitizes repo scope ids for Vercel sandbox names", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.triggerImageBuild({
+      ...environmentBuildConfig(),
+      scopeKind: "repo",
+      scopeId: "acme/web.app",
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.name).toMatch(/^build-env-acme-web-app-\d+$/);
+    expect(createCall.env).toEqual(
+      expect.objectContaining({ SANDBOX_ID: "build-env-acme/web.app" })
+    );
+    expect(createCall.tags).toEqual(
+      expect.objectContaining({
+        openinspect_scope_kind: "repo",
+        openinspect_scope_id: "acme/web.app",
+      })
     );
   });
 

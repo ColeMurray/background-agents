@@ -1,0 +1,632 @@
+{
+  "anthropic": {
+    "id": "anthropic",
+    "env": ["ANTHROPIC_API_KEY"],
+    "npm": "@ai-sdk/anthropic",
+    "name": "Anthropic",
+    "models": {
+      "claude-haiku-4-5": {
+        "id": "claude-haiku-4-5",
+        "name": "Claude Haiku 4.5 (latest)",
+        "family": "claude-haiku",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "budget_tokens",
+            "min": 1024
+          }
+        ],
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2025-10-15",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "cost": {
+          "input": 1,
+          "output": 5,
+          "cache_read": 0.1,
+          "cache_write": 1.25
+        }
+      },
+      "claude-sonnet-4-5": {
+        "id": "claude-sonnet-4-5",
+        "name": "Claude Sonnet 4.5 (latest)",
+        "family": "claude-sonnet",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "budget_tokens",
+            "min": 1024
+          }
+        ],
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2025-09-29",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 64000
+        },
+        "cost": {
+          "input": 3,
+          "output": 15,
+          "cache_read": 0.3,
+          "cache_write": 3.75
+        }
+      },
+      "claude-sonnet-4-6": {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "family": "claude-sonnet",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["low", "medium", "high", "max"]
+          },
+          {
+            "type": "budget_tokens",
+            "min": 1024
+          }
+        ],
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2026-02-17",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 3,
+          "output": 15,
+          "cache_read": 0.3,
+          "cache_write": 3.75
+        }
+      },
+      "claude-sonnet-5": {
+        "id": "claude-sonnet-5",
+        "name": "Claude Sonnet 5",
+        "family": "claude-sonnet",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": ["low", "medium", "high", "xhigh", "max"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "release_date": "2026-06-29",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 2,
+          "output": 10,
+          "cache_read": 0.2,
+          "cache_write": 2.5
+        }
+      },
+      "claude-opus-4-5": {
+        "id": "claude-opus-4-5",
+        "name": "Claude Opus 4.5 (latest)",
+        "family": "claude-opus",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["low", "medium", "high"]
+          },
+          {
+            "type": "budget_tokens",
+            "min": 1024
+          }
+        ],
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2025-11-24",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "cost": {
+          "input": 5,
+          "output": 25,
+          "cache_read": 0.5,
+          "cache_write": 6.25
+        }
+      },
+      "claude-opus-4-6": {
+        "id": "claude-opus-4-6",
+        "name": "Claude Opus 4.6",
+        "family": "claude-opus",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["low", "medium", "high", "max"]
+          },
+          {
+            "type": "budget_tokens",
+            "min": 1024
+          }
+        ],
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2026-02-04",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 5,
+          "output": 25,
+          "cache_read": 0.5,
+          "cache_write": 6.25
+        }
+      },
+      "claude-opus-4-7": {
+        "id": "claude-opus-4-7",
+        "name": "Claude Opus 4.7",
+        "family": "claude-opus",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["low", "medium", "high", "xhigh", "max"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "release_date": "2026-04-14",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 5,
+          "output": 25,
+          "cache_read": 0.5,
+          "cache_write": 6.25
+        }
+      },
+      "claude-opus-4-8": {
+        "id": "claude-opus-4-8",
+        "name": "Claude Opus 4.8",
+        "family": "claude-opus",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["low", "medium", "high", "xhigh", "max"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "release_date": "2026-05-28",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 5,
+          "output": 25,
+          "cache_read": 0.5,
+          "cache_write": 6.25
+        }
+      },
+      "claude-opus-5": {
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
+        "family": "claude-opus",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["low", "medium", "high", "xhigh", "max"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "release_date": "2026-07-24",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 5,
+          "output": 25,
+          "cache_read": 0.5,
+          "cache_write": 6.25
+        }
+      },
+      "claude-fable-5": {
+        "id": "claude-fable-5",
+        "name": "Claude Fable 5",
+        "family": "claude-fable",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["low", "medium", "high", "xhigh", "max"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "release_date": "2026-06-07",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 10,
+          "output": 50,
+          "cache_read": 1,
+          "cache_write": 12.5
+        }
+      }
+    }
+  },
+  "openai": {
+    "id": "openai",
+    "env": ["OPENAI_API_KEY"],
+    "npm": "@ai-sdk/openai",
+    "name": "OpenAI",
+    "models": {
+      "gpt-5.4": {
+        "id": "gpt-5.4",
+        "name": "GPT-5.4",
+        "family": "gpt",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["none", "low", "medium", "high", "xhigh"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2026-03-05",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1050000,
+          "input": 922000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 2.5,
+          "output": 15,
+          "cache_read": 0.25,
+          "tiers": [
+            {
+              "input": 5,
+              "output": 22.5,
+              "cache_read": 0.5,
+              "tier": {
+                "type": "context",
+                "size": 272000
+              }
+            }
+          ],
+          "context_over_200k": {
+            "input": 5,
+            "output": 22.5,
+            "cache_read": 0.5
+          }
+        }
+      },
+      "gpt-5.5": {
+        "id": "gpt-5.5",
+        "name": "GPT-5.5",
+        "family": "gpt",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["none", "low", "medium", "high", "xhigh"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "release_date": "2026-04-23",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1050000,
+          "input": 922000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 5,
+          "output": 30,
+          "cache_read": 0.5,
+          "tiers": [
+            {
+              "input": 10,
+              "output": 45,
+              "cache_read": 1,
+              "tier": {
+                "type": "context",
+                "size": 272000
+              }
+            }
+          ],
+          "context_over_200k": {
+            "input": 10,
+            "output": 45,
+            "cache_read": 1
+          }
+        }
+      },
+      "gpt-5.6-sol": {
+        "id": "gpt-5.6-sol",
+        "name": "GPT-5.6 Sol",
+        "family": "gpt-sol",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["none", "low", "medium", "high", "xhigh", "max"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "release_date": "2026-07-09",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1050000,
+          "input": 922000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 4,
+          "output": 20,
+          "cache_read": 0.4,
+          "cache_write": 5,
+          "tiers": [
+            {
+              "input": 8,
+              "output": 30,
+              "cache_read": 0.8,
+              "cache_write": 10,
+              "tier": {
+                "type": "context",
+                "size": 272000
+              }
+            }
+          ],
+          "context_over_200k": {
+            "input": 8,
+            "output": 30,
+            "cache_read": 0.8,
+            "cache_write": 10
+          }
+        }
+      },
+      "gpt-5.6-terra": {
+        "id": "gpt-5.6-terra",
+        "name": "GPT-5.6 Terra",
+        "family": "gpt-terra",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["none", "low", "medium", "high", "xhigh", "max"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "release_date": "2026-07-09",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1050000,
+          "input": 922000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 2,
+          "output": 12,
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "tiers": [
+            {
+              "input": 4,
+              "output": 18,
+              "cache_read": 0.4,
+              "cache_write": 5,
+              "tier": {
+                "type": "context",
+                "size": 272000
+              }
+            }
+          ],
+          "context_over_200k": {
+            "input": 4,
+            "output": 18,
+            "cache_read": 0.4,
+            "cache_write": 5
+          }
+        }
+      },
+      "gpt-5.6-luna": {
+        "id": "gpt-5.6-luna",
+        "name": "GPT-5.6 Luna",
+        "family": "gpt-luna",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["none", "low", "medium", "high", "xhigh", "max"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "release_date": "2026-07-09",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 1050000,
+          "input": 922000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 0.2,
+          "output": 1.2,
+          "cache_read": 0.02,
+          "cache_write": 0.25,
+          "tiers": [
+            {
+              "input": 0.4,
+              "output": 1.8,
+              "cache_read": 0.04,
+              "cache_write": 0.5,
+              "tier": {
+                "type": "context",
+                "size": 272000
+              }
+            }
+          ],
+          "context_over_200k": {
+            "input": 0.4,
+            "output": 1.8,
+            "cache_read": 0.04,
+            "cache_write": 0.5
+          }
+        }
+      },
+      "gpt-5.3-codex": {
+        "id": "gpt-5.3-codex",
+        "name": "GPT-5.3 Codex",
+        "family": "gpt-codex",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["none", "low", "medium", "high", "xhigh"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2026-02-05",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 400000,
+          "input": 272000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 1.75,
+          "output": 14,
+          "cache_read": 0.175
+        }
+      },
+      "gpt-5.3-codex-spark": {
+        "id": "gpt-5.3-codex-spark",
+        "name": "GPT-5.3 Codex Spark",
+        "family": "gpt-codex-spark",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["none", "low", "medium", "high", "xhigh"]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "release_date": "2026-02-05",
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 128000,
+          "input": 100000,
+          "output": 32000
+        },
+        "cost": {
+          "input": 1.75,
+          "output": 14,
+          "cache_read": 0.175
+        }
+      }
+    }
+  }
+}

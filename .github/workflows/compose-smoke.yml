@@ -1,0 +1,140 @@
+# The container's deployment gate: boot the control-plane image the way a
+# deployment does and round-trip one session through it.
+#
+# Keep the workflow unfiltered so this check can be required for merge without
+# leaving unrelated pull requests pending. Changes outside this stack still
+# report success, but skip the dependency install, image build and smoke.
+name: Compose smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_PREFER_OFFLINE: "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose-smoke:
+    name: Compose smoke (container)
+    runs-on: ubuntu-latest
+    # The stack boots and the session round-trips in about a minute; the rest
+    # of the budget is the image build on a cold layer cache.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check for changes affecting Compose smoke
+        id: changes
+        env:
+          # PRs compare from the merge base; pushes compare the complete push.
+          DIFF_RANGE: ${{ github.event_name == 'pull_request' && format('{0}...{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
+        run: |
+          # Protect inputs inside otherwise unrelated directories first.
+          # npm ci installs all workspaces; the image copies sandbox JSON and
+          # migrations, and the driver/fake Modal live under test/smoke.
+          required_inputs=(
+            ':(glob)packages/*/package.json'
+            ':(glob)packages/*/package-lock.json'
+            ':(glob)packages/*/npm-shrinkwrap.json'
+            ':(glob)packages/*/.npmrc'
+            ':(glob)packages/sandbox-runtime/src/sandbox_runtime/*.json'
+            terraform/d1/migrations
+            packages/control-plane/test/smoke
+          )
+          # These are not built or executed by this smoke. Keep this list in
+          # sync with Dockerfile COPYs, .dockerignore and compose-smoke.sh.
+          # Do not exclude all tests: shared test-support is compiled by tsc.
+          unrelated_paths=(
+            ':(exclude,glob)*.md'
+            ':(exclude,glob)docs/**/*.md'
+            ':(exclude,glob)docs/**/*.html'
+            ':(exclude)packages/web'
+            ':(exclude)packages/slack-bot'
+            ':(exclude)packages/github-bot'
+            ':(exclude)packages/linear-bot'
+            ':(exclude)packages/modal-infra'
+            ':(exclude)packages/daytona-infra'
+            ':(exclude)packages/e2b-infra'
+            ':(exclude)packages/opencomputer-infra'
+            ':(exclude)packages/sandbox-runtime'
+            ':(exclude)terraform'
+            ':(exclude,glob)packages/control-plane/src/**/*.test.ts'
+            ':(exclude,glob)packages/shared/src/**/*.test.ts'
+            ':(exclude)packages/control-plane/test'
+            ':(exclude,glob)packages/control-plane/vitest*.ts'
+            ':(exclude)packages/shared/vitest.config.ts'
+            ':(exclude)packages/control-plane/tsconfig.test.json'
+            ':(exclude)packages/shared/tsconfig.test.json'
+            ':(exclude).github/workflows/ci.yml'
+            ':(exclude).github/workflows/ci-python.yml'
+            ':(exclude).github/workflows/deploy-web.yml'
+            ':(exclude).github/workflows/terraform.yml'
+            ':(exclude)eslint.config.js'
+            ':(exclude)knip.json'
+            ':(exclude)ruff.toml'
+            ':(exclude).prettierrc'
+            ':(exclude).prettierignore'
+            ':(exclude)vitest.workspace.ts'
+            ':(exclude,glob)scripts/lint-*.mjs'
+            ':(exclude)scripts/sql-portability-baseline.json'
+            ':(exclude,glob)scripts/bootstrap-workspace-owner*.ts'
+            ':(exclude,glob)scripts/merge-split-users*.ts'
+            ':(exclude)scripts/cf-logs.ts'
+            ':(exclude)scripts/check-aws-stack.sh'
+            ':(exclude)scripts/d1-migrate.sh'
+            ':(exclude)scripts/wrangler-secrets.sh'
+          )
+          # Unknown paths and unavailable comparisons run smoke. No rename
+          # detection: moving an input into an unrelated directory must run it.
+          if git diff --quiet --no-renames "$DIFF_RANGE" -- "${required_inputs[@]}" &&
+            git diff --quiet --no-renames "$DIFF_RANGE" -- . "${unrelated_paths[@]}"; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No Compose smoke inputs changed: skipping container smoke." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node.js
+        if: steps.changes.outputs.run == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        if: steps.changes.outputs.run == 'true'
+        run: npm ci
+
+      - name: Test smoke change detection
+        if: steps.changes.outputs.run == 'true'
+        run: node --test scripts/compose-smoke-paths.test.mjs
+
+      - name: Build shared package
+        if: steps.changes.outputs.run == 'true'
+        run: npm run build -w @open-inspect/shared
+
+      - name: Boot the container and round-trip a session
+        if: steps.changes.outputs.run == 'true'
+        run: scripts/compose-smoke.sh
+
+      - name: Upload container logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-smoke-logs
+          path: smoke-logs/
+          if-no-files-found: ignore

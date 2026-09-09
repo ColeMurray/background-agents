@@ -10,6 +10,7 @@
 
 import { z } from "zod";
 import { computeHmacHex, timingSafeEqual } from "../auth";
+import type { SlackChannelListing } from "./channel-contract";
 
 const SLACK_API_BASE = "https://slack.com/api";
 export const SLACK_REQUEST_TIMEOUT_MS = 10_000;
@@ -429,15 +430,6 @@ const conversationsListPayloadSchema = z.object({
   ),
   response_metadata: z.object({ next_cursor: z.string().optional() }).optional(),
 });
-
-/** Normalized channel for the automation channel picker. */
-export interface SlackChannelListing {
-  id: string;
-  name: string;
-  isPrivate: boolean;
-  /** Whether the bot is a member — only member channels deliver messages. */
-  isMember: boolean;
-}
 
 /**
  * List the workspace's public + private channels via `conversations.list`,

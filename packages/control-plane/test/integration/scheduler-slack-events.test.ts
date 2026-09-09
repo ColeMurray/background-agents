@@ -6,7 +6,7 @@ import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
 import { Scheduler } from "../../src/scheduler/scheduler";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -58,7 +58,7 @@ function makeSlackEvent(overrides?: Partial<SlackAutomationEvent>): SlackAutomat
 }
 
 function sendEvent(event: SlackAutomationEvent) {
-  return new Scheduler(env.DB, env as Env, { submit() {} }).event(event);
+  return new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} }).event(event);
 }
 
 /** Create a watched slack_event automation (channel C1, text_match contains "deploy"). */

@@ -78,6 +78,15 @@ export const PromptSkillTextarea = forwardRef<HTMLTextAreaElement, PromptSkillTe
       cursor !== null &&
       sameCursor(dismissedAt.cursor, cursor);
     const open = completion !== null && !dismissed;
+    const suggestionStatus = !open
+      ? ""
+      : suggestionSource.status === "loading"
+        ? "Loading managed skill suggestions."
+        : suggestionSource.status === "error"
+          ? "Managed skill suggestions unavailable."
+          : matchingSkills.length === 0
+            ? "No managed skill suggestions available."
+            : `${matchingSkills.length} managed skill suggestion${matchingSkills.length === 1 ? "" : "s"} available.`;
 
     const setInputRef = useCallback(
       (input: HTMLTextAreaElement | null) => {
@@ -217,6 +226,9 @@ export const PromptSkillTextarea = forwardRef<HTMLTextAreaElement, PromptSkillTe
             onSelect?.(event);
           }}
         />
+        <span role="status" className="sr-only">
+          {suggestionStatus}
+        </span>
         {open && completion && (
           <PromptSkillSuggestionPanel
             id={listboxId}

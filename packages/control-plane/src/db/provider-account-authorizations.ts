@@ -18,11 +18,6 @@ export const PROVIDER_AUTHORIZATION_TERMINAL_STATES = [
 export type ProviderAuthorizationLiveState = (typeof PROVIDER_AUTHORIZATION_LIVE_STATES)[number];
 export type ProviderAuthorizationTerminalState =
   (typeof PROVIDER_AUTHORIZATION_TERMINAL_STATES)[number];
-export type ProviderAuthorizationState =
-  | ProviderAuthorizationLiveState
-  | ProviderAuthorizationTerminalState
-  | "connected";
-
 interface ProviderAuthorizationRow {
   id: string;
   user_id: string;
@@ -70,7 +65,7 @@ type ProviderAuthorizationTarget =
       targetAccountLifecycleVersion: number;
     };
 
-export type InitiatingProviderAuthorization = ProviderAuthorizationCommon &
+type InitiatingProviderAuthorization = ProviderAuthorizationCommon &
   ProviderAuthorizationTarget & {
     state: "initiating";
   };

@@ -91,7 +91,7 @@ export const githubAutofixSessionResponseSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("rejected"),
-    reason: z.enum(["session_closed", "queue_full", "attempt_limit"]),
+    reason: z.enum(["session_closed", "budget_exhausted", "queue_full", "attempt_limit"]),
   }),
   z.object({
     kind: z.literal("found"),

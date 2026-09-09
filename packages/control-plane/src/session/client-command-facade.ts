@@ -21,29 +21,38 @@ import type { SessionConnectionAuthenticator } from "./connection-authenticator"
 import type { SessionMessageQueue } from "./message-queue";
 import type { PresenceService } from "./presence-service";
 import type { PermissionId } from "@open-inspect/shared/rbac";
+import type { SessionWebSocket } from "../platform-ports";
 
-export class SessionClientCommandFacade implements SessionClientCommands<WebSocket, ClientInfo> {
+export class SessionClientCommandFacade implements SessionClientCommands<
+  SessionWebSocket,
+  ClientInfo
+> {
   constructor(
     private readonly authenticator: SessionConnectionAuthenticator,
     private readonly prompts: SessionMessageQueue,
+    private readonly stop: () => Promise<void>,
     private readonly presence: PresenceService,
     private readonly events: SessionEventStream
   ) {}
 
-  subscribe(connection: WebSocket, message: ClientSubscribe): Promise<void> {
+  subscribe(connection: SessionWebSocket, message: ClientSubscribe): Promise<void> {
     return this.authenticator.handleSubscribe(connection, message);
   }
 
-  submitPrompt(connection: WebSocket, client: ClientInfo, message: ClientPrompt): Promise<void> {
+  submitPrompt(
+    connection: SessionWebSocket,
+    client: ClientInfo,
+    message: ClientPrompt
+  ): Promise<void> {
     return this.prompts.handlePromptMessage(connection, client, message);
   }
 
-  cancelPrompt(connection: WebSocket, message: ClientCancelPrompt): Promise<void> {
+  cancelPrompt(connection: SessionWebSocket, message: ClientCancelPrompt): Promise<void> {
     return this.prompts.cancelQueuedPrompt(connection, message);
   }
 
   stopExecution(): Promise<void> {
-    return this.prompts.stopExecution();
+    return this.stop();
   }
 
   notifyTyping(): Promise<void> {

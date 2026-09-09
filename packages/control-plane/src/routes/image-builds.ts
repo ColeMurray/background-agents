@@ -8,6 +8,11 @@
  * - Enabled-scope and status queries
  */
 
+import { bodyIssue, parseBody } from "./body";
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { repositoryParams } from "./repository-params";
 import {
   type ImageBuildStatusResponse,
   repositoryShaEntrySchema,
@@ -40,18 +45,14 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
   type RequestContext,
-  type Route,
-  defineRoute,
   GITHUB_USER_OR_SERVICE_ROUTE,
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
   error,
-  extractRepoParams,
   json,
-  parseJsonBody,
-  parsePattern,
   NO_AUTHORIZATION,
   requirePermission,
 } from "./shared";
+import { parseQuery } from "./query";
 
 const logger = createLogger("router:image-builds");
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
@@ -69,7 +70,7 @@ const buildCompleteBodySchema = z.object({
   provider_session_id: z.string().min(1),
   repository_shas: z.array(repositoryShaEntrySchema).min(1),
   runtime_version: z.string().refine((value) => parseRuntimeVersionNumber(value) !== null, {
-    message: "must start with v<number>",
+    error: "must start with v<number>",
   }),
   // Must stay finite: Infinity would be canonicalized to null by
   // JSON.stringify inside the completion hash and the persisted row. Capped
@@ -163,11 +164,7 @@ function parseCallbackBody<Schema extends z.ZodType>(
   body: unknown
 ): z.infer<Schema> | Response {
   const parsed = schema.safeParse(body);
-  if (parsed.success) return parsed.data;
-
-  const issue = parsed.error.issues[0];
-  const path = issue.path.join(".");
-  return error(path ? `${path}: ${issue.message}` : issue.message, 400);
+  return parsed.success ? parsed.data : error(bodyIssue(parsed.error), 400);
 }
 
 /**
@@ -177,7 +174,7 @@ function parseCallbackBody<Schema extends z.ZodType>(
 async function handleBuildComplete(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const body = await readCallbackBody(request);
@@ -213,7 +210,7 @@ async function handleBuildComplete(
 async function handleBuildFailed(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const body = await readCallbackBody(request);
@@ -274,14 +271,13 @@ async function triggerBuildForScope(
 async function handleTriggerEnvironmentBuild(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const environmentId = match.groups?.id;
-  if (!environmentId) return error("Environment ID required", 400);
+  const environmentId = params.id;
 
   return triggerBuildForScope(env, { kind: "environment", id: environmentId }, ctx);
 }
@@ -293,16 +289,16 @@ async function handleTriggerEnvironmentBuild(
 async function handleTriggerRepoBuild(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
 
-  return triggerBuildForScope(env, repoImageBuildScope(params.owner, params.name), ctx);
+  return triggerBuildForScope(env, repoImageBuildScope(repository.owner, repository.name), ctx);
 }
 
 /**
@@ -315,23 +311,22 @@ async function handleTriggerRepoBuild(
 async function handleToggleRepoImageBuilds(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
+  const { owner, name } = repository;
 
-  const rawBody = await parseJsonBody<unknown>(request);
-  if (rawBody instanceof Response) return rawBody;
-  const parsedBody = toggleRepoImageBuildsBodySchema.safeParse(rawBody);
-  if (!parsedBody.success) {
-    return error("enabled must be a boolean", 400);
-  }
-  const body = parsedBody.data;
+  const body = await parseBody(
+    request,
+    toggleRepoImageBuildsBodySchema,
+    "enabled must be a boolean"
+  );
+  if (body instanceof Response) return body;
 
   const scope = repoImageBuildScope(owner, name);
 
@@ -375,18 +370,28 @@ async function handleToggleRepoImageBuilds(
   return json({ ok: true, enabled: body.enabled });
 }
 
+const SCOPE_KIND_ERROR = "scope_kind must be 'repo' or 'environment'";
+
+/** A scope is either wholly absent or a `scope_kind` with a non-empty `scope_id`. */
+const scopeQuerySchema = z
+  .object({
+    scope_kind: z.enum(["repo", "environment"], { error: SCOPE_KIND_ERROR }).optional(),
+    scope_id: z.string().optional(),
+  })
+  .superRefine((query, context) => {
+    if (query.scope_kind === undefined && query.scope_id === undefined) return;
+    if (query.scope_kind === undefined) {
+      context.addIssue({ code: "custom", message: SCOPE_KIND_ERROR });
+    } else if (!query.scope_id) {
+      context.addIssue({ code: "custom", message: "scope_id is required with scope_kind" });
+    }
+  });
+
 function parseScopeParams(request: Request): ImageBuildScope | null | Response {
-  const params = new URL(request.url).searchParams;
-  const scopeKind = params.get("scope_kind");
-  const scopeId = params.get("scope_id");
-  if (scopeKind === null && scopeId === null) return null;
-  if (scopeKind !== "repo" && scopeKind !== "environment") {
-    return error("scope_kind must be 'repo' or 'environment'", 400);
-  }
-  if (!scopeId) {
-    return error("scope_id is required with scope_kind", 400);
-  }
-  return { kind: scopeKind, id: scopeId };
+  const query = parseQuery(request, scopeQuerySchema);
+  if (query instanceof Response) return query;
+  if (query.scope_kind === undefined || query.scope_id === undefined) return null;
+  return { kind: query.scope_kind, id: query.scope_id };
 }
 
 async function readStatusRows(
@@ -410,7 +415,7 @@ async function readStatusRows(
 async function handleGetStatus(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
@@ -440,7 +445,7 @@ async function handleGetStatus(
 async function handleGetEnabledUnits(
   _request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
@@ -474,7 +479,7 @@ async function handleGetEnabledUnits(
 async function handleGetEnabledRepos(
   _request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
@@ -492,53 +497,47 @@ async function handleGetEnabledRepos(
   }
 }
 
-export const imageBuildRoutes: Route[] = [
-  defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
-    method: "POST",
-    pattern: parsePattern("/image-builds/build-complete"),
-    authorization: NO_AUTHORIZATION,
-    handler: handleBuildComplete,
-  }),
-  defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
-    method: "POST",
-    pattern: parsePattern("/image-builds/build-failed"),
-    authorization: NO_AUTHORIZATION,
-    handler: handleBuildFailed,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "POST",
-    pattern: parsePattern("/image-builds/trigger/environment/:id"),
+const BUILD_CALLBACK = admit({
+  ...SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
+  authorization: NO_AUTHORIZATION,
+});
+const REPO_IMAGES_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("repositories.images.manage"),
+});
+const IMAGE_BUILDS_READ = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("image_builds.read"),
+});
+
+export const imageBuildRoutes = new Hono<ControlPlaneHonoEnv>();
+
+imageBuildRoutes.post("/image-builds/build-complete", BUILD_CALLBACK, (c) =>
+  dispatch(c, handleBuildComplete)
+);
+imageBuildRoutes.post("/image-builds/build-failed", BUILD_CALLBACK, (c) =>
+  dispatch(c, handleBuildFailed)
+);
+imageBuildRoutes.post(
+  "/image-builds/trigger/environment/:id",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("environments.images.manage"),
-    handler: handleTriggerEnvironmentBuild,
   }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "POST",
-    pattern: parsePattern("/image-builds/trigger/repo/:owner/:name"),
-    authorization: requirePermission("repositories.images.manage"),
-    handler: handleTriggerRepoBuild,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "PUT",
-    pattern: parsePattern("/image-builds/toggle/repo/:owner/:name"),
-    authorization: requirePermission("repositories.images.manage"),
-    handler: handleToggleRepoImageBuilds,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "GET",
-    pattern: parsePattern("/image-builds/status"),
-    authorization: requirePermission("image_builds.read"),
-    handler: handleGetStatus,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "GET",
-    pattern: parsePattern("/image-builds/enabled"),
-    authorization: requirePermission("image_builds.read"),
-    handler: handleGetEnabledUnits,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "GET",
-    pattern: parsePattern("/image-builds/enabled-repos"),
-    authorization: requirePermission("image_builds.read"),
-    handler: handleGetEnabledRepos,
-  }),
-];
+  (c) => dispatch(c, handleTriggerEnvironmentBuild)
+);
+imageBuildRoutes.post("/image-builds/trigger/repo/:owner/:name", REPO_IMAGES_MANAGE, (c) =>
+  dispatch(c, handleTriggerRepoBuild)
+);
+imageBuildRoutes.put("/image-builds/toggle/repo/:owner/:name", REPO_IMAGES_MANAGE, (c) =>
+  dispatch(c, handleToggleRepoImageBuilds)
+);
+imageBuildRoutes.get("/image-builds/status", IMAGE_BUILDS_READ, (c) =>
+  dispatch(c, handleGetStatus)
+);
+imageBuildRoutes.get("/image-builds/enabled", IMAGE_BUILDS_READ, (c) =>
+  dispatch(c, handleGetEnabledUnits)
+);
+imageBuildRoutes.get("/image-builds/enabled-repos", IMAGE_BUILDS_READ, (c) =>
+  dispatch(c, handleGetEnabledRepos)
+);

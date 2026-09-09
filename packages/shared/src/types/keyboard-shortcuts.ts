@@ -115,8 +115,6 @@ export const keyboardShortcutPreferencesSchema: z.ZodType<KeyboardShortcutPrefer
     }
   });
 
-export const keyboardShortcutPreferencesResponseSchema = z.strictObject({
+export const keyboardShortcutPreferencesPayloadSchema = z.strictObject({
   shortcuts: keyboardShortcutPreferencesSchema,
 });
-
-export const updateKeyboardShortcutPreferencesSchema = keyboardShortcutPreferencesResponseSchema;

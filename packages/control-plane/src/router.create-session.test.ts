@@ -2,13 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateEncryptionKey } from "./auth/crypto";
 import { SessionIndexStore } from "./db/session-index";
 import { UserStore } from "./db/user-store";
-import { handleRequest } from "./router";
 import {
+  fakeSessionRuntimeDispatch,
+  handleRequest,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "./router.test-support";
-import { sessionCreateRoutes } from "./routes/session-create";
+import { handleCreateSession } from "./routes/session-create";
 import { HttpError, resolveRepoOrError } from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
 import { resolveManagedSkills } from "./session/skill-resolution";
@@ -134,7 +135,7 @@ describe("handleCreateSession D1 ordering", () => {
   }
 
   function createEnv(
-    initFetch: ReturnType<typeof vi.fn>,
+    initFetch: (request: Request) => Promise<Response>,
     permissions = ["sessions.create", "repositories.use", "environments.use"]
   ): Record<string, unknown> {
     const statement = {
@@ -153,10 +154,14 @@ describe("handleCreateSession D1 ordering", () => {
       DB: {
         prepare: vi.fn((sql: string) => {
           if (sql.includes("FROM users u") && sql.includes("user_role_assignments")) {
+            let authorizedUserId = "user-1";
             const authorizationStatement = {
-              bind: vi.fn(() => authorizationStatement),
+              bind: vi.fn((userId: string) => {
+                authorizedUserId = userId;
+                return authorizationStatement;
+              }),
               first: vi.fn(async () => ({
-                user_id: "user-1",
+                user_id: authorizedUserId,
                 suspended_at: null,
                 role_id: "role-1",
                 role_key: null,
@@ -191,10 +196,7 @@ describe("handleCreateSession D1 ordering", () => {
         exec: vi.fn(),
         dump: vi.fn(),
       },
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => ({ fetch: initFetch }),
-      },
+      SESSION: fakeSessionRuntimeDispatch(initFetch),
     };
   }
 
@@ -615,7 +617,7 @@ describe("handleCreateSession D1 ordering", () => {
     const testEnv: Record<string, unknown> = createEnv(initFetch);
     testEnv.SCM_PROVIDER = "gitlab";
 
-    const response = await sessionCreateRoutes[0].handler(
+    const response = await handleCreateSession(
       new Request("https://test.local/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -630,7 +632,7 @@ describe("handleCreateSession D1 ordering", () => {
         }),
       }),
       testEnv as never,
-      [] as unknown as RegExpMatchArray,
+      {},
       {
         request_id: "test-request",
         trace_id: "test-trace",
@@ -653,7 +655,7 @@ describe("handleCreateSession D1 ordering", () => {
         db: testEnv["DB"] as never,
         executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
         metrics: {
-          d1Queries: [],
+          sqlQueries: [],
           spans: {},
           time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
           summarize: () => ({}),

@@ -11,30 +11,7 @@ data "external" "opencomputer_source_hash" {
   # sandbox-runtime tree via collectRuntimeFiles (not just *.py/.js/.ts — skill prompts,
   # assets, etc.), so mirror its include/exclude policy here, and add the builder + its
   # dependency manifests so an SDK/toolchain bump also invalidates the snapshot.
-  program = ["bash", "-c", <<-EOF
-    set -euo pipefail
-    cd "${var.project_root}"
-    paths=(
-      packages/sandbox-runtime/src
-      packages/sandbox-runtime/pyproject.toml
-      packages/opencomputer-infra/src/build-template.ts
-      packages/opencomputer-infra/package.json
-      package-lock.json
-    )
-    if command -v sha256sum &> /dev/null; then
-      hash=$(find "$${paths[@]}" -type f \
-        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
-        -not -name '*.pyc' -not -name '.DS_Store' \
-        -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
-    else
-      hash=$(find "$${paths[@]}" -type f \
-        -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' -not -path '*/.ruff_cache/*' \
-        -not -name '*.pyc' -not -name '.DS_Store' \
-        -exec shasum -a 256 {} \; | sort | shasum -a 256 | cut -d' ' -f1)
-    fi
-    echo "{\"hash\": \"$hash\"}"
-  EOF
-  ]
+  program = ["python3", "${var.project_root}/packages/sandbox-images/cli.py", "hash", "--root", var.project_root, "--provider", "opencomputer"]
 }
 
 module "opencomputer_infra" {

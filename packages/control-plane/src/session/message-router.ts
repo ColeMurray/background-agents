@@ -56,11 +56,23 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
     // The wire protocol is JSON text; binary frames have always been ignored.
     if (typeof message !== "string") return;
 
-    if (this.deps.sockets.classify(connection).kind === "sandbox") {
-      await this.handleSandboxMessage(message);
-    } else {
+    const classified = this.deps.sockets.classify(connection);
+    if (classified.kind !== "sandbox") {
       await this.handleClientMessage(connection, message);
+      return;
     }
+    if (!this.deps.sockets.isActiveSandbox(connection)) {
+      // A replaced bridge keeps its tags until its close completes. A frame
+      // from it proves it is still open, so close it again instead of
+      // letting it mutate the session.
+      this.deps.log.debug("Ignoring frame from a replaced sandbox socket", {
+        sandbox_id: classified.sandboxId,
+        socket_id: classified.socketId,
+      });
+      this.deps.sockets.close(connection, 1000, "Sandbox socket replaced");
+      return;
+    }
+    await this.handleSandboxMessage(message);
   }
 
   private async handleSandboxMessage(message: string): Promise<void> {

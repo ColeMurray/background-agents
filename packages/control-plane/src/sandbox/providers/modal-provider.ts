@@ -229,8 +229,9 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     } catch (error) {
       if (error instanceof ModalApiError) {
         throw this.classifyErrorWithStatus(
-          `Snapshot failed with HTTP ${error.status}`,
-          error.status
+          `Snapshot failed with HTTP ${error.status}: ${error.message}`,
+          error.status,
+          error
         );
       }
       if (error instanceof SandboxProviderError) {

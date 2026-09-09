@@ -167,16 +167,29 @@ describe("mergeUsers", () => {
     ).toEqual({ generation: 1 });
     expect(
       await env.DB.prepare(
-        `SELECT principal_kind, actor_user_id_snapshot, actor_service_snapshot,
-                resource_id, target_user_id_snapshot
+        `SELECT request_id, principal_kind, actor_user_id_snapshot, actor_service_snapshot,
+                resource_id, target_user_id_snapshot, operation_result, metadata_json
          FROM authorization_audit_events WHERE action = 'workspace.user_merged'`
       ).first()
     ).toEqual({
+      request_id: expect.stringMatching(/^operator-cli:[0-9a-f-]+$/),
       principal_kind: "service",
       actor_user_id_snapshot: null,
-      actor_service_snapshot: "control-plane",
+      actor_service_snapshot: "operator-cli",
       resource_id: SURVIVOR,
       target_user_id_snapshot: LOSER,
+      operation_result: "applied",
+      metadata_json: JSON.stringify({
+        before: {
+          survivor: { userId: SURVIVOR, roleId: "role_builtin_member", suspendedAt: null },
+          loser: { userId: LOSER, roleId: "role_builtin_member", suspendedAt: null },
+        },
+        requested: { survivorUserId: SURVIVOR, loserUserId: LOSER },
+        after: {
+          survivor: { userId: SURVIVOR, roleId: "role_builtin_member", suspendedAt: null },
+          loser: null,
+        },
+      }),
     });
   });
 

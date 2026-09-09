@@ -30,7 +30,8 @@ const { useSWRMock, mutateMock } = vi.hoisted(() => ({
   mutateMock: vi.fn(),
 }));
 
-vi.mock("swr", () => ({
+vi.mock(import("swr"), async (importOriginal) => ({
+  ...(await importOriginal()),
   default: useSWRMock,
   mutate: mutateMock,
 }));

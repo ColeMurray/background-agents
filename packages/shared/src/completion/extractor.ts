@@ -28,6 +28,12 @@ export type { ControlPlaneFetcher };
 /** Server-side limit for the events API. */
 const EVENTS_PAGE_LIMIT = 200;
 
+function recordOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 export interface BuildAgentResponseOptions {
   defaultSuccess?: boolean;
 }
@@ -329,7 +335,7 @@ function isArtifactInEventRange(
  */
 export function summarizeToolCall(data: Record<string, unknown>): ToolCallSummary {
   const tool = String(data.tool ?? "Unknown");
-  const args = (data.args ?? {}) as Record<string, unknown>;
+  const args = recordOrUndefined(data.args) ?? {};
 
   switch (tool) {
     case "Read":
@@ -355,12 +361,12 @@ export function summarizeToolCall(data: Record<string, unknown>): ToolCallSummar
 export function getArtifactLabel(data: Record<string, unknown>): string {
   const type = String(data.artifactType ?? "artifact");
   if (type === "pr") {
-    const metadata = data.metadata as Record<string, unknown> | undefined;
+    const metadata = recordOrUndefined(data.metadata);
     const prNum = metadata?.number;
     return prNum ? `PR #${prNum}` : "Pull Request";
   }
   if (type === "branch") {
-    const metadata = data.metadata as Record<string, unknown> | undefined;
+    const metadata = recordOrUndefined(data.metadata);
     return `Branch: ${metadata?.name ?? "branch"}`;
   }
   return type;
@@ -406,10 +412,7 @@ export function toEventMediaArtifactInfo(data: Record<string, unknown>): MediaAr
   const id = typeof data.artifactId === "string" ? data.artifactId.trim() : "";
   if (!id) return null;
 
-  const metadata =
-    data.metadata && typeof data.metadata === "object" && !Array.isArray(data.metadata)
-      ? (data.metadata as Record<string, unknown>)
-      : undefined;
+  const metadata = recordOrUndefined(data.metadata);
   const mimeType = typeof metadata?.mimeType === "string" ? metadata.mimeType : undefined;
   const sizeBytes =
     typeof metadata?.sizeBytes === "number" &&

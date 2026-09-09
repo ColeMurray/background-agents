@@ -1,215 +1,90 @@
 #!/usr/bin/env python3
-"""
-Build (and pre-warm) the Open-Inspect E2B sandbox template — programmatically,
-via the E2B Python SDK. Authenticates with the runtime API key (E2B_API_KEY).
+"""Build and verify an E2B template using the provider-neutral image bundle."""
 
-The base image layers live in e2b.Dockerfile (FROM + apt/npm/pip); this script
-adds the context-dependent steps the SDK owns: copying the staged sandbox_runtime,
-the workdir, and the start/ready commands.
+from __future__ import annotations
 
-Env:
-  E2B_TEMPLATE_ID   (required) — template name to create/rebuild.
-  E2B_API_KEY       (required) — runtime API key; authenticates the build AND
-                                 the post-build pre-warm.
-  E2B_API_URL       (optional) — REST API base URL (default https://api.e2b.app).
-  E2B_TEMPLATE_CPU        (optional) — vCPU count (default 2).
-  E2B_TEMPLATE_MEMORY_MB  (optional) — memory MB, even number (default 4096).
-"""
-
-import atexit
-import json
 import os
-import re
-import shutil
 import sys
-import urllib.error
-import urllib.request
+import time
 from pathlib import Path
 
-from e2b import Template, default_build_logger
+from e2b import Sandbox, Template, default_build_logger
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "packages/sandbox-images/src"))
 
-DOCKERFILE = (SCRIPT_DIR / "e2b.Dockerfile").read_text()
+from sandbox_images.bundle import pack_bundle, plan_image  # noqa: E402
+from sandbox_images.native import write_build_result  # noqa: E402
 
-
-def dockerfile_arg(name: str) -> str:
-    """Read an ARG default out of e2b.Dockerfile.
-
-    READY_CMD asserts the versions the image actually baked. Reading them back
-    from the Dockerfile keeps one source of truth per pin: a literal here would
-    silently stop matching the image the first time someone bumps an ARG.
-    """
-    match = re.search(rf"^ARG {re.escape(name)}=(.+)$", DOCKERFILE, re.MULTILINE)
-    if not match:
-        print(f"Error: ARG {name} not found in e2b.Dockerfile", file=sys.stderr)
-        sys.exit(1)
-    return match.group(1).strip()
-
-
-TEMPLATE_ID = os.environ.get("E2B_TEMPLATE_ID")
-API_KEY = os.environ.get("E2B_API_KEY")
-API_URL = os.environ.get("E2B_API_URL", "https://api.e2b.app").rstrip("/")
-CPU = int(os.environ.get("E2B_TEMPLATE_CPU", "2"))
-MEM = int(os.environ.get("E2B_TEMPLATE_MEMORY_MB", "4096"))
-
-# Mirror the e2b-infra Terraform module's validation so manual builds fail
-# fast locally instead of with a late remote build error.
-if CPU < 1:
-    print("Error: E2B_TEMPLATE_CPU must be a positive integer", file=sys.stderr)
-    sys.exit(1)
-if MEM < 2 or MEM % 2 != 0:
-    print("Error: E2B_TEMPLATE_MEMORY_MB must be a positive even number", file=sys.stderr)
-    sys.exit(1)
-
-# The template runs nothing of its own: the control plane execs the supervisor
-# entrypoint via envd on every sandbox create (per-sandbox env rides the create
-# call), so the start command is inert. It is kept (rather than omitted) only
-# so the ready command still gates the build: E2B evaluates READY_CMD during
-# template finalization, which is the one place a broken toolchain layer can
-# fail the build instead of every later session. E2B resumes the captured
-# `sleep` on each create from the base template — one harmless idle process.
 START_CMD = "sleep infinity"
-# Every tool the image bakes is asserted here. E2B evaluates READY_CMD during
-# template finalization, which is the one place a broken toolchain layer fails
-# the build instead of failing every later session. Adding an install above
-# without adding it here ships the breakage silently.
-#
-# Versions are asserted, not just presence: a silently-floating Node or pnpm is
-# the failure mode that a prebuilt repo image cannot recover from, because its
-# node_modules was installed against whatever was here at build time.
-READY_CMD = " && ".join(
-    [
-        # Agent runtime + sandbox supervisor.
-        "command -v python",
-        "command -v bun",
-        "command -v opencode",
-        "command -v code-server",
-        "command -v ttyd",
-        'test "$(command -v gh)" = /usr/local/bin/gh',
-        "test -x /usr/bin/gh",
-        "PYTHONPATH=/app python -c 'import sandbox_runtime'",
-        # Pre-staged OpenCode plugin deps (skips a 2-22s reify() per session).
-        "test -d /app/opencode-deps/node_modules",
-        # Workload toolchain, version-pinned.
-        f'case "$(node --version)" in v{dockerfile_arg("NODE_MAJOR")}.*) ;; *) exit 1 ;; esac',
-        # COREPACK_HOME is spelled out rather than inherited: a bare `pnpm` here
-        # resolves through corepack's own fallback (it reports whatever version
-        # corepack ships when no package.json pins one), which would make this
-        # assertion pass while telling us nothing. What actually matters is that
-        # the pinned version is already unpacked in the shared corepack home, so
-        # the first `pnpm` inside a checkout does not go to the network.
-        f'test "$(COREPACK_HOME=/opt/corepack pnpm --version)" = "{dockerfile_arg("PNPM_VERSION")}"',
-        f'test "$(go env GOVERSION)" = "go{dockerfile_arg("GO_VERSION")}"',
-        "command -v gofmt",
-        "command -v golangci-lint",
-        "command -v air",
-        "command -v op",
-        "command -v stripe",
-        "command -v mkcert",
-        "command -v gcx",
-        f'test "$(posthog-cli --version)" = "posthog-cli {dockerfile_arg("POSTHOG_CLI_VERSION")}"',
-        # Presence only: `wizard --version` reports "unknown", and npm enforces the
-        # pin at install time anyway, unlike the apt/corepack toolchain above.
-        "command -v wizard",
-        # Agent skills and rules the image bakes into the runtime HOME.
-        "test -d /home/user/.agents/skills/debug-with-grafana",
-        "grep -q posthog-cli /home/user/.config/opencode/AGENTS.md",
-        "command -v psql",
-        # Service containers for repositories whose hooks need them. dockerd is
-        # started by the boot hook, so only the binaries are checked here.
-        "command -v dockerd",
-        "command -v docker",
-        "docker compose version",
-        "command -v sudo",
-        # Reachable only because of the /usr/sbin symlinks in the Dockerfile;
-        # envd's PATH does not include the sbin directories.
-        "command -v iptables",
-        "command -v useradd",
-        # Shared caches a prebuilt repo image warms during its build.
-        "test -w /opt/pnpm-store",
-        "test -w /opt/turbo-cache",
-        "test -w /opt/go",
-    ]
-)
+READY_CMD = "/opt/openinspect/python/bin/python -I -c 'import sandbox_runtime'"
 
-if not TEMPLATE_ID:
-    print("Error: E2B_TEMPLATE_ID is not set", file=sys.stderr)
-    sys.exit(1)
-if not API_KEY:
-    print(
-        "Error: E2B_API_KEY is not set",
-        file=sys.stderr,
+
+def main() -> None:
+    name = os.environ.get("E2B_TEMPLATE_ID")
+    api_key = os.environ.get("E2B_API_KEY")
+    if not name or not api_key:
+        raise RuntimeError("E2B_TEMPLATE_ID and E2B_API_KEY are required")
+    cpu = int(os.environ.get("E2B_TEMPLATE_CPU", "2"))
+    memory_mb = int(os.environ.get("E2B_TEMPLATE_MEMORY_MB", "4096"))
+    if cpu < 1 or memory_mb < 2 or memory_mb % 2:
+        raise ValueError("E2B template CPU must be positive and memory a positive even number")
+    plan = plan_image(ROOT, "e2b")
+    name = (
+        os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
+        or f"{name}-{plan['buildHash'][:12]}-{time.time_ns()}"
     )
-    sys.exit(1)
-
-RUNTIME_SRC = SCRIPT_DIR.parent / "sandbox-runtime" / "src" / "sandbox_runtime"
-STAGED = SCRIPT_DIR / "sandbox_runtime"
-
-if not RUNTIME_SRC.exists():
-    print(f"Error: sandbox-runtime not found at {RUNTIME_SRC}", file=sys.stderr)
-    sys.exit(1)
-
-print(f"Staging sandbox_runtime from {RUNTIME_SRC}")
-if STAGED.exists():
-    shutil.rmtree(STAGED)
-
-
-def _ignore_pycache(src: str, names: list[str]) -> list[str]:
-    return [n for n in names if n == "__pycache__" or n.endswith(".pyc")]
-
-
-shutil.copytree(RUNTIME_SRC, STAGED, ignore=_ignore_pycache)
-atexit.register(lambda: shutil.rmtree(STAGED, ignore_errors=True))
-
-print(f"Building E2B template: {TEMPLATE_ID} (cpu={CPU}, mem={MEM})")
-
-template = (
-    Template()
-    .from_dockerfile(DOCKERFILE)
-    # Staged into this dir above; imported via PYTHONPATH=/app as `sandbox_runtime`.
-    .copy("sandbox_runtime", "/app/sandbox_runtime")
-    # E2B's non-root runtime cannot install this into /usr/local/bin itself.
-    .copy("sandbox_runtime/gh-wrapper.sh", "/usr/local/bin/gh", mode=0o755)
-    .set_workdir("/workspace")
-    .set_start_cmd(START_CMD, READY_CMD)
-)
-
-Template.build(
-    template,
-    TEMPLATE_ID,
-    api_key=API_KEY,
-    cpu_count=CPU,
-    memory_mb=MEM,
-    # E2B's built-in logger: elapsed-time + level-aligned lines; degrades to
-    # plain text (no ANSI/animation) in the non-TTY Terraform/CI build context.
-    on_build_logs=default_build_logger(min_level="info"),
-)
-print(f"E2B template {TEMPLATE_ID} built successfully")
-
-# Pre-warm: spawn one sandbox from the fresh build and kill it. Works around a
-# vendor-confirmed E2B bug where the first spawn of a new template build is much
-# slower than subsequent ones — pre-warming here means no user session pays it.
-try:
-    print(f"Pre-warming template {TEMPLATE_ID}")
-    headers = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
-    req = urllib.request.Request(
-        f"{API_URL}/sandboxes",
-        data=json.dumps(
-            {"templateID": TEMPLATE_ID, "timeout": 60, "metadata": {"purpose": "template-prewarm"}}
-        ).encode(),
-        headers=headers,
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        sandbox_id = json.loads(resp.read())["sandboxID"]
-    try:
-        del_req = urllib.request.Request(
-            f"{API_URL}/sandboxes/{sandbox_id}", headers=headers, method="DELETE"
+    bundle = pack_bundle(ROOT, "e2b", ROOT / ".cache/sandbox-images")
+    template = (
+        Template(file_context_path=bundle)
+        .from_dockerfile("FROM " + plan["target"]["base"])
+        .copy(".", "/tmp/openinspect-image", user="root")
+        .run_cmd(
+            "bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh", user="root"
         )
-        urllib.request.urlopen(del_req, timeout=10)
-    except Exception:
-        pass
-    print(f"Pre-warm complete (sandbox {sandbox_id})")
-except Exception as exc:
-    print(f"Warning: pre-warm failed; first user session will be slow: {exc}", file=sys.stderr)
+        .set_user("user")
+        .set_workdir("/workspace")
+        .set_start_cmd(START_CMD, READY_CMD)
+    )
+    existing = None
+    if Template.exists(name, api_key=api_key, api_url=os.environ.get("E2B_API_URL")):
+        existing = name
+    build = (
+        None
+        if existing
+        else Template.build(
+            template,
+            name,
+            api_key=api_key,
+            api_url=os.environ.get("E2B_API_URL"),
+            cpu_count=cpu,
+            memory_mb=memory_mb,
+            on_build_logs=default_build_logger(min_level="info"),
+        )
+    )
+    # A fresh spawn both verifies the final native artifact and prewarms it.
+    sandbox = Sandbox.create(
+        template=existing or build.template_id,
+        api_key=api_key,
+        api_url=os.environ.get("E2B_API_URL"),
+        timeout=300,
+        envs=plan["runtimeEnv"],
+        metadata={
+            "purpose": "openinspect-image-verification",
+        },
+    )
+    try:
+        result = sandbox.commands.run(
+            "/opt/openinspect/python/bin/python /app/verify/smoke_test.py verify",
+            timeout=240,
+            user="root",
+        )
+        if result.exit_code != 0:
+            raise RuntimeError("E2B image verification failed")
+        write_build_result(existing or build.template_id)
+    finally:
+        sandbox.kill()
+
+
+if __name__ == "__main__":
+    main()

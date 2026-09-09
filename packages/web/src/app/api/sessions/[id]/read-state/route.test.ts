@@ -34,6 +34,7 @@ describe("session read-state BFF", () => {
         outcome: "no_terminal_message",
         unread: false,
         latestMessageId: null,
+        version: 0,
       })
     );
     const request = new Request("http://localhost/api/sessions/session-1/read-state", {

@@ -4,7 +4,8 @@ import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore } from "../db/session-index";
-import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
+import { SessionInternalPaths } from "./contracts";
+import { createSessionRuntimeClient } from "./runtime-client";
 import { createLogger } from "../logger";
 import type { SessionSkillManifestInput } from "./skill-resolution";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
@@ -90,6 +91,12 @@ export async function initializeSession(
   input: SessionInitInput,
   ctx: RequestContext
 ): Promise<{ sessionId: string; status: string }> {
+  if (
+    (input.managedSkillsManifest === undefined) ===
+    (input.managedSkillsSourceSessionId === undefined)
+  ) {
+    throw new Error("Session must resolve or inherit exactly one managed skills manifest");
+  }
   const hasRepoOwner = input.repoOwner !== null;
   const hasRepoName = input.repoName !== null;
   const hasRepoId = input.repoId != null;
@@ -160,22 +167,15 @@ export async function initializeSession(
     providerAuth: input.providerAuth,
   });
 
-  // Step 2: DO init
-  const doId = env.SESSION.idFromName(input.sessionId);
-  const stub = env.SESSION.get(doId);
-
-  const headers = new Headers({
-    "Content-Type": "application/json",
-  });
-  headers.set("x-trace-id", ctx.trace_id);
-  headers.set("x-request-id", ctx.request_id);
-
+  // Step 2: runtime init
   let initResponse: Response;
   try {
-    initResponse = await stub.fetch(
-      new Request(buildSessionInternalUrl(SessionInternalPaths.init), {
+    initResponse = await createSessionRuntimeClient(env, ctx).fetch(
+      input.sessionId,
+      SessionInternalPaths.init,
+      {
         method: "POST",
-        headers,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionName: input.sessionId,
           repoOwner: input.repoOwner,
@@ -204,7 +204,7 @@ export async function initializeSession(
           spawnSource: input.spawnSource,
           spawnDepth: input.spawnDepth,
         }),
-      })
+      }
     );
   } catch (transportError) {
     await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);

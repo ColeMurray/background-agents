@@ -85,7 +85,7 @@ export type PushBranchResult = { success: true } | { success: false; error: stri
  * A PR-creation failure with a caller-facing HTTP status. Thrown by internal
  * steps; createPullRequest's boundary catch maps it into the error result.
  */
-export class PullRequestCreationError extends Error {
+class PullRequestCreationError extends Error {
   constructor(
     readonly status: number,
     message: string
@@ -158,10 +158,10 @@ export interface PullRequestServiceDeps {
   /** Display name used in the PR body footer (e.g. "Created with [name](url)"). */
   appName: string;
   /**
-   * D1 authority store for session PR records (design §4). Absent when the
-   * deployment has no D1 binding; the write is best-effort either way.
+   * D1 authority store for session PR records (design §4). The write is
+   * best-effort: an upsert failure still leaves the mirror updated.
    */
-  sessionPullRequests?: Pick<SessionPullRequestStore, "upsert">;
+  sessionPullRequests: Pick<SessionPullRequestStore, "upsert">;
   /** Resolves SCM policy for the pull request's target repository. */
   resolveScmSettings: (repo: RepoIdentity) => Promise<ScmSettings>;
 }
@@ -464,10 +464,8 @@ export class SessionPullRequestService {
    * webhook or read-through repairs a missing record (design §5).
    */
   private async writeSessionPullRequestRecord(record: SessionPullRequestRecord): Promise<void> {
-    const store = this.deps.sessionPullRequests;
-    if (!store) return;
     try {
-      await store.upsert(record);
+      await this.deps.sessionPullRequests.upsert(record);
     } catch (error) {
       this.deps.log.error("Failed to write session pull request record", {
         artifact_id: record.artifactId,
@@ -610,7 +608,7 @@ export class SessionPullRequestService {
     const applied = await applyPullRequestSnapshot(
       {
         artifactRepository: this.deps.artifactRepository,
-        sessionPullRequests: this.deps.sessionPullRequests ?? null,
+        sessionPullRequests: this.deps.sessionPullRequests,
       },
       { artifactId: artifact.id, sessionId, artifactCreatedAt: artifact.created_at },
       live

@@ -1,7 +1,8 @@
-import type {
-  CodeServerSettings,
-  SandboxSettings,
-  VncSettings,
+import {
+  codeServerSettingsSchema,
+  sandboxSettingsSchema,
+  vncSettingsSchema,
+  type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsStore } from "../db/integration-settings";
 import { createLogger } from "../logger";
@@ -32,7 +33,7 @@ export async function resolveCodeServerEnabled(
       repo,
       environmentId
     );
-    const codeServerSettings = settings as CodeServerSettings;
+    const codeServerSettings = codeServerSettingsSchema.parse(settings);
     if (codeServerSettings.enabled !== true) return false;
     // enabledRepos: null -> all repos, [] -> none, [...] -> allowlist
     if (enabledRepos !== null && !enabledRepos.includes(repo.toLowerCase())) return false;
@@ -57,7 +58,7 @@ export async function resolveVncEnabled(
   try {
     const store = new IntegrationSettingsStore(db);
     const { enabledRepos, settings } = await store.getResolvedConfig("vnc", repo, environmentId);
-    const vncSettings = settings as VncSettings;
+    const vncSettings = vncSettingsSchema.parse(settings);
     if (vncSettings.enabled !== true) return false;
     if (enabledRepos !== null && !enabledRepos.includes(repo.toLowerCase())) return false;
     return true;
@@ -104,7 +105,7 @@ export async function resolveSandboxSettings(
     );
     // enabledRepos: null -> all repos, [] -> none, [...] -> allowlist
     if (enabledRepos !== null && !enabledRepos.includes(repo.toLowerCase())) return {};
-    return settings as SandboxSettings;
+    return sandboxSettingsSchema.parse(settings);
   } catch (e) {
     logger.warn("Failed to resolve sandbox settings, using defaults", {
       error: e instanceof Error ? e.message : String(e),

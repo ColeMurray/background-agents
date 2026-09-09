@@ -648,6 +648,20 @@ describe("boundary schemas", () => {
       }
     });
 
+    it("accepts legacy runtime step finish payloads with null cost", () => {
+      expect(
+        sandboxEventSchema.safeParse({
+          type: "step_finish",
+          messageId: "message-1",
+          ackId: "step_finish:1",
+          cost: null,
+          tokens: { input: 1 },
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        }).success
+      ).toBe(true);
+    });
+
     it("parses a ready event (emitted on every sandbox connect)", () => {
       const result = sandboxEventSchema.safeParse({
         type: "ready",

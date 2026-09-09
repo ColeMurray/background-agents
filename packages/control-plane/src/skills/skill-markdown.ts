@@ -9,7 +9,7 @@
 import { isAlias, isMap, isNode, isScalar, isSeq, parseDocument, type Node } from "yaml";
 
 /** A frontmatter entry, in the shapes the importer can map or report. */
-export type SkillFrontmatterValue =
+type SkillFrontmatterValue =
   | { kind: "scalar"; value: string }
   | { kind: "map"; value: Record<string, string> }
   | { kind: "sequence"; value: string[] }

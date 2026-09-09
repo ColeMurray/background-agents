@@ -1,11 +1,11 @@
 import type { Logger } from "../../logger";
 import type { Clock } from "../ports";
+import { requestLogger } from "../request-logger";
 import type { SessionInternalRoute } from "./routes";
 
 export interface SessionHttpDispatcherDeps {
   log: Logger;
   routes: readonly SessionInternalRoute[];
-  handleWebSocketUpgrade: (request: Request, url: URL, log: Logger) => Promise<Response>;
   clock: Clock;
 }
 
@@ -15,15 +15,12 @@ export class SessionHttpDispatcher {
 
   async dispatch(request: Request): Promise<Response> {
     const fetchStart = this.deps.clock.monotonicNowMs();
-    const log = this.requestLogger(request);
+    const log = requestLogger(this.deps.log, request);
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // Preserve the existing contract: upgrades and unmatched routes are not route metrics.
-    if (request.headers.get("Upgrade") === "websocket") {
-      return this.deps.handleWebSocketUpgrade(request, url, log);
-    }
-
+    // Unmatched routes are not route metrics. WebSocket upgrades never reach
+    // this dispatcher: the host completes them against `SessionUpgradeAdmission`.
     const route = this.deps.routes.find(
       (candidate) => candidate.path === path && candidate.method === request.method
     );
@@ -54,18 +51,5 @@ export class SessionHttpDispatcher {
         outcome,
       });
     }
-  }
-
-  private requestLogger(request: Request): Logger {
-    // Never mutate the session logger with request correlation shared by later callbacks.
-    const sessionLog = this.deps.log;
-    const traceId = request.headers.get("x-trace-id");
-    const requestId = request.headers.get("x-request-id");
-    if (!traceId && !requestId) return sessionLog;
-
-    const correlationContext: Record<string, unknown> = {};
-    if (traceId) correlationContext.trace_id = traceId;
-    if (requestId) correlationContext.request_id = requestId;
-    return sessionLog.child(correlationContext);
   }
 }

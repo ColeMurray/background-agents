@@ -30,8 +30,8 @@ export function SummaryCard({
 export function AnalyticsSummaryCards({ days, summary, loading }: SummaryCardsProps) {
   if (loading && !summary) {
     return (
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {Array.from({ length: 5 }).map((_, index) => (
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, index) => (
           <div
             key={index}
             className="rounded-md border border-border-muted bg-card p-4 animate-pulse"
@@ -58,7 +58,7 @@ export function AnalyticsSummaryCards({ days, summary, loading }: SummaryCardsPr
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           label="Total Sessions"
           value={formatAnalyticsCount(summary.totalSessions)}
@@ -78,11 +78,6 @@ export function AnalyticsSummaryCards({ days, summary, loading }: SummaryCardsPr
           label="Avg Cost / Session"
           value={formatSessionCost(summary.avgCost)}
           hint="Average per session"
-        />
-        <SummaryCard
-          label="PRs Created"
-          value={formatAnalyticsCount(summary.totalPrs)}
-          hint="Platform-tracked PR artifacts"
         />
       </div>
 
