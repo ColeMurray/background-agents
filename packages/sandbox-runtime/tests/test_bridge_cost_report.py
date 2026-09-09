@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from sandbox_runtime.bridge import AgentBridge
+from tests.conftest import ScriptedHarness
 
 
 @pytest.fixture
@@ -16,7 +17,7 @@ def bridge() -> AgentBridge:
         control_plane_url="http://localhost:8787",
         auth_token="test-token",
     )
-    b.opencode_session_id = "oc-session-123"
+    b.harness.session_id = "oc-session-123"
     b._configure_git_identity = AsyncMock()
     b._send_event = AsyncMock()
     return b
@@ -46,8 +47,7 @@ class TestExecutionCompleteCostReport:
             reported.set()
             await asyncio.Event().wait()
 
-        bridge._stream_opencode_response_sse = stream
-        bridge._request_opencode_stop = AsyncMock()
+        bridge.harness = ScriptedHarness(stream)
         bridge.diff_refresh = Mock()
         await bridge._handle_command({"type": "prompt", **_prompt_command()})
         await asyncio.wait_for(reported.wait(), timeout=1)
@@ -80,7 +80,7 @@ class TestExecutionCompleteCostReport:
                 "messageCostUsd": 0.75,
             }
 
-        bridge._stream_opencode_response_sse = stream
+        bridge.harness = ScriptedHarness(stream)
 
         await bridge._handle_prompt(_prompt_command())
 
@@ -94,7 +94,7 @@ class TestExecutionCompleteCostReport:
             yield {"type": "step_finish", "messageId": "msg-1", "cost": 0.5, "messageCostUsd": 0.5}
             yield {"type": "error", "messageId": "msg-1", "error": "boom"}
 
-        bridge._stream_opencode_response_sse = stream
+        bridge.harness = ScriptedHarness(stream)
 
         await bridge._handle_prompt(_prompt_command())
 
@@ -107,7 +107,7 @@ class TestExecutionCompleteCostReport:
         async def stream(*_args, **_kwargs):
             yield {"type": "token", "messageId": "msg-1", "content": "hi"}
 
-        bridge._stream_opencode_response_sse = stream
+        bridge.harness = ScriptedHarness(stream)
 
         await bridge._handle_prompt(_prompt_command())
 

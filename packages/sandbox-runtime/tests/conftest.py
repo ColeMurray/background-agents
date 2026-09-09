@@ -5,9 +5,13 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 
-from sandbox_runtime.opencode_client import OpenCodeClient
+from sandbox_runtime.harness import EventSink, HarnessPrompt, PromptLimits, TurnOutcome
+from sandbox_runtime.harness.opencode import OpencodeHarness
+from sandbox_runtime.harness.opencode_client import OpenCodeClient
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Callable
+
     from sandbox_runtime.bridge import AgentBridge
 
 
@@ -37,21 +41,130 @@ def isolate_runtime_file_paths(tmp_path, monkeypatch):
 
 
 def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:
-    """Point a bridge's OpenCode client at a fake HTTP transport (test seam).
+    """Point a bridge's OpenCode harness at a fake HTTP transport (test seam).
 
-    Rebuilds ``bridge.opencode_client`` around the fake, resets the lazily
-    built prompt stream so it rebinds to the new client, and stashes the fake
-    on ``bridge.http_client`` so tests can read it back to script responses.
-    Returns the fake for convenience.
+    Rebuilds ``bridge.harness`` around the fake (carrying the vendor session
+    id over), so the lazily built prompt stream rebinds to the new client,
+    and stashes the fake on ``bridge.http_client`` so tests can read it back
+    to script responses. Returns the fake for convenience.
     """
-    bridge.opencode_client = OpenCodeClient(
-        base_url=bridge.opencode_base_url,
+    previous = bridge.harness
+    assert isinstance(previous, OpencodeHarness)
+    harness = OpencodeHarness(
+        client=OpenCodeClient(
+            base_url=f"http://localhost:{bridge.opencode_port}",
+            log=bridge.log,
+            http_client=http_client,
+        ),
+        attachment_processor=bridge.attachment_processor,
         log=bridge.log,
-        http_client=http_client,
+        limits=previous.limits,
     )
-    bridge._prompt_stream = None
+    harness.session_id = previous.session_id
+    bridge.harness = harness
     bridge.http_client = http_client
     return http_client
+
+
+def set_prompt_limits(bridge: "AgentBridge", **overrides: float) -> None:
+    """Adjust per-prompt budgets before the harness builds its prompt stream."""
+    from dataclasses import replace
+
+    assert isinstance(bridge.harness, OpencodeHarness)
+    bridge.prompt_limits = replace(bridge.prompt_limits, **overrides)
+    bridge.harness.limits = bridge.prompt_limits
+
+
+def stream_opencode_events(
+    bridge: "AgentBridge",
+    message_id: str,
+    content: str,
+    *,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    attachments: list[Any] | None = None,
+) -> "AsyncIterator[dict[str, Any]]":
+    """The raw translated event stream of one OpenCode prompt (what run_prompt drains)."""
+    assert isinstance(bridge.harness, OpencodeHarness)
+    return bridge.harness.stream_events(
+        HarnessPrompt(
+            message_id=message_id,
+            text=content,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            attachments=tuple(attachments or ()),
+        )
+    )
+
+
+class ScriptedHarness:
+    """An ``AgentHarness`` that replays a scripted event stream (bridge tests).
+
+    ``stream`` is an async-generator function; it is called once per prompt
+    and its events are emitted verbatim. The outcome is derived exactly as
+    the OpenCode harness derives it: an ``error`` event fails the turn, the
+    last ``step_finish.messageCostUsd`` is the turn cost.
+    """
+
+    from sandbox_runtime.harness import HarnessId
+    from sandbox_runtime.harness.opencode import OPENCODE_CAPABILITIES
+
+    id = HarnessId.OPENCODE
+    capabilities = OPENCODE_CAPABILITIES
+
+    def __init__(
+        self,
+        stream: "Callable[..., AsyncIterator[dict[str, Any]]] | None" = None,
+        *,
+        session_id: str | None = "oc-session-123",
+    ) -> None:
+        self.stream = stream
+        self.session_id = session_id
+        self.prompts: list[HarnessPrompt] = []
+        self.abort_calls = 0
+        self.opened = False
+        self.closed = False
+
+    async def open(self) -> None:
+        self.opened = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def create_or_resume_session(self, persisted_id: str | None) -> str:
+        self.session_id = persisted_id or self.session_id or "oc-session-new"
+        return self.session_id
+
+    async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
+        self.prompts.append(prompt)
+        if self.stream is None:
+            return TurnOutcome.ok()
+        error: str | None = None
+        cost: float | None = None
+        async for event in self.stream(prompt.message_id, prompt.text):
+            if event.get("type") == "error":
+                error = str(event.get("error"))
+            if event.get("type") == "step_finish" and "messageCostUsd" in event:
+                cost = event["messageCostUsd"]
+            await emit(event)
+        if error is not None:
+            return TurnOutcome.failed(error, message_cost_usd=cost)
+        return TurnOutcome.ok(message_cost_usd=cost)
+
+    async def abort(self) -> bool:
+        self.abort_calls += 1
+        return True
+
+
+__all__ = [
+    "MockResponse",
+    "PromptLimits",
+    "ScriptedHarness",
+    "oc_message_id",
+    "set_prompt_limits",
+    "stream_opencode_events",
+    "wire_opencode_transport",
+]
 
 
 class MockResponse:
