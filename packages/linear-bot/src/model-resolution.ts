@@ -37,7 +37,7 @@ const MODEL_LABEL_ALIASES = {
   haiku: "anthropic/claude-haiku-4-5",
   sonnet: "anthropic/claude-sonnet-4-5",
   opus: "anthropic/claude-opus-4-5",
-  fable: "anthropic/claude-fable-5",
+  fable: "anthropic/claude-fable-5-1",
 } satisfies Record<string, ValidModel>;
 
 /**

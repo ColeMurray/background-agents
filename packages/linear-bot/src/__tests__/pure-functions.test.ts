@@ -85,7 +85,7 @@ describe("extractModelFromLabels", () => {
     ["haiku", "anthropic/claude-haiku-4-5"],
     ["sonnet", "anthropic/claude-sonnet-4-5"],
     ["opus", "anthropic/claude-opus-4-5"],
-    ["fable", "anthropic/claude-fable-5"],
+    ["fable", "anthropic/claude-fable-5-1"],
   ])("returns the configured model for the model:%s alias", (alias, expected) => {
     expect(extractModelFromLabels([{ name: `model:${alias}` }])).toBe(expected);
   });
