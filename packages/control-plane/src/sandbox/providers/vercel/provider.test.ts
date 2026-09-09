@@ -107,6 +107,7 @@ const baseCreateConfig: CreateSandboxConfig = {
   repoName: "testrepo",
   controlPlaneUrl: "https://control-plane.test",
   sandboxAuthToken: "auth-token",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "anthropic/claude-sonnet-4-5",
 };
@@ -119,6 +120,7 @@ const baseRestoreConfig: RestoreConfig = {
   repoName: "testrepo",
   controlPlaneUrl: "https://control-plane.test",
   sandboxAuthToken: "auth-token",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "anthropic/claude-sonnet-4-5",
 };
@@ -220,6 +222,7 @@ describe("VercelSandboxProvider", () => {
     );
     expect(JSON.parse(createCall.env?.SESSION_CONFIG as string)).toEqual({
       session_id: "session-123",
+      harness: "opencode",
       repo_owner: "testowner",
       repo_name: "testrepo",
       provider: "anthropic",

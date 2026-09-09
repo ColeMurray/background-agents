@@ -41,6 +41,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     repoId: number | null;
     baseBranch?: string | null;
     model: string;
+    harness: "opencode" | "claude";
     reasoningEffort: string | null;
     sandboxTimeoutMs?: number;
     promptAuthor: {
@@ -74,6 +75,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     repoOwner: "acme",
     repoName: "web-app",
     repoId: 12345,
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
     sandboxTimeoutMs: 14_400_000,

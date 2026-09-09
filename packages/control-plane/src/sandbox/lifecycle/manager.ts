@@ -10,6 +10,7 @@
  * spawn attempts within the same request.
  */
 
+import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
@@ -610,6 +611,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         repoName: session.repo_name,
         controlPlaneUrl: this.config.controlPlaneUrl,
         sandboxAuthToken,
+        harness: getValidHarnessOrDefault(session.harness),
         provider,
         model: modelId,
         userEnvVars,
@@ -964,6 +966,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         controlPlaneUrl: this.config.controlPlaneUrl,
         repoOwner: session.repo_owner,
         repoName: session.repo_name,
+        harness: getValidHarnessOrDefault(session.harness),
         provider,
         model: modelId,
         userEnvVars,

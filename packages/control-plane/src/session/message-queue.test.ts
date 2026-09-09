@@ -56,7 +56,8 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     branch_name: null,
     base_sha: null,
     current_sha: null,
-    opencode_session_id: null,
+    agent_session_id: null,
+    harness: "opencode",
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: null,
     status: "active",
@@ -361,7 +362,8 @@ describe("SessionMessageQueue", () => {
       () => h.queue.processMessageQueue(),
       () => h.queue.broadcastPromptQueue(),
       budget,
-      (closure) => closure()
+      (closure) => closure(),
+      { hasTitle: () => true, apply: () => {} }
     );
     const finishing = handler.handleExecutionComplete(
       {

@@ -1,3 +1,4 @@
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { SourceControlProviderName } from "../source-control";
@@ -39,6 +40,8 @@ export interface SessionConfigPayload {
   session_id: string;
   repo_owner: string | null;
   repo_name: string | null;
+  /** Agent harness the runtime must boot. */
+  harness: HarnessId;
   provider: string;
   model: string;
   /** Omitted from the serialized payload when undefined. */
@@ -54,6 +57,7 @@ export interface SessionConfigInput {
   sessionId: string;
   repoOwner: string | null;
   repoName: string | null;
+  harness: HarnessId;
   provider: string;
   model: string;
   mcpServers?: McpServerConfig[];
@@ -74,6 +78,7 @@ export function buildSessionConfig(input: SessionConfigInput): SessionConfigPayl
     session_id: input.sessionId,
     repo_owner: input.repoOwner,
     repo_name: input.repoName,
+    harness: input.harness,
     provider: input.provider,
     model: input.model,
     mcp_servers: input.mcpServers,

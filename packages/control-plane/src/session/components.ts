@@ -513,7 +513,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     () => messageQueue.processMessageQueue(),
     () => messageQueue.broadcastPromptQueue(),
     budgetService,
-    transaction
+    transaction,
+    {
+      hasTitle: () => Boolean(sessionCoreRepository.getSession()?.title),
+      apply: (title) => {
+        titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
+      },
+    }
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,
@@ -522,7 +528,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     diffService,
     (title, options) => titleService.applySessionTitleUpdate(title, options),
-    updateLastActivity
+    updateLastActivity,
+    log
   );
   const pushService = new SandboxPushService(log, wsManager);
   const sandboxEventProcessor = new SessionSandboxEventProcessor(

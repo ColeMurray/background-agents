@@ -3,6 +3,7 @@ import {
   type ModelProviderSelections,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
+import { harnessSupportsProviderAuth, type HarnessId } from "@open-inspect/shared/harnesses";
 import { ProviderDefaultStore } from "../db/provider-account-defaults";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
@@ -26,6 +27,13 @@ function legacy(provider: SubscriptionProviderId): SessionModelProviderAuthInput
 export interface ProviderAccountResolutionInput {
   explicit?: ModelProviderSelections;
   unattended: boolean;
+  /**
+   * The session's harness. An installation default only applies where the
+   * harness can select a provider account; otherwise the provider resolves
+   * to api_key (selectionSource "harness_fallback") rather than binding an
+   * account the harness cannot use.
+   */
+  harness: HarnessId;
 }
 
 function apiKey(
@@ -55,6 +63,9 @@ async function resolveProvider(
 
   const providerDefault = await stores.defaults.get(provider);
   if (!providerDefault) return legacy(provider);
+  if (!harnessSupportsProviderAuth(input.harness, provider, "provider_account")) {
+    return apiKey(provider, "harness_fallback");
+  }
   if (input.unattended && providerDefault.unattendedMode === "api_key") {
     return apiKey(provider, "unattended_policy");
   }

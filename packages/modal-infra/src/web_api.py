@@ -117,7 +117,9 @@ class CreateSandboxRequest(_RepositoryContextModel):
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
     sandbox_auth_token: NonEmptyString
+    agent_session_id: str | None = None
     opencode_session_id: str | None = None
+    harness: str | None = None
     provider: str | None = None
     model: str | None = None
     branch: str | None = None
@@ -143,7 +145,9 @@ class RestoreSessionConfigRequest(_RepositoryContextModel):
     session_id: str | None = None
     branch: str | None = None
     base_sha: str | None = None
+    agent_session_id: str | None = None
     opencode_session_id: str | None = None
+    harness: str | None = None
     provider: str | None = None
     model: str | None = None
     mcp_servers: list[dict[str, Any]] | None = None

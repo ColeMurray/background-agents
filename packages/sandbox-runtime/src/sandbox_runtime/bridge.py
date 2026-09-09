@@ -249,6 +249,7 @@ class AgentBridge:
             "type": "ready",
             "sandboxId": self.sandbox_id,
             "opencodeSessionId": self.agent_session_id,
+            "harness": self.harness.id.value,
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {

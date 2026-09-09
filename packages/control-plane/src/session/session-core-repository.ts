@@ -1,3 +1,4 @@
+import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
@@ -13,6 +14,8 @@ export interface UpsertSessionData {
   repoName: string | null;
   repoId?: number | null;
   baseBranch?: string | null;
+  /** Agent harness; fixed at create. Absent means the built-in harness. */
+  harness?: HarnessId;
   model: string;
   reasoningEffort?: string | null;
   status: SessionStatus;
@@ -65,7 +68,7 @@ export class SessionCoreRepository {
   /**
    * Writes the session row. On a repeat for the same id every named column
    * takes the new value; working state the aggregate accumulates elsewhere
-   * (branch_name, base_sha, current_sha, opencode_session_id, total_cost) is
+   * (branch_name, base_sha, current_sha, agent_session_id, total_cost) is
    * left as it stands.
    */
   upsertSession(data: UpsertSessionData): void {
@@ -82,8 +85,8 @@ export class SessionCoreRepository {
       // max_cost_usd is seeded on insert but absent from the update clause: once
       // setSessionBudget has written a live limit, it is working state like
       // branch_name and total_cost, and a repeated init must not reset it.
-      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, max_cost_usd, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, harness, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, max_cost_usd, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET
          session_name = excluded.session_name,
          title = excluded.title,
@@ -91,6 +94,7 @@ export class SessionCoreRepository {
          repo_name = excluded.repo_name,
          repo_id = excluded.repo_id,
          base_branch = excluded.base_branch,
+         harness = excluded.harness,
          model = excluded.model,
          reasoning_effort = excluded.reasoning_effort,
          status = excluded.status,
@@ -110,6 +114,7 @@ export class SessionCoreRepository {
       data.repoName,
       data.repoId ?? null,
       data.baseBranch ?? (hasRepoOwner ? DEFAULT_BASE_BRANCH : null),
+      data.harness ?? DEFAULT_HARNESS,
       data.model,
       data.reasoningEffort ?? null,
       data.status,

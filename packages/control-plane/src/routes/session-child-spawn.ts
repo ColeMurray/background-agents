@@ -1,3 +1,4 @@
+import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
 import { parseBody } from "./body";
 import { Hono } from "hono";
 import { admit } from "../routing/admit";
@@ -174,6 +175,12 @@ export async function handleSpawnChild(
     return error(`Model "${body.model}" is not enabled`, 400);
   }
   const model = resolveEnabledModel({ model: requestedModel, enabledModels });
+  // The child runs on the parent's harness; the requested model must run there.
+  const harness = spawnContext.harness;
+  const harnessIncompatibility = checkHarnessCompatibility(harness, model);
+  if (harnessIncompatibility) {
+    return error(harnessIncompatibility.message, 400);
+  }
   if (body.reasoningEffort !== undefined && !isValidReasoningEffort(model, body.reasoningEffort)) {
     const validEfforts = getReasoningConfig(model)?.efforts;
     const suffix = validEfforts?.length
@@ -239,6 +246,7 @@ export async function handleSpawnChild(
         ? (spawnContext.baseBranch ?? DEFAULT_BASE_BRANCH)
         : null,
     title: body.title,
+    harness,
     model,
     reasoningEffort,
     participantUserId: spawnContext.promptAuthor.userId,

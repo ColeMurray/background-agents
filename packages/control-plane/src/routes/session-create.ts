@@ -2,6 +2,10 @@ import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { RepositoryRef, RepositoryPair } from "@open-inspect/shared/types/repositories";
+import {
+  checkHarnessCompatibility,
+  getValidHarnessOrDefault,
+} from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
 import { generateId } from "../auth/crypto";
@@ -199,8 +203,11 @@ export async function handleCreateSession(
     }
   }
 
-  // Validate model and reasoning effort once for both DO init and D1 index
+  // Validate harness, model and reasoning effort once for both DO init and D1 index
+  const harness = getValidHarnessOrDefault(body.harness);
   const model = getValidModelOrDefault(body.model);
+  const harnessModelIncompatibility = checkHarnessCompatibility(harness, model);
+  if (harnessModelIncompatibility) return error(harnessModelIncompatibility.message, 400);
   const reasoningEffort =
     body.reasoningEffort && isValidReasoningEffort(model, body.reasoningEffort)
       ? body.reasoningEffort
@@ -223,11 +230,18 @@ export async function handleCreateSession(
     providerAuth = await resolveSessionProviderAuth(ctx.db, {
       explicit: body.providerSelections,
       unattended: spawnSource !== undefined && spawnSource !== "user",
+      harness,
     });
   } catch (e) {
     if (e instanceof ProviderAccountSelectionPolicyError) return error(e.message, e.status);
     throw e;
   }
+  const harnessAuthIncompatibility = checkHarnessCompatibility(
+    harness,
+    model,
+    Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
+  );
+  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
 
   let managedSkillsManifest;
   try {
@@ -255,6 +269,7 @@ export async function handleCreateSession(
     repositories,
     environmentId,
     title: body.title,
+    harness,
     model,
     reasoningEffort,
     participantUserId,

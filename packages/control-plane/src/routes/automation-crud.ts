@@ -21,6 +21,10 @@ import {
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import type { PermissionId } from "@open-inspect/shared/rbac";
+import {
+  checkHarnessCompatibility,
+  getValidHarnessOrDefault,
+} from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
 import {
   AutomationStore,
@@ -200,8 +204,11 @@ async function handleCreateAutomation(
     };
   }
 
-  // Validate model
+  // Validate harness and model
+  const harness = getValidHarnessOrDefault(body.harness);
   const model = getValidModelOrDefault(body.model);
+  const harnessIncompatibility = checkHarnessCompatibility(harness, model);
+  if (harnessIncompatibility) return error(harnessIncompatibility.message, 400);
   const reasoningEffort = resolveReasoningEffort(model, body.reasoningEffort);
   if (body.reasoningEffort !== undefined && body.reasoningEffort !== null && !reasoningEffort) {
     return error("Invalid reasoning effort for selected model", 400);
@@ -262,6 +269,7 @@ async function handleCreateAutomation(
     trigger_type: triggerType,
     schedule_cron: body.scheduleCron ?? null,
     schedule_tz: body.scheduleTz ?? "UTC",
+    harness,
     model,
     reasoning_effort: reasoningEffort,
     enabled: 1,
@@ -423,6 +431,10 @@ async function handleUpdateAutomation(
   }
 
   const nextModel = body.model !== undefined ? getValidModelOrDefault(body.model) : existing.model;
+  const nextHarness =
+    body.harness !== undefined ? body.harness : getValidHarnessOrDefault(existing.harness);
+  const harnessIncompatibility = checkHarnessCompatibility(nextHarness, nextModel);
+  if (harnessIncompatibility) return error(harnessIncompatibility.message, 400);
   const requestedReasoningEffort = body.reasoningEffort;
   const resolvedReasoningEffort =
     requestedReasoningEffort !== undefined
@@ -445,6 +457,7 @@ async function handleUpdateAutomation(
   if (body.instructions !== undefined) updateFields.instructions = body.instructions;
   if (body.scheduleCron !== undefined) updateFields.schedule_cron = body.scheduleCron;
   if (body.scheduleTz !== undefined) updateFields.schedule_tz = body.scheduleTz;
+  if (body.harness !== undefined) updateFields.harness = nextHarness;
   if (body.model !== undefined) updateFields.model = nextModel;
   if (body.reasoningEffort !== undefined || body.model !== undefined) {
     updateFields.reasoning_effort = resolvedReasoningEffort;

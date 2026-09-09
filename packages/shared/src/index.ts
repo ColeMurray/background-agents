@@ -9,6 +9,7 @@ export * from "./auth";
 export * from "./service-auth";
 export * from "./http-body";
 export * from "./models";
+export * from "./harnesses";
 export * from "./cron";
 export * from "./triggers";
 export * from "./completion/extractor";

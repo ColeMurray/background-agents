@@ -5,6 +5,7 @@
  * snake_case rows in the database, camelCase types at the API boundary.
  */
 
+import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
 import type {
   Automation,
   AutomationExecutionSummary,
@@ -62,6 +63,7 @@ export interface AutomationRow {
   trigger_type: string;
   schedule_cron: string | null;
   schedule_tz: string;
+  harness: HarnessId;
   model: string;
   reasoning_effort: string | null;
   enabled: number; // SQLite integer boolean
@@ -218,6 +220,7 @@ export function toAutomation(
     triggerType: row.trigger_type as Automation["triggerType"],
     scheduleCron: row.schedule_cron,
     scheduleTz: row.schedule_tz,
+    harness: getValidHarnessOrDefault(row.harness),
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     enabled: row.enabled === 1,
@@ -348,10 +351,10 @@ export class AutomationStore {
       .prepare(
         `INSERT INTO automations
          (id, name, instructions,
-          trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
+          trigger_type, schedule_cron, schedule_tz, harness, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
           event_type, trigger_config, trigger_auth_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -360,6 +363,7 @@ export class AutomationStore {
         row.trigger_type,
         row.schedule_cron,
         row.schedule_tz,
+        row.harness,
         row.model,
         row.reasoning_effort,
         row.enabled,
@@ -519,6 +523,7 @@ export class AutomationStore {
       "instructions",
       "schedule_cron",
       "schedule_tz",
+      "harness",
       "model",
       "reasoning_effort",
       "next_run_at",

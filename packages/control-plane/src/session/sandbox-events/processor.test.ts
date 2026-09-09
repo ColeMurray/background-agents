@@ -37,6 +37,7 @@ function createProcessor() {
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
     recordReportedSandboxRuntimeVersion: vi.fn(),
+    getSession: vi.fn(() => null),
     getProcessingMessage,
     addSessionCost: vi.fn(() => 1.25),
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => {
@@ -135,7 +136,8 @@ function createProcessor() {
       processMessageQueue,
       broadcastPromptQueue,
       budgetService,
-      (closure) => closure()
+      (closure) => closure(),
+      { hasTitle: () => true, apply: () => {} }
     ),
     new SandboxRuntimeEventHandler(
       repository as unknown as SessionCoreRepository,
@@ -144,7 +146,8 @@ function createProcessor() {
       messenger,
       diffService as unknown as SessionDiffService,
       applySessionTitleUpdate,
-      updateLastActivity
+      updateLastActivity,
+      log
     ),
     pushService
   );

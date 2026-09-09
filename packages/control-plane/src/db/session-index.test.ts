@@ -8,6 +8,7 @@ type SessionRow = {
   title: string | null;
   repo_owner: string | null;
   repo_name: string | null;
+  harness: "opencode" | "claude";
   model: string;
   reasoning_effort: string | null;
   base_branch: string | null;
@@ -194,6 +195,7 @@ class FakeD1Database {
         title,
         repoOwner,
         repoName,
+        harness,
         model,
         reasoningEffort,
         baseBranch,
@@ -216,6 +218,7 @@ class FakeD1Database {
         string | null,
         string | null,
         string | null,
+        "opencode" | "claude",
         string,
         string | null,
         string | null,
@@ -245,6 +248,7 @@ class FakeD1Database {
           title,
           repo_owner: repoOwner,
           repo_name: repoName,
+          harness,
           model,
           reasoning_effort: reasoningEffort,
           base_branch: baseBranch,
@@ -492,6 +496,7 @@ describe("SessionIndexStore", () => {
       expect(result).toEqual({
         ...session,
         // Defaults applied for missing optional fields
+        harness: "opencode",
         parentSessionId: null,
         spawnSource: "user",
         spawnDepth: 0,

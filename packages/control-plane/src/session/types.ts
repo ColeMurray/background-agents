@@ -2,6 +2,7 @@
  * Session-specific type definitions.
  */
 
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import type {
   SessionStatus,
@@ -44,7 +45,8 @@ export interface SessionRow {
   branch_name: string | null;
   base_sha: string | null;
   current_sha: string | null;
-  opencode_session_id: string | null;
+  agent_session_id: string | null; // The agent's own conversation id
+  harness: HarnessId; // Agent harness the session runs on; fixed at create
   model: string; // LLM model to use (e.g., "anthropic/claude-haiku-4-5")
   reasoning_effort: string | null; // Reasoning effort level (e.g., "high", "max")
   status: SessionStatus;

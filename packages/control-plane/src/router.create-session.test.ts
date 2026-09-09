@@ -448,6 +448,7 @@ describe("handleCreateSession D1 ordering", () => {
     expect(resolveSessionProviderAuth).toHaveBeenCalledWith(expect.anything(), {
       explicit,
       unattended: true,
+      harness: "opencode",
     });
   });
 
