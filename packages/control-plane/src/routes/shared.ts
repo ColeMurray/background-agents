@@ -2,7 +2,7 @@
  * Shared route primitives used by all route modules.
  */
 
-import type { Principal } from "../auth/principal";
+import type { AccessTokenWrites, Principal } from "../auth/principal";
 import type { RequestContext } from "../http/request-context";
 import { HttpError } from "../http/responses";
 import type { Env } from "../types";
@@ -254,6 +254,16 @@ export type SandboxRouteContext = RouteContext<{ kind: "sandbox" } & SandboxSess
 export interface RoutePolicy {
   authentication: RouteAuthentication;
   supportedScmProviders: "all" | readonly SourceControlProviderName[];
+  /**
+   * Whether a personal access token may use this route's mutating methods —
+   * and, on a `{ kind: "user" }` authentication, reach it at all.
+   *
+   * Omitted, the default, leaves the credential read-only here. Declare it
+   * only where the handler takes its subject from `canonicalUserIdOf`: an
+   * access-token principal carries its owner's id but is not a `UserPrincipal`,
+   * so a route whose handler wants the narrowed context must stay human-only.
+   */
+  accessTokenWrites?: AccessTokenWrites;
 }
 
 /** Framework-neutral policy consumed by request admission. */

@@ -7,6 +7,7 @@
 
 import type { RouteModule } from "../routing/hono-env";
 import { webhookRoutes } from "../webhooks";
+import { accessTokenRoutes } from "./access-tokens";
 import { analyticsRoutes } from "./analytics";
 import { auditEventRoutes } from "./audit-events";
 import { autofixRoutes } from "./autofix";
@@ -96,6 +97,10 @@ export const catalog: readonly RouteModule[] = [
 
   // Workspace roles, members, and current-user authorization
   rbacRoutes,
+
+  // Personal access tokens (human-only credential management; no path
+  // overlap with any other module, so registration order is immaterial here)
+  accessTokenRoutes,
 
   // Webhooks (public routes — auth handled per-route)
   webhookRoutes,

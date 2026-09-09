@@ -43,6 +43,7 @@ import {
   parseAndValidateAutomationProviderSelections,
 } from "../model-provider-accounts/automation-provider-selection";
 import { generateId } from "../auth/crypto";
+import { isSelfActingPrincipal } from "../auth/principal";
 import {
   applyIdentityEnforcement,
   requireAdmittedCanonicalUserId,
@@ -154,7 +155,10 @@ async function handleCreateAutomation(
     if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
-  if (ctx.principal?.kind === "user") {
+  // An access token is its owner, so it faces the target checks that owner
+  // would: skipping them would let the credential aim an automation at
+  // repositories and environments the user may not use.
+  if (isSelfActingPrincipal(ctx.principal)) {
     const targetAuthorizationError = requireTargetPermissions(ctx, [
       ...(requestedRepositories.length > 0 ? (["repositories.use"] as const) : []),
       ...(requestedEnvironmentIds.length > 0 ? (["environments.use"] as const) : []),
@@ -712,6 +716,13 @@ automationCrudRoutes.post(
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("automations.create"),
+    // Additionally admits a personal access token, so the MCP server can
+    // create automations as its owner. Create only: it adds an automation
+    // under a new id and takes nothing away, while PUT and DELETE rewrite and
+    // remove one that other people may already depend on, and those stay
+    // human-only. `automations.create` is still required, so the exception
+    // widens which credential may act, never which user may.
+    accessTokenWrites: "allow",
   }),
   (c) => dispatch(c, handleCreateAutomation)
 );
