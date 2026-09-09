@@ -32,9 +32,9 @@ function makeAgentSessionPayload(webhookId = "webhook-config-1") {
     organizationId: "org-1",
     appUserId: "app-user-1",
     webhookId,
+    promptContext: "Implement the Linear issue.",
     agentSession: {
       id: "agent-session-1",
-      promptContext: "Implement the Linear issue.",
     },
   };
 }

@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initializeSession, type SessionInitInput } from "./initialize";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "./contracts";
+import type { SqlDatabase } from "../db/sql-database";
+import { fakeSessionRuntimeDispatch } from "../router.test-support";
 
 vi.mock("../db/session-index", () => ({
   SessionIndexStore: vi.fn(),
@@ -31,9 +33,26 @@ describe("initializeSession", () => {
     spawnSource: "user",
     spawnDepth: 0,
     codeServerEnabled: false,
+    vncEnabled: true,
     sandboxSettings: {},
     automationId: null,
     automationRunId: null,
+    managedSkillsManifest: {
+      selection: { mode: "all" },
+      resolverVersion: 1,
+      manifestSha256: "0".repeat(64),
+      resolvedAt: 1,
+      skills: [],
+    },
+    providerAuth: [
+      {
+        provider: "openai",
+        authMode: "provider_account",
+        providerAccountId: "1".repeat(32),
+        selectionSource: "installation_default",
+      },
+      { provider: "xai", authMode: "api_key", selectionSource: "fallback_api_key" },
+    ],
   };
 
   const ctx = {
@@ -44,15 +63,12 @@ describe("initializeSession", () => {
 
   let createMock: ReturnType<typeof vi.fn>;
   let updateStatusMock: ReturnType<typeof vi.fn>;
-  let stubFetchMock: ReturnType<typeof vi.fn>;
+  let stubFetchMock: ReturnType<typeof vi.fn<(request: Request) => Promise<Response>>>;
 
   function createEnv() {
     return {
-      DB: {} as D1Database,
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => ({ fetch: stubFetchMock }),
-      },
+      DB: {} as SqlDatabase,
+      SESSION: fakeSessionRuntimeDispatch((request) => stubFetchMock(request)),
     } as never;
   }
 
@@ -76,6 +92,24 @@ describe("initializeSession", () => {
     expect(createMock.mock.invocationCallOrder[0]).toBeLessThan(
       stubFetchMock.mock.invocationCallOrder[0]
     );
+  });
+
+  it("requires exactly one resolved or inherited managed skills manifest", async () => {
+    await expect(
+      initializeSession(
+        createEnv(),
+        { ...baseInput, managedSkillsManifest: undefined },
+        ctx as never
+      )
+    ).rejects.toThrow("Session must resolve or inherit exactly one managed skills manifest");
+    await expect(
+      initializeSession(
+        createEnv(),
+        { ...baseInput, managedSkillsSourceSessionId: "parent-session" },
+        ctx as never
+      )
+    ).rejects.toThrow("Session must resolve or inherit exactly one managed skills manifest");
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it("throws when D1 write fails and does not call DO init", async () => {
@@ -190,6 +224,7 @@ describe("initializeSession", () => {
     expect(d1Entry.automationRunId).toBeNull();
     expect(d1Entry.scmLogin).toBe("acmedev");
     expect(d1Entry.userId).toBe("platform-user-1");
+    expect(d1Entry.providerAuth).toEqual(baseInput.providerAuth);
     expect(d1Entry.createdAt).toBeTypeOf("number");
     expect(d1Entry.updatedAt).toBeTypeOf("number");
   });
@@ -230,6 +265,7 @@ describe("initializeSession", () => {
     expect(body.model).toBe("anthropic/claude-sonnet-4-6");
     expect(body.reasoningEffort).toBeNull();
     expect(body.userId).toBe("user-1");
+    expect(body.canonicalUserId).toBe("platform-user-1");
     expect(body.scmLogin).toBe("acmedev");
     expect(body.scmName).toBe("Acme Dev");
     expect(body.scmEmail).toBe("dev@acme.test");
@@ -238,10 +274,12 @@ describe("initializeSession", () => {
     expect(body.scmTokenExpiresAt).toBe(1700000000000);
     expect(body.scmUserId).toBe("scm-1");
     expect(body.codeServerEnabled).toBe(false);
+    expect(body.vncEnabled).toBe(true);
     expect(body.sandboxSettings).toEqual({});
     expect(body.parentSessionId).toBeNull();
     expect(body.spawnSource).toBe("user");
     expect(body.spawnDepth).toBe(0);
+    expect(body).not.toHaveProperty("providerAuth");
   });
 
   it("sets correlation headers on the DO init request", async () => {

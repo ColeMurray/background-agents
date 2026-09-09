@@ -14,16 +14,9 @@ import {
 } from "./utils/linear-client";
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
-import { resolveAppName } from "@open-inspect/shared";
+import { resolveAppName } from "@open-inspect/shared/app-name";
 import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
 import { isDuplicateEvent } from "./kv-store";
-
-// Re-export pure functions for existing test imports
-export {
-  resolveStaticTarget,
-  extractModelFromLabels,
-  resolveSessionModelSettings,
-} from "./model-resolution";
 
 const log = createLogger("handler");
 

@@ -15,6 +15,10 @@ export {
   postMessage,
   publishView,
   removeReaction,
+  SLACK_PAGINATION_TIMEOUT_MS,
+  SLACK_REQUEST_TIMEOUT_MS,
+  slackMessageAttachmentSchema,
+  slackMessageFileSchema,
   updateMessage,
   uploadToExternalUrl,
   verifySlackSignature,
@@ -22,15 +26,20 @@ export {
 export type {
   SlackAuthTestResult,
   SlackChannelInfo,
-  SlackChannelListing,
   SlackEnvelope,
   CompleteExternalUploadOptions,
   ExternalUploadUrlOptions,
   SlackMessageAttachment,
   SlackMessageFile,
+  SlackRequestOptions,
   SlackThreadMessage,
   SlackUser,
 } from "./client";
+export {
+  controlPlaneSlackChannelsResponseSchema,
+  slackChannelListingSchema,
+} from "./channel-contract";
+export type { ControlPlaneSlackChannelsResponse, SlackChannelListing } from "./channel-contract";
 export {
   applyMentionPolicy,
   escapeMrkdwnText,
@@ -41,6 +50,9 @@ export {
 } from "./mrkdwn";
 export type { MentionPolicy, SanitizeOptions, SanitizeResult } from "./mrkdwn";
 export { resolveUserNames } from "./resolve-users";
+export { splitIntoSlackSections, SECTION_TEXT_MAX_CHARS, MAX_RESPONSE_SECTIONS } from "./sections";
+export { selectThreadWindow, classifyThreadSpeaker } from "./thread-context";
+export type { ThreadWindowOptions, ThreadSpeaker } from "./thread-context";
 export {
   SLACK_DENIAL_REASONS,
   SLACK_DENIAL_STATUS,

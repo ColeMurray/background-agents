@@ -28,8 +28,12 @@ const sourceLine =
 
 describe("collectForwardedMessages", () => {
   it("returns nothing when the message carried no attachments", () => {
-    expect(collectForwardedMessages(undefined)).toEqual({ entries: [], files: [] });
-    expect(collectForwardedMessages([])).toEqual({ entries: [], files: [] });
+    expect(collectForwardedMessages(undefined)).toEqual({
+      entries: [],
+      files: [],
+      hasBody: false,
+    });
+    expect(collectForwardedMessages([])).toEqual({ entries: [], files: [], hasBody: false });
   });
 
   it("quotes the body under its author, channel, and a fetchable source", () => {
@@ -88,26 +92,30 @@ describe("collectForwardedMessages", () => {
     ]);
     expect(result.entries[0]).toContain("(no text)");
     expect(result.files).toEqual(files);
+    expect(result.hasBody).toBe(false);
   });
 
   it("falls back to Slack's plain-text rendering when the share has no text", () => {
     // Shared app posts keep their content in their own attachments/blocks, so
     // `text` can be empty while `fallback` still renders the message.
-    expect(collectForwardedMessages([shareAttachment({ text: "" })]).entries[0]).toContain(
+    const result = collectForwardedMessages([shareAttachment({ text: "" })]);
+    expect(result.entries[0]).toContain(
       "[February 9th, 2026 12:30 PM] ada: The analytics job has been failing since Tuesday"
     );
+    expect(result.hasBody).toBe(true);
   });
 
   it("skips link unfurls, which only restate a link the text already carries", () => {
     expect(
       collectForwardedMessages([
         {
-          text: "Monitor your errors",
-          fallback: "Rollbar",
-          from_url: "https://app.rollbar.com/a/acme/fix/item/api/431",
+          is_msg_unfurl: true,
+          text: "The referenced Slack message",
+          fallback: "[February 9th, 2026 12:30 PM] ada: The referenced Slack message",
+          from_url: "https://acme.slack.com/archives/C123/p1770652200000000",
         },
       ])
-    ).toEqual({ entries: [], files: [] });
+    ).toEqual({ entries: [], files: [], hasBody: false });
   });
 
   it("treats a whitespace-only body as absent so the fallback still shows", () => {
@@ -119,7 +127,7 @@ describe("collectForwardedMessages", () => {
   it("skips shares with neither a body nor files", () => {
     expect(
       collectForwardedMessages([shareAttachment({ text: "   ", fallback: undefined })])
-    ).toEqual({ entries: [], files: [] });
+    ).toEqual({ entries: [], files: [], hasBody: false });
   });
 
   it("keeps every shared message when several are forwarded at once", () => {
@@ -132,6 +140,7 @@ describe("collectForwardedMessages", () => {
     expect(result.entries[0]).toContain("first");
     expect(result.entries[1]).toContain("from Grace Hopper");
     expect(result.entries[1]).toContain("second");
+    expect(result.hasBody).toBe(true);
   });
 
   it("caps the number of shared messages folded into the prompt", () => {

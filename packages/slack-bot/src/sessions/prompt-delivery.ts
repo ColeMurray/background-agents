@@ -6,7 +6,7 @@
  * so the sequencing lives in exactly one place.
  */
 
-import type { CallbackContext, SendPromptResponse } from "@open-inspect/shared";
+import type { CallbackContext, SendPromptResponse } from "@open-inspect/shared/types/session-api";
 import {
   notifyDroppedAttachments,
   uploadPreparedAttachments,
@@ -60,7 +60,7 @@ export async function deliverPrompt(
     threadTs,
     traceId,
   } = options;
-  const upload = await uploadPreparedAttachments(env, sessionId, attachments, traceId);
+  const upload = await uploadPreparedAttachments(env, sessionId, attachments, authorId, traceId);
 
   if (imageOnly && upload.references.length === 0) {
     // The placeholder prompt would launch a meaningless run with nothing

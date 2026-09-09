@@ -3,8 +3,19 @@
  * Uses raw Anthropic API (no SDK) to classify which repo an issue belongs to.
  */
 
-import type { Env, RepoConfig, ClassificationResult } from "../types";
+import type {
+  ClassificationResult,
+  RepoConfig,
+} from "@open-inspect/shared/types/repository-catalog";
+import type { Env } from "../types";
 import { z } from "zod";
+import {
+  CLASSIFICATION_REQUEST_TIMEOUT_MS,
+  DEFAULT_CLASSIFICATION_MODEL,
+  callOpenAIStructured,
+  requireClassificationProviderKey,
+  resolveClassificationProvider,
+} from "@open-inspect/shared/classification";
 import { getAvailableRepos, buildRepoDescriptions } from "./repos";
 import { createLogger } from "../logger";
 
@@ -19,7 +30,7 @@ export const classifyToolInputSchema = z.object({
   alternatives: z.array(z.string()),
 });
 
-export type ClassifyToolInput = z.infer<typeof classifyToolInputSchema>;
+type ClassifyToolInput = z.infer<typeof classifyToolInputSchema>;
 
 export const anthropicMessagesResponseSchema = z.object({
   content: z.array(
@@ -30,6 +41,45 @@ export const anthropicMessagesResponseSchema = z.object({
     })
   ),
 });
+
+/**
+ * JSON schema for the classification result, shared by the Anthropic tool
+ * definition and the OpenAI strict structured-output schema.
+ *
+ * Anthropic's tool `input_schema` omits `additionalProperties`, so it stays a
+ * base schema here and the OpenAI side spreads the flag on: `strict: true`
+ * requires it, and keeping it off the base leaves the Anthropic request bytes
+ * unchanged.
+ */
+const classifyRepoJsonSchema = {
+  type: "object",
+  properties: {
+    repoId: {
+      type: ["string", "null"],
+      description: "Repository ID (owner/name) if confident, otherwise null.",
+    },
+    confidence: {
+      type: "string",
+      enum: ["high", "medium", "low"],
+    },
+    reasoning: {
+      type: "string",
+      description: "Brief explanation.",
+    },
+    alternatives: {
+      type: "array",
+      items: { type: "string" },
+      description: "Alternative repo IDs when not confident.",
+    },
+  },
+  required: ["repoId", "confidence", "reasoning", "alternatives"],
+} as const;
+
+/** OpenAI's strict structured-output mode requires `additionalProperties: false`. */
+const classifyRepoStrictJsonSchema = {
+  ...classifyRepoJsonSchema,
+  additionalProperties: false,
+} as const;
 
 /**
  * Build classification prompt from Linear issue context.
@@ -81,13 +131,17 @@ Consider:
 5. Project name associations
 6. Label associations
 
-Return your decision by calling the ${CLASSIFY_REPO_TOOL_NAME} tool.`;
+Return your decision with the fields repoId, confidence, reasoning, and alternatives.`;
 }
 
 /**
  * Call Anthropic API directly (no SDK — Workers can't use CJS imports).
  */
-async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyToolInput> {
+async function callAnthropic(
+  apiKey: string,
+  prompt: string,
+  model: string
+): Promise<ClassifyToolInput> {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -96,41 +150,20 @@ async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyTo
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-haiku-4-5",
+      model,
       max_tokens: 500,
       temperature: 0,
       tools: [
         {
           name: CLASSIFY_REPO_TOOL_NAME,
           description: "Classify which repository an issue belongs to.",
-          input_schema: {
-            type: "object" as const,
-            properties: {
-              repoId: {
-                type: ["string", "null"],
-                description: "Repository ID (owner/name) if confident, otherwise null.",
-              },
-              confidence: {
-                type: "string",
-                enum: ["high", "medium", "low"],
-              },
-              reasoning: {
-                type: "string",
-                description: "Brief explanation.",
-              },
-              alternatives: {
-                type: "array",
-                items: { type: "string" },
-                description: "Alternative repo IDs when not confident.",
-              },
-            },
-            required: ["repoId", "confidence", "reasoning", "alternatives"],
-          },
+          input_schema: classifyRepoJsonSchema,
         },
       ],
       tool_choice: { type: "tool", name: CLASSIFY_REPO_TOOL_NAME },
       messages: [{ role: "user", content: prompt }],
     }),
+    signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -149,6 +182,27 @@ async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyTo
 
   const input = classifyToolInputSchema.safeParse(toolBlock.input);
   if (!input.success) throw new Error("Malformed Anthropic tool input");
+
+  return input.data;
+}
+
+/**
+ * Call the OpenAI Chat Completions API with strict JSON-schema structured
+ * output, matching the same {@link classifyToolInputSchema} shape the
+ * Anthropic tool call produces.
+ */
+async function callOpenAI(
+  apiKey: string,
+  prompt: string,
+  model: string
+): Promise<ClassifyToolInput> {
+  const parsed = await callOpenAIStructured(apiKey, model, prompt, {
+    name: CLASSIFY_REPO_TOOL_NAME,
+    schema: classifyRepoStrictJsonSchema,
+  });
+
+  const input = classifyToolInputSchema.safeParse(parsed);
+  if (!input.success) throw new Error("Malformed OpenAI tool input");
 
   return input.data;
 }
@@ -200,7 +254,21 @@ export async function classifyRepo(
       traceId
     );
 
-    const result = await callAnthropic(env.ANTHROPIC_API_KEY, prompt);
+    const modelId = env.CLASSIFICATION_MODEL || DEFAULT_CLASSIFICATION_MODEL;
+    const { provider, model } = resolveClassificationProvider(modelId);
+
+    const result: ClassifyToolInput =
+      provider === "anthropic"
+        ? await callAnthropic(
+            requireClassificationProviderKey(env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY", modelId),
+            prompt,
+            model
+          )
+        : await callOpenAI(
+            requireClassificationProviderKey(env.OPENAI_API_KEY, "OPENAI_API_KEY", modelId),
+            prompt,
+            model
+          );
 
     let matchedRepo: RepoConfig | null = null;
     if (result.repoId) {

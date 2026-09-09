@@ -7,14 +7,15 @@
  */
 
 import type {
-  ListArtifactsResponse,
   AgentResponse,
   ToolCallSummary,
   ArtifactInfo,
   MediaArtifactInfo,
+  ArtifactType,
 } from "../types/artifacts";
-import type { EventResponse, ListEventsResponse } from "../types/sandbox-events";
-import type { ArtifactType } from "../types/statuses";
+import { listArtifactsResponseSchema } from "../types/artifacts";
+import type { EventResponse } from "../types/sandbox-events";
+import { listEventsResponseSchema } from "../types/sandbox-events";
 import type { Logger } from "../logger";
 import {
   buildOutboundAuthHeaders,
@@ -24,13 +25,14 @@ import {
 
 export type { ControlPlaneFetcher };
 
-/**
- * Tool names included in summary display.
- */
-export const SUMMARY_TOOL_NAMES = ["Edit", "Write", "Bash", "Grep", "Read"] as const;
-
 /** Server-side limit for the events API. */
 const EVENTS_PAGE_LIMIT = 200;
+
+function recordOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
 
 export interface BuildAgentResponseOptions {
   defaultSuccess?: boolean;
@@ -123,7 +125,23 @@ export async function extractAgentResponse(
         };
       }
 
-      const data = (await response.json()) as ListEventsResponse;
+      const parsed = listEventsResponseSchema.safeParse(await response.json());
+      if (!parsed.success) {
+        log.error("control_plane.fetch_events", {
+          ...base,
+          outcome: "error",
+          error: new Error("Invalid events response"),
+          duration_ms: Date.now() - startTime,
+        });
+        return {
+          textContent: "",
+          toolCalls: [],
+          artifacts: [],
+          mediaArtifacts: [],
+          success: false,
+        };
+      }
+      const data = parsed.data;
       allEvents.push(...data.events);
       cursor = data.hasMore ? data.cursor : undefined;
     } while (cursor);
@@ -262,7 +280,16 @@ async function fetchSessionArtifacts(
       return [];
     }
 
-    const data = (await response.json()) as ListArtifactsResponse;
+    const parsed = listArtifactsResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      log.error("control_plane.fetch_artifacts", {
+        ...base,
+        outcome: "error",
+        error: new Error("Invalid artifacts response"),
+      });
+      return [];
+    }
+    const data = parsed.data;
     return data.artifacts
       .filter((artifact) => artifact.type !== "screenshot" && artifact.type !== "video")
       .filter((artifact) => isArtifactInEventRange(artifact.createdAt, eventRange))
@@ -308,7 +335,7 @@ function isArtifactInEventRange(
  */
 export function summarizeToolCall(data: Record<string, unknown>): ToolCallSummary {
   const tool = String(data.tool ?? "Unknown");
-  const args = (data.args ?? {}) as Record<string, unknown>;
+  const args = recordOrUndefined(data.args) ?? {};
 
   switch (tool) {
     case "Read":
@@ -334,12 +361,12 @@ export function summarizeToolCall(data: Record<string, unknown>): ToolCallSummar
 export function getArtifactLabel(data: Record<string, unknown>): string {
   const type = String(data.artifactType ?? "artifact");
   if (type === "pr") {
-    const metadata = data.metadata as Record<string, unknown> | undefined;
+    const metadata = recordOrUndefined(data.metadata);
     const prNum = metadata?.number;
     return prNum ? `PR #${prNum}` : "Pull Request";
   }
   if (type === "branch") {
-    const metadata = data.metadata as Record<string, unknown> | undefined;
+    const metadata = recordOrUndefined(data.metadata);
     return `Branch: ${metadata?.name ?? "branch"}`;
   }
   return type;
@@ -385,10 +412,7 @@ export function toEventMediaArtifactInfo(data: Record<string, unknown>): MediaAr
   const id = typeof data.artifactId === "string" ? data.artifactId.trim() : "";
   if (!id) return null;
 
-  const metadata =
-    data.metadata && typeof data.metadata === "object" && !Array.isArray(data.metadata)
-      ? (data.metadata as Record<string, unknown>)
-      : undefined;
+  const metadata = recordOrUndefined(data.metadata);
   const mimeType = typeof metadata?.mimeType === "string" ? metadata.mimeType : undefined;
   const sizeBytes =
     typeof metadata?.sizeBytes === "number" &&

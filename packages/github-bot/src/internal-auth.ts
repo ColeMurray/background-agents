@@ -9,7 +9,7 @@ import {
   signedControlPlaneFetch as sharedSignedControlPlaneFetch,
   type OutboundRequestToSign,
   type SignedFetchInit,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/service-auth";
 import type { Env } from "./types";
 
 export function signedControlPlaneFetch(

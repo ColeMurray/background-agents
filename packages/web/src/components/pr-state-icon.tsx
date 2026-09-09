@@ -1,4 +1,4 @@
-import type { PullRequestDisplayStatus } from "@open-inspect/shared";
+import type { PullRequestDisplayStatus } from "@open-inspect/shared/types/artifacts";
 import { GitMergeIcon, GitPrClosedIcon, GitPrDraftIcon, GitPrIcon } from "@/components/ui/icons";
 
 const PR_STATE_ICON_TEXT_CLASS: Record<PullRequestDisplayStatus, string> = {

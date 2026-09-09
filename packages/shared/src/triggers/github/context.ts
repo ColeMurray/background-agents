@@ -13,6 +13,7 @@ import type {
   IssuesPayload,
   PullRequestPayload,
   PullRequestReviewCommentPayload,
+  WorkflowRunPayload,
 } from "./webhook-types";
 
 const GITHUB_CONTEXT_CONSTANTS = {
@@ -203,6 +204,32 @@ export function buildCheckSuiteContextBlock(payload: CheckSuitePayload): string 
   if (prNumbers) {
     lines.push(`Pull Requests: ${prNumbers}`);
   }
+
+  return wrapUserContextTag(lines.join("\n"));
+}
+
+/**
+ * Build the context block for `workflow_run.completed`. The workflow name and
+ * run ID are required; a missing conclusion is rendered as unknown. The
+ * workflow path, branch, commit, and run URL are appended when GitHub supplies
+ * them.
+ */
+export function buildWorkflowRunContextBlock(payload: WorkflowRunPayload): string {
+  const run = payload.workflow_run;
+  const lines = [
+    GITHUB_EVENT_PREAMBLE,
+    "",
+    "Event: workflow_run.completed",
+    `Repository: ${getRepoFullName(payload)}`,
+    `Workflow: ${run.name}`,
+    `Run: ${run.id}`,
+    `Conclusion: ${run.conclusion ?? "unknown"}`,
+  ];
+
+  if (run.path) lines.push(`Workflow file: ${run.path}`);
+  if (run.head_branch) lines.push(`Branch: ${run.head_branch}`);
+  if (run.head_sha) lines.push(`Commit: ${run.head_sha.slice(0, 7)}`);
+  if (run.html_url) lines.push(`Run URL: ${run.html_url}`);
 
   return wrapUserContextTag(lines.join("\n"));
 }

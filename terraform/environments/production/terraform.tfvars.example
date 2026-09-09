@@ -120,20 +120,22 @@ e2b_template_id = ""           # e.g., "open-inspect-sandbox"
 # =============================================================================
 # Create GitHub App at: https://github.com/settings/apps
 #
-# One GitHub App handles both OAuth (user authentication) and repository access.
-# See docs/GETTING_STARTED.md for detailed setup instructions.
+# A GitHub App installation is required for repository access in every
+# deployment. Its OAuth client ID and secret are optional together: configure
+# them for GitHub sign-in, or leave both empty for Google-only sign-in.
+# See docs/GETTING_STARTED.md for the supported combinations.
 #
-# Required credentials:
-# - Client ID and Secret: Found in the GitHub App settings page
-# - App ID: Shown at top of the GitHub App settings page
-# - Private Key: Generate and download from GitHub App settings, convert to PKCS#8
-# - Installation ID: Found in URL after installing the app on your account/org
+# Always required for repository access:
+# - App ID, PKCS#8 private key, and installation ID
+#
+# Optional pair for GitHub sign-in:
+# - Client ID and client secret from the GitHub App settings page
 
-# OAuth credentials (from GitHub App -> "Client secrets" section)
+# GitHub OAuth sign-in pair (set both or leave both empty)
 github_client_id = ""      # e.g., "Iv1.abc123..."
 github_client_secret = ""
 
-# App credentials
+# Repository-access App credentials (always required)
 github_app_id = ""
 
 # Private key in PKCS#8 format
@@ -175,7 +177,8 @@ github_bot_username = ""
 #   - Application type: Web application
 #   - Authorized redirect URI: {your-web-app-url}/api/auth/callback/google
 #   - Consent screen scopes: openid, email, profile (non-sensitive — no Google review)
-# Set BOTH values to enable Google login, or leave BOTH empty for GitHub-only.
+# Set BOTH values to enable Google login. GitHub OAuth may be enabled as well or
+# left empty for Google-only sign-in.
 # Pair with allowed_emails / allowed_email_domains below to control who may sign in.
 google_client_id = ""
 google_client_secret = ""
@@ -215,9 +218,27 @@ linear_webhook_secret = ""   # Webhook Signing Secret from the application confi
 # API Keys
 # =============================================================================
 
-# Anthropic API key for Claude
+# Anthropic API key for Claude. Injected into Modal session sandboxes and
+# OpenComputer sandboxes; Daytona, E2B and Vercel read model keys only from the
+# secret store in the web app, which overrides this value everywhere. Optional:
+# leave it blank to supply model credentials as secrets instead. Required only
+# when classification_model names an Anthropic model AND at least one of the
+# Slack or Linear bots is enabled. Both of those are the defaults, so a stock
+# configuration does need this key.
 # From: https://console.anthropic.com/
 anthropic_api_key = ""
+
+# OpenAI credential for the Slack/Linear bot classifiers. Required when
+# classification_model names an OpenAI model AND at least one of the Slack or
+# Linear bots is enabled; an Anthropic classifier model is served by
+# anthropic_api_key above.
+# From: https://platform.openai.com/api-keys
+classification_openai_api_key = ""
+
+# Model backing the Slack/Linear bot classifiers. A "claude-"/"anthropic/" id is
+# served by anthropic_api_key; a "gpt-"/"openai/" id by
+# classification_openai_api_key.
+# classification_model = "claude-haiku-4-5"
 
 # =============================================================================
 # Security Secrets
@@ -229,6 +250,11 @@ token_encryption_key = ""
 
 # Repo secrets encryption key (for encrypting repo secrets in D1)
 repo_secrets_encryption_key = ""
+
+# Optional existing provider account credential encryption key. Leave blank for
+# Terraform to generate and persist a dedicated key. Never change this after
+# storing provider account credentials.
+provider_accounts_encryption_key = ""
 
 # Modal API secret (for control plane -> Modal authentication)
 # Only required when sandbox_provider = "modal"
@@ -278,11 +304,6 @@ project_root = "../../../"
 # Display name shown in the web UI, bot messages (Slack, Linear), and PR body footers.
 # Also used as the outbound HTTP User-Agent header. Defaults to "Open-Inspect".
 # app_name = "Open-Inspect"
-
-# Short brand label shown only in the sidebar header.
-# Defaults to "Inspect". Set this when app_name is too wide for the sidebar
-# (e.g. app_name = "Acme Coding Agent", app_short_name = "Acme").
-# app_short_name = "Inspect"
 
 # Optional URL (absolute or root-relative path) to a custom logo image for the
 # command menu and browser favicon. Leave empty to use the built-in favicon
@@ -338,11 +359,12 @@ project_root = "../../../"
 enable_durable_object_bindings = false
 enable_service_bindings = false
 
-# Optional: override these only when an existing deployment needs to re-enter
-# Phase 1 for a later Durable Object migration. Fresh deployments can omit them.
+# Override these only for an explicit Durable Object migration. The production
+# workflow stages the SchedulerDO v2-to-v3 deletion only when state is still v2.
 # control_plane_migration_tag = "v1"
 # control_plane_migration_old_tag = null
 # control_plane_new_sqlite_classes = []
+# control_plane_deleted_classes = []
 
 # =============================================================================
 # Access Control

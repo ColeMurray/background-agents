@@ -12,27 +12,8 @@ import { refreshAccessToken } from "../auth/github";
 import type { SourceControlAuthContext, SourceControlProviderName } from "../source-control";
 import type { Logger } from "../logger";
 import type { ParticipantRow } from "./types";
-import type { CreateParticipantData } from "./repository";
+import type { ParticipantRepository } from "./participant-repository";
 import { DEFAULT_TOKEN_LIFETIME_MS, type UserScmTokenStore } from "../db/user-scm-tokens";
-
-/**
- * Narrow repository interface — only the methods ParticipantService needs.
- */
-export interface ParticipantRepository {
-  getParticipantByUserId(userId: string): ParticipantRow | null;
-  getParticipantByWsTokenHash(tokenHash: string): ParticipantRow | null;
-  getParticipantById(participantId: string): ParticipantRow | null;
-  getProcessingMessageAuthor(): { author_id: string } | null;
-  createParticipant(data: CreateParticipantData): void;
-  updateParticipantTokens(
-    participantId: string,
-    data: {
-      scmAccessTokenEncrypted: string;
-      scmRefreshTokenEncrypted?: string | null;
-      scmTokenExpiresAt: number;
-    }
-  ): void;
-}
 
 /**
  * Environment config — only the secrets ParticipantService needs.
@@ -48,10 +29,11 @@ export interface ParticipantServiceEnv {
  */
 export interface ParticipantServiceDeps {
   repository: ParticipantRepository;
+  getProcessingMessageAuthor: () => { author_id: string } | null;
   env: ParticipantServiceEnv;
   log: Logger;
   generateId: () => string;
-  userScmTokenStore?: UserScmTokenStore | null;
+  userScmTokenStore: UserScmTokenStore;
 }
 
 /**
@@ -59,11 +41,12 @@ export interface ParticipantServiceDeps {
  */
 export function getAvatarUrl(
   login: string | null | undefined,
-  provider: SourceControlProviderName = "github"
+  provider: SourceControlProviderName = "github",
+  userId?: string | null
 ): string | undefined {
-  if (!login) return undefined;
-  if (provider === "github") return `https://github.com/${login}.png`;
-  return undefined;
+  if (provider !== "github") return undefined;
+  if (userId) return `https://avatars.githubusercontent.com/u/${encodeURIComponent(userId)}?v=4`;
+  return login ? `https://github.com/${login}.png` : undefined;
 }
 
 export class ParticipantService {
@@ -71,14 +54,16 @@ export class ParticipantService {
   private readonly env: ParticipantServiceEnv;
   private readonly log: Logger;
   private readonly generateId: () => string;
-  private readonly userScmTokenStore: UserScmTokenStore | null;
+  private readonly userScmTokenStore: UserScmTokenStore;
+  private readonly getProcessingMessageAuthor: () => { author_id: string } | null;
 
   constructor(deps: ParticipantServiceDeps) {
     this.repository = deps.repository;
     this.env = deps.env;
     this.log = deps.log;
     this.generateId = deps.generateId;
-    this.userScmTokenStore = deps.userScmTokenStore ?? null;
+    this.userScmTokenStore = deps.userScmTokenStore;
+    this.getProcessingMessageAuthor = deps.getProcessingMessageAuthor;
   }
 
   /**
@@ -99,13 +84,14 @@ export class ParticipantService {
    * Create a new participant with "member" role.
    * Returns the constructed ParticipantRow without a DB round-trip.
    */
-  create(userId: string, name: string): ParticipantRow {
+  create(userId: string, name: string, canonicalUserId?: string): ParticipantRow {
     const id = this.generateId();
     const now = Date.now();
 
     this.repository.createParticipant({
       id,
       userId,
+      canonicalUserId: canonicalUserId ?? null,
       scmName: name,
       role: "member",
       joinedAt: now,
@@ -114,6 +100,7 @@ export class ParticipantService {
     return {
       id,
       user_id: userId,
+      canonical_user_id: canonicalUserId ?? null,
       scm_user_id: null,
       scm_login: null,
       scm_email: null,
@@ -137,7 +124,7 @@ export class ParticipantService {
     | { participant: ParticipantRow; error?: never; status?: never }
     | { participant?: never; error: string; status: number }
   > {
-    const processingMessage = this.repository.getProcessingMessageAuthor();
+    const processingMessage = this.getProcessingMessageAuthor();
 
     if (!processingMessage) {
       this.log.warn("PR creation failed: no processing message found");
@@ -174,7 +161,7 @@ export class ParticipantService {
    * Dispatches to centralized (D1) or local (per-DO SQLite) refresh path.
    */
   async refreshToken(participant: ParticipantRow): Promise<ParticipantRow | null> {
-    if (this.userScmTokenStore && participant.scm_user_id) {
+    if (participant.scm_user_id) {
       return this.refreshTokenCentralized(participant);
     }
     return this.refreshTokenLocal(participant);
@@ -192,7 +179,7 @@ export class ParticipantService {
   private async refreshTokenCentralized(
     participant: ParticipantRow
   ): Promise<ParticipantRow | null> {
-    const store = this.userScmTokenStore!;
+    const store = this.userScmTokenStore;
     const scmUserId = participant.scm_user_id!;
 
     try {
@@ -224,7 +211,6 @@ export class ParticipantService {
       const newTokens = await refreshAccessToken(d1Tokens.refreshToken, {
         clientId: this.env.GITHUB_CLIENT_ID,
         clientSecret: this.env.GITHUB_CLIENT_SECRET,
-        encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
       });
 
       const newAccessToken = newTokens.access_token;
@@ -303,7 +289,6 @@ export class ParticipantService {
    */
   private async seedD1AfterLocalRefresh(participant: ParticipantRow): Promise<void> {
     if (
-      !this.userScmTokenStore ||
       !participant.scm_user_id ||
       !participant.scm_access_token_encrypted ||
       !participant.scm_refresh_token_encrypted ||
@@ -335,8 +320,9 @@ export class ParticipantService {
   }
 
   /**
-   * Local-only refresh using the per-DO SQLite refresh token.
-   * Original refreshToken logic — used as fallback when D1 is unavailable.
+   * Local-only refresh using the per-DO SQLite refresh token. Taken by a
+   * participant with no `scm_user_id`, who has no row in the shared token
+   * store to refresh centrally, and as the fallback when that row is missing.
    */
   private async refreshTokenLocal(participant: ParticipantRow): Promise<ParticipantRow | null> {
     if (!participant.scm_refresh_token_encrypted) {
@@ -358,7 +344,6 @@ export class ParticipantService {
       const newTokens = await refreshAccessToken(refreshToken, {
         clientId: this.env.GITHUB_CLIENT_ID,
         clientSecret: this.env.GITHUB_CLIENT_SECRET,
-        encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
       });
 
       const newAccessTokenEncrypted = await encryptToken(

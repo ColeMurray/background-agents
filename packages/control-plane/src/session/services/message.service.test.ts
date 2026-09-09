@@ -1,16 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ArtifactRow, EventRow, MessageRow } from "../types";
-import type { SessionRepository } from "../repository";
+import type { MessageRepository } from "../message-repository";
 import type { SessionMessageQueue } from "../message-queue";
-import { enqueuePromptRequestSchema, MessageService } from "./message.service";
+import type { ArtifactRepository } from "../artifact-repository";
+import type { EventRepository } from "../event-repository";
+import { MessageService } from "./message.service";
 
 function createService() {
   const repository = {
+    listMessages: vi.fn(),
+  } as unknown as MessageRepository;
+  const eventRepository = {
     listEventPage: vi.fn(),
+  } as unknown as EventRepository;
+  const artifactRepository = {
     listArtifacts: vi.fn(),
     getArtifactById: vi.fn(),
-    listMessages: vi.fn(),
-  } as unknown as SessionRepository;
+  } as unknown as ArtifactRepository;
 
   const messageQueue = {
     enqueuePromptFromApi: vi.fn(),
@@ -22,11 +28,15 @@ function createService() {
   return {
     service: new MessageService({
       repository,
+      eventRepository,
+      artifactRepository,
       messageQueue,
       stopExecution,
       parseArtifactMetadata,
     }),
     repository,
+    eventRepository,
+    artifactRepository,
     messageQueue,
     stopExecution,
     parseArtifactMetadata,
@@ -34,38 +44,6 @@ function createService() {
 }
 
 describe("MessageService", () => {
-  it("parses valid enqueue prompt request bodies", () => {
-    const body = {
-      content: "hello",
-      authorId: "github:123",
-      source: "github",
-      model: "anthropic/claude-haiku-4-5",
-      reasoningEffort: "high",
-      attachments: [{ attachmentId: "attachment-1", name: "screenshot.png" }],
-      callbackContext: { source: "automation", runId: "run-1" },
-      scmEnrichment: {
-        userId: "user-1",
-        login: "octocat",
-        name: null,
-        email: null,
-        accessTokenEncrypted: "encrypted-token",
-        refreshTokenEncrypted: null,
-        tokenExpiresAt: null,
-      },
-    };
-
-    expect(enqueuePromptRequestSchema.safeParse(body).success).toBe(true);
-  });
-
-  it("rejects malformed enqueue prompt request bodies", () => {
-    const result = enqueuePromptRequestSchema.safeParse({
-      content: "hello",
-      authorId: "user-1",
-    });
-
-    expect(result.success).toBe(false);
-  });
-
   it("delegates enqueuePrompt to SessionMessageQueue", async () => {
     const { service, messageQueue } = createService();
     vi.mocked(messageQueue.enqueuePromptFromApi).mockResolvedValue({
@@ -96,13 +74,13 @@ describe("MessageService", () => {
   });
 
   it("paginates events with hasMore and cursor", () => {
-    const { service, repository } = createService();
+    const { service, eventRepository } = createService();
     const events: EventRow[] = [
       { id: "e3", type: "token", data: "{}", message_id: "m1", created_at: 3000 },
       { id: "e2", type: "token", data: "{}", message_id: "m1", created_at: 2000 },
       { id: "e1", type: "token", data: "{}", message_id: "m1", created_at: 1000 },
     ];
-    vi.mocked(repository.listEventPage).mockReturnValue({
+    vi.mocked(eventRepository.listEventPage).mockReturnValue({
       events: events.slice(0, 2),
       hasMore: true,
       nextCursor: { kind: "timeline", createdAt: 2000, id: "e2" },
@@ -120,7 +98,7 @@ describe("MessageService", () => {
       messageId: "m1",
       createdAt: 3000,
     });
-    expect(repository.listEventPage).toHaveBeenCalledWith({
+    expect(eventRepository.listEventPage).toHaveBeenCalledWith({
       cursor: null,
       limit: 2,
       type: "token",
@@ -129,7 +107,7 @@ describe("MessageService", () => {
   });
 
   it("maps artifacts and delegates metadata parsing", () => {
-    const { service, repository, parseArtifactMetadata } = createService();
+    const { service, artifactRepository, parseArtifactMetadata } = createService();
     const artifacts: ArtifactRow[] = [
       {
         id: "a1",
@@ -140,7 +118,7 @@ describe("MessageService", () => {
         updated_at: 1500,
       },
     ];
-    vi.mocked(repository.listArtifacts).mockReturnValue(artifacts);
+    vi.mocked(artifactRepository.listArtifacts).mockReturnValue(artifacts);
     vi.mocked(parseArtifactMetadata).mockReturnValue({ key: "value" });
 
     const result = service.listArtifacts();
@@ -161,7 +139,7 @@ describe("MessageService", () => {
   });
 
   it("returns a single mapped artifact by id", () => {
-    const { service, repository, parseArtifactMetadata } = createService();
+    const { service, artifactRepository, parseArtifactMetadata } = createService();
     const artifact: ArtifactRow = {
       id: "artifact-1",
       type: "screenshot",
@@ -170,7 +148,7 @@ describe("MessageService", () => {
       created_at: 1000,
       updated_at: 1500,
     };
-    vi.mocked(repository.getArtifactById).mockReturnValue(artifact);
+    vi.mocked(artifactRepository.getArtifactById).mockReturnValue(artifact);
     vi.mocked(parseArtifactMetadata).mockReturnValue({ mimeType: "image/png" });
 
     const result = service.getArtifact("artifact-1");
@@ -185,13 +163,13 @@ describe("MessageService", () => {
         updatedAt: 1500,
       },
     });
-    expect(repository.getArtifactById).toHaveBeenCalledWith("artifact-1");
+    expect(artifactRepository.getArtifactById).toHaveBeenCalledWith("artifact-1");
     expect(parseArtifactMetadata).toHaveBeenCalledWith(artifact);
   });
 
   it("returns null when a requested artifact does not exist", () => {
-    const { service, repository, parseArtifactMetadata } = createService();
-    vi.mocked(repository.getArtifactById).mockReturnValue(null);
+    const { service, artifactRepository, parseArtifactMetadata } = createService();
+    vi.mocked(artifactRepository.getArtifactById).mockReturnValue(null);
 
     expect(service.getArtifact("missing")).toEqual({ artifact: null });
     expect(parseArtifactMetadata).not.toHaveBeenCalled();
@@ -215,8 +193,14 @@ describe("MessageService", () => {
           },
         ]),
         callback_context: null,
+        client_request_id: null,
+        request_fingerprint: null,
+        autofix_feedback_key: null,
+        autofix_pr_key: null,
+        origin_context: null,
         status: "pending",
         error_message: null,
+        stop_confirmation_deadline: null,
         created_at: 3000,
         started_at: null,
         completed_at: null,
@@ -230,8 +214,14 @@ describe("MessageService", () => {
         reasoning_effort: null,
         attachments: "invalid-json",
         callback_context: null,
+        client_request_id: null,
+        request_fingerprint: null,
+        autofix_feedback_key: null,
+        autofix_pr_key: null,
+        origin_context: null,
         status: "pending",
         error_message: null,
+        stop_confirmation_deadline: null,
         created_at: 2000,
         started_at: null,
         completed_at: null,
@@ -245,8 +235,14 @@ describe("MessageService", () => {
         reasoning_effort: null,
         attachments: null,
         callback_context: null,
+        client_request_id: null,
+        request_fingerprint: null,
+        autofix_feedback_key: null,
+        autofix_pr_key: null,
+        origin_context: null,
         status: "pending",
         error_message: null,
+        stop_confirmation_deadline: null,
         created_at: 1000,
         started_at: null,
         completed_at: null,
@@ -286,8 +282,14 @@ describe("MessageService", () => {
         reasoning_effort: null,
         attachments: "[]",
         callback_context: null,
+        client_request_id: null,
+        request_fingerprint: null,
+        autofix_feedback_key: null,
+        autofix_pr_key: null,
+        origin_context: null,
         status: "pending",
         error_message: null,
+        stop_confirmation_deadline: null,
         created_at: 1000,
         started_at: null,
         completed_at: null,

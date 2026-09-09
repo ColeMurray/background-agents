@@ -1,4 +1,4 @@
-import { verifySlackSignature } from "@open-inspect/shared";
+import { verifySlackSignature } from "@open-inspect/shared/slack";
 import { Hono } from "hono";
 import { handleAppHomeInteractionRoute } from "../app-home";
 import { handleSlackInteraction } from "../interactions/dispatcher";

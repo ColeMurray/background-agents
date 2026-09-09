@@ -1,15 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyTitleUpdate,
   buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
+  fetchSessionListPage,
   isArchivedSessionListKey,
   isSessionListKey,
   isUnarchivedSessionListKey,
   type SessionListResponse,
 } from "./session-list";
-import type { Session } from "@open-inspect/shared";
+import type { Session } from "@open-inspect/shared/types/sessions";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function session(id: string, overrides: Partial<Session> = {}): Session {
   return {
@@ -35,8 +41,14 @@ function session(id: string, overrides: Partial<Session> = {}): Session {
 describe("buildSessionsPageKey", () => {
   it("adds the current-user creator filter", () => {
     expect(
-      buildSessionsPageKey({ excludeStatus: "archived", createdBy: [CURRENT_USER_CREATED_BY] })
-    ).toBe("/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me");
+      buildSessionsPageKey({
+        excludeStatus: "archived",
+        excludeAutomationLineage: true,
+        createdBy: [CURRENT_USER_CREATED_BY],
+      })
+    ).toBe(
+      "/api/sessions?limit=50&offset=0&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
+    );
   });
 
   it("adds repeated creator filters", () => {
@@ -48,6 +60,34 @@ describe("buildSessionsPageKey", () => {
     ).toBe(
       "/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&createdBy=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
+  });
+});
+
+describe("fetchSessionListPage", () => {
+  it("parses the session-list boundary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          sessions: [session("session-1")],
+          hasMore: false,
+        })
+      )
+    );
+
+    await expect(fetchSessionListPage(buildSessionsPageKey())).resolves.toMatchObject({
+      sessions: [{ id: "session-1", status: "active" }],
+      hasMore: false,
+    });
+  });
+
+  it("rejects malformed pages", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ sessions: [{ id: "session-1" }], hasMore: false }))
+    );
+
+    await expect(fetchSessionListPage(buildSessionsPageKey())).rejects.toThrow();
   });
 });
 
@@ -116,17 +156,17 @@ describe("isArchivedSessionListKey", () => {
 });
 
 describe("applyTitleUpdate", () => {
-  it("replaces the title and updatedAt of the matching session", () => {
+  it("replaces only the title of the matching session", () => {
     const before: SessionListResponse = {
       sessions: [session("a"), session("b"), session("c")],
       hasMore: false,
     };
 
-    const after = applyTitleUpdate(before, "b", "Renamed", 9999);
+    const after = applyTitleUpdate(before, "b", "Renamed");
 
     expect(after?.sessions).toEqual([
       session("a"),
-      session("b", { title: "Renamed", updatedAt: 9999 }),
+      session("b", { title: "Renamed" }),
       session("c"),
     ]);
   });
@@ -137,13 +177,13 @@ describe("applyTitleUpdate", () => {
       hasMore: true,
     };
 
-    const after = applyTitleUpdate(before, "a", "New", 1);
+    const after = applyTitleUpdate(before, "a", "New");
 
     expect(after?.hasMore).toBe(true);
   });
 
   it("returns undefined when data is undefined (cache miss)", () => {
-    expect(applyTitleUpdate(undefined, "a", "New", 1)).toBeUndefined();
+    expect(applyTitleUpdate(undefined, "a", "New")).toBeUndefined();
   });
 
   it("leaves the list unchanged when sessionId does not match", () => {
@@ -152,7 +192,7 @@ describe("applyTitleUpdate", () => {
       hasMore: false,
     };
 
-    const after = applyTitleUpdate(before, "missing", "New", 9999);
+    const after = applyTitleUpdate(before, "missing", "New");
 
     expect(after?.sessions).toEqual(before.sessions);
   });
@@ -164,7 +204,7 @@ describe("applyTitleUpdate", () => {
     };
     const beforeSnapshot = structuredClone(before);
 
-    applyTitleUpdate(before, "a", "Mutated", 9999);
+    applyTitleUpdate(before, "a", "Mutated");
 
     expect(before).toEqual(beforeSnapshot);
   });

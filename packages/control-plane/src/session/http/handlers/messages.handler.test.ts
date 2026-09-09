@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
-import { createMessagesHandler } from "./messages.handler";
+import { MessagesHandler } from "./messages.handler";
 import type { MessageService } from "../../services/message.service";
 
 function createHandler() {
@@ -22,15 +22,13 @@ function createHandler() {
   } as unknown as Logger;
 
   return {
-    handler: createMessagesHandler({
-      messageService,
-    }),
+    handler: new MessagesHandler(messageService),
     messageService,
     log,
   };
 }
 
-describe("createMessagesHandler", () => {
+describe("MessagesHandler", () => {
   it("enqueues prompt and returns queued response", async () => {
     const { handler, messageService, log } = createHandler();
     vi.mocked(messageService.enqueuePrompt).mockResolvedValue({

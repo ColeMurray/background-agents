@@ -1,28 +1,88 @@
 "use client";
 
 import { useEffect, useState, type RefObject } from "react";
+import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/types/sessions";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
 import type { SessionActionProps } from "@/components/session-actions";
+import { BoxIcon, RightSidebarIcon, RightSidebarOpenIcon } from "@/components/ui/icons";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
+import { getSafeExternalUrl } from "@/lib/urls";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
 
-const SANDBOX_STATUS_COLORS: Record<string, string> = {
-  pending: "text-muted-foreground",
-  warming: "text-warning",
-  spawning: "text-warning",
-  syncing: "text-accent",
-  ready: "text-success",
-  running: "text-accent",
-  stopped: "text-muted-foreground",
-  stale: "text-muted-foreground",
-  failed: "text-destructive",
+const SANDBOX_STATUS_PRESENTATION: Record<
+  SandboxStatusValue,
+  { label: string; detail: string; color: string; dot: string; pulse?: boolean }
+> = {
+  pending: {
+    label: "Pending",
+    detail: "Waiting for the sandbox to start.",
+    color: "text-muted-foreground",
+    dot: "bg-muted-foreground",
+  },
+  warming: {
+    label: "Warming...",
+    detail: "Preparing sandbox capacity.",
+    color: "text-warning",
+    dot: "bg-warning",
+    pulse: true,
+  },
+  spawning: {
+    label: "Starting...",
+    detail: "Creating or restoring the sandbox.",
+    color: "text-warning",
+    dot: "bg-warning",
+    pulse: true,
+  },
+  connecting: {
+    label: "Connecting...",
+    detail: "Waiting for the sandbox runtime to connect.",
+    color: "text-warning",
+    dot: "bg-warning",
+    pulse: true,
+  },
+  ready: {
+    label: "Ready",
+    detail: "The sandbox is available.",
+    color: "text-success",
+    dot: "bg-success",
+  },
+  snapshotting: {
+    label: "Saving...",
+    detail: "Saving a sandbox snapshot.",
+    color: "text-accent",
+    dot: "bg-accent",
+    pulse: true,
+  },
+  stopped: {
+    label: "Stopped",
+    detail: "The sandbox stopped after inactivity and can restart with the next prompt.",
+    color: "text-muted-foreground",
+    dot: "bg-muted-foreground",
+  },
+  stale: {
+    label: "Unresponsive",
+    detail: "The sandbox runtime stopped responding.",
+    color: "text-destructive",
+    dot: "bg-destructive",
+  },
+  failed: {
+    label: "Failed",
+    detail: "The sandbox could not start or recover.",
+    color: "text-destructive",
+    dot: "bg-destructive",
+  },
 };
 
 export type SessionHeaderProps = {
   sessionState: SessionSocketState["sessionState"];
+  /** Why the sandbox last failed; shown in the status popover. */
+  sandboxError?: SessionSocketState["sandboxError"];
   fallbackSessionInfo: {
     repoOwner: string | null;
     repoName: string | null;
@@ -30,27 +90,41 @@ export type SessionHeaderProps = {
   };
   connected: boolean;
   connecting: boolean;
+  /** A reconnect is scheduled and has not started yet. */
+  reconnecting: boolean;
   isDetailsOpen: boolean;
+  isDesktopDetailsOpen: boolean;
+  showDesktopDetailsToggle: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   actionsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
+  onToggleDesktopDetails: () => void;
   onOpenMobileDetails: () => void;
   actions: SessionActionProps;
-  renameSession: (title: string) => Promise<boolean | undefined>;
+  optimisticTitle?: string;
+  renameSession: (title: string) => Promise<boolean>;
+  capabilities: SessionCapabilities;
 };
 
 export function SessionHeader({
   sessionState,
+  sandboxError,
   fallbackSessionInfo,
   connected,
   connecting,
+  reconnecting,
   isDetailsOpen,
+  isDesktopDetailsOpen,
+  showDesktopDetailsToggle,
   detailsButtonRef,
   actionsButtonRef,
   onToggleDetails,
+  onToggleDesktopDetails,
   onOpenMobileDetails,
   actions,
+  optimisticTitle,
   renameSession,
+  capabilities,
 }: SessionHeaderProps) {
   const { isOpen } = useSidebarContext();
   const hasFallbackSessionInfo =
@@ -66,12 +140,11 @@ export function SessionHeader({
 
   const [isRenaming, setIsRenaming] = useState(false);
   const [title, setTitle] = useState(baseResolvedTitle);
-  const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null);
-
   const resolvedTitle =
     optimisticTitle ?? sessionState?.title ?? fallbackSessionInfo.title ?? repoLabel;
 
   const handleStartRename = () => {
+    if (!capabilities.lifecycle) return;
     setTitle(resolvedTitle);
     setIsRenaming(true);
   };
@@ -89,24 +162,13 @@ export function SessionHeader({
       return;
     }
 
-    const previousTitle = resolvedTitle;
     setIsRenaming(false);
-    setOptimisticTitle(trimmed);
 
     const success = await renameSession(trimmed);
     if (!success) {
-      setOptimisticTitle(null);
-      setTitle(previousTitle);
       setIsRenaming(true);
     }
   };
-
-  useEffect(() => {
-    if (!optimisticTitle) return;
-    if (sessionState?.title === optimisticTitle) {
-      setOptimisticTitle(null);
-    }
-  }, [optimisticTitle, sessionState?.title]);
 
   useEffect(() => {
     if (!isRenaming) setTitle(sessionState?.title ?? fallbackSessionInfo.title ?? "");
@@ -138,20 +200,16 @@ export function SessionHeader({
                 className="text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium max-w-40 truncate"
               />
             ) : (
-              <h1
-                className="text-sm font-medium text-foreground max-w-40 truncate cursor-text"
-                onClick={handleStartRename}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    handleStartRename();
-                  }
-                }}
-                role="button"
-                tabIndex={0}
-                title="Click to rename"
-              >
-                {resolvedTitle}
+              <h1 className="max-w-40 truncate text-sm font-medium text-foreground">
+                <button
+                  type="button"
+                  className={`max-w-full truncate text-left ${capabilities.lifecycle ? "cursor-text" : "cursor-default"}`}
+                  onClick={handleStartRename}
+                  title={capabilities.lifecycle ? "Click to rename" : undefined}
+                  disabled={!capabilities.lifecycle}
+                >
+                  {resolvedTitle}
+                </button>
               </h1>
             )}
             <p className="text-sm text-muted-foreground">{repoLabel}</p>
@@ -175,119 +233,150 @@ export function SessionHeader({
             onOpenDetails={onOpenMobileDetails}
             onOpenMedia={onOpenMobileDetails}
           />
-          <div className="md:hidden">
-            <CombinedStatusDot
-              connected={connected}
-              connecting={connecting}
-              sandboxStatus={sessionState?.sandboxStatus}
-            />
-          </div>
-          <div className="hidden md:contents">
-            <ConnectionStatus connected={connected} connecting={connecting} />
-            <SandboxStatus
+          <div className="flex items-center gap-1">
+            {capabilities.read && (
+              <ConnectionStatusIcon
+                connected={connected}
+                connecting={connecting}
+                reconnecting={reconnecting}
+              />
+            )}
+            <SandboxStatusIcon
               status={sessionState?.sandboxStatus}
-              dashboardUrl={sessionState?.sandboxDashboardUrl}
+              dashboardUrl={
+                capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined
+              }
+              error={sandboxError}
             />
           </div>
+          {showDesktopDetailsToggle && (
+            <button
+              type="button"
+              onClick={onToggleDesktopDetails}
+              className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
+              aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
+              aria-controls="session-details-sidebar"
+              aria-expanded={isDesktopDetailsOpen}
+            >
+              {isDesktopDetailsOpen ? (
+                <RightSidebarOpenIcon className="h-4 w-4" />
+              ) : (
+                <RightSidebarIcon className="h-4 w-4" />
+              )}
+            </button>
+          )}
         </div>
       </div>
     </header>
   );
 }
 
-function ConnectionStatus({ connected, connecting }: { connected: boolean; connecting: boolean }) {
-  if (connecting) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-warning">
-        <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
-        Connecting...
-      </span>
-    );
-  }
-
-  if (connected) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-success">
-        <span className="w-2 h-2 rounded-full bg-success" />
-        Connected
-      </span>
-    );
-  }
-
-  return (
-    <span className="flex items-center gap-1 text-xs text-destructive">
-      <span className="w-2 h-2 rounded-full bg-destructive" />
-      Disconnected
-    </span>
-  );
-}
-
-function SandboxStatus({
-  status,
-  dashboardUrl,
-}: {
-  status?: string;
-  dashboardUrl?: string | null;
-}) {
-  if (!status) return null;
-
-  const className = `text-xs ${SANDBOX_STATUS_COLORS[status] || SANDBOX_STATUS_COLORS.pending}`;
-  const label = `Sandbox: ${status}`;
-
-  if (dashboardUrl) {
-    return (
-      <a
-        href={dashboardUrl}
-        target="_blank"
-        rel="noreferrer noopener"
-        title="Open sandbox in provider dashboard"
-        className={`${className} hover:underline`}
-      >
-        {label}
-        <span aria-hidden="true" className="ml-0.5">
-          {"\u2197"}
-        </span>
-      </a>
-    );
-  }
-
-  return <span className={className}>{label}</span>;
-}
-
-function CombinedStatusDot({
+function ConnectionStatusIcon({
   connected,
   connecting,
-  sandboxStatus,
+  reconnecting,
 }: {
   connected: boolean;
   connecting: boolean;
-  sandboxStatus?: string;
+  reconnecting: boolean;
 }) {
-  let color: string;
-  let pulse = false;
-  let label: string;
-
-  if (!connected && !connecting) {
-    color = "bg-destructive";
-    label = "Disconnected";
-  } else if (connecting) {
-    color = "bg-warning";
-    pulse = true;
-    label = "Connecting...";
-  } else if (sandboxStatus === "failed") {
-    color = "bg-destructive";
-    label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
-  } else if (["pending", "warming", "spawning", "syncing"].includes(sandboxStatus || "")) {
-    color = "bg-warning";
-    label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
-  } else {
-    color = "bg-success";
-    label = sandboxStatus ? `Connected \u00b7 Sandbox: ${sandboxStatus}` : "Connected";
-  }
+  // A pending reconnect is a wait, not a dead connection: say so rather than
+  // showing "Disconnected" while the backoff timer runs.
+  const pending = connecting || reconnecting;
+  const label = reconnecting
+    ? "Reconnecting..."
+    : connecting
+      ? "Connecting..."
+      : connected
+        ? "Connected"
+        : "Disconnected";
+  const color = pending ? "bg-warning" : connected ? "bg-success" : "bg-destructive";
 
   return (
-    <span title={label} className="flex items-center">
-      <span className={`w-2.5 h-2.5 rounded-full ${color}${pulse ? " animate-pulse" : ""}`} />
-    </span>
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            role="status"
+            aria-label={`Connection status: ${label}`}
+            tabIndex={0}
+            className="flex h-8 w-8 items-center justify-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span
+              aria-hidden="true"
+              className={`h-2.5 w-2.5 rounded-full ${color}${pending ? " animate-pulse motion-reduce:animate-none" : ""}`}
+            />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{label}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+function SandboxStatusIcon({
+  status,
+  dashboardUrl,
+  error,
+}: {
+  status?: SandboxStatusValue;
+  dashboardUrl?: string | null;
+  /**
+   * The control plane's reason for the current failure, when it has one.
+   * Rendered verbatim: it is usually the sandbox provider's own message (quota
+   * exceeded, rate limited, timeout above the plan cap), which is the only part
+   * that tells someone what to actually change.
+   */
+  error?: string | null;
+}) {
+  if (!status) return null;
+
+  const presentation = SANDBOX_STATUS_PRESENTATION[status];
+  const safeDashboardUrl = getSafeExternalUrl(dashboardUrl);
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Sandbox status: ${presentation.label}`}
+          className={`relative flex h-8 w-8 items-center justify-center rounded-sm border border-border ${presentation.color} transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+        >
+          <BoxIcon className="h-4 w-4" />
+          <span
+            aria-hidden="true"
+            className={`absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full ${presentation.dot}${presentation.pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}
+          />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" side="bottom" className="w-[min(20rem,calc(100vw-2rem))] p-0">
+        <div className="border-b border-border-muted p-3">
+          <div className={`flex items-center gap-2 text-sm font-medium ${presentation.color}`}>
+            <span
+              aria-hidden="true"
+              className={`h-2 w-2 rounded-full ${presentation.dot}${presentation.pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}
+            />
+            Sandbox {presentation.label}
+          </div>
+          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{presentation.detail}</p>
+          {error && (
+            <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-destructive">
+              {error}
+            </p>
+          )}
+        </div>
+        {safeDashboardUrl && (
+          <a
+            href={safeDashboardUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-between p-3 text-xs font-medium text-accent hover:bg-muted"
+          >
+            Open provider dashboard
+            <span aria-hidden="true">{"\u2197"}</span>
+          </a>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }

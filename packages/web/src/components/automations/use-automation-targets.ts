@@ -1,11 +1,9 @@
 "use client";
 
 import { useCallback, useMemo, useEffect, useState } from "react";
-import {
-  MAX_AUTOMATION_REPOSITORIES,
-  parseRepositoryFullName,
-  type AutomationRepositoryInput,
-} from "@open-inspect/shared";
+import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
+import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
+import type { AutomationRepositoryInput } from "@open-inspect/shared/types/automations";
 import {
   type AutomationSessionTarget,
   type SelectionMode,

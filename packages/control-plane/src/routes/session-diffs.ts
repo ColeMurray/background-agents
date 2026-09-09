@@ -1,19 +1,27 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   SESSION_DIFF_FAILURE_BODY_MAX_BYTES,
   SESSION_DIFF_ID_PATTERN,
   SESSION_DIFF_MAX_BUNDLE_BYTES,
   sessionDiffFailureSchema,
   sessionDiffUploadSchema,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 import { SessionInternalPaths } from "../session/contracts";
-import { error, parsePattern, type Route } from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import {
+  error,
+  SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  requirePermission,
+} from "./shared";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 import type { Env } from "../types";
 
 export const SESSION_DIFF_UPLOAD_BODY_MAX_BYTES = SESSION_DIFF_MAX_BUNDLE_BYTES;
 
-function routeId(match: RegExpMatchArray, name: string): string | null {
-  const value = match.groups?.[name];
+function routeId(params: Record<string, string>, name: string): string | null {
+  const value = params[name];
   return value && SESSION_DIFF_ID_PATTERN.test(value) ? value : null;
 }
 
@@ -70,14 +78,13 @@ async function runtimeJson(
   });
 }
 
-async function handleDiffState(
+export async function handleDiffState(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required", 400);
+  const sessionId = params.id;
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.diffState);
   if (!response.ok) {
     return response.status === 404
@@ -90,14 +97,13 @@ async function handleDiffState(
   });
 }
 
-async function handleDiffUpload(
+export async function handleDiffUpload(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required", 400);
+  const sessionId = params.id;
   const body = await readBoundedJson(
     request,
     SESSION_DIFF_UPLOAD_BODY_MAX_BYTES,
@@ -110,14 +116,13 @@ async function handleDiffUpload(
   return new Response(response.body, { status: response.status, headers: response.headers });
 }
 
-async function handleDiffFailure(
+export async function handleDiffFailure(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required", 400);
+  const sessionId = params.id;
   const body = await readBoundedJson(
     request,
     SESSION_DIFF_FAILURE_BODY_MAX_BYTES,
@@ -130,15 +135,15 @@ async function handleDiffFailure(
   return new Response(response.body, { status: response.status, headers: response.headers });
 }
 
-async function handleDiffFile(
+export async function handleDiffFile(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; revisionId: string; fileId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  const revisionId = routeId(match, "revisionId");
-  const fileId = routeId(match, "fileId");
+  const sessionId = params.id;
+  const revisionId = routeId(params, "revisionId");
+  const fileId = routeId(params, "fileId");
   if (!sessionId || !revisionId || !fileId) return error("Invalid diff file identity", 400);
   const response = await ctx.sessionRuntime.fetch(
     sessionId,
@@ -156,14 +161,13 @@ async function handleDiffFile(
   });
 }
 
-async function handleDiffRetry(
+export async function handleDiffRetry(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required", 400);
+  const sessionId = params.id;
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.diffRetry, {
     method: "POST",
   });
@@ -180,30 +184,32 @@ async function handleDiffRetry(
  * Only bundle upload and failure reporting additionally accept the per-session
  * sandbox token; the Session DO validates that token before these handlers run.
  */
-export const sessionDiffRoutes: Route[] = [
-  sessionRoute({
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/diff"),
-    handler: handleDiffState,
+export const sessionDiffRoutes = new Hono<ControlPlaneHonoEnv>();
+
+const DIFF_READ = admit({
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("sessions.read"),
+});
+const DIFF_WRITE = admit({
+  ...SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
+  authorization: requirePermission("sessions.collaborate"),
+});
+
+sessionDiffRoutes.get("/sessions/:id/diff", DIFF_READ, (c) => dispatchSession(c, handleDiffState));
+sessionDiffRoutes.put("/sessions/:id/diff", DIFF_WRITE, (c) =>
+  dispatchSession(c, handleDiffUpload)
+);
+sessionDiffRoutes.post("/sessions/:id/diff/failure", DIFF_WRITE, (c) =>
+  dispatchSession(c, handleDiffFailure)
+);
+sessionDiffRoutes.get("/sessions/:id/diff/:revisionId/files/:fileId", DIFF_READ, (c) =>
+  dispatchSession(c, handleDiffFile)
+);
+sessionDiffRoutes.post(
+  "/sessions/:id/diff/retry",
+  admit({
+    ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+    authorization: requirePermission("sessions.lifecycle"),
   }),
-  sessionRoute({
-    method: "PUT",
-    pattern: parsePattern("/sessions/:id/diff"),
-    handler: handleDiffUpload,
-  }),
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/diff/failure"),
-    handler: handleDiffFailure,
-  }),
-  sessionRoute({
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/diff/:revisionId/files/:fileId"),
-    handler: handleDiffFile,
-  }),
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/diff/retry"),
-    handler: handleDiffRetry,
-  }),
-];
+  (c) => dispatchSession(c, handleDiffRetry)
+);

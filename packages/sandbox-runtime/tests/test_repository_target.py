@@ -34,8 +34,14 @@ def _plugin_module(tmp_path: Path) -> Path:
     zod_package.mkdir(parents=True)
     (zod_package / "package.json").write_text('{"type":"module","exports":"./index.js"}')
     (zod_package / "index.js").write_text(
-        "const schema = { describe() { return this; }, optional() { return this; } };"
-        "export const z = { string() { return Object.create(schema); } };"
+        "const schema = {"
+        " describe(description) { this.description = description; return this; },"
+        " optional() { return this; }"
+        "};"
+        "export const z = {"
+        " string() { return Object.create(schema); },"
+        " boolean() { return Object.create(schema); }"
+        "};"
     )
     return module
 
@@ -84,3 +90,140 @@ def test_parses_nested_owner_without_manifest(tmp_path: Path) -> None:
 @pytest.mark.parametrize("repo", ["web", "/web", "group/", "group//web"])
 def test_rejects_malformed_repository_names(tmp_path: Path, repo: str) -> None:
     assert _resolve(tmp_path, repo, []) is None
+
+
+def test_draft_mode_requires_explicit_user_request(tmp_path: Path) -> None:
+    script = """
+      console.log = () => {};
+      const { default: pullRequestTool } = await import(process.argv[1]);
+      process.stdout.write(pullRequestTool.args.draft.description);
+    """
+    result = subprocess.run(
+        [
+            NODE_BINARY,
+            "--input-type=module",
+            "-e",
+            script,
+            _plugin_module(tmp_path).as_uri(),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+
+    assert "true only when the user explicitly asks for a draft" in result.stdout
+    assert "otherwise omit this field" in result.stdout
+
+
+def _format_success(tmp_path: Path, result_json: str) -> str:
+    script = """
+      console.log = () => {};
+      const { formatPullRequestSuccess } = await import(process.argv[1]);
+      process.stdout.write(formatPullRequestSuccess(JSON.parse(process.argv[2])));
+    """
+    result = subprocess.run(
+        [
+            NODE_BINARY,
+            "--input-type=module",
+            "-e",
+            script,
+            _plugin_module(tmp_path).as_uri(),
+            result_json,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+    return result.stdout
+
+
+@pytest.mark.parametrize(
+    ("state", "message"),
+    [
+        ("draft", "The pull request is in draft mode."),
+        ("open", "The pull request is now ready for review."),
+    ],
+)
+def test_formats_pull_request_state(tmp_path: Path, state: str, message: str) -> None:
+    output = _format_success(
+        tmp_path,
+        json.dumps(
+            {
+                "prNumber": 42,
+                "prUrl": "https://example.test/pull/42",
+                "state": state,
+                "headBranch": "feature-x",
+                "baseBranch": "main",
+                "updated": False,
+            }
+        ),
+    )
+
+    assert message in output
+    envelope = json.loads(output)
+    assert envelope["kind"] == "created"
+    assert envelope["prNumber"] == 42
+    assert envelope["headBranch"] == "feature-x"
+
+
+def test_formats_updated_pull_request(tmp_path: Path) -> None:
+    output = _format_success(
+        tmp_path,
+        json.dumps(
+            {
+                "prNumber": 42,
+                "prUrl": "https://example.test/pull/42",
+                "state": "open",
+                "headBranch": "feature-x",
+                "baseBranch": "main",
+                "updated": True,
+            }
+        ),
+    )
+
+    assert "updated with your latest commits" in output
+    assert "PR #42" in output
+    assert "https://example.test/pull/42" in output
+    assert "feature-x" in output
+    assert "created successfully" not in output
+
+
+def test_formats_branches_on_creation(tmp_path: Path) -> None:
+    output = _format_success(
+        tmp_path,
+        json.dumps(
+            {
+                "prNumber": 42,
+                "prUrl": "https://example.test/pull/42",
+                "state": "open",
+                "headBranch": "feature-x",
+                "baseBranch": "release-1.0",
+                "updated": False,
+            }
+        ),
+    )
+
+    assert "created successfully" in output
+    assert "feature-x" in output
+    assert "release-1.0" in output
+
+
+def test_formats_schema_valid_success_without_optional_metadata(tmp_path: Path) -> None:
+    output = _format_success(
+        tmp_path,
+        json.dumps(
+            {
+                "prNumber": 42,
+                "prUrl": "https://example.test/pull/42",
+                "updated": False,
+            }
+        ),
+    )
+
+    envelope = json.loads(output)
+    assert envelope["kind"] == "created"
+    assert envelope["state"] == "open"
+    assert "headBranch" not in envelope
+    assert "baseBranch" not in envelope

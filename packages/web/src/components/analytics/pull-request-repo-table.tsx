@@ -1,4 +1,4 @@
-import type { AnalyticsPullRequestRepoEntry } from "@open-inspect/shared";
+import type { AnalyticsPullRequestRepoEntry } from "@open-inspect/shared/types/analytics";
 import {
   formatAnalyticsCount,
   formatAnalyticsLongDuration,

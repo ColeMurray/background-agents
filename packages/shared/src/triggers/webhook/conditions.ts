@@ -3,7 +3,7 @@
  */
 
 import type { ConditionRegistry } from "../conditions";
-import type { JsonPathFilter } from "../conditions";
+import type { JsonPathFilter } from "../types";
 import { evaluateJsonPathFilter } from "./normalizer";
 
 export const conditions = {

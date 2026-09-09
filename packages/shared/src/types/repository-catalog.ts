@@ -1,5 +1,6 @@
-import type { ConfidenceLevel } from "./statuses";
 import { z } from "zod";
+
+export type ConfidenceLevel = "high" | "medium" | "low";
 
 export const installationRepositorySchema = z.object({
   id: z.number(),

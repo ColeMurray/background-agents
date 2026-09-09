@@ -1,7 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
-import { buildAuthDisplay } from "@/lib/build-auth-identity";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 /**
@@ -26,17 +25,10 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   const { id: sessionId } = await params;
 
   try {
-    // Participant identity and SCM provenance are derived by the control
-    // plane. The request carries only a cosmetic presence name.
-    const user = session.user;
-    const { authName } = buildAuthDisplay(user);
-
     const fetchStart = Date.now();
     const response = await controlPlaneUserFetch(`/sessions/${sessionId}/ws-token`, {
       method: "POST",
-      body: JSON.stringify({
-        authName,
-      }),
+      body: JSON.stringify({}),
     });
     const fetchMs = Date.now() - fetchStart;
     const totalMs = Date.now() - routeStart;

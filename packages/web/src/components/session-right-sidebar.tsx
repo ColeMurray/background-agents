@@ -8,27 +8,32 @@ import { TasksSection } from "./sidebar/tasks-section";
 import { FilesChangedSection } from "./sidebar/files-changed-section";
 import { MediaSection } from "./sidebar/media-section";
 import { CodeServerSection } from "./sidebar/code-server-section";
+import { VncSection } from "./sidebar/vnc-section";
 import { TunnelUrlsSection } from "./sidebar/tunnel-urls-section";
 import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
 import { buildAuthenticatedUrl } from "@/lib/urls";
 import { extractLatestTasks } from "@/lib/tasks";
 import type { Artifact, SandboxEvent } from "@/types/session";
+import type { ParticipantPresence, SessionState } from "@open-inspect/shared/types/server-messages";
 import type {
-  ParticipantPresence,
   SessionDiffFile,
   SessionDiffRepository,
   SessionDiffState,
-  SessionState,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
+import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
+import { BudgetSection } from "./sidebar/budget-section";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 interface SessionRightSidebarProps {
+  isOpen?: boolean;
   sessionId: string;
   sessionState: SessionState | null;
   participants: ParticipantPresence[];
+  presenceSynced: boolean;
   events: SandboxEvent[];
   artifacts: Artifact[];
   terminalOpen?: boolean;
@@ -38,14 +43,19 @@ interface SessionRightSidebarProps {
   diffLoading?: boolean;
   selectedDiff?: DiffSelection | null;
   onOpenDiff?: (repository: SessionDiffRepository, file: SessionDiffFile) => void;
+  capabilities: SessionCapabilities;
+  canManageBudget?: boolean;
 }
 
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
+
+const DEFAULT_CAN_MANAGE_BUDGET = false;
 
 export function SessionRightSidebarContent({
   sessionId,
   sessionState,
   participants,
+  presenceSynced,
   events,
   artifacts,
   terminalOpen,
@@ -55,6 +65,8 @@ export function SessionRightSidebarContent({
   diffLoading,
   selectedDiff,
   onOpenDiff,
+  canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
+  capabilities,
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const warnings = useMemo(
@@ -99,11 +111,11 @@ export function SessionRightSidebarContent({
     <>
       {/* Participants */}
       <div className="px-4 py-4 border-b border-border-muted">
-        <ParticipantsSection participants={participants} />
+        <ParticipantsSection participants={participants} presenceSynced={presenceSynced} />
       </div>
 
       {/* Metadata */}
-      <div className="px-4 py-4 border-b border-border-muted">
+      <div className="space-y-4 px-4 py-4 border-b border-border-muted">
         <MetadataSection
           sessionId={sessionId}
           createdAt={sessionState.createdAt}
@@ -119,12 +131,18 @@ export function SessionRightSidebarContent({
           environmentName={sessionState.environmentName}
           warnings={warnings}
           parentSessionId={sessionState.parentSessionId}
-          totalCost={sessionState.totalCost}
+          canManageLifecycle={capabilities.lifecycle}
+        />
+        <BudgetSection
+          sessionId={sessionId}
+          totalCost={sessionState.totalCost ?? 0}
+          maxSessionCostUsd={sessionState.maxSessionCostUsd}
+          canManageBudget={canManageBudget}
         />
       </div>
 
       {/* Code Server */}
-      {sessionState.codeServerUrl && (
+      {capabilities.sandboxAccess && sessionState.codeServerUrl && (
         <div className="px-4 py-4 border-b border-border-muted">
           <CodeServerSection
             url={sessionState.codeServerUrl}
@@ -134,8 +152,19 @@ export function SessionRightSidebarContent({
         </div>
       )}
 
+      {/* VNC Desktop */}
+      {capabilities.sandboxAccess && sessionState.vncUrl && (
+        <div className="px-4 py-4 border-b border-border-muted">
+          <VncSection
+            url={sessionState.vncUrl}
+            password={sessionState.vncPassword ?? null}
+            sandboxStatus={sessionState.sandboxStatus}
+          />
+        </div>
+      )}
+
       {/* Terminal */}
-      {sessionState.ttydUrl && terminalUrl && (
+      {capabilities.sandboxAccess && sessionState.ttydUrl && terminalUrl && (
         <div className="px-4 py-4 border-b border-border-muted">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -167,14 +196,16 @@ export function SessionRightSidebarContent({
       )}
 
       {/* Tunnel URLs */}
-      {sessionState.tunnelUrls && Object.keys(sessionState.tunnelUrls).length > 0 && (
-        <div className="px-4 py-4 border-b border-border-muted">
-          <TunnelUrlsSection
-            urls={sessionState.tunnelUrls}
-            sandboxStatus={sessionState.sandboxStatus}
-          />
-        </div>
-      )}
+      {capabilities.sandboxAccess &&
+        sessionState.tunnelUrls &&
+        Object.keys(sessionState.tunnelUrls).length > 0 && (
+          <div className="px-4 py-4 border-b border-border-muted">
+            <TunnelUrlsSection
+              urls={sessionState.tunnelUrls}
+              sandboxStatus={sessionState.sandboxStatus}
+            />
+          </div>
+        )}
 
       {/* Tasks */}
       {tasks.length > 0 && (
@@ -185,6 +216,8 @@ export function SessionRightSidebarContent({
 
       {/* Child Sessions */}
       <ChildSessionsSection sessionId={sessionState.id} />
+
+      <ManagedSkillsSection sessionId={sessionState.id} />
 
       {/* Canonical durable checkout changes */}
       {diffView.kind !== "hidden" && (
@@ -226,6 +259,7 @@ export function SessionRightSidebarContent({
                 sessionId={sessionId}
                 message={diffView.message ?? ""}
                 variant="inline"
+                capabilities={capabilities}
               />
             )}
           </div>
@@ -256,9 +290,11 @@ export function SessionRightSidebarContent({
 }
 
 export function SessionRightSidebar({
+  isOpen = true,
   sessionId,
   sessionState,
   participants,
+  presenceSynced,
   events,
   artifacts,
   terminalOpen,
@@ -268,13 +304,24 @@ export function SessionRightSidebar({
   diffLoading,
   selectedDiff,
   onOpenDiff,
+  canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
+  capabilities,
 }: SessionRightSidebarProps) {
   return (
-    <aside className="w-80 border-l border-border-muted overflow-y-auto hidden lg:block">
+    <aside
+      id="session-details-sidebar"
+      aria-hidden={!isOpen}
+      className={
+        isOpen
+          ? "hidden w-80 shrink-0 overflow-y-auto border-l border-border-muted lg:block"
+          : "hidden"
+      }
+    >
       <SessionRightSidebarContent
         sessionId={sessionId}
         sessionState={sessionState}
         participants={participants}
+        presenceSynced={presenceSynced}
         events={events}
         artifacts={artifacts}
         terminalOpen={terminalOpen}
@@ -284,6 +331,8 @@ export function SessionRightSidebar({
         diffLoading={diffLoading}
         selectedDiff={selectedDiff}
         onOpenDiff={onOpenDiff}
+        canManageBudget={canManageBudget}
+        capabilities={capabilities}
       />
     </aside>
   );

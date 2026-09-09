@@ -1,7 +1,6 @@
 "use client";
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
-import { signIn, useAuthSession } from "@/lib/auth-session";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { NewSessionButton, SearchSessionsButton, SessionSidebar } from "./session-sidebar";
@@ -11,10 +10,10 @@ import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { COMMAND_MENU_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { Button } from "@/components/ui/button";
-import { GitHubIcon, GoogleIcon, SidebarIcon } from "@/components/ui/icons";
-import { APP_NAME, GOOGLE_LOGIN_ENABLED } from "@/lib/site-config";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { SidebarIcon } from "@/components/ui/icons";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useMobileSidebarPull } from "@/hooks/use-mobile-sidebar-pull";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -43,16 +42,17 @@ interface SidebarLayoutProps {
   children: React.ReactNode;
 }
 
-export function SidebarToggleButton({ label = "Open sidebar" }: { label?: string }) {
+function SidebarToggleButton({ label = "Open sidebar" }: { label?: string }) {
   const { toggle } = useSidebarContext();
+  const { labels } = useKeyboardShortcuts();
 
   return (
     <Button
       variant="ghost"
       size="icon"
       onClick={toggle}
-      title={`${label} (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-      aria-label={`${label} (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+      title={`${label} (${labels["toggle-sidebar"]})`}
+      aria-label={`${label} (${labels["toggle-sidebar"]})`}
     >
       <SidebarIcon className="w-4 h-4" />
     </Button>
@@ -61,6 +61,7 @@ export function SidebarToggleButton({ label = "Open sidebar" }: { label?: string
 
 export function CollapsedSidebarControls() {
   const actions = useContext(AppShellActionsContext);
+  const { hasPermission } = useCurrentUserAuthorization();
   if (!actions) {
     throw new Error("CollapsedSidebarControls must be used within a SidebarLayout");
   }
@@ -69,14 +70,15 @@ export function CollapsedSidebarControls() {
     <div className="flex items-center gap-2">
       <SidebarToggleButton />
       <SearchSessionsButton onClick={actions.searchSessions} />
-      <NewSessionButton onClick={actions.newSession} />
+      {hasPermission("sessions.create") && <NewSessionButton onClick={actions.newSession} />}
     </div>
   );
 }
 
 export function SidebarLayout({ children }: SidebarLayoutProps) {
-  const { data: session, status } = useAuthSession();
   const router = useRouter();
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canCreateSession = hasPermission("sessions.create");
   const sidebar = useSidebar();
   const isMobile = useIsMobile();
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
@@ -93,18 +95,17 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   });
 
   const { data: sessionsResponse } = useSWR<SessionListResponse>(
-    status === "authenticated" && Boolean(session) && isCommandMenuOpen
-      ? COMMAND_MENU_SESSIONS_KEY
-      : null
+    isCommandMenuOpen ? COMMAND_MENU_SESSIONS_KEY : null
   );
 
   const handleNewSession = useCallback(() => {
+    if (!canCreateSession) return;
     setIsCommandMenuOpen(false);
     if (isMobile) {
       sidebar.close();
     }
     router.push("/");
-  }, [isMobile, router, sidebar]);
+  }, [canCreateSession, isMobile, router, sidebar]);
 
   const handleNavigate = useCallback(
     (href: string) => {
@@ -129,61 +130,25 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   );
 
   useGlobalShortcuts({
-    enabled: status === "authenticated" && Boolean(session),
+    enabled: true,
     onOpenCommandMenu: handleOpenCommandMenu,
     onNewSession: handleNewSession,
     onToggleSidebar: sidebar.toggle,
   });
 
-  // Show loading state
-  if (status === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-foreground" />
-      </div>
-    );
-  }
-
-  // Show sign-in page if not authenticated
-  if (!session) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-8">
-        <h1 className="text-4xl font-bold text-foreground">{APP_NAME}</h1>
-        <p className="text-muted-foreground max-w-md text-center">
-          Background coding agent for your team. Ship faster with AI-powered code changes.
-        </p>
-        <div className="flex flex-col items-stretch gap-3">
-          <Button onClick={() => signIn("github")} className="gap-2 px-6 py-3">
-            <GitHubIcon className="w-5 h-5" />
-            Sign in with GitHub
-          </Button>
-          {GOOGLE_LOGIN_ENABLED && (
-            <Button onClick={() => signIn("google")} variant="outline" className="gap-2 px-6 py-3">
-              <GoogleIcon className="w-5 h-5" />
-              Sign in with Google
-            </Button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <SidebarContext.Provider value={sidebar}>
       <AppShellActionsContext.Provider value={appShellActions}>
-        <div className="flex h-dvh overflow-hidden">
-          {isMobile && !sidebar.isOpen && (
-            <div
-              data-testid="mobile-sidebar-drag-handle"
-              className="fixed inset-y-0 left-0 z-50 w-5 touch-pan-y"
-              aria-hidden="true"
-              onPointerDown={sidebarPull.handlePointerDown}
-              onPointerMove={sidebarPull.handlePointerMove}
-              onPointerUp={sidebarPull.handlePointerUp}
-              onPointerCancel={sidebarPull.reset}
-              onContextMenu={(event) => event.preventDefault()}
-            />
-          )}
+        <div
+          data-testid="mobile-sidebar-gesture-boundary"
+          className={`flex h-dvh overflow-hidden ${
+            isMobile && !sidebar.isOpen ? "touch-pan-y" : ""
+          }`}
+          onPointerDownCapture={sidebarPull.handlePointerDown}
+          onPointerMoveCapture={sidebarPull.handlePointerMove}
+          onPointerUpCapture={sidebarPull.handlePointerUp}
+          onPointerCancelCapture={sidebarPull.handlePointerCancel}
+        >
           {/* Mobile: overlay backdrop */}
           {isMobile && (
             <div

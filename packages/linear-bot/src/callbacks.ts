@@ -4,7 +4,12 @@
  */
 
 import { Hono } from "hono";
-import type { Env, CompletionCallback, ToolCallCallback } from "./types";
+import type { Env } from "./types";
+import {
+  linearCompletionCallbackSchema,
+  linearToolCallCallbackSchema,
+  type LinearCompletionCallback,
+} from "@open-inspect/shared/types/session-api";
 import {
   getLinearClient,
   emitAgentActivity,
@@ -12,7 +17,7 @@ import {
   updateAgentSession,
 } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
-import { resolveAppName } from "@open-inspect/shared";
+import { resolveAppName } from "@open-inspect/shared/app-name";
 import { makePlan } from "./plan";
 import { createLogger } from "./logger";
 import { createStartCallbackRouter } from "./callbacks/start-callback";
@@ -30,30 +35,21 @@ export function formatCompletionComment(
     : `## ⚠️ ${appName} encountered an issue\n\n${message}`;
 }
 
-export function isValidPayload(payload: unknown): payload is CompletionCallback {
-  if (!payload || typeof payload !== "object") return false;
-  const p = payload as Record<string, unknown>;
-  return (
-    typeof p.sessionId === "string" &&
-    typeof p.messageId === "string" &&
-    typeof p.success === "boolean" &&
-    typeof p.timestamp === "number" &&
-    typeof p.signature === "string" &&
-    p.context !== null &&
-    typeof p.context === "object" &&
-    typeof (p.context as Record<string, unknown>).issueId === "string"
-  );
-}
-
 export const callbacksRouter = new Hono<{ Bindings: Env }>();
 callbacksRouter.route("/", createStartCallbackRouter());
 
 callbacksRouter.post("/complete", async (c) => {
   const startTime = Date.now();
   const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
-  const payload = await c.req.json();
+  let rawPayload: unknown;
+  try {
+    rawPayload = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid payload" }, 400);
+  }
+  const parsed = linearCompletionCallbackSchema.safeParse(rawPayload);
 
-  if (!isValidPayload(payload)) {
+  if (!parsed.success) {
     log.warn("http.request", {
       trace_id: traceId,
       http_path: "/callbacks/complete",
@@ -64,8 +60,10 @@ callbacksRouter.post("/complete", async (c) => {
     });
     return c.json({ error: "invalid payload" }, 400);
   }
+  const payload = parsed.data;
 
-  const rejection = await rejectInvalidCallback(c, payload, {
+  // Verify the original object because the signature covers its JSON key order.
+  const rejection = await rejectInvalidCallback(c, rawPayload, {
     path: "/callbacks/complete",
     traceId,
     startTime,
@@ -105,34 +103,25 @@ export function formatToolAction(
     default: {
       const firstStringArg = Object.values(args).find((v) => typeof v === "string");
       return {
-        // Linear rejects activities with an empty `action`; the upstream
-        // validator allows tool === "" so guard here.
-        action: tool || "Tool",
+        action: tool,
         parameter: firstStringArg ? String(firstStringArg).slice(0, 200) : "(no args)",
       };
     }
   }
 }
 
-export function isValidToolCallPayload(payload: unknown): payload is ToolCallCallback {
-  if (!payload || typeof payload !== "object") return false;
-  const p = payload as Record<string, unknown>;
-  return (
-    typeof p.sessionId === "string" &&
-    typeof p.tool === "string" &&
-    typeof p.timestamp === "number" &&
-    typeof p.signature === "string" &&
-    p.context !== null &&
-    typeof p.context === "object"
-  );
-}
-
 callbacksRouter.post("/tool_call", async (c) => {
   const startTime = Date.now();
   const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
-  const payload = await c.req.json();
+  let rawPayload: unknown;
+  try {
+    rawPayload = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid payload" }, 400);
+  }
+  const parsed = linearToolCallCallbackSchema.safeParse(rawPayload);
 
-  if (!isValidToolCallPayload(payload)) {
+  if (!parsed.success) {
     log.warn("http.request", {
       trace_id: traceId,
       http_path: "/callbacks/tool_call",
@@ -143,8 +132,10 @@ callbacksRouter.post("/tool_call", async (c) => {
     });
     return c.json({ error: "invalid payload" }, 400);
   }
+  const payload = parsed.data;
 
-  const rejection = await rejectInvalidCallback(c, payload, {
+  // Verify the original object because the signature covers its JSON key order.
+  const rejection = await rejectInvalidCallback(c, rawPayload, {
     path: "/callbacks/tool_call",
     traceId,
     startTime,
@@ -234,7 +225,7 @@ callbacksRouter.post("/tool_call", async (c) => {
 // ─── Completion Callback ─────────────────────────────────────────────────────
 
 async function handleCompletionCallback(
-  payload: CompletionCallback,
+  payload: LinearCompletionCallback,
   env: Env,
   traceId?: string
 ): Promise<void> {

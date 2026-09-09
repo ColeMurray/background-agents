@@ -10,18 +10,18 @@
  * path and a DO round-trip), so they are not dispatched here.
  */
 
-import { SERVICE_SIGNATURE_HEADER } from "@open-inspect/shared";
+import { SERVICE_SIGNATURE_HEADER } from "@open-inspect/shared/service-auth";
 import { authenticateSession, SessionIntegrityError } from "./user/session-authenticator";
 import { isAuthError, type AuthResult } from "./result";
 import { authenticateServiceRequest } from "./service/request-authenticator";
 import { createLogger } from "../logger";
-import type { RequestContext } from "../routes/shared";
+import type { AuthenticationRequestServices } from "./request-services";
 import type { Env } from "../types";
 
 const logger = createLogger("auth");
 
-export { isAuthError, type AuthError, type AuthResult } from "./result";
-export { SERVICE_REQUEST_MAX_BODY_BYTES } from "./service/request-authenticator";
+export { isAuthError, type AuthResult } from "./result";
+export { SERVICE_REQUEST_MAX_BODY_BYTES } from "@open-inspect/shared/service-auth";
 
 export interface AuthenticationRequirement {
   /**
@@ -34,7 +34,7 @@ export interface AuthenticationRequirement {
 export async function authenticate(
   request: Request,
   env: Env,
-  ctx: RequestContext,
+  ctx: AuthenticationRequestServices,
   requirement: AuthenticationRequirement = {}
 ): Promise<AuthResult> {
   const signatureHeader = request.headers.get(SERVICE_SIGNATURE_HEADER);

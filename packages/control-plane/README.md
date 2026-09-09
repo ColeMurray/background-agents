@@ -1,6 +1,7 @@
 # Open-Inspect Control Plane
 
-Cloudflare Workers + Durable Objects control plane for session management and real-time streaming.
+Cloudflare Workers + Hono + Durable Objects control plane for session management and real-time
+streaming.
 
 ## Overview
 
@@ -21,8 +22,11 @@ The control plane provides:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Cloudflare Workers                            │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │                   API Gateway (router.ts)                 │   │
-│  │   POST /sessions  │  GET /sessions/:id  │  WebSocket      │   │
+│  │                  Worker fetch entrypoint                 │   │
+│  │  ┌──────────────────────────────────┐  ┌───────────────┐ │   │
+│  │  │ Hono HTTP API + Route Admission  │  │  WebSocket    │ │   │
+│  │  │ POST /sessions  GET /sessions/:id│  │  upgrade*     │ │   │
+│  │  └──────────────────────────────────┘  └───────────────┘ │   │
 │  └─────────────────────────────┬────────────────────────────┘   │
 │                                │                                 │
 │  ┌─────────────────────────────┴────────────────────────────┐   │
@@ -45,6 +49,12 @@ The control plane provides:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+Hono selects ordinary HTTP routes from the framework-neutral catalog. Authentication, service
+principal admission, canonical actor resolution, RBAC, sandbox capabilities, and route-specific
+authorization remain in the shared admission layer. WebSocket upgrades (`*` above), scheduled
+events, Queues, and Durable Object lifecycle callbacks stay at the Cloudflare Worker boundary and do
+not pass through Hono.
+
 ## API Endpoints
 
 ### Health
@@ -57,16 +67,17 @@ The control plane provides:
 
 | Endpoint                        | Method    | Description                    |
 | ------------------------------- | --------- | ------------------------------ |
-| `/sessions`                     | GET       | List user's sessions           |
+| `/sessions`                     | GET       | List workspace sessions        |
 | `/sessions`                     | POST      | Create new session             |
-| `/sessions/:id`                 | GET       | Get session state              |
+| `/sessions/:id`                 | GET       | Get canonical session snapshot |
 | `/sessions/:id`                 | DELETE    | Delete session                 |
+| `/sessions/:id/sandbox-access`  | GET       | Get sandbox connection details |
 | `/sessions/:id/prompt`          | POST      | Enqueue prompt                 |
 | `/sessions/:id/stop`            | POST      | Stop execution                 |
 | `/sessions/:id/ws`              | WebSocket | Real-time connection           |
 | `/sessions/:id/events`          | GET       | Paginated events               |
 | `/sessions/:id/artifacts`       | GET       | List artifacts                 |
-| `/sessions/:id/participants`    | GET/POST  | Manage participants            |
+| `/sessions/:id/participants`    | GET       | List runtime participants      |
 | `/sessions/:id/messages`        | GET       | List messages                  |
 | `/sessions/:id/pr`              | POST      | Create pull request            |
 | `/sessions/:id/scm-credentials` | POST      | Broker sandbox git credentials |
@@ -85,6 +96,12 @@ The control plane provides:
 
 When `headBranch` is omitted, control-plane resolves it from session state and finally falls back to
 the generated `open-inspect/<session>` branch.
+
+A session can hold multiple pull requests per repository — one open PR per head branch. Calling the
+endpoint again for a head branch that already carries an open PR force-pushes the branch and reuses
+that PR instead of creating a duplicate; the response marks this with `updated: true`. A merged or
+closed PR releases its head branch for a fresh PR. The success response is
+`{ prNumber, prUrl, state, headBranch, baseBranch, updated }`.
 
 ### SCM Credentials
 
@@ -154,20 +171,23 @@ statuses are `building | ready | failed | superseded`.
 | -------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/image-builds/build-complete`               | POST   | Success callback from image builders (public route, callback-authenticated)                                                                                          |
 | `/image-builds/build-failed`                 | POST   | Failure callback from image builders (public route, callback-authenticated)                                                                                          |
-| `/image-builds/trigger/repo/:owner/:name`    | POST   | Trigger a repo-scope build (cron, save-hooks, manual rebuild)                                                                                                        |
-| `/image-builds/trigger/environment/:id`      | POST   | Trigger an environment-scope build                                                                                                                                   |
+| `/image-builds/trigger/repo/:owner/:name`    | POST   | Trigger a repo-scope build manually                                                                                                                                  |
+| `/image-builds/trigger/environment/:id`      | POST   | Trigger an environment-scope build manually                                                                                                                          |
 | `/image-builds/toggle/repo/:owner/:name`     | PUT    | Toggle repo prebuilds (`repo_metadata.image_build_enabled`); toggling on triggers a build. The environment toggle stays on the environments CRUD (`prebuildEnabled`) |
 | `/image-builds/status`                       | GET    | Cross-scope aggregate over every prebuild-enabled scope — excludes superseded, includes failed                                                                       |
 | `/image-builds/status?scope_kind=&scope_id=` | GET    | One scope's recent non-superseded builds (settings/debug view)                                                                                                       |
-| `/image-builds/enabled`                      | GET    | Cron feed: enabled scope units with repositories + fingerprint, plus the runtime floor                                                                               |
-| `/image-builds/mark-stale`                   | POST   | Mark old `building` rows failed (called by the scheduler)                                                                                                            |
-| `/image-builds/cleanup`                      | POST   | Delete old failed rows and reap superseded rows' provider artifacts                                                                                                  |
+| `/image-builds/enabled`                      | GET    | Settings feed: enabled scope identities with their current repository-set fingerprints                                                                               |
 
-Build callbacks authenticate in one of two modes, decided per provider: Modal builders call back
-with the deployment-wide internal HMAC token, while Vercel/OpenComputer build sandboxes use a
-single-use bearer token minted at trigger time — only its HMAC hash is stored on the build row and
-bound to the provider session. Success callbacks verify it before payload validation and consume it
-atomically when accepted; failure callbacks consume it while marking the build failed.
+Every provider uses the same callback contract. The control plane creates a dormant provider
+session, binds its opaque id to the build row, and only then starts the runtime. The runtime calls
+back with a single-use bearer token minted at trigger time; only its HMAC hash is stored and the
+callback must present the exact bound provider session id.
+
+Callbacks atomically accept the payload in D1 before publishing a small, secret-free command to
+Cloudflare Queue. The Queue consumer then leases the accepted row, snapshots/checkpoints the
+provider session, persists the artifact, transitions the row to `ready` or `superseded`, and
+performs idempotent session cleanup. This keeps provider operations outside the Worker's
+request-lifetime durability window and makes retries safe across all providers.
 
 ### Automations
 
@@ -253,8 +273,15 @@ npm install
 
 ```bash
 npm run build
-# Outputs to dist/index.js
+# Outputs the Worker bundle to dist/index.js and the Node host to dist/node/main.js
 ```
+
+### Run as a container
+
+The control plane also runs as a Node process on a container, with SQLite on a volume and an
+S3-compatible bucket for media. See
+[docs/CONTROL_PLANE_CONTAINER.md](../../docs/CONTROL_PLANE_CONTAINER.md) for `docker compose up` and
+the image build.
 
 ### Deploy
 
@@ -293,9 +320,10 @@ sessions index, repo metadata, and encrypted secrets:
 - `image_builds`: the unified prebuilt-image registry for both scope kinds (`scope_kind` +
   `scope_id` columns) — provider artifact id, per-repository SHAs (`repository_shas`), a
   repositories fingerprint for spawn matching, the runtime version for the compatibility-floor
-  check, and callback-token state. Replaces the former `repo_images` and `environment_images` tables
-  (dropped in migrations 0039/0040; environment rows were copied over, repo rows are rebuilt by the
-  cron).
+  check, callback-token state, Queue-finalization lease state, and provider-session cleanup state.
+  Replaces the former `repo_images` and `environment_images` tables (dropped in migrations
+  0039/0040). The control-plane scheduler naturally rebuilds enabled scopes; no legacy backfill job
+  is required.
 - `integration_environment_settings`: environment-level integration-setting overrides (sandbox,
   code-server), the top layer above `integration_settings` (global) and `integration_repo_settings`
   (per-repo).
@@ -333,19 +361,50 @@ Terraform configures `WEB_APP_URL`, provider credentials, admission allowlists, 
 `BROWSER_AUTH_SECRET` on this worker. `WEB_APP_URL` must be the exact browser-visible HTTPS origin,
 except that an HTTP loopback origin is accepted for local development.
 
-## Token Encryption
+A complete GitHub or Google OAuth credential pair enables that sign-in provider; partial pairs and
+an empty provider set fail closed. Google requires verified-email/domain admission (or explicit
+unsafe allow-all), while GitHub may also use username or organization admission. The normalized
+runtime constructs Better Auth and the immutable provider list from the same configuration.
+`GET /internal/auth/sign-in-providers` exposes only those identifiers to signed `service:web`
+requests so the React `/login` route can render them server-side.
 
-GitHub OAuth tokens are encrypted at rest using AES-256-GCM:
+## Credential Encryption
 
-```typescript
-import { encryptToken, decryptToken } from "./auth/crypto";
+Three independent key domains protect stored credentials. Rotation guidance differs — never treat
+them as interchangeable during an incident:
 
-// Encrypt before storing
-const encrypted = await encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY);
+- **`TOKEN_ENCRYPTION_KEY`** — AES-256-GCM for the SCM enrichment tokens in `user_scm_tokens`:
 
-// Decrypt when needed
-const token = await decryptToken(encrypted, env.TOKEN_ENCRYPTION_KEY);
-```
+  ```typescript
+  import { encryptToken, decryptToken } from "./auth/crypto";
+
+  // Encrypt before storing
+  const encrypted = await encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY);
+
+  // Decrypt when needed
+  const token = await decryptToken(encrypted, env.TOKEN_ENCRYPTION_KEY);
+  ```
+
+  Rotating it invalidates stored SCM tokens; affected users re-link their SCM connection.
+
+- **`BROWSER_AUTH_SECRET`** — Better Auth's secret. It signs browser session cookies **and**
+  encrypts the sign-in OAuth credential columns on `user_identities` (`access_token`,
+  `refresh_token`, `id_token`, written at web sign-in and read via `auth.api.getAccessToken`).
+  Rotating it signs every browser session out and orphans those stored credentials — they
+  re-populate at each user's next sign-in. It does not affect `user_scm_tokens`.
+
+- **`PROVIDER_ACCOUNTS_ENCRYPTION_KEY`** — dedicated AES-256-GCM key for subscription-provider
+  account credentials. Provider account mode stores only account references on sessions and brokers
+  short-lived access through `POST /sessions/:id/provider-auth/:provider/access-token`. Rotation
+  requires an explicit migration that can decrypt every credential with the old key and re-encrypt
+  it with the new key while both are available, then verifies the migrated data before changing the
+  Worker binding. Reconnecting accounts does not migrate already encrypted rows. If the old key is
+  lost, remove affected defaults and archive/recreate the accounts; sessions bound to the lost
+  credentials are unrecoverable and must be recreated.
+
+Legacy scoped OpenAI/xAI OAuth and provider accounts can coexist. Explicit choices and provider
+defaults apply to newly created sessions; sessions without either retain legacy scoped behavior.
+Existing sessions remain pinned to their stored authentication mode.
 
 ## Security Model
 
@@ -392,8 +451,13 @@ All secrets are configured via Terraform. Required secrets include:
 - `GITHUB_APP_PRIVATE_KEY` - GitHub App private key (PKCS#8 format)
 - `GITHUB_APP_INSTALLATION_ID` - Single installation for all users
 - `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
+- `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` - Dedicated key for provider account credentials in D1
 
 Optional variables:
+
+- `provider_accounts_encryption_key` - Existing Base64 AES-256-GCM key override for provider account
+  credentials. When blank, Terraform generates a key and persists it in state. In both cases,
+  Terraform supplies the required `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` Worker secret binding.
 
 - `SCM_PROVIDER` - Source control provider for this deployment (`github`, `bitbucket`, or `gitlab`,
   default: `github`). `bitbucket` returns explicit `501 Not Implemented` responses until
@@ -425,6 +489,7 @@ for the complete list.
 | Token encryption works             | Store/retrieve token, verify matches  |
 | Prompt queue ordering              | Enqueue 3 prompts, verify FIFO        |
 | Session survives DO eviction       | Create, wait, reconnect, verify state |
+| Sandbox survives WebSocket close   | Close with 1000/1001, reconnect       |
 | Ping/pong WebSocket health         | Send ping, verify pong                |
 | Typing triggers sandbox warm       | Send typing, verify warming event     |
 | Presence sync on connect           | Connect 2 clients, verify presence    |

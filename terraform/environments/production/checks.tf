@@ -30,14 +30,36 @@ resource "terraform_data" "cloudflare_custom_domain_gate" {
 resource "terraform_data" "access_control_gate" {
   lifecycle {
     precondition {
-      condition = (
-        var.unsafe_allow_all_users ||
-        length([for item in split(",", var.allowed_users) : trimspace(item) if trimspace(item) != ""]) > 0 ||
-        length([for item in split(",", var.allowed_email_domains) : trimspace(item) if trimspace(item) != ""]) > 0 ||
-        length([for item in split(",", var.allowed_emails) : trimspace(item) if trimspace(item) != ""]) > 0 ||
-        length([for item in split(",", var.allowed_github_orgs) : trimspace(item) if trimspace(item) != ""]) > 0
-      )
+      condition     = local.admission_allowlist_enabled || var.unsafe_allow_all_users
       error_message = "At least one access control allowlist must be configured. Set allowed_users, allowed_email_domains, allowed_emails, or allowed_github_orgs, or set unsafe_allow_all_users = true to explicitly allow all authenticated users."
+    }
+  }
+}
+
+resource "terraform_data" "sign_in_provider_gate" {
+  lifecycle {
+    precondition {
+      condition     = local.github_oauth_enabled || local.google_enabled
+      error_message = "At least one complete OAuth sign-in provider pair must be configured."
+    }
+
+    precondition {
+      condition = (
+        !local.github_oauth_enabled ||
+        local.github_admission_enabled ||
+        local.provider_neutral_admission_enabled ||
+        local.unsafe_allow_all_effective
+      )
+      error_message = "GitHub sign-in requires a GitHub-specific or provider-neutral admission rule, or effective unsafe allow-all."
+    }
+
+    precondition {
+      condition = (
+        !local.google_enabled ||
+        local.provider_neutral_admission_enabled ||
+        local.unsafe_allow_all_effective
+      )
+      error_message = "Google sign-in requires allowed_emails, allowed_email_domains, or effective unsafe allow-all; GitHub-specific admission rules cannot admit Google identities."
     }
   }
 }

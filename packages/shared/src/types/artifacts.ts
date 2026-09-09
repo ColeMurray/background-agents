@@ -1,31 +1,22 @@
 import { z } from "zod";
-import { artifactTypeSchema } from "./statuses";
-import type { ArtifactType } from "./statuses";
 
-export const recordSchema = z.record(z.string(), z.unknown());
+export const artifactTypeSchema = z.enum(["pr", "screenshot", "video", "preview", "branch"]);
+export type ArtifactType = z.infer<typeof artifactTypeSchema>;
 
 // Artifact created by session
-export interface SessionArtifact {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: Record<string, unknown> | null;
-  createdAt: number;
-  /**
-   * Last content change (epoch ms). Optional for rolling deploys — producers
-   * predating PR lifecycle tracking omit it; consumers fall back to createdAt.
-   */
-  updatedAt?: number;
-}
-
 export const sessionArtifactSchema = z.object({
   id: z.string(),
   type: artifactTypeSchema,
   url: z.string().nullable(),
-  metadata: recordSchema.nullable(),
+  metadata: z.record(z.string(), z.unknown()).nullable(),
   createdAt: z.number(),
+  /**
+   * Last content change (epoch ms). Optional for rolling deploys — producers
+   * predating PR lifecycle tracking omit it; consumers fall back to createdAt.
+   */
   updatedAt: z.number().optional(),
 });
+export type SessionArtifact = z.infer<typeof sessionArtifactSchema>;
 
 // ─── Pull request lifecycle ───────────────────────────────────────────────────
 
@@ -153,17 +144,18 @@ export interface PullRequest {
   updatedAt: string;
 }
 
-export interface ArtifactResponse {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: Record<string, unknown> | null;
-  createdAt: number;
-}
+/**
+ * The `/artifacts` list response is the session artifact shape verbatim — the
+ * producer serializes stored artifact rows, `updatedAt` included. It reuses
+ * `sessionArtifactSchema` rather than restating the fields so the two can never
+ * drift (a restated copy silently stripped `updatedAt`).
+ */
+export const listArtifactsResponseSchema = z.object({
+  artifacts: z.array(sessionArtifactSchema),
+});
 
-export interface ListArtifactsResponse {
-  artifacts: ArtifactResponse[];
-}
+export type ArtifactResponse = z.infer<typeof sessionArtifactSchema>;
+export type ListArtifactsResponse = z.infer<typeof listArtifactsResponseSchema>;
 
 export interface ToolCallSummary {
   tool: string;

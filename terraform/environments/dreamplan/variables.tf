@@ -19,6 +19,21 @@ variable "cloudflare_zone_id" {
   default     = null
 }
 
+variable "cloudflare_custom_domain" {
+  description = "Custom domain (hostname) to attach to the Cloudflare web Worker (optional). Requires web_platform = 'cloudflare' and cloudflare_zone_id. e.g. 'app.example.com'"
+  type        = string
+  default     = null
+
+  validation {
+    condition = (
+      var.cloudflare_custom_domain == null ||
+      trimspace(var.cloudflare_custom_domain) == "" ||
+      can(regex("(?i)^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.cloudflare_custom_domain))
+    )
+    error_message = "cloudflare_custom_domain must be a bare hostname such as 'app.example.com' — no scheme, port, path, trailing dot, or whitespace."
+  }
+}
+
 variable "cloudflare_worker_subdomain" {
   description = "Cloudflare Workers account subdomain (e.g. 'myaccount' — .workers.dev is appended automatically)"
   type        = string
@@ -72,19 +87,48 @@ variable "modal_workspace" {
   }
 }
 
+variable "modal_environment" {
+  description = "Modal environment name used by the Modal CLI"
+  type        = string
+  default     = "main"
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || (length(trimspace(var.modal_environment)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment)))
+    error_message = "modal_environment must be set and must not contain colons, slashes, or backslashes when sandbox_provider = 'modal'."
+  }
+}
+
+variable "modal_environment_web_suffix" {
+  description = "Modal environment web suffix used in endpoint URLs. Use lowercase letters, digits, and dashes, or leave empty for the environment with no web suffix."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || can(regex("^$|^[a-z0-9-]+$", var.modal_environment_web_suffix))
+    error_message = "modal_environment_web_suffix must be empty or contain only lowercase letters, digits, and dashes when sandbox_provider = 'modal'."
+  }
+}
+
 # =============================================================================
-# GitHub OAuth App Credentials
+# GitHub OAuth Sign-In Credentials
 # =============================================================================
 
 variable "github_client_id" {
-  description = "GitHub OAuth App client ID"
+  description = "GitHub App client ID used for OAuth sign-in. Set together with github_client_secret to enable GitHub sign-in; leave both empty for Google-only sign-in."
   type        = string
+  default     = ""
+
+  validation {
+    condition     = (trimspace(var.github_client_id) == "") == (trimspace(var.github_client_secret) == "")
+    error_message = "github_client_id and github_client_secret must be set together with non-whitespace values, or both left empty."
+  }
 }
 
 variable "github_client_secret" {
-  description = "GitHub OAuth App client secret"
+  description = "GitHub App client secret used for OAuth sign-in. Set together with github_client_id to enable GitHub sign-in."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 # =============================================================================
@@ -215,9 +259,64 @@ variable "linear_api_key" {
 # =============================================================================
 
 variable "anthropic_api_key" {
-  description = "Anthropic API key for Claude"
+  description = "Anthropic API key for the Slack and Linear bot classifiers, also injected into Modal session sandboxes and OpenComputer sandboxes. Daytona, E2B and Vercel read model keys only from the scoped secret store, as do Modal image builds. Optional: leave blank to supply model credentials as scoped secrets, which override this value on every provider. Required only when a classifier bot is enabled and classification_model is an Anthropic model."
   type        = string
   sensitive   = true
+  default     = ""
+  nullable    = false
+
+  # Sandboxes tolerate a blank key — they fall back to the secret store — but a
+  # deployed Anthropic classifier has no such fallback. CI renders an unset
+  # secret as an empty string, which would otherwise deploy a credential-less
+  # classifier that rejects every message.
+  validation {
+    condition = (
+      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
+      startswith(var.classification_model, "openai/") ||
+      startswith(var.classification_model, "gpt-") ||
+      trimspace(var.anthropic_api_key) != ""
+    )
+    error_message = "anthropic_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an Anthropic model."
+  }
+}
+
+variable "classification_model" {
+  description = "Model backing the Slack and Linear bots' target classifiers. An \"anthropic/\"-prefixed or bare \"claude-\" id is served by anthropic_api_key; an \"openai/\"-prefixed or bare \"gpt-\" id is served by classification_openai_api_key."
+  type        = string
+  default     = "claude-haiku-4-5"
+  nullable    = false
+
+  # Each prefix must be followed by an actual model id: a bare "claude-" or
+  # "openai/" satisfies startswith but names no model, and would reach the bots
+  # as a value their resolver accepts and then sends to the provider verbatim.
+  validation {
+    condition = anytrue([
+      for prefix in ["anthropic/", "claude-", "openai/", "gpt-"] :
+      startswith(var.classification_model, prefix) &&
+      trimspace(substr(var.classification_model, length(prefix), -1)) != ""
+    ])
+    error_message = "classification_model must be an Anthropic id (\"anthropic/...\" or \"claude-...\") or an OpenAI id (\"openai/...\" or \"gpt-...\"), naming a model after the prefix."
+  }
+}
+
+variable "classification_openai_api_key" {
+  description = "OpenAI API key used specifically by the Slack and Linear bot classifiers. Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled."
+  type        = string
+  sensitive   = true
+  default     = ""
+  nullable    = false
+
+  # Fail closed once a deployed classifier is pointed at OpenAI: CI renders an
+  # unset secret as an empty string, which would otherwise deploy a
+  # credential-less classifier that rejects every message.
+  validation {
+    condition = (
+      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
+      !(startswith(var.classification_model, "openai/") || startswith(var.classification_model, "gpt-")) ||
+      trimspace(var.classification_openai_api_key) != ""
+    )
+    error_message = "classification_openai_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an OpenAI model."
+  }
 }
 
 # =============================================================================
@@ -236,10 +335,20 @@ variable "repo_secrets_encryption_key" {
   sensitive   = true
 }
 
-variable "internal_callback_secret" {
-  description = "Shared secret for internal service communication (generate with: openssl rand -base64 32)"
+variable "provider_accounts_encryption_key" {
+  description = "Optional existing key for provider account credentials; when blank, Terraform generates and persists a dedicated key"
   type        = string
   sensitive   = true
+  nullable    = false
+  default     = ""
+
+  validation {
+    condition = (
+      trimspace(var.provider_accounts_encryption_key) == "" ||
+      can(regex("^[A-Za-z0-9+/]{43}=$", trimspace(var.provider_accounts_encryption_key)))
+    )
+    error_message = "provider_accounts_encryption_key must be blank or a Base64-encoded 32-byte key."
+  }
 }
 
 variable "modal_api_secret" {
@@ -361,22 +470,11 @@ variable "default_model" {
   default     = "claude-haiku-4-5"
 }
 
-variable "classification_model" {
-  description = "Model used by the Slack bot for lightweight classification tasks (intent detection, routing)."
-  type        = string
-  default     = "claude-haiku-4-5"
-}
 
 variable "app_name" {
   description = "Display name shown in the web UI tab title, sign-in page, bot messages (Slack, Linear), PR body footer, and outbound HTTP User-Agent headers."
   type        = string
   default     = "Open-Inspect"
-}
-
-variable "app_short_name" {
-  description = "Short brand label shown only in the web sidebar header. Defaults to 'Inspect' to keep the sidebar visually compact."
-  type        = string
-  default     = "Inspect"
 }
 
 variable "app_icon_url" {
@@ -405,6 +503,12 @@ variable "control_plane_migration_old_tag" {
 
 variable "control_plane_new_sqlite_classes" {
   description = "DO classes new in this control plane migration step (empty means treat all configured classes as new)"
+  type        = list(string)
+  default     = []
+}
+
+variable "control_plane_deleted_classes" {
+  description = "DO classes deleted in this control plane migration step"
   type        = list(string)
   default     = []
 }

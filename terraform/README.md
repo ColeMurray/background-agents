@@ -19,40 +19,28 @@ The infrastructure spans multiple cloud providers:
 ```
 terraform/
 ├── d1/
-│   └── migrations/              # D1 database migrations (applied via d1-migrate.sh)
-├── modules/                      # Reusable Terraform modules
-│   ├── cloudflare-kv/           # KV namespace management
-│   ├── cloudflare-worker/       # Worker deployment with bindings (KV, DO, D1)
-│   ├── daytona-infra/           # Daytona snapshot bootstrap wrapper
-│   ├── vercel-project/          # Vercel project + environment vars
-│   └── modal-app/               # Modal CLI wrapper
-│       └── scripts/             # Deployment scripts
+│   └── migrations/              # D1 migrations (applied via d1-migrate.sh)
+├── modules/                     # Reusable modules with input/output definitions
 ├── environments/
-│   └── production/              # Production root module (split by concern)
-│       ├── main.tf              # Entrypoint + file map
-│       ├── locals.tf            # Shared naming/URL/script path locals
-│       ├── kv.tf                # Cloudflare KV namespaces
-│       ├── d1.tf                # D1 database + migrations
-│       ├── workers-*.tf         # Worker builds/deployments per service
-│       ├── web-*.tf             # Web app resources (Vercel/OpenNext)
-│       ├── daytona.tf           # Daytona snapshot resources
-│       ├── modal.tf             # Modal infrastructure
-│       ├── checks.tf            # Terraform check blocks
-│       ├── moved.tf             # State move declarations
-│       ├── variables.tf         # Input variables
-│       ├── outputs.tf           # Output values
-│       ├── backend.tf           # State backend (R2)
-│       ├── versions.tf          # Provider versions
-│       └── terraform.tfvars.example
+│   ├── production/              # Cloudflare-based deployment (split by concern)
+│   ├── aws-staging/             # AWS staging root module
+│   └── aws-production/          # AWS production root module
 └── README.md                    # This file
 ```
+
+The [production root module](environments/production/) is split across `.tf` files loaded together;
+there is no special entrypoint file. See [variables.tf](environments/production/variables.tf) for
+inputs, [outputs.tf](environments/production/outputs.tf) for outputs, and
+[terraform.tfvars.example](environments/production/terraform.tfvars.example) for configuration. For
+AWS deployment instructions, see [AWS staging](environments/aws-staging/) and
+[AWS production](environments/aws-production/).
 
 ## Prerequisites
 
 ### 1. Required Tools
 
 ```bash
-# Terraform >= 1.9.0
+# Terraform >= 1.14.0 (see environments/production/versions.tf)
 brew install terraform
 
 # Modal CLI (for Modal deployments)
@@ -70,7 +58,7 @@ brew install node@22
      - Workers KV Storage: **Edit**
      - Workers R2 Storage: **Edit**
      - D1: **Edit**
-     - Queues: **Edit** (required when the Slack bot is enabled)
+     - Queues: **Edit** (required for durable image-build finalization)
    - If you manage Cloudflare routes/custom domains through Terraform, also add:
      - Workers Routes: **Edit**
 
@@ -95,18 +83,27 @@ brew install node@22
 1. **Sign up** at [Modal](https://modal.com)
 2. **Create API Token** at Modal Settings
 
-### 5. GitHub Apps
+### 5. Sign-In Providers and GitHub Repository Access
 
-1. **OAuth App** - For user authentication
-   - Create at: https://github.com/settings/developers
-   - Callback URL: `https://<your-vercel-app>.vercel.app/api/auth/callback/github`
+A GitHub App installation is always required for repository access in sandboxes. Create it at
+https://github.com/settings/apps and convert its private key to PKCS#8:
 
-2. **GitHub App** - For repository access in sandboxes
-   - Create at: https://github.com/settings/apps
-   - Convert private key to PKCS#8 format:
-     ```bash
-     openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in key.pem -out key-pkcs8.pem
-     ```
+```bash
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in key.pem -out key-pkcs8.pem
+```
+
+Choose at least one sign-in provider:
+
+- **GitHub sign-in:** set the GitHub App client ID and client secret together, and configure
+  `/api/auth/callback/github`.
+- **Google sign-in:** set the Google OAuth client ID and client secret together, and configure
+  `/api/auth/callback/google`.
+- Configure both pairs to offer both providers. Google-only is supported, but the GitHub App
+  repository credentials remain required.
+
+Google sign-in requires provider-neutral admission through an exact email/domain allowlist, unless
+the deployment explicitly opts into unsafe allow-all. GitHub-only admission may also use GitHub
+usernames or organizations.
 
 ### 6. Slack App
 
@@ -115,13 +112,16 @@ Create at [Slack API](https://api.slack.com/apps) and note:
 - Bot OAuth Token (`xoxb-...`)
 - Signing Secret
 
-The bot token requires `app_mentions:read`, `chat:write`, `channels:history`, `channels:read`,
-`groups:history`, `groups:read`, `im:history`, `im:read`, `files:read`, `files:write`, and
-`reactions:write`. Reinstall the app after changing scopes.
+The bot token requires `assistant:write`, `app_mentions:read`, `chat:write`, `channels:history`,
+`channels:read`, `groups:history`, `groups:read`, `im:history`, `files:read`, `files:write`,
+`reactions:write`, `users:read`, and `users:read.email`. Reinstall the app after changing scopes.
+The complete app configuration is available in
+[`packages/slack-bot/slack-app-manifest.yaml`](../packages/slack-bot/slack-app-manifest.yaml).
 
-When upgrading an existing Slack deployment, add **Queues: Edit** to the Cloudflare API token before
-running `terraform apply`. Add `files:write` and `files:read`, reinstall the Slack app, and update
-the deployed bot token if Slack issued a replacement before deploying this version.
+Before upgrading any deployment, add **Queues: Edit** to the Cloudflare API token before running
+`terraform apply`; image-build finalization now provisions a Queue and dead-letter Queue. For Slack
+deployments, also add `files:write` and `files:read`, reinstall the Slack app, and update the
+deployed bot token if Slack issued a replacement before deploying this version.
 
 ## Quick Start
 
@@ -154,6 +154,14 @@ terraform init \
 
 ### 3. Plan Changes
 
+Terraform generates and persists a dedicated provider-account credential encryption key by default.
+Existing local installations may set `provider_accounts_encryption_key` in `terraform.tfvars` to
+retain their current key; Actions deployments use the `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` repository
+or production-environment secret instead. Do not change this value after storing provider account
+credentials unless every credential has first been re-encrypted and verified through the documented
+old-key-to-new-key migration before the Worker binding is updated. Back up the remote Terraform
+state because it is the recovery source for an automatically generated key.
+
 ```bash
 terraform plan
 ```
@@ -173,7 +181,16 @@ The GitHub Actions workflow (`.github/workflows/terraform.yml`) automates:
 | Pull Request  | `terraform plan` with PR comment |
 | Merge to main | `terraform apply` (auto-approve) |
 
-### Required GitHub Secrets
+### GitHub Actions Secrets and Variables
+
+Keep credentials in Actions **Secrets**. Non-secret configuration (account/application IDs, provider
+settings, feature flags, allowlists, and branding) can use Actions **Variables** instead. The
+workflows prefer a non-empty variable, then the same-named secret, then the existing default where
+one exists. Existing secret-only deployments continue to work; an empty variable falls back to the
+secret rather than clearing it. `CLASSIFICATION_MODEL` remains variable-only.
+
+See [the CI/CD setup guide](../docs/GETTING_STARTED.md#step-10-set-up-cicd-optional) for the
+complete variable list and bulk upload examples using `gh variable set` and `gh secret set`.
 
 Add these secrets to your repository settings:
 
@@ -220,9 +237,13 @@ VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
 VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
 VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
 
-# GitHub App OAuth credentials
+# Optional GitHub sign-in pair (set both or neither)
 GH_OAUTH_CLIENT_ID
 GH_OAUTH_CLIENT_SECRET
+
+# Optional Google sign-in pair (set both or neither)
+GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET
 
 # GitHub App
 GH_APP_ID
@@ -246,11 +267,13 @@ LINEAR_CLIENT_SECRET
 LINEAR_WEBHOOK_SECRET
 
 # API Keys
-ANTHROPIC_API_KEY
+ANTHROPIC_API_KEY # Optional; required only when classification_model is an Anthropic model and the Slack or Linear bot is enabled
+CLASSIFICATION_OPENAI_API_KEY # Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled
 
 # Security Secrets
 TOKEN_ENCRYPTION_KEY
 REPO_SECRETS_ENCRYPTION_KEY
+PROVIDER_ACCOUNTS_ENCRYPTION_KEY # Optional existing provider-account key override
 NEXTAUTH_SECRET # Browser-auth secret; legacy Actions secret name
 
 # Access control
@@ -260,130 +283,22 @@ ENABLE_DURABLE_OBJECT_BINDINGS # Optional; defaults to true
 
 # Branding
 APP_NAME # Optional; defaults to Open-Inspect
-APP_SHORT_NAME
 APP_ICON_URL
 ```
 
 ## Module Reference
 
-### cloudflare-kv
+Browse [modules/](modules/) for the available modules. Each module's `variables.tf` defines its
+inputs, types, defaults, and validation; `outputs.tf` defines its returned values.
 
-Creates a Cloudflare Workers KV namespace.
+Use the maintained deployment configurations as integration examples:
 
-```hcl
-module "my_kv" {
-  source = "../../modules/cloudflare-kv"
+- [Cloudflare KV namespaces](environments/production/kv.tf)
+- [Control-plane Worker and bindings](environments/production/workers-control-plane.tf)
+- [Vercel web project](environments/production/web-vercel.tf)
+- [Modal deployment](environments/production/modal.tf)
 
-  account_id     = var.cloudflare_account_id
-  namespace_name = "my-namespace"
-}
-```
-
-**Outputs:** `namespace_id`, `namespace_name`
-
-### cloudflare-worker
-
-Deploys a Cloudflare Worker with bindings using the native 3-resource pattern: `cloudflare_worker` +
-`cloudflare_worker_version` + `cloudflare_workers_deployment`
-
-```hcl
-module "my_worker" {
-  source = "../../modules/cloudflare-worker"
-
-  account_id  = var.cloudflare_account_id
-  worker_name = "my-worker"
-  script_path = "dist/index.js"  # Path to bundled JS file
-
-  kv_namespaces = [
-    { binding_name = "KV", namespace_id = module.my_kv.namespace_id }
-  ]
-
-  service_bindings = [
-    { binding_name = "OTHER_WORKER", service_name = "other-worker" }
-  ]
-
-  secrets = [
-    { name = "API_KEY", value = var.api_key }
-  ]
-
-  durable_objects = [
-    { binding_name = "DO", class_name = "MyDurableObject" }
-  ]
-
-  d1_databases = [
-    { binding_name = "DB", database_id = cloudflare_d1_database.main.id }
-  ]
-
-  compatibility_date = "2024-09-23"
-  migration_tag      = "v1"  # For DO migrations
-}
-```
-
-**Outputs:** `worker_name`, `worker_id`, `version_id`, `deployment_id`, `worker_url`
-
-### vercel-project
-
-Creates a Vercel project with environment variables.
-
-```hcl
-module "web_app" {
-  source = "../../modules/vercel-project"
-
-  project_name = "my-app"
-  team_id      = var.vercel_team_id
-  framework    = "nextjs"
-
-  git_repository = {
-    type = "github"
-    repo = "owner/repo"
-  }
-
-  root_directory = "packages/web"
-
-  environment_variables = [
-    {
-      key       = "API_URL"
-      value     = "https://api.example.com"
-      targets   = ["production", "preview"]
-      sensitive = false
-    }
-  ]
-}
-```
-
-**Outputs:** `project_id`, `project_name`, `production_url`
-
-### modal-app
-
-Deploys a Modal app via CLI wrapper.
-
-```hcl
-module "modal" {
-  source = "../../modules/modal-app"
-
-  modal_token_id     = var.modal_token_id
-  modal_token_secret = var.modal_token_secret
-
-  app_name                     = "my-app"
-  workspace                    = "my-workspace"
-  modal_environment            = "main"
-  modal_environment_web_suffix = ""
-  deploy_path                  = "${path.root}/../../../packages/modal-infra"
-  deploy_module                = "deploy"
-
-  secrets = [
-    {
-      name = "my-secret"
-      values = {
-        KEY1 = "value1"
-        KEY2 = "value2"
-      }
-    }
-  ]
-}
-```
-
-**Outputs:** `app_name`, `deploy_id`, `api_health_url`
+The other sandbox providers are wired in the same [production directory](environments/production/).
 
 ## Important Notes
 
@@ -400,6 +315,12 @@ Use the built-in two-phase flags instead of editing Terraform modules:
 2. Run `terraform apply` to create the initial workers and migrations.
 3. Set both values back to `true`.
 4. Run `terraform apply` again to attach the Durable Object and service bindings.
+
+Class removal does not disable surviving bindings. Remove the retired binding, set a new migration
+tag and previous tag, list the class in `control_plane_deleted_classes`, and apply with
+`enable_durable_object_bindings = true`. The migration and surviving bindings are emitted together.
+The production workflow stages the `SchedulerDO` v2-to-v3 deletion only when Terraform state still
+reports v2, so the release-specific migration is not a permanent default for fresh deployments.
 
 See
 [Cloudflare's documentation](https://developers.cloudflare.com/workers/platform/infrastructure-as-code/)
@@ -438,8 +359,8 @@ MODAL_WORKSPACE_SLUG="<workspace>" # or "<workspace>-<modal_environment_web_suff
 curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
 # Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
-# 3. Verify Vercel deployment (replace with your Vercel app URL)
-curl https://<your-vercel-app>.vercel.app
+# 3. Verify the web deployment
+curl -I "$(terraform output -raw web_app_url)"
 
 # 4. Test authenticated endpoint (should return 401)
 curl https://open-inspect-control-plane-prod.<subdomain>.workers.dev/sessions
@@ -475,7 +396,7 @@ variables.
    - `Workers KV Storage: Edit`
    - `Workers R2 Storage: Edit`
    - `D1: Edit`
-   - `Queues: Edit` if the Slack bot is enabled
+   - `Queues: Edit`
    - `Workers Routes: Edit` if you manage routes/custom domains through Terraform
 
 ## Adding New Environments

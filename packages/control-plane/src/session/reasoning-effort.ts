@@ -3,7 +3,7 @@
  * Returns the validated effort string or null if invalid/absent.
  */
 
-import { isValidReasoningEffort } from "@open-inspect/shared";
+import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import type { Logger } from "../logger";
 
 export function validateReasoningEffort(

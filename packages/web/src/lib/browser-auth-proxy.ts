@@ -1,9 +1,10 @@
 import {
   BROWSER_AUTH_CLIENT_IP_HEADER,
-  buildServiceAuthHeaders,
   isBrowserAuthProxyRoute,
-} from "@open-inspect/shared";
-import { dispatchControlPlaneFetch, getControlPlaneUrl } from "./control-plane-transport";
+} from "@open-inspect/shared/browser-auth-routes";
+import { readBodyCapped } from "@open-inspect/shared/http-body";
+import { SERVICE_REQUEST_MAX_BODY_BYTES } from "@open-inspect/shared/service-auth";
+import { dispatchWebServiceRequest } from "./control-plane-service";
 
 const REQUEST_HEADERS = [
   "Accept",
@@ -26,6 +27,13 @@ const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
 ]);
 
 const DECODED_BODY_RESPONSE_HEADERS = new Set(["content-encoding", "content-length"]);
+
+function requestBodyTooLarge(): Response {
+  return Response.json(
+    { error: "Request body is too large" },
+    { status: 413, headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }
+  );
+}
 
 /**
  * A logical browser-auth request for server code that has no incoming URL.
@@ -93,37 +101,19 @@ async function dispatchAllowedBrowserAuthRequest(
   request: BrowserAuthDispatchRequest
 ): Promise<Response> {
   const method = request.method;
-  const secret = process.env.SERVICE_AUTH_SECRET;
-  if (!secret) {
-    throw new Error("SERVICE_AUTH_SECRET not configured");
-  }
-
-  const upstreamUrl = `${getControlPlaneUrl()}${request.pathname}${request.search ?? ""}`;
   const sourceHeaders = new Headers(request.headers);
   const headers = copyRequestHeaders(sourceHeaders, request.clientIp);
-  const serviceHeaders = await buildServiceAuthHeaders({
-    service: "web",
-    secret,
+  const upstream = await dispatchWebServiceRequest({
     method,
-    url: upstreamUrl,
+    path: `${request.pathname}${request.search ?? ""}`,
+    headers,
     body: request.body,
     traceId: sourceHeaders.get("x-trace-id") ?? undefined,
-  });
-  for (const [name, value] of Object.entries(serviceHeaders)) {
-    headers.set(name, value);
-  }
-
-  const upstream = await dispatchControlPlaneFetch(
-    upstreamUrl,
-    {
-      method,
-      headers,
-      body: request.body,
+    transportOptions: {
       redirect: "manual",
       cache: "no-store",
     },
-    {}
-  );
+  });
 
   return new Response(upstream.body, {
     status: upstream.status,
@@ -149,8 +139,18 @@ export async function proxyBrowserAuthRequest(request: Request): Promise<Respons
     return Response.json({ error: "Not found" }, { status: 404 });
   }
 
-  const body =
-    method === "GET" || method === "HEAD" ? undefined : new Uint8Array(await request.arrayBuffer());
+  let body: Uint8Array<ArrayBuffer> | undefined;
+  if (method !== "GET" && method !== "HEAD") {
+    const contentLength = Number(request.headers.get("Content-Length"));
+    if (Number.isFinite(contentLength) && contentLength > SERVICE_REQUEST_MAX_BODY_BYTES) {
+      return requestBodyTooLarge();
+    }
+    const buffered = await readBodyCapped(request.body, SERVICE_REQUEST_MAX_BODY_BYTES);
+    if (buffered === null) {
+      return requestBodyTooLarge();
+    }
+    body = buffered;
+  }
   return dispatchAllowedBrowserAuthRequest({
     method,
     pathname: incomingUrl.pathname,

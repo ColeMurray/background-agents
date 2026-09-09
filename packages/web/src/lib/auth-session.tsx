@@ -2,6 +2,7 @@
 
 import useSWR, { mutate } from "swr";
 import { z } from "zod";
+import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import {
   browserAuthSessionResponseSchema,
   type BrowserAuthSessionUser,
@@ -10,13 +11,11 @@ import { browserApiFetch } from "./browser-api-fetch";
 
 const BROWSER_AUTH_SESSION_PATH = "/api/auth/get-session";
 
-export type AuthSessionUser = BrowserAuthSessionUser;
+type AuthSessionUser = BrowserAuthSessionUser;
 
 export interface AuthSession {
   user: AuthSessionUser;
 }
-
-export type SignInProvider = "github" | "google";
 
 export type AuthSessionState =
   | {
@@ -25,7 +24,7 @@ export type AuthSessionState =
     }
   | {
       data: null;
-      status: "loading" | "unauthenticated";
+      status: "loading" | "unauthenticated" | "unavailable";
     };
 
 export async function signIn(provider: SignInProvider): Promise<void> {
@@ -59,6 +58,11 @@ export async function signOut(): Promise<void> {
   if (!response.ok) {
     throw new Error(`Sign-out failed with status ${response.status}`);
   }
+  await clearAuthSessionCache();
+}
+
+/** Immediately reflect a server-side session revocation in the client cache. */
+export async function clearAuthSessionCache(): Promise<void> {
   await mutate(BROWSER_AUTH_SESSION_PATH, null, false);
 }
 
@@ -82,7 +86,7 @@ export function useAuthSession(): AuthSessionState {
 
   if (data) return { data, status: "authenticated" };
   if (error) {
-    return { data: null, status: "unauthenticated" };
+    return { data: null, status: "unavailable" };
   }
   if (isLoading || data === undefined) {
     return { data: null, status: "loading" };

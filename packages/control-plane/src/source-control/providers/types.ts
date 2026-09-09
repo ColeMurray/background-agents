@@ -3,7 +3,7 @@
  */
 
 import type { GitHubAppConfig } from "../../auth/github-app";
-import type { CacheStore } from "@open-inspect/shared";
+import type { CacheStore } from "@open-inspect/shared/cache-store";
 
 /**
  * Configuration for GitHubSourceControlProvider.

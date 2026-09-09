@@ -9,8 +9,35 @@
  */
 
 import type { Logger } from "../logger";
-import type { ClientInfo, ServerMessage, ParticipantPresence } from "../types";
+import type {
+  ParticipantPresence,
+  ServerMessage,
+} from "@open-inspect/shared/types/server-messages";
+import type { ClientInfo } from "../types";
 import type { SessionMessenger } from "./messenger";
+import type { SessionWebSocket } from "../platform-ports";
+
+/** Project one participant per identity from one or more client connections. */
+function projectConnectedParticipants(connections: Iterable<ClientInfo>): ParticipantPresence[] {
+  const participants = new Map<string, ParticipantPresence>();
+  for (const connection of connections) {
+    const existing = participants.get(connection.participantId);
+    if (!existing) {
+      participants.set(connection.participantId, {
+        participantId: connection.participantId,
+        userId: connection.userId,
+        name: connection.name,
+        avatar: connection.avatar,
+        status: connection.status,
+        lastSeen: connection.lastSeen,
+      });
+      continue;
+    }
+    if (connection.status === "active") existing.status = "active";
+    if (connection.lastSeen > existing.lastSeen) existing.lastSeen = connection.lastSeen;
+  }
+  return Array.from(participants.values());
+}
 
 /**
  * Dependencies injected into PresenceService.
@@ -19,8 +46,8 @@ import type { SessionMessenger } from "./messenger";
 export interface PresenceServiceDeps {
   getAuthenticatedClients: () => IterableIterator<ClientInfo>;
   messenger: SessionMessenger;
-  send: (ws: WebSocket, message: ServerMessage) => boolean;
-  getSandboxSocket: () => WebSocket | null;
+  send: (ws: SessionWebSocket, message: ServerMessage) => boolean;
+  getSandboxSocket: () => SessionWebSocket | null;
   isSpawning: () => boolean;
   spawnSandbox: () => Promise<void>;
   log: Logger;
@@ -41,30 +68,13 @@ export class PresenceService {
    * participant active, and we take the most recent lastSeen across sockets.
    */
   getPresenceList(): ParticipantPresence[] {
-    const byId = new Map<string, ParticipantPresence>();
-    for (const c of this.deps.getAuthenticatedClients()) {
-      const existing = byId.get(c.participantId);
-      if (!existing) {
-        byId.set(c.participantId, {
-          participantId: c.participantId,
-          userId: c.userId,
-          name: c.name,
-          avatar: c.avatar,
-          status: c.status,
-          lastSeen: c.lastSeen,
-        });
-        continue;
-      }
-      if (c.status === "active") existing.status = "active";
-      if (c.lastSeen > existing.lastSeen) existing.lastSeen = c.lastSeen;
-    }
-    return Array.from(byId.values());
+    return projectConnectedParticipants(this.deps.getAuthenticatedClients());
   }
 
   /**
    * Send presence info to a specific client.
    */
-  sendPresence(ws: WebSocket): void {
+  sendPresence(ws: SessionWebSocket): void {
     const participants = this.getPresenceList();
     this.deps.send(ws, { type: "presence_sync", participants });
   }

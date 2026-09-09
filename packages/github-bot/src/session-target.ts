@@ -10,7 +10,8 @@
  * session must always be able to check out the PR under review.
  */
 
-import { encodeRepositoryPathSegments, resolveAppName } from "@open-inspect/shared";
+import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
+import { resolveAppName } from "@open-inspect/shared/app-name";
 import { z } from "zod";
 import type { Env } from "./types";
 import { signedControlPlaneFetch } from "./internal-auth";

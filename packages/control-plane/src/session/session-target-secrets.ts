@@ -1,5 +1,34 @@
+import type { OAuthSecretScope } from "../db/scoped-oauth-secrets";
 import type { SecretSource } from "../db/secrets-validation";
 import type { SessionRepositoryEntry } from "./repository-target";
+import type { SessionRow } from "./types";
+
+/** Maps a session target to the secret scope that owns its provider OAuth credentials. */
+export async function resolveSessionOAuthSecretScope(
+  session: SessionRow,
+  ensureRepoId: (session: SessionRow) => Promise<number>
+): Promise<OAuthSecretScope | null> {
+  const { repo_owner: repoOwner, repo_name: repoName } = session;
+  const hasEmptyRepositoryIdentifier =
+    (repoOwner !== null && repoOwner.trim().length === 0) ||
+    (repoName !== null && repoName.trim().length === 0);
+  if (hasEmptyRepositoryIdentifier || (repoOwner === null) !== (repoName === null)) {
+    throw new Error("Session has incomplete repository context");
+  }
+
+  if (session.environment_id) {
+    return { kind: "environment", environmentId: session.environment_id };
+  }
+  if (repoOwner !== null && repoName !== null) {
+    return {
+      kind: "repo",
+      repoId: await ensureRepoId(session),
+      repoOwner,
+      repoName,
+    };
+  }
+  return null;
+}
 
 export interface SessionTargetSecretSourcesInput {
   /**

@@ -14,6 +14,7 @@ vi.mock("./browser-auth-proxy", () => ({
 }));
 
 import { getServerAuthSession, type ServerAuthSession } from "./server-auth-session";
+import { AuthenticationUnavailableError } from "./authentication-unavailable-error";
 
 describe("getServerAuthSession", () => {
   beforeEach(() => {
@@ -63,6 +64,14 @@ describe("getServerAuthSession", () => {
     expect(mocks.dispatchBrowserAuthRequest).not.toHaveBeenCalled();
   });
 
+  it("propagates cookie access failures without wrapping or dispatching", async () => {
+    const frameworkSignal = new Error("NEXT_DYNAMIC_API_SIGNAL");
+    mocks.cookies.mockRejectedValue(frameworkSignal);
+
+    await expect(getServerAuthSession()).rejects.toBe(frameworkSignal);
+    expect(mocks.dispatchBrowserAuthRequest).not.toHaveBeenCalled();
+  });
+
   it("returns null when Better Auth rejects the browser session", async () => {
     mocks.dispatchBrowserAuthRequest.mockResolvedValue(
       Response.json({ error: "Unauthorized" }, { status: 401 })
@@ -77,14 +86,12 @@ describe("getServerAuthSession", () => {
     await expect(getServerAuthSession()).resolves.toBeNull();
   });
 
-  it("throws when the auth service fails instead of treating failure as logout", async () => {
+  it("reports auth-service failure as explicit unavailability instead of logout", async () => {
     mocks.dispatchBrowserAuthRequest.mockResolvedValue(
       Response.json({ error: "Unavailable" }, { status: 503 })
     );
 
-    await expect(getServerAuthSession()).rejects.toThrow(
-      "Browser authentication failed with status 503"
-    );
+    await expect(getServerAuthSession()).rejects.toBeInstanceOf(AuthenticationUnavailableError);
   });
 
   it("rejects malformed successful session responses", async () => {
@@ -107,7 +114,9 @@ describe("getServerAuthSession", () => {
       })
     );
 
-    await expect(getServerAuthSession()).rejects.toThrow(
+    const error = await getServerAuthSession().catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(AuthenticationUnavailableError);
+    expect(String((error as AuthenticationUnavailableError).cause)).toContain(
       "Browser session user id is not canonical"
     );
   });

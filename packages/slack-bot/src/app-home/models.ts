@@ -1,13 +1,12 @@
 import {
   DEFAULT_ENABLED_MODELS,
   MODEL_OPTIONS,
-  isValidModel,
   normalizeValidModels,
-  type SlackGlobalConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import type { ModelOption } from "./slack-types";
+import { getSlackSettings } from "../slack-settings";
 
 const ALL_MODELS = MODEL_OPTIONS.flatMap((group) =>
   group.models.map((model) => ({
@@ -15,6 +14,10 @@ const ALL_MODELS = MODEL_OPTIONS.flatMap((group) =>
     value: model.id,
   }))
 );
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function getDefaultModelOptions(): ModelOption[] {
   const defaultSet = new Set<string>(DEFAULT_ENABLED_MODELS);
@@ -28,8 +31,9 @@ export async function getAvailableModels(env: Env, traceId?: string): Promise<Mo
     const response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
 
     if (response.ok) {
-      const data = (await response.json()) as { enabledModels?: unknown };
+      const data = await response.json();
       if (
+        isObject(data) &&
         Array.isArray(data.enabledModels) &&
         data.enabledModels.every((id): id is string => typeof id === "string")
       ) {
@@ -51,18 +55,5 @@ export async function getSlackDefaultModel(
   env: Env,
   traceId?: string
 ): Promise<string | undefined> {
-  try {
-    const url = "https://internal/integration-settings/slack";
-    const response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
-
-    if (!response.ok) {
-      return undefined;
-    }
-
-    const data = (await response.json()) as { settings: SlackGlobalConfig | null };
-    const model = data.settings?.defaults?.model;
-    return model && isValidModel(model) ? model : undefined;
-  } catch {
-    return undefined;
-  }
+  return (await getSlackSettings(env, traceId)).defaultModel;
 }

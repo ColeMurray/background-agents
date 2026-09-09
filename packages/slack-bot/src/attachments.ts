@@ -12,15 +12,15 @@
  * images.
  */
 
+import { postMessage, type SlackMessageFile } from "@open-inspect/shared/slack";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
-  postMessage,
-  readBodyCapped,
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  sessionAttachmentUploadResponseSchema,
   type SessionAttachmentReference,
-  type SlackMessageFile,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-attachments";
+import { readBodyCapped } from "@open-inspect/shared/http-body";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "./request-options";
@@ -253,6 +253,7 @@ async function uploadToSession(
   env: Env,
   sessionId: string,
   file: PreparedImageAttachments["files"][number],
+  authorId: string,
   traceId?: string
 ): Promise<{ reference: SessionAttachmentReference } | { sessionMissing: boolean }> {
   const { attachment, bytes } = file;
@@ -275,6 +276,7 @@ async function uploadToSession(
         method: "POST",
         url: `https://internal/sessions/${sessionId}/attachments`,
         body: { bytes: multipartBytes, contentType },
+        actor: authorId.startsWith("slack:") ? authorId : undefined,
         traceId,
       },
       { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
@@ -288,8 +290,8 @@ async function uploadToSession(
       });
       return { sessionMissing: response.status === 404 };
     }
-    const body = (await response.json()) as { attachmentId?: unknown };
-    if (typeof body.attachmentId !== "string" || !body.attachmentId) {
+    const parsed = sessionAttachmentUploadResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
       log.warn("slack.attachment.upload_failed", {
         trace_id: traceId,
         session_id: sessionId,
@@ -298,7 +300,7 @@ async function uploadToSession(
       });
       return { sessionMissing: false };
     }
-    return { reference: { attachmentId: body.attachmentId, name: attachment.name } };
+    return { reference: { attachmentId: parsed.data.attachmentId, name: attachment.name } };
   } catch (e) {
     log.warn("slack.attachment.upload_error", {
       trace_id: traceId,
@@ -320,10 +322,11 @@ export async function uploadPreparedAttachments(
   env: Env,
   sessionId: string,
   prepared: PreparedImageAttachments,
+  authorId: string,
   traceId?: string
 ): Promise<SlackAttachmentUploadResult> {
   const outcomes = await Promise.all(
-    prepared.files.map((file) => uploadToSession(env, sessionId, file, traceId))
+    prepared.files.map((file) => uploadToSession(env, sessionId, file, authorId, traceId))
   );
   const references: SessionAttachmentReference[] = [];
   const dropped: SlackAttachmentDropReason[] = [...prepared.dropped];

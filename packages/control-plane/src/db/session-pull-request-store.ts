@@ -1,4 +1,5 @@
-import type { PullRequestLifecycleState, PullRequestSummary } from "@open-inspect/shared";
+import type { PullRequestSummary } from "@open-inspect/shared/types/sessions";
+import type { PullRequestLifecycleState } from "@open-inspect/shared/types/artifacts";
 import type { SqlDatabase } from "./sql-database";
 
 /**

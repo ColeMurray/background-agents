@@ -1,74 +1,65 @@
 /**
  * Condition system for trigger-based automations.
  *
- * Each condition type's shape is defined once in ConditionConfigMap.
- * TypeScript derives the discriminated union and typed handler interfaces from it.
+ * TypeScript derives typed handler interfaces from the trigger configuration
+ * shapes, while this module owns runtime validation and evaluation.
  */
 
-import type { AutomationEvent, AutomationEventSource } from "./types";
-
-// ─── 1. ConditionConfigMap: single source of truth ───────────────────────────
-
-export interface ConditionConfigMap {
-  branch: { operator: "glob_match" | "exact"; value: string[] };
-  target_branch: { operator: "glob_match" | "exact"; value: string[] };
-  label: { operator: "any_of" | "none_of"; value: string[] };
-  path_glob: { operator: "any_match"; value: string[] };
-  actor: { operator: "include" | "exclude"; value: string[] };
-  check_conclusion: { operator: "eq"; value: string };
-  linear_status: { operator: "any_of"; value: string[] };
-  sentry_project: { operator: "any_of"; value: string[] };
-  sentry_level: { operator: "any_of"; value: string[] };
-  jsonpath: { operator: "all_match"; value: JsonPathFilter[] };
-  text_match: { operator: "contains" | "exact" | "regex"; value: TextMatchValue };
-  slack_channel: { operator: "any_of"; value: string[] };
-  slack_actor: { operator: "include" | "exclude"; value: string[] };
-}
-
-export interface JsonPathFilter {
-  path: string;
-  comparison: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains" | "exists";
-  value?: string | number | boolean;
-}
-
-/** Value shape for the `text_match` condition (keyword / substring / regex). */
-export interface TextMatchValue {
-  /** Keyword/substring (contains/exact) or regular-expression source (regex). */
-  pattern: string;
-  /** Case/regex flags; only an allowlisted subset is accepted (see ALLOWED_REGEX_FLAGS). */
-  flags?: string;
-}
-
-// ─── 2. Derived discriminated union ──────────────────────────────────────────
-
-export type TriggerCondition = {
-  [K in keyof ConditionConfigMap]: { type: K } & ConditionConfigMap[K];
-}[keyof ConditionConfigMap];
-
-// ─── 3. Typed handler interface ──────────────────────────────────────────────
-
-export type ConditionType = keyof ConditionConfigMap;
+import type {
+  AutomationEvent,
+  AutomationEventSource,
+  AutomationTriggerType,
+  ConditionType,
+  TriggerCondition,
+} from "./types";
+import { TRIGGER_TYPE_TO_SOURCE } from "./types";
+import { getGitHubConclusionOptions, isGitHubConditionSupported } from "./github/webhook-types";
 
 type ConditionOf<K extends ConditionType> = Extract<TriggerCondition, { type: K }>;
 
 export interface ConditionHandler<K extends ConditionType> {
   /** Validate at automation creation time. Returns null if valid, error string otherwise. */
-  validate(condition: ConditionOf<K>): string | null;
+  validate(condition: ConditionOf<K>, eventType?: string): string | null;
 
   /** Evaluate at event matching time. Returns true if the condition passes. */
   evaluate(condition: ConditionOf<K>, event: AutomationEvent): boolean;
 
   /** Which event sources this condition can be used with. */
-  appliesTo: AutomationEventSource[];
+  appliesTo: readonly AutomationEventSource[];
 }
 
-// ─── 4. Typed registry ───────────────────────────────────────────────────────
+// ─── Typed Registry ──────────────────────────────────────────────────────────
 
 export type ConditionRegistry = {
   [K in ConditionType]: ConditionHandler<K>;
 };
 
-// ─── 5. Dispatch ─────────────────────────────────────────────────────────────
+export function getConditionSemanticKey(type: ConditionType): ConditionType {
+  return type === "check_conclusion" ? "conclusion" : type;
+}
+
+export function dedupeConditionsBySemanticKey(
+  conditions: readonly TriggerCondition[]
+): TriggerCondition[] {
+  const seen = new Set<ConditionType>();
+  return conditions.filter((condition) => {
+    const key = getConditionSemanticKey(condition.type);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function isGitHubConditionCompatible(
+  eventType: string,
+  condition: TriggerCondition
+): boolean {
+  if (!isGitHubConditionSupported(eventType, condition.type)) return false;
+  if (condition.type !== "conclusion" && condition.type !== "check_conclusion") return true;
+  return getGitHubConclusionOptions(eventType).includes(condition.value);
+}
+
+// ─── Dispatch ────────────────────────────────────────────────────────────────
 
 export function matchesConditions(
   conditions: TriggerCondition[],
@@ -81,12 +72,53 @@ export function matchesConditions(
   });
 }
 
-// ─── 6. Validation (called at automation creation time) ──────────────────────
+// ─── Validation (called at automation creation time) ────────────────────────
+
+interface TriggerConditionConfiguration {
+  type: AutomationTriggerType;
+  eventType?: string;
+  conditions: TriggerCondition[];
+}
+
+/**
+ * Validate a proposed trigger configuration. Unchanged legacy GitHub filters
+ * may survive an edit, but each existing occurrence can exempt only one filter.
+ * Callers parse stored data and provide the previous configuration only for edits.
+ */
+export function validateTriggerConditions(
+  proposed: TriggerConditionConfiguration,
+  registry: ConditionRegistry,
+  previous?: TriggerConditionConfiguration
+): string[] {
+  const source = TRIGGER_TYPE_TO_SOURCE[proposed.type];
+  if (!source) return [];
+  const eventType = proposed.eventType;
+  const unchangedGitHubEvent =
+    proposed.type === "github_event" &&
+    previous?.type === proposed.type &&
+    eventType !== undefined &&
+    eventType !== "" &&
+    previous.eventType === eventType;
+  const remainingOriginalConditions = unchangedGitHubEvent
+    ? previous.conditions.map((condition) => JSON.stringify(condition))
+    : [];
+  return proposed.conditions.flatMap((condition) => {
+    if (unchangedGitHubEvent && !isGitHubConditionSupported(eventType, condition.type)) {
+      const index = remainingOriginalConditions.indexOf(JSON.stringify(condition));
+      if (index !== -1) {
+        remainingOriginalConditions.splice(index, 1);
+        return [];
+      }
+    }
+    return validateConditions([condition], source, registry, eventType);
+  });
+}
 
 export function validateConditions(
   conditions: TriggerCondition[],
   triggerSource: AutomationEventSource,
-  registry: ConditionRegistry
+  registry: ConditionRegistry,
+  eventType?: string
 ): string[] {
   const errors: string[] = [];
   for (const condition of conditions) {
@@ -95,14 +127,18 @@ export function validateConditions(
       errors.push(`Condition "${condition.type}" does not apply to ${triggerSource} triggers`);
       continue;
     }
-    const err = handler.validate(condition);
+    if (triggerSource === "github") {
+      if (!eventType) {
+        errors.push(`Condition "${condition.type}" requires a GitHub event type`);
+        continue;
+      }
+      if (!isGitHubConditionSupported(eventType, condition.type)) {
+        errors.push(`Condition "${condition.type}" does not apply to GitHub event ${eventType}`);
+        continue;
+      }
+    }
+    const err = handler.validate(condition, eventType);
     if (err) errors.push(err);
   }
   return errors;
-}
-
-// ─── 7. TriggerConfig (stored as JSON in D1) ────────────────────────────────
-
-export interface TriggerConfig {
-  conditions: TriggerCondition[];
 }

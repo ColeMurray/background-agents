@@ -3,9 +3,11 @@ import { SELF, env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { serviceFetch, sqlDatabase } from "./helpers";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const AUTOMATION_OWNER_ID = "11111111111111111111111111111111";
 
 function makeSlackEventBody(overrides?: Record<string, unknown>): Record<string, unknown> {
   const ts = `${Date.now()}.${Math.floor(Math.random() * 1e6)}`;
@@ -29,10 +31,6 @@ function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow 
   return {
     id: `auto-slack-${Math.random().toString(36).slice(2, 8)}`,
     name: "Slack triage",
-    repo_owner: null,
-    repo_name: null,
-    base_branch: null,
-    repo_id: null,
     instructions: "Investigate and fix",
     trigger_type: "slack_event",
     schedule_cron: null,
@@ -42,8 +40,8 @@ function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow 
     enabled: 1,
     next_run_at: null,
     consecutive_failures: 0,
-    created_by: "user-1",
-    user_id: null,
+    created_by: AUTOMATION_OWNER_ID,
+    user_id: AUTOMATION_OWNER_ID,
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -60,10 +58,18 @@ function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow 
 }
 
 async function seedSlackAutomation(): Promise<string> {
+  await env.DB.prepare(
+    `INSERT INTO users
+      (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+     VALUES (?, 'Slack Owner', NULL, 0, NULL, ?, ?)`
+  )
+    .bind(AUTOMATION_OWNER_ID, Date.now(), Date.now())
+    .run();
   const store = new AutomationStore(env.DB);
   const automation = makeSlackAutomation();
   await store.create(automation);
-  await new SlackChannelStore(env.DB).setSlackChannels(automation.id, ["C1"]);
+  const channels = new SlackChannelStore(env.DB);
+  await sqlDatabase(env.DB).batch(channels.bindChannelStatements(automation.id, ["C1"]));
   return automation.id;
 }
 
@@ -144,6 +150,19 @@ describe("POST /internal/slack-event (integration)", () => {
   it("returns 400 when eventType/triggerKey/concurrencyKey are missing", async () => {
     const res = await postEvent(makeSlackEventBody({ triggerKey: undefined }));
     expect(res.status).toBe(400);
+  });
+
+  it.each([
+    ["eventType", { type: "message.posted" }],
+    ["triggerKey", ["slack:msg:C1:1"]],
+    ["concurrencyKey", { key: "slack:C1:1" }],
+    ["channelId", ["C1"]],
+    ["ts", { value: "1700000000.000200" }],
+  ])("returns 400 when %s is not a string", async (field, value) => {
+    const res = await postEvent(makeSlackEventBody({ [field]: value }));
+
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain(field);
   });
 
   it("forwards a valid event to the scheduler and returns trigger counts", async () => {

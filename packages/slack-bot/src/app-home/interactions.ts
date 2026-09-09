@@ -1,4 +1,4 @@
-import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared";
+import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
   BRANCH_INPUT_BLOCK_ID,
   BRANCH_MODAL_CALLBACK_ID,
@@ -73,7 +73,7 @@ const APP_HOME_BLOCK_ACTIONS: Record<string, AppHomeBlockActionHandler> = {
   [CLEAR_BRANCH_PREFERENCE_ACTION_ID]: { handle: handleClearBranchPreference },
 };
 
-export async function getRepoBranchSuggestionOptions(
+async function getRepoBranchSuggestionOptions(
   env: Env,
   userId: string,
   query: string | undefined,

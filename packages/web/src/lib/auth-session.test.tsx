@@ -99,7 +99,7 @@ describe("useAuthSession", () => {
     });
   });
 
-  it("fails closed without crashing when the session lookup fails", () => {
+  it("distinguishes a session service failure from an unauthenticated session", () => {
     mocks.useSWR.mockReturnValue({
       data: undefined,
       error: new Error("control plane unavailable"),
@@ -110,7 +110,7 @@ describe("useAuthSession", () => {
 
     expect(result.current).toEqual({
       data: null,
-      status: "unauthenticated",
+      status: "unavailable",
     });
   });
 

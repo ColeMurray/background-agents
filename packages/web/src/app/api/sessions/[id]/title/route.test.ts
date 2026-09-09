@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseSessionTitlePatchBody } from "./route";
+import { parseSessionTitlePatchBody } from "./parse-request";
 
 describe("session title API route", () => {
   describe("parseSessionTitlePatchBody", () => {
@@ -17,6 +17,7 @@ describe("session title API route", () => {
     it("rejects a malformed title request", () => {
       expect(parseSessionTitlePatchBody({ title: 123 })).toBeNull();
       expect(parseSessionTitlePatchBody(null)).toBeNull();
+      expect(parseSessionTitlePatchBody([])).toBeNull();
     });
   });
 });

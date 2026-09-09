@@ -2,7 +2,8 @@
  * Callback handlers for control-plane notifications.
  */
 
-import { postEphemeral, verifyCallbackFromControlPlane } from "@open-inspect/shared";
+import { postEphemeral } from "@open-inspect/shared/slack";
+import { verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { Env } from "./types";
@@ -24,6 +25,8 @@ const slackCallbackContextSchema = z.looseObject({
   model: z.string(),
   reasoningEffort: z.string().optional(),
   reactionMessageTs: z.string().optional(),
+  /** Present when the control plane owns this thread as an automation. */
+  automationId: z.string().optional(),
 });
 
 const completionCallbackSchema = z.looseObject({
@@ -71,24 +74,14 @@ const automationCompleteSchema = z.looseObject({
   signature: z.string(),
 });
 
-/** Payload for a concurrency-skip ephemeral notice. */
-interface AutomationSkipPayload {
-  channel: string;
-  user: string;
-  threadTs: string;
-  signature: string;
-}
+const automationSkipSchema = z.looseObject({
+  channel: z.string(),
+  user: z.string(),
+  threadTs: z.string(),
+  signature: z.string(),
+});
 
-function isValidAutomationSkipPayload(payload: unknown): payload is AutomationSkipPayload {
-  if (!isPlainRecord(payload)) return false;
-  const p = payload;
-  return (
-    typeof p.channel === "string" &&
-    typeof p.user === "string" &&
-    typeof p.threadTs === "string" &&
-    typeof p.signature === "string"
-  );
-}
+type AutomationSkipPayload = z.infer<typeof automationSkipSchema>;
 
 /**
  * Shared rejection guard for signed callback routes: validate the payload shape,
@@ -213,7 +206,11 @@ callbacksRouter.post("/complete", async (c) => {
   return enqueueCompletion(
     c,
     createSlackCompletionJob({
-      source: "session",
+      // A Slack thread follow-up completes through this route whether it
+      // continues an interactive @mention or an automation's thread. Only the
+      // latter may decline to reply, so trust the control plane's marker rather
+      // than the route.
+      source: valid.context.automationId ? "automation" : "session",
       sessionId: valid.sessionId,
       messageId: valid.messageId,
       success: valid.success,
@@ -288,7 +285,7 @@ callbacksRouter.post("/tool_call", async (c) => {
 /**
  * Callback endpoint for Slack-triggered automation completion. Posts the agent's
  * final response into the triggering message's thread and clears the `eyes`
- * reaction. The SchedulerDO owns this fan-out (it holds the message coordinates).
+ * reaction. The scheduler owns this fan-out (it holds the message coordinates).
  */
 callbacksRouter.post("/automation-complete", async (c) => {
   const startTime = Date.now();
@@ -353,9 +350,11 @@ callbacksRouter.post("/automation-skip", async (c) => {
     return c.json({ error: "invalid payload" }, 400);
   }
 
-  if (!isValidAutomationSkipPayload(payload)) {
+  const parsed = automationSkipSchema.safeParse(payload);
+  if (!parsed.success || !isSignedCallbackPayload(payload)) {
     return rejectInvalidPayload(c, "/callbacks/automation-skip", traceId, startTime);
   }
+  const valid = parsed.data;
 
   const rejection = await rejectInvalidCallback(c, payload, {
     path: "/callbacks/automation-skip",
@@ -364,7 +363,7 @@ callbacksRouter.post("/automation-skip", async (c) => {
   });
   if (rejection) return rejection;
 
-  c.executionCtx.waitUntil(handleAutomationSkip(payload as AutomationSkipPayload, c.env, traceId));
+  c.executionCtx.waitUntil(handleAutomationSkip(valid, c.env, traceId));
 
   return c.json({ ok: true });
 });

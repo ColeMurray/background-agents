@@ -1,0 +1,49 @@
+# Replace SLACK_EVENTS_URL and SLACK_INTERACTIONS_URL with the deployed worker endpoints.
+display_information:
+  name: Open Inspect
+  description: AI coding assistant for your codebase
+  background_color: "#1a1a2e"
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  agent_view:
+    agent_description: AI coding assistant for your codebase
+  bot_user:
+    display_name: Open Inspect
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - assistant:write
+      - app_mentions:read
+      - channels:history
+      - channels:read
+      - chat:write
+      - files:read
+      - files:write
+      - groups:history
+      - groups:read
+      - im:history
+      - reactions:write
+      - users:read
+      - users:read.email
+  pkce_enabled: false
+settings:
+  event_subscriptions:
+    request_url: SLACK_EVENTS_URL
+    bot_events:
+      - app_home_opened
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+  interactivity:
+    is_enabled: true
+    request_url: SLACK_INTERACTIONS_URL
+    message_menu_options_url: SLACK_INTERACTIONS_URL
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
+  is_mcp_enabled: false

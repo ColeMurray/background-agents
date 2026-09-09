@@ -1,16 +1,77 @@
-import { SELF, env, runInDurableObject } from "cloudflare:test";
-import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared";
-import type { SandboxStatus } from "../../src/types";
-import type { SessionDO } from "../../src/session/durable-object";
+import { SELF, env } from "cloudflare:test";
+import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
+import { handleControlPlaneHttp } from "../../src/cloudflare/http-host";
+import { runInSessionDO } from "./session-do-access";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
+import { BUILT_IN_ROLE_REGISTRY, type BuiltInRoleKey } from "@open-inspect/shared/rbac";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { hashToken } from "../../src/auth/crypto";
+import type { SqlDatabase } from "../../src/db/sql-database";
+import { SessionIndexStore } from "../../src/db/session-index";
+import type { SessionModelProviderAuthInput } from "../../src/model-provider-accounts/provider-auth-contracts";
+
+/**
+ * The test D1 binding viewed through the engine-neutral interface, so tests
+ * can `batch()` statements bound by stores (which type them as SqlStatement).
+ * Plain assignment — D1Database satisfies SqlDatabase structurally by the
+ * interface's documented method bivariance.
+ */
+export function sqlDatabase(db: D1Database): SqlDatabase {
+  return db;
+}
+
+/**
+ * The ordinary HTTP entrypoint over the Worker's bindings, as `index.ts`
+ * calls it: for tests that route a request without going through `SELF`.
+ */
+export function routeRequest(
+  request: Request,
+  bindings: WorkerBindings,
+  executionCtx: ExecutionContext
+): Promise<Response> {
+  return handleControlPlaneHttp(request, createCloudflareEnv(bindings), executionCtx);
+}
+
+/**
+ * `Headers.getSetCookie()`, which workerd implements but this workers-types
+ * version does not declare (src/routes/browser-auth.ts carries the same
+ * cast for the production proxy path).
+ */
+export function getSetCookies(headers: Headers): string[] {
+  return (headers as Headers & { getSetCookie(): string[] }).getSetCookie();
+}
+
+export async function seedActiveUser(userId: string): Promise<void> {
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO users (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)`
+  )
+    .bind(userId, "Integration User", now, now)
+    .run();
+}
 
 const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
+export const INTEGRATION_WEBSOCKET_TIMEOUT_MS = 2000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
 const TEST_BROWSER_ACCOUNT_ID = "test-browser-account";
 const TEST_BROWSER_PROVIDER_SUBJECT = "583231";
+type InitialUserRole = Exclude<BuiltInRoleKey, "viewer">;
+const DEFAULT_INITIAL_USER_ROLE = "owner" as const;
 const TEST_BROWSER_SESSION_ID = "test-browser-session";
 const TEST_BROWSER_SESSION_TOKEN = "test-browser-session-token";
 const TEST_BROWSER_SESSION_COOKIE = "__Secure-openinspect.session_token";
+const TEST_NAMED_SESSION_DEFAULTS = {
+  repoOwner: "acme",
+  repoName: "web-app",
+  repoId: 12345,
+  userId: "user-1",
+} as const;
+export const TEST_SESSION_PROVIDER_AUTH: SessionModelProviderAuthInput[] = [
+  { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+  { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+];
 
 async function signCookieValue(value: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -34,58 +95,45 @@ async function signCookieValue(value: string, secret: string): Promise<string> {
  * web request must carry the same compound credential as production. Direct
  * service-auth tests intentionally build their own bare sig1 requests.
  */
-async function testBrowserSessionCookie(): Promise<string> {
+async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<string> {
   const secret = env.BROWSER_AUTH_SECRET;
   if (!secret) throw new Error("BROWSER_AUTH_SECRET is not configured for integration tests");
 
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const applicationTimestamp = now.getTime();
+  const existingUser = await env.DB.prepare("SELECT 1 FROM users WHERE id = ?")
+    .bind(TEST_BROWSER_USER_ID)
+    .first();
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT OR IGNORE INTO auth_users
-         (id, name, email, emailVerified, image, createdAt, updatedAt)
+      `INSERT OR IGNORE INTO users
+         (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_USER_ID,
       "Integration Browser User",
       "browser@test.local",
       1,
-      null,
-      now.toISOString(),
-      now.toISOString()
-    ),
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO users
-         (id, display_name, email, avatar_url, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(
-      TEST_BROWSER_USER_ID,
-      "Integration Browser User",
       "browser@test.local",
-      null,
       applicationTimestamp,
       applicationTimestamp
     ),
     env.DB.prepare(
-      `INSERT OR IGNORE INTO auth_accounts
-         (id, accountId, providerId, userId, accessToken, refreshToken, idToken,
-          accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO user_identities
+         (id, user_id, provider, provider_user_id, provider_login, provider_email,
+          provider_issuer, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_ACCOUNT_ID,
-      TEST_BROWSER_PROVIDER_SUBJECT,
-      "github",
       TEST_BROWSER_USER_ID,
+      "github",
+      TEST_BROWSER_PROVIDER_SUBJECT,
       null,
-      null,
-      null,
-      null,
-      null,
-      null,
-      null,
-      now.toISOString(),
-      now.toISOString()
+      "browser@test.local",
+      "https://github.com",
+      applicationTimestamp,
+      applicationTimestamp
     ),
     env.DB.prepare(
       `INSERT OR IGNORE INTO auth_sessions
@@ -93,15 +141,20 @@ async function testBrowserSessionCookie(): Promise<string> {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_SESSION_ID,
-      expiresAt.toISOString(),
+      expiresAt.getTime(),
       TEST_BROWSER_SESSION_TOKEN,
-      now.toISOString(),
-      now.toISOString(),
+      applicationTimestamp,
+      applicationTimestamp,
       "127.0.0.1",
       "integration-test",
       TEST_BROWSER_USER_ID
     ),
   ]);
+  if (initialRole !== "member" && !existingUser) {
+    await env.DB.prepare(`UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?`)
+      .bind(BUILT_IN_ROLE_REGISTRY[initialRole].id, TEST_BROWSER_USER_ID)
+      .run();
+  }
 
   const signedToken = await signCookieValue(TEST_BROWSER_SESSION_TOKEN, secret);
   return `${TEST_BROWSER_SESSION_COOKIE}=${signedToken}`;
@@ -113,17 +166,26 @@ async function testBrowserSessionCookie(): Promise<string> {
  * carry their service credential. Signs per request because sig1 binds method,
  * URL, and body.
  */
-export async function serviceFetch(
+const DEFAULT_SERVICE_REQUEST_METHOD = "GET";
+
+export interface ServiceRequestInit {
+  method?: string;
+  body?: string;
+  headers?: Record<string, string>;
+  service?: ServiceName;
+  actor?: string;
+  initialUserRole?: InitialUserRole;
+}
+
+/**
+ * Build the production-equivalent credential headers for one request: sig1
+ * for the service plus, for web, the seeded Better Auth browser session.
+ */
+export async function serviceRequestHeaders(
   url: string,
-  init?: {
-    method?: string;
-    body?: string;
-    headers?: Record<string, string>;
-    service?: ServiceName;
-    actor?: string;
-  }
-): Promise<Response> {
-  const method = init?.method ?? "GET";
+  init?: ServiceRequestInit
+): Promise<Record<string, string>> {
+  const method = init?.method ?? DEFAULT_SERVICE_REQUEST_METHOD;
   const service = init?.service ?? "web";
   const auth = await buildServiceAuthHeaders({
     service,
@@ -133,22 +195,27 @@ export async function serviceFetch(
     body: init?.body,
     actor: init?.actor,
   });
-  const browserCookie = service === "web" ? await testBrowserSessionCookie() : undefined;
+  const browserCookie =
+    service === "web"
+      ? await testBrowserSessionCookie(init?.initialUserRole ?? DEFAULT_INITIAL_USER_ROLE)
+      : undefined;
+  return {
+    ...(init?.body === undefined ? {} : { "Content-Type": "application/json" }),
+    ...(browserCookie ? { Cookie: browserCookie } : {}),
+    ...init?.headers,
+    ...auth,
+  };
+}
+
+export async function serviceFetch(url: string, init?: ServiceRequestInit): Promise<Response> {
   return SELF.fetch(url, {
-    method,
-    headers: {
-      ...(init?.body === undefined ? {} : { "Content-Type": "application/json" }),
-      ...(browserCookie ? { Cookie: browserCookie } : {}),
-      ...init?.headers,
-      ...auth,
-    },
+    method: init?.method ?? DEFAULT_SERVICE_REQUEST_METHOD,
+    headers: await serviceRequestHeaders(url, init),
     body: init?.body,
   });
 }
 
-/**
- * Create a fresh DO, call /internal/init, return the stub and id.
- */
+/** Create a production-shaped D1 session and DO, then return the stub and IDs. */
 export async function initSession(overrides?: {
   sessionName?: string;
   repoOwner?: string;
@@ -165,26 +232,46 @@ export async function initSession(overrides?: {
   title?: string;
   model?: string;
   reasoningEffort?: string;
+  sandboxSettings?: SandboxSettings;
   userId?: string;
   scmLogin?: string;
+  providerAuth?: SessionModelProviderAuthInput[];
 }) {
-  const id = env.SESSION.newUniqueId();
-  const stub = env.SESSION.get(id);
   const defaults = {
-    sessionName: `test-${Date.now()}`,
+    sessionName: `test-${Date.now()}-${crypto.randomUUID()}`,
     repoOwner: "acme",
     repoName: "web-app",
     repoId: 12345,
     userId: "user-1",
     ...overrides,
   };
+  const id = env.SESSION.idFromName(defaults.sessionName);
+  const stub = env.SESSION.get(id);
+  const { providerAuth = TEST_SESSION_PROVIDER_AUTH, ...doDefaults } = defaults;
+  const now = Date.now();
+  await new SessionIndexStore(env.DB).create({
+    id: defaults.sessionName,
+    title: defaults.title ?? null,
+    repoOwner: defaults.repoOwner,
+    repoName: defaults.repoName,
+    model: defaults.model ?? "anthropic/claude-haiku-4-5",
+    reasoningEffort: defaults.reasoningEffort ?? null,
+    baseBranch: defaults.defaultBranch ?? "main",
+    repositories: defaults.repositories,
+    environmentId: defaults.environmentId ?? null,
+    status: "created",
+    userId: defaults.userId,
+    providerAuth,
+    createdAt: now,
+    updatedAt: now,
+  });
   const res = await stub.fetch("http://internal/internal/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(defaults),
+    body: JSON.stringify(doDefaults),
   });
   if (res.status !== 200) throw new Error(`Init failed: ${res.status}`);
-  return { stub, id };
+  return { stub, id, sessionName: defaults.sessionName };
 }
 
 /**
@@ -195,8 +282,8 @@ export async function queryDO<T>(
   sql: string,
   ...params: unknown[]
 ): Promise<T[]> {
-  return runInDurableObject(stub, (instance: SessionDO) => {
-    return instance.ctx.storage.sql.exec(sql, ...params).toArray() as T[];
+  return runInSessionDO(stub, (instance: SessionDO, state) => {
+    return state.storage.sql.exec(sql, ...params).toArray() as T[];
   });
 }
 
@@ -232,10 +319,11 @@ export async function seedEvents(
     createdAt: number;
   }>
 ): Promise<void> {
-  await runInDurableObject(stub, (instance: SessionDO) => {
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
     for (const e of events) {
-      instance.ctx.storage.sql.exec(
-        "INSERT INTO events (id, type, data, message_id, created_at) VALUES (?, ?, ?, ?, ?)",
+      state.storage.sql.exec(
+        `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+         VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events))`,
         e.id,
         e.type,
         e.data,
@@ -261,8 +349,8 @@ export async function seedMessage(
     startedAt?: number;
   }
 ): Promise<void> {
-  await runInDurableObject(stub, (instance: SessionDO) => {
-    instance.ctx.storage.sql.exec(
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.sql.exec(
       "INSERT INTO messages (id, author_id, content, source, status, created_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       msg.id,
       msg.authorId,
@@ -280,8 +368,7 @@ export async function seedMessage(
 // ---------------------------------------------------------------------------
 
 /**
- * Create a session using idFromName() so the worker's /sessions/:name/ws
- * route can locate the DO via the same name. Returns stub + sessionName.
+ * Create a production-shaped named session: D1 index first, then the session DO.
  */
 export async function initNamedSession(
   sessionName: string,
@@ -300,23 +387,51 @@ export async function initNamedSession(
     model?: string;
     reasoningEffort?: string;
     userId?: string;
+    canonicalUserId?: string;
     scmLogin?: string;
+    parentSessionId?: string;
+    spawnSource?: "user" | "agent" | "automation";
+    spawnDepth?: number;
+    sandboxSettings?: Record<string, unknown>;
+    providerAuth?: SessionModelProviderAuthInput[];
   }
 ) {
-  const id = env.SESSION.idFromName(sessionName);
-  const stub = env.SESSION.get(id);
   const defaults = {
     sessionName,
-    repoOwner: "acme",
-    repoName: "web-app",
-    repoId: 12345,
-    userId: "user-1",
+    ...TEST_NAMED_SESSION_DEFAULTS,
     ...overrides,
   };
+  const { providerAuth = TEST_SESSION_PROVIDER_AUTH, ...doDefaults } = defaults;
+  const now = Date.now();
+  await new SessionIndexStore(env.DB).create({
+    id: sessionName,
+    title: defaults.title ?? null,
+    repoOwner: defaults.repoOwner ?? null,
+    repoName: defaults.repoName ?? null,
+    model: defaults.model ?? "anthropic/claude-haiku-4-5",
+    reasoningEffort: defaults.reasoningEffort ?? null,
+    baseBranch: defaults.defaultBranch ?? "main",
+    status: "created",
+    parentSessionId: defaults.parentSessionId ?? null,
+    spawnSource: defaults.spawnSource ?? "user",
+    spawnDepth: defaults.spawnDepth ?? 0,
+    userId: defaults.canonicalUserId ?? defaults.userId,
+    providerAuth,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return initNamedSessionDO(sessionName, doDefaults);
+}
+
+/** Create only the named session DO for tests that manage the D1 row explicitly. */
+export async function initNamedSessionDO(sessionName: string, init: Record<string, unknown> = {}) {
+  const id = env.SESSION.idFromName(sessionName);
+  const stub = env.SESSION.get(id);
   const res = await stub.fetch("http://internal/internal/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(defaults),
+    body: JSON.stringify({ sessionName, ...TEST_NAMED_SESSION_DEFAULTS, ...init }),
   });
   if (res.status !== 200) throw new Error(`Init failed: ${res.status}`);
   return { stub, id, sessionName };
@@ -332,8 +447,8 @@ export function collectMessages(
 ): Promise<Record<string, unknown>[]> {
   return new Promise((resolve) => {
     const messages: Record<string, unknown>[] = [];
-    const timeout = opts?.timeoutMs ?? 2000;
-    const timer = setTimeout(() => resolve(messages), timeout);
+    const timeoutMs = opts?.timeoutMs ?? INTEGRATION_WEBSOCKET_TIMEOUT_MS;
+    const timer = setTimeout(() => resolve(messages), timeoutMs);
 
     ws.addEventListener("message", (event) => {
       const msg = JSON.parse(typeof event.data === "string" ? event.data : "{}");
@@ -350,10 +465,63 @@ export function collectMessages(
  * Open a client WebSocket via SELF.fetch (full worker routing path).
  * Optionally subscribe by generating a WS token and completing the subscribe flow.
  */
+interface OpenClientWsOpts {
+  subscribe?: boolean;
+  userId?: string;
+  canonicalUserId?: string;
+  scmLogin?: string;
+  scmName?: string;
+}
+
+export async function issueClientWsToken(
+  sessionName: string,
+  opts: Omit<OpenClientWsOpts, "subscribe"> = {}
+): Promise<{ token: string; participantId: string }> {
+  const stub = env.SESSION.get(env.SESSION.idFromName(sessionName));
+  const canonicalUserId = opts.canonicalUserId ?? opts.userId ?? "user-1";
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO users (id, display_name, created_at, updated_at)
+     VALUES (?, ?, ?, ?)`
+  )
+    .bind(canonicalUserId, "WebSocket Test User", now, now)
+    .run();
+  const tokenRes = await stub.fetch("http://internal/internal/ws-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      userId: opts.userId ?? "user-1",
+      canonicalUserId,
+      scmLogin: opts.scmLogin,
+      scmName: opts.scmName,
+    }),
+  });
+  if (!tokenRes.ok) throw new Error(`Token issuance failed: ${tokenRes.status}`);
+  return tokenRes.json<{ token: string; participantId: string }>();
+}
+
+// Overloaded on the `subscribe` discriminant: a subscribed socket always
+// resolves its token, participant, and replay messages; a bare socket never
+// carries them.
 export async function openClientWs(
   sessionName: string,
-  opts?: { subscribe?: boolean; userId?: string }
-) {
+  opts: OpenClientWsOpts & { subscribe: true }
+): Promise<{
+  ws: WebSocket;
+  token: string;
+  participantId: string;
+  messages: Record<string, unknown>[];
+}>;
+export async function openClientWs(
+  sessionName: string,
+  opts?: OpenClientWsOpts
+): Promise<{
+  ws: WebSocket;
+  token?: string;
+  participantId?: string;
+  messages?: Record<string, unknown>[];
+}>;
+export async function openClientWs(sessionName: string, opts?: OpenClientWsOpts) {
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws`, {
     headers: { Upgrade: "websocket" },
   });
@@ -366,18 +534,7 @@ export async function openClientWs(
     return { ws };
   }
 
-  // Generate a WS token via the DO
-  const id = env.SESSION.idFromName(sessionName);
-  const stub = env.SESSION.get(id);
-  const tokenRes = await stub.fetch("http://internal/internal/ws-token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId: opts.userId ?? "user-1" }),
-  });
-  const { token, participantId } = await tokenRes.json<{
-    token: string;
-    participantId: string;
-  }>();
+  const { token, participantId } = await issueClientWsToken(sessionName, opts);
 
   // Start collecting BEFORE sending subscribe to avoid race.
   // The subscribed message now includes batched replay data, so we terminate on it
@@ -429,8 +586,8 @@ export async function seedSandboxAuth(
   await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
-  await runInDurableObject(stub, (instance: SessionDO) => {
-    instance.ctx.storage.sql.exec(
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.sql.exec(
       "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?",
       opts.authToken,
       tokenHash,
@@ -453,8 +610,8 @@ export async function seedSandboxAuthHash(
   await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
-  await runInDurableObject(stub, (instance: SessionDO) => {
-    instance.ctx.storage.sql.exec(
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.sql.exec(
       "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?",
       tokenHash,
       opts.sandboxId,

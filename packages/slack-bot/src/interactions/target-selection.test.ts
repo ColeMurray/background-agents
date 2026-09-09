@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getMessageDetails, postMessage } from "@open-inspect/shared";
+import { getMessageDetails, postMessage } from "@open-inspect/shared/slack";
 import type { Env } from "../types";
 import { handleTargetSelection } from "./target-selection";
 import { getPendingRequest, deletePendingRequest } from "../pending-requests/pending-request-store";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
+import { resolveSlackActorIdentity } from "../user-identity";
 
-vi.mock(import("@open-inspect/shared"), async (importOriginal) => ({
+vi.mock(import("@open-inspect/shared/slack"), async (importOriginal) => ({
   ...(await importOriginal()),
   escapeMrkdwnText: (text: string) => text,
   getMessageDetails: vi.fn(),
@@ -30,6 +31,10 @@ vi.mock("../sessions/session-launcher", () => ({
 
 vi.mock("../target-clarification", () => ({
   resolveTargetValue: vi.fn(),
+}));
+
+vi.mock("../user-identity", () => ({
+  resolveSlackActorIdentity: vi.fn(),
 }));
 
 const repositoryTarget = {
@@ -57,6 +62,11 @@ function makeEnv(): Env {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(resolveTargetValue).mockResolvedValue(repositoryTarget);
+  vi.mocked(resolveSlackActorIdentity).mockResolvedValue({
+    userId: "U123",
+    senderLabel: "Ajan (U123)",
+    displayName: "Ajan",
+  });
 });
 
 describe("handleTargetSelection", () => {
@@ -64,6 +74,7 @@ describe("handleTargetSelection", () => {
     vi.mocked(getPendingRequest).mockResolvedValue({
       message: "What is wrong in this screenshot?",
       userId: "U123",
+      unattributedPrompt: { forwardedMessages: ["Forwarded body"] },
       sourceMessage: { ts: "111.222" },
     });
     vi.mocked(getMessageDetails).mockResolvedValue({
@@ -87,8 +98,14 @@ describe("handleTargetSelection", () => {
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
       env,
       expect.objectContaining({
-        messageText: "What is wrong in this screenshot?",
-        userId: "U123",
+        messageText:
+          "Slack messages forwarded with this request:\n---\nForwarded body\n---\n\n" +
+          "[Ajan (U123)]: What is wrong in this screenshot?",
+        actor: {
+          userId: "U123",
+          senderLabel: "Ajan (U123)",
+          displayName: "Ajan",
+        },
         images: [
           {
             id: "F1",

@@ -130,11 +130,13 @@ Open the web app and go to **Settings > Integrations > GitHub** to configure the
 
 ### Defaults and Scope
 
-| Setting               | What it controls                                                                      |
-| --------------------- | ------------------------------------------------------------------------------------- |
-| Auto-review new PRs   | Whether new non-draft PRs should be reviewed automatically                            |
-| Repository Scope      | Whether the bot responds in all accessible repositories or only selected repositories |
-| Allowed Trigger Users | Who can trigger the bot from GitHub                                                   |
+| Setting                  | What it controls                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| Default model            | Model used for GitHub-started sessions when a repository does not override it         |
+| Default reasoning effort | Reasoning depth used with the selected default model                                  |
+| Auto-review new PRs      | Whether new non-draft PRs should be reviewed automatically                            |
+| Repository Scope         | Whether the bot responds in all accessible repositories or only selected repositories |
+| Allowed Trigger Users    | Who can trigger the bot from GitHub                                                   |
 
 If no GitHub Bot settings are configured, Open-Inspect uses permissive defaults: all repositories
 available to the GitHub App are in scope, auto-review is enabled, and users with write, maintain, or
@@ -156,10 +158,8 @@ repository, event type, enabled state, and trigger conditions.
 | Comment Action Instructions | Extra guidance appended to `@mention` action prompts                      |
 | Repository Overrides        | Per-repository overrides for model, reasoning, instructions, and behavior |
 
-Repository overrides take priority over global defaults for the repository they apply to. The web UI
-currently exposes model and reasoning settings on repository overrides. If global model or reasoning
-defaults exist in integration settings, GitHub-started sessions honor them. If neither a repository
-override nor global default sets a model, sessions use the deployment default model.
+Repository overrides take priority over global defaults for the repository they apply to. If neither
+a repository override nor global default sets a model, sessions use the deployment default model.
 
 ### Commit Signing
 

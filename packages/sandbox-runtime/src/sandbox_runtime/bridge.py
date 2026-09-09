@@ -13,14 +13,13 @@ import argparse
 import asyncio
 import contextlib
 import json
+import math
 import os
-import re
 import tempfile
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 
 import websockets
 from websockets import ClientConnection, State
@@ -31,20 +30,25 @@ from .attachment_processor import (
     HydratedSessionAttachment,
     parse_session_attachments,
 )
-from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
+from .constants import (
+    BOOT_WARNINGS_FILE_PATH,
+    DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+    MAX_SNAPSHOT_RESERVE_SECONDS,
+    REPO_MANIFEST_FILE_PATH,
+    SANDBOX_TIMEOUT_ENV_VAR,
+    SNAPSHOT_RESERVE_FRACTION,
+)
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
-from .git_signing import UNSIGNED_GIT_USER, GitSigningError, GitSigningRuntime
+from .git_signing import GitSigningError, GitSigningRuntime
 from .log_config import configure_logging, get_logger
 from .opencode_client import OpenCodeClient
 from .prompt_stream import OpenCodePromptStream
-from .repo_config import find_repo_entry, load_repo_manifest
+from .push_operation import PushOperation
+from .repo_config import load_repo_manifest
 from .types import GitUser
 
 configure_logging()
-
-# Compatibility alias for the runtime's unsigned fallback identity.
-FALLBACK_GIT_USER = UNSIGNED_GIT_USER
 
 
 def parse_prompt_git_author(author_data: object) -> GitUser | None:
@@ -69,71 +73,6 @@ def parse_prompt_git_author(author_data: object) -> GitUser | None:
     if not isinstance(email, str) or not email.strip():
         raise GitSigningError("Invalid prompt Git identity")
     return GitUser(name=name.strip(), email=email.strip())
-
-
-@dataclass(frozen=True)
-class PushRequest:
-    """The provider-generated push spec, normalized for execution.
-
-    Absent fields normalize to ""/False; _validate_push_request decides
-    which of those are fatal.
-    """
-
-    branch_name: str
-    repo_owner: str
-    repo_name: str
-    refspec: str
-    push_url: str
-    redacted_push_url: str
-    force: bool
-
-    @classmethod
-    def from_push_spec(cls, push_spec: dict[str, Any] | None) -> "PushRequest":
-        """Normalize the raw spec; missing fields become ""/False, never errors."""
-        spec = push_spec or {}
-
-        def field(key: str) -> str:
-            return str(spec.get(key, "")).strip()
-
-        return cls(
-            branch_name=field("targetBranch"),
-            repo_owner=field("repoOwner"),
-            repo_name=field("repoName"),
-            refspec=field("refspec"),
-            push_url=field("remoteUrl"),
-            redacted_push_url=field("redactedRemoteUrl"),
-            force=bool(spec.get("force", False)),
-        )
-
-    @property
-    def has_repo_identity(self) -> bool:
-        """True when the spec names its target repository.
-
-        Owner and name always travel together — _validate_push_request
-        rejects partial identity before anything consults this.
-        """
-        return bool(self.repo_owner and self.repo_name)
-
-    @property
-    def repo_full_name(self) -> str:
-        return f"{self.repo_owner}/{self.repo_name}"
-
-    def repo_fields(self) -> dict[str, Any]:
-        """Repo identity echoed on push events when the spec carried it."""
-        fields: dict[str, Any] = {}
-        if self.repo_owner:
-            fields["repoOwner"] = self.repo_owner
-        if self.repo_name:
-            fields["repoName"] = self.repo_name
-        return fields
-
-
-class PushRejected(Exception):
-    """A push that cannot proceed; str(exc) is the user-facing error message.
-
-    Raise sites log their own specific event first — this exception only
-    carries the message to the single push_error emitter in _handle_push.
-    """
 
 
 class SessionTerminatedError(Exception):
@@ -165,9 +104,6 @@ class AgentBridge:
     SSE_INACTIVITY_TIMEOUT = 120.0
     SSE_INACTIVITY_TIMEOUT_MIN = 5.0
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
-    GIT_PUSH_TIMEOUT_SECONDS = 300.0
-    GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
-    PROMPT_MAX_DURATION = 5400.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
     def __init__(
@@ -206,6 +142,22 @@ class AgentBridge:
             default=self.SSE_INACTIVITY_TIMEOUT,
             min_value=self.SSE_INACTIVITY_TIMEOUT_MIN,
             max_value=self.SSE_INACTIVITY_TIMEOUT_MAX,
+        )
+        sandbox_timeout_seconds = self._resolve_positive_timeout_seconds(
+            name=SANDBOX_TIMEOUT_ENV_VAR,
+            default=DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+        )
+        snapshot_reserve_seconds = min(
+            MAX_SNAPSHOT_RESERVE_SECONDS,
+            sandbox_timeout_seconds * SNAPSHOT_RESERVE_FRACTION,
+        )
+        self.prompt_cleanup_timeout_seconds = snapshot_reserve_seconds
+        self.prompt_max_duration_seconds = sandbox_timeout_seconds - snapshot_reserve_seconds
+        self.log.info(
+            "bridge.prompt_timeout_config",
+            timeout_ms=int(self.prompt_max_duration_seconds * 1000),
+            sandbox_timeout_ms=int(sandbox_timeout_seconds * 1000),
+            snapshot_reserve_ms=int(snapshot_reserve_seconds * 1000),
         )
 
         self.ws: ClientConnection | None = None
@@ -267,10 +219,15 @@ class AgentBridge:
 
     def _build_ready_event(self) -> dict[str, Any]:
         repositories = load_repo_manifest(self.repo_manifest_path)
+        # The image bakes SANDBOX_VERSION; reporting it lets the control plane
+        # stamp snapshots with the runtime that produced them and retire the
+        # ones a later compatibility floor rules out.
+        runtime_version = os.environ.get("SANDBOX_VERSION", "")
         return {
             "type": "ready",
             "sandboxId": self.sandbox_id,
             "opencodeSessionId": self.opencode_session_id,
+            **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
                     "position": position,
@@ -282,15 +239,6 @@ class AgentBridge:
                 if repository.base_sha
             ],
         }
-
-    @staticmethod
-    def _redact_git_stderr(stderr_text: str, push_url: str, redacted_push_url: str) -> str:
-        """Redact credential-bearing URLs from git stderr."""
-        redacted_stderr = stderr_text
-        if push_url and redacted_push_url:
-            redacted_stderr = redacted_stderr.replace(push_url, redacted_push_url)
-
-        return re.sub(r"(https?://)([^/\s@]+)@", r"\1***@", redacted_stderr)
 
     async def run(self) -> None:
         """Main bridge loop with reconnection handling.
@@ -325,7 +273,9 @@ class AgentBridge:
                 except Exception as e:
                     error_str = str(e)
                     # Check for fatal HTTP errors that shouldn't trigger retry
-                    if self._is_fatal_connection_error(error_str):
+                    if (
+                        isinstance(e, GitSigningError) and not e.retryable
+                    ) or self._is_fatal_connection_error(error_str):
                         run_outcome = "fatal_error"
                         self.shutdown_event.set()
                         break
@@ -655,6 +605,9 @@ class AgentBridge:
         author_data = cmd.get("author", {})
         start_time = time.time()
         outcome = "success"
+        message_cost_usd: float | None = None
+        had_error = False
+        error_message = None
 
         self.log.info(
             "prompt.start",
@@ -670,9 +623,7 @@ class AgentBridge:
             if not self.opencode_session_id:
                 await self._create_opencode_session()
 
-            session_attachments, rejected_attachments = parse_session_attachments(
-                raw_attachments
-            )
+            session_attachments, rejected_attachments = parse_session_attachments(raw_attachments)
             if rejected_attachments:
                 self.log.warn(
                     "prompt.invalid_attachments",
@@ -684,8 +635,6 @@ class AgentBridge:
                 )
             attachments = await self.attachment_processor.process(session_attachments)
 
-            had_error = False
-            error_message = None
             emitted_output = False
             async for event in self._stream_opencode_response_sse(
                 message_id, content, model, reasoning_effort, attachments
@@ -695,6 +644,8 @@ class AgentBridge:
                     error_message = event.get("error")
                 elif event.get("type") in ("token", "tool_call", "step_finish"):
                     emitted_output = True
+                if event.get("type") == "step_finish" and "messageCostUsd" in event:
+                    message_cost_usd = event["messageCostUsd"]
                 await self._send_event(event)
 
             if not had_error and not emitted_output:
@@ -710,26 +661,18 @@ class AgentBridge:
             if had_error:
                 outcome = "error"
 
-            await self._send_event(
-                {
-                    "type": "execution_complete",
-                    "messageId": message_id,
-                    "success": not had_error,
-                    **({"error": error_message} if error_message else {}),
-                }
-            )
-
+        except asyncio.CancelledError:
+            # This top-level command boundary settles cancellation just like
+            # other prompt failures, while the turn's cost is still available.
+            # The done callback remains a fallback for cancellation before start.
+            outcome = "cancelled"
+            had_error = True
+            error_message = "Task was cancelled"
         except Exception as e:
             outcome = "error"
+            had_error = True
+            error_message = str(e)
             self.log.error("prompt.error", exc=e, message_id=message_id)
-            await self._send_event(
-                {
-                    "type": "execution_complete",
-                    "messageId": message_id,
-                    "success": False,
-                    "error": str(e),
-                }
-            )
         finally:
             duration_ms = int((time.time() - start_time) * 1000)
             self.log.info(
@@ -740,6 +683,16 @@ class AgentBridge:
                 outcome=outcome,
                 duration_ms=duration_ms,
             )
+
+        await self._send_event(
+            {
+                "type": "execution_complete",
+                "messageId": message_id,
+                "success": not had_error,
+                **({"error": error_message} if error_message else {}),
+                **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
+            }
+        )
 
     async def _create_opencode_session(self) -> None:
         """Create a new OpenCode session."""
@@ -760,7 +713,8 @@ class AgentBridge:
                 attachment_processor=self.attachment_processor,
                 log=self.log,
                 sse_inactivity_timeout_seconds=self.sse_inactivity_timeout,
-                prompt_max_duration_seconds=self.PROMPT_MAX_DURATION,
+                prompt_max_duration_seconds=self.prompt_max_duration_seconds,
+                prompt_cleanup_timeout_seconds=self.prompt_cleanup_timeout_seconds,
             )
         return self._prompt_stream
 
@@ -814,210 +768,19 @@ class AgentBridge:
         self.shutdown_event.set()
 
     async def _handle_push(self, cmd: dict[str, Any]) -> None:
-        """Handle push command using provider-generated push spec.
-
-        Pipeline: parse → validate → resolve checkout → run git push. Every
-        failure raises PushRejected (logged at the raise site) and lands in
-        the single push_error emitter below.
-        """
-        push_spec = cmd.get("pushSpec") if isinstance(cmd.get("pushSpec"), dict) else None
-        request = PushRequest.from_push_spec(push_spec)
-
-        self.log.info(
-            "git.push_start",
-            branch_name=request.branch_name,
-            repo_owner=request.repo_owner,
-            repo_name=request.repo_name,
-            mode="push_spec",
-        )
-
-        try:
-            self._validate_push_request(request, spec_present=push_spec is not None)
-            repo_dir = self._resolve_push_checkout(request)
-            await self._run_git_push(request, repo_dir)
-        except PushRejected as rejection:
-            await self._send_push_error(str(rejection), request)
-            return
-        except Exception as e:
-            self.log.error("git.push_error", exc=e, branch_name=request.branch_name)
-            await self._send_push_error(str(e), request)
-            return
-
-        self.log.info(
-            "git.push_complete",
-            branch_name=request.branch_name,
-            repo_owner=request.repo_owner,
-            repo_name=request.repo_name,
-        )
+        """Execute locally, then emit exactly one timestamped result event."""
+        result = await PushOperation(
+            repo_path=self.repo_path,
+            manifest_path=self.repo_manifest_path,
+            logger=self.log,
+        ).execute(cmd.get("pushSpec"))
         await self._send_event(
             {
-                "type": "push_complete",
-                "branchName": request.branch_name,
-                **request.repo_fields(),
-                "timestamp": time.time(),
-            }
-        )
-
-    def _reject_push(self, *, reason: str, message: str, **log_fields: Any) -> NoReturn:
-        """Log a push rejection and raise it toward _handle_push's emitter."""
-        self.log.warn("git.push_error", reason=reason, **log_fields)
-        raise PushRejected(message)
-
-    def _validate_push_request(self, request: PushRequest, *, spec_present: bool) -> None:
-        """Reject structurally unusable specs before touching the workspace."""
-        if not spec_present:
-            self._reject_push(
-                reason="missing_push_spec",
-                message="Push failed - missing push specification",
-            )
-        if bool(request.repo_owner) != bool(request.repo_name):
-            self._reject_push(
-                reason="partial_repo_identity",
-                message="Push failed - pushSpec must carry both repoOwner and repoName",
-                repo_owner=request.repo_owner,
-                repo_name=request.repo_name,
-            )
-        if not request.branch_name:
-            self._reject_push(
-                reason="missing_target_branch",
-                message="Push failed - missing target branch",
-            )
-        if not request.refspec or not request.push_url:
-            self._reject_push(
-                reason="invalid_push_spec",
-                message="Push failed - invalid push specification",
-            )
-
-    def _resolve_push_checkout(self, request: PushRequest) -> Path:
-        """Pick the git checkout the push runs in."""
-        if request.has_repo_identity:
-            return self._member_checkout(request)
-        return self._sole_workspace_checkout()
-
-    def _member_checkout(self, request: PushRequest) -> Path:
-        """Checkout of the session member the spec names.
-
-        The identity is matched against the supervisor-written manifest and
-        the matched entry's path is used verbatim — spec-supplied strings
-        never become filesystem paths, so a crafted name cannot select a
-        checkout outside the session.
-        """
-        member = find_repo_entry(
-            load_repo_manifest(self.repo_manifest_path),
-            request.repo_owner,
-            request.repo_name,
-        )
-        if member is None:
-            self._reject_push(
-                reason="repo_not_session_member",
-                message=f"Repository {request.repo_full_name} is not part of this session",
-                repo_owner=request.repo_owner,
-                repo_name=request.repo_name,
-            )
-        if not (member.path / ".git").exists():
-            self._reject_push(
-                reason="repo_not_in_workspace",
-                message=f"Repository {request.repo_full_name} not found in workspace",
-                repo_owner=request.repo_owner,
-                repo_name=request.repo_name,
-            )
-        return member.path
-
-    def _sole_workspace_checkout(self) -> Path:
-        """Checkout for a spec that names no repository (legacy control
-        planes, single-repo sessions): the one clone directly under
-        /workspace. Sorted only to be deterministic if that invariant is
-        ever violated."""
-        repo_dirs = sorted(self.repo_path.glob("*/.git"))
-        if not repo_dirs:
-            self._reject_push(reason="no_repo_configured", message="No repository found")
-        return repo_dirs[0].parent
-
-    async def _run_git_push(self, request: PushRequest, repo_dir: Path) -> None:
-        """Run git push in repo_dir; raises PushRejected on failure or timeout."""
-        self.log.info(
-            "git.push_command",
-            branch_name=request.branch_name,
-            refspec=request.refspec,
-            force=request.force,
-            remote_url=request.redacted_push_url,
-        )
-
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            "push",
-            request.push_url,
-            request.refspec,
-            *(["-f"] if request.force else []),
-            cwd=repo_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        try:
-            _stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=self.GIT_PUSH_TIMEOUT_SECONDS,
-            )
-        except TimeoutError:
-            self.log.warn(
-                "git.push_timeout",
-                branch_name=request.branch_name,
-                timeout_ms=int(self.GIT_PUSH_TIMEOUT_SECONDS * 1000),
-            )
-            await self._terminate_push_process(process, request.branch_name)
-            raise PushRejected(
-                f"Push failed - git push timed out after {int(self.GIT_PUSH_TIMEOUT_SECONDS)}s"
-            ) from None
-
-        if process.returncode != 0:
-            stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
-            redacted_stderr_text = self._redact_git_stderr(
-                stderr_text,
-                request.push_url,
-                request.redacted_push_url,
-            )
-            self.log.warn(
-                "git.push_failed",
-                branch_name=request.branch_name,
-                stderr=redacted_stderr_text,
-            )
-            raise PushRejected(
-                f"Push failed: {redacted_stderr_text}"
-                if redacted_stderr_text
-                else "Push failed - unknown error"
-            )
-
-    async def _terminate_push_process(
-        self, process: asyncio.subprocess.Process, branch_name: str
-    ) -> None:
-        """Terminate a hung git push, escalating to kill after a grace period."""
-        with contextlib.suppress(ProcessLookupError):
-            process.terminate()
-        try:
-            await asyncio.wait_for(
-                process.wait(),
-                timeout=self.GIT_PUSH_TERMINATE_GRACE_SECONDS,
-            )
-        except TimeoutError:
-            self.log.warn(
-                "git.push_kill",
-                branch_name=branch_name,
-                timeout_ms=int(self.GIT_PUSH_TERMINATE_GRACE_SECONDS * 1000),
-            )
-            with contextlib.suppress(ProcessLookupError):
-                process.kill()
-            await process.wait()
-
-    async def _send_push_error(self, error: str, request: PushRequest) -> None:
-        """Emit push_error. branchName is included even when empty so the
-        control plane can resolve its pending push instead of leaking it."""
-        await self._send_event(
-            {
-                "type": "push_error",
-                "error": error,
-                "branchName": request.branch_name,
-                **request.repo_fields(),
+                "type": "push_error" if result.error is not None else "push_complete",
+                **({"error": result.error} if result.error is not None else {}),
+                # Even an empty branch resolves the control plane's pending push.
+                "branchName": result.request.branch_name,
+                **result.request.repo_fields(),
                 "timestamp": time.time(),
             }
         )
@@ -1108,6 +871,28 @@ class AgentBridge:
             timeout_ms=int(value * 1000),
             min_ms=int(min_value * 1000),
             max_ms=int(max_value * 1000),
+        )
+        return value
+
+    def _resolve_positive_timeout_seconds(self, name: str, default: float) -> float:
+        raw = os.environ.get(name)
+        try:
+            value = default if raw is None or raw == "" else float(raw)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError
+        except ValueError:
+            self.log.warn(
+                "bridge.timeout_invalid",
+                timeout_name=name,
+                timeout_ms=int(default * 1000),
+                detail=f"invalid value '{raw}', using default",
+            )
+            value = default
+
+        self.log.info(
+            "bridge.timeout_config",
+            timeout_name=name,
+            timeout_ms=int(value * 1000),
         )
         return value
 

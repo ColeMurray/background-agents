@@ -1,630 +1,194 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { SWRConfig } from "swr";
-import { MOBILE_LONG_PRESS_MS, SessionSidebar } from "./session-sidebar";
-import {
-  buildSessionsPageKey,
-  CURRENT_USER_CREATED_BY,
-  SIDEBAR_SESSIONS_KEY,
-} from "@/lib/session-list";
+import { SessionSidebar } from "./session-sidebar";
 
 expect.extend(matchers);
 
-const { mockUseIsMobile } = vi.hoisted(() => ({
-  mockUseIsMobile: vi.fn(() => false),
+const { mockHook, authorization } = vi.hoisted(() => ({
+  mockHook: vi.fn(),
+  authorization: { permissions: null as Set<string> | null },
 }));
 
-const { mockPush } = vi.hoisted(() => ({
-  mockPush: vi.fn(),
-}));
-
+vi.mock("@/hooks/use-sidebar-sessions", () => ({ useSidebarSessions: mockHook }));
 vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: () => ({
-    data: {
-      user: {
-        name: "Test User",
-        email: "test@example.com",
-      },
-    },
-  }),
+  useAuthSession: () => ({ data: { user: { name: "Test User", email: "test@example.com" } } }),
   signOut: vi.fn(),
 }));
-
+vi.mock("@/hooks/use-media-query", () => ({ useIsMobile: () => false }));
+vi.mock("@/hooks/use-environments", () => ({ useEnvironments: () => ({ environments: [] }) }));
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      authorization.permissions === null || authorization.permissions.has(permission),
+  }),
+}));
 vi.mock("next/navigation", () => ({
   usePathname: () => "/",
-  useRouter: () => ({ push: mockPush }),
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
-vi.mock("next/link", () => ({
-  default: ({ children, href, ...props }: React.ComponentProps<"a">) => (
-    <a href={typeof href === "string" ? href : "#"} {...props}>
-      {children}
-    </a>
-  ),
-}));
-
-vi.mock("@/hooks/use-media-query", () => ({
-  useIsMobile: mockUseIsMobile,
-}));
-
-const { mockUseEnvironments } = vi.hoisted(() => ({
-  mockUseEnvironments: vi.fn(() => ({ environments: [] as unknown[], loading: false })),
-}));
-
-vi.mock("@/hooks/use-environments", () => ({
-  useEnvironments: mockUseEnvironments,
-}));
-
-afterEach(() => {
-  cleanup();
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  mockUseIsMobile.mockReturnValue(false);
-  mockPush.mockReset();
-  mockUseEnvironments.mockReturnValue({ environments: [], loading: false });
-});
-
-function createSession(index: number, overrides: Record<string, unknown> = {}) {
+function session(id: string, title: string, parentSessionId: string | null = null) {
   return {
-    id: `session-${index}`,
-    title: `Session ${index}`,
+    id,
+    title,
     repoOwner: "open-inspect",
-    repoName: "background-agents",
-    parentSessionId: null,
-    spawnSource: "user",
-    spawnDepth: 0,
-    status: "active",
-    createdAt: 1000 + index,
-    updatedAt: 2000 + index,
-    ...overrides,
+    repoName: "open-inspect",
+    model: "test-model",
+    reasoningEffort: null,
+    baseBranch: "main",
+    status: "active" as const,
+    parentSessionId,
+    spawnSource: parentSessionId ? ("agent" as const) : ("user" as const),
+    spawnDepth: parentSessionId ? 1 : 0,
+    automationId: null,
+    automationRunId: null,
+    scmLogin: "octocat",
+    userId: "user_test",
+    totalCost: 0,
+    activeDurationMs: 0,
+    messageCount: 0,
+    prCount: 0,
+    environmentId: null,
+    readState: { latestMessageId: null, version: 0, unread: false } as const,
+    createdAt: 1,
+    updatedAt: 2,
   };
 }
 
-function jsonResponse(body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
+const noPagination = {
+  hasMore: false,
+  loadingMore: false,
+  loadMore: vi.fn(),
+  retry: vi.fn(async () => undefined),
+};
+
+beforeEach(() => {
+  authorization.permissions = null;
+  const attention = session("attention", "Needs review");
+  const running = session("running", "Implementing inbox");
+  const child = session("child", "Checking tests", running.id);
+  const recent = { ...session("recent", "Finished work"), status: "completed" as const };
+  mockHook.mockReturnValue({
+    needsAttention: [attention],
+    inProgress: [running],
+    finished: [recent],
+    childrenMap: new Map([[running.id, [child]]]),
+    loading: false,
+    sessionsError: undefined,
+    refreshSnapshot: vi.fn(async () => undefined),
+    sectionPagination: {
+      needsAttention: noPagination,
+      inProgress: noPagination,
+      finished: noPagination,
+    },
+    sessionCreatorFilter: "all",
+    setSessionCreatorFilter: vi.fn(),
+    handleSessionArchived: vi.fn(),
+    handleMarkLatestMessageRead: vi.fn(),
   });
-}
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 describe("SessionSidebar", () => {
-  it("shows the user profile at the bottom of the sidebar", async () => {
-    const { container } = render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
-        <SessionSidebar />
-      </SWRConfig>
-    );
+  it("renders the shared application destinations", () => {
+    render(<SessionSidebar />);
 
-    const profileButton = await screen.findByRole("button", { name: "Signed in as Test User" });
-    expect(profileButton).toHaveTextContent("Test User");
-    expect(container.querySelector("aside")?.lastElementChild).toContainElement(profileButton);
+    expect(screen.getByTitle("Settings")).toHaveAttribute("href", "/settings");
+    expect(screen.getByRole("link", { name: "Automations" })).toHaveAttribute(
+      "href",
+      "/automations"
+    );
+    expect(screen.getByRole("link", { name: "Analytics" })).toHaveAttribute("href", "/analytics");
   });
 
-  it("renders the PR status summary on session rows", async () => {
-    const single = createSession(1, {
-      updatedAt: 4000,
-      pullRequestSummary: { total: 1, open: 0, draft: 0, merged: 1, closed: 0 },
-    });
-    const multi = createSession(2, {
-      updatedAt: 3000,
-      pullRequestSummary: { total: 3, open: 1, draft: 1, merged: 1, closed: 0 },
-    });
-    const none = createSession(3, { updatedAt: 2000 });
+  it("hides application destinations without their canonical read permission", () => {
+    authorization.permissions = new Set(["automations.read"]);
 
-    render(
-      <SWRConfig
-        value={{
-          fallback: {
-            [SIDEBAR_SESSIONS_KEY]: {
-              sessions: [single, multi, none],
-              hasMore: false,
-            },
-          },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
-        <SessionSidebar />
-      </SWRConfig>
-    );
+    render(<SessionSidebar />);
 
-    // GitHub-style state icon next to the title: merged for the single-PR
-    // session, open (dominant bucket) for the multi-PR session, none without
-    // tracked PRs.
-    expect(await screen.findByTestId("pr-state-merged")).toHaveClass(
-      "text-[#8250df]",
-      "dark:text-[#a371f7]"
-    );
-    expect(screen.getByTestId("pr-state-open")).toHaveClass(
-      "text-[#1f883d]",
-      "dark:text-[#3fb950]"
-    );
-    expect(screen.queryAllByTestId(/^pr-state-/)).toHaveLength(2);
-
-    // PR state is conveyed by the title icon without repeating the summary in
-    // the lower repository and branch metadata.
-    expect(screen.getByText("Session 1").closest("a")).not.toHaveTextContent("PR merged");
-    expect(screen.getByText("Session 2").closest("a")).not.toHaveTextContent("3 PRs · 2 open");
+    expect(screen.getByRole("link", { name: "Automations" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Analytics" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /New session/ })).not.toBeInTheDocument();
   });
 
-  it("renders nested child sessions under their immediate parent", async () => {
-    const parent = createSession(1, { updatedAt: 4000 });
-    const child = createSession(2, {
-      title: "Child session",
-      parentSessionId: parent.id,
-      spawnSource: "agent",
-      spawnDepth: 1,
-      updatedAt: 3000,
-      pullRequestSummary: { total: 1, open: 0, draft: 0, merged: 1, closed: 0 },
-    });
-    const grandchild = createSession(3, {
-      title: "Grandchild session",
-      parentSessionId: child.id,
-      spawnSource: "agent",
-      spawnDepth: 2,
-      updatedAt: 2000,
-    });
+  it("renders server-classified sections and nested descendants", () => {
+    render(<SessionSidebar />);
 
-    render(
-      <SWRConfig
-        value={{
-          fallback: {
-            [SIDEBAR_SESSIONS_KEY]: {
-              sessions: [parent, child, grandchild],
-              hasMore: false,
-            },
-          },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
-        <SessionSidebar />
-      </SWRConfig>
-    );
-
-    expect(await screen.findByText("Session 1")).toBeInTheDocument();
-    const childLink = screen.getByText("Child session").closest("a");
-    expect(childLink).toBeInTheDocument();
-    expect(childLink).toContainElement(screen.getByLabelText("PR merged"));
-    expect(screen.getByText("Grandchild session")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Needs attention" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "In progress" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Recent" })).toBeInTheDocument();
+    expect(screen.getByText("Checking tests")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Signed in as Test User" })).toBeInTheDocument();
   });
 
-  it("opens session search from the header", async () => {
-    const onSearchSessions = vi.fn();
-
-    render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
-        <SessionSidebar onSearchSessions={onSearchSessions} />
-      </SWRConfig>
-    );
-
-    expect(await screen.findByText("Session 1")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Search sessions/ }));
-    expect(onSearchSessions).toHaveBeenCalledOnce();
-  });
-
-  it("loads the next page when scrolled near the bottom", async () => {
-    const firstPage = Array.from({ length: 50 }, (_, index) => createSession(index + 1));
-    const secondPage = Array.from({ length: 5 }, (_, index) => createSession(index + 51));
-
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-
-      if (url === SIDEBAR_SESSIONS_KEY) {
-        return jsonResponse({ sessions: firstPage, hasMore: true });
-      }
-
-      if (url === buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })) {
-        return jsonResponse({ sessions: secondPage, hasMore: false });
-      }
-
-      throw new Error(`Unexpected fetch for ${url}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { container } = render(
-      <SWRConfig
-        value={{
-          provider: () => new Map(),
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-          fetcher: async (url: string) => {
-            const response = await fetch(url);
-            return response.json();
-          },
-        }}
-      >
-        <SessionSidebar />
-      </SWRConfig>
-    );
-
-    expect(await screen.findByText("Session 1")).toBeInTheDocument();
-
-    const scrollContainer = container.querySelector(".overflow-y-auto") as HTMLDivElement;
-    let scrollTop = 0;
-
-    Object.defineProperty(scrollContainer, "scrollHeight", {
-      configurable: true,
-      value: 2000,
-    });
-    Object.defineProperty(scrollContainer, "clientHeight", {
-      configurable: true,
-      value: 400,
-    });
-    Object.defineProperty(scrollContainer, "scrollTop", {
-      configurable: true,
-      get: () => scrollTop,
-      set: (value) => {
-        scrollTop = value;
+  it("loads more only in the requested section", () => {
+    const value = mockHook();
+    const loadMoreRunning = vi.fn();
+    mockHook.mockReturnValue({
+      ...value,
+      sectionPagination: {
+        ...value.sectionPagination,
+        inProgress: { hasMore: true, loadingMore: false, loadMore: loadMoreRunning },
       },
     });
+    render(<SessionSidebar />);
 
-    scrollTop = 1705;
-    fireEvent.scroll(scrollContainer);
-
-    expect(await screen.findByText("Session 55")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        buildSessionsPageKey({ excludeStatus: "archived", offset: 50 }),
-        {
-          mode: "same-origin",
-          credentials: "same-origin",
-        }
-      );
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Load more in progress" }));
+    expect(loadMoreRunning).toHaveBeenCalledOnce();
   });
 
-  it("filters sessions to the current user when Mine is selected", async () => {
-    const mineKey = buildSessionsPageKey({
-      excludeStatus: "archived",
-      createdBy: [CURRENT_USER_CREATED_BY],
-    });
-
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-
-      if (url === SIDEBAR_SESSIONS_KEY) {
-        return jsonResponse({ sessions: [createSession(1)], hasMore: false });
-      }
-
-      if (url === mineKey) {
-        return jsonResponse({
-          sessions: [createSession(2, { title: "Mine only" })],
-          hasMore: false,
-        });
-      }
-
-      throw new Error(`Unexpected fetch for ${url}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <SWRConfig
-        value={{
-          provider: () => new Map(),
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-          fetcher: async (url: string) => {
-            const response = await fetch(url);
-            return response.json();
-          },
-        }}
-      >
-        <SessionSidebar />
-      </SWRConfig>
+  it("keeps archived sessions accessible", () => {
+    render(<SessionSidebar />);
+    expect(screen.getByRole("link", { name: /Archived/ })).toHaveAttribute(
+      "href",
+      "/settings?tab=data-controls"
     );
-
-    expect(await screen.findByText("Session 1")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText("Mine"));
-
-    expect(await screen.findByText("Mine only")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(mineKey);
-    });
-    expect(screen.queryByText("Session 1")).not.toBeInTheDocument();
   });
 
-  it("shows the environment name on cards for environment-launched sessions", async () => {
-    mockUseEnvironments.mockReturnValue({
-      environments: [{ id: "env_1", name: "Full stack" }],
-      loading: false,
+  it("shows a retry action when one category fails", () => {
+    const value = mockHook();
+    const retry = vi.fn(async () => undefined);
+    mockHook.mockReturnValue({
+      ...value,
+      sessionsError: new Error("attention unavailable"),
+      sectionPagination: {
+        ...value.sectionPagination,
+        needsAttention: { ...noPagination, error: new Error("attention unavailable"), retry },
+      },
     });
+    render(<SessionSidebar />);
 
-    const sessions = [
-      createSession(1, { environmentId: "env_1" }),
-      // Deleted environment: the chip is dropped rather than showing a raw id.
-      createSession(2, { environmentId: "env_gone" }),
-    ];
-
-    render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions, hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
-        <SessionSidebar />
-      </SWRConfig>
-    );
-
-    expect(await screen.findByText("Session 1")).toBeInTheDocument();
-    expect(screen.getByText("Full stack")).toBeInTheDocument();
-    expect(screen.queryByText("env_gone")).not.toBeInTheDocument();
+    expect(screen.getByText("Unable to load needs attention")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledOnce();
+    expect(screen.getByRole("heading", { name: "In progress" })).toBeInTheDocument();
   });
 
-  it("ignores stale load-more results after the creator filter changes", async () => {
-    const firstPage = Array.from({ length: 50 }, (_, index) => createSession(index + 1));
-    const allNextPageKey = buildSessionsPageKey({ excludeStatus: "archived", offset: 50 });
-    const mineKey = buildSessionsPageKey({
-      excludeStatus: "archived",
-      createdBy: [CURRENT_USER_CREATED_BY],
+  it("surfaces a retryable error when the initial snapshot fails", () => {
+    const value = mockHook();
+    const refreshSnapshot = vi.fn(async () => undefined);
+    mockHook.mockReturnValue({
+      ...value,
+      needsAttention: [],
+      inProgress: [],
+      finished: [],
+      childrenMap: new Map(),
+      sessionsError: new Error("snapshot unavailable"),
+      refreshSnapshot,
     });
-    let resolveAllNextPage!: (response: Response) => void;
-    const allNextPage = new Promise<Response>((resolve) => {
-      resolveAllNextPage = resolve;
-    });
+    render(<SessionSidebar />);
 
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-
-      if (url === SIDEBAR_SESSIONS_KEY) {
-        return jsonResponse({ sessions: firstPage, hasMore: true });
-      }
-
-      if (url === allNextPageKey) {
-        return allNextPage;
-      }
-
-      if (url === mineKey) {
-        return jsonResponse({
-          sessions: [createSession(99, { title: "Mine only" })],
-          hasMore: false,
-        });
-      }
-
-      throw new Error(`Unexpected fetch for ${url}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { container } = render(
-      <SWRConfig
-        value={{
-          provider: () => new Map(),
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-          fetcher: async (url: string) => {
-            const response = await fetch(url);
-            return response.json();
-          },
-        }}
-      >
-        <SessionSidebar />
-      </SWRConfig>
-    );
-
-    expect(await screen.findByText("Session 1")).toBeInTheDocument();
-
-    const scrollContainer = container.querySelector(".overflow-y-auto") as HTMLDivElement;
-    Object.defineProperty(scrollContainer, "scrollHeight", {
-      configurable: true,
-      value: 2000,
-    });
-    Object.defineProperty(scrollContainer, "clientHeight", {
-      configurable: true,
-      value: 400,
-    });
-    Object.defineProperty(scrollContainer, "scrollTop", {
-      configurable: true,
-      value: 1705,
-    });
-
-    fireEvent.scroll(scrollContainer);
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(allNextPageKey, {
-        mode: "same-origin",
-        credentials: "same-origin",
-      });
-    });
-
-    fireEvent.click(screen.getByText("Mine"));
-    expect(await screen.findByText("Mine only")).toBeInTheDocument();
-
-    await act(async () => {
-      resolveAllNextPage(
-        jsonResponse({
-          sessions: [createSession(51, { title: "Stale page" })],
-          hasMore: false,
-        })
-      );
-      await allNextPage;
-    });
-
-    expect(screen.queryByText("Stale page")).not.toBeInTheDocument();
-    expect(screen.getByText("Mine only")).toBeInTheDocument();
-  });
-
-  it("navigates directly on mobile tap without opening rename actions", async () => {
-    mockUseIsMobile.mockReturnValue(true);
-    const onSessionSelect = vi.fn();
-
-    render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
-        <SessionSidebar onSessionSelect={onSessionSelect} />
-      </SWRConfig>
-    );
-
-    const link = await screen.findByRole("link", { name: /session 1/i });
-    fireEvent.click(link);
-
-    expect(screen.queryByText("Rename")).not.toBeInTheDocument();
-    expect(onSessionSelect).toHaveBeenCalledTimes(1);
-  });
-
-  it("closes the sidebar on mobile when using non-session navigation links", () => {
-    mockUseIsMobile.mockReturnValue(true);
-    const onSessionSelect = vi.fn();
-
-    render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
-        <SessionSidebar onSessionSelect={onSessionSelect} />
-      </SWRConfig>
-    );
-
-    fireEvent.click(screen.getByTitle("Settings"));
-    fireEvent.click(screen.getByRole("link", { name: /automations/i }));
-    fireEvent.click(screen.getByRole("link", { name: /analytics/i }));
-
-    expect(onSessionSelect).toHaveBeenCalledTimes(3);
-  });
-
-  it("opens rename actions on mobile long press", async () => {
-    mockUseIsMobile.mockReturnValue(true);
-
-    render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
-        <SessionSidebar />
-      </SWRConfig>
-    );
-
-    const link = await screen.findByRole("link", { name: /session 1/i });
-    vi.useFakeTimers();
-    fireEvent.touchStart(link, { touches: [{ clientX: 20, clientY: 20 }] });
-    act(() => {
-      vi.advanceTimersByTime(MOBILE_LONG_PRESS_MS);
-    });
-
-    expect(screen.getByText("Rename")).toBeInTheDocument();
-    expect(screen.getByText("Archive")).toBeInTheDocument();
-  });
-
-  it("archives a session from the sidebar actions menu", async () => {
-    mockUseIsMobile.mockReturnValue(true);
-
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) === "/api/sessions/session-1/archive" && init?.method === "POST") {
-        return jsonResponse({ ok: true });
-      }
-
-      throw new Error(`Unexpected fetch for ${String(input)}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
-        <SessionSidebar />
-      </SWRConfig>
-    );
-
-    const link = await screen.findByRole("link", { name: /session 1/i });
-    vi.useFakeTimers();
-    fireEvent.touchStart(link, { touches: [{ clientX: 20, clientY: 20 }] });
-    act(() => {
-      vi.advanceTimersByTime(MOBILE_LONG_PRESS_MS);
-    });
-    vi.useRealTimers();
-
-    fireEvent.click(screen.getByText("Archive"));
-    fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/archive", {
-        method: "POST",
-        mode: "same-origin",
-        credentials: "same-origin",
-      });
-    });
-  });
-
-  it("keeps the session in the sidebar when archiving fails", async () => {
-    mockUseIsMobile.mockReturnValue(true);
-
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) === "/api/sessions/session-1/archive" && init?.method === "POST") {
-        return new Response(null, { status: 500 });
-      }
-
-      throw new Error(`Unexpected fetch for ${String(input)}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <SWRConfig
-        value={{
-          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
-          dedupingInterval: 0,
-          revalidateOnFocus: false,
-        }}
-      >
-        <SessionSidebar />
-      </SWRConfig>
-    );
-
-    const link = await screen.findByRole("link", { name: /session 1/i });
-    vi.useFakeTimers();
-    fireEvent.touchStart(link, { touches: [{ clientX: 20, clientY: 20 }] });
-    act(() => {
-      vi.advanceTimersByTime(MOBILE_LONG_PRESS_MS);
-    });
-    vi.useRealTimers();
-
-    fireEvent.click(screen.getByText("Archive"));
-    fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/archive", {
-        method: "POST",
-        mode: "same-origin",
-        credentials: "same-origin",
-      });
-    });
-
-    expect(screen.getByRole("link", { name: /session 1/i })).toBeInTheDocument();
+    expect(screen.getByText("Unable to load sessions")).toBeInTheDocument();
+    expect(screen.queryByText("No sessions yet")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refreshSnapshot).toHaveBeenCalledOnce();
   });
 });

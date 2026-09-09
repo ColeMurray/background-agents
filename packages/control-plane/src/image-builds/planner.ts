@@ -1,6 +1,8 @@
-import { resolveBuildTimeoutSeconds } from "@open-inspect/shared";
+import { resolveBuildTimeoutSeconds } from "@open-inspect/shared/types/integrations";
 import { createLogger, type CorrelationContext } from "../logger";
-import { createSourceControlProviderFromEnv } from "../source-control";
+import { createSourceControlProviderFromEnv, resolveScmProviderFromEnv } from "../source-control";
+import { scmCloneIdentity } from "../sandbox/sandbox-env";
+import { prepareLegacyManagedProviderEnv } from "../sandbox/managed-provider-env";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
@@ -8,15 +10,14 @@ import {
   hashImageBuildCallbackToken,
   IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS,
 } from "./callback-auth";
-import type { ImageBuildProvider, ImageBuildScope } from "./model";
-import { getImageBuildCloneAuthMode } from "./provider-policy";
+import type { ImageBuildScope } from "./model";
 import {
   loadScopeBuildSecrets,
   resolveScopeSandboxSettings,
   resolveScopeTarget,
   type ResolvedImageBuildTarget,
 } from "./scope";
-import type { ImageBuildCloneAuth, PlannedImageBuild } from "./types";
+import type { ImageBuildCloneAuth, ImageBuildPlan } from "./types";
 
 const logger = createLogger("image-builds:planner");
 const MS_PER_SECOND = 1000;
@@ -29,6 +30,24 @@ export interface PlannedCallbackAuth {
 }
 
 export type { ResolvedImageBuildTarget } from "./scope";
+
+/** Inputs for planBuild; the target is resolved before registration, secrets after. */
+export interface ImageBuildPlanRequest {
+  buildId: string;
+  scope: ImageBuildScope;
+  callbackUrl: string;
+  failureCallbackUrl: string;
+  correlation: CorrelationContext;
+  target: ResolvedImageBuildTarget;
+  callbackAuth: PlannedCallbackAuth;
+}
+
+/** The planning operations the workflow sequences a build through. */
+export interface ImageBuildPlannerPort {
+  resolveTarget(scope: ImageBuildScope): Promise<ResolvedImageBuildTarget>;
+  createCallbackAuth(): Promise<PlannedCallbackAuth>;
+  planBuild(params: ImageBuildPlanRequest): Promise<ImageBuildPlan>;
+}
 
 /**
  * Resolves a trigger request into a concrete provider build plan.
@@ -43,11 +62,10 @@ export type { ResolvedImageBuildTarget } from "./scope";
  * timeout honors the primary repository's sandbox settings with the scope's
  * own overrides layered on top.
  */
-export class ImageBuildPlanner {
+export class ImageBuildPlanner implements ImageBuildPlannerPort {
   constructor(
     private readonly env: Env,
-    private readonly db: SqlDatabase,
-    private readonly provider: ImageBuildProvider
+    private readonly db: SqlDatabase
   ) {}
 
   async resolveTarget(scope: ImageBuildScope): Promise<ResolvedImageBuildTarget> {
@@ -63,18 +81,9 @@ export class ImageBuildPlanner {
     };
   }
 
-  async planBuild(params: {
-    buildId: string;
-    scope: ImageBuildScope;
-    callbackUrl: string;
-    failureCallbackUrl: string;
-    correlation: CorrelationContext;
-    target: ResolvedImageBuildTarget;
-    callbackAuth: PlannedCallbackAuth;
-  }): Promise<PlannedImageBuild> {
+  async planBuild(params: ImageBuildPlanRequest): Promise<ImageBuildPlan> {
     const { repositories, repositoriesFingerprint } = params.target;
     const primary = repositories[0];
-    const callbackAuth = params.callbackAuth;
 
     const [sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
       resolveScopeSandboxSettings(this.db, params.scope, primary),
@@ -90,64 +99,35 @@ export class ImageBuildPlanner {
       callbackUrl: params.callbackUrl,
       failureCallbackUrl: params.failureCallbackUrl,
       buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
-      userEnvVars,
+      userEnvVars: userEnvVars
+        ? prepareLegacyManagedProviderEnv({
+            exposedSecrets: userEnvVars,
+            brokerSecrets: userEnvVars,
+          })
+        : undefined,
       correlation: {
         trace_id: params.correlation.trace_id,
         request_id: params.correlation.request_id,
       },
     };
 
-    const registration = { tokenHash: callbackAuth.tokenHash, expiresAt: callbackAuth.expiresAt };
-
-    switch (this.provider) {
-      case "modal":
-        return {
-          plan: {
-            ...basePlan,
-            provider: "modal",
-            callbackMode: "provider_image",
-            callbackToken: callbackAuth.token,
-          },
-          callbackAuth: registration,
-        };
-      case "vercel":
-        return {
-          plan: {
-            ...basePlan,
-            provider: "vercel",
-            callbackMode: "provider_session",
-            callbackToken: callbackAuth.token,
-            cloneAuth,
-          },
-          callbackAuth: registration,
-        };
-      case "opencomputer":
-        return {
-          plan: {
-            ...basePlan,
-            provider: "opencomputer",
-            callbackMode: "provider_session",
-            callbackToken: callbackAuth.token,
-            cloneAuth,
-          },
-          callbackAuth: registration,
-        };
-      default: {
-        const exhaustive: never = this.provider;
-        throw new Error(`Unsupported image build provider: ${String(exhaustive)}`);
-      }
-    }
+    return {
+      ...basePlan,
+      callbackToken: params.callbackAuth.token,
+      cloneAuth,
+    };
   }
 
   private async resolveCloneAuth(scope: ImageBuildScope): Promise<ImageBuildCloneAuth> {
-    if (getImageBuildCloneAuthMode(this.provider) !== "credential_helper") {
-      return { type: "unavailable" };
-    }
-
     try {
       const provider = createSourceControlProviderFromEnv(this.env);
       const auth = await provider.generateCredentialHelperAuth();
-      return { type: "credential_helper", token: auth.password };
+      return {
+        type: "credential_helper",
+        host: scmCloneIdentity(resolveScmProviderFromEnv(this.env.SCM_PROVIDER)).host,
+        username: auth.username,
+        token: auth.password,
+      };
     } catch (e) {
       logger.warn("image_build.clone_token_failed", {
         error: e instanceof Error ? e.message : String(e),

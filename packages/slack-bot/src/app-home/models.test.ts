@@ -18,4 +18,17 @@ describe("getAvailableModels", () => {
 
     expect(models.map((model) => model.value)).toEqual(["openai/gpt-5.4"]);
   });
+
+  it("falls back to defaults for malformed model-preference responses", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ enabledModels: "all" })));
+    const env = {
+      SERVICE_AUTH_SECRET: "test-secret",
+      CONTROL_PLANE: { fetch },
+    } as unknown as Env;
+
+    const models = await getAvailableModels(env);
+
+    expect(models.length).toBeGreaterThan(0);
+    expect(models.map((model) => model.value)).not.toEqual(["all"]);
+  });
 });

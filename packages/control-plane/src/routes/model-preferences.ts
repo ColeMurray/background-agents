@@ -2,25 +2,33 @@
  * Model-preferences routes and handlers.
  */
 
-import { DEFAULT_ENABLED_MODELS, normalizeValidModels } from "@open-inspect/shared";
+import { Hono } from "hono";
+import type { Env } from "../types";
+import { DEFAULT_ENABLED_MODELS, normalizeValidModels } from "@open-inspect/shared/models";
 import { ModelPreferencesStore, ModelPreferencesValidationError } from "../db/model-preferences";
 import { createLogger } from "../logger";
-import type { Env } from "../types";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
-  type Route,
+  GITHUB_USER_OR_SERVICE_ROUTE,
   type RequestContext,
-  parsePattern,
   json,
   error,
-  parseJsonBody,
+  activeGlobal,
+  requirePermission,
 } from "./shared";
+import { parseJsonBody } from "./body";
 
 const logger = createLogger("router:model-preferences");
 
-async function handleGetModelPreferences(
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function getModelPreferences(
   _request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
+  _env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
@@ -57,20 +65,20 @@ async function handleGetModelPreferences(
   }
 }
 
-async function handleSetModelPreferences(
+async function setModelPreferences(
   request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
+  _env: Env,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
     return error("Model preferences storage is not configured", 503);
   }
 
-  const body = await parseJsonBody<{ enabledModels?: unknown[] }>(request);
+  const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
 
-  if (!body?.enabledModels || !Array.isArray(body.enabledModels)) {
+  if (!isRecord(body) || !Array.isArray(body.enabledModels)) {
     return error("Request body must include enabledModels array", 400);
   }
   if (!body.enabledModels.every((id): id is string => typeof id === "string")) {
@@ -103,15 +111,23 @@ async function handleSetModelPreferences(
   }
 }
 
-export const modelPreferencesRoutes: Route[] = [
-  {
-    method: "GET",
-    pattern: parsePattern("/model-preferences"),
-    handler: handleGetModelPreferences,
-  },
-  {
-    method: "PUT",
-    pattern: parsePattern("/model-preferences"),
-    handler: handleSetModelPreferences,
-  },
-];
+export const modelPreferencesRoutes = new Hono<ControlPlaneHonoEnv>();
+
+modelPreferencesRoutes.get(
+  "/model-preferences",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: activeGlobal({ actorlessGrants: [{ service: "slack-bot" }] }),
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatch(c, getModelPreferences)
+);
+
+modelPreferencesRoutes.put(
+  "/model-preferences",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requirePermission("models.preferences.manage"),
+  }),
+  (c) => dispatch(c, setModelPreferences)
+);

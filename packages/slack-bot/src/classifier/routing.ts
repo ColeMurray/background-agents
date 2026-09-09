@@ -6,7 +6,8 @@
  * target-kind dispatch and no fetching (routing rules aside).
  */
 
-import { isEnvironmentId, matchRoutingRules } from "@open-inspect/shared";
+import { isEnvironmentId } from "@open-inspect/shared/types/environments";
+import { matchRoutingRules } from "@open-inspect/shared/types/integrations";
 import type { Env } from "../types";
 import { targetValue, type SlackSessionTarget } from "../targets";
 import { getRoutingRules } from "./repos";

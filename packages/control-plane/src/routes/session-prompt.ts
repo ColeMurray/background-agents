@@ -1,25 +1,35 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
-  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   callbackContextSchema,
   sendPromptRequestSchema,
-  sessionAttachmentReferencesSchema,
   type CallbackContext,
+} from "@open-inspect/shared/types/session-api";
+import {
+  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+  sessionAttachmentReferencesSchema,
   type SessionAttachmentReference,
-} from "@open-inspect/shared";
-import { applyIdentityEnforcement, mayAttachCallbackContext } from "../auth/identity-enforcement";
+} from "@open-inspect/shared/types/session-attachments";
+import {
+  applyIdentityEnforcement,
+  mayAttachCallbackContext,
+} from "../routing/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
+import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import {
   parseAuthorId,
   resolveGitHubEnrichmentForRequest,
   type GitHubEnrichment,
 } from "../session/identity";
 import type { Env } from "../types";
-import { error, parsePattern, type Route } from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { parseJsonBody } from "./body";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
 
@@ -38,21 +48,16 @@ function validateAttachments(raw: unknown): SessionAttachmentReference[] | Respo
   return result.data;
 }
 
-async function handleSessionPrompt(
+export async function handleSessionPrompt(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required");
+  const sessionId = params.id;
 
-  let rawBody: unknown;
-  try {
-    rawBody = await request.json();
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const rawBody = await parseJsonBody(request);
+  if (rawBody instanceof Response) return rawBody;
 
   const enforcement = applyIdentityEnforcement(ctx, "prompt", rawBody);
   if (enforcement.rejection) return enforcement.rejection;
@@ -80,6 +85,7 @@ async function handleSessionPrompt(
   // anonymous. callbackContext is a completion notification channel — only
   // the bots that own callbacks may attach one.
   const authorId = enforcement.enforced.participantUserId ?? "anonymous";
+  let canonicalUserId = enforcement.enforced.canonicalUserId ?? undefined;
   if (callbackContext === undefined && body.callbackContext !== undefined) {
     logger.warn("Dropped callbackContext from unauthorized principal", {
       event: "identity.callback_context_dropped",
@@ -101,6 +107,7 @@ async function handleSessionPrompt(
         userId = (await userStore.getUserById(authorId))?.id;
       }
       if (userId) {
+        canonicalUserId = userId;
         enrichment =
           (await resolveGitHubEnrichmentForRequest(
             env,
@@ -118,50 +125,61 @@ async function handleSessionPrompt(
     }
   }
 
+  const promptRequest = {
+    content: body.content,
+    authorId,
+    canonicalUserId,
+    source: body.source || "web",
+    model: body.model,
+    reasoningEffort: body.reasoningEffort,
+    attachments,
+    callbackContext,
+    scmEnrichment: enrichment
+      ? {
+          userId: enrichment.scmUserId,
+          login: enrichment.scmLogin ?? null,
+          name: enrichment.displayName ?? null,
+          email: enrichment.email ?? null,
+          accessTokenEncrypted: enrichment.accessTokenEncrypted ?? null,
+          refreshTokenEncrypted: enrichment.refreshTokenEncrypted ?? null,
+          tokenExpiresAt: enrichment.tokenExpiresAt ?? null,
+        }
+      : undefined,
+  } satisfies EnqueuePromptRequest;
+
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.prompt, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      content: body.content,
-      authorId,
-      source: body.source || "web",
-      model: body.model,
-      reasoningEffort: body.reasoningEffort,
-      attachments,
-      callbackContext,
-      scmEnrichment: enrichment
-        ? {
-            userId: enrichment.scmUserId,
-            login: enrichment.scmLogin ?? null,
-            name: enrichment.displayName ?? null,
-            email: enrichment.email ?? null,
-            accessTokenEncrypted: enrichment.accessTokenEncrypted ?? null,
-            refreshTokenEncrypted: enrichment.refreshTokenEncrypted ?? null,
-            tokenExpiresAt: enrichment.tokenExpiresAt ?? null,
-          }
-        : undefined,
-    }),
+    body: JSON.stringify(promptRequest),
   });
 
   const store = new SessionIndexStore(ctx.db);
-  ctx.executionCtx?.waitUntil(
-    store.touchUpdatedAt(sessionId).catch((error) => {
-      logger.error("session_index.touch_updated_at.background_error", {
-        session_id: sessionId,
-        trace_id: ctx.trace_id,
-        request_id: ctx.request_id,
-        error,
-      });
-    })
+  ctx.executionCtx.submit(
+    () =>
+      store.touchUpdatedAt(sessionId).catch((error) => {
+        logger.error("session_index.touch_updated_at.background_error", {
+          session_id: sessionId,
+          trace_id: ctx.trace_id,
+          request_id: ctx.request_id,
+          error,
+        });
+      }),
+    {
+      name: "session_index.touch_updated_at",
+      context: { session_id: sessionId, trace_id: ctx.trace_id, request_id: ctx.request_id },
+    }
   );
 
   return response;
 }
 
-export const sessionPromptRoutes: Route[] = [
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/prompt"),
-    handler: handleSessionPrompt,
+export const sessionPromptRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionPromptRoutes.post(
+  "/sessions/:id/prompt",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requirePermission("sessions.collaborate"),
   }),
-];
+  (c) => dispatchSession(c, handleSessionPrompt)
+);

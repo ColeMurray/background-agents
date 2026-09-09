@@ -16,6 +16,9 @@ Open-Inspect is designed for **single-tenant** use. Everyone in your deployment 
 GitHub App installation scope. Read the security model in [README.md](../README.md) before
 production use.
 
+The control plane is the sole sign-in-provider authority. GitHub-only, Google-only, and combined
+sign-in are supported, while GitHub App repository credentials remain required for all three.
+
 ## Prerequisites
 
 Required:
@@ -75,10 +78,6 @@ cp packages/web/.env.example packages/web/.env.local
 Edit `packages/web/.env.local`:
 
 ```bash
-# Match the providers configured on the development control plane. This value
-# is inlined at build time, so restart the dev server after changing it.
-NEXT_PUBLIC_GOOGLE_ENABLED=
-
 # Development control-plane endpoints
 CONTROL_PLANE_URL=https://open-inspect-control-plane-<name>.<subdomain>.workers.dev
 NEXT_PUBLIC_WS_URL=wss://open-inspect-control-plane-<name>.<subdomain>.workers.dev
@@ -92,29 +91,26 @@ SERVICE_AUTH_SECRET=your_web_service_secret
 # inlined into the client bundle at build time — restart `npm run dev`
 # after changing them.
 NEXT_PUBLIC_APP_NAME=Open-Inspect
-# Short label for the sidebar header.
-NEXT_PUBLIC_APP_SHORT_NAME=Inspect
 NEXT_PUBLIC_APP_ICON_URL=
 ```
 
 Do not commit `packages/web/.env.local`.
 
 OAuth provider credentials are not web environment variables. Better Auth runs in the control plane,
-so configure `github_client_id` and `github_client_secret`—and, when enabled, `google_client_id` and
-`google_client_secret`—on the development control plane through Terraform. See
+so configure at least one complete pair: `github_client_id` plus `github_client_secret`,
+`google_client_id` plus `google_client_secret`, or both. See
 [Create GitHub App](GETTING_STARTED.md#step-3-create-github-app) and
 [Enable Google Login](GETTING_STARTED.md#enable-google-login-optional) for the complete provider
-setup. `NEXT_PUBLIC_GOOGLE_ENABLED` only controls whether the web UI offers Google sign-in and must
-match the providers configured on the control plane.
+setup. The `/login` page reads the enabled provider set from the control plane at request time.
 
 If you are using someone else's deployed backend, do not generate your own `SERVICE_AUTH_SECRET`.
 Use the web service secret configured in that backend deployment (the control plane only accepts
 signatures under its own copy). That backend must also be configured with
 `WEB_APP_URL=http://localhost:3000`; otherwise use its deployed web app rather than a local UI.
 
-### 3. Configure GitHub callback URL
+### 3. Configure OAuth callback URLs
 
-In GitHub App settings, include:
+If GitHub sign-in is enabled, include this callback in the GitHub App settings:
 
 `http://localhost:3000/api/auth/callback/github`
 
@@ -134,7 +130,7 @@ Open `http://localhost:3000`.
 
 ### 5. Verify it works
 
-1. Sign in with GitHub.
+1. Sign in with each configured provider.
 2. Open or create a session.
 3. Send a prompt.
 4. Confirm live events stream in the session page.
@@ -196,6 +192,13 @@ pytest tests/ -v
 
 ## Path C: Full Self-Hosted Deployment
 
+Follow the full deployment guide and generate `token_encryption_key` and
+`repo_secrets_encryption_key`. Terraform generates and persists the independent provider-account
+credential key unless an existing `provider_accounts_encryption_key` override is supplied. After
+deployment, connect subscriptions in **Settings > Provider Accounts**, configure defaults and
+unattended modes, and rebuild every runtime image. Legacy scoped OAuth can coexist with provider
+accounts; defaults affect only sessions created afterward.
+
 For full infrastructure setup, use:
 
 - [docs/GETTING_STARTED.md](./GETTING_STARTED.md)
@@ -205,7 +208,11 @@ Critical notes before deploy:
 - Build workers before running Terraform apply.
 - Build `@open-inspect/shared` first.
 - Use two-phase Terraform deploy for DO/service bindings.
-- For Modal deployments, deploy with `modal deploy deploy.py` (not `src/app.py`).
+- For Modal deployments, eagerly build the Sandbox image with
+  `uv run python deploy.py --build-sandbox-image`, then deploy with `uv run modal deploy deploy.py`
+  (not `src/app.py`).
+- Existing sessions keep their pinned authentication. Remove legacy OAuth keys only after dependent
+  legacy-bound sessions are no longer needed.
 
 ## Common Issues and Fixes
 
@@ -238,9 +245,13 @@ configured/deployed.
 
 - Architecture and internals: [docs/HOW_IT_WORKS.md](./HOW_IT_WORKS.md)
 - Full production deployment: [docs/GETTING_STARTED.md](./GETTING_STARTED.md)
+- Control plane in a container (no Cloudflare):
+  [docs/CONTROL_PLANE_CONTAINER.md](./CONTROL_PLANE_CONTAINER.md)
 - GitHub integration usage: [docs/integrations/GITHUB.md](./integrations/GITHUB.md)
 - Linear integration usage: [docs/integrations/LINEAR.md](./integrations/LINEAR.md)
 - Debugging and observability: [docs/DEBUGGING_PLAYBOOK.md](./DEBUGGING_PLAYBOOK.md)
 - Available models: [docs/AVAILABLE_MODELS.md](./AVAILABLE_MODELS.md)
+- Managed skills: [docs/MANAGED_SKILLS.md](./MANAGED_SKILLS.md)
 - OpenAI model setup: [docs/OPENAI_MODELS.md](./OPENAI_MODELS.md)
+- SuperGrok model setup: [docs/GROK_MODELS.md](./GROK_MODELS.md)
 - Contribution workflow: [CONTRIBUTING.md](../CONTRIBUTING.md)

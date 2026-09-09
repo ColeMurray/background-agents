@@ -3,7 +3,15 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionDiffState } from "@open-inspect/shared";
+import type { SessionDiffState } from "@open-inspect/shared/types/session-diffs";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
+
+const FULL_CAPABILITIES = {
+  read: true,
+  collaborate: true,
+  lifecycle: true,
+  sandboxAccess: true,
+} satisfies SessionCapabilities;
 
 vi.mock("next/dynamic", () => ({
   default: () => () => <div data-testid="diff-renderer" />,
@@ -69,6 +77,7 @@ describe("SessionChangesPanel", () => {
     render(
       <SessionChangesPanel
         sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
         state={state}
         resolved={{
           status: "ready",
@@ -90,10 +99,75 @@ describe("SessionChangesPanel", () => {
     expect(onSelect).toHaveBeenCalledWith({ repositoryPosition: 0, path: "src/lib.ts" });
   });
 
+  it("collapses and reopens the changed-files sidebar", async () => {
+    render(
+      <SessionChangesPanel
+        sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
+        state={state}
+        resolved={{
+          status: "ready",
+          revisionId: "revision-1",
+          repository: readyRepository,
+          file: readyRepository.files[0]!,
+        }}
+        onClose={vi.fn()}
+        onSelect={vi.fn()}
+      />
+    );
+
+    const sidebar = screen.getByRole("complementary", { name: "Changed files" });
+    const hideButton = screen.getByRole("button", { name: "Hide file list" });
+    expect(hideButton).toHaveAttribute("aria-expanded", "true");
+    expect(hideButton).toHaveAttribute("aria-controls", sidebar.id);
+
+    await userEvent.click(hideButton);
+
+    expect(sidebar).not.toBeVisible();
+    const showButton = screen.getByRole("button", { name: "Show file list" });
+    expect(showButton).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(showButton);
+
+    expect(sidebar).toBeVisible();
+    expect(screen.getByRole("button", { name: "Hide file list" })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
+  });
+
+  it("preserves the file filter while the sidebar is collapsed", async () => {
+    render(
+      <SessionChangesPanel
+        sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
+        state={state}
+        resolved={{
+          status: "ready",
+          revisionId: "revision-1",
+          repository: readyRepository,
+          file: readyRepository.files[0]!,
+        }}
+        onClose={vi.fn()}
+        onSelect={vi.fn()}
+      />
+    );
+
+    const filter = screen.getByRole("searchbox", { name: "Filter changed files" });
+    await userEvent.type(filter, "lib");
+    await userEvent.click(screen.getByRole("button", { name: "Hide file list" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show file list" }));
+
+    expect(filter).toHaveValue("lib");
+    expect(screen.queryByRole("button", { name: /app\.ts.*modified/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /lib\.ts.*modified/i })).toBeVisible();
+  });
+
   it("keeps navigation available when a selected file disappears", () => {
     render(
       <SessionChangesPanel
         sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
         state={state}
         resolved={{ status: "missing", revisionId: "revision-1" }}
         onClose={vi.fn()}
@@ -106,11 +180,12 @@ describe("SessionChangesPanel", () => {
     expect(screen.getByText(/no longer part of the latest/i)).toBeVisible();
   });
 
-  it("forces a unified-only diff control on mobile", () => {
+  it("supports file-list collapsing with a unified-only diff control on mobile", async () => {
     render(
       <SessionChangesPanel
         mobile
         sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
         state={state}
         resolved={{
           status: "ready",
@@ -125,6 +200,14 @@ describe("SessionChangesPanel", () => {
 
     expect(screen.getByRole("button", { name: "Unified" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Split" })).not.toBeInTheDocument();
+    const sidebar = screen.getByRole("complementary", { name: "Changed files" });
+    expect(sidebar).toHaveClass("max-h-48");
+
+    await userEvent.click(screen.getByRole("button", { name: "Hide file list" }));
+    expect(sidebar).not.toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show file list" }));
+    expect(sidebar).toBeVisible();
   });
 
   it("reports an authoritative retry failure from the explicit retry endpoint", async () => {
@@ -135,6 +218,7 @@ describe("SessionChangesPanel", () => {
     render(
       <SessionChangesPanel
         sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
         state={{
           ...state,
           lastError: { message: "timed out", occurredAt: 200 },

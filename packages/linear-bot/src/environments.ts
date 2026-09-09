@@ -6,19 +6,32 @@
  * skipped and resolution falls through to the next stage.
  */
 
-import type { Env, Environment, ListEnvironmentsResponse } from "./types";
+import { z } from "zod";
+import {
+  environmentSchema,
+  listEnvironmentsResponseSchema,
+  type Environment,
+} from "@open-inspect/shared/types/environments";
+import type { Env } from "./types";
 import { createCachedResource } from "./cached-resource";
 import { fetchControlPlaneJson } from "./control-plane";
+
+const environmentsSchema = z.array(environmentSchema);
 
 const environments = createCachedResource<Environment[]>({
   name: "environments",
   kvKey: "environments:cache",
   load: async (env, traceId) => {
     const body = await fetchControlPlaneJson(env, "/environments", traceId);
-    const list = (body as ListEnvironmentsResponse).environments;
-    return Array.isArray(list) ? list : [];
+    // Throws on a malformed body so the resource falls back to the KV
+    // last-known-good copy. Returning [] here would instead publish "no
+    // environments" as a successful load and overwrite that copy.
+    return listEnvironmentsResponseSchema.parse(body).environments;
   },
-  deserialize: (cached) => (Array.isArray(cached) ? (cached as Environment[]) : null),
+  deserialize: (cached) => {
+    const result = environmentsSchema.safeParse(cached);
+    return result.success ? result.data : null;
+  },
   fallback: [],
 });
 

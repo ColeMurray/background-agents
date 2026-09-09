@@ -10,19 +10,15 @@ This package contains the code that runs inside sandboxes regardless of provider
 """
 
 from .types import (
-    GitSyncStatus,
     GitUser,
     McpServerConfig,
-    SandboxEvent,
     SandboxStatus,
     SessionConfig,
 )
 
 __all__ = [
-    "GitSyncStatus",
     "GitUser",
     "McpServerConfig",
-    "SandboxEvent",
     "SandboxStatus",
     "SessionConfig",
 ]

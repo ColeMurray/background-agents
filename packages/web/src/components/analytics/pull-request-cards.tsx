@@ -1,4 +1,7 @@
-import type { AnalyticsDays, AnalyticsPullRequestsResponse } from "@open-inspect/shared";
+import type {
+  AnalyticsDays,
+  AnalyticsPullRequestsResponse,
+} from "@open-inspect/shared/types/analytics";
 import { SummaryCard } from "@/components/analytics/summary-cards";
 import {
   formatAnalyticsCount,

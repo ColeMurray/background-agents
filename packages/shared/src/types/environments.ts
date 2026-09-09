@@ -62,31 +62,37 @@ export type UpdateEnvironmentInput = z.input<typeof updateEnvironmentInputSchema
  * NOT NULL — resolution fills the repo's default branch when the request omits
  * it); repoId is nullable to tolerate rows written before a repo resolved.
  */
-export interface EnvironmentRepository {
-  repoOwner: string;
-  repoName: string;
-  repoId: number | null;
-  baseBranch: string;
-}
+export const environmentRepositorySchema = z.object({
+  repoOwner: z.string(),
+  repoName: z.string(),
+  repoId: z.number().nullable(),
+  baseBranch: z.string(),
+});
+
+export type EnvironmentRepository = z.infer<typeof environmentRepositorySchema>;
 
 /** An environment: a named, prebuildable repository set (design §7.1). */
-export interface Environment {
-  id: string;
-  name: string;
-  description: string | null;
-  prebuildEnabled: boolean;
-  createdAt: number;
-  updatedAt: number;
+export const environmentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  prebuildEnabled: z.boolean(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
   /**
    * Slack channel ids associated with this environment (classifier
    * channel-association stage). Absent when the environment has none.
    */
-  channelAssociations?: string[];
-  /** Ordered repositories; [0] is the primary (sandbox/code-server settings source). */
-  repositories: EnvironmentRepository[];
-}
+  channelAssociations: z.array(z.string()).optional(),
+  /** Ordered repositories; [0] is the primary (sandbox/integration settings source). */
+  repositories: z.array(environmentRepositorySchema),
+});
 
-export interface ListEnvironmentsResponse {
-  environments: Environment[];
-  total: number;
-}
+export type Environment = z.infer<typeof environmentSchema>;
+
+export const listEnvironmentsResponseSchema = z.object({
+  environments: z.array(environmentSchema),
+  total: z.number(),
+});
+
+export type ListEnvironmentsResponse = z.infer<typeof listEnvironmentsResponseSchema>;

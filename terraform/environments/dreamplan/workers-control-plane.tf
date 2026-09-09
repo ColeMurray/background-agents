@@ -2,6 +2,16 @@
 # Cloudflare Workers
 # =============================================================================
 
+resource "cloudflare_queue" "image_build_finalization" {
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-image-build-finalization-${local.name_suffix}"
+}
+
+resource "cloudflare_queue" "image_build_finalization_dlq" {
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-image-build-finalization-dlq-${local.name_suffix}"
+}
+
 # Build control-plane worker bundle (only runs during apply, not plan)
 resource "null_resource" "control_plane_build" {
   triggers = {
@@ -45,6 +55,29 @@ module "control_plane_worker" {
     }
   ]
 
+  # One producer binding per job kind (packages/control-plane/src/jobs.ts;
+  # the mapping lives in src/cloudflare/job-queue.ts). The autofix bindings
+  # also feed the operator health check its read-only queue metrics; autofix
+  # production itself remains with the GitHub bot.
+  queue_bindings = concat(
+    [
+      {
+        binding_name = "IMAGE_BUILD_FINALIZATION_QUEUE"
+        queue_name   = cloudflare_queue.image_build_finalization.queue_name
+      }
+    ],
+    var.enable_github_bot ? [
+      {
+        binding_name = "AUTOFIX_QUEUE"
+        queue_name   = cloudflare_queue.github_autofix[0].queue_name
+      },
+      {
+        binding_name = "AUTOFIX_DLQ"
+        queue_name   = cloudflare_queue.github_autofix_dlq[0].queue_name
+      }
+    ] : []
+  )
+
   service_bindings = concat(
     var.enable_slack_bot ? [
       {
@@ -64,8 +97,6 @@ module "control_plane_worker" {
 
   plain_text_bindings = concat(
     [
-      { name = "GITHUB_CLIENT_ID", value = var.github_client_id },
-      { name = "GOOGLE_CLIENT_ID", value = var.google_client_id },
       { name = "WEB_APP_URL", value = local.web_app_url },
       { name = "ALLOWED_USERS", value = var.allowed_users },
       { name = "ALLOWED_EMAIL_DOMAINS", value = var.allowed_email_domains },
@@ -75,12 +106,23 @@ module "control_plane_worker" {
       { name = "WORKER_URL", value = local.control_plane_url },
       { name = "DEPLOYMENT_NAME", value = var.deployment_name },
       { name = "APP_NAME", value = var.app_name },
+      { name = "GITHUB_BOT_USERNAME", value = var.github_bot_username },
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
     ],
-    local.use_modal_backend ? [{ name = "MODAL_WORKSPACE", value = var.modal_workspace }] : [],
+    local.github_oauth_enabled ? [
+      { name = "GITHUB_CLIENT_ID", value = trimspace(var.github_client_id) },
+    ] : [],
+    local.google_enabled ? [
+      { name = "GOOGLE_CLIENT_ID", value = trimspace(var.google_client_id) },
+    ] : [],
+    trimspace(var.modal_workspace) != "" ? [
+      { name = "MODAL_WORKSPACE", value = var.modal_workspace },
+      { name = "MODAL_ENVIRONMENT", value = var.modal_environment },
+      { name = "MODAL_ENVIRONMENT_WEB_SUFFIX", value = var.modal_environment_web_suffix },
+    ] : [],
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_URL", value = var.daytona_api_url },
-      { name = "DAYTONA_BASE_SNAPSHOT", value = var.daytona_base_snapshot },
+      { name = "DAYTONA_BASE_SNAPSHOT", value = module.daytona_infra[0].snapshot_name },
     ] : [],
     local.use_daytona_backend && var.daytona_target != "" ? [
       { name = "DAYTONA_TARGET", value = var.daytona_target },
@@ -93,9 +135,9 @@ module "control_plane_worker" {
       # and cookies in the control plane. Keeping the Terraform input stable
       # avoids coupling secret rotation to the browser-auth cutover.
       { name = "BROWSER_AUTH_SECRET", value = var.nextauth_secret },
-      { name = "GITHUB_CLIENT_SECRET", value = var.github_client_secret },
       { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
       { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
+      { name = "PROVIDER_ACCOUNTS_ENCRYPTION_KEY", value = local.effective_provider_accounts_encryption_key },
       # Pepper for image-build callback token hashes (see service-auth.tf)
       { name = "IMAGE_CALLBACK_TOKEN_PEPPER", value = random_password.image_callback_token_pepper.result },
       # Per-service sig1 verification keys
@@ -103,18 +145,18 @@ module "control_plane_worker" {
       { name = "SERVICE_AUTH_SECRET_SLACK_BOT", value = random_password.service_auth_secret_slack_bot.result },
       { name = "SERVICE_AUTH_SECRET_GITHUB_BOT", value = random_password.service_auth_secret_github_bot.result },
       { name = "SERVICE_AUTH_SECRET_LINEAR_BOT", value = random_password.service_auth_secret_linear_bot.result },
-      { name = "SERVICE_AUTH_SECRET_MODAL", value = random_password.service_auth_secret_modal.result },
       # GitHub App credentials for /repos endpoint (listInstallationRepositories)
       { name = "GITHUB_APP_ID", value = var.github_app_id },
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
       { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
     ],
-    local.google_enabled ? [
-      { name = "GOOGLE_CLIENT_SECRET", value = var.google_client_secret },
+    local.github_oauth_enabled ? [
+      { name = "GITHUB_CLIENT_SECRET", value = trimspace(var.github_client_secret) },
     ] : [],
-    local.use_modal_backend ? [
-      { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
-      { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },
+    local.google_enabled ? [
+      { name = "GOOGLE_CLIENT_SECRET", value = trimspace(var.google_client_secret) },
+    ] : [],
+    var.modal_api_secret != "" && trimspace(var.modal_workspace) != "" ? [
       { name = "MODAL_API_SECRET", value = var.modal_api_secret },
     ] : [],
     local.use_daytona_backend ? [
@@ -130,7 +172,6 @@ module "control_plane_worker" {
 
   durable_objects = [
     { binding_name = "SESSION", class_name = "SessionDO" },
-    { binding_name = "SCHEDULER", class_name = "SchedulerDO" },
   ]
 
   enable_durable_object_bindings = var.enable_durable_object_bindings
@@ -140,14 +181,36 @@ module "control_plane_worker" {
   migration_tag       = var.control_plane_migration_tag
   migration_old_tag   = var.control_plane_migration_old_tag
   new_sqlite_classes  = var.control_plane_new_sqlite_classes
+  deleted_classes     = var.control_plane_deleted_classes
 
-  cron_triggers = ["* * * * *"]
+  # The image-build schedule must match IMAGE_BUILD_SCHEDULER_CRON in scheduler.ts,
+  # and the draft sweep ABANDONED_DRAFT_SWEEP_CRON in abandoned-draft-sweep.ts.
+  cron_triggers = ["* * * * *", "7,37 * * * *", "23 * * * *"]
 
+  # Base artifacts are verified before the Worker switches its provider references.
   depends_on = [
     null_resource.control_plane_build,
     module.session_index_kv,
     null_resource.d1_migrations,
     module.linear_bot_worker,
     module.daytona_infra,
+    module.modal_app,
   ]
+}
+
+resource "cloudflare_queue_consumer" "image_build_finalization" {
+  account_id        = var.cloudflare_account_id
+  queue_id          = cloudflare_queue.image_build_finalization.queue_id
+  type              = "worker"
+  script_name       = module.control_plane_worker.worker_name
+  dead_letter_queue = cloudflare_queue.image_build_finalization_dlq.queue_name
+  settings = {
+    batch_size       = 1
+    max_wait_time_ms = 1000
+    max_concurrency  = 5
+    max_retries      = 12
+    retry_delay      = 15
+  }
+
+  depends_on = [module.control_plane_worker]
 }

@@ -52,12 +52,14 @@ module "slack_bot_worker" {
     { name = "CLASSIFICATION_MODEL", value = var.classification_model },
   ]
 
-  secrets = [
-    { name = "SLACK_BOT_TOKEN", value = var.slack_bot_token },
-    { name = "SLACK_SIGNING_SECRET", value = var.slack_signing_secret },
-    { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-    { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_slack_bot.result },
-  ]
+  secrets = concat(
+    [
+      { name = "SLACK_BOT_TOKEN", value = var.slack_bot_token },
+      { name = "SLACK_SIGNING_SECRET", value = var.slack_signing_secret },
+      { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_slack_bot.result },
+    ],
+    local.classifier_secret_bindings
+  )
 
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]

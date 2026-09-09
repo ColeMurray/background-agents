@@ -1,4 +1,4 @@
-import { MAX_COMMIT_SIGNING_PRIVATE_KEY_LENGTH } from "@open-inspect/shared";
+import { MAX_COMMIT_SIGNING_PRIVATE_KEY_LENGTH } from "@open-inspect/shared/types/commit-signing";
 
 import { createArmoredGitSshSig, createGitSshSigSignedData } from "./sshsig";
 
