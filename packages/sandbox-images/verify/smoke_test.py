@@ -20,8 +20,8 @@ from typing import Any
 PNPM_GLOBAL_PROBE = r"""
 import json, os, pathlib, shutil, subprocess, tempfile, uuid
 name = "oi-image-probe-" + uuid.uuid4().hex
-home = pathlib.Path(os.environ["PNPM_HOME"])
-assert str(home) in os.environ["PATH"].split(":")
+bin_dir = pathlib.Path(subprocess.check_output(["pnpm", "bin", "--global"], text=True, timeout=10).strip())
+assert str(bin_dir) in os.environ["PATH"].split(":")
 with tempfile.TemporaryDirectory(prefix="openinspect-pnpm-") as directory:
     root = pathlib.Path(directory)
     package = root / "package"
@@ -37,11 +37,11 @@ with tempfile.TemporaryDirectory(prefix="openinspect-pnpm-") as directory:
             "pnpm", "add", "--global", "--offline", "--ignore-scripts",
             "--global-dir", str(root / "global"), "--store-dir", str(root / "store"),
             str(package),
-        ], check=True, timeout=60, capture_output=True)
-        assert shutil.which(name) == str(home / name)
+        ], check=True, timeout=60)
+        assert shutil.which(name) == str(bin_dir / name)
         assert subprocess.check_output([name], text=True, timeout=10).strip() == "global-bin-ok"
     finally:
-        (home / name).unlink(missing_ok=True)
+        (bin_dir / name).unlink(missing_ok=True)
 """
 
 

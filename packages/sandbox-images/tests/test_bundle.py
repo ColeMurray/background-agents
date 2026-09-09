@@ -1,6 +1,9 @@
 """Shared payload staging and conservative build invalidation."""
 
 import json
+import re
+import runpy
+import shlex
 import shutil
 from pathlib import Path
 
@@ -27,8 +30,39 @@ def checkout(tmp_path):
 @pytest.mark.parametrize("provider", PROVIDERS)
 def test_runtime_user_global_pnpm_commands_are_on_path(provider):
     environment = plan_image(REPO_ROOT, provider)["runtimeEnv"]
-    assert environment["PNPM_HOME"] in environment["PATH"].split(":")
+    assert environment["PNPM_HOME"] + "/bin" in environment["PATH"].split(":")
     assert "VIRTUAL_ENV" not in environment
+
+
+def test_reference_docker_build_runs_every_native_install_phase():
+    package = REPO_ROOT / "packages/sandbox-images"
+    install = (package / "install/install.sh").read_text()
+    dockerfile = (package / "Dockerfile").read_text()
+    phases = shlex.split(re.search(r"^phases=\((.+)\)$", install, re.MULTILINE).group(1))
+    phases[0] = "os"
+    docker_phases = []
+    for line in dockerfile.splitlines():
+        if line.startswith("RUN bash ") and "/install.sh " in line:
+            docker_phases.extend(shlex.split(line.split("/install.sh ", 1)[1].split(" &&", 1)[0]))
+    assert docker_phases == phases
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_planned_environment_is_accepted_by_runtime(tmp_path, monkeypatch, provider):
+    import os
+
+    environment = plan_image(REPO_ROOT, provider)["runtimeEnv"]
+    runtime = runpy.run_path(
+        str(REPO_ROOT / "packages/sandbox-runtime/src/sandbox_runtime/image_environment.py")
+    )
+    for key in environment:
+        monkeypatch.setenv(key, "previous-value")
+    monkeypatch.setenv("SANDBOX_TOKEN", "session-token")
+    path = tmp_path / "environment.json"
+    path.write_text(json.dumps(environment))
+    runtime["apply_image_environment"](path)
+    assert {key: os.environ[key] for key in environment} == environment
+    assert os.environ["SANDBOX_TOKEN"] == "session-token"
 
 
 def test_binary_checksum_and_minimum_tool_version_are_required():

@@ -20,6 +20,12 @@ IMAGE_ENV_KEYS = frozenset(
         "npm_config_prefix",
         "npm_config_cache",
         "PNPM_HOME",
+        "COREPACK_HOME",
+        "COREPACK_ENABLE_DOWNLOAD_PROMPT",
+        "GOPATH",
+        "GOMODCACHE",
+        "GOTOOLCHAIN",
+        "POSTHOG_CLI_HOST",
         "OPENINSPECT_BIN_INSTALL_DIR",
         "OI_SCM_CRED_CACHE_DIR",
     }
