@@ -2,11 +2,13 @@ import { parseBody } from "./body";
 import {
   MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
   PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN,
+  completeProviderAuthorizationCodeRequestSchema,
   connectModelProviderAccountRequestSchema,
   modelProviderAccountDisplayNameSchema,
   modelProviderAccountDefaultRequestSchema,
   modelProviderAccountStatusSchema,
   reconnectModelProviderAccountRequestSchema,
+  startProviderAuthorizationCodeRequestSchema,
   startProviderDeviceAuthorizationRequestSchema,
   subscriptionProviderIdSchema,
   type SubscriptionProviderId,
@@ -34,10 +36,9 @@ import {
   ModelProviderAccountService,
   ProviderAccountServiceError,
 } from "../model-provider-accounts/service";
-import {
-  ProviderDeviceAuthorizationError,
-  ProviderDeviceAuthorizationService,
-} from "../model-provider-accounts/device-authorization-service";
+import { ProviderAuthorizationCodeService } from "../model-provider-accounts/authorization-code-service";
+import { ProviderAuthorizationError } from "../model-provider-accounts/authorization-transaction";
+import { ProviderDeviceAuthorizationService } from "../model-provider-accounts/device-authorization-service";
 import { ProviderDeviceAuthorizationFinalizer } from "../model-provider-accounts/device-authorization-finalizer";
 import {
   ProviderAccountSelectionPolicy,
@@ -74,7 +75,7 @@ const LEGACY_REFRESH_PATH: Partial<Record<SubscriptionProviderId, SessionInterna
   openai: SessionInternalPaths.openaiTokenRefresh,
   xai: SessionInternalPaths.xaiTokenRefresh,
 };
-const providerAuthorizationLogger = createLogger("provider-device-authorization");
+const providerAuthorizationLogger = createLogger("provider-authorization");
 
 function service(env: Env, ctx: RequestContext): ModelProviderAccountService {
   const accounts = new ModelProviderAccountStore(ctx.db);
@@ -88,22 +89,30 @@ function service(env: Env, ctx: RequestContext): ModelProviderAccountService {
   );
 }
 
-function authorizationService(env: Env, ctx: RequestContext): ProviderDeviceAuthorizationService {
+function authorizationServiceParts(env: Env, ctx: RequestContext) {
   const accounts = new ModelProviderAccountStore(ctx.db);
   const finalizer = new ProviderDeviceAuthorizationFinalizer(
     accounts,
     new D1ModelProviderAccountAtomicWriter(ctx.db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY),
     () => generateId(16)
   );
-  return new ProviderDeviceAuthorizationService(
+  return [
     new ProviderAccountAuthorizationStore(ctx.db),
     accounts,
     finalizer,
     env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY,
     modelProviderAccountAdapterRegistry,
     { generateId, now: () => Date.now() },
-    providerAuthorizationLogger
-  );
+    providerAuthorizationLogger,
+  ] as const;
+}
+
+function authorizationService(env: Env, ctx: RequestContext): ProviderDeviceAuthorizationService {
+  return new ProviderDeviceAuthorizationService(...authorizationServiceParts(env, ctx));
+}
+
+function authorizationCodeService(env: Env, ctx: RequestContext): ProviderAuthorizationCodeService {
+  return new ProviderAuthorizationCodeService(...authorizationServiceParts(env, ctx));
 }
 
 function provider(value: string): SubscriptionProviderId | Response {
@@ -181,11 +190,11 @@ async function authorizationOperation(
   try {
     return await operation();
   } catch (cause) {
-    if (cause instanceof ProviderDeviceAuthorizationError) {
+    if (cause instanceof ProviderAuthorizationError) {
       return json({ error: cause.message, retryable: cause.retryable }, cause.status);
     }
-    providerAuthorizationLogger.error("provider_device_authorization.operation_failed", {
-      event: "provider_device_authorization.operation_failed",
+    providerAuthorizationLogger.error("provider_authorization.operation_failed", {
+      event: "provider_authorization.operation_failed",
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
       error: cause instanceof Error ? cause : String(cause),
@@ -289,6 +298,89 @@ modelProviderAccountRoutes.delete(
       if (id instanceof Response) return id;
       return authorizationOperation(ctx, async () => {
         await authorizationService(env, ctx).cancel(ctx.principal.userId, parsedProvider, id);
+        return new Response(null, { status: 204 });
+      });
+    })
+);
+modelProviderAccountRoutes.post(
+  "/model-provider-accounts/:provider/authorization-codes",
+  ACCOUNTS_MANAGE,
+  (c) =>
+    dispatch(c, async (request, env, params, ctx) => {
+      const parsedProvider = provider(params.provider);
+      if (parsedProvider instanceof Response) return parsedProvider;
+      const body = await parseBody(
+        request,
+        startProviderAuthorizationCodeRequestSchema,
+        "Invalid authorization request"
+      );
+      if (body instanceof Response) return body;
+      return authorizationOperation(ctx, async () =>
+        json(
+          await authorizationCodeService(env, ctx).start(
+            ctx.principal.userId,
+            parsedProvider,
+            body
+          ),
+          201
+        )
+      );
+    })
+);
+modelProviderAccountRoutes.get(
+  "/model-provider-accounts/:provider/authorization-codes/:id",
+  ACCOUNTS_MANAGE,
+  (c) =>
+    dispatch(c, async (_request, env, params, ctx) => {
+      const parsedProvider = provider(params.provider);
+      if (parsedProvider instanceof Response) return parsedProvider;
+      const id = authorizationId(params.id);
+      if (id instanceof Response) return id;
+      return authorizationOperation(ctx, async () =>
+        json(
+          await authorizationCodeService(env, ctx).status(ctx.principal.userId, parsedProvider, id)
+        )
+      );
+    })
+);
+modelProviderAccountRoutes.post(
+  "/model-provider-accounts/:provider/authorization-codes/:id/complete",
+  ACCOUNTS_MANAGE,
+  (c) =>
+    dispatch(c, async (request, env, params, ctx) => {
+      const parsedProvider = provider(params.provider);
+      if (parsedProvider instanceof Response) return parsedProvider;
+      const id = authorizationId(params.id);
+      if (id instanceof Response) return id;
+      const body = await parseBody(
+        request,
+        completeProviderAuthorizationCodeRequestSchema,
+        "Invalid authorization code"
+      );
+      if (body instanceof Response) return body;
+      return authorizationOperation(ctx, async () =>
+        json(
+          await authorizationCodeService(env, ctx).complete(
+            ctx.principal.userId,
+            parsedProvider,
+            id,
+            body.code
+          )
+        )
+      );
+    })
+);
+modelProviderAccountRoutes.delete(
+  "/model-provider-accounts/:provider/authorization-codes/:id",
+  ACCOUNTS_MANAGE,
+  (c) =>
+    dispatch(c, async (_request, env, params, ctx) => {
+      const parsedProvider = provider(params.provider);
+      if (parsedProvider instanceof Response) return parsedProvider;
+      const id = authorizationId(params.id);
+      if (id instanceof Response) return id;
+      return authorizationOperation(ctx, async () => {
+        await authorizationCodeService(env, ctx).cancel(ctx.principal.userId, parsedProvider, id);
         return new Response(null, { status: 204 });
       });
     })

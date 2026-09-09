@@ -24,6 +24,13 @@ export class ProviderDeviceAuthorizationFinalizer {
     private readonly generateAccountId: () => string
   ) {}
 
+  /**
+   * Persist a connection the provider itself vouched for. Identity-bound
+   * providers converge on the external account id: a create that lands on a
+   * known identity reconnects it, and a reconnect must present the target's
+   * identity. Identity-less connections (the adapter accepts a missing id)
+   * name a fresh slot on create and write straight to the target on reconnect.
+   */
   async finalizeTrustedConnection(
     transaction: ProcessingProviderAuthorization,
     connection: ProviderConnectionResult<unknown>,
@@ -31,7 +38,6 @@ export class ProviderDeviceAuthorizationFinalizer {
     now: number
   ): Promise<boolean> {
     const identity = connection.externalAccountId;
-    if (!identity) throw new Error("Provider account identity could not be verified");
 
     if (transaction.operation === "reconnect") {
       const snapshot = await this.accounts.getLifecycleSnapshot(transaction.providerAccountId);
@@ -39,10 +45,24 @@ export class ProviderDeviceAuthorizationFinalizer {
       if (!account || account.archivedAt !== null || account.provider !== transaction.provider) {
         throw new Error("Provider account is unavailable for reconnection");
       }
-      if (!account.externalAccountId || account.externalAccountId !== identity) {
+      if (identity === undefined) {
+        adapter.validateExternalIdentity(identity, account.externalAccountId);
+        if (account.externalAccountId !== null) {
+          throw new Error("Provider account identity could not be verified");
+        }
+      } else if (!account.externalAccountId || account.externalAccountId !== identity) {
         throw new Error("Provider account identity did not match");
       }
       return this.reconnect(transaction, snapshot, connection, adapter, now);
+    }
+
+    if (identity === undefined) {
+      adapter.validateExternalIdentity(identity, null);
+      const outcome = await this.create(transaction, connection, adapter, null, now);
+      if (outcome === "identity_conflict") {
+        throw new Error("Identity-less provider account reported an identity conflict");
+      }
+      return outcome === "created";
     }
 
     const existing = await this.accounts.findLifecycleSnapshotByExternalIdentity(
@@ -76,7 +96,7 @@ export class ProviderDeviceAuthorizationFinalizer {
     transaction: ProcessingProviderAuthorization & { operation: "create" },
     connection: ProviderConnectionResult<unknown>,
     adapter: ModelProviderAccountAdapter<unknown, unknown>,
-    identity: string,
+    identity: string | null,
     now: number
   ): Promise<"created" | "identity_conflict" | "claim_lost"> {
     const accountId = this.generateAccountId();
@@ -103,7 +123,7 @@ export class ProviderDeviceAuthorizationFinalizer {
     const outcome = await this.writer.finalizeDeviceAuthorizationReconnect({
       authorization: transaction,
       accountId: account.id,
-      externalAccountId: account.externalAccountId!,
+      externalAccountId: account.externalAccountId,
       credential: connection.credential,
       credentialSchemaVersion: adapter.credentialSchemaVersion,
       accessTokenExpiresAt: connection.accessTokenExpiresAt ?? null,

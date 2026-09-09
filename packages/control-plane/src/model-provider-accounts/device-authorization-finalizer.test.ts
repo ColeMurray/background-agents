@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { OpenAIModelProviderAccountAdapter } from "../auth/model-provider-account-openai-adapter";
+import { AnthropicModelProviderAccountAdapter } from "../auth/model-provider-account-anthropic-adapter";
 import type { ProcessingProviderAuthorization } from "../db/provider-account-authorizations";
 import type { ModelProviderAccountLifecycleSnapshot } from "../db/model-provider-accounts";
 import { ProviderDeviceAuthorizationFinalizer } from "./device-authorization-finalizer";
@@ -8,6 +9,7 @@ const authorization: ProcessingProviderAuthorization = {
   id: "01".repeat(32),
   userId: "user-1",
   provider: "openai",
+  authorizationKind: "device",
   operation: "create",
   displayName: "Primary OpenAI",
   encryptedProviderData: "encrypted",
@@ -109,5 +111,94 @@ describe("ProviderDeviceAuthorizationFinalizer", () => {
     ).rejects.toThrow("encryption failed");
     expect(accounts.findLifecycleSnapshotByExternalIdentity).toHaveBeenCalledOnce();
     expect(writer.finalizeDeviceAuthorizationReconnect).not.toHaveBeenCalled();
+  });
+
+  describe("identity-less connections", () => {
+    const anthropicCreate: ProcessingProviderAuthorization = {
+      ...authorization,
+      provider: "anthropic",
+      authorizationKind: "authorization_code",
+    };
+    const identityless = {
+      credential: { kind: "setup_token", token: "sk-ant-oat01-secret" },
+    };
+
+    it("creates a fresh named slot on every create without identity lookups", async () => {
+      const { finalizer, accounts, writer } = subject("created");
+
+      await expect(
+        finalizer.finalizeTrustedConnection(
+          anthropicCreate,
+          identityless,
+          new AnthropicModelProviderAccountAdapter(),
+          100_000
+        )
+      ).resolves.toBe(true);
+      expect(accounts.findLifecycleSnapshotByExternalIdentity).not.toHaveBeenCalled();
+      expect(writer.finalizeDeviceAuthorizationCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ externalAccountId: null, accountId: "03".repeat(16) })
+      );
+      expect(writer.finalizeDeviceAuthorizationReconnect).not.toHaveBeenCalled();
+    });
+
+    it("writes a reconnect straight to the identity-less target account", async () => {
+      const { finalizer, accounts, writer } = subject("created");
+      accounts.getLifecycleSnapshot.mockResolvedValue({
+        account: { ...winner.account, provider: "anthropic", externalAccountId: null },
+        lifecycleVersion: 4,
+      });
+
+      await expect(
+        finalizer.finalizeTrustedConnection(
+          {
+            ...anthropicCreate,
+            operation: "reconnect",
+            providerAccountId: winner.account.id,
+            targetAccountStatus: "reconnect_required",
+            targetAccountLifecycleVersion: 4,
+          } as ProcessingProviderAuthorization,
+          identityless,
+          new AnthropicModelProviderAccountAdapter(),
+          100_000
+        )
+      ).resolves.toBe(true);
+      expect(writer.finalizeDeviceAuthorizationReconnect).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: winner.account.id, externalAccountId: null })
+      );
+    });
+
+    it("refuses an identity-less reconnect onto an identity-bound account", async () => {
+      const { finalizer, writer } = subject("created");
+
+      await expect(
+        finalizer.finalizeTrustedConnection(
+          {
+            ...authorization,
+            operation: "reconnect",
+            providerAccountId: winner.account.id,
+            targetAccountStatus: "active",
+            targetAccountLifecycleVersion: 0,
+          } as ProcessingProviderAuthorization,
+          { credential: { refreshToken: "new-secret" } },
+          new OpenAIModelProviderAccountAdapter(),
+          100_000
+        )
+      ).rejects.toThrow(/could not be verified/);
+      expect(writer.finalizeDeviceAuthorizationReconnect).not.toHaveBeenCalled();
+    });
+
+    it("refuses an identity-less create for an identity-bound provider", async () => {
+      const { finalizer, writer } = subject("created");
+
+      await expect(
+        finalizer.finalizeTrustedConnection(
+          authorization,
+          { credential: { refreshToken: "new-secret" } },
+          new OpenAIModelProviderAccountAdapter(),
+          100_000
+        )
+      ).rejects.toThrow(/could not be verified/);
+      expect(writer.finalizeDeviceAuthorizationCreate).not.toHaveBeenCalled();
+    });
   });
 });

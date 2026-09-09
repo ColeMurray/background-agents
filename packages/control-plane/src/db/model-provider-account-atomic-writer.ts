@@ -57,7 +57,8 @@ export interface CreateAccountWithCredentialInput {
 
 interface DeviceAuthorizationCredentialInput {
   authorization: ProcessingProviderAuthorization;
-  externalAccountId: string;
+  /** Null for providers whose credential carries no account identity. */
+  externalAccountId: string | null;
   credential: unknown;
   credentialSchemaVersion: number;
   accessTokenExpiresAt: number | null;
@@ -207,7 +208,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
              access_token_expires_at, updated_at)
            SELECT ?, ?, ?, ?, ? WHERE changes() = 1
              AND EXISTS (SELECT 1 FROM model_provider_accounts
-               WHERE id = ? AND provider = ? AND external_account_id = ?
+               WHERE id = ? AND provider = ? AND external_account_id IS ?
                  AND status = 'active' AND archived_at IS NULL AND lifecycle_version = 0)`
         )
         .bind(
@@ -242,10 +243,13 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
     if (!(await this.ownsDeviceAuthorizationClaim(input.authorization, input.now))) {
       return { type: "claim_lost" };
     }
-    const conflict = await this.accounts.findLifecycleSnapshotByExternalIdentity(
-      input.authorization.provider,
-      input.externalAccountId
-    );
+    const conflict =
+      input.externalAccountId === null
+        ? null
+        : await this.accounts.findLifecycleSnapshotByExternalIdentity(
+            input.authorization.provider,
+            input.externalAccountId
+          );
     if (conflict) return { type: "identity_conflict" };
     throw new Error("Provider authorization create finalization rejected without a conflict");
   }
@@ -287,7 +291,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
           `UPDATE model_provider_accounts
            SET status = 'active', updated_by = ?, last_verified_at = ?, updated_at = ?,
                lifecycle_version = lifecycle_version + 1
-           WHERE id = ? AND provider = ? AND external_account_id = ?
+           WHERE id = ? AND provider = ? AND external_account_id IS ?
              AND archived_at IS NULL AND status = ? AND lifecycle_version = ?
              AND EXISTS (${authorizationGuard})
              AND EXISTS (SELECT 1 FROM model_provider_account_credentials

@@ -11,23 +11,26 @@ import {
   encryptProviderAuthorizationPayload,
 } from "../auth/provider-account-crypto";
 import type { ModelProviderAccountAdapterRegistry } from "../auth/model-provider-account-adapters";
-import {
-  PROVIDER_AUTHORIZATION_LIVE_STATES,
-  PROVIDER_AUTHORIZATION_TERMINAL_STATES,
-  type ProviderAccountAuthorizationStore,
-  type ConnectedProviderAuthorization,
-  type ProviderAuthorization,
-  type ProviderAuthorizationLive,
-  type ProviderAuthorizationLiveState,
-  type ProviderAuthorizationTerminalState,
+import type {
+  ProviderAccountAuthorizationStore,
+  ConnectedProviderAuthorization,
+  ProviderAuthorization,
+  ProviderAuthorizationLive,
+  ProviderAuthorizationTerminalState,
 } from "../db/provider-account-authorizations";
 import type { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import type { Logger } from "../logger";
 import type { ModelProviderId } from "./provider-auth-contracts";
 import type { ProviderDeviceAuthorizationFinalizer } from "./device-authorization-finalizer";
-
-const TRANSACTION_LIFETIME_MS = 10 * 60 * 1000;
-const PROCESSING_CLAIM_TIMEOUT_MS = 30 * 1000;
+import {
+  PROVIDER_AUTHORIZATION_PROCESSING_CLAIM_TIMEOUT_MS,
+  PROVIDER_AUTHORIZATION_TRANSACTION_LIFETIME_MS,
+  ProviderAuthorizationError,
+  isTerminalAuthorization,
+  ownedAuthorization,
+  resolveDurableAuthorization,
+  terminalAuthorizationStatus,
+} from "./authorization-transaction";
 
 function boundedPollInterval(intervalMs: number): number {
   return Math.min(
@@ -56,16 +59,6 @@ export type ProviderDeviceAuthorizationConnectionFinalizer = Pick<
   "finalizeTrustedConnection"
 >;
 
-export class ProviderDeviceAuthorizationError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly retryable = false
-  ) {
-    super(message);
-  }
-}
-
 export class ProviderDeviceAuthorizationService {
   constructor(
     private readonly transactions: ProviderDeviceAuthorizationTransactionStore,
@@ -86,7 +79,7 @@ export class ProviderDeviceAuthorizationService {
     try {
       capability = this.adapters.requireDeviceAuthorization(provider);
     } catch {
-      throw new ProviderDeviceAuthorizationError(
+      throw new ProviderAuthorizationError(
         `Device authorization is unavailable for ${provider}`,
         409
       );
@@ -95,13 +88,13 @@ export class ProviderDeviceAuthorizationService {
     let targetAccountLifecycleVersion: number | null = null;
     if (input.operation === "reconnect") {
       const snapshot = await this.accounts.getLifecycleSnapshot(input.providerAccountId);
-      if (!snapshot) throw new ProviderDeviceAuthorizationError("Provider account not found", 404);
+      if (!snapshot) throw new ProviderAuthorizationError("Provider account not found", 404);
       const { account, lifecycleVersion } = snapshot;
       if (account.provider !== provider) {
-        throw new ProviderDeviceAuthorizationError("Provider account does not match provider", 400);
+        throw new ProviderAuthorizationError("Provider account does not match provider", 400);
       }
       if (account.archivedAt !== null) {
-        throw new ProviderDeviceAuthorizationError("Provider account is archived", 409);
+        throw new ProviderAuthorizationError("Provider account is archived", 409);
       }
       targetAccountStatus = account.status;
       targetAccountLifecycleVersion = lifecycleVersion;
@@ -111,13 +104,13 @@ export class ProviderDeviceAuthorizationService {
     const id = this.dependencies.generateId(32);
     const attemptId = this.dependencies.generateId(32);
     if (!(await this.transactions.recordAttempt(attemptId, userId, now))) {
-      throw new ProviderDeviceAuthorizationError(
+      throw new ProviderAuthorizationError(
         "Too many authorization attempts; try again shortly",
         429,
         true
       );
     }
-    const expiresAt = now + TRANSACTION_LIFETIME_MS;
+    const expiresAt = now + PROVIDER_AUTHORIZATION_TRANSACTION_LIFETIME_MS;
     const reserved = await this.transactions.reserve({
       id,
       userId,
@@ -131,7 +124,7 @@ export class ProviderDeviceAuthorizationService {
       now,
     });
     if (!reserved) {
-      throw new ProviderDeviceAuthorizationError(
+      throw new ProviderAuthorizationError(
         "Too many live authorization attempts; finish or cancel one first",
         429,
         true
@@ -160,7 +153,7 @@ export class ProviderDeviceAuthorizationService {
           activatedAt
         ))
       ) {
-        throw new ProviderDeviceAuthorizationError(
+        throw new ProviderAuthorizationError(
           "Authorization attempt was cancelled or superseded",
           409,
           true
@@ -178,12 +171,8 @@ export class ProviderDeviceAuthorizationService {
       };
     } catch (cause) {
       await this.transactions.finish(id, userId, "failed", this.dependencies.now());
-      if (cause instanceof ProviderDeviceAuthorizationError) throw cause;
-      throw new ProviderDeviceAuthorizationError(
-        "Unable to start provider authorization",
-        502,
-        true
-      );
+      if (cause instanceof ProviderAuthorizationError) throw cause;
+      throw new ProviderAuthorizationError("Unable to start provider authorization", 502, true);
     }
   }
 
@@ -197,7 +186,7 @@ export class ProviderDeviceAuthorizationService {
     if (row.state === "connected") return this.connected(row);
     if (this.isTerminal(row)) return this.terminal(row.state);
     if (row.state === "processing") {
-      if (row.processingStartedAt + PROCESSING_CLAIM_TIMEOUT_MS <= now) {
+      if (row.processingStartedAt + PROVIDER_AUTHORIZATION_PROCESSING_CLAIM_TIMEOUT_MS <= now) {
         return this.finishAndResolve(userId, provider, id, "failed", now, row.processingOwner);
       }
       return this.pending(row);
@@ -296,38 +285,28 @@ export class ProviderDeviceAuthorizationService {
     return this.pending(current);
   }
 
-  private async resolveDurableRow(
+  private resolveDurableRow(
     userId: string,
     provider: ModelProviderId,
     id: string,
     now: number
   ): Promise<ProviderAuthorization> {
-    while (true) {
-      const current = await this.owned(userId, provider, id);
-      if (!this.isLive(current) || current.expiresAt > now) {
-        return current;
-      }
-      await this.transactions.expire(current, now);
-    }
+    return resolveDurableAuthorization(this.transactions, userId, provider, id, now);
   }
 
-  private async owned(
+  private owned(
     userId: string,
     provider: ModelProviderId,
     id: string
   ): Promise<ProviderAuthorization> {
-    const row = await this.transactions.getOwned(userId, id);
-    if (!row || row.provider !== provider) {
-      throw new ProviderDeviceAuthorizationError("Authorization transaction not found", 404);
-    }
-    return row;
+    return ownedAuthorization(this.transactions, userId, provider, id);
   }
 
   private async connected(
     row: ConnectedProviderAuthorization
   ): Promise<ProviderDeviceAuthorizationStatusResponse> {
     const account = await this.accounts.getById(row.resultProviderAccountId);
-    if (!account) throw new ProviderDeviceAuthorizationError("Connected account not found", 409);
+    if (!account) throw new ProviderAuthorizationError("Connected account not found", 409);
     return {
       status: "connected",
       account,
@@ -349,25 +328,12 @@ export class ProviderDeviceAuthorizationService {
   private isTerminal(
     row: ProviderAuthorization
   ): row is Extract<ProviderAuthorization, { state: ProviderAuthorizationTerminalState }> {
-    return PROVIDER_AUTHORIZATION_TERMINAL_STATES.includes(
-      row.state as ProviderAuthorizationTerminalState
-    );
-  }
-
-  private isLive(row: ProviderAuthorization): row is ProviderAuthorizationLive {
-    return PROVIDER_AUTHORIZATION_LIVE_STATES.includes(row.state as ProviderAuthorizationLiveState);
+    return isTerminalAuthorization(row);
   }
 
   private terminal(
     state: ProviderAuthorizationTerminalState
   ): ProviderDeviceAuthorizationStatusResponse {
-    const messages = {
-      denied: "Provider authorization was denied.",
-      expired: "Provider authorization expired.",
-      failed: "Provider authorization failed. Start a fresh authorization.",
-      cancelled: "Provider authorization was cancelled.",
-      superseded: "A newer authorization attempt replaced this one.",
-    } as const;
-    return { status: state, error: messages[state], retryable: state !== "denied" };
+    return terminalAuthorizationStatus(state);
   }
 }

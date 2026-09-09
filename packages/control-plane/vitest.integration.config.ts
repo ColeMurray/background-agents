@@ -83,6 +83,34 @@ export default defineConfig({
                 expires_in: 3600,
               });
             }
+            if (url.href === "https://console.anthropic.com/v1/oauth/token") {
+              const body = JSON.parse(await request.text()) as {
+                code?: string;
+                state?: string;
+                code_verifier?: string;
+                grant_type?: string;
+              };
+              if (body.code === "integration-anthropic-outage") {
+                throw new Error("Anthropic is unreachable in this integration test");
+              }
+              if (
+                body.grant_type !== "authorization_code" ||
+                body.code !== "integration-anthropic-code" ||
+                !body.state ||
+                !body.code_verifier
+              ) {
+                return Response.json(
+                  { error: "invalid_grant", error_description: "Unknown integration code" },
+                  { status: 400 }
+                );
+              }
+              return Response.json({
+                access_token: "sk-ant-oat01-integration",
+                refresh_token: "integration-anthropic-refresh-must-not-persist",
+                expires_in: 31_536_000,
+                scope: "user:inference",
+              });
+            }
             if (url.href === "https://auth.x.ai/oauth2/device/code") {
               return Response.json({
                 device_code: "integration-xai-device",
