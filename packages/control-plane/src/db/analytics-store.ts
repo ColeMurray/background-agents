@@ -45,6 +45,10 @@ type TimeseriesRow = z.infer<typeof timeseriesRowSchema>;
 const breakdownRowSchema = z.object({
   key: z.string().nullable(),
   display_name: z.string().nullable().optional(),
+  total_tokens: z.number().nullable().optional(),
+  repository: z.string().nullable().optional(),
+  user_name: z.string().optional(),
+  status: z.string().optional(),
   sessions: z.number(),
   completed: z.number(),
   failed: z.number(),
@@ -173,20 +177,33 @@ export class AnalyticsStore {
 
   prepareBreakdown(filters: AnalyticsFilters, by: AnalyticsBreakdownBy): SqlStatement {
     const isUserBreakdown = by === "user";
+    const isSessionBreakdown = by === "session";
     const repoGroupExpression =
       "CASE WHEN s.repo_owner IS NULL OR s.repo_name IS NULL THEN NULL ELSE s.repo_owner || '/' || s.repo_name END";
 
     const groupExpression = isUserBreakdown
       ? "COALESCE(s.user_id, NULLIF(s.scm_login, ''), '__unknown__')"
-      : repoGroupExpression;
+      : isSessionBreakdown
+        ? "s.id"
+        : repoGroupExpression;
 
     const displayNameSelect = isUserBreakdown
       ? "COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'Unknown user') AS display_name,"
-      : "NULL AS display_name,";
+      : isSessionBreakdown
+        ? `MAX(COALESCE(NULLIF(s.title, ''), s.id)) AS display_name,
+           MAX(${repoGroupExpression}) AS repository,
+           COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'Unknown user') AS user_name,
+           MAX(s.status) AS status,`
+        : "NULL AS display_name,";
 
-    const joinClause = isUserBreakdown ? "LEFT JOIN users u ON s.user_id = u.id" : "";
+    const joinClause =
+      isUserBreakdown || isSessionBreakdown ? "LEFT JOIN users u ON s.user_id = u.id" : "";
 
-    const orderTail = isUserBreakdown ? "display_name ASC" : "key ASC";
+    const orderTail = isSessionBreakdown
+      ? "last_active DESC, key ASC"
+      : isUserBreakdown
+        ? "display_name ASC"
+        : "key ASC";
 
     const sources = filters.spawnSources ?? HUMAN_SPAWN_SOURCES;
     const placeholders = sources.map(() => "?").join(", ");
@@ -201,10 +218,11 @@ export class AnalyticsStore {
            COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
            COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled,
            COALESCE(SUM(total_cost), 0) AS cost,
+           SUM(total_tokens) AS total_tokens,
            COALESCE(SUM(pr_count), 0) AS prs,
            COALESCE(SUM(message_count), 0) AS message_count,
            COALESCE(
-             AVG(CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN active_duration_ms END),
+             AVG(CASE WHEN ${isSessionBreakdown ? "1 = 1" : "status IN ('completed', 'failed', 'cancelled')"} THEN active_duration_ms END),
              0
            ) AS avg_duration,
            MAX(s.updated_at) AS last_active
@@ -226,6 +244,10 @@ export class AnalyticsStore {
     ).map((row) => ({
       key: row.key ?? NO_REPOSITORY_ANALYTICS_KEY,
       ...(row.display_name != null && { displayName: row.display_name }),
+      totalTokens: row.total_tokens ?? null,
+      ...(row.repository !== undefined && { repository: row.repository }),
+      ...(row.user_name !== undefined && { user: row.user_name }),
+      ...(row.status !== undefined && { status: row.status }),
       sessions: row.sessions,
       completed: row.completed,
       failed: row.failed,

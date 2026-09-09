@@ -157,7 +157,7 @@ export function AnalyticsUserTable({
       <div className="border-b border-border-muted px-5 py-4">
         <h2 className="text-lg font-semibold text-foreground">Per-User Breakdown</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Sortable usage metrics without ranking or gamification.
+          Usage across each user&apos;s sessions. Token totals cover newly recorded turns.
         </p>
       </div>
 
@@ -207,6 +207,16 @@ export function AnalyticsUserTable({
                 <SortButton
                   label="Messages"
                   sortKey="messageCount"
+                  activeKey={sortKey}
+                  direction={sortDirection}
+                  onClick={onSort}
+                  align="right"
+                />
+              </th>
+              <th className="px-5 py-3 text-right" aria-sort={getAriaSort("totalTokens")}>
+                <SortButton
+                  label="Tokens"
+                  sortKey="totalTokens"
                   activeKey={sortKey}
                   direction={sortDirection}
                   onClick={onSort}
@@ -265,6 +275,11 @@ export function AnalyticsUserTable({
                 </td>
                 <td className="px-5 py-4 text-right text-foreground">
                   {formatAnalyticsCount(entry.messageCount)}
+                </td>
+                <td className="px-5 py-4 text-right text-foreground">
+                  {entry.totalTokens == null
+                    ? "Not reported"
+                    : formatAnalyticsCount(entry.totalTokens)}
                 </td>
                 <td className="px-5 py-4 text-right text-foreground">
                   {formatSessionCost(entry.cost)}

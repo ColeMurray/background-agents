@@ -173,6 +173,7 @@ class TestHandlePartTranslation:
         assert events == [
             {
                 "type": "step_finish",
+                "stepId": "step-1",
                 "cost": 0.001,
                 "messageCostUsd": 0.001,
                 "tokens": 150,

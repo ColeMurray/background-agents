@@ -22,6 +22,7 @@ export type AnalyticsUserSortKey =
   | "completionRate"
   | "prs"
   | "messageCount"
+  | "totalTokens"
   | "cost"
   | "avgDuration"
   | "lastActive";
@@ -199,6 +200,12 @@ export function sortAnalyticsUserEntries(
         break;
       case "messageCount":
         comparison = left.messageCount - right.messageCount;
+        break;
+      case "totalTokens":
+        if (left.totalTokens == null || right.totalTokens == null) {
+          return left.totalTokens == null ? (right.totalTokens == null ? 0 : 1) : -1;
+        }
+        comparison = left.totalTokens - right.totalTokens;
         break;
       case "cost":
         comparison = left.cost - right.cost;

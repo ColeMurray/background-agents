@@ -95,6 +95,36 @@ export class EventRepository {
     );
   }
 
+  recordStepUsage(event: Extract<SandboxEvent, { type: "step_finish" }>, now: number): void {
+    // Without a stable part ID, repeated updates cannot be distinguished from
+    // new steps. Leave older runtimes unreported rather than inflate their usage.
+    if (!event.stepId || totalReportedTokens(event.tokens) === null) return;
+    const id = `step_finish:${JSON.stringify([event.messageId, event.childSessionId ?? "", event.stepId])}`;
+    this.sql.exec(
+      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+       VALUES (?, 'step_finish', ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
+       ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
+      id,
+      JSON.stringify(event),
+      event.messageId,
+      now
+    );
+  }
+
+  /** Null means no token usage was reported, which is different from zero. */
+  getTotalTokens(): number | null {
+    const rows = this.sql
+      .exec("SELECT data FROM events WHERE type = 'step_finish'")
+      .toArray() as Array<{ data: string }>;
+    let total: number | null = null;
+    for (const row of rows) {
+      const usage = parseEventData(row.data)?.tokens;
+      const count = totalReportedTokens(usage);
+      if (count !== null) total = (total ?? 0) + count;
+    }
+    return total;
+  }
+
   createContextCompactionEvent(data: CreateEventData & { messageId: string }): void {
     this.transactionSync(() => {
       this.sql.exec(
@@ -273,4 +303,23 @@ export class EventRepository {
     const nextCursor = events.length ? eventTimelineCursorFromRow(events[events.length - 1]) : null;
     return { events, hasMore, nextCursor };
   }
+}
+
+function totalReportedTokens(usage: unknown): number | null {
+  const valid = (value: unknown): value is number =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0;
+  if (valid(usage)) return usage;
+  if (typeof usage !== "object" || usage === null) return null;
+  const details = usage as Record<string, unknown>;
+  if (valid(details.total)) return details.total;
+  const cache = details.cache as Record<string, unknown> | undefined;
+  // OpenCode reports uncached input, output, reasoning, and cache separately.
+  const counts = [
+    details.input,
+    details.output,
+    details.reasoning,
+    cache?.read,
+    cache?.write,
+  ].filter(valid);
+  return counts.length ? counts.reduce((sum, count) => sum + count, 0) : null;
 }

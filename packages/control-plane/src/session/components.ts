@@ -383,7 +383,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionIndexStore,
     // Parent notifications have no request of their own: each is one hop
     // under this child's trace, with its own request id.
-    createSessionRuntimeClientForTrace(env, durableObjectId)
+    createSessionRuntimeClientForTrace(env, durableObjectId),
+    eventRepository
   );
 
   const titleService = new SessionTitleService({

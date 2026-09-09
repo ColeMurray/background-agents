@@ -17,6 +17,7 @@ export function useAnalyticsDashboard(days: AnalyticsDays) {
     summary: dashboard.data?.summary,
     timeseries: dashboard.data?.timeseries,
     repoBreakdown: dashboard.data?.breakdowns.repository,
+    sessionBreakdown: dashboard.data?.breakdowns.session,
     userBreakdown: dashboard.data?.breakdowns.user,
     pullRequests: dashboard.data?.pullRequests,
     loading: !dashboard.data && dashboard.isLoading,

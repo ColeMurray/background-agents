@@ -12,7 +12,7 @@ import { persistSandboxEvent, type SandboxEventContext } from "./context";
  * Streaming/timeline family: the high-frequency events that narrate an
  * execution (tokens, steps, tool activity, compaction). Every event here is
  * broadcast to clients; the ones with a durable representation also record
- * to the timeline (steps only renew activity and accumulate cost). Nothing
+ * to the timeline (steps also record usage and accumulate cost). Nothing
  * here transitions session state. Also owns the timeline-observer path
  * (`recordTimelineEvent`) for events that persist and broadcast unchanged.
  */
@@ -59,6 +59,7 @@ export class SandboxStreamingEventHandler {
     }
     this.messenger.broadcast({ type: "sandbox_event", event });
     if (event.type === "step_finish") {
+      this.eventRepository.recordStepUsage(event, context.now);
       await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
     }
   }

@@ -327,11 +327,12 @@ class FakeD1Database {
     }
 
     if (QUERY_PATTERNS.UPDATE_METRICS.test(normalized)) {
-      const [totalCost, activeDurationMs, messageCount, prCount, id] = args as [
+      const [totalCost, activeDurationMs, messageCount, prCount, , id] = args as [
         number,
         number,
         number,
         number,
+        number | null,
         string,
       ];
       const row = this.rows.get(id);

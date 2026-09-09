@@ -149,7 +149,7 @@ describe("analytics route handlers", () => {
       const response = await callRoute("GET", "/analytics/breakdown?days=30");
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({
-        error: "by must be one of: user, repo",
+        error: "by must be one of: user, repo, session",
       });
     });
 
@@ -157,7 +157,7 @@ describe("analytics route handlers", () => {
       const response = await callRoute("GET", "/analytics/breakdown?days=30&by=status");
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({
-        error: "by must be one of: user, repo",
+        error: "by must be one of: user, repo, session",
       });
       expect(mockStore.getBreakdown).not.toHaveBeenCalled();
     });
@@ -213,7 +213,9 @@ describe("analytics route handlers", () => {
     it("rejects an empty or repeated by key", async () => {
       const empty = await callRoute("GET", "/analytics/breakdown?days=30&by=");
       expect(empty.status).toBe(400);
-      await expect(empty.json()).resolves.toEqual({ error: "by must be one of: user, repo" });
+      await expect(empty.json()).resolves.toEqual({
+        error: "by must be one of: user, repo, session",
+      });
 
       const repeated = await callRoute("GET", "/analytics/breakdown?days=30&by=user&by=repo");
       expect(repeated.status).toBe(400);
