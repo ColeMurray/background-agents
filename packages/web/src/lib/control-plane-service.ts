@@ -77,6 +77,9 @@ export async function dispatchWebServiceRequest(request: WebServiceRequest): Pro
       method,
       headers,
       body,
+      // Cloudflare forwards credentials across followed redirects. This request carries both a
+      // session cookie and a service signature, so the transport must return redirects untouched.
+      redirect: "manual",
     },
     request.correlationFields ?? {}
   );

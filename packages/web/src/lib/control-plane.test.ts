@@ -112,14 +112,14 @@ describe("controlPlaneUserFetch", () => {
     expect(init?.signal?.reason).toBe("caller disconnected");
   });
 
-  it("preserves caller redirect and cache policy", async () => {
+  it("never follows redirects while preserving caller cache policy", async () => {
     await controlPlaneUserFetch("/sessions", {
-      redirect: "error",
+      redirect: "follow",
       cache: "force-cache",
     });
 
     const [, init] = fetchMock.mock.calls[0] ?? [];
-    expect(init?.redirect).toBe("error");
+    expect(init?.redirect).toBe("manual");
     expect(init?.cache).toBe("force-cache");
   });
 

@@ -6,7 +6,7 @@ import {
   type PermissionId,
 } from "@open-inspect/shared/rbac";
 import { authenticate, isAuthError } from "../auth/authenticate";
-import type { Principal } from "../auth/principal";
+import { canonicalUserIdOf, principalMayUseMethod, type Principal } from "../auth/principal";
 import type {
   AuthorizationDecisionRequirement,
   RouteAuthorizationDecision,
@@ -14,6 +14,7 @@ import type {
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { serviceAllowsPermission } from "../authorization/service-permissions";
 import { AutomationStore } from "../db/automation-store";
+import { PersonalAccessTokenStore } from "../db/personal-access-tokens";
 import { UserStore } from "../db/user-store";
 import type { RequestContext } from "../http/request-context";
 import { error, json } from "../http/responses";
@@ -226,6 +227,7 @@ async function verifySandboxAuthSafely(
 export function enforceRoutePrincipal(
   authentication: RouteAuthentication,
   principal: Principal,
+  method: string,
   evidence: AuthorizationEvidence = emptyEvidence()
 ): AuthorizationFailure | null {
   if (
@@ -250,6 +252,18 @@ export function enforceRoutePrincipal(
       { kind: "principal-type" },
       "principal_type_required",
       "Service authentication required"
+    );
+  }
+  // A read-only service is refused every mutating method on every route,
+  // whatever that route's own policy allows. This is the trust boundary for
+  // the claim: holding the credential is not enough to write.
+  if (!principalMayUseMethod(principal, method)) {
+    return authorizationDenial(
+      error("This credential may only read", 403),
+      evidence,
+      { kind: "principal-type" },
+      "credential_read_only",
+      "This credential may only read"
     );
   }
   return null;
@@ -283,12 +297,11 @@ async function enforceActiveUser(
     // actor here means enrollment was skipped, so never authorize it.
     return authorizationUnavailable();
   }
-  const userId =
-    ctx.principal?.kind === "user"
-      ? ctx.principal.userId
-      : ctx.principal?.kind === "service"
-        ? ctx.principal.actor?.canonicalUserId
-        : null;
+  // `canonicalUserIdOf` rather than a local kind check: an access token acts as
+  // its owner, so it has to load that owner's authorization. Resolving the
+  // subject in one place is what keeps a new principal kind from silently
+  // skipping the suspension and permission steps below.
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return null;
   const requirement = { kind: "active-user" } as const;
   try {
@@ -405,11 +418,10 @@ async function finalizeServiceActor(
 }
 
 function authorizationUserId(ctx: RequestContext): string | null {
-  if (ctx.principal?.kind === "user") return ctx.principal.userId;
   if (ctx.principal?.kind === "service") {
     return ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId ?? null;
   }
-  return null;
+  return canonicalUserIdOf(ctx.principal);
 }
 
 function actorlessGrantMatches(
@@ -615,7 +627,12 @@ async function enforceRouteAuthorization(
     return allowed(policy, "user", evidence);
   }
 
-  const principalFailure = enforceRoutePrincipal(policy.authentication, principal, evidence);
+  const principalFailure = enforceRoutePrincipal(
+    policy.authentication,
+    principal,
+    request.method,
+    evidence
+  );
   if (principalFailure) return resultForFailure(principalFailure);
 
   if (
@@ -707,6 +724,25 @@ export async function admitRoute(input: {
         ctx.principal = authResult.principal;
         ctx.authentication = authResult.authentication;
         handlerRequest = authResult.request;
+        if (ctx.principal.kind === "access-token") {
+          // Deliberately not awaited: the credential's own request must not
+          // wait on this bookkeeping write. Submitted here, not inside
+          // `authenticate()`, because core authentication depends only on the
+          // narrow auth port — `executionCtx` belongs to the full admission
+          // context.
+          const accessTokenPrincipal = ctx.principal;
+          ctx.executionCtx.submit(
+            () =>
+              new PersonalAccessTokenStore(ctx.db).touchLastUsed(
+                accessTokenPrincipal.tokenId,
+                Date.now()
+              ),
+            {
+              name: "access-token.touch-last-used",
+              context: { token_id: accessTokenPrincipal.tokenId },
+            }
+          );
+        }
       }
     }
 
