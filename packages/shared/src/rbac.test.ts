@@ -61,7 +61,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(43);
+    expect(PERMISSION_IDS).toHaveLength(44);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -125,6 +125,13 @@ describe("RBAC registry", () => {
     expect(permissionsForBuiltInRole("administrator")).toContain("workspace.audit.read");
     expect(permissionsForBuiltInRole("member")).not.toContain("workspace.audit.read");
     expect(permissionsForBuiltInRole("viewer")).not.toContain("workspace.audit.read");
+  });
+
+  it("reserves archiving other people's sessions for Owner and Administrator", () => {
+    expect(permissionsForBuiltInRole("owner")).toContain("sessions.archive_any");
+    expect(permissionsForBuiltInRole("administrator")).toContain("sessions.archive_any");
+    expect(permissionsForBuiltInRole("member")).not.toContain("sessions.archive_any");
+    expect(permissionsForBuiltInRole("viewer")).not.toContain("sessions.archive_any");
   });
 
   it("makes Member a superset of Viewer", () => {

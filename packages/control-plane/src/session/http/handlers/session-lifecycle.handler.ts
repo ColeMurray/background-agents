@@ -1,3 +1,4 @@
+import type { Logger } from "../../../logger";
 import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionCoreRepository } from "../../session-core-repository";
@@ -8,6 +9,11 @@ import type { SessionTitleService } from "../../title-service";
 import { resolvePublicSessionId } from "../../public-session-id";
 import { normalizeSessionTitle, type SessionTitleUpdateResult } from "../../title";
 import { z } from "zod";
+import {
+  OPERATOR_ARCHIVE_HTTP_STATUS,
+  operatorArchiveRequestSchema,
+  type OperatorArchiveOutcome,
+} from "../../operator-archive";
 import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
 
 /**
@@ -58,6 +64,20 @@ export class SessionLifecycleHandler {
     private readonly durableObjectId: string,
     private readonly cancelSession: () => Promise<void>
   ) {}
+
+  private async getArchiveOutcome(status: SessionStatus): Promise<OperatorArchiveOutcome> {
+    if (status === "archived") {
+      await this.statusService.transition("archived");
+      return "already_archived";
+    }
+    if (status === "cancelled") return "skipped_cancelled";
+    if (this.messageRepository.getPendingOrProcessingCount() > 0) {
+      return "skipped_queued_work";
+    }
+
+    await this.statusService.transition("archived");
+    return "archived";
+  }
 
   getState(): Response {
     const session = this.sessionCoreRepository.getSession();
@@ -138,17 +158,66 @@ export class SessionLifecycleHandler {
       return Response.json({ error: "Session not found" }, { status: 404 });
     }
 
-    if (session.status === "cancelled") {
+    const outcome = await this.getArchiveOutcome(session.status);
+    if (outcome === "skipped_cancelled") {
       return Response.json({ error: "Cancelled sessions cannot be archived" }, { status: 409 });
     }
-
-    if (this.messageRepository.getPendingOrProcessingCount() > 0) {
+    if (outcome === "skipped_queued_work") {
       return Response.json({ error: "Cannot archive a session with queued work" }, { status: 409 });
     }
 
-    await this.statusService.transition("archived");
-
     return Response.json({ status: "archived" });
+  }
+
+  async operatorArchive(request: Request, log: Logger): Promise<Response> {
+    const session = this.sessionCoreRepository.getSession();
+    if (!session) {
+      return Response.json({ error: "Session not found" }, { status: 404 });
+    }
+
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return Response.json({ error: "Invalid request body" }, { status: 400 });
+    }
+    const parsed = operatorArchiveRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      return Response.json({ error: "Invalid request body" }, { status: 400 });
+    }
+
+    const sessionId = resolvePublicSessionId(session, this.durableObjectId);
+    const outcome = await this.getArchiveOutcome(session.status);
+
+    // `transition` swallows a failed index projection, so a caller driving a
+    // batch would count this session as done and advance past it while the
+    // index row still reads live. Re-projecting surfaces that failure: it is a
+    // no-op once the row already agrees, and throws when it still does not.
+    if (outcome === "archived" || outcome === "already_archived") {
+      try {
+        await this.statusService.repairIndexStatus();
+      } catch (repairError) {
+        log.error("Operator session archive could not project the archived status", {
+          event: "operator.session_archive_projection_failed",
+          operator_user_id: parsed.data.operatorUserId,
+          session_id: sessionId,
+          error: repairError instanceof Error ? repairError.message : String(repairError),
+        });
+        return Response.json({ error: "Session index projection failed" }, { status: 500 });
+      }
+    }
+
+    log.info("Operator session archive evaluated", {
+      event: "operator.session_archive",
+      operator_user_id: parsed.data.operatorUserId,
+      session_id: sessionId,
+      outcome,
+    });
+
+    return Response.json(
+      { outcome, status: outcome === "archived" ? "archived" : session.status },
+      { status: OPERATOR_ARCHIVE_HTTP_STATUS[outcome] }
+    );
   }
 
   /**

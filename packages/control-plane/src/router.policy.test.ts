@@ -15,11 +15,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(177);
+    expect(routes).toHaveLength(178);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(135);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(177);
+    expect(new Set(paths).size).toBe(136);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(178);
   });
 
   it("declares every path in the literal-or-parameter grammar", () => {
@@ -205,6 +205,15 @@ describe("route policy table", () => {
       },
       cacheControl: "private, no-store",
     });
+    expect(routeFor("POST", "/operator/sessions/archive")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [{ kind: "permission", permission: "sessions.archive_any" }],
+        service: { kind: "deny" },
+        auditAllowed: true,
+      },
+    });
     expect(routeFor("POST", "/sessions/session-1/ws-token")?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [{ kind: "permission", permission: "sessions.read" }],
@@ -347,6 +356,7 @@ describe("route policy table", () => {
   it.each([
     ["GET", "/sessions/session-1"],
     ["GET", "/sessions/inbox"],
+    ["POST", "/operator/sessions/archive"],
     ["GET", "/sessions/session-1/sandbox-access"],
     ["PATCH", "/sessions/session-1/read-state"],
     ["GET", "/sessions/session-1/skills"],

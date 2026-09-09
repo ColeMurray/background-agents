@@ -7,6 +7,7 @@ import type { SessionStatusService } from "../../session-status-service";
 import type { MessageRepository } from "../../message-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
+import type { Logger } from "../../../logger";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -96,6 +97,12 @@ function createHandler() {
   const cancelSession = vi.fn();
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
   const sendToSandbox = vi.fn();
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  } as unknown as Logger;
 
   const lifecycleHandler = new SessionLifecycleHandler(
     repository as unknown as SessionCoreRepository,
@@ -117,6 +124,8 @@ function createHandler() {
     getState: () => lifecycleHandler.getState(),
     updateTitle: (request: Request) => lifecycleHandler.updateTitle(request),
     archive: (_request?: Request) => lifecycleHandler.archive(),
+    operatorArchive: (request: Request, requestLog: Logger) =>
+      lifecycleHandler.operatorArchive(request, requestLog),
     unarchive: (_request?: Request) => lifecycleHandler.unarchive(),
     expireDraft: () => lifecycleHandler.expireDraft(),
     cancel: () => lifecycleHandler.cancel(),
@@ -136,6 +145,7 @@ function createHandler() {
     getSandboxSocket,
     sendToSandbox,
     updateSandboxStatus,
+    log,
   };
 }
 
@@ -296,6 +306,98 @@ describe("SessionLifecycleHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "archived" });
     expect(transition).toHaveBeenCalledWith("archived");
+  });
+
+  it("archives and emits operator audit metadata", async () => {
+    const { handler, log, getSession, transition } = createHandler();
+    getSession.mockReturnValue(createSession());
+    transition.mockResolvedValue(true);
+
+    const response = await handler.operatorArchive(
+      new Request("http://internal/internal/operator-archive", {
+        method: "POST",
+        body: JSON.stringify({ operatorUserId: "0123456789abcdef0123456789abcdef" }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: "archived", status: "archived" });
+    expect(transition).toHaveBeenCalledWith("archived");
+    expect(log.info).toHaveBeenCalledWith(
+      "Operator session archive evaluated",
+      expect.objectContaining({
+        event: "operator.session_archive",
+        operator_user_id: "0123456789abcdef0123456789abcdef",
+        session_id: "public-session-1",
+        outcome: "archived",
+      })
+    );
+  });
+
+  it("repairs the index projection for an already archived operator target", async () => {
+    const { handler, log, getSession, transition, repairIndexStatus } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "archived" }));
+    transition.mockResolvedValue(true);
+
+    const response = await handler.operatorArchive(
+      new Request("http://internal/internal/operator-archive", {
+        method: "POST",
+        body: JSON.stringify({ operatorUserId: "0123456789abcdef0123456789abcdef" }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      outcome: "already_archived",
+      status: "archived",
+    });
+    expect(transition).toHaveBeenCalledWith("archived");
+    expect(repairIndexStatus).toHaveBeenCalled();
+  });
+
+  it("reports a failure when the archived status cannot reach the session index", async () => {
+    const { handler, log, getSession, transition, repairIndexStatus } = createHandler();
+    getSession.mockReturnValue(createSession());
+    transition.mockResolvedValue(true);
+    repairIndexStatus.mockRejectedValue(new Error("D1 unavailable"));
+
+    const response = await handler.operatorArchive(
+      new Request("http://internal/internal/operator-archive", {
+        method: "POST",
+        body: JSON.stringify({ operatorUserId: "0123456789abcdef0123456789abcdef" }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Session index projection failed" });
+    expect(log.info).not.toHaveBeenCalledWith(
+      "Operator session archive evaluated",
+      expect.anything()
+    );
+  });
+
+  it.each([
+    ["cancelled", "skipped_cancelled"],
+    ["active", "skipped_queued_work"],
+  ] as const)("preserves the %s operator archive invariant", async (status, outcome) => {
+    const { handler, log, getSession, repository, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status }));
+    if (status === "active") repository.getPendingOrProcessingCount.mockReturnValue(1);
+
+    const response = await handler.operatorArchive(
+      new Request("http://internal/internal/operator-archive", {
+        method: "POST",
+        body: JSON.stringify({ operatorUserId: "0123456789abcdef0123456789abcdef" }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ outcome, status });
+    expect(transition).not.toHaveBeenCalled();
   });
 
   it("archives a draft that was never prompted", async () => {

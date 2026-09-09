@@ -84,6 +84,7 @@ not pass through Hono.
 | `/sessions/:id/ws-token`        | POST      | Generate WebSocket token       |
 | `/sessions/:id/archive`         | POST      | Archive session                |
 | `/sessions/:id/unarchive`       | POST      | Unarchive session              |
+| `/operator/sessions/archive`    | POST      | Archive one operator batch     |
 
 ### Create PR Payload
 
@@ -410,6 +411,14 @@ Existing sessions remain pinned to their stored authentication mode.
 
 > **Single-Tenant Only**: This control plane is designed for single-tenant deployment where all
 > users are trusted members of the same organization.
+
+`POST /operator/sessions/archive` is maintenance-only. The caller must be an authenticated human
+holding `sessions.archive_any`, which Owner and Administrator carry by default and a custom role
+can be granted; the router enforces it, so the authorization audit records the same decision the
+caller observes. The endpoint scans a bounded, cursor-paged snapshot and asks each Session Durable
+Object to archive itself; cancelled sessions and sessions with queued work are reported as skipped,
+and index rows whose Durable Object no longer exists are reported as orphaned rather than retried.
+Ordinary `/sessions/:id/archive` authorization remains participant-scoped on `sessions.lifecycle`.
 
 ### GitHub App Token Flow
 

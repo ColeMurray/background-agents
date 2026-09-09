@@ -795,6 +795,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     updateTitle: (request) => sessionLifecycleHandler.updateTitle(request),
     budget: (request) => sessionBudgetHandler.update(request),
     archive: () => sessionLifecycleHandler.archive(),
+    operatorArchive: (request, _url, requestLog) =>
+      sessionLifecycleHandler.operatorArchive(request, requestLog),
     unarchive: () => sessionLifecycleHandler.unarchive(),
     expireDraft: () => sessionLifecycleHandler.expireDraft(),
     verifySandboxToken: (request, _url, requestLog) =>
