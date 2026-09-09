@@ -9,7 +9,7 @@ export interface ProviderConnectionResult<TCredential> {
   accessTokenExpiresAt?: number;
 }
 
-export interface ProviderDeviceAuthorizationStart<TProviderState> {
+interface ProviderDeviceAuthorizationStart<TProviderState> {
   providerState: TProviderState;
   userCode: string;
   verificationUrl: string;
@@ -49,7 +49,7 @@ export interface ProviderRefreshResult<TCredential> {
   externalAccountId?: string;
 }
 
-export interface CachedProviderAccess {
+interface CachedProviderAccess {
   accessToken: string;
   accessTokenExpiresAt: number;
 }

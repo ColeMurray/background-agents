@@ -1,4 +1,4 @@
-# Open-Inspect E2B Template Tooling
+# OpenInspect E2B Template Tooling
 
 Builds the E2B sandbox **template** that Open-Inspect E2B sandboxes are created from.
 
@@ -7,11 +7,9 @@ the template image, not runtime operations.
 
 ## What's here
 
-- **`e2b.Dockerfile`** — the template image: the pinned sandbox toolchain (Python 3.12, Node 22,
-  `opencode-ai`, `code-server`, `agent-browser`, bun) plus `packages/sandbox-runtime` copied to
-  `/app/sandbox_runtime`. **Toolchain versions are pinned — keep them in sync with the other sandbox
-  providers when bumping.**
-- **`build-template.py`** — stages `sandbox_runtime`, then builds the template programmatically via
+- **[Shared image package](../sandbox-images/README.md)** — owns the substrate, dependency pins,
+  frozen installation bundle, runtime wheel, and verification.
+- **`build-template.py`** — stages the shared bundle, then builds the template programmatically via
   the **E2B Template SDK** (`Template().from_dockerfile(...).copy(...).set_start_cmd(...)`),
   authenticated with the runtime API key. Used both for manual builds and by the Terraform module.
 
@@ -29,6 +27,10 @@ templates baked by the image-build workflow) boot the same way.
   from the [E2B dashboard](https://e2b.dev) → API Keys.
 
 ## Manual build
+
+Use the repository-root [build command](../sandbox-images/README.md). Native builds create unique
+candidates and never overwrite the selected template alias. Select the verified candidate's native
+template ID before directing traffic to it.
 
 ```bash
 cd packages/e2b-infra

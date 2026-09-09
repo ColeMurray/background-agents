@@ -68,6 +68,7 @@ export const PERMISSION_IDS = [
   "skill_profiles.manage_own",
   "skills.manage",
   "skills.read",
+  "workspace.audit.read",
   "workspace.members.manage",
   "workspace.members.read",
   "workspace.roles.read",

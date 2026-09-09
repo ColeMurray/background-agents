@@ -41,11 +41,13 @@ function resolveUserAgent(env: InstallationTokenCacheBindings | undefined): stri
   return value && value.length > 0 ? value : DEFAULT_APP_NAME;
 }
 
-interface CachedInstallationToken {
-  token: string;
-  expiresAtEpochMs: number;
-  cachedAtEpochMs: number;
-}
+const cachedInstallationTokenSchema = z.object({
+  token: z.string(),
+  expiresAtEpochMs: z.number(),
+  cachedAtEpochMs: z.number(),
+});
+
+type CachedInstallationToken = z.infer<typeof cachedInstallationTokenSchema>;
 
 interface GitHubHttpError extends Error {
   status?: number;
@@ -135,12 +137,14 @@ const repositoryBranchesResponseSchema = z.array(z.object({ name: z.string() }))
  * Parse PEM-encoded private key to raw bytes.
  */
 function parsePemPrivateKey(pem: string): Uint8Array {
-  // Remove PEM header/footer and newlines
+  // Remove PEM header/footer and newlines, including the two-character
+  // `\n` an environment file leaves in place of a newline.
   const pemContents = pem
     .replace(/-----BEGIN RSA PRIVATE KEY-----/g, "")
     .replace(/-----END RSA PRIVATE KEY-----/g, "")
     .replace(/-----BEGIN PRIVATE KEY-----/g, "")
     .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\\n/g, "")
     .replace(/\s/g, "");
 
   // Decode base64
@@ -304,8 +308,10 @@ async function readInstallationTokenFromCache(
   }
 
   try {
-    const cached = await env.cacheStore.get<CachedInstallationToken>(cacheKey, "json");
-    return cached ?? null;
+    const result = cachedInstallationTokenSchema.safeParse(
+      await env.cacheStore.get(cacheKey, "json")
+    );
+    return result.success ? result.data : null;
   } catch {
     return null;
   }

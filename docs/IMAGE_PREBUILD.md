@@ -34,10 +34,10 @@ few minutes of changes.
 ## Getting Started
 
 Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
-`sandbox_provider = "vercel"`, or `sandbox_provider = "opencomputer"`. The artifact is stored per
-provider as a Modal image, Vercel snapshot, or OpenComputer checkpoint. Daytona deployments use
-persistent sandboxes instead. E2B deployments use persistent pause/resume. Image settings are
-disabled for both backends.
+`sandbox_provider = "vercel"`, `sandbox_provider = "opencomputer"`, or `sandbox_provider = "e2b"`.
+The artifact is stored per provider as a Modal image, Vercel snapshot, OpenComputer checkpoint, or
+E2B snapshot. Daytona deployments use persistent sandboxes instead; image settings are disabled for
+that backend.
 
 ### Enable for a Repository
 
@@ -267,6 +267,10 @@ For an **environment** session, verify that:
   repositories exists
 
 ### Image seems stale
+
+Updating the shared sandbox toolchain does not automatically refresh prepared repository or
+environment images. Use the refresh button below after a dependency-only update when those images
+must pick up the new tools. Existing compatible saved sessions remain usable.
 
 Pre-built images are rebuilt every 30 minutes when new commits are detected. If you just pushed code
 and want the image updated immediately, trigger a manual rebuild — the refresh button next to the

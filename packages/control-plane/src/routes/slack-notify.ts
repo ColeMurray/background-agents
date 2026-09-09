@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 /**
  * Intentionally emits no transcript events: the agent's own tool_call event
  * is the single source of truth. Audit detail lives in the structured logs.
@@ -17,7 +20,12 @@ import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integratio
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
-import { error, json, type RequestContext } from "./shared";
+import {
+  GITHUB_SANDBOX_FALLBACK_ROUTE,
+  json,
+  requirePermission,
+  type RequestContext,
+} from "./shared";
 
 const logger = createLogger("slack-notify");
 
@@ -50,11 +58,10 @@ interface AuditFields {
 export async function handleSlackNotify(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required", 400);
+  const sessionId = params.id;
 
   const parsed = await parseBody(request);
   if (parsed instanceof Response) return parsed;
@@ -302,3 +309,15 @@ function logDenial(
     ...audit,
   });
 }
+
+export const slackNotifyRoutes = new Hono<ControlPlaneHonoEnv>();
+
+// Agent-initiated Slack notification (sandbox-authenticated).
+slackNotifyRoutes.post(
+  "/sessions/:id/slack-notify",
+  admit({
+    ...GITHUB_SANDBOX_FALLBACK_ROUTE,
+    authorization: requirePermission("sessions.collaborate"),
+  }),
+  (c) => dispatch(c, handleSlackNotify)
+);

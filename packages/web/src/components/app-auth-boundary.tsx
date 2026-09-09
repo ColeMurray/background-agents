@@ -12,7 +12,7 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
  */
 export function AppAuthBoundary({ children }: { children: React.ReactNode }) {
   const { status } = useAuthSession();
-  const { authorization, loading: authorizationLoading, error } = useCurrentUserAuthorization();
+  const { authorization, loading: authorizationLoading } = useCurrentUserAuthorization();
 
   if (status === "loading") {
     return (
@@ -63,7 +63,11 @@ export function AppAuthBoundary({ children }: { children: React.ReactNode }) {
         </div>
       );
     }
-    if (error || !authorization) {
+    // No authorization means none has resolved yet, or the hook withheld a cached
+    // grant because the server denied access. A grant that merely failed to
+    // refresh is still present here, so a transient failure cannot unmount the
+    // app and discard unsaved work.
+    if (!authorization) {
       return (
         <div className="min-h-screen flex items-center justify-center px-6">
           <ErrorBanner role="alert">Authorization is temporarily unavailable.</ErrorBanner>

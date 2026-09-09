@@ -12,7 +12,8 @@
 
 import type { AnalyticsPullRequestsResponse } from "@open-inspect/shared/types/analytics";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
-import type { SqlDatabase, SqlResult } from "./sql-database";
+import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
+import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
 
 /** `now` anchors the open-inventory age computation. */
 export interface PullRequestAnalyticsFilters {
@@ -44,7 +45,7 @@ interface InventoryRow {
 }
 
 interface DailyCountRow {
-  date: string;
+  day_index: number;
   count: number;
 }
 
@@ -96,20 +97,15 @@ export class PullRequestAnalyticsStore {
    * in the cohort funnel.
    */
   async get(filters: PullRequestAnalyticsFilters): Promise<AnalyticsPullRequestsResponse> {
+    return this.decode(await this.db.batch(this.prepare(filters)));
+  }
+
+  prepare(filters: PullRequestAnalyticsFilters): SqlStatement[] {
     const prCreatedAt = prCreatedAtExpr();
     const cohortWindow = `${prCreatedAt} >= ? AND ${prCreatedAt} < ?`;
     const cohortBinds = [filters.startAt, filters.endAt];
 
-    const [
-      funnelResult,
-      costResult,
-      mergesResult,
-      inventoryResult,
-      createdResult,
-      mergedResult,
-      reposResult,
-      sourcesResult,
-    ] = await this.db.batch([
+    return [
       this.db
         .prepare(
           `SELECT
@@ -151,20 +147,20 @@ export class PullRequestAnalyticsStore {
         .bind(filters.now),
       this.db
         .prepare(
-          `SELECT date(${prCreatedAt} / 1000, 'unixepoch') AS date, COUNT(*) AS count
+          `SELECT ${prCreatedAt} / ${MS_PER_DAY} AS day_index, COUNT(*) AS count
              FROM session_pull_requests
              WHERE ${cohortWindow}
-             GROUP BY date
-             ORDER BY date ASC`
+             GROUP BY day_index
+             ORDER BY day_index ASC`
         )
         .bind(...cohortBinds),
       this.db
         .prepare(
-          `SELECT date(merged_at / 1000, 'unixepoch') AS date, COUNT(*) AS count
+          `SELECT merged_at / ${MS_PER_DAY} AS day_index, COUNT(*) AS count
              FROM session_pull_requests
              WHERE lifecycle_state = 'merged' AND merged_at >= ? AND merged_at < ?
-             GROUP BY date
-             ORDER BY date ASC`
+             GROUP BY day_index
+             ORDER BY day_index ASC`
         )
         .bind(filters.startAt, filters.endAt),
       this.db
@@ -195,23 +191,36 @@ export class PullRequestAnalyticsStore {
              ORDER BY created DESC, source ASC`
         )
         .bind(...cohortBinds),
-    ]);
+    ];
+  }
+
+  decode(results: SqlResult[]): AnalyticsPullRequestsResponse {
+    const [
+      funnelResult,
+      costResult,
+      mergesResult,
+      inventoryResult,
+      createdResult,
+      mergedResult,
+      reposResult,
+      sourcesResult,
+    ] = results;
 
     const funnel = firstRow<FunnelRow>(funnelResult);
     const cost = firstRow<CostRow>(costResult);
     const merges = firstRow<MergeRow>(mergesResult);
     const inventory = firstRow<InventoryRow>(inventoryResult);
 
-    const timeseries = new Map<string, { created: number; merged: number }>();
+    const timeseries = new Map<number, { created: number; merged: number }>();
     for (const row of rows<DailyCountRow>(createdResult)) {
-      timeseries.set(row.date, { created: row.count, merged: 0 });
+      timeseries.set(row.day_index, { created: row.count, merged: 0 });
     }
     for (const row of rows<DailyCountRow>(mergedResult)) {
-      const point = timeseries.get(row.date);
+      const point = timeseries.get(row.day_index);
       if (point) {
         point.merged = row.count;
       } else {
-        timeseries.set(row.date, { created: 0, merged: row.count });
+        timeseries.set(row.day_index, { created: 0, merged: row.count });
       }
     }
 
@@ -231,8 +240,8 @@ export class PullRequestAnalyticsStore {
         avgAgeMs: inventory?.avg_age_ms ?? null,
       },
       timeseries: Array.from(timeseries.entries())
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, counts]) => ({ date, ...counts })),
+        .sort(([a], [b]) => a - b)
+        .map(([dayIndex, counts]) => ({ date: utcDateFromDayIndex(dayIndex), ...counts })),
       repos: rows<RepoRow>(reposResult).map((row) => ({
         key: row.key,
         created: row.created,

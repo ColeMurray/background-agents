@@ -61,7 +61,8 @@ export class SlackChannelStore {
       statements.push(
         this.db
           .prepare(
-            "INSERT OR IGNORE INTO automation_slack_channels (automation_id, channel_id) VALUES (?, ?)"
+            `INSERT INTO automation_slack_channels (automation_id, channel_id)
+             VALUES (?, ?) ON CONFLICT DO NOTHING`
           )
           .bind(automationId, channelId)
       );

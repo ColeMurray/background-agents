@@ -1,7 +1,7 @@
 import { runInSessionDO } from "./session-do-access";
 import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/sandbox/lifecycle/manager";
-import type { SessionDO } from "../../src/session/durable-object";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { cleanD1Tables } from "./cleanup";
 import { initSession, queryDO, seedMessage, waitForSandboxStatus } from "./helpers";
 

@@ -26,6 +26,8 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1,
@@ -289,21 +291,6 @@ describe("refreshSessionPullRequests", () => {
 
     expect(result).toEqual({ updated: [], failures: [] });
     expect(harness.artifactRepository.updateArtifact).not.toHaveBeenCalled();
-  });
-
-  it("updates the DO mirror without a D1 store", async () => {
-    const harness = createHarness([createPrArtifact()]);
-
-    const result = await refreshSessionPullRequests(
-      harness.repository,
-      harness.artifactRepository,
-      { getPullRequest: harness.getPullRequest },
-      null
-    );
-
-    expect(result.updated).toHaveLength(1);
-    expect(result.failures).toEqual([]);
-    expect(harness.artifactRepository.updateArtifact).toHaveBeenCalledTimes(1);
   });
 
   it("no-ops without a session row", async () => {

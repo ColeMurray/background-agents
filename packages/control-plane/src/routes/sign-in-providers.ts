@@ -1,25 +1,30 @@
+import { Hono } from "hono";
 import { UserAuthConfigurationError } from "../auth/user/runtime";
 import { createLogger } from "../logger";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
-  defineRoutes,
   error,
   json,
   NO_AUTHORIZATION,
-  parsePattern,
+  type RequestContext,
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
-  type Route,
 } from "./shared";
+import type { Env } from "../types";
 
 const logger = createLogger("sign-in-providers");
 
-const handleSignInProviders: Route["handler"] = async (_request, _env, _match, ctx) => {
+async function handleListSignInProviders(
+  _request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
   try {
     if (!ctx.getUserAuthRuntime) {
       throw new UserAuthConfigurationError("User authentication runtime is unavailable");
     }
-    const response = json({
-      providers: ctx.getUserAuthRuntime().enabledProviders,
-    });
+    const response = json({ providers: ctx.getUserAuthRuntime().enabledProviders });
     response.headers.set("Cache-Control", "no-store");
     return response;
   } catch (cause) {
@@ -34,13 +39,12 @@ const handleSignInProviders: Route["handler"] = async (_request, _env, _match, c
     }
     throw cause;
   }
-};
+}
 
-export const signInProviderRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_WEB_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    pattern: parsePattern("/internal/auth/sign-in-providers"),
-    authorization: NO_AUTHORIZATION,
-    handler: handleSignInProviders,
-  },
-]);
+export const signInProviderRoutes = new Hono<ControlPlaneHonoEnv>();
+
+signInProviderRoutes.get(
+  "/internal/auth/sign-in-providers",
+  admit({ ...SCM_AGNOSTIC_WEB_SERVICE_ROUTE, authorization: NO_AUTHORIZATION }),
+  (c) => dispatch(c, handleListSignInProviders)
+);

@@ -1,4 +1,8 @@
-import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
+import {
+  SERVICE_REQUEST_MAX_BODY_BYTES,
+  sha256Hex,
+  verifyServiceSignature,
+} from "@open-inspect/shared/service-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -25,6 +29,42 @@ describe("proxyBrowserAuthRequest", () => {
 
   afterEach(() => {
     process.env = originalEnv;
+  });
+
+  it("rejects an oversized browser-auth body before dispatching it", async () => {
+    const request = new Request("https://web.example/api/auth/sign-in/social", {
+      method: "POST",
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(SERVICE_REQUEST_MAX_BODY_BYTES + 1));
+          controller.close();
+        },
+      }),
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+
+    const response = await proxyBrowserAuthRequest(request);
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: "Request body is too large" });
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Pragma")).toBe("no-cache");
+    expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized declared body without reading its stream", async () => {
+    const request = new Request("https://web.example/api/auth/sign-in/social", {
+      method: "POST",
+      headers: { "Content-Length": String(SERVICE_REQUEST_MAX_BODY_BYTES + 1) },
+      body: new ReadableStream<Uint8Array>(),
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+
+    const response = await proxyBrowserAuthRequest(request);
+
+    expect(response.status).toBe(413);
+    expect(request.bodyUsed).toBe(false);
+    expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
   });
 
   it("forwards the auth request transparently with a fresh web signature", async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAgentResponseFromEvents,
   extractAgentResponse,
+  summarizeToolCall,
   toArtifactType,
   toEventArtifactInfo,
   type ControlPlaneFetcher,
@@ -17,6 +18,34 @@ describe("completion artifact type narrowing", () => {
       null
     );
   });
+
+  it.each([null, undefined, ["main"], "main", 42])(
+    "ignores malformed metadata while preserving artifact labels: %s",
+    (metadata) => {
+      expect(
+        toEventArtifactInfo({ artifactType: "branch", metadata, url: "/branches/main" })
+      ).toEqual({ type: "branch", url: "/branches/main", label: "Branch: branch" });
+      expect(toEventArtifactInfo({ artifactType: "pr", metadata, url: "/pull/1" })).toEqual({
+        type: "pr",
+        url: "/pull/1",
+        label: "Pull Request",
+      });
+    }
+  );
+
+  it.each([null, undefined, ["README.md"], "README.md", 42])(
+    "falls back to display defaults for malformed tool arguments: %s",
+    (args) => {
+      expect(summarizeToolCall({ tool: "Read", args })).toEqual({
+        tool: "Read",
+        summary: "Read file",
+      });
+      expect(summarizeToolCall({ tool: "Bash", args })).toEqual({
+        tool: "Bash",
+        summary: "Ran: ",
+      });
+    }
+  );
 });
 
 describe("buildAgentResponseFromEvents", () => {

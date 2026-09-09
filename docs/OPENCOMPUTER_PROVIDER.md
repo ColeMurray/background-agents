@@ -106,7 +106,7 @@ Terraform passes these provider-level values to the control plane:
 - `OPENCOMPUTER_API_URL`
 - `OPENCOMPUTER_API_KEY`
 - `OPENCOMPUTER_TEMPLATE`
-- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_API_KEY` (optional — bound only when the deployment configured one)
 
 The runtime also receives repository credentials from Open-Inspect for Git operations. If you use
 additional model providers or custom agent tools, add those keys through Open-Inspect's secrets
@@ -162,6 +162,7 @@ debugging OpenComputer.
 
 ### LLM/API Key Problems
 
-The control plane passes `ANTHROPIC_API_KEY` for the default Claude models. If OpenCode reports a
-model or provider error, confirm that the required provider key is available through Terraform or
-Open-Inspect secrets and that the selected model is available for that account.
+The control plane passes `ANTHROPIC_API_KEY` for the default Claude models when the deployment
+configured one; otherwise the key comes from Open-Inspect's secrets settings, which also override
+it. If OpenCode reports a model or provider error, confirm the key for the selected model is
+available through one of the two, and that the model is available for that account.

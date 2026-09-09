@@ -42,7 +42,7 @@ interface SidebarLayoutProps {
   children: React.ReactNode;
 }
 
-export function SidebarToggleButton({ label = "Open sidebar" }: { label?: string }) {
+function SidebarToggleButton({ label = "Open sidebar" }: { label?: string }) {
   const { toggle } = useSidebarContext();
   const { labels } = useKeyboardShortcuts();
 

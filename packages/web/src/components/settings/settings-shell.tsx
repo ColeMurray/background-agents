@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useIsMobile } from "@/hooks/use-media-query";
+import { MOBILE_BREAKPOINT, useMediaQuerySnapshot } from "@/hooks/use-media-query";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { SettingsViewportProvider } from "@/components/settings/settings-viewport-context";
 import { SettingsNav } from "@/components/settings/settings-nav";
@@ -16,8 +16,8 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const isMobile = useIsMobile();
-  const [isHydrated, setIsHydrated] = useState(false);
+  const isMobile = useMediaQuerySnapshot(MOBILE_BREAKPOINT);
+  const isHydrated = isMobile !== undefined;
   const tab = searchParams.get("tab");
   const { hasPermission, loading } = useCurrentUserAuthorization();
   const requestedCategory = pathname.startsWith("/settings/integrations/") ? "integrations" : tab;
@@ -29,7 +29,6 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   const categoryRedirectRequired =
     requestedCategory !== null && activeCategory !== requestedCategory;
 
-  useEffect(() => setIsHydrated(true), []);
   useEffect(() => {
     if (isHydrated && !loading && categoryRedirectRequired) {
       router.replace(`/settings?tab=${activeCategory}`);

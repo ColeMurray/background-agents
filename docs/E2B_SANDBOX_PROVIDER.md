@@ -141,11 +141,11 @@ Terraform passes these provider-level values to the control plane:
   authenticate the template build
 - `E2B_TEMPLATE_ID`
 - `E2B_API_URL` (optional)
-- `ANTHROPIC_API_KEY`
 
-The runtime also receives repository credentials from Open-Inspect for Git operations. If you use
-additional model providers or custom agent tools, add those keys through Open-Inspect's secrets
-settings. See [SECRETS.md](./SECRETS.md).
+Model credentials are not among them: E2B sandboxes take every LLM API key from Open-Inspect's
+secrets settings, so add `ANTHROPIC_API_KEY` there for Claude models and the equivalent key for any
+other provider you use. The runtime also receives repository credentials from Open-Inspect for Git
+operations. See [SECRETS.md](./SECRETS.md).
 
 ## Verify
 
@@ -202,9 +202,9 @@ debugging E2B.
 
 ### LLM/API Key Problems
 
-The control plane passes `ANTHROPIC_API_KEY` for the default Claude models. If OpenCode reports a
-model or provider error, confirm the required provider key is available through Terraform or
-Open-Inspect secrets and that the selected model is available for that account.
+E2B sandboxes get every model credential from Open-Inspect's secrets settings. If OpenCode reports a
+model or provider error, confirm the key for the selected model is saved at a scope the session
+inherits, and that the model is available for that account.
 
 ## References
 

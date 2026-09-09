@@ -110,7 +110,7 @@ function createMockUserScmTokenStore(): {
 
 function createTestHarness(overrides?: {
   env?: Partial<ParticipantServiceEnv>;
-  userScmTokenStore?: UserScmTokenStore | null;
+  userScmTokenStore?: UserScmTokenStore;
 }) {
   const log = createMockLogger();
   const repository = createMockRepository();
@@ -129,7 +129,7 @@ function createTestHarness(overrides?: {
     env,
     log,
     generateId: () => `gen-id-${++idCounter}`,
-    userScmTokenStore: overrides?.userScmTokenStore,
+    userScmTokenStore: overrides?.userScmTokenStore ?? createMockUserScmTokenStore().store,
   };
 
   return {
@@ -298,7 +298,7 @@ describe("ParticipantService", () => {
     });
   });
 
-  describe("refreshToken (local-only, no D1 store)", () => {
+  describe("refreshToken (local-only, no scm_user_id)", () => {
     it("returns null when no refresh token stored", async () => {
       const participant = createParticipant({ scm_refresh_token_encrypted: null });
 
@@ -338,19 +338,6 @@ describe("ParticipantService", () => {
 
       // Should not call D1 store at all
       expect(mockStore.getTokens).not.toHaveBeenCalled();
-    });
-
-    it("falls back to local when userScmTokenStore is null", async () => {
-      const h = createTestHarness({ userScmTokenStore: null });
-
-      const participant = createParticipant({
-        scm_user_id: "gh-123",
-        scm_refresh_token_encrypted: null,
-      });
-
-      const result = await h.service.refreshToken(participant);
-
-      expect(result).toBeNull();
     });
   });
 

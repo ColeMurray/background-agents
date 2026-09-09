@@ -1,29 +1,32 @@
-import type { SessionRuntimeClient } from "../session/runtime-client";
-import { createSessionRuntimeClient } from "../session/runtime-client";
+import type { Context as HonoContext } from "hono";
+import type { RequestContext } from "../http/request-context";
+import { dispatch, type HandlerEnv, type PathParams } from "../routing/admit";
+import { createSessionRuntimeClient, type SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
-import type { RequestContext, RouteDefinition } from "./shared";
 
 export type SessionRouteContext = RequestContext & {
   sessionRuntime: SessionRuntimeClient;
 };
 
-export type SessionRouteHandler = (
-  request: Request,
+/** Give a session route's handler a runtime client bound to this request. */
+export function withSessionRuntime<Context extends RequestContext>(
   env: Env,
-  match: RegExpMatchArray,
-  ctx: SessionRouteContext
-) => Promise<Response>;
-
-function withSessionRuntime(handler: SessionRouteHandler): RouteDefinition["handler"] {
-  return (request, env, match, ctx) =>
-    handler(request, env, match, {
-      ...ctx,
-      sessionRuntime: createSessionRuntimeClient(env, ctx),
-    });
+  ctx: Context
+): Context & { sessionRuntime: SessionRuntimeClient } {
+  return { ...ctx, sessionRuntime: createSessionRuntimeClient(env, ctx) };
 }
 
-export function sessionRoute(
-  route: Omit<RouteDefinition, "handler"> & { handler: SessionRouteHandler }
-): RouteDefinition {
-  return { ...route, handler: withSessionRuntime(route.handler) };
+/** Run a session handler for an admitted request, with the runtime client bound to it. */
+export function dispatchSession<Context extends RequestContext, Path extends string>(
+  c: HonoContext<HandlerEnv<Context>, Path>,
+  handler: (
+    request: Request,
+    env: Env,
+    params: PathParams<Path>,
+    ctx: Context & { sessionRuntime: SessionRuntimeClient }
+  ) => Promise<Response>
+): Promise<Response> {
+  return dispatch<Context, Path>(c, (request, env, params, ctx) =>
+    handler(request, env, params, withSessionRuntime(env, ctx))
+  );
 }

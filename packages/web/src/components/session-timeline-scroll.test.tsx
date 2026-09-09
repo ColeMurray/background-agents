@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { useLayoutEffect, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@/types/session";
@@ -59,7 +59,174 @@ function toolEvent(
   };
 }
 
+function mockResizeObservers() {
+  const observers: Array<{ callback: ResizeObserverCallback; targets: Set<Element> }> = [];
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      readonly targets = new Set<Element>();
+
+      constructor(callback: ResizeObserverCallback) {
+        observers.push({ callback, targets: this.targets });
+      }
+
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+
+      disconnect() {
+        this.targets.clear();
+      }
+    }
+  );
+  return (target: Element, blockSize = 0) => {
+    for (const observer of observers) {
+      if (observer.targets.has(target)) {
+        observer.callback(
+          [
+            {
+              target,
+              borderBoxSize: [{ inlineSize: 800, blockSize }],
+            } as unknown as ResizeObserverEntry,
+          ],
+          {} as ResizeObserver
+        );
+      }
+    }
+  };
+}
+
+function mockTimelineScrollMetrics(metrics: {
+  clientHeight: number;
+  scrollHeight: number | (() => number);
+  scrollTop: number;
+}) {
+  const value = () =>
+    typeof metrics.scrollHeight === "function" ? metrics.scrollHeight() : metrics.scrollHeight;
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (
+    this: HTMLElement
+  ) {
+    return this.classList.contains("overflow-y-auto") ? metrics.clientHeight : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (
+    this: HTMLElement
+  ) {
+    return this.classList.contains("overflow-y-auto") ? value() : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "scrollTop", "get").mockImplementation(function (
+    this: HTMLElement
+  ) {
+    return this.classList.contains("overflow-y-auto") ? metrics.scrollTop : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "scrollTop", "set").mockImplementation(function (
+    this: HTMLElement,
+    next: number
+  ) {
+    if (this.classList.contains("overflow-y-auto")) {
+      metrics.scrollTop = Math.min(next, Math.max(0, value() - metrics.clientHeight));
+    }
+  });
+}
+
+function mockAnimationFrames() {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  return () => {
+    for (const frame of frames.splice(0)) frame(0);
+  };
+}
+
 describe("timeline auto-scrolling", () => {
+  it("follows measured row growth through the virtualizer", () => {
+    const notifyResize = mockResizeObservers();
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this.hasAttribute("data-index") ? 100 : 800;
+    });
+    const flushAnimationFrames = mockAnimationFrames();
+    const metrics = {
+      clientHeight: 50,
+      scrollHeight: () => {
+        const spacer = document.querySelector<HTMLElement>("[data-index]")?.parentElement;
+        return Number.parseFloat(spacer?.style.height ?? "0");
+      },
+      scrollTop: 0,
+    };
+    mockTimelineScrollMetrics(metrics);
+
+    const { container } = render(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          {
+            type: "user_message",
+            content: "hello",
+            messageId: "message-1",
+            timestamp: 1,
+          },
+        ]}
+      />
+    );
+    const timeline = container.firstElementChild as HTMLDivElement;
+    const row = timeline.querySelector<HTMLElement>("[data-index]")!;
+    const spacer = row.parentElement!;
+    const estimatedHeight = Number.parseFloat(spacer.style.height);
+    expect(estimatedHeight).toBe(120);
+    metrics.scrollTop = 70;
+    fireEvent.scroll(timeline);
+
+    act(() => {
+      notifyResize(row, 500);
+      flushAnimationFrames();
+    });
+
+    expect(Number.parseFloat(spacer.style.height)).toBe(520);
+    expect(metrics.scrollTop).toBe(470);
+  });
+
+  it("stays at the bottom when the timeline viewport shrinks", () => {
+    const notifyResize = mockResizeObservers();
+    const metrics = { clientHeight: 600, scrollHeight: 1_000, scrollTop: 0 };
+    mockTimelineScrollMetrics(metrics);
+
+    const { container } = render(
+      <SessionTimeline {...baseTimelineProps} events={[]} isProcessing />
+    );
+    const timeline = container.firstElementChild as HTMLDivElement;
+    expect(metrics.scrollTop).toBe(400);
+
+    metrics.clientHeight = 300;
+    act(() => notifyResize(timeline, 300));
+
+    expect(metrics.scrollTop).toBe(700);
+  });
+
+  it("preserves user scroll position when the timeline viewport resizes", () => {
+    const notifyResize = mockResizeObservers();
+    const metrics = { clientHeight: 300, scrollHeight: 1_000, scrollTop: 700 };
+    mockTimelineScrollMetrics(metrics);
+
+    const { container } = render(
+      <SessionTimeline {...baseTimelineProps} events={[]} isProcessing />
+    );
+    const timeline = container.firstElementChild as HTMLDivElement;
+
+    metrics.scrollTop = 200;
+    fireEvent.scroll(timeline);
+    metrics.clientHeight = 200;
+    act(() => notifyResize(timeline, 200));
+
+    expect(metrics.scrollTop).toBe(200);
+  });
+
   it("preserves the visible row position when history is prepended", () => {
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
       this: HTMLElement
@@ -200,6 +367,8 @@ describe("timeline auto-scrolling", () => {
   });
 
   it("follows appended activity when within the bottom threshold", () => {
+    const notifyResize = mockResizeObservers();
+    const flushAnimationFrames = mockAnimationFrames();
     const task = toolEvent("task", "task-call", 1, {
       childSessionId: "child-1",
       status: "running",
@@ -228,12 +397,19 @@ describe("timeline auto-scrolling", () => {
         ]}
       />
     );
+    const row = timeline.querySelector<HTMLElement>("[data-index]")!;
+    act(() => {
+      notifyResize(row, 900);
+      flushAnimationFrames();
+    });
 
     expect(timeline.scrollTop).toBe(1_000);
     expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("does not move the timeline when the user has scrolled away from the bottom", () => {
+    const notifyResize = mockResizeObservers();
+    const flushAnimationFrames = mockAnimationFrames();
     const task = toolEvent("task", "task-call", 1, {
       childSessionId: "child-1",
       status: "running",
@@ -262,6 +438,11 @@ describe("timeline auto-scrolling", () => {
         ]}
       />
     );
+    const row = timeline.querySelector<HTMLElement>("[data-index]")!;
+    act(() => {
+      notifyResize(row, 900);
+      flushAnimationFrames();
+    });
 
     expect(timeline.scrollTop).toBe(300);
   });

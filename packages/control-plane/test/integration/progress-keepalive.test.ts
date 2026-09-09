@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { runInSessionDO } from "./session-do-access";
-import type { SessionDO } from "../../src/session/durable-object";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { PROGRESS_KEEPALIVE_INTERVAL_MS } from "../../src/session/progress-keepalive";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, openSandboxWs, queryDO, seedSandboxAuth } from "./helpers";

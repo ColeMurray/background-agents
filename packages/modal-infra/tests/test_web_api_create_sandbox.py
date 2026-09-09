@@ -249,7 +249,15 @@ async def test_sandbox_generic_failures_raise_500_and_log_request(monkeypatch, c
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.detail == "Internal server error"
-    error.assert_called_once()
+    error.assert_called_once_with(
+        "api.error",
+        exc=ANY,
+        endpoint_name=endpoint,
+        trace_id="trace-1",
+        request_id="request-1",
+        session_id="sess-1",
+        sandbox_id="sandbox-1",
+    )
     info.assert_called_once_with(
         "modal.http_request",
         http_method="POST",

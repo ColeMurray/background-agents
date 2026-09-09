@@ -99,6 +99,34 @@ describe("evaluateJsonPathFilter", () => {
     ).toBe(false);
   });
 
+  it.each([
+    { comparison: "gt", value: "3", expected: true },
+    { comparison: "gte", value: "10", expected: true },
+    { comparison: "lt", value: "11", expected: true },
+    { comparison: "lte", value: "10", expected: true },
+    { comparison: "gt", value: true, expected: true },
+    { comparison: "gt", value: "not numeric", expected: false },
+    { comparison: "lt", value: undefined, expected: false },
+  ] as const)(
+    "preserves stored numeric filter semantics: $comparison $value",
+    ({ comparison, value, expected }) => {
+      expect(evaluateJsonPathFilter({ path: "$.event.count", comparison, value }, body)).toBe(
+        expected
+      );
+    }
+  );
+
+  it.each([
+    { value: 123, text: "release-123", expected: true },
+    { value: 456, text: "release-123", expected: false },
+    { value: true, text: "result=true", expected: true },
+    { value: undefined, text: "undefined", expected: true },
+  ])("preserves scalar contains filters: $value", ({ value, text, expected }) => {
+    expect(
+      evaluateJsonPathFilter({ path: "$.text", comparison: "contains", value }, { text })
+    ).toBe(expected);
+  });
+
   it("evaluates exists comparison", () => {
     expect(evaluateJsonPathFilter({ path: "$.event.severity", comparison: "exists" }, body)).toBe(
       true

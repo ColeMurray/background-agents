@@ -1,12 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import type { SlackChannelListing } from "@open-inspect/shared/slack";
-
-interface ControlPlaneChannelsResponse {
-  channels: SlackChannelListing[];
-  error?: string;
-}
+import { controlPlaneSlackChannelsResponseSchema } from "@open-inspect/shared/slack";
 
 /**
  * List Slack channels for the automation channel picker. Proxies to the control
@@ -26,8 +21,9 @@ export async function GET() {
       console.error("Control plane slack channels error:", error);
       return NextResponse.json({ channels: [], error: "fetch_failed" });
     }
-    const data: ControlPlaneChannelsResponse = await response.json();
-    return NextResponse.json({ channels: data.channels ?? [], error: data.error });
+    const parsed = controlPlaneSlackChannelsResponseSchema.safeParse(await response.json());
+    if (!parsed.success) throw new Error("Invalid control plane Slack channels response");
+    return NextResponse.json({ channels: parsed.data.channels, error: parsed.data.error });
   } catch (error) {
     console.error("Error fetching slack channels:", error);
     return NextResponse.json({ channels: [], error: "fetch_failed" });

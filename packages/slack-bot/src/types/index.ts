@@ -5,7 +5,7 @@
 import type { SlackCompletionJob } from "../completion/job";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 
-export interface SlackCompletionQueue {
+interface SlackCompletionQueue {
   send(message: SlackCompletionJob, options?: { contentType?: "json" }): Promise<unknown>;
 }
 

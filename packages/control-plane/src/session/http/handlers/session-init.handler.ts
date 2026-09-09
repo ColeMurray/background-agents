@@ -128,6 +128,12 @@ export class SessionInitHandler {
         { status: 400 }
       );
     }
+    // A retried init must not rebuild sandbox/participant rows or reset live
+    // budget state. If the first attempt committed but never scheduled the
+    // spawn, the first prompt spawns through processMessageQueue.
+    if (this.sessionCoreRepository.getSession()) {
+      return Response.json({ sessionId, status: "created" });
+    }
 
     let encryptedToken = body.scmTokenEncrypted ?? null;
     if (body.scmToken) {
@@ -178,6 +184,10 @@ export class SessionInitHandler {
       );
     }
 
+    const normalizedSandboxSettings = body.sandboxSettings
+      ? normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" })
+      : null;
+
     this.sessionCoreRepository.transaction(() => {
       this.sessionCoreRepository.upsertSession({
         id: sessionId,
@@ -195,9 +205,10 @@ export class SessionInitHandler {
         spawnDepth: body.spawnDepth ?? 0,
         codeServerEnabled: body.codeServerEnabled ?? false,
         vncEnabled: body.vncEnabled ?? false,
-        sandboxSettings: body.sandboxSettings
-          ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
+        sandboxSettings: normalizedSandboxSettings
+          ? JSON.stringify(normalizedSandboxSettings)
           : null,
+        maxCostUsd: normalizedSandboxSettings?.maxSessionCostUsd ?? null,
         environmentId: body.environmentId ?? null,
         createdAt: now,
         updatedAt: now,

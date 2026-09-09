@@ -24,7 +24,7 @@ import { ImageBuildReaper } from "../../src/image-builds/reaper";
 import { resolveScopeEnabled } from "../../src/image-builds/scope";
 import type { DeleteImageInput, ImageBuildAdapter } from "../../src/image-builds/types";
 import { evaluateImageBuildForSpawn } from "../../src/sandbox/lifecycle/image-selection";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 import {
@@ -725,7 +725,10 @@ describe("Image builds", () => {
         scope: environmentScope(environmentId),
         provider: "modal",
         repositoriesFingerprint: "fp-cb",
-        callbackTokenHash: await hashImageBuildCallbackToken(MODAL_BUILD_TOKEN, env as Env),
+        callbackTokenHash: await hashImageBuildCallbackToken(
+          MODAL_BUILD_TOKEN,
+          createCloudflareEnv(env)
+        ),
         callbackTokenExpiresAt: Date.now() + 60_000,
       });
       await store.bindProviderSession(buildId, "modal", `session-${buildId}`);
@@ -820,7 +823,10 @@ describe("Image builds", () => {
         scope: environmentScope(environmentId),
         provider: "modal",
         repositoriesFingerprint: "fp-cb",
-        callbackTokenHash: await hashImageBuildCallbackToken(MODAL_BUILD_TOKEN, env as Env),
+        callbackTokenHash: await hashImageBuildCallbackToken(
+          MODAL_BUILD_TOKEN,
+          createCloudflareEnv(env)
+        ),
         callbackTokenExpiresAt: Date.now() - 1,
       });
       await store.bindProviderSession("cb-expired", "modal", "session-cb-expired");
@@ -963,7 +969,7 @@ describe("Image builds", () => {
         scope: TOKEN_SCOPE,
         provider: "vercel",
         repositoriesFingerprint: "fp-token",
-        callbackTokenHash: await hashImageBuildCallbackToken(token, env as Env),
+        callbackTokenHash: await hashImageBuildCallbackToken(token, createCloudflareEnv(env)),
         callbackTokenExpiresAt: Date.now() + 60_000,
       });
       await store.bindProviderSession("tok-malformed", "vercel", "vercel-session-1");

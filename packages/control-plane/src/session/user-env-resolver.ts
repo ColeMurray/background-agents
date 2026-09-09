@@ -36,7 +36,7 @@ import type { SessionRow } from "./types";
  * Dependencies injected into UserEnvResolver.
  */
 export interface UserEnvResolverDeps {
-  db: SqlDatabase | null;
+  db: SqlDatabase;
   sessionCoreRepository: SessionCoreRepository;
   /**
    * Resolves (and persists) the session's primary repo id for legacy rows
@@ -58,7 +58,7 @@ interface UserEnvContext {
 }
 
 export class UserEnvResolver {
-  private readonly db: SqlDatabase | null;
+  private readonly db: SqlDatabase;
   private readonly sessionCoreRepository: SessionCoreRepository;
   private readonly resolveRepoId: (session: SessionRow) => Promise<number>;
   private readonly durableObjectId: string;
@@ -115,7 +115,6 @@ export class UserEnvResolver {
     }
 
     const db = this.db;
-    if (!db) throw new Error("D1 is required to load session provider auth");
     const providerAuth = await new SessionIndexStore(db).getCompleteProviderAuth(
       resolvePublicSessionId(session, this.durableObjectId)
     );

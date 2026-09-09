@@ -13,6 +13,7 @@ from .boot_warnings import BootWarningSink
 from .browser_desktop import BrowserDesktop
 from .code_server import CodeServer
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
+from .image_environment import apply_image_environment
 from .log_config import configure_logging, get_logger
 from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
@@ -30,6 +31,7 @@ configure_logging()
 
 def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
     """Consume process secrets and compose the production runtime."""
+    apply_image_environment()
     config = RuntimeConfig.from_env(os.environ)
     vnc_password = os.environ.pop(VNC_PASSWORD_ENV_VAR, None) or None
     if vnc_password:

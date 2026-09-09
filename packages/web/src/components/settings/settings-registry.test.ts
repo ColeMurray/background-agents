@@ -42,6 +42,13 @@ describe("settings registry", () => {
     }
   });
 
+  it("shows the Audit log only with workspace audit read permission", () => {
+    expect(canViewSettingsCategory("audit-log", () => false)).toBe(false);
+    expect(
+      canViewSettingsCategory("audit-log", (permission) => permission === "workspace.audit.read")
+    ).toBe(true);
+  });
+
   it("requires repository visibility alongside image-build read access", () => {
     expect(
       canViewSettingsCategory("images", (permission) => permission === "image_builds.read")

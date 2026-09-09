@@ -22,6 +22,18 @@ async function getStoredModels(): Promise<unknown> {
 describe("Model preferences API", () => {
   beforeEach(cleanD1Tables);
 
+  it("rejects malformed JSON without replacing preferences", async () => {
+    const stored = ["anthropic/claude-sonnet-4-6"];
+    await seedPreferences(stored);
+    const response = await serviceFetch("https://test.local/model-preferences", {
+      method: "PUT",
+      body: "{",
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid JSON body" });
+    expect(await getStoredModels()).toEqual(stored);
+  });
+
   it("returns defaults when no preferences are stored", async () => {
     const response = await serviceFetch("https://test.local/model-preferences");
 
@@ -103,5 +115,28 @@ describe("Model preferences API", () => {
     });
 
     expect(response.status).toBe(400);
+  });
+
+  it.each([
+    null,
+    ["openai/gpt-5.4"],
+    "invalid",
+    42,
+    {},
+    { enabledModels: null },
+    { enabledModels: {} },
+  ])("rejects invalid request body %j without replacing preferences", async (body) => {
+    const stored = ["anthropic/claude-sonnet-4-6"];
+    await seedPreferences(stored);
+    const response = await serviceFetch("https://test.local/model-preferences", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Request body must include enabledModels array",
+    });
+    expect(await getStoredModels()).toEqual(stored);
   });
 });

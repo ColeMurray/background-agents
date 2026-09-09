@@ -61,7 +61,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(42);
+    expect(PERMISSION_IDS).toHaveLength(43);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -118,6 +118,13 @@ describe("RBAC registry", () => {
   it("grants workspace analytics to Members and Viewers", () => {
     expect(permissionsForBuiltInRole("member")).toContain("analytics.read");
     expect(permissionsForBuiltInRole("viewer")).toContain("analytics.read");
+  });
+
+  it("reserves workspace audit reads for Owner, Administrator, and eligible custom roles", () => {
+    expect(permissionsForBuiltInRole("owner")).toContain("workspace.audit.read");
+    expect(permissionsForBuiltInRole("administrator")).toContain("workspace.audit.read");
+    expect(permissionsForBuiltInRole("member")).not.toContain("workspace.audit.read");
+    expect(permissionsForBuiltInRole("viewer")).not.toContain("workspace.audit.read");
   });
 
   it("makes Member a superset of Viewer", () => {

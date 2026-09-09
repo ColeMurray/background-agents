@@ -1,6 +1,6 @@
 import { runInSessionDO } from "./session-do-access";
 import { describe, it, expect } from "vitest";
-import type { SessionDO } from "../../src/session/durable-object";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import {
   initSession,
   queryDO,

@@ -8,6 +8,7 @@ import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
 import {
+  BudgetExhaustedError,
   PromptQueueFullError,
   PromptRequestConflictError,
   SessionNotPromptableError,
@@ -42,6 +43,9 @@ export class MessagesHandler {
       }
       if (error instanceof SessionNotPromptableError) {
         return Response.json({ error: error.message }, { status: 409 });
+      }
+      if (error instanceof BudgetExhaustedError) {
+        return Response.json({ error: error.message, code: "BUDGET_EXHAUSTED" }, { status: 409 });
       }
       if (error instanceof PromptQueueFullError) {
         return Response.json({ error: error.message, code: "PROMPT_QUEUE_FULL" }, { status: 429 });

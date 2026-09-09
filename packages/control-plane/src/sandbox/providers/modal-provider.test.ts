@@ -609,9 +609,10 @@ describe("ModalSandboxProvider", () => {
     });
 
     it("classifies HTTP 503 from takeSnapshot as transient", async () => {
+      const modalError = new ModalApiError("Modal API error: 503 Service Unavailable", 503);
       const client = createMockModalClient({
         snapshotSandbox: vi.fn(async () => {
-          throw new ModalApiError("Modal API error: 503 Service Unavailable", 503);
+          throw modalError;
         }),
       });
       const provider = new ModalSandboxProvider(client);
@@ -626,6 +627,10 @@ describe("ModalSandboxProvider", () => {
       } catch (e) {
         expect(e).toBeInstanceOf(SandboxProviderError);
         expect((e as SandboxProviderError).errorType).toBe("transient");
+        expect(e).toMatchObject({
+          message: "Snapshot failed with HTTP 503: Modal API error: 503 Service Unavailable",
+          cause: modalError,
+        });
       }
     });
 

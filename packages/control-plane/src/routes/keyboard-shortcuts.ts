@@ -1,59 +1,61 @@
-import { updateKeyboardShortcutPreferencesSchema } from "@open-inspect/shared/types/keyboard-shortcuts";
+import { parseBody } from "./body";
+import { Hono } from "hono";
+import { keyboardShortcutPreferencesPayloadSchema } from "@open-inspect/shared/types/keyboard-shortcuts";
 import { KeyboardShortcutPreferencesStore } from "../db/keyboard-shortcut-preferences";
-import type { Env } from "../types";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   ACTIVE_SELF,
-  defineRoutes,
-  error,
+  activeSelf,
   json,
-  parsePattern,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
-  type Route,
   type UserRouteContext,
 } from "./shared";
+import type { Env } from "../types";
 
-async function getPreferences(
+async function handleGetKeyboardShortcuts(
   _request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
   const shortcuts = await new KeyboardShortcutPreferencesStore(ctx.db).get(ctx.principal.userId);
   return json({ shortcuts });
 }
 
-async function updatePreferences(
+async function handleSetKeyboardShortcuts(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
-  const parsed = updateKeyboardShortcutPreferencesSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid keyboard shortcuts", 400);
+  const parsed = await parseBody(
+    request,
+    keyboardShortcutPreferencesPayloadSchema,
+    "Invalid keyboard shortcuts"
+  );
+  if (parsed instanceof Response) return parsed;
   const shortcuts = await new KeyboardShortcutPreferencesStore(ctx.db).set(
     ctx.principal.userId,
-    parsed.data.shortcuts
+    parsed.shortcuts
   );
   return json({ shortcuts });
 }
 
-export const keyboardShortcutRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
-  {
-    method: "GET",
-    pattern: parsePattern("/keyboard-shortcuts"),
+export const keyboardShortcutRoutes = new Hono<ControlPlaneHonoEnv>();
+
+keyboardShortcutRoutes.get(
+  "/keyboard-shortcuts",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     authorization: ACTIVE_SELF,
-    handler: getPreferences,
-  },
-  {
-    method: "PUT",
-    pattern: parsePattern("/keyboard-shortcuts"),
-    authorization: ACTIVE_SELF,
-    handler: updatePreferences,
-  },
-]);
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatch(c, handleGetKeyboardShortcuts)
+);
+
+keyboardShortcutRoutes.put(
+  "/keyboard-shortcuts",
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: activeSelf({ auditAllowed: true }) }),
+  (c) => dispatch(c, handleSetKeyboardShortcuts)
+);

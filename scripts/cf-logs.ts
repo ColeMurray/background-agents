@@ -40,32 +40,15 @@ interface TelemetryQuery {
 }
 
 interface WorkersMetadata {
-  id?: string;
-  requestId?: string;
-  traceId?: string;
-  trigger?: string;
   service?: string;
   level?: string;
   message?: string;
-  account?: string;
-  type?: string;
-  fingerprint?: string;
-  origin?: string;
-  messageTemplate?: string;
 }
 
 interface WorkersInfo {
-  truncated?: boolean;
-  event?: Record<string, unknown>;
   outcome?: string;
   scriptName?: string;
-  eventType?: string;
   executionModel?: string;
-  scriptVersion?: { id: string };
-  durableObjectId?: string;
-  requestId?: string;
-  cpuTimeMs?: number;
-  wallTimeMs?: number;
 }
 
 /** Application-level fields emitted by our logger via console.log(JSON.stringify(...)). */
@@ -75,10 +58,7 @@ interface LogSource {
   component?: string;
   msg?: string;
   message?: string;
-  ts?: number;
   session_id?: string;
-  request_id?: string;
-  trace_id?: string;
   [key: string]: unknown;
 }
 
@@ -95,9 +75,74 @@ interface LogEvent {
   $metadata?: WorkersMetadata;
   $workers?: WorkersInfo;
   source?: LogSource;
-  dataset?: string;
   timestamp?: number;
-  links?: unknown[];
+}
+
+interface TelemetryQueryResponse {
+  success: boolean;
+  errors?: unknown[];
+  result?: { events?: { events?: LogEvent[] } };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOptionalStrings(value: unknown, fields: string[]): boolean {
+  return (
+    value === undefined ||
+    (isRecord(value) &&
+      fields.every((field) => value[field] === undefined || typeof value[field] === "string"))
+  );
+}
+
+/** Validate the fields we consume, retaining all other fields for --json output. */
+function isLogEvent(value: unknown): value is LogEvent {
+  return (
+    isRecord(value) &&
+    (value.timestamp === undefined ||
+      (typeof value.timestamp === "number" &&
+        Number.isFinite(new Date(value.timestamp).getTime()))) &&
+    hasOptionalStrings(value.$metadata, ["service", "level", "message"]) &&
+    hasOptionalStrings(value.$workers, ["outcome", "scriptName", "executionModel"]) &&
+    hasOptionalStrings(value.source, [
+      "level",
+      "service",
+      "component",
+      "msg",
+      "message",
+      "session_id",
+    ])
+  );
+}
+
+function parseTelemetryQueryResponse(value: unknown): TelemetryQueryResponse {
+  if (!isRecord(value) || typeof value.success !== "boolean") {
+    throw new Error("API response was not a telemetry query result");
+  }
+
+  // An API failure may omit its result; preserve the API's error diagnostics.
+  if (!value.success) {
+    return { success: false, errors: Array.isArray(value.errors) ? value.errors : undefined };
+  }
+  const result = value.result;
+  if (result !== undefined && !isRecord(result)) {
+    throw new Error("API response contained malformed telemetry events");
+  }
+  const eventsEnvelope = result?.events;
+  if (eventsEnvelope !== undefined && !isRecord(eventsEnvelope)) {
+    throw new Error("API response contained malformed telemetry events");
+  }
+  const events = eventsEnvelope?.events;
+  if (events !== undefined && (!Array.isArray(events) || !events.every(isLogEvent))) {
+    throw new Error("API response contained malformed telemetry events");
+  }
+
+  return {
+    success: value.success,
+    errors: Array.isArray(value.errors) ? value.errors : undefined,
+    result: events ? { events: { events } } : undefined,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -391,11 +436,7 @@ async function fetchLogs(): Promise<LogEvent[]> {
     throw new Error(`API request failed: ${response.status} ${response.statusText}\n${text}`);
   }
 
-  const data = (await response.json()) as {
-    success: boolean;
-    errors?: unknown[];
-    result?: { events?: { events?: LogEvent[] } };
-  };
+  const data = parseTelemetryQueryResponse(await response.json());
 
   if (!data.success) {
     throw new Error(`API error: ${JSON.stringify(data.errors)}`);

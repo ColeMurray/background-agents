@@ -1,3 +1,4 @@
+import { parseBody } from "./body";
 import {
   MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
   PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN,
@@ -10,6 +11,7 @@ import {
   subscriptionProviderIdSchema,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
+import { Hono } from "hono";
 import { z } from "zod";
 import { createLogger } from "../logger";
 import { generateId } from "../auth/crypto";
@@ -41,24 +43,22 @@ import {
   ProviderAccountSelectionPolicy,
   ProviderAccountSelectionPolicyError,
 } from "../model-provider-accounts/selection-policy";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
 import { SessionInternalPaths } from "../session/contracts";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import {
-  defineRoute,
   error,
   json,
-  parseJsonBody,
-  parsePattern,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   type RequestContext,
-  type Route,
   type SandboxRouteContext,
-  type UserRouteContext,
   NO_AUTHORIZATION,
   requirePermission,
 } from "./shared";
+import { parseQuery } from "./query";
 
 const PRIVATE_NO_STORE = "private, no-store" as const;
 const NO_STORE = "no-store" as const;
@@ -105,15 +105,45 @@ function authorizationService(env: Env, ctx: RequestContext): ProviderDeviceAuth
   );
 }
 
-function provider(value: string | undefined): SubscriptionProviderId | Response {
-  if (!value) return error("Provider required", 400);
+function provider(value: string): SubscriptionProviderId | Response {
   const parsed = subscriptionProviderIdSchema.safeParse(value);
   return parsed.success ? parsed.data : error("Unsupported model provider", 400);
 }
 
-function accountId(match: RegExpMatchArray): string | Response {
-  const id = match.groups?.id;
-  return id && MODEL_PROVIDER_ACCOUNT_ID_PATTERN.test(id)
+const accountListQuerySchema = z.object({
+  // An empty `provider` means no filter, as it always has.
+  provider: z
+    .string()
+    .optional()
+    .transform((raw, context) => {
+      if (!raw) return undefined;
+      const parsed = subscriptionProviderIdSchema.safeParse(raw);
+      if (!parsed.success) {
+        context.addIssue({ code: "custom", message: "Unsupported model provider" });
+        return z.NEVER;
+      }
+      return parsed.data;
+    }),
+  archived: z
+    .string()
+    .optional()
+    .transform((raw) => raw === "true"),
+  status: z
+    .string()
+    .optional()
+    .transform((raw, context) => {
+      if (raw === undefined) return undefined;
+      const parsed = modelProviderAccountStatusSchema.safeParse(raw);
+      if (!parsed.success) {
+        context.addIssue({ code: "custom", message: "Unsupported provider account status" });
+        return z.NEVER;
+      }
+      return parsed.data;
+    }),
+});
+
+function accountId(id: string): string | Response {
+  return MODEL_PROVIDER_ACCOUNT_ID_PATTERN.test(id)
     ? id
     : error("Invalid provider account ID", 400);
 }
@@ -163,240 +193,228 @@ async function authorizationOperation(
   }
 }
 
-function authorizationId(match: RegExpMatchArray): string | Response {
-  const id = match.groups?.id;
-  return id && PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN.test(id)
+function authorizationId(id: string): string | Response {
+  return PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN.test(id)
     ? id
     : error("Authorization transaction not found", 404);
 }
 
-function managementRoute(
-  method: string,
-  path: string,
-  handler: (
-    request: Request,
-    env: Env,
-    match: RegExpMatchArray,
-    ctx: UserRouteContext
-  ) => Promise<Response>
-): Route {
-  return defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
-    method,
-    pattern: parsePattern(path),
-    cacheControl: PRIVATE_NO_STORE,
-    authorization: requirePermission(
-      method === "GET" ? "provider_accounts.read" : "provider_accounts.manage"
-    ),
-    handler,
-  });
-}
+const ACCOUNTS_READ = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  cacheControl: PRIVATE_NO_STORE,
+  authorization: requirePermission("provider_accounts.read"),
+});
+const ACCOUNTS_MANAGE = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  cacheControl: PRIVATE_NO_STORE,
+  authorization: requirePermission("provider_accounts.manage"),
+});
 
-const managementRoutes: Route[] = [
-  managementRoute(
-    "GET",
-    "/model-provider-accounts/legacy-credentials",
-    async (_request, _env, _match, ctx) =>
-      json({ legacyKeys: await listLegacyProviderCredentials(ctx.db) })
-  ),
-  managementRoute("GET", "/model-provider-accounts", async (request, env, _match, ctx) => {
-    const accounts = service(env, ctx);
-    const url = new URL(request.url);
-    const providerFilter = url.searchParams.get("provider");
-    let parsedProvider: SubscriptionProviderId | undefined;
-    if (providerFilter) {
-      const result = provider(providerFilter);
-      if (result instanceof Response) return result;
-      parsedProvider = result;
-    }
-    const includeArchived = url.searchParams.get("archived") === "true";
-    const status = url.searchParams.get("status");
-    if (status !== null && !modelProviderAccountStatusSchema.safeParse(status).success) {
-      return error("Unsupported provider account status", 400);
-    }
-    const listed = await accounts.list(parsedProvider, includeArchived);
+export const modelProviderAccountRoutes = new Hono<ControlPlaneHonoEnv>();
+
+modelProviderAccountRoutes.get("/model-provider-accounts/legacy-credentials", ACCOUNTS_READ, (c) =>
+  dispatch(c, async (_request, _env, _params, ctx) =>
+    json({ legacyKeys: await listLegacyProviderCredentials(ctx.db) })
+  )
+);
+modelProviderAccountRoutes.get("/model-provider-accounts", ACCOUNTS_READ, (c) =>
+  dispatch(c, async (request, env, _params, ctx) => {
+    const query = parseQuery(request, accountListQuerySchema);
+    if (query instanceof Response) return query;
+    const listed = await service(env, ctx).list(query.provider, query.archived);
     return json({
-      accounts: status ? listed.filter((account) => account.status === status) : listed,
+      accounts: query.status ? listed.filter((account) => account.status === query.status) : listed,
     });
-  }),
-  managementRoute("POST", "/model-provider-accounts", async (request, env, _match, ctx) => {
-    const body = await parseJsonBody<unknown>(request);
+  })
+);
+modelProviderAccountRoutes.post("/model-provider-accounts", ACCOUNTS_MANAGE, (c) =>
+  dispatch(c, async (request, env, _params, ctx) => {
+    const body = await parseBody(
+      request,
+      connectModelProviderAccountRequestSchema,
+      "Invalid provider account"
+    );
     if (body instanceof Response) return body;
-    const parsed = connectModelProviderAccountRequestSchema.safeParse(body);
-    if (!parsed.success) return error("Invalid provider account", 400);
     const accounts = service(env, ctx);
     return accountOperation(ctx, async () => {
-      const result = await accounts.create(parsed.data, ctx.principal.userId);
+      const result = await accounts.create(body, ctx.principal.userId);
       return json(result, result.reconnectedExisting ? 200 : 201);
     });
-  }),
-  managementRoute(
-    "POST",
-    "/model-provider-accounts/:provider/device-authorizations",
-    async (request, env, match, ctx) => {
-      const parsedProvider = provider(match.groups?.provider);
+  })
+);
+modelProviderAccountRoutes.post(
+  "/model-provider-accounts/:provider/device-authorizations",
+  ACCOUNTS_MANAGE,
+  (c) =>
+    dispatch(c, async (request, env, params, ctx) => {
+      const parsedProvider = provider(params.provider);
       if (parsedProvider instanceof Response) return parsedProvider;
-      const body = await parseJsonBody<unknown>(request);
+      const body = await parseBody(
+        request,
+        startProviderDeviceAuthorizationRequestSchema,
+        "Invalid device authorization request"
+      );
       if (body instanceof Response) return body;
-      const parsed = startProviderDeviceAuthorizationRequestSchema.safeParse(body);
-      if (!parsed.success) return error("Invalid device authorization request", 400);
       return authorizationOperation(ctx, async () =>
         json(
-          await authorizationService(env, ctx).start(
-            ctx.principal.userId,
-            parsedProvider,
-            parsed.data
-          ),
+          await authorizationService(env, ctx).start(ctx.principal.userId, parsedProvider, body),
           201
         )
       );
-    }
-  ),
-  managementRoute(
-    "POST",
-    "/model-provider-accounts/:provider/device-authorizations/:id/poll",
-    async (_request, env, match, ctx) => {
-      const parsedProvider = provider(match.groups?.provider);
+    })
+);
+modelProviderAccountRoutes.post(
+  "/model-provider-accounts/:provider/device-authorizations/:id/poll",
+  ACCOUNTS_MANAGE,
+  (c) =>
+    dispatch(c, async (_request, env, params, ctx) => {
+      const parsedProvider = provider(params.provider);
       if (parsedProvider instanceof Response) return parsedProvider;
-      const id = authorizationId(match);
+      const id = authorizationId(params.id);
       if (id instanceof Response) return id;
       return authorizationOperation(ctx, async () =>
         json(await authorizationService(env, ctx).poll(ctx.principal.userId, parsedProvider, id))
       );
-    }
-  ),
-  managementRoute(
-    "DELETE",
-    "/model-provider-accounts/:provider/device-authorizations/:id",
-    async (_request, env, match, ctx) => {
-      const parsedProvider = provider(match.groups?.provider);
+    })
+);
+modelProviderAccountRoutes.delete(
+  "/model-provider-accounts/:provider/device-authorizations/:id",
+  ACCOUNTS_MANAGE,
+  (c) =>
+    dispatch(c, async (_request, env, params, ctx) => {
+      const parsedProvider = provider(params.provider);
       if (parsedProvider instanceof Response) return parsedProvider;
-      const id = authorizationId(match);
+      const id = authorizationId(params.id);
       if (id instanceof Response) return id;
       return authorizationOperation(ctx, async () => {
         await authorizationService(env, ctx).cancel(ctx.principal.userId, parsedProvider, id);
         return new Response(null, { status: 204 });
       });
-    }
-  ),
-  managementRoute("GET", "/model-provider-accounts/:id", async (_request, env, match, ctx) => {
-    const id = accountId(match);
+    })
+);
+modelProviderAccountRoutes.get("/model-provider-accounts/:id", ACCOUNTS_READ, (c) =>
+  dispatch(c, async (_request, env, params, ctx) => {
+    const id = accountId(params.id);
     if (id instanceof Response) return id;
     const accounts = service(env, ctx);
     return accountOperation(ctx, async () => json({ account: await accounts.get(id) }));
-  }),
-  managementRoute("PATCH", "/model-provider-accounts/:id", async (request, env, match, ctx) => {
-    const id = accountId(match);
+  })
+);
+modelProviderAccountRoutes.patch("/model-provider-accounts/:id", ACCOUNTS_MANAGE, (c) =>
+  dispatch(c, async (request, env, params, ctx) => {
+    const id = accountId(params.id);
     if (id instanceof Response) return id;
-    const body = await parseJsonBody<unknown>(request);
+    const body = await parseBody(request, renameSchema, "Invalid provider account name");
     if (body instanceof Response) return body;
-    const parsed = renameSchema.safeParse(body);
-    if (!parsed.success) return error("Invalid provider account name", 400);
     const accounts = service(env, ctx);
     return accountOperation(ctx, async () =>
-      json({ account: await accounts.rename(id, parsed.data.displayName, ctx.principal.userId) })
+      json({ account: await accounts.rename(id, body.displayName, ctx.principal.userId) })
     );
-  }),
-  ...(["verify", "disable", "enable"] as const).map((action) =>
-    managementRoute(
-      "POST",
-      `/model-provider-accounts/:id/${action}`,
-      async (_request, env, match, ctx) => {
-        const id = accountId(match);
-        if (id instanceof Response) return id;
-        const accounts = service(env, ctx);
-        return accountOperation(ctx, async () => {
-          const account =
-            action === "verify"
-              ? await accounts.verify(id, ctx.principal.userId)
-              : await accounts.setStatus(
-                  id,
-                  action === "enable" ? "active" : "disabled",
-                  ctx.principal.userId
-                );
-          return json({ account });
-        });
-      }
-    )
-  ),
-  managementRoute(
-    "POST",
-    "/model-provider-accounts/:id/reconnect",
-    async (request, env, match, ctx) => {
-      const id = accountId(match);
+  })
+);
+for (const action of ["verify", "disable", "enable"] as const) {
+  modelProviderAccountRoutes.post(`/model-provider-accounts/:id/${action}`, ACCOUNTS_MANAGE, (c) =>
+    dispatch(c, async (_request, env, params, ctx) => {
+      const id = accountId(params.id);
       if (id instanceof Response) return id;
-      const body = await parseJsonBody<unknown>(request);
-      if (body instanceof Response) return body;
-      const parsed = reconnectModelProviderAccountRequestSchema.safeParse(body);
-      if (!parsed.success) return error("Invalid provider account reconnect request", 400);
       const accounts = service(env, ctx);
-      return accountOperation(ctx, async () =>
-        json({ account: await accounts.reconnect(id, parsed.data, ctx.principal.userId) })
-      );
-    }
-  ),
-  managementRoute("DELETE", "/model-provider-accounts/:id", async (_request, env, match, ctx) => {
-    const id = accountId(match);
+      return accountOperation(ctx, async () => {
+        const account =
+          action === "verify"
+            ? await accounts.verify(id, ctx.principal.userId)
+            : await accounts.setStatus(
+                id,
+                action === "enable" ? "active" : "disabled",
+                ctx.principal.userId
+              );
+        return json({ account });
+      });
+    })
+  );
+}
+modelProviderAccountRoutes.post("/model-provider-accounts/:id/reconnect", ACCOUNTS_MANAGE, (c) =>
+  dispatch(c, async (request, env, params, ctx) => {
+    const id = accountId(params.id);
+    if (id instanceof Response) return id;
+    const body = await parseBody(
+      request,
+      reconnectModelProviderAccountRequestSchema,
+      "Invalid provider account reconnect request"
+    );
+    if (body instanceof Response) return body;
+    const accounts = service(env, ctx);
+    return accountOperation(ctx, async () =>
+      json({ account: await accounts.reconnect(id, body, ctx.principal.userId) })
+    );
+  })
+);
+modelProviderAccountRoutes.delete("/model-provider-accounts/:id", ACCOUNTS_MANAGE, (c) =>
+  dispatch(c, async (_request, env, params, ctx) => {
+    const id = accountId(params.id);
     if (id instanceof Response) return id;
     const accounts = service(env, ctx);
     return accountOperation(ctx, async () => {
       await accounts.archive(id, ctx.principal.userId);
       return new Response(null, { status: 204 });
     });
-  }),
-  managementRoute("GET", "/model-provider-account-defaults", async (_request, _env, _match, ctx) =>
+  })
+);
+modelProviderAccountRoutes.get("/model-provider-account-defaults", ACCOUNTS_READ, (c) =>
+  dispatch(c, async (_request, _env, _params, ctx) =>
     json({ defaults: await new ProviderDefaultStore(ctx.db).list() })
-  ),
-  managementRoute(
-    "PUT",
-    "/model-provider-account-defaults/:provider",
-    async (request, _env, match, ctx) => {
-      const parsedProvider = provider(match.groups?.provider);
-      if (parsedProvider instanceof Response) return parsedProvider;
-      const body = await parseJsonBody<unknown>(request);
-      if (body instanceof Response) return body;
-      const parsed = modelProviderAccountDefaultRequestSchema.safeParse(body);
-      if (!parsed.success) return error("Invalid provider default", 400);
-      const defaults = new ProviderDefaultStore(ctx.db);
-      try {
-        await new ProviderAccountSelectionPolicy(
-          new ModelProviderAccountStore(ctx.db),
-          modelProviderAccountAdapterRegistry
-        ).validateDefault(parsedProvider, parsed.data.providerAccountId);
-        await defaults.set(
-          parsedProvider,
-          parsed.data.providerAccountId,
-          parsed.data.unattendedMode,
-          ctx.principal.userId
-        );
-        return json({ default: await defaults.get(parsedProvider) });
-      } catch (cause) {
-        if (cause instanceof ProviderAccountSelectionPolicyError) {
-          return error(cause.message, cause.status);
-        }
-        if (cause instanceof ProviderDefaultConstraintError) {
-          return error(cause.message, 409);
-        }
-        logger.error("provider_account.default_update_failed", {
-          event: "provider_account.default_update_failed",
-          request_id: ctx.request_id,
-          trace_id: ctx.trace_id,
-          error: cause instanceof Error ? cause : String(cause),
-        });
-        return error("Provider default could not be updated", 502);
+  )
+);
+modelProviderAccountRoutes.put("/model-provider-account-defaults/:provider", ACCOUNTS_MANAGE, (c) =>
+  dispatch(c, async (request, _env, params, ctx) => {
+    const parsedProvider = provider(params.provider);
+    if (parsedProvider instanceof Response) return parsedProvider;
+    const body = await parseBody(
+      request,
+      modelProviderAccountDefaultRequestSchema,
+      "Invalid provider default"
+    );
+    if (body instanceof Response) return body;
+    const defaults = new ProviderDefaultStore(ctx.db);
+    try {
+      await new ProviderAccountSelectionPolicy(
+        new ModelProviderAccountStore(ctx.db),
+        modelProviderAccountAdapterRegistry
+      ).validateDefault(parsedProvider, body.providerAccountId);
+      await defaults.set(
+        parsedProvider,
+        body.providerAccountId,
+        body.unattendedMode,
+        ctx.principal.userId
+      );
+      return json({ default: await defaults.get(parsedProvider) });
+    } catch (cause) {
+      if (cause instanceof ProviderAccountSelectionPolicyError) {
+        return error(cause.message, cause.status);
       }
+      if (cause instanceof ProviderDefaultConstraintError) {
+        return error(cause.message, 409);
+      }
+      logger.error("provider_account.default_update_failed", {
+        event: "provider_account.default_update_failed",
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+        error: cause instanceof Error ? cause : String(cause),
+      });
+      return error("Provider default could not be updated", 502);
     }
-  ),
-  managementRoute(
-    "DELETE",
-    "/model-provider-account-defaults/:provider",
-    async (_request, _env, match, ctx) => {
-      const parsedProvider = provider(match.groups?.provider);
+  })
+);
+modelProviderAccountRoutes.delete(
+  "/model-provider-account-defaults/:provider",
+  ACCOUNTS_MANAGE,
+  (c) =>
+    dispatch(c, async (_request, _env, params, ctx) => {
+      const parsedProvider = provider(params.provider);
       if (parsedProvider instanceof Response) return parsedProvider;
       await new ProviderDefaultStore(ctx.db).remove(parsedProvider);
       return new Response(null, { status: 204 });
-    }
-  ),
-];
+    })
+);
 
 async function handleLegacyProviderAccess(
   env: Env,
@@ -425,12 +443,11 @@ async function handleLegacyProviderAccess(
 async function handleProviderAccess(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; provider: string },
   ctx: SandboxRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  const parsedProvider = provider(match.groups?.provider);
-  if (!sessionId) return error("Session ID required", 400);
+  const sessionId = params.id;
+  const parsedProvider = provider(params.provider);
   if (parsedProvider instanceof Response) return parsedProvider;
   let binding;
   try {
@@ -480,13 +497,8 @@ async function handleProviderAccess(
   }
 }
 
-export const modelProviderAccountRoutes: Route[] = [
-  ...managementRoutes,
-  defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/provider-auth/:provider/access-token"),
-    cacheControl: NO_STORE,
-    authorization: NO_AUTHORIZATION,
-    handler: handleProviderAccess,
-  }),
-];
+modelProviderAccountRoutes.post(
+  "/sessions/:id/provider-auth/:provider/access-token",
+  admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, cacheControl: NO_STORE, authorization: NO_AUTHORIZATION }),
+  (c) => dispatch(c, handleProviderAccess)
+);
