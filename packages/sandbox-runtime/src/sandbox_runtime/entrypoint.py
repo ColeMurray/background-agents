@@ -7,11 +7,12 @@ import argparse
 import asyncio
 import os
 import signal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .agent_bridge_process import AgentBridgeProcess
 from .boot_warnings import BootWarningSink
 from .browser_desktop import BrowserDesktop
+from .claude_stager import ClaudeStager, resolve_claude_config_dir
 from .code_server import CodeServer
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
 from .harness.base import HarnessId, HarnessProcessOwner
@@ -27,6 +28,9 @@ from .runtime_config import RuntimeConfig
 from .supervisor import SandboxSupervisor
 from .tunnel_environment import TunnelEnvironment
 from .web_terminal import WebTerminal
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 configure_logging()
 
@@ -46,7 +50,19 @@ def build_harness_process(
                 log,
                 warnings.record,
             )
+        case HarnessId.CLAUDE:
+            return ClaudeStager(config.claude_stager_config(), log)
     raise ValueError(f"Unsupported harness: {config.harness}")
+
+
+def managed_skills_destination(harness: HarnessId) -> Path:
+    """Where managed skills land: each harness discovers skills from its own tree."""
+    match harness:
+        case HarnessId.OPENCODE:
+            return resolve_opencode_global_config_dir() / "skills"
+        case HarnessId.CLAUDE:
+            return resolve_claude_config_dir() / "skills"
+    raise ValueError(f"Unsupported harness: {harness}")
 
 
 def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
@@ -74,14 +90,13 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
     managed_skills_config = config.managed_skills_config()
     managed_skills = None
     if managed_skills_config.control_plane_url and managed_skills_config.session_id:
-        global_config_dir = resolve_opencode_global_config_dir()
         managed_skills = ManagedSkillsMaterializer(
             ManagedSkillsClient(
                 managed_skills_config.control_plane_url,
                 managed_skills_config.session_id,
                 managed_skills_config.sandbox_token,
             ),
-            global_config_dir / "skills",
+            managed_skills_destination(config.harness),
             log,
         )
     harness_process = build_harness_process(config, shutdown_event, log, warnings)

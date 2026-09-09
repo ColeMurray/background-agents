@@ -60,6 +60,8 @@ BOOT_WARNINGS_FILE_PATH = "/tmp/oi-boot-warnings.jsonl"
 # Written by the bridge before it exits with DETERMINISTIC_FAILURE_EXIT_CODE;
 # the supervisor reports its contents instead of restarting the bridge.
 BRIDGE_FATAL_ERROR_FILE_PATH = "/tmp/oi-bridge-fatal-error.txt"
+# Supervisor → bridge handoff for the Claude harness (workdir, config dir, MCP servers).
+CLAUDE_HARNESS_FILE_PATH = "/tmp/oi-claude-harness.json"
 
 # Canonical repository manifest written by the supervisor before any child
 # process starts, rewritten on every boot. Consumed by the bridge (push

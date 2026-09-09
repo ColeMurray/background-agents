@@ -1,6 +1,6 @@
 {
-  "runtimeVersion": "v63-mcp-package-cache",
-  "generation": 63,
-  "minimumCompatibleGeneration": 62,
-  "minimumRebuildGeneration": 63
+  "runtimeVersion": "v64-claude-harness",
+  "generation": 64,
+  "minimumCompatibleGeneration": 64,
+  "minimumRebuildGeneration": 64
 }

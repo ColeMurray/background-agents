@@ -48,6 +48,7 @@ from .harness import (
     DEFAULT_HARNESS_ID,
     DETERMINISTIC_FAILURE_EXIT_CODE,
     AgentHarness,
+    BridgeIdentity,
     HarnessId,
     HarnessPrompt,
     HarnessStartError,
@@ -201,6 +202,13 @@ class AgentBridge:
         # registry in production.
         self.harness: AgentHarness = harness or build_agent_harness(
             harness_id,
+            identity=BridgeIdentity(
+                sandbox_id=sandbox_id,
+                session_id=session_id,
+                control_plane_url=control_plane_url,
+                auth_token=auth_token,
+                repo_manifest_path=self.repo_manifest_path,
+            ),
             attachment_processor=self.attachment_processor,
             log=self.log,
             limits=self.prompt_limits,

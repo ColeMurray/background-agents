@@ -5,7 +5,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
+from sandbox_runtime.sandbox_bin import install_bin_scripts
 from tests.runtime_helpers import make_opencode_server
 
 
@@ -333,25 +335,25 @@ class TestInstallTools:
 
 
 class TestInstallBinScripts:
-    """Cases for _install_bin_scripts() standalone CLI installation."""
+    """Cases for install_bin_scripts(): standalone CLIs both harnesses share."""
 
-    def test_scripts_installed_to_bin(self, tmp_path):
+    @staticmethod
+    def _install(monkeypatch, src: Path, dest: Path) -> list[str]:
+        monkeypatch.setattr("sandbox_runtime.sandbox_bin.DEFAULT_BIN_INSTALL_DIR", str(dest))
+        return install_bin_scripts(get_logger("test"), bin_dir=src)
+
+    def test_scripts_installed_to_bin(self, tmp_path, monkeypatch):
         """Checked-in bin scripts should be installed as executable commands."""
-        sup = _make_opencode_server()
-
         src = tmp_path / "app" / "sandbox_runtime" / "bin"
         src.mkdir(parents=True)
         (src / "upload-media.js").write_text("#!/usr/bin/env node\n// upload cli")
         (src / "oi-git-sign").write_text("#!/bin/sh\n# signer launcher")
-
         dest = tmp_path / "usr-local-bin"
         dest.mkdir()
 
-        with _patch_paths(
-            legacy=tmp_path / "no-legacy", tools=tmp_path / "no-tools", bin_src=src, bin_dest=dest
-        ):
-            sup._install_bin_scripts()
+        installed_names = self._install(monkeypatch, src, dest)
 
+        assert installed_names == ["oi-git-sign", "upload-media"]
         installed = dest / "upload-media"
         assert installed.exists()
         assert installed.read_text() == "#!/usr/bin/env node\n// upload cli"
@@ -363,66 +365,42 @@ class TestInstallBinScripts:
 
     def test_scripts_installed_to_configured_bin(self, tmp_path, monkeypatch):
         """OPENINSPECT_BIN_INSTALL_DIR can override the install directory."""
-        sup = _make_opencode_server()
-
         src = tmp_path / "app" / "sandbox_runtime" / "bin"
         src.mkdir(parents=True)
         (src / "upload-media.js").write_text("#!/usr/bin/env node\n// upload cli")
-
         default_dest = tmp_path / "usr-local-bin"
         default_dest.mkdir()
         user_dest = tmp_path / "configured-bin"
         monkeypatch.setenv("OPENINSPECT_BIN_INSTALL_DIR", str(user_dest))
 
-        with _patch_paths(
-            legacy=tmp_path / "no-legacy",
-            tools=tmp_path / "no-tools",
-            bin_src=src,
-            bin_dest=default_dest,
-        ):
-            sup._install_bin_scripts()
+        self._install(monkeypatch, src, default_dest)
 
         installed = user_dest / "upload-media"
         assert installed.exists()
         assert installed.read_text() == "#!/usr/bin/env node\n// upload cli"
         assert not (default_dest / "upload-media").exists()
 
-    def test_non_js_files_skipped(self, tmp_path):
-        """Non-.js files in bin/ should not be installed."""
-        sup = _make_opencode_server()
-
+    def test_non_js_files_skipped(self, tmp_path, monkeypatch):
+        """Files that are neither extensionless nor .js are not installed."""
         src = tmp_path / "app" / "sandbox_runtime" / "bin"
         src.mkdir(parents=True)
         (src / "upload-media.js").write_text("// cli")
         (src / "README.md").write_text("# docs")
-
         dest = tmp_path / "usr-local-bin"
         dest.mkdir()
 
-        with _patch_paths(
-            legacy=tmp_path / "no-legacy", tools=tmp_path / "no-tools", bin_src=src, bin_dest=dest
-        ):
-            sup._install_bin_scripts()
+        self._install(monkeypatch, src, dest)
 
         assert (dest / "upload-media").exists()
         assert not (dest / "README").exists()
+        assert not (dest / "README.md").exists()
 
-    def test_noop_when_bin_dir_missing(self, tmp_path):
-        """Should be a no-op when bin/ directory doesn't exist."""
-        sup = _make_opencode_server()
-
+    def test_noop_when_bin_dir_missing(self, tmp_path, monkeypatch):
+        """A missing bundled bin directory installs nothing and creates nothing."""
         dest = tmp_path / "usr-local-bin"
-        dest.mkdir()
 
-        with _patch_paths(
-            legacy=tmp_path / "no-legacy",
-            tools=tmp_path / "no-tools",
-            bin_src=tmp_path / "no-bin",
-            bin_dest=dest,
-        ):
-            sup._install_bin_scripts()
-
-        assert list(dest.iterdir()) == []
+        assert self._install(monkeypatch, tmp_path / "missing-bin", dest) == []
+        assert not dest.exists()
 
 
 class TestInstallSkills:
