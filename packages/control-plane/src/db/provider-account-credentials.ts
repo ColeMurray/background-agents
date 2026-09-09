@@ -27,8 +27,8 @@ interface CredentialRow {
   updated_at: number;
 }
 
-export interface ProviderCredentialState<T = unknown> {
-  payload: T;
+export interface ProviderCredentialState {
+  payload: unknown;
   credentialSchemaVersion: number;
   credentialVersion: number;
   exchangeGeneration: number;
@@ -113,10 +113,10 @@ export class ProviderCredentialStore {
       );
   }
 
-  async readCredentialState<T = unknown>(
+  async readCredentialState(
     providerAccountId: string,
     provider: ModelProviderId
-  ): Promise<ProviderCredentialState<T> | null> {
+  ): Promise<ProviderCredentialState | null> {
     assertModelProviderId(provider);
     const row = await this.db
       .prepare(
@@ -128,7 +128,7 @@ export class ProviderCredentialStore {
       .first<CredentialRow>();
     if (!row) return null;
     return {
-      payload: await decryptProviderAccountPayload<T>(row.encrypted_payload, this.encryptionKey, {
+      payload: await decryptProviderAccountPayload(row.encrypted_payload, this.encryptionKey, {
         providerAccountId,
         provider,
         credentialSchemaVersion: row.credential_schema_version,

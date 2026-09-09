@@ -47,6 +47,7 @@
 
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { z } from "zod";
 import { ensurePrivateDirectory } from "./private-paths";
 import { openPrivateSqliteFile } from "./sqlite-file";
 
@@ -86,6 +87,21 @@ export interface JobStoreStats {
    * is how a stranded job gets noticed.
    */
   oldestRunnableLagMs: number | null;
+}
+
+const claimedJobRowSchema = z.object({
+  id: z.string(),
+  kind: z.string(),
+  payload: z.string(),
+  attempts: z.number().int(),
+});
+
+export function parseClaimedJobRow(row: unknown, token: string): ClaimedJob {
+  const parsed = claimedJobRowSchema.safeParse(row);
+  if (!parsed.success) {
+    throw new Error("Malformed claimed job row", { cause: parsed.error });
+  }
+  return { ...parsed.data, token };
 }
 
 export interface JobStore {
@@ -234,15 +250,7 @@ export function openJobStore(dataDir: string): JobStore {
       const token = crypto.randomUUID();
       return claimFor(kinds.length)
         .all(token, leaseUntil, now, ...kinds, limit)
-        .map((row) => {
-          const { id, kind, payload, attempts } = row as {
-            id: string;
-            kind: string;
-            payload: string;
-            attempts: number;
-          };
-          return { id, kind, payload, attempts, token };
-        });
+        .map((row) => parseClaimedJobRow(row, token));
     },
     complete: (id, token) => {
       remove.run(id, token);

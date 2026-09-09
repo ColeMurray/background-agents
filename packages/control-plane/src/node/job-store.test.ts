@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openJobStore, type ClaimedJob, type JobStore } from "./job-store";
+import { openJobStore, parseClaimedJobRow, type ClaimedJob, type JobStore } from "./job-store";
 
 const KINDS = ["image_build.finalize", "github.autofix"] as const;
 const LEASE_MS = 60_000;
@@ -29,6 +29,29 @@ function claim(now: number, limit = 10): ClaimedJob[] {
 }
 
 describe("openJobStore", () => {
+  describe("parseClaimedJobRow", () => {
+    it("parses the row fields needed to deliver a claimed job", () => {
+      expect(
+        parseClaimedJobRow(
+          { id: "job-1", kind: "image_build.finalize", payload: "{}", attempts: 1 },
+          "token-1"
+        )
+      ).toEqual({
+        id: "job-1",
+        kind: "image_build.finalize",
+        payload: "{}",
+        attempts: 1,
+        token: "token-1",
+      });
+    });
+
+    it("rejects malformed claimed job rows", () => {
+      expect(() =>
+        parseClaimedJobRow({ id: "job-1", kind: "image_build.finalize", attempts: 1 }, "token-1")
+      ).toThrow("Malformed claimed job row");
+    });
+  });
+
   it("reports the soonest runnable job", () => {
     add("late", 5_000);
     add("soon", 2_000);
