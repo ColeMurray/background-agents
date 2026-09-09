@@ -11,6 +11,7 @@ import type {
 } from "@open-inspect/shared/types/provider-accounts";
 import { ProviderAccountsSettings } from "./provider-accounts-settings";
 import { CHATGPT_DEVICE_AUTHORIZATION_SETTINGS_URL } from "./provider-device-authorization-dialog";
+import { ANTHROPIC_CREDENTIAL_ROTATION_WARNING } from "./provider-authorization-code-dialog";
 
 expect.extend(matchers);
 afterEach(cleanup);
@@ -22,10 +23,15 @@ const startAuthorization = vi.fn();
 const pollAuthorization = vi.fn();
 const cancelAuthorization = vi.fn();
 const reconnectAccount = vi.fn();
+const connectAccount = vi.fn();
+const startAuthorizationCode = vi.fn();
+const completeAuthorizationCode = vi.fn();
+const cancelAuthorizationCode = vi.fn();
 let legacyCredentialsResult: Record<string, unknown>;
 const providers = [
   { provider: "openai" as const, displayName: "OpenAI", subscriptionName: "ChatGPT" },
   { provider: "xai" as const, displayName: "xAI", subscriptionName: "SuperGrok" },
+  { provider: "anthropic" as const, displayName: "Anthropic", subscriptionName: "Claude" },
 ];
 const account = {
   id: "a".repeat(32),
@@ -40,6 +46,21 @@ const account = {
   createdAt: 1,
   updatedAt: 1,
   archivedAt: null,
+};
+const claudeAccount = {
+  ...account,
+  id: "f".repeat(32),
+  provider: "anthropic" as const,
+  displayName: "Team Claude",
+  externalAccountId: null,
+};
+const authorizationCodeStart = {
+  transactionId: "9".repeat(64),
+  provider: "anthropic" as const,
+  operation: "create" as const,
+  authorizationUrl: "https://claude.ai/oauth/authorize?state=abc",
+  expiresAt: Date.now() + 60_000,
+  expiresInMs: 60_000,
 };
 let accountsResult: ModelProviderAccount[];
 let defaultsResult: ModelProviderAccountDefault[];
@@ -64,13 +85,16 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
   useLegacyProviderCredentials: () => legacyCredentialsResult,
   runProviderAccountAction: (...args: unknown[]) => runAction(...args),
   archiveProviderAccount: vi.fn(),
-  connectProviderAccount: vi.fn(),
+  connectProviderAccount: (...args: unknown[]) => connectAccount(...args),
   reconnectProviderAccount: (...args: unknown[]) => reconnectAccount(...args),
   renameProviderAccount: vi.fn(),
   setProviderAccountDefault: (...args: unknown[]) => setDefault(...args),
   startProviderDeviceAuthorization: (...args: unknown[]) => startAuthorization(...args),
   pollProviderDeviceAuthorization: (...args: unknown[]) => pollAuthorization(...args),
   cancelProviderDeviceAuthorization: (...args: unknown[]) => cancelAuthorization(...args),
+  startProviderAuthorizationCode: (...args: unknown[]) => startAuthorizationCode(...args),
+  completeProviderAuthorizationCode: (...args: unknown[]) => completeAuthorizationCode(...args),
+  cancelProviderAuthorizationCode: (...args: unknown[]) => cancelAuthorizationCode(...args),
 }));
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -94,6 +118,10 @@ describe("ProviderAccountsSettings", () => {
     pollAuthorization.mockImplementation(() => new Promise(() => undefined));
     cancelAuthorization.mockResolvedValue(undefined);
     reconnectAccount.mockResolvedValue(undefined);
+    connectAccount.mockResolvedValue(undefined);
+    startAuthorizationCode.mockResolvedValue(authorizationCodeStart);
+    completeAuthorizationCode.mockImplementation(() => new Promise(() => undefined));
+    cancelAuthorizationCode.mockResolvedValue(undefined);
     accountsResult = [account];
     defaultsResult = [];
     allowedPermissions = null;
@@ -330,6 +358,115 @@ describe("ProviderAccountsSettings", () => {
     expect(startAuthorization).not.toHaveBeenCalled();
   });
 
+  it("starts Claude through the authorization-code dialog from the provider picker", async () => {
+    render(<ProviderAccountsSettings />);
+
+    expect(screen.getByText("Claude")).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Claude" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Connect your Claude account" })
+    ).toBeInTheDocument();
+    expect(startAuthorizationCode).toHaveBeenCalledWith("anthropic", {
+      operation: "create",
+      displayName: "Claude account",
+    });
+    expect(startAuthorization).not.toHaveBeenCalled();
+    const link = await screen.findByRole("link", { name: "Open Anthropic" });
+    expect(link).toHaveAttribute("href", authorizationCodeStart.authorizationUrl);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(screen.getByLabelText("Authorization code")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/Claude Code/);
+  });
+
+  it("connects a Claude setup token through the direct path", async () => {
+    render(<ProviderAccountsSettings />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Claude" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Paste a setup token instead" }));
+    fireEvent.change(screen.getByLabelText("Setup token"), {
+      target: { value: "sk-ant-oat01-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(connectAccount).toHaveBeenCalledWith({
+        provider: "anthropic",
+        displayName: "Claude account",
+        setupToken: "sk-ant-oat01-token",
+      })
+    );
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(toast.success).toHaveBeenCalledWith("Claude account connected");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Connect your Claude account" })
+      ).not.toBeInTheDocument()
+    );
+  });
+
+  it("reconnects a Claude account with a setup token against the explicit account", async () => {
+    accountsResult = [claudeAccount];
+    startAuthorizationCode.mockResolvedValue({ ...authorizationCodeStart, operation: "reconnect" });
+    render(<ProviderAccountsSettings />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team Claude" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Reconnect" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Reconnect Team Claude" })
+    ).toBeInTheDocument();
+    expect(screen.getByText(ANTHROPIC_CREDENTIAL_ROTATION_WARNING)).toBeInTheDocument();
+    expect(startAuthorizationCode).toHaveBeenCalledWith("anthropic", {
+      operation: "reconnect",
+      providerAccountId: claudeAccount.id,
+    });
+    expect(await screen.findByRole("link", { name: "Open Anthropic" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Paste a setup token instead" }));
+    expect(screen.queryByLabelText("Account name")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Setup token"), {
+      target: { value: "sk-ant-oat01-rotated" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(reconnectAccount).toHaveBeenCalledWith(claudeAccount.id, {
+        provider: "anthropic",
+        setupToken: "sk-ant-oat01-rotated",
+      })
+    );
+  });
+
+  it("hides Verify for Claude accounts and warns before disabling", async () => {
+    accountsResult = [claudeAccount];
+    render(<ProviderAccountsSettings />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team Claude" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    expect(await screen.findByRole("menuitem", { name: "Reconnect" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Verify" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Copy account ID" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Disable" }));
+
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+      ANTHROPIC_CREDENTIAL_ROTATION_WARNING
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    await waitFor(() => expect(runAction).toHaveBeenCalledWith(claudeAccount.id, "disable"));
+  });
+
   it("keeps the changing countdown outside the live region", async () => {
     render(<ProviderAccountsSettings />);
     fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
@@ -356,10 +493,11 @@ describe("ProviderAccountsSettings", () => {
       )
     ).toBeInTheDocument();
     expect(screen.queryByLabelText("Automated authentication")).not.toBeInTheDocument();
-    expect(screen.getAllByText("No default account selected")).toHaveLength(2);
-    expect(screen.getAllByText("Choose Make default from an account above.")).toHaveLength(2);
+    expect(screen.getAllByText("No default account selected")).toHaveLength(3);
+    expect(screen.getAllByText("Choose Make default from an account above.")).toHaveLength(3);
     expect(screen.getAllByTitle("OpenAI")).not.toHaveLength(0);
     expect(screen.getAllByTitle("Grok")).not.toHaveLength(0);
+    expect(screen.getAllByTitle("Anthropic")).not.toHaveLength(0);
   });
 
   it("names the effective account used by automated sessions", () => {
