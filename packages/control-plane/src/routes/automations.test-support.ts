@@ -105,6 +105,13 @@ export const USER_PRINCIPAL: Principal = {
   userId: "user-1",
 };
 
+/** A personal access token, which the control plane resolves to its owner. */
+export const ACCESS_TOKEN_PRINCIPAL: Principal = {
+  kind: "access-token",
+  userId: "user-1",
+  tokenId: "token-1",
+};
+
 export const SLACK_BOT_PRINCIPAL: Principal = {
   kind: "service",
   service: "slack-bot",

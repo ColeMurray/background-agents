@@ -24,6 +24,7 @@ import {
   mockProviderAdapterGet,
   mockResolveGitHubCredentialAuthority,
   mockResolveGitHubEnrichmentForRequest,
+  ACCESS_TOKEN_PRINCIPAL,
   SLACK_BOT_PRINCIPAL,
   sampleRow,
   applyMockDefaults,
@@ -743,6 +744,61 @@ describe("automation create route", () => {
       });
       expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
       expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+    });
+
+    it("creates for an access token, attributed to the token's owner", async () => {
+      // The route declares accessTokenWrites so the MCP server can create
+      // automations; without that declaration the POST is refused before the
+      // handler, whatever the token's owner is allowed to do.
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: validBody,
+        principal: ACCESS_TOKEN_PRINCIPAL,
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ created_by: "user-1", user_id: "user-1" })
+      );
+    });
+
+    it("holds an access token to the same target permissions as its owner", async () => {
+      // The check used to run for browser users alone, which would have let the
+      // credential aim an automation at a repository its owner may not use.
+      const res = await callRoute("POST", "/automations", {
+        body: validBody,
+        principal: ACCESS_TOKEN_PRINCIPAL,
+        permissions: PERMISSION_IDS.filter((permission) => permission !== "repositories.use"),
+      });
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        code: "permission_required",
+        permission: "repositories.use",
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it("refuses an access token the routes that rewrite or remove an automation", async () => {
+      // Only create opted the credential in. These stay read-only whatever the
+      // owner's role says, which is what keeps a leaked token additive.
+      for (const [method, path] of [
+        ["PUT", "/automations/auto-1"],
+        ["DELETE", "/automations/auto-1"],
+      ] as const) {
+        mockStore.getById.mockResolvedValue(sampleRow);
+
+        const res = await callRoute(method, path, {
+          body: { name: "Renamed" },
+          principal: ACCESS_TOKEN_PRINCIPAL,
+        });
+
+        expect(res.status, `${method} ${path}`).toBe(403);
+        await expect(res.json(), `${method} ${path}`).resolves.toEqual({
+          error: "This credential may only read",
+        });
+      }
     });
 
     it("rejects forbidden body identity fields", async () => {

@@ -171,6 +171,15 @@ automationLifecycleRoutes.post("/automations/:id/resume", AUTOMATION_MANAGE, (c)
 );
 automationLifecycleRoutes.post(
   "/automations/:id/trigger",
-  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requireAutomation("trigger") }),
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requireAutomation("trigger"),
+    // Additionally admits a personal access token, so the MCP server can run
+    // its owner's automations on demand. A manual run is what the automation
+    // was already scheduled to do, and `automations.trigger` still scopes it
+    // to the automations that user may run. Pause and resume withhold the
+    // declaration: those change whether the schedule fires at all.
+    accessTokenWrites: "allow",
+  }),
   (c) => dispatch(c, handleTriggerAutomation)
 );
