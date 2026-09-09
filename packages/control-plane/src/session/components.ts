@@ -669,7 +669,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     durableObjectId,
     async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());
-    }
+    },
+    (reason) => lifecycleManager.terminateFailedSandbox(reason)
   );
   const sessionBudgetHandler = new SessionBudgetHandler(sessionCoreRepository, budgetService, () =>
     Date.now()
@@ -809,6 +810,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     childSummary: (_request, url) => childSummaryHandler.getChildSummary(url),
     parentPrompt: (request) => childSessionsHandler.parentPrompt(request),
     cancel: () => sessionLifecycleHandler.cancel(),
+    revokeSandbox: (request) => sessionLifecycleHandler.revokeSandbox(request),
     childSessionUpdate: (request) => childSessionsHandler.childSessionUpdate(request),
     diffState: () => diffsHandler.state(),
     diffStore: (request) => diffsHandler.storeBundle(request),

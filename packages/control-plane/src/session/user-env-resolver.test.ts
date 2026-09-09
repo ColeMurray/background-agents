@@ -89,6 +89,9 @@ class FakeStatement implements SqlStatement {
   }
 
   first<T = Record<string, unknown>>(): Promise<T | null> {
+    if (this.query.includes("FROM model_provider_accounts")) {
+      return Promise.resolve((this.db.accountRow as T | null) ?? null);
+    }
     return Promise.reject(new Error(`first() is not used by the resolver: ${this.query}`));
   }
 
@@ -107,6 +110,8 @@ class FakeSqlDatabase implements SqlDatabase {
   readonly queries: string[] = [];
   readonly providerAuthBinds: unknown[] = [];
   providerAuthRows: D1Row[] = [];
+  /** The bound provider account the pre-spawn check reads; null means removed. */
+  accountRow: D1Row | null = null;
   globalSecretRows: D1Row[] = [];
   readonly repoSecretRowsByRepoId = new Map<number, D1Row[]>();
   readonly environmentSecretRowsById = new Map<string, D1Row[]>();
@@ -149,17 +154,37 @@ async function secretRows(secrets: Record<string, string>): Promise<D1Row[]> {
 function providerAuthRows(modes: {
   openai: SessionProviderAuthMode;
   xai: SessionProviderAuthMode;
+  anthropic?: SessionProviderAuthMode;
 }): D1Row[] {
-  return (["openai", "xai"] as const).map((provider) => ({
+  return (["openai", "xai", "anthropic"] as const).map((provider) => ({
     provider,
-    auth_mode: modes[provider],
+    auth_mode: modes[provider] ?? "api_key",
     provider_account_id: modes[provider] === "provider_account" ? "1".repeat(32) : null,
     selection_source: "explicit",
     inherited_from_session_id: null,
   }));
 }
 
-const API_KEY_MODES = { openai: "api_key", xai: "api_key" } as const;
+const API_KEY_MODES = { openai: "api_key", xai: "api_key", anthropic: "api_key" } as const;
+
+function accountRow(status: string, overrides: Partial<D1Row> = {}): D1Row {
+  return {
+    id: "1".repeat(32),
+    provider: "anthropic",
+    display_name: "Owner Claude",
+    external_account_id: null,
+    status,
+    created_by: null,
+    updated_by: null,
+    last_verified_at: null,
+    last_used_at: null,
+    created_at: 1,
+    updated_at: 1,
+    archived_at: null,
+    lifecycle_version: 0,
+    ...overrides,
+  };
+}
 
 function sessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -306,7 +331,11 @@ describe("UserEnvResolver", () => {
         memberRows: [memberRow(0, "acme", "web", 90101), memberRow(1, "acme", "backend", 90102)],
         encryptionKey: ENCRYPTION_KEY,
       });
-      h.db.providerAuthRows = providerAuthRows({ openai: "api_key", xai: "legacy_scoped_oauth" });
+      h.db.providerAuthRows = providerAuthRows({
+        openai: "api_key",
+        xai: "legacy_scoped_oauth",
+        anthropic: "api_key",
+      });
       h.db.globalSecretRows = await secretRows({ SHARED: "global", ONLY_GLOBAL: "g" });
       h.db.repoSecretRowsByRepoId.set(90101, await secretRows(primarySecrets));
       h.db.repoSecretRowsByRepoId.set(90102, await secretRows(secondarySecrets));
@@ -356,7 +385,11 @@ describe("UserEnvResolver", () => {
         session: sessionRow({ environment_id: "env-1" }),
         encryptionKey: ENCRYPTION_KEY,
       });
-      h.db.providerAuthRows = providerAuthRows({ openai: "api_key", xai: "legacy_scoped_oauth" });
+      h.db.providerAuthRows = providerAuthRows({
+        openai: "api_key",
+        xai: "legacy_scoped_oauth",
+        anthropic: "api_key",
+      });
       h.db.globalSecretRows = await secretRows({ SHARED: "global", ONLY_GLOBAL: "g" });
       h.db.environmentSecretRowsById.set(
         "env-1",
@@ -495,10 +528,37 @@ describe("UserEnvResolver", () => {
 
     it("returns null when the provider is authenticated", async () => {
       const h = makeHarness();
-      h.db.providerAuthRows = providerAuthRows({ openai: "provider_account", xai: "api_key" });
+      h.db.providerAuthRows = providerAuthRows({
+        openai: "provider_account",
+        xai: "api_key",
+        anthropic: "api_key",
+      });
+      h.db.accountRow = accountRow("active");
 
       await expect(h.resolver.getProviderAuthenticationError("openai/gpt-5")).resolves.toBeNull();
     });
+
+    it.each([
+      ["disabled", accountRow("disabled"), "disabled"],
+      ["fenced", accountRow("reconnect_required"), "needs to be reconnected"],
+      ["archived", accountRow("active", { archived_at: 5 }), "was removed"],
+      ["missing", null, "was removed"],
+    ] as const)(
+      "fails the prompt before spawn when the bound account is %s",
+      async (_label, row, fragment) => {
+        const h = makeHarness();
+        h.db.providerAuthRows = providerAuthRows({
+          openai: "api_key",
+          xai: "api_key",
+          anthropic: "provider_account",
+        });
+        h.db.accountRow = row;
+
+        await expect(
+          h.resolver.getProviderAuthenticationError("anthropic/claude-sonnet-4-6")
+        ).resolves.toContain(fragment);
+      }
+    );
 
     it("returns null for non-subscription providers", async () => {
       const h = makeHarness();

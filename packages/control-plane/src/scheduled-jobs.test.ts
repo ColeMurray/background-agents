@@ -106,7 +106,10 @@ describe("SCHEDULED_JOBS", () => {
 
     expect(Scheduler).toHaveBeenCalledWith(deps.db, deps.env, deps.backgroundTasks);
     expect(schedulerTick).toHaveBeenCalledTimes(1);
-    expect(deps.submitted.map((entry) => entry.name)).toEqual(["autofix_queue_health"]);
+    expect(deps.submitted.map((entry) => entry.name)).toEqual([
+      "autofix_queue_health",
+      "provider_credential_cleanup",
+    ]);
     expect(checkAutofixQueueHealth).not.toHaveBeenCalled();
     await deps.submitted[0]!.task();
     expect(checkAutofixQueueHealth).toHaveBeenCalledWith(deps.env, deps.log);

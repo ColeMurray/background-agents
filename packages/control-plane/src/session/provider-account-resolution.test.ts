@@ -1,3 +1,4 @@
+import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelProviderAccount } from "../db/model-provider-accounts";
 import type { ProviderDefault } from "../db/provider-account-defaults";
@@ -6,10 +7,11 @@ import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/
 
 const OPENAI_ACCOUNT_ID = "1".repeat(32);
 const XAI_ACCOUNT_ID = "2".repeat(32);
+const ANTHROPIC_ACCOUNT_ID = "3".repeat(32);
 
 function account(
   id: string,
-  provider: "openai" | "xai",
+  provider: SubscriptionProviderId,
   overrides: Partial<ModelProviderAccount> = {}
 ): ModelProviderAccount {
   return {
@@ -30,7 +32,7 @@ function account(
 }
 
 function providerDefault(
-  provider: "openai" | "xai",
+  provider: SubscriptionProviderId,
   providerAccountId: string,
   unattendedMode: "provider_account" | "api_key" = "provider_account"
 ): ProviderDefault {
@@ -67,7 +69,34 @@ describe("resolveProviderAccountSelections", () => {
     ).resolves.toEqual([
       { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
       { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+      { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
     ]);
+  });
+
+  it("binds an Anthropic default only on a harness that can use it", async () => {
+    const deps = stores({
+      defaults: [providerDefault("anthropic", ANTHROPIC_ACCOUNT_ID)],
+      accounts: [account(ANTHROPIC_ACCOUNT_ID, "anthropic")],
+    });
+    const onOpenCode = await resolveProviderAccountSelections(
+      { unattended: false, harness: "opencode" },
+      deps
+    );
+    expect(onOpenCode[2]).toEqual({
+      provider: "anthropic",
+      authMode: "api_key",
+      selectionSource: "harness_fallback",
+    });
+    const onClaude = await resolveProviderAccountSelections(
+      { unattended: false, harness: "claude" },
+      deps
+    );
+    expect(onClaude[2]).toEqual({
+      provider: "anthropic",
+      authMode: "provider_account",
+      providerAccountId: ANTHROPIC_ACCOUNT_ID,
+      selectionSource: "installation_default",
+    });
   });
 
   it("resolves every provider using explicit choices before defaults", async () => {
@@ -97,6 +126,7 @@ describe("resolveProviderAccountSelections", () => {
         selectionSource: "explicit",
       },
       { provider: "xai", authMode: "api_key", selectionSource: "explicit" },
+      { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
     ]);
   });
 

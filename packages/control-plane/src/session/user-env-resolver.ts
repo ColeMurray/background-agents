@@ -20,10 +20,12 @@ import {
   getProviderAuthenticationError as resolveProviderAuthenticationError,
   prepareManagedProviderEnv,
 } from "../sandbox/managed-provider-env";
-import type {
-  SessionProviderAuthMode,
-  SubscriptionProviderId,
+import {
+  SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
+  type SessionProviderAuthMode,
+  type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
+import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
 import { resolvePublicSessionId } from "./public-session-id";
@@ -55,6 +57,8 @@ export interface UserEnvResolverDeps {
 interface UserEnvContext {
   sandboxEnv: Record<string, string>;
   providerAuthModes: Record<SubscriptionProviderId, SessionProviderAuthMode>;
+  /** Bound account per provider in provider_account mode. */
+  providerAccountIds: Partial<Record<SubscriptionProviderId, string>>;
 }
 
 export class UserEnvResolver {
@@ -93,6 +97,8 @@ export class UserEnvResolver {
   async getProviderAuthenticationError(model: string): Promise<string | null> {
     const context = await this.loadUserEnvContext();
     if (!context) return null;
+    const accountIssue = await this.checkBoundAccount(model, context);
+    if (accountIssue) return accountIssue;
     const issue = resolveProviderAuthenticationError(
       model,
       context.sandboxEnv,
@@ -105,6 +111,33 @@ export class UserEnvResolver {
       auth_mode: context.providerAuthModes[issue.provider],
     });
     return issue.message;
+  }
+
+  /**
+   * Pre-spawn check: a session bound to a connected account that has since
+   * been disabled, archived, or fenced fails the prompt in the queue, before
+   * a sandbox is spawned into a credential denial.
+   */
+  private async checkBoundAccount(model: string, context: UserEnvContext): Promise<string | null> {
+    const provider = model.split("/", 1)[0] as SubscriptionProviderId;
+    const accountId = context.providerAccountIds[provider];
+    if (!accountId || context.providerAuthModes[provider] !== "provider_account") return null;
+    const account = await new ModelProviderAccountStore(this.db).getById(accountId);
+    const subscription = SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName;
+    if (!account || account.archivedAt !== null) {
+      return `The connected ${subscription} account for this session was removed. Start a new session with another account or an API key.`;
+    }
+    if (account.status !== "active") {
+      const state = account.status === "disabled" ? "disabled" : "needs to be reconnected";
+      this.log.error("provider_auth.account_unusable", {
+        event: "provider_auth.account_unusable",
+        provider,
+        provider_account_id: accountId,
+        status: account.status,
+      });
+      return `The connected ${subscription} account for this session ${state}. Reconnect it in Settings, then start a new session.`;
+    }
+    return null;
   }
 
   private async loadUserEnvContext(): Promise<UserEnvContext | null> {
@@ -121,6 +154,13 @@ export class UserEnvResolver {
     const providerAuthModes = Object.fromEntries(
       providerAuth.map(({ provider, authMode }) => [provider, authMode])
     ) as Record<SubscriptionProviderId, SessionProviderAuthMode>;
+    const providerAccountIds = Object.fromEntries(
+      providerAuth.flatMap((auth) =>
+        "providerAccountId" in auth && auth.providerAccountId
+          ? [[auth.provider, auth.providerAccountId]]
+          : []
+      )
+    ) as Partial<Record<SubscriptionProviderId, string>>;
 
     // Fail hard on secret loading — sandboxes must not silently lose secrets
     const encryptionKey = this.repoSecretsEncryptionKey;
@@ -171,7 +211,7 @@ export class UserEnvResolver {
       brokerSecrets: managedSecrets,
       providerAuthModes,
     });
-    return { sandboxEnv, providerAuthModes };
+    return { sandboxEnv, providerAuthModes, providerAccountIds };
   }
 
   /**

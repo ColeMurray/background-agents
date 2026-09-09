@@ -56,8 +56,36 @@ export class SessionLifecycleHandler {
     private readonly titleService: SessionTitleService,
     private readonly sockets: WebSocketManager,
     private readonly durableObjectId: string,
-    private readonly cancelSession: () => Promise<void>
+    private readonly cancelSession: () => Promise<void>,
+    private readonly terminateSandbox: (reason: string) => Promise<boolean> = async () => false
   ) {}
+
+  /**
+   * Credential revocation: stop the sandbox only if it is still the one that
+   * received the credential. A respawned sandbox never held it, so the call
+   * is a no-op there. The session itself stays resumable; the next prompt
+   * fails the pre-spawn account check with reconnect guidance.
+   */
+  async revokeSandbox(request: Request): Promise<Response> {
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return Response.json({ error: "Invalid request body" }, { status: 400 });
+    }
+    const body = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+    const expectedSandboxId = body?.expectedSandboxId;
+    const reason = typeof body?.reason === "string" ? body.reason : "provider credential revoked";
+    if (typeof expectedSandboxId !== "string" || !expectedSandboxId) {
+      return Response.json({ error: "expectedSandboxId is required" }, { status: 400 });
+    }
+    const sandbox = this.sandboxRepository.getSandbox();
+    if (!sandbox) return Response.json({ outcome: "no_sandbox" });
+    const currentId = sandbox.modal_sandbox_id ?? sandbox.id;
+    if (currentId !== expectedSandboxId) return Response.json({ outcome: "not_current" });
+    const terminated = await this.terminateSandbox(reason);
+    return Response.json({ outcome: terminated ? "terminated" : "not_current" });
+  }
 
   getState(): Response {
     const session = this.sessionCoreRepository.getSession();

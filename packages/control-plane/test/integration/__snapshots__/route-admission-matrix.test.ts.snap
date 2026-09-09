@@ -19,6 +19,7 @@ exports[`route admission matrix > admits a session-bound sandbox token on every 
   "POST /sessions/:id/children/:childId/prompt sandbox=400 wrong-token=401",
   "POST /sessions/:id/slack-notify sandbox=400 wrong-token=401",
   "POST /sessions/:id/provider-auth/:provider/access-token sandbox=404 wrong-token=401",
+  "POST /sessions/:id/provider-auth/:provider/runtime-credential sandbox=409 wrong-token=401",
   "GET /sessions/:id/commit-signing sandbox=200 wrong-token=401",
   "POST /sessions/:id/commit-signing sandbox=400 wrong-token=401",
 ]
@@ -291,6 +292,7 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "PUT /model-provider-account-defaults/:provider anonymous=401",
   "DELETE /model-provider-account-defaults/:provider anonymous=401",
   "POST /sessions/:id/provider-auth/:provider/access-token anonymous=401",
+  "POST /sessions/:id/provider-auth/:provider/runtime-credential anonymous=401",
   "GET /integration-settings/:id anonymous=401",
   "PUT /integration-settings/:id anonymous=401",
   "DELETE /integration-settings/:id anonymous=401",

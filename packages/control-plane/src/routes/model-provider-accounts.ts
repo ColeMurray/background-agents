@@ -46,7 +46,7 @@ import {
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
-import { SessionInternalPaths } from "../session/contracts";
+import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import {
   error,
@@ -69,10 +69,11 @@ const legacyAccessSchema = z.object({
   expires_in: z.number().optional(),
   account_id: z.string().optional(),
 });
-const LEGACY_REFRESH_PATH = {
+/** Providers that ever had a session-scoped legacy OAuth refresh path. */
+const LEGACY_REFRESH_PATH: Partial<Record<SubscriptionProviderId, SessionInternalPath>> = {
   openai: SessionInternalPaths.openaiTokenRefresh,
   xai: SessionInternalPaths.xaiTokenRefresh,
-} as const;
+};
 const providerAuthorizationLogger = createLogger("provider-device-authorization");
 
 function service(env: Env, ctx: RequestContext): ModelProviderAccountService {
@@ -422,11 +423,11 @@ async function handleLegacyProviderAccess(
   sessionId: string,
   providerId: SubscriptionProviderId
 ): Promise<Response> {
-  const response = await createSessionRuntimeClient(env, ctx).fetch(
-    sessionId,
-    LEGACY_REFRESH_PATH[providerId],
-    { method: "POST" }
-  );
+  const legacyPath = LEGACY_REFRESH_PATH[providerId];
+  if (!legacyPath) return error("Provider has no legacy scoped OAuth path", 409);
+  const response = await createSessionRuntimeClient(env, ctx).fetch(sessionId, legacyPath, {
+    method: "POST",
+  });
   if (!response.ok) return response;
   const parsed = legacyAccessSchema.safeParse(await response.json().catch(() => null));
   if (!parsed.success) return error("Provider access unavailable", 503);
