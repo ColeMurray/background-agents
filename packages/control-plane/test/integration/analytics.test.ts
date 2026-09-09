@@ -75,6 +75,52 @@ async function seedUser(
 describe("Analytics API", () => {
   beforeEach(cleanD1Tables);
 
+  it("returns session threads with token usage even when cost is zero", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now() - 1000;
+    for (const id of ["token-session", "legacy-session"]) {
+      await seedSession(store, {
+        id,
+        repoOwner: "group/subgroup",
+        repoName: "repo",
+        scmLogin: "alice",
+        status: "completed",
+        createdAt: now,
+        updatedAt: now,
+        totalCost: 0,
+        activeDurationMs: 5000,
+        messageCount: 2,
+        prCount: 0,
+      });
+    }
+    await store.updateMetrics("token-session", {
+      totalCost: 0,
+      totalTokens: 12500,
+      activeDurationMs: 5000,
+      messageCount: 2,
+      prCount: 0,
+    });
+    const response = await serviceFetch("https://test.local/analytics/breakdown?days=7&by=session");
+    expect(response.status).toBe(200);
+    const body = await response.json<AnalyticsBreakdownResponse>();
+    expect(body.entries).toHaveLength(2);
+    expect(body.entries.find((entry) => entry.key === "token-session")).toMatchObject({
+      displayName: "token-session",
+      repository: "group/subgroup/repo",
+      user: "alice",
+      status: "completed",
+      cost: 0,
+      totalTokens: 12500,
+      messageCount: 2,
+      avgDuration: 5000,
+    });
+    expect(body.entries.find((entry) => entry.key === "legacy-session")?.totalTokens).toBeNull();
+    const dashboard = await serviceFetch("https://test.local/analytics/dashboard?days=7");
+    const snapshot = await dashboard.json<AnalyticsDashboardResponse>();
+    expect(snapshot.breakdowns.session).toEqual(body);
+    expect(snapshot.breakdowns.user.entries[0].totalTokens).toBe(12500);
+  });
+
   it("returns one coherently-windowed dashboard snapshot", async () => {
     const before = Date.now();
     const response = await serviceFetch("https://test.local/analytics/dashboard?days=7");
@@ -384,6 +430,7 @@ describe("Analytics API", () => {
         prs: 1,
         messageCount: 3,
         avgDuration: 100_000,
+        totalTokens: null,
         lastActive: aliceCreatedAt + 2_000,
       },
       {
@@ -397,6 +444,7 @@ describe("Analytics API", () => {
         prs: 0,
         messageCount: 0,
         avgDuration: 0,
+        totalTokens: null,
         lastActive: unknownActiveAt + 4_000,
       },
       {
@@ -410,6 +458,7 @@ describe("Analytics API", () => {
         prs: 0,
         messageCount: 2,
         avgDuration: 50_000,
+        totalTokens: null,
         lastActive: bobFailedAt + 3_000,
       },
     ]);
@@ -521,6 +570,7 @@ describe("Analytics API", () => {
         prs: 2,
         messageCount: 16,
         avgDuration: 360_000,
+        totalTokens: null,
         lastActive: webPendingAt + 10_000,
       },
       {
@@ -533,6 +583,7 @@ describe("Analytics API", () => {
         prs: 0,
         messageCount: 4,
         avgDuration: 300_000,
+        totalTokens: null,
         lastActive: apiActiveAt + 8_000,
       },
       {
@@ -545,6 +596,7 @@ describe("Analytics API", () => {
         prs: 0,
         messageCount: 1,
         avgDuration: 30_000,
+        totalTokens: null,
         lastActive: noRepoCompletedAt + 9_000,
       },
     ]);
@@ -743,6 +795,7 @@ describe("Analytics API", () => {
         prs: 1,
         messageCount: 8,
         avgDuration: 75_000,
+        totalTokens: null,
         lastActive: now - 24 * 60 * 60 * 1000 + 2_000,
       },
       {
@@ -756,6 +809,7 @@ describe("Analytics API", () => {
         prs: 0,
         messageCount: 2,
         avgDuration: 30_000,
+        totalTokens: null,
         lastActive: now - 3 * 24 * 60 * 60 * 1000 + 3_000,
       },
     ]);

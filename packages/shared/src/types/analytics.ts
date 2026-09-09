@@ -3,7 +3,7 @@ import type { SpawnSource } from "./sessions";
 export const ANALYTICS_DAYS = [7, 14, 30, 90] as const;
 export type AnalyticsDays = (typeof ANALYTICS_DAYS)[number];
 
-export const ANALYTICS_BREAKDOWN_BY = ["user", "repo"] as const;
+export const ANALYTICS_BREAKDOWN_BY = ["user", "repo", "session"] as const;
 export type AnalyticsBreakdownBy = (typeof ANALYTICS_BREAKDOWN_BY)[number];
 
 export interface AnalyticsStatusBreakdown {
@@ -36,6 +36,12 @@ export interface AnalyticsTimeseriesResponse {
 export interface AnalyticsBreakdownEntry {
   key: string;
   displayName?: string;
+  /** Present for session breakdowns. */
+  repository?: string | null;
+  user?: string;
+  status?: string;
+  /** Null when usage has not been reported; omitted by older servers. */
+  totalTokens?: number | null;
   sessions: number;
   completed: number;
   failed: number;
@@ -130,6 +136,7 @@ export interface AnalyticsDashboardResponse {
   breakdowns: {
     repository: AnalyticsBreakdownResponse;
     user: AnalyticsBreakdownResponse;
+    session: AnalyticsBreakdownResponse;
   };
   pullRequests: AnalyticsPullRequestsResponse;
 }

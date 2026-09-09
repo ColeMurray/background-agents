@@ -16,6 +16,7 @@ import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
+import type { EventRepository } from "./event-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
 import type { BackgroundTasks } from "../platform-ports";
@@ -37,7 +38,8 @@ export class SessionStatusService {
     private readonly messenger: SessionMessenger,
     private readonly sessionIndex: SessionIndexProjections,
     /** Reaches the parent session's runtime for the child rollup. */
-    private readonly sessions: SessionRuntimeClient
+    private readonly sessions: SessionRuntimeClient,
+    private readonly eventRepository: Pick<EventRepository, "getTotalTokens">
   ) {}
 
   /**
@@ -277,6 +279,7 @@ export class SessionStatusService {
     const session = this.repository.getSession();
     if (!session) return;
 
+    const totalTokens = this.eventRepository.getTotalTokens();
     const messageCount = this.messageRepository.getMessageCount();
     const activeDurationMs = this.messageRepository.getActiveDurationMs();
     const artifacts = this.artifactRepository.listArtifacts();
@@ -286,6 +289,7 @@ export class SessionStatusService {
       () =>
         this.sessionIndex.updateMetrics(sessionId, {
           totalCost: session.total_cost ?? 0,
+          totalTokens,
           activeDurationMs,
           messageCount,
           prCount,

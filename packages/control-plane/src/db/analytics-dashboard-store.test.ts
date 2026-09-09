@@ -36,8 +36,8 @@ describe("AnalyticsDashboardStore", () => {
     });
 
     expect(batch).toHaveBeenCalledTimes(1);
-    expect(statements).toHaveLength(12);
-    expect(batchedStatements).toHaveLength(12);
+    expect(statements).toHaveLength(13);
+    expect(batchedStatements).toHaveLength(13);
     expect(batchedStatements.every((statement) => statements.includes(statement))).toBe(true);
     expect(response).toMatchObject({
       generatedAt: 1_700_000_000_000,

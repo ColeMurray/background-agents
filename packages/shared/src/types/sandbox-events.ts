@@ -89,6 +89,8 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     /** Cumulative reported cost of the whole turn so far; idempotent on resend. */
     messageCostUsd: z.number().nonnegative().optional(),
     tokens: tokenUsageSchema.optional(),
+    /** Stable runtime part ID, used to deduplicate usage reports. */
+    stepId: z.string().optional(),
     reason: z.string().optional(),
     isSubtask: z.boolean().optional(),
     childSessionId: z.string().optional(),

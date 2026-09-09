@@ -666,6 +666,8 @@ class OpenCodePromptStream:
                 "messageId": state.message_id,
                 "messageCostUsd": state.message_cost_usd(),
             }
+            if part.get("id"):
+                finish_event["stepId"] = part["id"]
             if cost is not None:
                 finish_event["cost"] = cost
             events.append(finish_event)

@@ -29,7 +29,7 @@ const snapshot = {
     },
   },
   timeseries: { series: [] },
-  breakdowns: { repository: { entries: [] }, user: { entries: [] } },
+  breakdowns: { repository: { entries: [] }, user: { entries: [] }, session: { entries: [] } },
   pullRequests: {
     funnel: { created: 2, open: 1, draft: 0, merged: 1, closed: 0 },
     prSessionCost: 1,

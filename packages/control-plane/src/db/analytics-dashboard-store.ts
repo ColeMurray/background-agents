@@ -29,13 +29,15 @@ export class AnalyticsDashboardStore {
       now: filters.endAt,
     });
 
-    const [summary, timeseries, repository, user, ...pullRequestResults] = await this.db.batch([
-      analytics.prepareSummary(sessionFilters),
-      analytics.prepareTimeseries(sessionFilters),
-      analytics.prepareBreakdown(sessionFilters, "repo"),
-      analytics.prepareBreakdown(sessionFilters, "user"),
-      ...pullRequestStatements,
-    ]);
+    const [summary, timeseries, repository, user, session, ...pullRequestResults] =
+      await this.db.batch([
+        analytics.prepareSummary(sessionFilters),
+        analytics.prepareTimeseries(sessionFilters),
+        analytics.prepareBreakdown(sessionFilters, "repo"),
+        analytics.prepareBreakdown(sessionFilters, "user"),
+        analytics.prepareBreakdown(sessionFilters, "session"),
+        ...pullRequestStatements,
+      ]);
 
     return {
       generatedAt: filters.endAt,
@@ -49,6 +51,7 @@ export class AnalyticsDashboardStore {
       breakdowns: {
         repository: analytics.decodeBreakdown(repository),
         user: analytics.decodeBreakdown(user),
+        session: analytics.decodeBreakdown(session),
       },
       pullRequests: pullRequests.decode(pullRequestResults),
     };

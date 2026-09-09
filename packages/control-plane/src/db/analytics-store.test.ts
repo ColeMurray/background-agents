@@ -126,6 +126,7 @@ describe("AnalyticsStore row decoding", () => {
           prs: 3,
           messageCount: 8,
           avgDuration: 100,
+          totalTokens: null,
           lastActive: 200,
         },
       ],

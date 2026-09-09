@@ -8,6 +8,7 @@ import { AnalyticsPullRequestRepoTable } from "@/components/analytics/pull-reque
 import { AnalyticsRepoBarChart } from "@/components/analytics/repo-bar-chart";
 import { AnalyticsSummaryCards } from "@/components/analytics/summary-cards";
 import { AnalyticsTimeseriesChart } from "@/components/analytics/timeseries-chart";
+import { AnalyticsSessionTable } from "@/components/analytics/session-table";
 import { AnalyticsUserTable } from "@/components/analytics/user-table";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { Badge } from "@/components/ui/badge";
@@ -29,8 +30,16 @@ export default function AnalyticsPage() {
   const [days, setDays] = useState<AnalyticsDays>(30);
   const [sortKey, setSortKey] = useState<AnalyticsUserSortKey>("sessions");
   const [sortDirection, setSortDirection] = useState<AnalyticsSortDirection>("desc");
-  const { summary, timeseries, repoBreakdown, userBreakdown, pullRequests, loading, error } =
-    useAnalyticsDashboard(days);
+  const {
+    summary,
+    timeseries,
+    repoBreakdown,
+    userBreakdown,
+    sessionBreakdown,
+    pullRequests,
+    loading,
+    error,
+  } = useAnalyticsDashboard(days);
   const userEntries = userBreakdown?.entries;
 
   const sortedUserEntries = useMemo(
@@ -149,6 +158,8 @@ export default function AnalyticsPage() {
                 <AnalyticsTimeseriesChart series={timeseries?.series} loading={loading} />
                 <AnalyticsRepoBarChart entries={repoBreakdown?.entries} loading={loading} />
               </div>
+
+              <AnalyticsSessionTable entries={sessionBreakdown?.entries} loading={loading} />
 
               <AnalyticsUserTable
                 entries={sortedUserEntries}

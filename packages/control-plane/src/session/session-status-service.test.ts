@@ -90,7 +90,8 @@ function harness(options: { session?: SessionRow | null } = {}) {
     artifactRepository,
     messenger,
     sessionIndex,
-    parentSessions
+    parentSessions,
+    { getTotalTokens: () => 1500 }
   );
 
   return {
@@ -156,6 +157,7 @@ describe("SessionStatusService.transition", () => {
 
     expect(h.sessionIndex.updateMetrics).toHaveBeenCalledWith("public-session-1", {
       totalCost: 2.5,
+      totalTokens: 1500,
       activeDurationMs: 4500,
       messageCount: 3,
       prCount: 2,

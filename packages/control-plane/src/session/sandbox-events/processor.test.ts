@@ -58,6 +58,7 @@ function createProcessor() {
     createContextCompactionEvent: vi.fn(),
     upsertToolCallEvent: vi.fn(),
     createEvent: vi.fn(),
+    recordStepUsage: vi.fn(),
   } as unknown as EventRepository;
   const artifactRepository = { createArtifact: vi.fn() } as unknown as ArtifactRepository;
 
@@ -424,6 +425,7 @@ describe("SessionSandboxEventProcessor", () => {
       "msg-1",
       expect.any(Number)
     );
+    expect(h.eventRepository.recordStepUsage).toHaveBeenCalledWith(event, expect.any(Number));
     expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
   });
 

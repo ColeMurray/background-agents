@@ -748,6 +748,7 @@ export class SessionIndexStore {
     id: string,
     metrics: {
       totalCost: number;
+      totalTokens?: number | null;
       activeDurationMs: number;
       messageCount: number;
       prCount: number;
@@ -755,10 +756,17 @@ export class SessionIndexStore {
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE sessions SET total_cost = ?, active_duration_ms = ?, message_count = ?, pr_count = ?
+        `UPDATE sessions SET total_cost = ?, active_duration_ms = ?, message_count = ?, pr_count = ?, total_tokens = COALESCE(?, total_tokens)
          WHERE id = ?`
       )
-      .bind(metrics.totalCost, metrics.activeDurationMs, metrics.messageCount, metrics.prCount, id)
+      .bind(
+        metrics.totalCost,
+        metrics.activeDurationMs,
+        metrics.messageCount,
+        metrics.prCount,
+        metrics.totalTokens ?? null,
+        id
+      )
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
