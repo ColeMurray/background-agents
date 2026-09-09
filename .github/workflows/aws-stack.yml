@@ -59,6 +59,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # Nothing here runs an authenticated git command, so there is no
+          # reason to leave a token behind for the pull request's own code.
+          persist-credentials: false
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4

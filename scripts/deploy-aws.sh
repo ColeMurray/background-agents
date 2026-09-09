@@ -8,18 +8,19 @@
 # The deployed version is an SSM parameter the instance reads into `.env` on
 # every activation, so a deploy is a parameter write plus one remote command --
 # no new instance, and no ssh. The command fetches (which brings down the stack
-# files, `.env` and the activation script itself) and then runs the activation,
-# which pulls and `up -d --wait`s without stopping the old stack first: a failure
-# before the swap leaves the running deployment untouched.
+# files, `.env` and the activation script itself) and, only if that worked, runs
+# the activation, which pulls and `up -d --wait`s without stopping the old stack
+# first: a failure before the swap leaves the running deployment untouched.
 #
 # It names those two steps rather than a helper baked into the instance, because
 # the instance ignores `user_data_base64` -- a host keeps whatever cloud-init
 # wrote at its first boot, so anything a deploy assumes is installed there is an
-# assumption about how old the instance is.
+# assumption about how old the instance is. Naming them costs the `set -e` the
+# helper has, which is why they go as one `&&` command and not as two.
 #
-# A rollback is therefore the same two steps with the old value, which is why
-# this script and not the workflow owns the sequence: the value to restore has
-# to be read before anything moves.
+# A rollback is therefore the same command with the old value, which is why this
+# script and not the workflow owns the sequence: the value to restore has to be
+# read before anything moves.
 set -euo pipefail
 
 : "${AWS_REGION:?AWS_REGION is required}"
@@ -79,9 +80,21 @@ activate() {
   # image and sends a second one. The document rejects anything under 30s; the
   # tests compress the local budget well below that, hence the floor.
   execution_timeout=$(( COMMAND_TIMEOUT_SECONDS < 30 ? 30 : COMMAND_TIMEOUT_SECONDS ))
-  parameters="$(printf '{"commands":["%s","%s"],"executionTimeout":["%s"]}' \
-    "/usr/local/bin/open-inspect-fetch-config" \
-    "bash /opt/open-inspect/deploy.sh" \
+
+  # One command rather than two, joined by `&&`. AWS-RunShellScript reports the
+  # exit status of the last command it ran, so a fetch that fails ahead of an
+  # activation that succeeds is reported as a success -- and that activation
+  # would activate the `.env` already on the instance, which names the previous
+  # image. `compose pull` and `up` would be no-ops, the health check would pass
+  # because what is running is the deployment that was working a minute ago, and
+  # this script would report having deployed an image the instance never
+  # fetched. Nothing looks wrong, so nothing rolls back.
+  #
+  # This is what the instance's own `open-inspect-deploy` does under `set -e`.
+  # Inlining the two steps here is deliberate -- a deploy must not assume how
+  # old the instance is -- but it must not lose the `set -e` along with them.
+  parameters="$(printf '{"commands":["%s"],"executionTimeout":["%s"]}' \
+    "/usr/local/bin/open-inspect-fetch-config && exec bash /opt/open-inspect/deploy.sh" \
     "$execution_timeout")"
 
   command_id="$(aws ssm send-command \

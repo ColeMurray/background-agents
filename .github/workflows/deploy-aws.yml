@@ -126,6 +126,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # This job holds AWS credentials; it has no reason to also hold a git
+          # token. Nothing after this pushes, tags or fetches.
+          persist-credentials: false
 
       - name: Check the environment's deploy configuration
         env:

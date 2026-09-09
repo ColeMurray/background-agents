@@ -11,7 +11,14 @@
 // service healthy again, the way it would in reality.
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -219,10 +226,13 @@ test("the remote command bounds its own execution and assumes nothing about the 
   // The instance ignores user_data_base64, so a host keeps whatever cloud-init
   // wrote at its first boot. Naming anything installed that way makes a deploy
   // depend on how old the instance is; the fetch brings the rest down itself,
-  // including the activation script the second command runs.
+  // including the activation script it hands off to.
+  //
+  // One entry, not two: AWS-RunShellScript reports the status of the last
+  // command it ran, so two would report a successful activation over a failed
+  // fetch. The test below is what proves the `&&` does its job.
   assert.deepEqual(parameters.commands, [
-    "/usr/local/bin/open-inspect-fetch-config",
-    "bash /opt/open-inspect/deploy.sh",
+    "/usr/local/bin/open-inspect-fetch-config && exec bash /opt/open-inspect/deploy.sh",
   ]);
 
   // Without executionTimeout the document runs to completion whatever this
@@ -231,4 +241,47 @@ test("the remote command bounds its own execution and assumes nothing about the 
   // that bounds delivery, not the shell. "30" rather than this run's 5-second
   // budget because the document rejects anything lower, so the script floors it.
   assert.deepEqual(parameters.executionTimeout, ["30"]);
+});
+
+// Runs the payload's command with the two absolute paths it names replaced by
+// stubs. What is under test is the shell between them, not where they live --
+// the deepEqual above is what holds the paths.
+function runRemoteCommand(command, { fetchExits }) {
+  const dir = mkdtempSync(join(tmpdir(), "deploy-aws-remote-"));
+  const fetch = join(dir, "fetch");
+  const activate = join(dir, "activate");
+  const marker = join(dir, "activated");
+
+  writeFileSync(fetch, `#!/bin/bash\nexit ${fetchExits}\n`);
+  writeFileSync(activate, `#!/bin/bash\ntouch "${marker}"\n`);
+  chmodSync(fetch, 0o755);
+  chmodSync(activate, 0o755);
+
+  const script = command
+    .replace("/usr/local/bin/open-inspect-fetch-config", fetch)
+    .replace("/opt/open-inspect/deploy.sh", activate);
+  assert.notEqual(script, command, "the payload no longer names the paths this stubs");
+
+  const result = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+  return { status: result.status, activated: existsSync(marker) };
+}
+
+test("a configuration fetch that fails never reaches the activation", () => {
+  // The failure this rules out is silent. Run Command reports the status of the
+  // last command it ran, so a fetch that fails ahead of an activation that
+  // succeeds reports Success -- and that activation would bring up the `.env`
+  // already on the instance, naming the previous image. The health check passes,
+  // because the previous image is the one that was working; the deploy reports
+  // the image it never fetched; nothing rolls back, because nothing looks wrong.
+  const run = runDeploy({ previous: OLD, image: NEW });
+  const [command] = JSON.parse(run.parameters).commands;
+
+  const failed = runRemoteCommand(command, { fetchExits: 1 });
+  assert.equal(failed.activated, false, "the activation must not run after a failed fetch");
+  assert.notEqual(failed.status, 0, "and the command must report the fetch's failure");
+
+  // The other half: the chain has to still activate when the fetch works.
+  const ok = runRemoteCommand(command, { fetchExits: 0 });
+  assert.equal(ok.activated, true);
+  assert.equal(ok.status, 0);
 });
