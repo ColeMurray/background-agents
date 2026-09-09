@@ -423,19 +423,32 @@ class OpenCodePromptStream:
 
             events: list[dict[str, Any]] = []
             if role == "assistant" and oc_msg_id:
+                created_epoch_ms = _message_created_epoch_ms(info)
                 disposition = state.attribution.assistant_disposition(
                     oc_msg_id,
                     parent_id,
                     is_summary=is_compaction_summary,
-                    created_epoch_ms=_message_created_epoch_ms(info),
+                    created_epoch_ms=created_epoch_ms,
                 )
-                if disposition is not AssistantMessageDisposition.REJECT and info.get("error"):
+                # A rejected message's error is normally another turn's and
+                # re-emitting it would fail this prompt spuriously. One case is
+                # ours: a message created after this prompt started whose
+                # parentID we never matched — then the error is the only account
+                # of why the prompt produced no output, so swallowing it reports
+                # the failure as silence.
+                if info.get("error") and self._error_belongs_to_prompt(
+                    state,
+                    disposition,
+                    is_summary=is_compaction_summary,
+                    created_epoch_ms=created_epoch_ms,
+                ):
                     error_event = self._parent_error_event_once(state, info["error"])
                     if error_event:
                         self._log.error(
                             "bridge.message_error",
                             error_msg=error_event["error"],
                             oc_msg_id=oc_msg_id,
+                            disposition=disposition.value,
                         )
                         events.append(error_event)
 
@@ -777,6 +790,30 @@ class OpenCodePromptStream:
         for entry in pending:
             events.extend(self._handle_part(state, entry.part, entry.delta, is_subtask=is_subtask))
         return events
+
+    def _error_belongs_to_prompt(
+        self,
+        state: _PromptState,
+        disposition: AssistantMessageDisposition,
+        *,
+        is_summary: bool,
+        created_epoch_ms: int | None,
+    ) -> bool:
+        """Whether an errored assistant message's error is this prompt's to report.
+
+        Attributed messages always are. A rejected one only when it cannot be a
+        prior turn: a compaction summary's error is internal, and a message
+        created before this prompt started belongs to an earlier turn that the
+        post-compaction history replays. An absent timestamp errs toward
+        reporting — a swallowed error surfaces as unexplained silence.
+        """
+        if disposition is not AssistantMessageDisposition.REJECT:
+            return True
+        if is_summary:
+            return False
+        if created_epoch_ms is None:
+            return True
+        return created_epoch_ms >= state.attribution.prompt_started_epoch_ms
 
     def _log_parent_idle(self, state: _PromptState, log_event: str) -> None:
         self._log.debug(

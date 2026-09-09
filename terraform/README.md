@@ -365,10 +365,9 @@ module "web_app" {
 
   environment_variables = [
     {
-      key       = "API_URL"
-      value     = "https://api.example.com"
-      targets   = ["production", "preview"]
-      sensitive = false
+      key     = "API_URL"
+      value   = "https://api.example.com"
+      targets = ["production", "preview"]
     }
   ]
 }

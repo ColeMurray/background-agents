@@ -1,6 +1,6 @@
 {
-  "runtimeVersion": "v61-sandbox-sbin-path",
-  "generation": 61,
+  "runtimeVersion": "v65-opencode-1-18-25-no-apple-double",
+  "generation": 65,
   "minimumCompatibleGeneration": 60,
   "minimumRebuildGeneration": 60
 }

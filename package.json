@@ -36,7 +36,7 @@
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.21.0",
-    "wrangler": "^4.103.0"
+    "wrangler": "^4.124.0"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -57,5 +57,12 @@
       "ruff check --fix",
       "ruff format"
     ]
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "esbuild@0.25.4": true,
+    "fsevents@2.3.3": true,
+    "sharp@0.34.5": true,
+    "workerd@1.20260815.1": true
   }
 }

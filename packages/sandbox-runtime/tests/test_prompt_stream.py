@@ -828,6 +828,32 @@ class TestApplySseEventDispositions:
 
         assert step.events == []
 
+    def test_rejected_assistant_error_from_this_prompt_is_surfaced(self):
+        """An unmatched parentID must not swallow the run's only error: without
+        this the prompt fails as "no assistant output" with the cause lost."""
+        stream = make_stream()
+        state = make_state(PROMPT_MESSAGE_ID)
+
+        step = stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": oc_message_id(PROMPT_TS_MS, 4, "b"),
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": oc_message_id(PROMPT_TS_MS, 9, "z"),
+                        "time": {"created": PROMPT_TS_MS + 5},
+                        "error": {"name": "ProviderAuthError", "data": {"message": "no key"}},
+                    }
+                },
+            ),
+        )
+
+        assert [event["type"] for event in step.events] == ["error"]
+        assert "no key" in step.events[0]["error"]
+
     def test_session_created_tracks_direct_children_only(self):
         state = make_state()
         stream = make_stream()

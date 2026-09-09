@@ -63,10 +63,9 @@ variable "serverless_region" {
 variable "environment_variables" {
   description = "List of environment variables"
   type = list(object({
-    key       = string
-    value     = string
-    targets   = list(string) # ["production", "preview", "development"]
-    sensitive = optional(bool, false)
+    key     = string
+    value   = string
+    targets = list(string) # ["production", "preview", "development"]
   }))
   default   = []
   sensitive = true

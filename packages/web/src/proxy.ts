@@ -7,7 +7,7 @@ import {
   resolveTraceId,
 } from "@/lib/request-correlation";
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const correlation = {
     traceId: resolveTraceId(request.headers.get("x-trace-id")),
     requestId: createRequestId(),

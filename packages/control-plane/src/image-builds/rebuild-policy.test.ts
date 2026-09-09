@@ -60,9 +60,9 @@ describe("evaluateImageBuildRebuildPolicy", () => {
 
   it("rebuilds each provider's pre-wraparound image and keeps the shared new generation", () => {
     const superseded: Array<[ImageBuildProvider, string]> = [
-      ["modal", "v58-image-build-stdin-launch-vnc"],
+      ["modal", "v59-opencode-1-18-18"],
       ["opencomputer", "v57-vnc-opencode-1-18-11"],
-      ["vercel", "v57-vnc-opencode-1-18-11"],
+      ["vercel", "v59-vnc-opencode-1-18-18"],
     ];
     for (const [provider, runtimeVersion] of superseded) {
       expect(

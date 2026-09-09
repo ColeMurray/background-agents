@@ -32,7 +32,7 @@ resource "vercel_project_environment_variable" "env" {
   key        = var.environment_variables[count.index].key
   value      = var.environment_variables[count.index].value
   target     = var.environment_variables[count.index].targets
-  sensitive  = var.environment_variables[count.index].sensitive
+  sensitive  = true
 }
 
 # Custom domain (optional)

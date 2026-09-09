@@ -86,10 +86,19 @@ function buildLocalRuntimeArchive(sourceDirInput: string): {
         archivePath,
         "-C",
         dirname(sourceDir),
+        // AppleDouble sidecars are 163-byte binaries that macOS tar emits beside
+        // every file carrying an extended attribute. `._foo.js` looks like a
+        // module to any *.js glob, and OpenCode runs on Bun: importing one fails
+        // to transpile with "BuildMessage: Unexpected \0", which Effect reports
+        // as a defect rather than an error — a silent prompt failure.
+        "--exclude",
+        "._*",
         `${packageDir}/pyproject.toml`,
         `${packageDir}/src`,
       ],
-      { stdio: ["ignore", "inherit", "inherit"] }
+      // Belt to the --exclude braces: COPYFILE_DISABLE stops macOS tar from
+      // generating the sidecars in the first place. No effect on GNU tar.
+      { stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, COPYFILE_DISABLE: "1" } }
     );
 
     const archive = readFileSync(archivePath);

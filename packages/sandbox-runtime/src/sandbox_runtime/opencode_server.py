@@ -42,6 +42,19 @@ def resolve_opencode_global_config_dir() -> Path:
     return base / "opencode"
 
 
+def is_apple_double(name: str) -> bool:
+    """Whether a filename is a macOS AppleDouble sidecar (``._foo.js``).
+
+    macOS tar writes one beside every file with an extended attribute. The
+    sidecar is a small binary, but it inherits the real file's extension, so a
+    ``*.js`` glob happily installs it as a module — and Bun, which OpenCode runs
+    on, fails to transpile it with "BuildMessage: Unexpected \\0". Effect surfaces
+    that as a defect, not an error, so the prompt dies with no assistant output
+    and nothing on the event stream. Never install one.
+    """
+    return name.startswith("._")
+
+
 class OpenCodeServer:
     HEALTH_CHECK_TIMEOUT = 30.0
     MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
@@ -153,6 +166,9 @@ class OpenCodeServer:
         if tools_dir.exists():
             for tool_file in tools_dir.iterdir():
                 if not (tool_file.is_file() and tool_file.suffix == ".js"):
+                    continue
+                if is_apple_double(tool_file.name):
+                    self.log.warn("opencode.apple_double_skipped", path=str(tool_file))
                     continue
                 gate_env = AGENT_TOOLS_GATED_ON_ENV.get(tool_file.name)
                 if gate_env and os.environ.get(gate_env, "").lower() != "true":
