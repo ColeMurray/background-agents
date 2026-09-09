@@ -93,19 +93,43 @@ export function resolveRepositoryTarget(repo, repositories) {
   return owner.split("/").some((segment) => !segment) ? null : { owner, name };
 }
 
+// This sandbox-shipped file cannot import the workspace package at runtime.
+// Keep these envelopes symmetric with @open-inspect/shared/pull-request-tool.
 export function formatPullRequestSuccess(result) {
+  const state = result?.state === "draft" ? "draft" : "open";
   const branches =
     result?.headBranch && result?.baseBranch
       ? ` (${result.headBranch} -> ${result.baseBranch})`
       : "";
+  let agentMessage;
   if (result?.updated) {
-    return `Pull request updated with your latest commits.\n\nPR #${result.prNumber}${branches}: ${result.prUrl}`;
+    agentMessage = `Pull request updated with your latest commits.\n\nPR #${result.prNumber}${branches}: ${result.prUrl}`;
+  } else {
+    const status =
+      state === "draft"
+        ? "The pull request is in draft mode."
+        : "The pull request is now ready for review.";
+    agentMessage = `Pull request created successfully!\n\nPR #${result.prNumber}${branches}: ${result.prUrl}\n\n${status}`;
   }
-  const status =
-    result?.state === "draft"
-      ? "The pull request is in draft mode."
-      : "The pull request is now ready for review.";
-  return `Pull request created successfully!\n\nPR #${result.prNumber}${branches}: ${result.prUrl}\n\n${status}`;
+
+  return JSON.stringify({
+    kind: result.updated ? "updated" : "created",
+    prNumber: result.prNumber,
+    prUrl: result.prUrl,
+    state,
+    headBranch: result.headBranch,
+    baseBranch: result.baseBranch,
+    agentMessage,
+  });
+}
+
+export function formatPullRequestFailure(message) {
+  return JSON.stringify({ kind: "failure", message, agentMessage: message });
+}
+
+export function formatManualPullRequest(createPrUrl) {
+  const agentMessage = `Branch pushed successfully.\n\nCreate the pull request in GitHub:\n${createPrUrl}\n\nUse your logged-in GitHub account to finish creating the PR.`;
+  return JSON.stringify({ kind: "manual", createPrUrl, agentMessage });
 }
 
 async function getCurrentBranch(repoPath) {
@@ -165,7 +189,7 @@ export default tool({
         "Whether to open the pull request as a draft. Set to true only when the user explicitly asks for a draft; otherwise omit this field so the pull request is ready for review. Note: repository policy may still require draft mode."
       ),
   },
-  async execute(args, context) {
+  async execute(args, _context) {
     console.log(`[create-pull-request] execute() called with args:`, JSON.stringify(args));
     const title = args.title || "Changes from OpenCode session";
     const body = args.body || "Automated PR created via create-pull-request tool";
@@ -181,10 +205,14 @@ export default tool({
     if (args.repo) {
       const target = resolveRepositoryTarget(args.repo, repositories);
       if (!target && repositories.length > 0) {
-        return `Failed to create pull request: ${args.repo} is not part of this session. Valid values: ${validValues}.`;
+        return formatPullRequestFailure(
+          `Failed to create pull request: ${args.repo} is not part of this session. Valid values: ${validValues}.`
+        );
       }
       if (!target) {
-        return 'Failed to create pull request: repo must be "owner/name".';
+        return formatPullRequestFailure(
+          'Failed to create pull request: repo must be "owner/name".'
+        );
       }
       // Use the manifest's canonical casing and path — checkout directories
       // and the control plane's member records are case-sensitive.
@@ -192,7 +220,9 @@ export default tool({
       repoName = target.name;
       repoPath = target.path;
     } else if (repositories.length > 1) {
-      return `Failed to create pull request: this session spans multiple repositories — pass repo with one of: ${validValues}.`;
+      return formatPullRequestFailure(
+        `Failed to create pull request: this session spans multiple repositories — pass repo with one of: ${validValues}.`
+      );
     }
 
     const headBranch = await getCurrentBranch(repoPath);
@@ -205,7 +235,9 @@ export default tool({
 
       if (!sessionId) {
         console.log("[create-pull-request] ERROR: Session ID not found");
-        return "Failed to create pull request: Session ID not found in environment. Please check that SESSION_CONFIG is set correctly.";
+        return formatPullRequestFailure(
+          "Failed to create pull request: Session ID not found in environment. Please check that SESSION_CONFIG is set correctly."
+        );
       }
 
       // Use the session-specific endpoint
@@ -252,14 +284,14 @@ export default tool({
         }
 
         console.log(`[create-pull-request] ERROR: HTTP ${response.status} - ${errorMessage}`);
-        return userMessage;
+        return formatPullRequestFailure(userMessage);
       }
 
       const result = await response.json();
 
       if (result?.status === "manual" && result?.createPrUrl) {
         console.log("[create-pull-request] SUCCESS: branch pushed, manual PR URL generated");
-        return `Branch pushed successfully.\n\nCreate the pull request in GitHub:\n${result.createPrUrl}\n\nUse your logged-in GitHub account to finish creating the PR.`;
+        return formatManualPullRequest(result.createPrUrl);
       }
 
       console.log(`[create-pull-request] SUCCESS: PR #${result.prNumber} created`);
@@ -267,7 +299,7 @@ export default tool({
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.log(`[create-pull-request] ERROR: ${message}`);
-      return `Failed to create pull request: ${message}`;
+      return formatPullRequestFailure(`Failed to create pull request: ${message}`);
     }
   },
 });

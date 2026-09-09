@@ -5,12 +5,14 @@
 import { normalizeWebhookEvent } from "@open-inspect/shared/triggers";
 import { AutomationStore } from "../db/automation-store";
 import { verifyWebhookApiKey } from "../auth/webhook-key";
-import type { Route, RequestContext } from "../routes/shared";
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { RequestContext } from "../routes/shared";
 import {
-  defineRoute,
   error,
   json,
-  parsePattern,
+  NO_AUTHORIZATION,
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
 } from "../routes/shared";
 import type { Env } from "../types";
@@ -30,11 +32,10 @@ export function parseWebhookIdempotencyKey(body: unknown): string | undefined {
 async function handleAutomationWebhook(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const automationId = match.groups?.id;
-  if (!automationId) return error("Automation ID required", 400);
+  const automationId = params.id;
 
   // 1. Validate content type
   const contentType = request.headers.get("content-type");
@@ -83,14 +84,14 @@ async function handleAutomationWebhook(
 
   // 6. Normalize and process the event.
   const event = normalizeWebhookEvent(automationId, body, idempotencyKey);
-  const response = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
-
-  const result = await response.json<{ triggered: number; skipped: number }>();
-  return json({ ok: true, ...result }, response.status === 200 ? 200 : response.status);
+  const result = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
+  return json({ ok: true, ...result });
 }
 
-export const automationWebhookRoute: Route = defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
-  method: "POST",
-  pattern: parsePattern("/webhooks/automation/:id"),
-  handler: handleAutomationWebhook,
-});
+export const automationWebhookRoutes = new Hono<ControlPlaneHonoEnv>();
+
+automationWebhookRoutes.post(
+  "/webhooks/automation/:id",
+  admit({ ...SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, authorization: NO_AUTHORIZATION }),
+  (c) => dispatch(c, handleAutomationWebhook)
+);

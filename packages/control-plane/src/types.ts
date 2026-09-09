@@ -2,29 +2,18 @@
  * Type definitions for Open-Inspect Control Plane.
  */
 
-import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
+import type { CacheStore } from "@open-inspect/shared/cache-store";
+import type { SqlDatabase } from "./db/sql-database";
+import type { Jobs } from "./jobs";
+import type { FetchClient, QueueMetricsSource } from "./platform-ports";
+import type { SessionRuntimeDispatch } from "./session/runtime-client";
+import type { ObjectStorage } from "./storage/object-storage";
 
-// Environment bindings
-export interface Env {
-  // Durable Objects
-  SESSION: DurableObjectNamespace;
-
-  // KV Namespaces
-  REPOS_CACHE: KVNamespace; // Short-lived cache for /repos listing
-
-  // Service bindings
-  SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
-  LINEAR_BOT?: Fetcher; // Optional - only if linear-bot is deployed
-
-  // D1 database
-  DB: D1Database;
-
-  // Durable callback-to-finalizer handoff for provider-session image builds.
-  IMAGE_BUILD_FINALIZATION_QUEUE?: Queue<ImageBuildFinalizationJob>;
-
-  // R2 buckets
-  MEDIA_BUCKET: R2Bucket;
-
+/**
+ * The deployment's configuration: variables and secrets, every one a string,
+ * so any host can supply them.
+ */
+export interface EnvConfig {
   // Secrets
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
@@ -63,6 +52,7 @@ export interface Env {
   // Variables
   DEPLOYMENT_NAME: string;
   APP_NAME?: string; // Display name for user-visible UI, PR footers, and HTTP User-Agent headers
+  GITHUB_BOT_USERNAME: string; // GitHub App bot login used for self-origin checks
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
@@ -76,6 +66,10 @@ export interface Env {
   MODAL_WORKSPACE?: string; // Modal workspace name
   MODAL_ENVIRONMENT?: string; // Modal environment name for dashboard URLs
   MODAL_ENVIRONMENT_WEB_SUFFIX?: string; // Modal environment web suffix for endpoint URLs
+  // Origin serving the Modal functions by path, in place of their derived
+  // `*.modal.run` hosts. Unset in every cloud deployment; a proxy or a
+  // stand-in server sets it, as the other providers' `*_API_URL` settings do.
+  MODAL_API_URL?: string;
   DAYTONA_API_URL?: string; // Daytona REST API base URL
   DAYTONA_BASE_SNAPSHOT?: string; // Named Daytona snapshot used for fresh sandbox creation
   DAYTONA_AUTO_STOP_INTERVAL_MINUTES?: string; // Daytona idle stop interval in minutes
@@ -99,14 +93,43 @@ export interface Env {
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)
-  EXECUTION_TIMEOUT_MS?: string; // Max processing time before auto-fail (default: 5400000 = 90 min)
+  EXECUTION_TIMEOUT_MS?: string; // Max processing time before auto-fail; sessions fall back to DEFAULT_SANDBOX_TIMEOUT_SECONDS, the scheduler's recovery sweep to its DEFAULT_EXECUTION_TIMEOUT_MS
   SECRETS_CAP_ENFORCEMENT?: string; // "enforce" (default) fails spawn/build on oversized secret payloads; set "warn" to only log
 
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
 }
 
-// Client info (stored in DO memory)
+/**
+ * The deployment-wide ports the host supplies. Each field keeps the name of
+ * the Worker binding it stands in for, so services read the same `env` on
+ * every host; the host's composition root builds the record
+ * (`cloudflare/platform.ts` on Workers).
+ */
+export interface Platform {
+  /** The global store. Request paths take it injected and instrumented (`ctx.db`), never from here. */
+  DB: SqlDatabase;
+  /** Delivery to session runtimes, addressed by session id. */
+  SESSION: SessionRuntimeDispatch;
+  /** Short-lived cache for the /repos listing. */
+  REPOS_CACHE: CacheStore;
+  /** Media artifacts: screenshots, uploads, session media. */
+  MEDIA_BUCKET: ObjectStorage;
+  /** The slack-bot service, when deployed. */
+  SLACK_BOT?: FetchClient;
+  /** The linear-bot service, when deployed. */
+  LINEAR_BOT?: FetchClient;
+  /** GitHub Autofix queues, read for health metrics only. */
+  AUTOFIX_QUEUE?: QueueMetricsSource;
+  AUTOFIX_DLQ?: QueueMetricsSource;
+  /** Durable background work; null when the host cannot deliver jobs yet (see `jobs.ts`). */
+  JOBS: Jobs | null;
+}
+
+/** What the application runs against: its configuration and the platform ports. */
+export interface Env extends EnvConfig, Platform {}
+
+/** Authenticated client state stored in session-runtime memory. */
 export interface ClientInfo {
   participantId: string;
   userId: string;
@@ -115,6 +138,7 @@ export interface ClientInfo {
   status: "active" | "idle" | "away";
   lastSeen: number;
   clientId: string;
-  ws: WebSocket;
+  /** Wall-clock time when this connection's authorization lease expires. */
+  authorizationExpiresAt: number;
   lastFetchHistoryAtMs?: number;
 }

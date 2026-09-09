@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { automationTriggerTypeSchema, triggerConfigSchema } from "../triggers/types";
+import {
+  type AutomationTriggerType,
+  automationTriggerTypeSchema,
+  triggerConfigSchema,
+} from "../triggers/types";
 import {
   MAX_TARGET_REPOSITORIES,
   repositoriesInputSchema,
@@ -7,6 +11,8 @@ import {
 } from "./repositories";
 import type { RepositoryInput, RepositoryRef } from "./repositories";
 import { modelProviderSelectionsSchema } from "./provider-accounts";
+import { isEnvironmentId } from "./environments";
+import { isCanonicalUserId } from "../user-id";
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
 
@@ -30,6 +36,36 @@ export type AutomationInvocationStatus = z.infer<typeof automationInvocationStat
 
 /** Maximum repositories an automation can fan out across per invocation. */
 export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
+
+/** Maximum length of an automation's instruction prompt. */
+export const MAX_AUTOMATION_INSTRUCTIONS_LENGTH = 15_000;
+
+/**
+ * Validate target-count rules shared by automation clients and the API.
+ * Repository-scoped triggers bind to exactly one repository and no
+ * environments; fan-out is schedule-only; both target kinds share one cap.
+ */
+export function validateAutomationTargetCounts(
+  triggerType: AutomationTriggerType,
+  repositoryCount: number,
+  environmentCount: number
+): string | null {
+  if ((triggerType === "github_event" || triggerType === "linear_event") && repositoryCount === 0) {
+    return "Repository-scoped triggers require exactly one repository";
+  }
+  if ((triggerType === "github_event" || triggerType === "linear_event") && environmentCount > 0) {
+    return "Repository-scoped triggers cannot target environments";
+  }
+  if (repositoryCount + environmentCount > 1 && triggerType !== "schedule") {
+    return "Multi-target selections require a schedule trigger";
+  }
+  if (repositoryCount + environmentCount > MAX_AUTOMATION_REPOSITORIES) {
+    return `At most ${MAX_AUTOMATION_REPOSITORIES} repositories and environments combined`;
+  }
+  return null;
+}
+/** Largest page `GET /automations/:id/invocations` serves; larger limits are refused. */
+export const MAX_AUTOMATION_INVOCATION_LIST_LIMIT = 100;
 
 /** A repository selected on an automation (response shape, resolved). */
 const automationRepositorySchema = z.object({
@@ -79,6 +115,7 @@ const automationSchema = z.object({
   nextRunAt: z.number().nullable(),
   consecutiveFailures: z.number(),
   createdBy: z.string(),
+  userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID").nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),
   deletedAt: z.number().nullable(),
@@ -105,6 +142,31 @@ const automationListItemSchema = automationSchema.extend({
 
 export type AutomationListItem = z.infer<typeof automationListItemSchema>;
 
+const automationEnvironmentIdsSchema = z
+  .array(
+    z.string().refine(isEnvironmentId, {
+      message: "must be an environment id (env_…)",
+    })
+  )
+  .superRefine((environmentIds, ctx) => {
+    const seen = new Set<string>();
+    environmentIds.forEach((environmentId, index) => {
+      if (seen.has(environmentId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "must not contain duplicates",
+          path: [index],
+        });
+      }
+      seen.add(environmentId);
+    });
+  });
+
+/** Sentry client secrets are opaque but must contain at least one non-whitespace character. */
+export const sentryClientSecretSchema = z.string().refine((secret) => secret.trim().length > 0, {
+  message: "must not be empty",
+});
+
 export const createAutomationRequestSchema = z.object({
   name: z.string(),
   instructions: z.string(),
@@ -115,11 +177,11 @@ export const createAutomationRequestSchema = z.object({
   reasoningEffort: z.string().nullable().optional(),
   eventType: z.string().optional(),
   triggerConfig: triggerConfigSchema.optional(),
-  sentryClientSecret: z.string().optional(),
+  sentryClientSecret: sentryClientSecretSchema.optional(),
   /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
   repositories: automationRepositoriesInputSchema.optional(),
   /** Environments to fan out over, one workspace session each (design §13.3). */
-  environmentIds: z.array(z.string()).optional(),
+  environmentIds: automationEnvironmentIdsSchema.optional(),
   /** Complete pin set. Omission creates the automation without pins. */
   providerSelections: modelProviderSelectionsSchema.optional(),
 });
@@ -133,11 +195,11 @@ export const updateAutomationRequestSchema = z.object({
   model: z.string().optional(),
   reasoningEffort: z.string().nullable().optional(),
   eventType: z.string().optional(),
-  triggerConfig: triggerConfigSchema.optional(),
+  triggerConfig: triggerConfigSchema.nullable().optional(),
   /** Replaces the full repository selection when present. */
   repositories: automationRepositoriesInputSchema.optional(),
   /** Replaces the full environment selection when present (empty clears). */
-  environmentIds: z.array(z.string()).optional(),
+  environmentIds: automationEnvironmentIdsSchema.optional(),
   /** Replaces every provider pin when present; an empty map clears all pins. */
   providerSelections: modelProviderSelectionsSchema.optional(),
 });

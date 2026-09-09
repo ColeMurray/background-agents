@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolCallEvent } from "@/lib/timeline-items";
 import { TaskActivityItem } from "./task-activity-item";
 
@@ -24,7 +24,13 @@ describe("TaskActivityItem", () => {
     };
 
     render(
-      <TaskActivityItem event={event} hasActivity={false}>
+      <TaskActivityItem
+        event={event}
+        hasActivity={false}
+        expansionKey="task-1"
+        expandedSections={new Set()}
+        onToggleSection={vi.fn()}
+      >
         {null}
       </TaskActivityItem>
     );

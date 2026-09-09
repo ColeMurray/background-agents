@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { generateEncryptionKey } from "./auth/crypto";
-import { requireRepoSecretsEncryptionKey } from "./env-validation";
+import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "./env-validation";
 import type { Env } from "./types";
 
 function envWith(key: string | undefined): Env {
@@ -37,5 +37,27 @@ describe("requireRepoSecretsEncryptionKey", () => {
     expect(() =>
       requireRepoSecretsEncryptionKey(envWith("bm90YXJlYWxrZXlub3RhcmVhbGtleW5vdGFyZWFsa2V5eA=="))
     ).toThrow(/32 bytes.*got 34/);
+  });
+});
+
+describe("requireTokenEncryptionKey", () => {
+  // Shares the material validator with the repo-secrets key; these tests pin
+  // the token-specific wiring (which env var is read, whose name errors carry).
+  it("returns a canonical base64-encoded 32-byte key", () => {
+    const key = generateEncryptionKey();
+
+    expect(requireTokenEncryptionKey({ TOKEN_ENCRYPTION_KEY: key } as Env)).toBe(key);
+  });
+
+  it("throws with the token key's name when absent or malformed", () => {
+    expect(() => requireTokenEncryptionKey({} as Env)).toThrow(
+      /TOKEN_ENCRYPTION_KEY is not configured/
+    );
+    expect(() =>
+      requireTokenEncryptionKey({ TOKEN_ENCRYPTION_KEY: "not base64!!" } as Env)
+    ).toThrow(/TOKEN_ENCRYPTION_KEY is not valid base64/);
+    expect(() =>
+      requireTokenEncryptionKey({ TOKEN_ENCRYPTION_KEY: "dG9vc2hvcnQ=" } as Env)
+    ).toThrow(/TOKEN_ENCRYPTION_KEY must decode to 32 bytes/);
   });
 });

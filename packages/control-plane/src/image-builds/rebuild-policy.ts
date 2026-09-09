@@ -1,6 +1,6 @@
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import { parseRuntimeVersionNumber, type ImageBuildProvider } from "./model";
-import { parseRepositoryShasJson, repositoryIdentityKey } from "./provenance";
+import { repositoryIdentityKey } from "./provenance";
 import type { EnabledScopeUnit } from "./scope";
 import { MIN_REBUILD_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
 
@@ -28,18 +28,18 @@ export function evaluateImageBuildRebuildPolicy(
   }
 
   const ready = providerRows.find(
-    (row) => row.status === "ready" && row.repositories_fingerprint === unit.repositoriesFingerprint
+    (row) => row.status === "ready" && row.repositoriesFingerprint === unit.repositoriesFingerprint
   );
   if (!ready) return { type: "rebuild", reason: "missing_image" };
 
-  const runtimeVersion = parseRuntimeVersionNumber(ready.runtime_version);
+  const runtimeVersion = parseRuntimeVersionNumber(ready.runtimeVersion);
   // Rebuild old images to the current toolchain without invalidating images
   // that remain safe to boot during the rollout gap.
   if (runtimeVersion === null || runtimeVersion < MIN_REBUILD_RUNTIME_VERSION) {
     return { type: "rebuild", reason: "runtime_incompatible" };
   }
 
-  const provenance = parseRepositoryShasJson(ready.repository_shas);
+  const provenance = ready.repositoryShas;
   if (!provenance) {
     return { type: "rebuild", reason: "invalid_provenance" };
   }

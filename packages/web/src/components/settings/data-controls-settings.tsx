@@ -5,17 +5,20 @@ import Link from "next/link";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import type { Session } from "@open-inspect/shared/types/sessions";
 import { formatRepoLabel } from "@/lib/repo-label";
 import {
   buildSessionHref,
   buildSessionsPageKey,
+  fetchSessionListPage,
   isUnarchivedSessionListKey,
   removeSessionFromList,
+  type SessionListItem,
   type SessionListResponse,
 } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { canUseSettingsCapability } from "./settings-registry";
 
 const PAGE_SIZE = 20;
 const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
@@ -25,19 +28,28 @@ const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
 });
 
 export function DataControlsSettings() {
-  const [extraSessions, setExtraSessions] = useState<Session[]>([]);
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canUnarchive = canUseSettingsCapability(
+    "data-controls",
+    "unarchiveSessions",
+    hasPermission
+  );
+  const [extraSessions, setExtraSessions] = useState<SessionListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const offsetRef = useRef(0);
 
-  const { data, isLoading: loading } = useSWR<SessionListResponse>(ARCHIVED_SESSIONS_KEY, {
-    onSuccess: (data) => {
-      const fetched = data.sessions || [];
-      setHasMore(data.hasMore);
-      offsetRef.current = fetched.length;
-      setExtraSessions([]);
-    },
-  });
+  const { data, isLoading: loading } = useSWR<SessionListResponse>(
+    ARCHIVED_SESSIONS_KEY,
+    fetchSessionListPage,
+    {
+      onSuccess: (data) => {
+        setHasMore(data.hasMore);
+        offsetRef.current = data.sessions.length;
+        setExtraSessions([]);
+      },
+    }
+  );
 
   const firstPageSessions = data?.sessions ?? [];
   const sessions = [...firstPageSessions, ...extraSessions];
@@ -45,20 +57,16 @@ export function DataControlsSettings() {
   const handleLoadMore = useCallback(async () => {
     setLoadingMore(true);
     try {
-      const res = await browserApiFetch(
+      const page = await fetchSessionListPage(
         buildSessionsPageKey({
           status: "archived",
           limit: PAGE_SIZE,
           offset: offsetRef.current,
         })
       );
-      if (res.ok) {
-        const resData: SessionListResponse = await res.json();
-        const fetched: Session[] = resData.sessions || [];
-        setExtraSessions((prev) => [...prev, ...fetched]);
-        setHasMore(resData.hasMore);
-        offsetRef.current += fetched.length;
-      }
+      setExtraSessions((prev) => [...prev, ...page.sessions]);
+      setHasMore(page.hasMore);
+      offsetRef.current += page.sessions.length;
     } catch (error) {
       console.error("Failed to fetch archived sessions:", error);
     } finally {
@@ -126,6 +134,7 @@ export function DataControlsSettings() {
               <ArchivedSessionRow
                 key={session.id}
                 session={session}
+                canUnarchive={canUnarchive}
                 onUnarchive={handleUnarchive}
               />
             ))}
@@ -150,9 +159,11 @@ export function DataControlsSettings() {
 
 function ArchivedSessionRow({
   session,
+  canUnarchive,
   onUnarchive,
 }: {
-  session: Session;
+  session: SessionListItem;
+  canUnarchive: boolean;
   onUnarchive: (id: string) => void;
 }) {
   const repoInfo = formatRepoLabel(session.repoOwner, session.repoName);
@@ -169,14 +180,16 @@ function ArchivedSessionRow({
           <span className="truncate">{repoInfo}</span>
         </div>
       </Link>
-      <Button
-        variant="outline"
-        size="xs"
-        onClick={() => onUnarchive(session.id)}
-        className="flex-shrink-0 opacity-0 group-hover:opacity-100"
-      >
-        Unarchive
-      </Button>
+      {canUnarchive && (
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => onUnarchive(session.id)}
+          className="flex-shrink-0 opacity-0 group-hover:opacity-100"
+        >
+          Unarchive
+        </Button>
+      )}
     </div>
   );
 }

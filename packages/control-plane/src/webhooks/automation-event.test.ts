@@ -47,6 +47,13 @@ describe("validateAutomationEventEnvelope", () => {
     expect(result.event?.source).toBe("slack");
   });
 
+  it("rejects a non-string source through the object guard path", async () => {
+    const result = validateAutomationEventEnvelope(makeSlackEvent({ source: ["slack"] }), "slack");
+
+    expect(result.response?.status).toBe(400);
+    expect(await result.response?.text()).toContain("source");
+  });
+
   it.each(["eventType", "triggerKey", "concurrencyKey", "channelId", "ts"])(
     "rejects an empty required field for %s",
     async (field) => {
@@ -99,5 +106,24 @@ describe("logAutomationEventRejection", () => {
       request_id: "request-1",
       trace_id: "trace-1",
     });
+  });
+
+  it("omits logged event_type for non-object rejected payloads", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    logAutomationEventRejection([], "slack", ["body"], {
+      request_id: "request-1",
+      trace_id: "trace-1",
+    } as RequestContext);
+
+    const entry = JSON.parse(String(warn.mock.calls[0]?.[0])) as Record<string, unknown>;
+    expect(entry).toMatchObject({
+      event: "automation_event.ingress_rejected",
+      source: "slack",
+      issue_paths: ["body"],
+      request_id: "request-1",
+      trace_id: "trace-1",
+    });
+    expect(entry.event_type).toBeUndefined();
   });
 });

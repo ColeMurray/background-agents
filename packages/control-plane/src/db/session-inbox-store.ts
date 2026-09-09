@@ -9,10 +9,11 @@ import type { SessionInboxCursor } from "./session-inbox-cursor";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
+/** Viewer, filtering, and pagination inputs for an inbox query. */
 export interface ListSessionInboxOptions {
   category: SessionInboxCategory;
   createdByUserIds?: readonly string[];
-  excludeAutomationLineage?: boolean;
+  excludeAutomatedSessions?: boolean;
   viewerUserId: string;
   limit: number;
   cursor: SessionInboxCursor | null;
@@ -69,9 +70,11 @@ function toListItem(row: InboxSessionRow): SessionListItem {
   };
 }
 
+/** Builds viewer-specific session inbox pages from the D1 session index. */
 export class SessionInboxStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  /** List one inbox category with viewer-specific read state. */
   async list(options: ListSessionInboxOptions): Promise<ListSessionInboxResult> {
     const result = await this.bindInboxQuery(options).all<InboxSessionRow>();
     const page = this.buildPageData(options.limit, result.results ?? []);
@@ -85,6 +88,7 @@ export class SessionInboxStore {
     );
   }
 
+  /** List every inbox category with viewer-specific read state. */
   async snapshot(
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): Promise<ListSessionInboxSnapshotResult> {
@@ -186,7 +190,7 @@ export class SessionInboxStore {
   private inboxCtes(
     options: Pick<
       ListSessionInboxOptions,
-      "createdByUserIds" | "excludeAutomationLineage" | "viewerUserId"
+      "createdByUserIds" | "excludeAutomatedSessions" | "viewerUserId"
     >
   ): { sql: string; params: unknown[] } {
     const { conditions, params } = this.eligibility(options);
@@ -243,14 +247,12 @@ export class SessionInboxStore {
   }
 
   private eligibility(
-    options: Pick<ListSessionInboxOptions, "createdByUserIds" | "excludeAutomationLineage">
+    options: Pick<ListSessionInboxOptions, "createdByUserIds" | "excludeAutomatedSessions">
   ): { conditions: string[]; params: unknown[] } {
     const conditions = ["sessions.status != 'archived'", "sessions.root_session_id IS NOT NULL"];
     const params: unknown[] = [];
-    if (options.excludeAutomationLineage) {
-      conditions.push(
-        "sessions.automation_id IS NULL AND sessions.spawn_source NOT IN ('automation', 'github-bot')"
-      );
+    if (options.excludeAutomatedSessions) {
+      conditions.push("sessions.spawn_source NOT IN ('automation', 'github-bot')");
     }
     if (options.createdByUserIds?.length) {
       conditions.push(

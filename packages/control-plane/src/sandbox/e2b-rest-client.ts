@@ -33,6 +33,14 @@ const ENVELOPE_HEADER_BYTES = 5;
 /** Connect end-of-stream flag; that envelope carries `{}` or `{"error": ...}`. */
 const ENVELOPE_END_STREAM_FLAG = 0x02;
 
+const connectEndStreamSchema = z.object({
+  error: z
+    .object({
+      message: z.string().optional(),
+    })
+    .optional(),
+});
+
 const e2bSandboxDetailSchema = z.object({
   sandboxID: z.string(),
   templateID: z.string(),
@@ -164,6 +172,10 @@ function* decodeConnectEnvelopes(buffer: Uint8Array): Generator<{ flags: number;
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /**
  * Fail unless the stream proves the command ran to a clean exit: a start
  * event, `end.status === "exit status 0"`, and a healthy Connect end-of-stream
@@ -180,16 +192,22 @@ function assertProcessStarted(buffer: Uint8Array): void {
   let endOfStream = false;
   for (const { flags, body } of decodeConnectEnvelopes(buffer)) {
     if (flags & ENVELOPE_END_STREAM_FLAG) {
-      const streamError = (body as { error?: { message?: string } }).error;
-      if (streamError) {
-        throw new Error(`envd process start failed: ${streamError.message ?? "stream error"}`);
+      const parsed = connectEndStreamSchema.safeParse(body);
+      if (!parsed.success) {
+        throw new Error("envd process start stream contained a malformed end-of-stream envelope");
+      }
+      if (parsed.data.error) {
+        throw new Error(
+          `envd process start failed: ${parsed.data.error.message ?? "stream error"}`
+        );
       }
       endOfStream = true;
       continue;
     }
-    const event = (body as { event?: Record<string, { status?: string }> }).event;
+    const event = isRecord(body) && isRecord(body.event) ? body.event : undefined;
     if (event?.start) started = true;
-    const status = event?.end?.status;
+    const end = event && isRecord(event.end) ? event.end : undefined;
+    const status = end?.status;
     if (status !== undefined) {
       if (status !== "exit status 0") {
         throw new Error(`envd process start exited non-zero: ${status}`);

@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import { sqlDatabase } from "./helpers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { generateEncryptionKey } from "../../src/auth/crypto";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
@@ -509,7 +510,7 @@ describe("provider account migration and stores", () => {
 
     await seedAutomation("automation-auth");
     const automationAuth = new AutomationModelProviderAuthStore(env.DB);
-    await env.DB.batch(
+    await sqlDatabase(env.DB).batch(
       automationAuth.bindReplace(
         "automation-auth",
         { openai: { mode: "provider_account", accountId: "account-auth" } },
@@ -519,7 +520,7 @@ describe("provider account migration and stores", () => {
     expect(await automationAuth.list("automation-auth")).toEqual([
       expect.objectContaining({ provider: "openai", provider_account_id: "account-auth" }),
     ]);
-    await env.DB.batch(automationAuth.bindReplace("automation-auth", {}, now + 1));
+    await sqlDatabase(env.DB).batch(automationAuth.bindReplace("automation-auth", {}, now + 1));
     expect(await automationAuth.list("automation-auth")).toEqual([]);
   });
 });

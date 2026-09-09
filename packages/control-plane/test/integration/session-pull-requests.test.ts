@@ -24,7 +24,7 @@ async function seedSession(id: string): Promise<void> {
     model: "test-model",
     reasoningEffort: null,
     baseBranch: "main",
-    status: "initializing",
+    status: "active",
     createdAt: now,
     updatedAt: now,
   });

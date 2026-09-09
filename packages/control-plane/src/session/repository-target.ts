@@ -25,8 +25,8 @@ export interface SessionRepositoryEntry {
   /**
    * The entry's base branch: the row's, or the scalar mirror's for
    * synthesized entries. Null only for legacy sessions without a stored
-   * base branch — consumers apply their own default ("main" for state and
-   * spawn, the repo's default branch for PR creation).
+   * base branch — consumers apply their own default (DEFAULT_BASE_BRANCH
+   * for state and spawn, the repo's default branch for PR creation).
    */
   baseBranch: string | null;
   /** Whether this member is the session's primary (scalar-mirror) repo. */

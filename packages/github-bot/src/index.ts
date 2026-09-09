@@ -30,6 +30,7 @@ import {
   type HandlerResult,
 } from "./handlers";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
+import { toAutofixEnvelope } from "./autofix-ingress";
 
 const app = new Hono<{ Bindings: Env }>();
 const DELIVERY_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -98,6 +99,25 @@ app.post("/webhooks/github", async (c) => {
       : undefined,
     action,
   });
+
+  const autofixEnvelope = toAutofixEnvelope({
+    event,
+    payload,
+    deliveryId: deliveryId ?? `missing:${traceId}`,
+    botUsername: c.env.GITHUB_BOT_USERNAME,
+    receivedAt: new Date(),
+  });
+  if (autofixEnvelope) {
+    try {
+      await c.env.AUTOFIX_QUEUE.send(autofixEnvelope);
+    } catch (err) {
+      log.error("webhook.autofix_queue_failed", {
+        trace_id: traceId,
+        delivery_id: deliveryId,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    }
+  }
 
   c.executionCtx.waitUntil(
     handleWebhook(c.env, log, event, payload, traceId, deliveryId)

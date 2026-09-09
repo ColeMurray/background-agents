@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createSessionResponseSchema } from "@open-inspect/shared/types/session-api";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -96,16 +97,19 @@ export function useWarmDraftSession(
         });
         if (!response.ok) return null;
 
-        const payload = (await response.json()) as { sessionId?: unknown };
-        if (typeof payload.sessionId !== "string" || payload.sessionId.length === 0) return null;
+        const parsed = createSessionResponseSchema.safeParse(
+          await response.json().catch(() => null)
+        );
+        if (!parsed.success) return null;
+        const { sessionId } = parsed.data;
         if (identityRef.current !== launchIdentity) {
-          void retireWarmDraftSession(payload.sessionId);
+          void retireWarmDraftSession(sessionId);
           return null;
         }
 
-        sessionIdRef.current = payload.sessionId;
-        setSessionId(payload.sessionId);
-        return payload.sessionId;
+        sessionIdRef.current = sessionId;
+        setSessionId(sessionId);
+        return sessionId;
       } catch (error) {
         if (!(error instanceof Error && error.name === "AbortError")) {
           console.error("Failed to create session for warming:", error);

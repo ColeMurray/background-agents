@@ -17,6 +17,7 @@ import {
   isSandboxReconnectBlockedStatus,
   isSnapshotRuntimeCompatible,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+  DEFAULT_SPAWN_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   type CircuitBreakerState,
   type CircuitBreakerConfig,
@@ -855,22 +856,24 @@ describe("evaluateConnectingTimeout", () => {
 
   it("returns not timed out when within timeout window", () => {
     const now = Date.now();
-    const createdAt = now - 60_000; // 60s ago, well within 120s timeout
+    const elapsed = config.timeoutMs / 2; // comfortably inside the window
+    const createdAt = now - elapsed;
 
     const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
 
     expect(result.isTimedOut).toBe(false);
-    expect(result.elapsedMs).toBe(60_000);
+    expect(result.elapsedMs).toBe(elapsed);
   });
 
   it("returns timed out when past timeout", () => {
     const now = Date.now();
-    const createdAt = now - 130_000; // 130s ago, past 120s timeout
+    const elapsed = config.timeoutMs + 10_000; // past the window
+    const createdAt = now - elapsed;
 
     const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
 
     expect(result.isTimedOut).toBe(true);
-    expect(result.elapsedMs).toBe(130_000);
+    expect(result.elapsedMs).toBe(elapsed);
   });
 
   it("returns timed out at exact boundary (>=)", () => {
@@ -885,12 +888,13 @@ describe("evaluateConnectingTimeout", () => {
 
   it("returns timed out when stuck in spawning past timeout (interrupted spawn)", () => {
     const now = Date.now();
-    const createdAt = now - 130_000; // 130s ago, past 120s timeout
+    const elapsed = config.timeoutMs + 10_000; // past the window
+    const createdAt = now - elapsed;
 
     const result = evaluateConnectingTimeout("spawning", createdAt, config, now);
 
     expect(result.isTimedOut).toBe(true);
-    expect(result.elapsedMs).toBe(130_000);
+    expect(result.elapsedMs).toBe(elapsed);
   });
 
   it("returns not timed out for spawning within timeout window", () => {
@@ -908,6 +912,44 @@ describe("evaluateConnectingTimeout", () => {
       const result = evaluateConnectingTimeout(status, old, config, now);
       expect(result.isTimedOut).toBe(false);
     }
+  });
+});
+
+describe("connect watchdog and spawn staleness defaults", () => {
+  it("does not spawn a replacement while a sandbox is still inside the connect watchdog window", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "connecting",
+      createdAt: now - (DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs - 1),
+      snapshotImageId: null,
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, DEFAULT_SPAWN_CONFIG, now, false);
+
+    expect(decision.action).toBe("skip");
+  });
+
+  it("spawns a replacement once the connect watchdog has failed the sandbox", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "connecting",
+      createdAt: now - DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs,
+      snapshotImageId: null,
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    expect(
+      evaluateConnectingTimeout(
+        "connecting",
+        state.createdAt,
+        DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+        now
+      ).isTimedOut
+    ).toBe(true);
+    expect(evaluateSpawnDecision(state, DEFAULT_SPAWN_CONFIG, now, false).action).toBe("spawn");
   });
 });
 

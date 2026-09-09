@@ -18,11 +18,20 @@ import {
   useProviderAccounts,
 } from "./use-provider-accounts";
 
-vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
+const permissions = vi.hoisted(() => new Set<string>());
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) => permissions.has(permission),
+  }),
 }));
 
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
+
+beforeEach(() => {
+  permissions.clear();
+  permissions.add("provider_accounts.read");
+});
 
 function wrapper({ children }: { children: ReactNode }) {
   return (
@@ -90,6 +99,34 @@ describe("useLegacyProviderCredentials", () => {
 
 describe("useProviderAccounts", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("does not request provider resources without read permission", () => {
+    permissions.clear();
+
+    const { result } = renderHook(
+      () => ({ accounts: useProviderAccounts(), legacy: useLegacyProviderCredentials() }),
+      { wrapper }
+    );
+
+    expect(browserApiFetch).not.toHaveBeenCalled();
+    expect(result.current.accounts).toMatchObject({ accounts: [], defaults: [], loading: false });
+    expect(result.current.legacy).toMatchObject({ legacyKeys: [], loading: false });
+  });
+
+  it("clears provider resources when read permission is revoked", async () => {
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(Response.json({ accounts: [account] }))
+      .mockResolvedValueOnce(Response.json({ defaults: [] }));
+
+    const { result, rerender } = renderHook(() => useProviderAccounts(), { wrapper });
+    await waitFor(() => expect(result.current.accounts).toEqual([account]));
+
+    permissions.clear();
+    rerender();
+
+    expect(result.current).toMatchObject({ accounts: [], defaults: [], loading: false });
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+  });
 
   it("uses the shared static provider catalog without fetching it", async () => {
     vi.mocked(browserApiFetch)
@@ -175,6 +212,23 @@ describe("provider account API response boundaries", () => {
       message: "Accounts unavailable",
       status: 503,
     });
+  });
+
+  it("falls back when the error response body is malformed", async () => {
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(
+        Response.json({ error: "Untrusted error", retryable: "no" }, { status: 502 })
+      )
+      .mockResolvedValueOnce(Response.json({ defaults: [] }));
+
+    const { result } = renderHook(() => useProviderAccounts(), { wrapper });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toMatchObject({
+      name: "ProviderResourceError",
+      message: "Provider account request failed",
+      status: 502,
+      retryable: undefined,
+    } satisfies Partial<ProviderResourceError>);
   });
 });
 

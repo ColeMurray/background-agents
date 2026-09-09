@@ -5,17 +5,39 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueuedPromptStack } from "./queued-prompt-stack";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
+
+const FULL_CAPABILITIES = {
+  read: true,
+  collaborate: true,
+  lifecycle: true,
+  sandboxAccess: true,
+} satisfies SessionCapabilities;
 
 expect.extend(matchers);
 
 afterEach(cleanup);
 
 describe("QueuedPromptStack", () => {
+  it("shows queued prompts without removal controls in read-only mode", () => {
+    render(
+      <QueuedPromptStack
+        promptQueue={[{ messageId: "queued-1", content: "Review this", status: "pending" }]}
+        cancellingPromptIds={new Set()}
+        onRemove={vi.fn()}
+        capabilities={{ ...FULL_CAPABILITIES, lifecycle: false }}
+      />
+    );
+
+    expect(screen.getByText("Review this")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Remove queued prompt/ })).not.toBeInTheDocument();
+  });
   it("renders only pending prompts in FIFO order", () => {
     render(
       <QueuedPromptStack
         cancellingPromptIds={new Set()}
         onRemove={vi.fn()}
+        capabilities={FULL_CAPABILITIES}
         promptQueue={[
           { messageId: "running", content: "Already running", status: "processing" },
           { messageId: "next", content: "Run next", status: "pending" },
@@ -37,6 +59,7 @@ describe("QueuedPromptStack", () => {
       <QueuedPromptStack
         cancellingPromptIds={new Set()}
         onRemove={vi.fn()}
+        capabilities={FULL_CAPABILITIES}
         promptQueue={[{ messageId: "running", content: "Already running", status: "processing" }]}
       />
     );
@@ -51,6 +74,7 @@ describe("QueuedPromptStack", () => {
         promptQueue={[{ messageId: "next", content: "Run next", status: "pending" }]}
         cancellingPromptIds={new Set(["next"])}
         onRemove={onRemove}
+        capabilities={FULL_CAPABILITIES}
       />
     );
 
@@ -67,6 +91,7 @@ describe("QueuedPromptStack", () => {
         promptQueue={[{ messageId: "next", content: "Run next", status: "pending" }]}
         cancellingPromptIds={new Set()}
         onRemove={onRemove}
+        capabilities={FULL_CAPABILITIES}
       />
     );
 
@@ -87,6 +112,7 @@ describe("QueuedPromptStack", () => {
         ]}
         cancellingPromptIds={new Set()}
         onRemove={onRemove}
+        capabilities={FULL_CAPABILITIES}
       />
     );
 

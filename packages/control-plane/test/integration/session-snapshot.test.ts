@@ -37,11 +37,11 @@ describe("session snapshot synchronization", () => {
        SET status = 'ready', code_server_url = ?, code_server_password = ?,
            vnc_url = ?, vnc_password = ?, ttyd_url = ?, ttyd_token = ?`,
       "https://code.example.test",
-      await encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
+      await encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
       "https://desktop.example.test",
-      await encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
+      await encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
       "https://terminal.example.test",
-      await encryptToken("terminal-secret", env.REPO_SECRETS_ENCRYPTION_KEY)
+      await encryptToken("terminal-secret", env.REPO_SECRETS_ENCRYPTION_KEY!)
     );
 
     const response = await stub.fetch("http://internal/internal/snapshot");
@@ -73,6 +73,8 @@ describe("session snapshot synchronization", () => {
       codeServer: { url: "https://code.example.test", password: "code-secret" },
       vnc: { url: "https://desktop.example.test", password: "vnc-secret" },
       ttyd: { url: "https://terminal.example.test", token: "terminal-secret" },
+      tunnelUrls: null,
+      sandboxDashboardUrl: null,
     });
 
     const { ws, messages } = await openClientWs(name, { subscribe: true });
@@ -81,6 +83,7 @@ describe("session snapshot synchronization", () => {
     expect(messages![0].session).not.toHaveProperty("codeServerPassword");
     expect(messages![0].session).not.toHaveProperty("vncPassword");
     expect(messages![0].session).not.toHaveProperty("ttydToken");
+    expect(messages![0].canManageBudget).toBe(true);
     expect(messages![0].timeline).toHaveProperty("events");
     expect(JSON.stringify(messages![0])).not.toContain("code-secret");
     expect(JSON.stringify(messages![0])).not.toContain("vnc-secret");

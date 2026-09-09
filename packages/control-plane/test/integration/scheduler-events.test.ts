@@ -1,20 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
+import { seedActiveUser, sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import type { SentryAutomationEvent, WebhookAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 import { Scheduler } from "../../src/scheduler/scheduler";
-import type { Env } from "../../src/types";
-
-function getSchedulerStub() {
-  const scheduler = new Scheduler(env.DB, env as Env, { submit() {} });
-  return {
-    fetch(input: RequestInfo | URL, init?: RequestInit) {
-      return scheduler.dispatch(new Request(input, init));
-    },
-  };
-}
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
@@ -31,7 +23,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     next_run_at: now + 86400000,
     consecutive_failures: 0,
     created_by: "user-1",
-    user_id: null,
+    user_id: "user-1",
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -42,13 +34,8 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   };
 }
 
-async function sendEvent(event: SentryAutomationEvent | WebhookAutomationEvent): Promise<Response> {
-  const stub = getSchedulerStub();
-  return stub.fetch("http://internal/internal/event", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(event),
-  });
+function sendEvent(event: SentryAutomationEvent | WebhookAutomationEvent) {
+  return new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} }).event(event);
 }
 
 function makeSentryEvent(
@@ -87,7 +74,10 @@ function makeWebhookEvent(
 }
 
 describe("Scheduler event handling (integration)", () => {
-  beforeEach(cleanD1Tables);
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await seedActiveUser("user-1");
+  });
 
   // ─── Sentry event matching ───────────────────────────────────────────────
 
@@ -107,14 +97,14 @@ describe("Scheduler event handling (integration)", () => {
       // Keep this matching test independent of SessionDO and sandbox startup.
       // A deleted environment still produces one child, which fails locally
       // during target resolution after the invocation is persisted.
-      await env.DB.batch(store.bindReplaceEnvironments(automationId, ["env-deleted"], Date.now()));
+      await sqlDatabase(env.DB).batch(
+        store.bindReplaceEnvironments(automationId, ["env-deleted"], Date.now())
+      );
 
       const event = makeSentryEvent(automationId);
-      const res = await sendEvent(event);
+      const result = await sendEvent(event);
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
-      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
       const runs = await fetchRuns(automationId);
       expect(runs).toHaveLength(1);
@@ -155,11 +145,9 @@ describe("Scheduler event handling (integration)", () => {
       );
 
       const event = makeWebhookEvent(automationId);
-      const res = await sendEvent(event);
+      const result = await sendEvent(event);
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ triggered: number; skipped: number }>();
-      expect(body.triggered + body.skipped).toBeLessThanOrEqual(1);
+      expect(result.triggered + result.skipped).toBeLessThanOrEqual(1);
 
       const runs = await fetchRuns(automationId);
       expect(runs.length).toBeGreaterThanOrEqual(1);
@@ -192,12 +180,9 @@ describe("Scheduler event handling (integration)", () => {
 
       // Send event with a non-matching project
       const event = makeSentryEvent(automationId, { sentryProject: "frontend" });
-      const res = await sendEvent(event);
+      const result = await sendEvent(event);
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ triggered: number; skipped: number }>();
-      expect(body.triggered).toBe(0);
-      expect(body.skipped).toBe(0);
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
       // Verify no run was created
       const runs = await fetchRuns(automationId);
@@ -221,9 +206,9 @@ describe("Scheduler event handling (integration)", () => {
       );
 
       const event = makeSentryEvent(automationId, { sentryProject: "backend" });
-      const res = await sendEvent(event);
+      const result = await sendEvent(event);
 
-      expect(res.status).toBe(200);
+      expect(result.steered).toBe(0);
 
       // A run should be created (even though session creation fails)
       const runs = await fetchRuns(automationId);
@@ -251,8 +236,8 @@ describe("Scheduler event handling (integration)", () => {
       const event = makeSentryEvent(automationId, { triggerKey: sharedTriggerKey });
 
       // First event — should create a run
-      const res1 = await sendEvent(event);
-      expect(res1.status).toBe(200);
+      const result1 = await sendEvent(event);
+      expect(result1.steered).toBe(0);
 
       const runs1 = await fetchRuns(automationId);
       expect(runs1).toHaveLength(1);
@@ -261,13 +246,11 @@ describe("Scheduler event handling (integration)", () => {
       // (so the per-key overlap guard cannot intercept it first) — rejected
       // atomically by the invocation trigger-key index; a dedup is a silent
       // no-op, not a skip row.
-      const res2 = await sendEvent({
+      const result2 = await sendEvent({
         ...event,
         concurrencyKey: `sentry_issue:redelivery-${Date.now()}`,
       });
-      expect(res2.status).toBe(200);
-      const body2 = await res2.json<{ triggered: number; skipped: number }>();
-      expect(body2.skipped).toBe(1);
+      expect(result2).toEqual({ triggered: 0, skipped: 1, steered: 0 });
 
       const runs2 = await fetchRuns(automationId);
       expect(runs2).toHaveLength(1);
@@ -326,12 +309,9 @@ describe("Scheduler event handling (integration)", () => {
         concurrencyKey,
         triggerKey: `sentry_issue:second-${Date.now()}`,
       });
-      const res = await sendEvent(event);
+      const result = await sendEvent(event);
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ triggered: number; skipped: number }>();
-      expect(body.skipped).toBe(1);
-      expect(body.triggered).toBe(0);
+      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
 
       // Only the original run exists; the skip is a childless invocation.
       const runs = await fetchRuns(automationId);
@@ -361,22 +341,24 @@ describe("Scheduler event handling (integration)", () => {
         })
       );
 
+      // The active run's firing key lives on its invocation: seed it there so
+      // this proves per-key scoping, not merely keyed-vs-unkeyed.
       await seedRun(
         makeRunRow(automationId, {
           status: "running",
           session_id: "sess-existing",
           started_at: Date.now(),
-          concurrency_key: "sentry_issue:42",
-        })
+        }),
+        { concurrencyKey: "sentry_issue:42" }
       );
 
       const event = makeSentryEvent(automationId, {
         concurrencyKey: "sentry_issue:43",
         triggerKey: `sentry_issue:43-${Date.now()}`,
       });
-      const res = await sendEvent(event);
+      const result = await sendEvent(event);
 
-      expect(res.status).toBe(200);
+      expect(result.steered).toBe(0);
       // A new run was created despite the unrelated active run.
       const runs = await fetchRuns(automationId);
       expect(runs).toHaveLength(2);
@@ -401,12 +383,9 @@ describe("Scheduler event handling (integration)", () => {
       );
 
       const event = makeSentryEvent(automationId);
-      const res = await sendEvent(event);
+      const result = await sendEvent(event);
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ triggered: number; skipped: number }>();
-      expect(body.triggered).toBe(0);
-      expect(body.skipped).toBe(0);
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
       // No runs created
       const runs = await fetchRuns(automationId);
@@ -428,12 +407,9 @@ describe("Scheduler event handling (integration)", () => {
       );
 
       const event = makeWebhookEvent(automationId);
-      const res = await sendEvent(event);
+      const result = await sendEvent(event);
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ triggered: number; skipped: number }>();
-      expect(body.triggered).toBe(0);
-      expect(body.skipped).toBe(0);
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
       const runs = await fetchRuns(automationId);
       expect(runs).toHaveLength(0);

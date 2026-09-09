@@ -12,7 +12,8 @@ Open-Inspect provides a hosted background coding agent that can:
 - Connect from anywhere — web UI, Slack, GitHub PRs, Linear issues, or webhooks
 - Enable multiplayer sessions where multiple people can collaborate in real time
 - Create PRs with proper commit attribution to the prompting user
-- Run on a schedule — cron jobs, Sentry alerts, and webhook-triggered automations
+- Run scheduled automations for cron jobs, or event-driven automations for GitHub events, Sentry
+  alerts, and webhooks
 - Spawn parallel sub-tasks that work in separate sandboxes simultaneously
 - Use your choice of AI model — Anthropic Claude, OpenAI Codex (via ChatGPT subscription), xAI Grok
   (via SuperGrok subscription), or OpenCode Zen
@@ -28,8 +29,9 @@ The system uses a shared GitHub App installation for git operations (clone, fetc
 control plane mints short-lived installation tokens server-side and brokers them to sandboxes
 through the git credential helper on demand. This means:
 
-- **All users share the same GitHub App credentials** - The GitHub App must be installed on your
-  organization's repositories, and any user of the system can access any repo the App has access to
+- **Authorized users share the same GitHub App credentials** - The GitHub App must be installed on
+  your organization's repositories, and active users whose role permits repository use can access
+  any repo the App has access to
 - **No per-user repository access validation** - The system does not verify that a user has
   permission to access a specific repository before creating a session
 - **GitHub users' OAuth tokens are used for PR creation** - For GitHub logins, PRs are created using
@@ -68,6 +70,9 @@ built for internal use where all employees are trusted and have access to compan
    organization membership (`ALLOWED_GITHUB_ORGS`)
 4. **Use GitHub's repository selection** - When installing the App, select specific repositories
    rather than "All repositories"
+
+See [Authentication and Authorization](docs/AUTH.md) for workspace roles, session access, automation
+ownership, bots, and member suspension.
 
 ## Architecture
 
@@ -234,6 +239,8 @@ Schedule recurring tasks or react to external events — no human in the loop:
 
 - **Cron schedules** — Hourly, daily, weekly, monthly, or custom 5-field cron with timezone support
 - **Sentry alerts** — Auto-triage on new errors, regressions, or critical metric alerts
+- **GitHub workflow runs** — Start work when a GitHub Actions workflow finishes, with optional
+  workflow-name and conclusion filters
 - **Inbound webhooks** — JSONPath condition filters to gate which payloads spawn sessions
 - **Multi-repo fan-out** — One scheduled automation can run across up to 10 repositories, opening a
   separate session and pull request for each

@@ -1,3 +1,8 @@
+import { parseBody } from "./body";
+import { Hono } from "hono";
+import { z } from "zod";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   parseSessionListQuery,
   SESSION_LIST_CURRENT_USER,
@@ -13,37 +18,47 @@ import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {
   error,
-  defineRoute,
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
-  parseJsonBody,
-  parsePattern,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  requirePermission,
   type RequestContext,
-  type Route,
   type UserRouteContext,
 } from "./shared";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
+import { parseQuery } from "./query";
+
+const sessionInboxQuerySchema = z.object({
+  category: z
+    .string()
+    .optional()
+    .transform((raw, context) => {
+      if (raw === undefined) return null;
+      const parsed = sessionInboxCategorySchema.safeParse(raw);
+      if (!parsed.success) {
+        context.addIssue({ code: "custom", message: "Invalid category" });
+        return z.NEVER;
+      }
+      return parsed.data;
+    }),
+  cursor: z.string().min(1, { error: "Invalid cursor" }).optional(),
+  mine: z.literal("true", { error: "Invalid mine" }).optional(),
+});
 
 const log = createLogger("session-read-state");
 const SESSION_INBOX_LIMIT = 20;
 
 function parseCreatedByFilters(
   values: readonly string[],
-  principal: RequestContext["principal"]
+  currentUserId: string | null
 ): string[] | Response {
   const userIds: string[] = [];
   const seen = new Set<string>();
 
   for (const value of values) {
-    const userId =
-      value === SESSION_LIST_CURRENT_USER
-        ? principal?.kind === "user"
-          ? principal.userId
-          : null
-        : value;
+    const userId = value === SESSION_LIST_CURRENT_USER ? currentUserId : value;
 
     if (!isCanonicalUserId(userId)) {
       return error("Invalid createdBy", 400);
@@ -58,10 +73,10 @@ function parseCreatedByFilters(
   return userIds;
 }
 
-async function handleListSessions(
+export async function handleListSessions(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -70,7 +85,13 @@ async function handleListSessions(
 
   const { createdBy, status, excludeStatus, excludeAutomationLineage, limit, offset } =
     parsedQuery.data;
-  const createdByUserIds = parseCreatedByFilters(createdBy, ctx.principal);
+  const viewerUserId =
+    ctx.principal?.kind === "user"
+      ? ctx.principal.userId
+      : ctx.principal?.kind === "service"
+        ? (ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId)
+        : undefined;
+  const createdByUserIds = parseCreatedByFilters(createdBy, viewerUserId ?? null);
 
   if (createdByUserIds instanceof Response) {
     return createdByUserIds;
@@ -78,7 +99,6 @@ async function handleListSessions(
 
   const store = new SessionIndexStore(ctx.db);
   const listStartedAt = Date.now();
-  const viewerUserId = ctx.principal?.kind === "user" ? ctx.principal.userId : undefined;
   const result = await store.list({
     status,
     excludeStatus,
@@ -86,7 +106,7 @@ async function handleListSessions(
     createdByUserIds,
     limit,
     offset,
-    viewerUserId,
+    ...(viewerUserId ? { viewerUserId } : {}),
   });
   if (viewerUserId) {
     log.info("session_read_state.decorated", {
@@ -108,23 +128,19 @@ async function handleListSessions(
   return response;
 }
 
-async function handleListSessionInbox(
+export async function handleListSessionInbox(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
+  _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
-  const searchParams = new URL(request.url).searchParams;
-  const categoryValue = searchParams.get("category");
-  const category =
-    categoryValue === null ? null : sessionInboxCategorySchema.safeParse(categoryValue);
-  if (category && !category.success) return error("Invalid category", 400);
-  const cursor = searchParams.get("cursor");
-  if (cursor === "") return error("Invalid cursor", 400);
-  if (cursor !== null && category === null) return error("Category required for pagination", 400);
-  const mine = searchParams.get("mine");
-  if (mine !== null && mine !== "true") return error("Invalid mine", 400);
-  const parsedCursor = parseSessionInboxCursor(cursor);
+  const query = parseQuery(request, sessionInboxQuerySchema);
+  if (query instanceof Response) return query;
+  const { category, mine } = query;
+  if (query.cursor !== undefined && category === null) {
+    return error("Category required for pagination", 400);
+  }
+  const parsedCursor = parseSessionInboxCursor(query.cursor);
   if (!parsedCursor.ok) return error(parsedCursor.error, 400);
 
   const startedAt = Date.now();
@@ -132,7 +148,7 @@ async function handleListSessionInbox(
   const commonOptions = {
     limit: SESSION_INBOX_LIMIT,
     createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
-    excludeAutomationLineage: mine === "true",
+    excludeAutomatedSessions: mine === "true",
     viewerUserId: ctx.principal.userId,
   };
 
@@ -152,7 +168,7 @@ async function handleListSessionInbox(
 
   const result = await store.listInbox({
     ...commonOptions,
-    category: category.data,
+    category,
     cursor: parsedCursor.cursor,
   });
   const nextCursor = result.nextCursor ? encodeSessionInboxCursor(result.nextCursor) : null;
@@ -164,7 +180,7 @@ async function handleListSessionInbox(
   response.headers.set("Cache-Control", "private, no-store");
   log.info("session_inbox.listed", {
     event: "session_inbox.listed",
-    category: category.data,
+    category,
     hierarchy_count: result.items.length,
     session_count: result.items.reduce(
       (count, item) => count + 1 + item.descendantSessions.length,
@@ -187,25 +203,18 @@ function encodeInboxPage(
   };
 }
 
-async function handlePatchReadState(
+export async function handlePatchReadState(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required");
+  const sessionId = params.id;
 
-  const unparsedBody = await parseJsonBody<unknown>(request);
-  if (unparsedBody instanceof Response) return unparsedBody;
-  const parsedBody = sessionReadActionSchema.safeParse(unparsedBody);
-  if (!parsedBody.success) return error("Invalid session read action", 400);
-  const body = parsedBody.data;
+  const body = await parseBody(request, sessionReadActionSchema, "Invalid session read action");
+  if (body instanceof Response) return body;
 
   const store = new SessionIndexStore(ctx.db);
-  const visibleSession = await store.getVisibleForUser(sessionId, ctx.principal.userId);
-  if (!visibleSession) return error("Session not found", 404);
-
   const result = await store.updateReadState(ctx.principal.userId, sessionId, body);
   if (!result) return error("Session not found", 404);
 
@@ -223,14 +232,13 @@ async function handlePatchReadState(
   return response;
 }
 
-async function handleDeleteSession(
+export async function handleDeleteSession(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required");
+  const sessionId = params.id;
 
   const sessionStore = new SessionIndexStore(ctx.db);
   await sessionStore.delete(sessionId);
@@ -238,25 +246,28 @@ async function handleDeleteSession(
   return json({ status: "deleted", sessionId });
 }
 
-export const sessionIndexRoutes: Route[] = [
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "GET",
-    pattern: parsePattern("/sessions"),
-    handler: handleListSessions,
+export const sessionIndexRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionIndexRoutes.get(
+  "/sessions",
+  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.read") }),
+  (c) => dispatch(c, handleListSessions)
+);
+sessionIndexRoutes.get(
+  "/sessions/inbox",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    authorization: requirePermission("sessions.read", { service: "deny" }),
   }),
-  defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
-    method: "GET",
-    pattern: parsePattern("/sessions/inbox"),
-    handler: handleListSessionInbox,
-  }),
-  defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
-    method: "PATCH",
-    pattern: parsePattern("/sessions/:id/read-state"),
-    handler: handlePatchReadState,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "DELETE",
-    pattern: parsePattern("/sessions/:id"),
-    handler: handleDeleteSession,
-  }),
-];
+  (c) => dispatch(c, handleListSessionInbox)
+);
+sessionIndexRoutes.patch(
+  "/sessions/:id/read-state",
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requirePermission("sessions.read") }),
+  (c) => dispatch(c, handlePatchReadState)
+);
+sessionIndexRoutes.delete(
+  "/sessions/:id",
+  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.delete") }),
+  (c) => dispatch(c, handleDeleteSession)
+);

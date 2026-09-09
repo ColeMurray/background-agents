@@ -1,5 +1,6 @@
 import type { ImageBuildStore, ReapableImageBuildRow } from "../db/image-builds";
 import { createLogger } from "../logger";
+import { errorMessage } from "./errors";
 import type { ImageBuildProvider, SupersededImageBuild } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { ImageBuildAdapter, ImageBuildWorkflowContext } from "./types";
@@ -156,7 +157,7 @@ export class ImageBuildReaper {
     ).then(() => undefined);
   }
 
-  async deleteImageBestEffort(
+  private async deleteImageBestEffort(
     provider: ImageBuildProvider,
     image: { providerImageId: string; providerSessionId?: string | null },
     ctx: ImageBuildWorkflowContext,
@@ -186,7 +187,7 @@ export class ImageBuildReaper {
   }
 
   /** Null (never throws) when the provider is unconfigured — cleanup is best-effort. */
-  createAdapterForBestEffortCleanup(
+  private createAdapterForBestEffortCleanup(
     provider: ImageBuildProvider,
     buildId: string,
     ctx: ImageBuildWorkflowContext
@@ -205,8 +206,4 @@ export class ImageBuildReaper {
       return null;
     }
   }
-}
-
-function errorMessage(errorValue: unknown): string {
-  return errorValue instanceof Error ? errorValue.message : String(errorValue);
 }

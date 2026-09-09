@@ -13,16 +13,16 @@ const unit = {
 function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordView {
   return {
     id: "build-1",
-    scope_kind: "repo",
-    scope_id: "acme/web",
+    scopeKind: "repo",
+    scopeId: "acme/web",
     provider: "modal",
     status: "ready",
-    repositories_fingerprint: "fp-current",
-    repository_shas: JSON.stringify([{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }]),
-    runtime_version: COMPATIBLE_RUNTIME_VERSION,
-    build_duration_seconds: 1,
-    error_message: null,
-    created_at: 1,
+    repositoriesFingerprint: "fp-current",
+    repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
+    runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+    buildDurationSeconds: 1,
+    errorMessage: null,
+    createdAt: 1,
     ...overrides,
   };
 }
@@ -43,12 +43,12 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     expect(
       evaluateImageBuildRebuildPolicy(
         unit,
-        [row({ runtime_version: "v56-managed-provider-runtime" })],
+        [row({ runtimeVersion: "v56-managed-provider-runtime" })],
         "modal"
       )
     ).toMatchObject({ type: "rebuild", reason: "runtime_incompatible" });
     expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ repository_shas: "not-json" })], "modal")
+      evaluateImageBuildRebuildPolicy(unit, [row({ repositoryShas: null })], "modal")
     ).toMatchObject({ type: "rebuild", reason: "invalid_provenance" });
   });
 
@@ -64,9 +64,9 @@ describe("evaluateImageBuildRebuildPolicy", () => {
       ["opencomputer", "v57-vnc-opencode-1-18-11"],
       ["vercel", "v57-vnc-opencode-1-18-11"],
     ];
-    for (const [provider, runtime_version] of superseded) {
+    for (const [provider, runtimeVersion] of superseded) {
       expect(
-        evaluateImageBuildRebuildPolicy(unit, [row({ provider, runtime_version })], provider)
+        evaluateImageBuildRebuildPolicy(unit, [row({ provider, runtimeVersion })], provider)
       ).toMatchObject({ type: "rebuild", reason: "runtime_incompatible" });
     }
 
@@ -75,9 +75,9 @@ describe("evaluateImageBuildRebuildPolicy", () => {
       ["opencomputer", COMPATIBLE_RUNTIME_VERSION],
       ["vercel", COMPATIBLE_RUNTIME_VERSION],
     ];
-    for (const [provider, runtime_version] of current) {
+    for (const [provider, runtimeVersion] of current) {
       expect(
-        evaluateImageBuildRebuildPolicy(unit, [row({ provider, runtime_version })], provider).type
+        evaluateImageBuildRebuildPolicy(unit, [row({ provider, runtimeVersion })], provider).type
       ).toBe("check_branches");
     }
   });

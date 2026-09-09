@@ -23,11 +23,13 @@ export function parseTunnelUrls(raw: string): Record<string, string> | null {
     return null;
   }
 
-  if (!Object.values(parsed).every((value) => typeof value === "string")) {
-    return null;
+  const urls: Record<string, string> = {};
+  for (const [port, url] of Object.entries(parsed)) {
+    if (typeof url !== "string") return null;
+    urls[port] = url;
   }
 
-  return parsed as Record<string, string>;
+  return urls;
 }
 
 /**

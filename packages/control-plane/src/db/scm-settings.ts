@@ -1,7 +1,9 @@
-import type {
-  ScmSettings,
-  ScmGlobalConfig,
-  ScmRepoSettings,
+import {
+  scmGlobalConfigSchema,
+  scmSettingsSchema,
+  type ScmSettings,
+  type ScmGlobalConfig,
+  type ScmRepoSettings,
 } from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsStore } from "./integration-settings";
 import type { SqlDatabase } from "./sql-database";
@@ -24,43 +26,6 @@ export class ScmSettingsValidationError extends Error {
   }
 }
 
-const ALLOWED_SCM_SETTING_KEYS = new Set(["alwaysUseDraftMode", "pullRequestLabel"]);
-
-function validateAndNormalizeScmSettings(settings: unknown): ScmSettings {
-  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
-    throw new ScmSettingsValidationError("SCM settings must be an object");
-  }
-
-  for (const key of Object.keys(settings)) {
-    if (!ALLOWED_SCM_SETTING_KEYS.has(key)) {
-      throw new ScmSettingsValidationError(`Unknown SCM setting: ${key}`);
-    }
-  }
-
-  const { alwaysUseDraftMode, pullRequestLabel } = settings as {
-    alwaysUseDraftMode?: unknown;
-    pullRequestLabel?: unknown;
-  };
-  if (alwaysUseDraftMode !== undefined && typeof alwaysUseDraftMode !== "boolean") {
-    throw new ScmSettingsValidationError("alwaysUseDraftMode must be a boolean");
-  }
-
-  if (pullRequestLabel !== undefined && typeof pullRequestLabel !== "string") {
-    throw new ScmSettingsValidationError("pullRequestLabel must be a string");
-  }
-
-  const normalizedLabel =
-    typeof pullRequestLabel === "string" ? pullRequestLabel.trim() : undefined;
-  if (normalizedLabel?.includes(",")) {
-    throw new ScmSettingsValidationError("pullRequestLabel must not contain commas");
-  }
-
-  return {
-    ...(alwaysUseDraftMode !== undefined ? { alwaysUseDraftMode } : {}),
-    ...(normalizedLabel ? { pullRequestLabel: normalizedLabel } : {}),
-  };
-}
-
 /**
  * Global defaults + per-repo overrides for source-control (SCM) behavior, such
  * as always opening pull/merge requests as drafts. Applies to both GitHub and
@@ -79,22 +44,10 @@ export class ScmSettingsStore {
   }
 
   async setGlobal(config: ScmGlobalConfig): Promise<void> {
-    if (!config || typeof config !== "object" || Array.isArray(config)) {
-      throw new ScmSettingsValidationError("SCM settings must be an object");
-    }
-    // `scm` has no enable/disable-per-repo concept, so only `defaults` is
-    // supported at the global level. Reject anything else (e.g. `enabledRepos`)
-    // rather than silently persisting config that downstream resolution ignores.
-    for (const key of Object.keys(config)) {
-      if (key !== "defaults") {
-        throw new ScmSettingsValidationError(`Unknown SCM global setting: ${key}`);
-      }
-    }
-    const normalized: ScmGlobalConfig =
-      config.defaults === undefined
-        ? {}
-        : { defaults: validateAndNormalizeScmSettings(config.defaults) };
-    await this.store.setGlobal(SCM_SETTINGS_KEY, normalized);
+    const parsed = scmGlobalConfigSchema.safeParse(config);
+    if (!parsed.success)
+      throw new ScmSettingsValidationError(parsed.error.issues[0]?.message ?? "Invalid settings");
+    await this.store.setGlobal(SCM_SETTINGS_KEY, parsed.data);
   }
 
   deleteGlobal(): Promise<void> {
@@ -106,8 +59,10 @@ export class ScmSettingsStore {
   }
 
   async setRepoSettings(repo: string, settings: ScmRepoSettings): Promise<void> {
-    const normalized = validateAndNormalizeScmSettings(settings);
-    await this.store.setRepoSettings(SCM_SETTINGS_KEY, repo, normalized);
+    const parsed = scmSettingsSchema.safeParse(settings);
+    if (!parsed.success)
+      throw new ScmSettingsValidationError(parsed.error.issues[0]?.message ?? "Invalid settings");
+    await this.store.setRepoSettings(SCM_SETTINGS_KEY, repo, parsed.data);
   }
 
   deleteRepoSettings(repo: string): Promise<void> {

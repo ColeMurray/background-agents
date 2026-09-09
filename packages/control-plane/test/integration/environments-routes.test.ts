@@ -254,6 +254,17 @@ describe("Environments API (routes)", () => {
       });
       expect(res.status).toBe(404);
     });
+
+    it("rejects non-string secret values with the shared request error", async () => {
+      const id = await seedEnvironment();
+      const res = await serviceFetch(`${BASE}/environments/${id}/secrets`, {
+        method: "PUT",
+        body: JSON.stringify({ secrets: { TOKEN: 123 } }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "Request body must include secrets object" });
+    });
   });
 
   describe("POST /environments/:id/secrets/import", () => {
@@ -270,7 +281,7 @@ describe("Environments API (routes)", () => {
 
       const res = await serviceFetch(`${BASE}/environments/${id}/secrets/import`, {
         method: "POST",
-        body: JSON.stringify({ repoOwner: "acme", repoName: "web", keys: ["DEPLOY_KEY"] }),
+        body: JSON.stringify({ repoOwner: " ACME ", repoName: " WEB ", keys: ["DEPLOY_KEY"] }),
       });
       expect(res.status).toBe(200);
       const raw = await res.text();
@@ -285,6 +296,17 @@ describe("Environments API (routes)", () => {
       expect(
         (await listRes.json<{ secrets: { key: string }[] }>()).secrets.map((s) => s.key)
       ).toEqual(["DEPLOY_KEY"]);
+    });
+
+    it("rejects a whitespace-only source identity before membership lookup", async () => {
+      const id = await seedEnvironment();
+      const res = await serviceFetch(`${BASE}/environments/${id}/secrets/import`, {
+        method: "POST",
+        body: JSON.stringify({ repoOwner: "   ", repoName: "web" }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "repoOwner and repoName are required" });
     });
 
     it("rejects a non-member source with 403 and imports nothing", async () => {

@@ -3,6 +3,7 @@ import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 export interface ViewerReadStateRow {
   unread: number;
   latest_terminal_message_id: string | null;
+  latest_terminal_message_created_at: number | null;
 }
 
 /** Requires `users AS viewer` and `session_read_states AS read_state` joins. */
@@ -21,6 +22,10 @@ export function unreadSql(sessionAlias: string): string {
 
 export function readStateFromRow(row: ViewerReadStateRow): SessionReadState {
   return row.latest_terminal_message_id === null
-    ? { latestMessageId: null, unread: false }
-    : { latestMessageId: row.latest_terminal_message_id, unread: row.unread === 1 };
+    ? { latestMessageId: null, unread: false, version: 0 }
+    : {
+        latestMessageId: row.latest_terminal_message_id,
+        unread: row.unread === 1,
+        version: row.latest_terminal_message_created_at ?? 0,
+      };
 }

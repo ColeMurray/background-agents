@@ -1,5 +1,9 @@
 import type { ClientMessage } from "@open-inspect/shared/types/websocket";
-import type { EventResponse, ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
+import {
+  eventResponseSchema,
+  type EventResponse,
+  type ListEventsResponse,
+} from "@open-inspect/shared/types/sandbox-events";
 import {
   encodeEventTimelineCursor,
   type EventListCursor,
@@ -111,13 +115,13 @@ function toEventStreamCursor(cursor: EventTimelineCursor): EventStreamCursor {
 }
 
 function toEventResponse(event: EventRow): EventResponse {
-  return {
+  return eventResponseSchema.parse({
     id: event.id,
     type: event.type,
-    data: JSON.parse(event.data) as Record<string, unknown>,
+    data: JSON.parse(event.data) as unknown,
     messageId: event.message_id,
     createdAt: event.created_at,
-  };
+  });
 }
 
 function clampHistoryLimit(limit: number | undefined): number {

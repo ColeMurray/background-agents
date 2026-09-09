@@ -1,16 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyTitleUpdate,
-  applySessionReadState,
   buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
+  fetchSessionListPage,
   isArchivedSessionListKey,
   isSessionListKey,
   isUnarchivedSessionListKey,
   type SessionListResponse,
 } from "./session-list";
 import type { Session } from "@open-inspect/shared/types/sessions";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function session(id: string, overrides: Partial<Session> = {}): Session {
   return {
@@ -58,38 +63,31 @@ describe("buildSessionsPageKey", () => {
   });
 });
 
-describe("applySessionReadState", () => {
-  it("does not let an older mutation response overwrite a newer terminal message", () => {
-    const data: SessionListResponse = {
-      sessions: [
-        session("session-1", {
-          readState: {
-            unread: true,
-            latestMessageId: "message-b",
-          },
-        }),
-      ],
-      hasMore: false,
-    };
+describe("fetchSessionListPage", () => {
+  it("parses the session-list boundary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          sessions: [session("session-1")],
+          hasMore: false,
+        })
+      )
+    );
 
-    expect(
-      applySessionReadState(data, "session-1", {
-        unread: false,
-        latestMessageId: "message-a",
-      })?.sessions[0].readState
-    ).toEqual({
-      unread: true,
-      latestMessageId: "message-b",
+    await expect(fetchSessionListPage(buildSessionsPageKey())).resolves.toMatchObject({
+      sessions: [{ id: "session-1", status: "active" }],
+      hasMore: false,
     });
-    expect(
-      applySessionReadState(data, "session-1", {
-        unread: false,
-        latestMessageId: "message-b",
-      })?.sessions[0].readState
-    ).toEqual({
-      unread: false,
-      latestMessageId: "message-b",
-    });
+  });
+
+  it("rejects malformed pages", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ sessions: [{ id: "session-1" }], hasMore: false }))
+    );
+
+    await expect(fetchSessionListPage(buildSessionsPageKey())).rejects.toThrow();
   });
 });
 

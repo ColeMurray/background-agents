@@ -55,6 +55,8 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1,
@@ -959,17 +961,6 @@ describe("SessionPullRequestService", () => {
         "Failed to write session pull request record",
         expect.objectContaining({ artifact_id: "id-1", pr_number: 42 })
       );
-    });
-
-    it("skips the D1 write when no store is configured", async () => {
-      const deps = { ...harness.deps };
-      delete deps.sessionPullRequests;
-      const service = new SessionPullRequestService(deps);
-
-      const result = await service.createPullRequest(createInput());
-
-      expect(result.kind).toBe("created");
-      expect(harness.sessionPullRequests.upsert).not.toHaveBeenCalled();
     });
   });
 });

@@ -65,9 +65,10 @@ export function SkillEditor({
     JSON.stringify(skill?.metadata ?? {}, null, 2)
   );
   const [files, setFiles] = useState<SkillFileInput[]>(
-    skill?.files
-      .filter(({ path }) => path !== "SKILL.md")
-      .map(({ path, content, executable }) => ({ path, content, executable })) ?? []
+    () =>
+      skill?.files
+        .filter(({ path }) => path !== "SKILL.md")
+        .map(({ path, content, executable }) => ({ path, content, executable })) ?? []
   );
   const [assignmentKeys, setAssignmentKeys] = useState(
     () => new Set(initialAssignments.map(assignmentKey))

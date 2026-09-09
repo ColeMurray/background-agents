@@ -1,21 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
+import { seedActiveUser, sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
 import { Scheduler } from "../../src/scheduler/scheduler";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
-
-function getSchedulerStub() {
-  const scheduler = new Scheduler(env.DB, env as Env, { submit() {} });
-  return {
-    fetch(input: RequestInfo | URL, init?: RequestInit) {
-      return scheduler.dispatch(new Request(input, init));
-    },
-  };
-}
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
@@ -32,7 +24,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     next_run_at: null,
     consecutive_failures: 0,
     created_by: "user-1",
-    user_id: null,
+    user_id: "user-1",
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -65,20 +57,8 @@ function makeSlackEvent(overrides?: Partial<SlackAutomationEvent>): SlackAutomat
   };
 }
 
-async function sendEvent(event: SlackAutomationEvent): Promise<Response> {
-  const opts = {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(event),
-  };
-  try {
-    return await getSchedulerStub().fetch("http://internal/internal/event", opts);
-  } catch (e) {
-    if (e instanceof Error && e.message.includes("invalidating this Durable Object")) {
-      return getSchedulerStub().fetch("http://internal/internal/event", opts);
-    }
-    throw e;
-  }
+function sendEvent(event: SlackAutomationEvent) {
+  return new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} }).event(event);
 }
 
 /** Create a watched slack_event automation (channel C1, text_match contains "deploy"). */
@@ -89,7 +69,7 @@ async function seedSlackAutomation(
   const id = `auto-slack-${Math.random().toString(36).slice(2, 8)}`;
   await store.create(makeAutomation({ id, ...overrides }));
   const channels = new SlackChannelStore(env.DB);
-  await env.DB.batch(channels.bindChannelStatements(id, ["C1"]));
+  await sqlDatabase(env.DB).batch(channels.bindChannelStatements(id, ["C1"]));
   return id;
 }
 
@@ -100,15 +80,25 @@ async function fetchInvocations(store: AutomationStore, automationId: string) {
 }
 
 describe("Scheduler slack event handling (integration)", () => {
-  beforeEach(cleanD1Tables);
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await seedActiveUser("user-1");
+    await seedActiveUser("slack-actor-1");
+    await env.DB.prepare(
+      `INSERT INTO user_identities
+        (id, user_id, provider, provider_user_id, provider_issuer, created_at, updated_at)
+       VALUES ('slack-identity-1', 'slack-actor-1', 'slack', 'U1',
+         'https://slack.com', 1, 1)`
+    ).run();
+  });
 
   it("triggers a matching slack automation and records thread coordinates", async () => {
     const store = new AutomationStore(env.DB);
     const id = await seedSlackAutomation(store);
 
     const event = makeSlackEvent({ text: "please deploy the api" });
-    const res = await sendEvent(event);
-    expect(res.status).toBe(200);
+    const result = await sendEvent(event);
+    expect(result.triggered).toBe(1);
 
     const runs = await fetchRuns(id);
     expect(runs.length).toBeGreaterThanOrEqual(1);
@@ -124,10 +114,8 @@ describe("Scheduler slack event handling (integration)", () => {
     const store = new AutomationStore(env.DB);
     const id = await seedSlackAutomation(store);
 
-    const res = await sendEvent(makeSlackEvent({ text: "good morning team" }));
-    const body = await res.json<{ triggered: number; skipped: number }>();
-    expect(body.triggered).toBe(0);
-    expect(body.skipped).toBe(0);
+    const result = await sendEvent(makeSlackEvent({ text: "good morning team" }));
+    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
     expect(await fetchRuns(id)).toHaveLength(0);
   });
@@ -137,7 +125,7 @@ describe("Scheduler slack event handling (integration)", () => {
     const id = await seedSlackAutomation(store);
 
     // Event in an unwatched channel — the join table returns no candidate.
-    const res = await sendEvent(
+    const result = await sendEvent(
       makeSlackEvent({
         channelId: "C2",
         text: "please deploy",
@@ -145,9 +133,7 @@ describe("Scheduler slack event handling (integration)", () => {
         concurrencyKey: "slack:C2:1",
       })
     );
-    const body = await res.json<{ triggered: number; skipped: number }>();
-    expect(body.triggered).toBe(0);
-    expect(body.skipped).toBe(0);
+    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
     expect(await fetchRuns(id)).toHaveLength(0);
   });
@@ -181,13 +167,10 @@ describe("Scheduler slack event handling (integration)", () => {
       })
     );
 
-    const res = await sendEvent(
+    const result = await sendEvent(
       makeSlackEvent({ text: "deploy", concurrencyKey, triggerKey: "slack:msg:C1:second" })
     );
-    const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
-    expect(body.skipped).toBe(1);
-    expect(body.triggered).toBe(0);
-    expect(body.steered).toBe(0);
+    expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
 
     // The skip is a childless invocation carrying the message coordinates.
     const invocations = await fetchInvocations(store, id);
@@ -201,33 +184,27 @@ describe("Scheduler slack event handling (integration)", () => {
     expect(JSON.parse(invocationRow!.trigger_metadata!).channel).toBe("C1");
   });
 
-  it("steers the running session on a follow-up reply instead of dropping it", async () => {
+  it("steers the running session when the Slack actor may collaborate", async () => {
     const store = new AutomationStore(env.DB);
     const id = await seedSlackAutomation(store);
 
     const concurrencyKey = "slack:C1:thread-steer";
     // Root message triggers the run and creates its session.
-    const rootRes = await sendEvent(
+    const rootResult = await sendEvent(
       makeSlackEvent({ text: "deploy the api", concurrencyKey, triggerKey: "slack:msg:C1:root" })
     );
-    const rootBody = await rootRes.json<{ triggered: number }>();
-    expect(rootBody.triggered).toBe(1);
+    expect(rootResult.triggered).toBe(1);
 
     // A follow-up reply in the same thread (same concurrency key, new message)
     // is routed to the running session as a steering turn — not skipped.
-    const followRes = await sendEvent(
+    const followResult = await sendEvent(
       makeSlackEvent({
         text: "also update the changelog",
         concurrencyKey,
         triggerKey: "slack:msg:C1:reply",
       })
     );
-    const followBody = await followRes.json<{
-      triggered: number;
-      skipped: number;
-      steered: number;
-    }>();
-    expect(followBody).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+    expect(followResult).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
     // No concurrency-skip invocation recorded — the follow-up was steered.
     const invocations = await fetchInvocations(store, id);
@@ -236,20 +213,132 @@ describe("Scheduler slack event handling (integration)", () => {
     ).toBeUndefined();
   });
 
+  it.each([
+    [
+      "suspended",
+      async () => {
+        await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?")
+          .bind("slack-actor-1")
+          .run();
+      },
+    ],
+    [
+      "revoked",
+      async () => {
+        await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+          .bind("role_builtin_viewer", "slack-actor-1")
+          .run();
+      },
+    ],
+    [
+      "missing collaboration permission",
+      async () => {
+        await env.DB.batch([
+          env.DB.prepare(
+            `INSERT INTO roles
+            (id, key, name, normalized_name, description, is_system)
+           VALUES ('role_no_collaboration', NULL, 'No Collaboration', 'no collaboration',
+               NULL, 0)`
+          ),
+          env.DB.prepare(
+            `INSERT INTO role_permissions (role_id, permission_id)
+           VALUES ('role_no_collaboration', 'sessions.create')`
+          ),
+          env.DB.prepare(
+            "UPDATE user_role_assignments SET role_id = 'role_no_collaboration' WHERE user_id = 'slack-actor-1'"
+          ),
+        ]);
+      },
+    ],
+  ])(
+    "does not steer when the Slack actor's collaboration authority is %s",
+    async (authorityState, revoke) => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store);
+      const concurrencyKey = `slack:C1:thread-${authorityState}`;
+      expect(
+        await sendEvent(
+          makeSlackEvent({
+            text: "deploy the api",
+            concurrencyKey,
+            triggerKey: `slack:msg:C1:root-${authorityState}`,
+          })
+        )
+      ).toMatchObject({ triggered: 1 });
+
+      await revoke();
+
+      expect(
+        await sendEvent(
+          makeSlackEvent({
+            text: "also update the changelog",
+            concurrencyKey,
+            triggerKey: `slack:msg:C1:reply-${authorityState}`,
+          })
+        )
+      ).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+      expect(await fetchRuns(id)).toHaveLength(1);
+      expect(await fetchInvocations(store, id)).toHaveLength(1);
+    }
+  );
+
+  it("does not impose automation-launch grants on the Slack actor while steering", async () => {
+    const store = new AutomationStore(env.DB);
+    const id = await seedSlackAutomation(store);
+    const concurrencyKey = "slack:C1:thread-actor-only";
+    expect(
+      await sendEvent(
+        makeSlackEvent({
+          text: "deploy the api",
+          concurrencyKey,
+          triggerKey: "slack:msg:C1:root-actor-only",
+        })
+      )
+    ).toMatchObject({ triggered: 1 });
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO roles
+          (id, key, name, normalized_name, description, is_system)
+         VALUES ('role_collaboration_only', NULL, 'Collaboration Only',
+           'collaboration only', NULL, 0)`
+      ),
+      env.DB.prepare(
+        `INSERT INTO role_permissions (role_id, permission_id)
+         VALUES ('role_collaboration_only', 'sessions.collaborate')`
+      ),
+      env.DB.prepare(
+        `UPDATE user_role_assignments
+         SET role_id = 'role_collaboration_only' WHERE user_id = 'slack-actor-1'`
+      ),
+    ]);
+
+    expect(
+      await sendEvent(
+        makeSlackEvent({
+          text: "also update the changelog",
+          concurrencyKey,
+          triggerKey: "slack:msg:C1:reply-actor-only",
+        })
+      )
+    ).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+    expect(await fetchRuns(id)).toHaveLength(1);
+  });
+
   it("continues the same session on a reply after the run has completed", async () => {
     const store = new AutomationStore(env.DB);
     const id = await seedSlackAutomation(store);
 
     const concurrencyKey = "slack:C1:thread-done";
     // Root message triggers the run and creates its session.
-    const rootRes = await sendEvent(
+    const rootResult = await sendEvent(
       makeSlackEvent({
         text: "deploy the api",
         concurrencyKey,
         triggerKey: "slack:msg:C1:root-done",
       })
     );
-    expect((await rootRes.json<{ triggered: number }>()).triggered).toBe(1);
+    expect(rootResult.triggered).toBe(1);
 
     // Simulate the run finishing. Its session stays steerable within the window,
     // just like an @mention thread after a turn completes.
@@ -262,19 +351,18 @@ describe("Scheduler slack event handling (integration)", () => {
     // A reply after completion — with text that does NOT match the trigger
     // conditions — still continues the same session, proving the steer bypasses
     // both condition matching and the run-status filter.
-    const followRes = await sendEvent(
+    const followResult = await sendEvent(
       makeSlackEvent({
         text: "thanks! can you also bump the version?",
         concurrencyKey,
         triggerKey: "slack:msg:C1:reply-done",
       })
     );
-    const followBody = await followRes.json<{
-      triggered: number;
-      skipped: number;
-      steered: number;
-    }>();
-    expect(followBody).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+    expect(followResult).toEqual({
+      triggered: 0,
+      skipped: 0,
+      steered: 1,
+    });
 
     // The reply created no new run and recorded no skip — it reused the
     // completed run's session. Exactly one materialized run remains.

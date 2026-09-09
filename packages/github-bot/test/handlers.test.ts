@@ -302,7 +302,7 @@ describe("handlePullRequestOpened", () => {
       handler_action: "auto_review",
     });
     expect(sessionCreateBody(getControlPlaneFetch(env)).scmLogin).toBe("test-bot[bot]");
-    expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('-f event="COMMENT"');
+    expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('"event": "COMMENT"');
   });
 
   it("rejects a bot-authored PR when the bot is not an allowed trigger user", async () => {
@@ -602,6 +602,23 @@ describe("handleIssueComment", () => {
     const payload: IssueCommentPayload = {
       ...issueCommentPayload,
       comment: { ...issueCommentPayload.comment, body: "just a regular comment" },
+    };
+
+    const result = await handleIssueComment(env, log, payload, "trace-2");
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "no_mention" });
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a longer username prefix as an @mention", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: IssueCommentPayload = {
+      ...issueCommentPayload,
+      comment: {
+        ...issueCommentPayload.comment,
+        body: "Please ask @test-bot[bot]-clone to handle this.",
+      },
     };
 
     const result = await handleIssueComment(env, log, payload, "trace-2");

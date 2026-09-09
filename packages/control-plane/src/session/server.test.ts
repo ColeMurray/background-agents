@@ -44,6 +44,7 @@ function createHarness() {
     send: vi.fn(() => true),
     getClient: vi.fn(() => currentClient),
     close: vi.fn(),
+    isActiveSandbox: vi.fn(() => true),
     clearSandboxIfMatch: vi.fn(() => true),
     removeClient: vi.fn(() => client),
     hasParticipant: vi.fn(() => false),
@@ -56,6 +57,7 @@ function createHarness() {
     notifyTyping: vi.fn(async () => undefined),
     updatePresence: vi.fn(),
     getHistoryPage: vi.fn(() => ({ items: [], hasMore: false, cursor: null })),
+    authorize: vi.fn(async () => "allowed" as const),
   };
   const sandbox: SandboxDisconnectMonitor = {
     getStatus: vi.fn((): "ready" => "ready"),
@@ -67,7 +69,7 @@ function createHarness() {
   };
 
   const httpDeps: SessionHttpDispatcherDeps = {
-    getLogger: () => log,
+    log,
     routes: [
       {
         method: "GET",
@@ -75,18 +77,17 @@ function createHarness() {
         handler: vi.fn(async () => new Response("state", { status: 200 })),
       },
     ],
-    handleWebSocketUpgrade: vi.fn(async () => new Response(null, { status: 200 })),
     clock,
   };
   const messageDeps: SessionMessageRouterDeps<string, TestClient> = {
-    getLogger: () => log,
+    log,
     sockets,
     clientCommands,
     processSandboxEvent: vi.fn(async () => undefined),
     clock,
   };
   const disconnectDeps = {
-    getLogger: () => log,
+    log,
     sockets,
     sandbox,
     broadcaster,
@@ -251,6 +252,30 @@ describe("SessionServer", () => {
     expect(clientCommands.stopExecution).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [{ type: "prompt", content: "work", clientRequestId: "request-1" }, "sessions.collaborate"],
+    [
+      { type: "cancel_prompt", messageId: "message-1", clientRequestId: "request-1" },
+      "sessions.lifecycle",
+    ],
+    [{ type: "stop" }, "sessions.lifecycle"],
+  ] as const)("rejects %s without its command permission", async (message, permission) => {
+    const { server, sockets, clientCommands, client } = createHarness();
+    vi.mocked(clientCommands.authorize).mockResolvedValue("denied");
+
+    await server.onMessage("client", JSON.stringify(message));
+
+    expect(clientCommands.authorize).toHaveBeenCalledWith(client, permission);
+    expect(sockets.send).toHaveBeenCalledWith("client", {
+      type: "error",
+      code: "PERMISSION_REQUIRED",
+      message: `Permission required: ${permission}`,
+    });
+    expect(clientCommands.submitPrompt).not.toHaveBeenCalled();
+    expect(clientCommands.cancelPrompt).not.toHaveBeenCalled();
+    expect(clientCommands.stopExecution).not.toHaveBeenCalled();
+  });
+
   it("routes fetch_history and enforces throttling with the injected clock", async () => {
     const { server, sockets, clientCommands, setNow } = createHarness();
     const cursor = { timestamp: 10, id: "event-1", sequence: 2 };
@@ -294,6 +319,29 @@ describe("SessionServer", () => {
       timestamp: 1000,
       status: "ready",
     });
+  });
+
+  it("refuses frames from a replaced sandbox socket and closes it again", async () => {
+    const { server, messageDeps, sockets, log, setConnectionKind } = createHarness();
+    setConnectionKind("sandbox");
+    vi.mocked(sockets.isActiveSandbox).mockReturnValue(false);
+
+    await server.onMessage(
+      "sandbox",
+      JSON.stringify({
+        type: "heartbeat",
+        sandboxId: "sandbox-1",
+        timestamp: 1000,
+        status: "ready",
+      })
+    );
+
+    expect(messageDeps.processSandboxEvent).not.toHaveBeenCalled();
+    expect(sockets.close).toHaveBeenCalledWith("sandbox", 1000, "Sandbox socket replaced");
+    expect(log.debug).toHaveBeenCalledWith(
+      "Ignoring frame from a replaced sandbox socket",
+      expect.objectContaining({ sandbox_id: "sandbox-1" })
+    );
   });
 
   it("schedules sandbox reconnect checks and always reciprocates close", async () => {

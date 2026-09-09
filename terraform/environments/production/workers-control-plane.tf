@@ -55,12 +55,28 @@ module "control_plane_worker" {
     }
   ]
 
-  queue_bindings = [
-    {
-      binding_name = "IMAGE_BUILD_FINALIZATION_QUEUE"
-      queue_name   = cloudflare_queue.image_build_finalization.queue_name
-    }
-  ]
+  # One producer binding per job kind (packages/control-plane/src/jobs.ts;
+  # the mapping lives in src/cloudflare/job-queue.ts). The autofix bindings
+  # also feed the operator health check its read-only queue metrics; autofix
+  # production itself remains with the GitHub bot.
+  queue_bindings = concat(
+    [
+      {
+        binding_name = "IMAGE_BUILD_FINALIZATION_QUEUE"
+        queue_name   = cloudflare_queue.image_build_finalization.queue_name
+      }
+    ],
+    var.enable_github_bot ? [
+      {
+        binding_name = "AUTOFIX_QUEUE"
+        queue_name   = cloudflare_queue.github_autofix[0].queue_name
+      },
+      {
+        binding_name = "AUTOFIX_DLQ"
+        queue_name   = cloudflare_queue.github_autofix_dlq[0].queue_name
+      }
+    ] : []
+  )
 
   service_bindings = concat(
     var.enable_slack_bot ? [
@@ -90,6 +106,7 @@ module "control_plane_worker" {
       { name = "WORKER_URL", value = local.control_plane_url },
       { name = "DEPLOYMENT_NAME", value = var.deployment_name },
       { name = "APP_NAME", value = var.app_name },
+      { name = "GITHUB_BOT_USERNAME", value = var.github_bot_username },
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
       { name = "SANDBOX_INACTIVITY_TIMEOUT_MS", value = tostring(var.sandbox_inactivity_timeout_ms) },
     ],
@@ -106,7 +123,7 @@ module "control_plane_worker" {
     ] : [],
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_URL", value = var.daytona_api_url },
-      { name = "DAYTONA_BASE_SNAPSHOT", value = var.daytona_base_snapshot },
+      { name = "DAYTONA_BASE_SNAPSHOT", value = module.daytona_infra[0].snapshot_name },
     ] : [],
     local.use_daytona_backend && var.daytona_target != "" ? [
       { name = "DAYTONA_TARGET", value = var.daytona_target },
@@ -140,7 +157,7 @@ module "control_plane_worker" {
     ] : [],
     local.use_e2b_backend ? [
       { name = "E2B_API_URL", value = var.e2b_api_url },
-      { name = "E2B_TEMPLATE_ID", value = var.e2b_template_id },
+      { name = "E2B_TEMPLATE_ID", value = module.e2b_infra[0].template_id },
       { name = "E2B_SANDBOX_TIMEOUT_SECONDS", value = tostring(var.e2b_sandbox_timeout_seconds) },
       { name = "E2B_AUTO_PAUSE", value = tostring(var.e2b_auto_pause) },
     ] : []
@@ -179,8 +196,13 @@ module "control_plane_worker" {
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_KEY", value = var.daytona_api_key },
     ] : [],
-    var.opencomputer_api_key != "" && trimspace(var.opencomputer_api_url) != "" ? [
+    local.opencomputer_enabled ? [
       { name = "OPENCOMPUTER_API_KEY", value = var.opencomputer_api_key },
+    ] : [],
+    # OpenComputer sandboxes take the deployment-wide Anthropic key from the
+    # control plane. It is optional, and an unset one must not shadow the key a
+    # repository supplies through the secret store.
+    local.opencomputer_enabled && trimspace(var.anthropic_api_key) != "" ? [
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
     ] : [],
     var.vercel_sandbox_token != "" && trimspace(var.vercel_sandbox_project_id) != "" ? [
@@ -214,15 +236,14 @@ module "control_plane_worker" {
   # and the draft sweep ABANDONED_DRAFT_SWEEP_CRON in abandoned-draft-sweep.ts.
   cron_triggers = ["* * * * *", "7,37 * * * *", "23 * * * *"]
 
-  # module.e2b_infra is deliberately absent: its template build depends on THIS
-  # worker instead (see e2b.tf), so control-plane deploys land before template
-  # rebuilds — the compatible order for E2B boots.
+  # Base artifacts are verified before the Worker switches its provider references.
   depends_on = [
     null_resource.control_plane_build,
     module.session_index_kv,
     null_resource.d1_migrations,
     module.linear_bot_worker,
     module.daytona_infra,
+    module.e2b_infra,
     module.vercel_sandbox_infra,
     module.opencomputer_infra,
     module.modal_app,

@@ -526,6 +526,24 @@ describe("POST /callbacks/automation-skip", () => {
     expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
+  it("rejects a signed automation-skip payload with malformed fields", async () => {
+    const payload = await signPayload(skipData({ channel: 123 }));
+    const { response, ctx } = await postCallback("/callbacks/automation-skip", payload);
+
+    expect(response.status).toBe(400);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("accepts a correctly signed automation-skip payload with reordered fields", async () => {
+    okFetchMock();
+    const payload = await signPayload({ threadTs: "111.222", user: "U9", channel: "C123" });
+    const { response, ctx } = await postCallback("/callbacks/automation-skip", payload);
+
+    expect(response.status).toBe(200);
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    await expect(flushWaitUntil(ctx)).resolves.toBeUndefined();
+  });
+
   it("rejects a bad signature", async () => {
     const payload = await signPayload(skipData(), "wrong-secret");
     const { response, ctx } = await postCallback("/callbacks/automation-skip", payload);

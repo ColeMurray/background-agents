@@ -1,6 +1,6 @@
 import useSWR from "swr";
-import type { ZodType } from "zod";
-import { useAuthSession } from "@/lib/auth-session";
+import { z, type ZodType } from "zod";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   modelProviderAccountDefaultsResponseSchema,
@@ -30,6 +30,10 @@ import {
 const ACCOUNTS_KEY = "/api/model-provider-accounts";
 const DEFAULTS_KEY = "/api/model-provider-account-defaults";
 const LEGACY_CREDENTIALS_KEY = "/api/model-provider-accounts/legacy-credentials";
+const providerErrorResponseSchema = z.object({
+  error: z.string(),
+  retryable: z.boolean().optional(),
+});
 
 export type { LegacyProviderKeyLocation };
 
@@ -55,14 +59,11 @@ async function requestProviderResponse(
     signal: init?.signal,
   });
   if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as {
-      error?: string;
-      retryable?: boolean;
-    };
+    const parsed = providerErrorResponseSchema.safeParse(await response.json().catch(() => null));
     throw new ProviderResourceError(
-      payload.error || "Provider account request failed",
+      (parsed.success && parsed.data.error) || "Provider account request failed",
       response.status,
-      typeof payload.retryable === "boolean" ? payload.retryable : undefined
+      parsed.success ? parsed.data.retryable : undefined
     );
   }
   return response;
@@ -88,11 +89,12 @@ async function requestProviderResourceWithoutContent(
 }
 
 export function useProviderAccounts() {
-  const { data: session } = useAuthSession();
-  const accounts = useSWR(session ? ACCOUNTS_KEY : null, async (path) => {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canRead = hasPermission("provider_accounts.read");
+  const accounts = useSWR(canRead ? ACCOUNTS_KEY : null, async (path) => {
     return (await requestProviderResource(path, modelProviderAccountsResponseSchema)).accounts;
   });
-  const defaults = useSWR(session ? DEFAULTS_KEY : null, async (path) => {
+  const defaults = useSWR(canRead ? DEFAULTS_KEY : null, async (path) => {
     return (await requestProviderResource(path, modelProviderAccountDefaultsResponseSchema))
       .defaults;
   });
@@ -111,9 +113,10 @@ export function useProviderAccounts() {
 }
 
 export function useLegacyProviderCredentials() {
-  const { data: session } = useAuthSession();
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canRead = hasPermission("provider_accounts.read");
   const result = useSWR<LegacyProviderCredentialsResponse>(
-    session ? LEGACY_CREDENTIALS_KEY : null,
+    canRead ? LEGACY_CREDENTIALS_KEY : null,
     async (path: BrowserApiPath) => {
       return requestProviderResource(path, legacyProviderCredentialsResponseSchema);
     }
@@ -228,10 +231,4 @@ export async function setProviderAccountDefault(
       }
     )
   ).default;
-}
-
-export async function clearProviderAccountDefault(provider: SubscriptionProviderId) {
-  return requestProviderResourceWithoutContent(`${DEFAULTS_KEY}/${provider}`, {
-    method: "DELETE",
-  });
 }

@@ -35,11 +35,10 @@ const slackTriggerForwardResponseSchema = z.object({
  * `/internal/slack-event` endpoint for automation matching.
  *
  * All filtering happens here so the Slack event ack path stays cheap:
- * 1. Kill switch (`SLACK_TRIGGERS_ENABLED`) — dark by default.
- * 2. Bot identity (fail closed — no id ⇒ skip, since mention suppression needs it).
- * 3. Structural candidacy + mention suppression (`isChannelTriggerCandidate`).
- * 4. Watched-channel pre-filter (cached) — avoids forwarding every channel message.
- * 5. Normalize (+ best-effort channel name/permalink) and forward.
+ * 1. Bot identity (fail closed — no id ⇒ skip, since mention suppression needs it).
+ * 2. Structural candidacy + mention suppression (`isChannelTriggerCandidate`).
+ * 3. Watched-channel pre-filter (cached) — avoids forwarding every channel message.
+ * 4. Normalize (+ best-effort channel name/permalink) and forward.
  */
 export async function handleChannelTrigger(
   event: {
@@ -56,10 +55,6 @@ export async function handleChannelTrigger(
   env: Env,
   traceId: string | undefined
 ): Promise<void> {
-  if (env.SLACK_TRIGGERS_ENABLED !== "true") {
-    return;
-  }
-
   const botUserId = await getBotUserId(env, traceId);
   if (!botUserId) {
     log.warn("slack_trigger.skip", { trace_id: traceId, reason: "no_bot_user_id" });

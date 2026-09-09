@@ -8,9 +8,16 @@ import {
   isValidSandboxTimeoutMs,
   findSandboxPortConflict,
   matchRoutingRules,
+  mcpServerCommandSchema,
+  mcpServerCredentialMapSchema,
+  mcpServerTypeSchema,
   normalizeRoutingRules,
   resolveBuildTimeoutSeconds,
+  scmGlobalConfigSchema,
+  scmSettingsSchema,
+  integrationSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
+  validateSandboxChildSessionLimits,
   type SlackRoutingRule,
 } from "./integrations";
 
@@ -36,6 +43,36 @@ describe("isValidSandboxTimeoutMs", () => {
       expect(isValidSandboxTimeoutMs(value)).toBe(false);
     }
   );
+});
+
+describe("validateSandboxChildSessionLimits", () => {
+  it.each([4, 5])("accepts concurrent limit %i at or below the total", (concurrent) => {
+    expect(
+      validateSandboxChildSessionLimits({
+        maxConcurrentChildSessions: concurrent,
+        maxTotalChildSessions: 5,
+      })
+    ).toBeUndefined();
+  });
+
+  it("rejects a concurrent limit above the total with the existing message", () => {
+    expect(
+      validateSandboxChildSessionLimits({
+        maxConcurrentChildSessions: 6,
+        maxTotalChildSessions: 5,
+      })
+    ).toBe("maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions");
+  });
+
+  it.each([
+    {},
+    { maxConcurrentChildSessions: 100 },
+    { maxTotalChildSessions: 1 },
+    { maxConcurrentChildSessions: 100, maxTotalChildSessions: undefined },
+    { maxConcurrentChildSessions: undefined, maxTotalChildSessions: 1 },
+  ])("accepts sparse limits %j without applying defaults", (settings) => {
+    expect(validateSandboxChildSessionLimits(settings)).toBeUndefined();
+  });
 });
 
 describe("resolveBuildTimeoutSeconds", () => {
@@ -70,6 +107,46 @@ describe("resolveBuildTimeoutSeconds", () => {
 
   it("keeps the default below the maximum", () => {
     expect(DEFAULT_BUILD_TIMEOUT_SECONDS).toBeLessThan(MAX_BUILD_TIMEOUT_SECONDS);
+  });
+});
+
+describe("SCM settings schemas", () => {
+  it("parses and normalizes valid global and repo settings", () => {
+    expect(
+      scmGlobalConfigSchema.parse({
+        defaults: { alwaysUseDraftMode: true, pullRequestLabel: "  agent  " },
+      })
+    ).toEqual({ defaults: { alwaysUseDraftMode: true, pullRequestLabel: "agent" } });
+    expect(scmSettingsSchema.parse({ alwaysUseDraftMode: false, pullRequestLabel: "   " })).toEqual(
+      { alwaysUseDraftMode: false }
+    );
+  });
+
+  it("rejects malformed global and repo settings", () => {
+    expect(scmGlobalConfigSchema.safeParse({ enabledRepos: ["acme/web"] }).success).toBe(false);
+    expect(scmGlobalConfigSchema.safeParse({ defaults: { pullRequestLabel: 123 } }).success).toBe(
+      false
+    );
+    expect(scmSettingsSchema.safeParse({ alwaysUseDraftMode: "yes" }).success).toBe(false);
+    expect(scmSettingsSchema.safeParse({ pullRequestLabel: "release,agent" }).success).toBe(false);
+  });
+});
+
+describe("MCP server schemas", () => {
+  it("accepts canonical persisted MCP fields", () => {
+    expect(mcpServerTypeSchema.parse("local")).toBe("local");
+    expect(mcpServerCommandSchema.parse(["npx", "-y", "@playwright/mcp"])).toEqual([
+      "npx",
+      "-y",
+      "@playwright/mcp",
+    ]);
+    expect(mcpServerCredentialMapSchema.parse({ DEBUG: "1" })).toEqual({ DEBUG: "1" });
+  });
+
+  it("rejects malformed MCP command and credential fields", () => {
+    expect(mcpServerCommandSchema.safeParse([]).success).toBe(false);
+    expect(mcpServerCommandSchema.safeParse(["npx", 1]).success).toBe(false);
+    expect(mcpServerCredentialMapSchema.safeParse({ DEBUG: 1 }).success).toBe(false);
   });
 });
 
@@ -188,6 +265,70 @@ describe("slackIntegrationSettingsRoutingResponseSchema", () => {
         settings: { defaults: { routingRules: [{ keyword: "frontend" }] } },
       }).success
     ).toBe(false);
+  });
+});
+
+describe("integration settings schemas", () => {
+  it("parses valid global and repo settings", () => {
+    expect(
+      integrationSettingsSchemas.github.global.safeParse({
+        enabledRepos: null,
+        defaults: { autoReviewOnOpen: false, allowedTriggerUsers: ["alice"] },
+      }).success
+    ).toBe(true);
+    expect(
+      integrationSettingsSchemas.slack.repo.safeParse({ agentNotificationsEnabled: true }).success
+    ).toBe(true);
+  });
+
+  it("rejects malformed stored settings", () => {
+    expect(
+      integrationSettingsSchemas.github.global.safeParse({
+        enabledRepos: [42],
+        defaults: { autoReviewOnOpen: false },
+      }).success
+    ).toBe(false);
+    expect(
+      integrationSettingsSchemas.slack.repo.safeParse({ agentNotificationsEnabled: "yes" }).success
+    ).toBe(false);
+  });
+
+  it("rejects unknown keys without stripping them", () => {
+    expect(
+      integrationSettingsSchemas.github.global.safeParse({
+        defaults: { autoReviewOnOpen: false, autoReviewOnOpened: true },
+      }).success
+    ).toBe(false);
+    expect(
+      integrationSettingsSchemas.github.repo.safeParse({
+        autofix: { enabled: true, unknownPolicy: true },
+      }).success
+    ).toBe(false);
+    expect(
+      integrationSettingsSchemas.scm.global.safeParse({ enabledRepos: ["acme/widgets"] }).success
+    ).toBe(false);
+  });
+
+  it("parses nullable sandbox resource settings", () => {
+    expect(
+      integrationSettingsSchemas.sandbox.repo.safeParse({ cpuCores: null, memoryMib: null }).success
+    ).toBe(true);
+  });
+
+  it("parses valid session cost limits", () => {
+    expect(
+      integrationSettingsSchemas.sandbox.repo.safeParse({
+        maxSessionCostUsd: 12.5,
+      }).success
+    ).toBe(true);
+  });
+
+  it.each([
+    { maxSessionCostUsd: 0 },
+    { maxSessionCostUsd: -1 },
+    { maxSessionCostUsd: Number.POSITIVE_INFINITY },
+  ])("rejects invalid session cost settings %#", (settings) => {
+    expect(integrationSettingsSchemas.sandbox.repo.safeParse(settings).success).toBe(false);
   });
 });
 

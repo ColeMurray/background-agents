@@ -20,6 +20,7 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionEventStream } from "./event-stream";
 import type { MessageService } from "./services/message.service";
 import type { SessionRow, SandboxRow } from "./types";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 export interface SessionSnapshotEnrichment {
   environmentId: string | null;
@@ -34,8 +35,7 @@ export interface SessionSnapshotReaderDeps {
   messageService: MessageService;
   eventStream: SessionEventStream;
   sandboxDashboardSettings: SandboxDashboardSettings;
-  /** Null when the deployment has no D1 binding — environment names resolve null. */
-  db: SqlDatabase | null;
+  db: SqlDatabase;
   durableObjectId: string;
   /** DO storage transaction so the snapshot reads are a consistent cut. */
   transaction: <T>(closure: () => T) => T;
@@ -102,6 +102,8 @@ export class SessionSnapshotReader {
       isProcessing: this.getIsProcessing(),
       parentSessionId: session.parent_session_id,
       totalCost: session.total_cost ?? 0,
+      maxSessionCostUsd: session.max_cost_usd,
+      budgetExhausted: session.budget_exhausted === 1,
       codeServerUrl: sandbox?.code_server_url ?? null,
       vncUrl: sandbox?.vnc_url ?? null,
       tunnelUrls: sandbox?.tunnel_urls
@@ -127,7 +129,7 @@ export class SessionSnapshotReader {
    * lookup failure resolves null rather than failing the whole state read.
    */
   private async resolveEnvironmentName(environmentId: string | null): Promise<string | null> {
-    if (!environmentId || !this.deps.db) {
+    if (!environmentId) {
       return null;
     }
     try {
@@ -156,7 +158,7 @@ export class SessionSnapshotReader {
       repoOwner: member.repoOwner,
       repoName: member.repoName,
       repoId: member.row ? member.row.repo_id : (session?.repo_id ?? null),
-      baseBranch: member.baseBranch ?? "main",
+      baseBranch: member.baseBranch ?? DEFAULT_BASE_BRANCH,
       branchName:
         member.row?.branch_name ?? (member.isPrimary ? (session?.branch_name ?? null) : null),
       baseSha: member.row?.base_sha ?? (member.isPrimary ? (session?.base_sha ?? null) : null),

@@ -3,11 +3,8 @@ import type { ImageBuildFinalizationRow } from "../db/image-build-finalization";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { FinalizeImageBuildInput } from "./types";
-import {
-  IMAGE_BUILD_PROVIDER_ATTEMPT_MS,
-  ImageBuildFinalizationAttemptError,
-  ImageBuildFinalizer,
-} from "./finalizer";
+import { ImageBuildFinalizationAttemptError } from "./finalization-error";
+import { IMAGE_BUILD_PROVIDER_ATTEMPT_MS, ImageBuildFinalizer } from "./finalizer";
 
 const job = { version: 1 as const, buildId: "build-1", completionHash: "a".repeat(64) };
 const correlation = { request_id: "queue-1", trace_id: "queue-1" };
@@ -129,7 +126,7 @@ describe("ImageBuildFinalizer", () => {
 
     await expect(finalizer.process(job, correlation)).resolves.toEqual({
       type: "retry",
-      delaySeconds: 365,
+      delayMs: 365_000,
     });
     expect(factory.create).not.toHaveBeenCalled();
   });
@@ -190,7 +187,7 @@ describe("ImageBuildFinalizer", () => {
 
     await expect(finalizer.process(job, correlation)).resolves.toEqual({
       type: "retry",
-      delaySeconds: 15,
+      delayMs: 15_000,
     });
     expect(finalization.clearLease).toHaveBeenCalledOnce();
     expect(finalization.markFailed).not.toHaveBeenCalled();
@@ -229,7 +226,7 @@ describe("ImageBuildFinalizer", () => {
 
     await expect(finalizer.process(job, correlation)).resolves.toEqual({
       type: "retry",
-      delaySeconds: 15,
+      delayMs: 15_000,
     });
     expect(adapter.deleteImage).toHaveBeenCalledWith({
       image: { providerImageId: "image-1", providerSessionId: "session-1" },

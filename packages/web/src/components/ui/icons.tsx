@@ -39,6 +39,23 @@ export function RightSidebarIcon({ className }: IconProps) {
   );
 }
 
+export function RightSidebarOpenIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4z" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function BackIcon({ className }: IconProps) {
   return (
     <svg

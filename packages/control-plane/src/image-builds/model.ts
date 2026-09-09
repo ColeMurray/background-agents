@@ -74,7 +74,6 @@ export interface ImageBuildCallbackBuild {
   id: string;
   scope: ImageBuildScope;
   provider: ImageBuildProvider;
-  providerSessionId: string | null;
   status: ImageBuildStatus;
 }
 

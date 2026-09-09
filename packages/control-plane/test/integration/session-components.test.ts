@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
-import type { SessionDO } from "../../src/session/durable-object";
+import { env } from "cloudflare:test";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
+import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
 import type { Env } from "../../src/types";
 import { createSessionRuntime } from "../../src/session/components";
-import { componentsOf } from "./session-do-access";
+import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
+import { componentsOf, runInSessionDO } from "./session-do-access";
 
 /**
  * The composition root is fail-fast: both provider factories construct at
@@ -15,26 +17,18 @@ describe("createSessionRuntime", () => {
   async function buildWithEnv(overrides: Partial<Record<keyof Env, string | undefined>>) {
     const stub = env.SESSION.get(env.SESSION.idFromName(`components-eager-${crypto.randomUUID()}`));
 
-    return runInDurableObject(stub, (instance: SessionDO) => {
+    return runInSessionDO(stub, (instance: SessionDO, state) => {
       // Apply the schema first (idempotent init), matching production order.
       componentsOf(instance);
 
-      const doctored = {
-        ...(instance as unknown as { env: Env }).env,
+      const doctored = createCloudflareEnv({
+        ...(instance as unknown as { env: WorkerBindings }).env,
         ...overrides,
-      } as Env;
+      } as WorkerBindings);
 
       let error: string | null = null;
       try {
-        createSessionRuntime(
-          {
-            ctx: instance.ctx,
-            sql: instance.ctx.storage.sql,
-            db: null,
-            ensureInitialized: () => {},
-          },
-          doctored
-        );
+        createSessionRuntime(createDurableObjectSessionPlatform(state, env.DB), doctored);
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);
       }

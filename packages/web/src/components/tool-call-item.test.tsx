@@ -92,4 +92,27 @@ describe("ToolCallItem", () => {
     expect(outputPre).toHaveClass("overflow-x-auto", "whitespace-pre");
     expect(outputPre).not.toHaveClass("whitespace-pre-wrap", "[overflow-wrap:anywhere]");
   });
+
+  it("uses the rich renderer for create-pull-request regardless of tool name casing", () => {
+    const event: Extract<SandboxEvent, { type: "tool_call" }> = {
+      type: "tool_call",
+      sandboxId: "sandbox-1",
+      messageId: "message-call-5",
+      callId: "call-5",
+      tool: "Create-Pull-Request",
+      args: { title: "Improve the timeline", body: "A clearer pull request preview." },
+      output:
+        "Pull request created successfully!\n\nPR #42 (feature/timeline -> main): https://github.com/acme/web/pull/42\n\nThe pull request is now ready for review.",
+      status: "completed",
+      timestamp: 1,
+    };
+
+    render(<ToolCallItem event={event} isExpanded onToggle={() => {}} />);
+
+    expect(screen.getByText("Opened pull request #42")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /open pr/i })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/web/pull/42"
+    );
+  });
 });

@@ -5,6 +5,7 @@ import { ImageBuildStore } from "../../src/db/image-builds";
 import type { ImageBuildAdapterFactory } from "../../src/image-builds/provider-factory";
 import { IMAGE_BUILD_SCHEDULER_CRON, ImageBuildScheduler } from "../../src/image-builds/scheduler";
 import type { ImageBuildWorkflow } from "../../src/image-builds/workflow";
+import type { WorkerBindings } from "../../src/cloudflare/platform";
 import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
 import { environmentScope, getRow, seedEnvironment } from "./image-build-helpers";
@@ -16,7 +17,7 @@ describe("image build scheduler integration", () => {
     await expect(
       worker.scheduled(
         { cron: IMAGE_BUILD_SCHEDULER_CRON } as ScheduledEvent,
-        { DB: env.DB } as unknown as Env,
+        { DB: env.DB } as unknown as WorkerBindings,
         createExecutionContext()
       )
     ).resolves.toBeUndefined();
@@ -52,15 +53,9 @@ describe("image build scheduler integration", () => {
       .run();
 
     const send = vi.fn(async () => undefined);
-    const workflow = {
-      cleanupImages: vi.fn(async () => ({
-        deletedFailed: 0,
-        reapedFailed: 0,
-        reapedSuperseded: 0,
-      })),
-    } as unknown as ImageBuildWorkflow;
+    const workflow = {} as unknown as ImageBuildWorkflow;
     const scheduler = new ImageBuildScheduler(
-      { IMAGE_BUILD_FINALIZATION_QUEUE: { send } } as unknown as Env,
+      { JOBS: { send } } as unknown as Env,
       env.DB,
       null,
       store,
@@ -74,9 +69,8 @@ describe("image build scheduler integration", () => {
     expect(stats.finalizationsRepublished).toBe(1);
     expect(stats.staleMarked).toBe(0);
     expect(send).toHaveBeenCalledWith({
-      version: 1,
-      buildId: "recover-before-stale",
-      completionHash,
+      kind: "image_build.finalize",
+      payload: { version: 1, buildId: "recover-before-stale", completionHash },
     });
     expect(await getRow("recover-before-stale")).toMatchObject({
       status: "building",
@@ -113,15 +107,9 @@ describe("image build scheduler integration", () => {
     }
 
     const send = vi.fn(async () => undefined);
-    const workflow = {
-      cleanupImages: vi.fn(async () => ({
-        deletedFailed: 0,
-        reapedFailed: 0,
-        reapedSuperseded: 0,
-      })),
-    } as unknown as ImageBuildWorkflow;
+    const workflow = {} as unknown as ImageBuildWorkflow;
     const scheduler = new ImageBuildScheduler(
-      { IMAGE_BUILD_FINALIZATION_QUEUE: { send } } as unknown as Env,
+      { JOBS: { send } } as unknown as Env,
       env.DB,
       null,
       store,
@@ -152,13 +140,7 @@ describe("image build scheduler integration", () => {
     }
 
     const cleanupFailedBuild = vi.fn(async () => undefined);
-    const workflow = {
-      cleanupImages: vi.fn(async () => ({
-        deletedFailed: 0,
-        reapedFailed: 0,
-        reapedSuperseded: 0,
-      })),
-    } as unknown as ImageBuildWorkflow;
+    const workflow = {} as unknown as ImageBuildWorkflow;
     const scheduler = new ImageBuildScheduler(
       {} as Env,
       env.DB,

@@ -22,6 +22,10 @@
       "import": "./dist/models.js",
       "types": "./dist/models.d.ts"
     },
+    "./classification": {
+      "import": "./dist/classification.js",
+      "types": "./dist/classification.d.ts"
+    },
     "./logger": {
       "import": "./dist/logger.js",
       "types": "./dist/logger.d.ts"
@@ -46,6 +50,10 @@
       "import": "./dist/user-id.js",
       "types": "./dist/user-id.d.ts"
     },
+    "./rbac": {
+      "import": "./dist/rbac.js",
+      "types": "./dist/rbac.d.ts"
+    },
     "./browser-auth-routes": {
       "import": "./dist/browser-auth-routes.js",
       "types": "./dist/browser-auth-routes.d.ts"
@@ -65,6 +73,10 @@
     "./types/github-identity": {
       "import": "./dist/types/github-identity.js",
       "types": "./dist/types/github-identity.d.ts"
+    },
+    "./types/github-autofix": {
+      "import": "./dist/types/github-autofix.js",
+      "types": "./dist/types/github-autofix.d.ts"
     },
     "./types/image-builds": {
       "import": "./dist/types/image-builds.js",
@@ -93,6 +105,10 @@
     "./slack": {
       "import": "./dist/slack/index.js",
       "types": "./dist/slack/index.d.ts"
+    },
+    "./pull-request-tool": {
+      "import": "./dist/pull-request-tool.js",
+      "types": "./dist/pull-request-tool.d.ts"
     },
     "./completion/extractor": {
       "import": "./dist/completion/extractor.js",
@@ -169,6 +185,10 @@
     "./types/analytics": {
       "import": "./dist/types/analytics.js",
       "types": "./dist/types/analytics.d.ts"
+    },
+    "./types/audit-events": {
+      "import": "./dist/types/audit-events.js",
+      "types": "./dist/types/audit-events.d.ts"
     }
   },
   "scripts": {

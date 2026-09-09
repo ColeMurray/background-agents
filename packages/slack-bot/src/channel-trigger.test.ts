@@ -82,7 +82,6 @@ function makeControlPlaneFetch(
 
 function makeEnv(
   opts: {
-    triggersEnabled?: boolean;
     watched?: string[];
     triggered?: number;
     steered?: number;
@@ -107,7 +106,6 @@ function makeEnv(
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "secret",
     SERVICE_AUTH_SECRET: "internal-secret",
-    SLACK_TRIGGERS_ENABLED: opts.triggersEnabled ? "true" : undefined,
   } as unknown as Env;
 }
 
@@ -171,7 +169,7 @@ describe("channel-message automation triggers (POST /events)", () => {
   });
 
   it("forwards a normalized event for a candidate message in a watched channel", async () => {
-    const env = makeEnv({ triggersEnabled: true, watched: ["C123"] });
+    const env = makeEnv({ watched: ["C123"] });
     const ctx = makeCtx();
 
     const res = await app.fetch(channelMessageRequest({}), env, ctx);
@@ -196,7 +194,7 @@ describe("channel-message automation triggers (POST /events)", () => {
   });
 
   it("does not react when the forward matches no automation (triggered: 0)", async () => {
-    const env = makeEnv({ triggersEnabled: true, watched: ["C123"], triggered: 0 });
+    const env = makeEnv({ watched: ["C123"], triggered: 0 });
     const ctx = makeCtx();
 
     await app.fetch(channelMessageRequest({}), env, ctx);
@@ -206,7 +204,7 @@ describe("channel-message automation triggers (POST /events)", () => {
   });
 
   it("reacts when a follow-up steers an active run (triggered: 0, steered: 1)", async () => {
-    const env = makeEnv({ triggersEnabled: true, watched: ["C123"], triggered: 0, steered: 1 });
+    const env = makeEnv({ watched: ["C123"], triggered: 0, steered: 1 });
     const ctx = makeCtx();
 
     // A reply in an active thread is forwarded and steers the running session;
@@ -224,7 +222,6 @@ describe("channel-message automation triggers (POST /events)", () => {
 
   it("does not react when the control-plane forward response is malformed", async () => {
     const env = makeEnv({
-      triggersEnabled: true,
       watched: ["C123"],
       forwardResponse: { triggered: "1", skipped: 0, steered: 0 },
     });
@@ -236,23 +233,8 @@ describe("channel-message automation triggers (POST /events)", () => {
     expect(mockAddReaction).not.toHaveBeenCalled();
   });
 
-  it("does not forward when the kill switch is off (default)", async () => {
-    const env = makeEnv({ triggersEnabled: false, watched: ["C123"] });
-    const ctx = makeCtx();
-
-    await app.fetch(channelMessageRequest({}), env, ctx);
-    await flushWaitUntil(ctx);
-
-    const forwarded = forwardedSlackEvents(
-      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
-    );
-    expect(forwarded).toHaveLength(0);
-    // auth.test isn't even reached when the feature is dark.
-    expect(mockAuthTest).not.toHaveBeenCalled();
-  });
-
   it("does not forward a message in an unwatched channel", async () => {
-    const env = makeEnv({ triggersEnabled: true, watched: ["C-other"] });
+    const env = makeEnv({ watched: ["C-other"] });
     const ctx = makeCtx();
 
     await app.fetch(channelMessageRequest({}), env, ctx);
@@ -265,7 +247,7 @@ describe("channel-message automation triggers (POST /events)", () => {
   });
 
   it("suppresses a message that mentions the bot (handled by app_mention)", async () => {
-    const env = makeEnv({ triggersEnabled: true, watched: ["C123"] });
+    const env = makeEnv({ watched: ["C123"] });
     const ctx = makeCtx();
 
     await app.fetch(channelMessageRequest({ text: `<@${BOT_USER_ID}> please deploy` }), env, ctx);

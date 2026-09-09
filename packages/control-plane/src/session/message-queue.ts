@@ -1,10 +1,13 @@
 import { generateId, hashToken } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
+import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import type {
-  SessionAttachmentReference,
-  ResolvedSessionAttachment,
-} from "@open-inspect/shared/types/session-attachments";
+  GitHubAutofixOrigin,
+  GitHubAutofixSessionCommand,
+  GitHubAutofixSessionResponse,
+} from "@open-inspect/shared";
+import { githubAutofixOriginSchema } from "@open-inspect/shared";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
@@ -13,7 +16,6 @@ import {
 } from "@open-inspect/shared/models";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
-import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
@@ -21,7 +23,7 @@ import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
 import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
-import { STOP_CONFIRMATION_TIMEOUT_MS, type MessageRepository } from "./message-repository";
+import type { MessageRepository } from "./message-repository";
 import {
   AttachmentClaimConflictError,
   type SessionAttachmentRepository,
@@ -34,7 +36,9 @@ import type { SessionStatusService } from "./session-status-service";
 import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
-import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
+import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
+import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
+import type { MessageFailureService } from "./message-failure-service";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -42,40 +46,38 @@ import {
   SessionAttachmentError,
   resolveSessionAttachments,
 } from "./session-attachment-resolver";
+import type {
+  EnqueuedPrompt,
+  EnqueuePromptCoreData,
+  PromptMessageData,
+} from "./message-queue-types";
 
-interface PromptMessageData {
-  clientRequestId?: string;
-  content: string;
-  model?: string;
-  reasoningEffort?: string;
-  attachments?: SessionAttachmentReference[];
-}
+const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
+const STUCK_PROCESSING_ERROR = "Execution timed out (stuck processing)";
 
-interface StopExecutionOptions {
-  suppressStatusReconcile?: boolean;
-}
+type EnqueueAutofixResponse = Extract<
+  GitHubAutofixSessionResponse,
+  { kind: "enqueued" | "duplicate" | "rejected" }
+>;
+type LookupAutofixResponse = Extract<GitHubAutofixSessionResponse, { kind: "found" | "not_found" }>;
 
-interface EnqueuePromptCoreData {
-  participant: ParticipantRow;
-  userId: string;
-  content: string;
-  source: MessageSource;
-  model?: string;
-  reasoningEffort?: string;
-  attachments?: SessionAttachmentReference[];
-  callbackContext?: Record<string, unknown>;
-  clientRequestId?: string;
-}
-
-interface EnqueuedPrompt {
-  messageId: string;
-  position: number | null;
-}
+type UserMessageEventWithOrigin = Extract<SandboxEvent, { type: "user_message" }> & {
+  origin?: GitHubAutofixOrigin;
+};
 
 export class SessionNotPromptableError extends Error {
   constructor(readonly sessionStatus: SessionRow["status"]) {
     super(`Cannot prompt a ${sessionStatus} session`);
     this.name = "SessionNotPromptableError";
+  }
+}
+
+export class BudgetExhaustedError extends Error {
+  constructor() {
+    super(
+      "Session cost limit reached. The session owner must raise or remove the limit to continue."
+    );
+    this.name = "BudgetExhaustedError";
   }
 }
 
@@ -141,21 +143,85 @@ export class SessionMessageQueue {
     private readonly callbackService: CallbackNotificationService,
     private readonly sessionStatus: SessionStatusService,
     private readonly getProviderAuthenticationError: (model: string) => Promise<string | null>,
-    private readonly projectTerminalMessage: (
-      messageId: string,
-      messageCreatedAt: number,
-      completedAt: number
-    ) => Promise<void>,
+    private readonly messageFailures: MessageFailureService,
     private readonly sandboxLifecycle: SandboxLifecycle,
-    private readonly sessionIndex: SessionIndexStore | null,
+    private readonly sessionIndex: Pick<SessionIndexStore, "touchUpdatedAt">,
     private readonly scmProvider: SourceControlProviderName,
     private readonly alarmScheduler: AlarmScheduler,
+    private readonly executionStop: ExecutionStopCoordinator,
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number
   ) {}
 
+  async enqueueAutofix(
+    command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }>
+  ): Promise<EnqueueAutofixResponse> {
+    const session = this.repository.getSession();
+    const userId = `github:${command.author.id}`;
+    const now = Date.now();
+    const admission = this.messageRepository.admitAutofixMessage({
+      message: {
+        id: generateId(),
+        authorId: () => {
+          let participant = this.participantService.getByUserId(userId);
+          if (!participant) {
+            participant = this.participantService.create(userId, command.author.login);
+          }
+          this.participantRepository.updateParticipantCoalesce(participant.id, {
+            scmUserId: command.author.id,
+            scmLogin: command.author.login,
+            scmName: command.author.login,
+          });
+          return participant.id;
+        },
+        content: command.prompt,
+        source: "github",
+        status: "pending",
+        createdAt: now,
+      },
+      feedbackKey: command.feedbackKey,
+      pullRequestKey: `github:${command.pullRequest.repositoryId}:${command.pullRequest.number}`,
+      originContext: JSON.stringify(command.origin),
+      attemptLimit: command.attemptLimit,
+      windowStart: now - AUTOFIX_ATTEMPT_WINDOW_MS,
+      sessionClosed: !session || session.status === "archived" || session.status === "cancelled",
+    });
+    if (admission.kind === "rejected") return admission;
+
+    if (admission.kind === "enqueued") {
+      this.broadcastPromptQueue();
+      this.log.info("autofix.enqueue", {
+        event: "autofix.enqueue",
+        feedback_key: command.feedbackKey,
+        message_id: admission.messageId,
+        pull_request_number: command.pullRequest.number,
+        artifact_id: command.pullRequest.artifactId,
+      });
+    }
+    await this.redrivePendingAutofix(admission.messageId);
+    return admission;
+  }
+
+  async lookupAutofix(feedbackKey: string): Promise<LookupAutofixResponse> {
+    const messageId = this.messageRepository.getAutofixMessageId(feedbackKey);
+    if (!messageId) return { kind: "not_found" };
+
+    await this.redrivePendingAutofix(messageId);
+    return { kind: "found", messageId };
+  }
+
+  private async redrivePendingAutofix(messageId: string): Promise<void> {
+    if (this.messageRepository.getMessageStatus(messageId) !== "pending") return;
+
+    const session = this.repository.getSession();
+    if (!session || session.status === "archived" || session.status === "cancelled") return;
+
+    await this.sessionStatus.transition("active");
+    await this.processMessageQueue();
+  }
+
   async handlePromptMessage(
-    ws: WebSocket,
+    ws: SessionWebSocket,
     client: ClientInfo,
     data: PromptMessageData
   ): Promise<void> {
@@ -165,6 +231,7 @@ export class SessionMessageQueue {
       let participant = this.participantRepository.getParticipantById(client.participantId);
       participant ??= this.participantService.getByUserId(client.userId);
       if (!participant) {
+        this.assertBudgetAvailable();
         this.assertQueueCapacity();
         participant = this.participantService.create(client.userId, client.name);
       }
@@ -215,19 +282,25 @@ export class SessionMessageQueue {
         });
         return;
       }
+      if (error instanceof BudgetExhaustedError) {
+        this.wsManager.send(ws, {
+          type: "error",
+          code: "BUDGET_EXHAUSTED",
+          message: error.message,
+          clientRequestId: data.clientRequestId,
+        });
+        return;
+      }
       throw error;
     }
 
-    const sessionIndex = this.sessionIndex;
-    if (sessionIndex) {
-      const session = this.repository.getSession();
-      const sessionId = session?.session_name || session?.id;
-      if (sessionId) {
-        this.backgroundTasks.submit(() => sessionIndex.touchUpdatedAt(sessionId), {
-          name: "session_index.touch_updated_at",
-          context: { session_id: sessionId },
-        });
-      }
+    const session = this.repository.getSession();
+    const sessionId = session?.session_name || session?.id;
+    if (sessionId) {
+      this.backgroundTasks.submit(() => this.sessionIndex.touchUpdatedAt(sessionId), {
+        name: "session_index.touch_updated_at",
+        context: { session_id: sessionId },
+      });
     }
 
     this.wsManager.send(ws, {
@@ -241,7 +314,7 @@ export class SessionMessageQueue {
   }
 
   async cancelQueuedPrompt(
-    ws: WebSocket,
+    ws: SessionWebSocket,
     data: { messageId: string; clientRequestId: string }
   ): Promise<void> {
     if (!this.messageRepository.cancelPendingMessage(data.messageId)) {
@@ -276,11 +349,14 @@ export class SessionMessageQueue {
     const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
     if (awaitingStop) {
       if (awaitingStop.deadline <= Date.now()) {
-        await this.recoverStopConfirmationTimeout();
+        await this.executionStop.recoverStopConfirmationTimeout();
       } else {
         await this.alarmScheduler.schedule(awaitingStop.deadline);
       }
       this.log.debug("processMessageQueue: waiting for sandbox stop confirmation");
+      return;
+    }
+    if (currentSession.budget_exhausted === 1) {
       return;
     }
     if (this.messageRepository.getProcessingMessage()) {
@@ -296,6 +372,7 @@ export class SessionMessageQueue {
     const session = this.repository.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
     const authenticationError = await this.getProviderAuthenticationError(resolvedModel);
+    if (this.repository.getSession()?.budget_exhausted === 1) return;
     if (authenticationError) {
       this.log.error("provider_auth.unavailable", {
         event: "provider_auth.unavailable",
@@ -308,9 +385,27 @@ export class SessionMessageQueue {
       }
       return;
     }
-
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (!sandboxWs) {
+      // The provider-auth lookup above is a non-storage await. The socket
+      // path re-validates through the processing claim; this path has no
+      // claim, so it re-reads what it acts on: a cancel or archive that
+      // landed meanwhile has closed the session and terminalized the prompt,
+      // and must not get a sandbox spawned for it. The queue is then pumped
+      // again over the state that moved: a prompt cancelled on its own
+      // leaves the next one pending with nobody else to dispatch it, and the
+      // pump stops by itself for a closed session, a processing owner, a
+      // stop fence, or an empty queue.
+      if (!this.isPromptStillDispatchable(message.id)) {
+        this.log.info("prompt.dispatch", {
+          event: "prompt.dispatch",
+          message_id: message.id,
+          outcome: "deferred",
+          reason: "superseded_during_auth",
+        });
+        await this.processMessageQueue();
+        return;
+      }
       this.log.info("prompt.dispatch", {
         event: "prompt.dispatch",
         message_id: message.id,
@@ -353,7 +448,8 @@ export class SessionMessageQueue {
       now,
       parseStoredSessionAttachments(message.attachments, () =>
         this.log.error("prompt.invalid_stored_attachments")
-      )
+      ),
+      message.origin_context
     );
     const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
     const requestedEffort =
@@ -393,7 +489,7 @@ export class SessionMessageQueue {
     if (!sent) {
       this.messageRepository.updateMessageToPending(message.id);
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
-      await this.resumeAfterSandboxTermination();
+      await this.executionStop.resumeAfterSandboxTermination();
     } else {
       this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
@@ -426,65 +522,10 @@ export class SessionMessageQueue {
     });
   }
 
-  /**
-   * Stop the current execution.
-   *
-   * Marks the processing message as failed, upserts a synthetic
-   * execution_complete, broadcasts that synthetic event so every client flushes
-   * its buffered tokens, and forwards the stop to the sandbox.
-   */
-  async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
-    const now = Date.now();
-    const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
-    let stoppedMessageId: string | null = null;
-
-    if (
-      processingMessage &&
-      this.failMessage(processingMessage, "Execution was stopped", now, "processing")
-    ) {
-      stoppedMessageId = processingMessage.id;
-      const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
-      this.messageRepository.markMessageAwaitingStopConfirmation(
-        processingMessage.id,
-        stopConfirmationDeadline
-      );
-      await this.alarmScheduler.schedule(stopConfirmationDeadline);
-      this.broadcastPromptQueue();
-      this.log.info("prompt.stopped", {
-        event: "prompt.stopped",
-        message_id: processingMessage.id,
-      });
-      if (!options.suppressStatusReconcile) {
-        await this.sessionStatus.reconcileAfterExecution(false);
-      }
-    }
-
-    this.messenger.broadcast({ type: "processing_status", isProcessing: false });
-
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (stoppedMessageId && (!sandboxWs || !this.wsManager.send(sandboxWs, { type: "stop" }))) {
-      await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
-      await this.resumeAfterSandboxTermination();
-    }
-  }
-
-  async recoverStopConfirmationTimeout(): Promise<void> {
-    const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
-    if (!awaitingStop || awaitingStop.deadline > Date.now()) return;
-    this.log.warn("Sandbox did not confirm stop before deadline", {
-      event: "prompt.stop_confirmation_timeout",
-      message_id: awaitingStop.id,
-    });
-    await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_confirmation_timeout");
-    await this.resumeAfterSandboxTermination();
-  }
-
-  async resumeAfterSandboxTermination(): Promise<void> {
-    const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
-    if (awaitingStop) {
-      this.messageRepository.clearMessageAwaitingStopConfirmation(awaitingStop.id);
-    }
-    await this.processMessageQueue();
+  async handleFatalSandboxFailure(reason: string): Promise<void> {
+    const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
+    await this.failStuckProcessingMessage(reason);
+    if (await termination) await this.executionStop.resumeAfterSandboxTermination();
   }
 
   /** Close every unfinished message synchronously; status projection happens afterwards. */
@@ -506,25 +547,18 @@ export class SessionMessageQueue {
   }
 
   /**
-   * Fail a stuck processing message (defense-in-depth for execution timeout).
+   * Fail a processing message that its sandbox can no longer complete.
    *
    * Only marks the message as failed and broadcasts — does NOT send a stop command
    * to the sandbox or call processMessageQueue(). This avoids races where a new
    * prompt could be dispatched to a sandbox being shut down.
    */
-  async failStuckProcessingMessage(): Promise<void> {
+  async failStuckProcessingMessage(error = STUCK_PROCESSING_ERROR): Promise<void> {
     const now = Date.now();
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     if (!processingMessage) return;
 
-    if (
-      !this.failMessage(
-        processingMessage,
-        "Execution timed out (stuck processing)",
-        now,
-        "processing"
-      )
-    ) {
+    if (!this.failMessage(processingMessage, error, now, "processing")) {
       return;
     }
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
@@ -538,47 +572,9 @@ export class SessionMessageQueue {
     completedAt: number,
     expectedStatus: "pending" | "processing"
   ): boolean {
-    const event: Extract<SandboxEvent, { type: "execution_complete" }> = {
-      type: "execution_complete",
-      messageId: message.id,
-      success: false,
-      error,
-      sandboxId: "",
-      timestamp: completedAt / 1000,
-    };
-    const completion = this.messageRepository.recordMessageCompletion(
-      event,
-      completedAt,
-      expectedStatus
-    );
-    if (!completion) return false;
-
-    this.backgroundTasks.submit(
-      () =>
-        this.projectTerminalMessage(
-          completion.messageId,
-          completion.messageCreatedAt,
-          completion.completedAt
-        )
-          .catch((projectionError) => {
-            this.log.error("terminal_message.projection_failed", {
-              message_id: message.id,
-              error: projectionError,
-            });
-          })
-          .then(() => this.messenger.broadcast({ type: "sandbox_event", event })),
-      {
-        name: "terminal_message.project",
-        context: { message_id: message.id },
-      }
-    );
-    this.backgroundTasks.submit(
-      () => this.callbackService.notifyComplete(message.id, false, error),
-      {
-        name: "callback.notify_complete",
-        context: { message_id: message.id },
-      }
-    );
+    const failure = this.messageFailures.record(message.id, error, completedAt, expectedStatus);
+    if (!failure) return false;
+    this.messageFailures.deliver(failure);
     return true;
   }
 
@@ -587,8 +583,17 @@ export class SessionMessageQueue {
     content: string,
     messageId: string,
     now: number,
-    attachments?: ResolvedSessionAttachment[]
-  ): Extract<SandboxEvent, { type: "user_message" }> {
+    attachments?: ResolvedSessionAttachment[],
+    originContext?: string | null
+  ): UserMessageEventWithOrigin {
+    let origin: GitHubAutofixOrigin | undefined;
+    if (originContext) {
+      try {
+        origin = githubAutofixOriginSchema.parse(JSON.parse(originContext));
+      } catch {
+        this.log.error("prompt.invalid_origin_context", { message_id: messageId });
+      }
+    }
     return {
       type: "user_message",
       content,
@@ -598,9 +603,10 @@ export class SessionMessageQueue {
         participantId: participant.id,
         userId: participant.canonical_user_id ?? participant.user_id,
         name: resolveParticipantName(participant),
-        avatar: getAvatarUrl(participant.scm_login, this.scmProvider),
+        avatar: getAvatarUrl(participant.scm_login, this.scmProvider, participant.scm_user_id),
       },
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      ...(origin ? { origin } : {}),
     };
   }
 
@@ -608,6 +614,7 @@ export class SessionMessageQueue {
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
     this.assertPromptableSession();
+    this.assertBudgetAvailable();
     this.assertQueueCapacity();
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
@@ -658,14 +665,17 @@ export class SessionMessageQueue {
   }
 
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
-    this.assertPromptableSession();
     let requestFingerprint: string | undefined;
     if (data.clientRequestId) {
       requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
     }
 
-    // Keep the idempotency lookup, capacity check, and insert in one synchronous
-    // turn so concurrent WebSocket requests cannot race between them.
+    // Keep the promptability check, idempotency lookup, budget and capacity
+    // checks, and insert in one synchronous turn so concurrent requests cannot
+    // race between them. The fingerprint hash above is a non-storage await: a
+    // cancel or archive can land while this request is suspended, so the
+    // session is read after it, not before.
+    this.assertPromptableSession();
     const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
     if (data.clientRequestId) {
       const existing = this.messageRepository.getMessageByClientRequestId(data.clientRequestId);
@@ -696,6 +706,7 @@ export class SessionMessageQueue {
         };
       }
     }
+    this.assertBudgetAvailable();
     this.assertQueueCapacity(queueDepthBefore);
     const resolvedAttachments = resolveSessionAttachments(
       data.attachments,
@@ -771,6 +782,26 @@ export class SessionMessageQueue {
     });
 
     return { messageId, position };
+  }
+
+  private assertBudgetAvailable(): void {
+    if (this.repository.getSession()?.budget_exhausted === 1) {
+      throw new BudgetExhaustedError();
+    }
+  }
+
+  /**
+   * Whether `messageId` is still pending in a session that still accepts
+   * work. Read in the caller's continuation, so the decision it feeds is made
+   * on the same state.
+   */
+  private isPromptStillDispatchable(messageId: string): boolean {
+    const session = this.repository.getSession();
+    return (
+      session !== null &&
+      isSessionPromptable(session.status) &&
+      this.messageRepository.getMessageStatus(messageId) === "pending"
+    );
   }
 
   private assertPromptableSession(): void {

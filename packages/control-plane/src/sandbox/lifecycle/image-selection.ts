@@ -25,6 +25,7 @@ import {
   parseRuntimeVersionNumber,
   type ImageBuildScope,
 } from "../../image-builds/model";
+import { parseRepositoryShasJson } from "../../image-builds/provenance";
 
 /**
  * The image-build row fields spawn selection reads. Mirrors the
@@ -117,14 +118,5 @@ export async function evaluateImageBuildForSpawn(
 }
 
 function parsePrimaryBaseSha(repositoryShas: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(repositoryShas);
-    if (!Array.isArray(parsed) || parsed.length === 0) return null;
-    const primary: unknown = parsed[0];
-    if (typeof primary !== "object" || primary === null) return null;
-    const baseSha = (primary as { baseSha?: unknown }).baseSha;
-    return typeof baseSha === "string" && baseSha.length > 0 ? baseSha : null;
-  } catch {
-    return null;
-  }
+  return parseRepositoryShasJson(repositoryShas)?.[0]?.baseSha ?? null;
 }
