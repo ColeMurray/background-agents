@@ -51,7 +51,11 @@ export function extractModelFromLabels(labels: Array<{ name: string }>): ValidMo
       const alias = MODEL_LABEL_ALIASES[key as keyof typeof MODEL_LABEL_ALIASES];
       if (alias) return alias;
 
-      const normalized = normalizeModelId(key.startsWith("gpt-") ? key : `claude-${key}`);
+      const candidate =
+        key.startsWith("gpt-") || key.startsWith("claude-") || key.includes("/")
+          ? key
+          : `claude-${key}`;
+      const normalized = normalizeModelId(candidate);
       if (isValidModel(normalized)) return normalized;
     }
   }

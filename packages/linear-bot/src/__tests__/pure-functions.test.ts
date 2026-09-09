@@ -108,6 +108,15 @@ describe("extractModelFromLabels", () => {
     expect(extractModelFromLabels([{ name: `model:${label}` }])).toBe(expected);
   });
 
+  it.each(["claude-fable-5-1", "anthropic/claude-fable-5-1"])(
+    "preserves the canonical model ID in model:%s",
+    (model) => {
+      expect(extractModelFromLabels([{ name: `model:${model}` }])).toBe(
+        "anthropic/claude-fable-5-1"
+      );
+    }
+  );
+
   it.each(["gpt-5.2", "gpt-5.2-codex", "opus-6"])(
     "returns null for unsupported model:%s label",
     (model) => {
