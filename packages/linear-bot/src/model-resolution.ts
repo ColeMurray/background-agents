@@ -6,7 +6,10 @@ import type { TeamRepoMapping, StaticTargetConfig } from "./types";
 import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
+  isValidModel,
   isValidReasoningEffort,
+  normalizeModelId,
+  type ValidModel,
 } from "@open-inspect/shared/models";
 
 /**
@@ -30,36 +33,26 @@ export function resolveStaticTarget(
   );
 }
 
-const MODEL_LABEL_MAP: Record<string, string> = {
+const MODEL_LABEL_ALIASES = {
   haiku: "anthropic/claude-haiku-4-5",
   sonnet: "anthropic/claude-sonnet-4-5",
   opus: "anthropic/claude-opus-4-5",
-  "opus-4-6": "anthropic/claude-opus-4-6",
-  "opus-4-7": "anthropic/claude-opus-4-7",
-  "opus-4-8": "anthropic/claude-opus-4-8",
-  "opus-5": "anthropic/claude-opus-5",
-  "sonnet-5": "anthropic/claude-sonnet-5",
   fable: "anthropic/claude-fable-5",
-  "fable-5": "anthropic/claude-fable-5",
-  "fable-5-1": "anthropic/claude-fable-5-1",
-  "gpt-5.4": "openai/gpt-5.4",
-  "gpt-5.5": "openai/gpt-5.5",
-  "gpt-5.6-sol": "openai/gpt-5.6-sol",
-  "gpt-5.6-terra": "openai/gpt-5.6-terra",
-  "gpt-5.6-luna": "openai/gpt-5.6-luna",
-  "gpt-6-astra": "openai/gpt-6-astra",
-  "gpt-5.3-codex": "openai/gpt-5.3-codex",
-};
+} satisfies Record<string, ValidModel>;
 
 /**
  * Extract model override from issue labels (e.g., "model:opus" → "anthropic/claude-opus-4-5").
  */
-export function extractModelFromLabels(labels: Array<{ name: string }>): string | null {
+export function extractModelFromLabels(labels: Array<{ name: string }>): ValidModel | null {
   for (const label of labels) {
     const match = label.name.match(/^model:(.+)$/i);
     if (match) {
       const key = match[1].toLowerCase();
-      if (MODEL_LABEL_MAP[key]) return MODEL_LABEL_MAP[key];
+      const alias = MODEL_LABEL_ALIASES[key as keyof typeof MODEL_LABEL_ALIASES];
+      if (alias) return alias;
+
+      const normalized = normalizeModelId(key.startsWith("gpt-") ? key : `claude-${key}`);
+      if (isValidModel(normalized)) return normalized;
     }
   }
   return null;
