@@ -17,6 +17,12 @@ export const ANTHROPIC_SETUP_TOKEN_SCOPE = "user:inference";
 /** What the CLI and Anthropic's documentation state for a setup token's lifetime. */
 export const ANTHROPIC_SETUP_TOKEN_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
 const EXCHANGE_TIMEOUT_MS = 30_000;
+/**
+ * Cloudflare in front of console.anthropic.com bans generic client
+ * signatures (error 1010), and a Worker's outbound fetch carries no
+ * User-Agent at all. Identify the deployment explicitly.
+ */
+export const ANTHROPIC_EXCHANGE_USER_AGENT = "open-inspect-control-plane/1.0";
 
 export interface AnthropicAuthorizationRequest {
   authorizationUrl: string;
@@ -129,7 +135,11 @@ export async function exchangeAnthropicAuthorizationCode(
   try {
     response = await fetchImpl(ANTHROPIC_OAUTH_TOKEN_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": ANTHROPIC_EXCHANGE_USER_AGENT,
+      },
       body: JSON.stringify({
         grant_type: "authorization_code",
         client_id: CLAUDE_CODE_OAUTH_CLIENT_ID,

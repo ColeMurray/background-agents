@@ -112,6 +112,8 @@ describe("exchangeAnthropicAuthorizationCode", () => {
       redirect_uri: ANTHROPIC_OAUTH_REDIRECT_URI,
     });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
+    // Cloudflare in front of the token endpoint bans anonymous client signatures.
+    expect(new Headers(init?.headers).get("User-Agent")).toBe("open-inspect-control-plane/1.0");
   });
 
   it.each([
