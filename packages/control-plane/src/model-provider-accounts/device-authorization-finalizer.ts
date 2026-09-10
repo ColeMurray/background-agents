@@ -50,7 +50,18 @@ export class ProviderDeviceAuthorizationFinalizer {
         if (account.externalAccountId !== null) {
           throw new Error("Provider account identity could not be verified");
         }
-      } else if (!account.externalAccountId || account.externalAccountId !== identity) {
+      } else if (account.externalAccountId === null) {
+        // A slot created without an identity (a pasted setup token) stays
+        // identity-less when a later reconnect names the account: identity is
+        // fixed at creation, never adopted.
+        return this.reconnect(
+          transaction,
+          snapshot,
+          { ...connection, externalAccountId: undefined },
+          adapter,
+          now
+        );
+      } else if (account.externalAccountId !== identity) {
         throw new Error("Provider account identity did not match");
       }
       return this.reconnect(transaction, snapshot, connection, adapter, now);

@@ -32,6 +32,10 @@ const credentialSchema = z.object({
   token: z.string().min(1),
   expiresAt: z.number().int().positive(),
   scopes: z.array(z.string()).min(1),
+  /** Anthropic's token id from a browser authorization; absent for a pasted token. */
+  tokenUuid: z.string().min(1).optional(),
+  /** Organization name from a browser authorization, for the settings page. */
+  organizationName: z.string().min(1).optional(),
 });
 const connectInputSchema = z.union([
   connectAnthropicModelProviderAccountRequestSchema,
@@ -98,7 +102,13 @@ export class AnthropicProviderAuthorizationCode implements ProviderAuthorization
         token: exchanged.accessToken,
         expiresAt: exchanged.expiresAt,
         scopes: exchanged.scope.split(/\s+/).filter(Boolean),
+        tokenUuid: exchanged.tokenUuid,
+        organizationName: exchanged.organization?.name,
       },
+      // The browser flow names the granting Claude account, so two slots for
+      // the same subscription collide and a reconnect from another account is
+      // refused; a pasted setup token stays identity-less.
+      externalAccountId: exchanged.account?.uuid,
       accessTokenExpiresAt: exchanged.expiresAt,
     };
   }
@@ -191,8 +201,9 @@ export class AnthropicModelProviderAccountAdapter implements ModelProviderAccoun
     _input: AnthropicProviderConnectInput,
     _expectedExternalAccountId: string | null
   ): void {
-    // Identity-less slots: the inference scope carries no account id, so a
-    // reconnect can never be checked against a previous identity.
+    // A pasted setup token carries no account id, so a paste reconnect cannot
+    // be checked here; a browser reconnect is checked by validateExternalIdentity
+    // once the exchange names the account.
   }
 
   runtimeMetadata(_credential: AnthropicProviderCredential, _externalAccountId: string | null) {

@@ -105,10 +105,18 @@ export default defineConfig({
                 );
               }
               return Response.json({
+                token_type: "Bearer",
                 access_token: "sk-ant-oat01-integration",
                 refresh_token: "integration-anthropic-refresh-must-not-persist",
+                refresh_token_expires_in: 2_511_418,
                 expires_in: 31_536_000,
                 scope: "user:inference",
+                token_uuid: "integration-anthropic-token-uuid",
+                organization: { uuid: "integration-anthropic-org", name: "Integration Org" },
+                account: {
+                  uuid: "integration-anthropic-account",
+                  email_address: "owner@example.com",
+                },
               });
             }
             if (url.href === "https://auth.x.ai/oauth2/device/code") {

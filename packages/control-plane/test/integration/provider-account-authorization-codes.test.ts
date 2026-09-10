@@ -118,7 +118,7 @@ describe("provider account authorization-code routes", () => {
     expect(await accountCount()).toBe(0);
   });
 
-  it("creates an identity-less account from the pasted code and replays the result", async () => {
+  it("creates an account named by the granting Claude account and replays the result", async () => {
     const { result } = await start();
 
     const connected = await complete(result.transactionId, GOOD_CODE);
@@ -129,7 +129,7 @@ describe("provider account authorization-code routes", () => {
       account: {
         provider: "anthropic",
         displayName: "Primary Claude",
-        externalAccountId: null,
+        externalAccountId: "integration-anthropic-account",
         status: "active",
       },
       reconnectedExisting: false,
@@ -145,6 +145,8 @@ describe("provider account authorization-code routes", () => {
       token: "sk-ant-oat01-integration",
       expiresAt: expect.any(Number),
       scopes: ["user:inference"],
+      tokenUuid: "integration-anthropic-token-uuid",
+      organizationName: "Integration Org",
     });
     expect(stored?.credentialVersion).toBe(1);
     expect(JSON.stringify(stored?.payload)).not.toContain("must-not-persist");
@@ -171,17 +173,17 @@ describe("provider account authorization-code routes", () => {
     ).toBe(1);
   });
 
-  it("does not deduplicate identity-less accounts across creates", async () => {
+  it("converges a second create for the same Claude account onto the existing slot", async () => {
     const first = await start({ operation: "create", displayName: "Work Claude" });
     await complete(first.result.transactionId, GOOD_CODE);
     const second = await start({ operation: "create", displayName: "Personal Claude" });
     const response = await complete(second.result.transactionId, GOOD_CODE);
     await expect(response.json()).resolves.toMatchObject({
       status: "connected",
-      account: { displayName: "Personal Claude" },
-      reconnectedExisting: false,
+      account: { displayName: "Work Claude", externalAccountId: "integration-anthropic-account" },
+      reconnectedExisting: true,
     });
-    expect(await accountCount()).toBe(2);
+    expect(await accountCount()).toBe(1);
   });
 
   it("denies a rejected code and never exchanges it again", async () => {
@@ -262,6 +264,12 @@ describe("provider account authorization-code routes", () => {
     expect(stored?.payload.token).toBe("sk-ant-oat01-integration");
     expect(stored?.credentialVersion).toBe(2);
     expect(await accountCount()).toBe(1);
+    // A slot created without an identity (pasted token) stays identity-less.
+    await expect(
+      env.DB.prepare("SELECT external_account_id FROM model_provider_accounts WHERE id = ?")
+        .bind(ACCOUNT_ID)
+        .first()
+    ).resolves.toEqual({ external_account_id: null });
   });
 
   it("refuses reconnect targets that belong to another provider or are archived", async () => {

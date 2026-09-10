@@ -167,6 +167,56 @@ describe("ProviderDeviceAuthorizationFinalizer", () => {
       );
     });
 
+    it("keeps an identity-less target identity-less when the reconnect names an account", async () => {
+      const { finalizer, accounts, writer } = subject("created");
+      accounts.getLifecycleSnapshot.mockResolvedValue({
+        account: { ...winner.account, provider: "anthropic", externalAccountId: null },
+        lifecycleVersion: 4,
+      });
+
+      await expect(
+        finalizer.finalizeTrustedConnection(
+          {
+            ...anthropicCreate,
+            operation: "reconnect",
+            providerAccountId: winner.account.id,
+            targetAccountStatus: "reconnect_required",
+            targetAccountLifecycleVersion: 4,
+          } as ProcessingProviderAuthorization,
+          { ...identityless, externalAccountId: "claude-account-uuid" },
+          new AnthropicModelProviderAccountAdapter(),
+          100_000
+        )
+      ).resolves.toBe(true);
+      expect(writer.finalizeDeviceAuthorizationReconnect).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: winner.account.id, externalAccountId: null })
+      );
+    });
+
+    it("refuses a named reconnect onto a slot bound to another identity", async () => {
+      const { finalizer, accounts, writer } = subject("created");
+      accounts.getLifecycleSnapshot.mockResolvedValue({
+        account: { ...winner.account, provider: "anthropic", externalAccountId: "other-account" },
+        lifecycleVersion: 4,
+      });
+
+      await expect(
+        finalizer.finalizeTrustedConnection(
+          {
+            ...anthropicCreate,
+            operation: "reconnect",
+            providerAccountId: winner.account.id,
+            targetAccountStatus: "active",
+            targetAccountLifecycleVersion: 4,
+          } as ProcessingProviderAuthorization,
+          { ...identityless, externalAccountId: "claude-account-uuid" },
+          new AnthropicModelProviderAccountAdapter(),
+          100_000
+        )
+      ).rejects.toThrow(/did not match/);
+      expect(writer.finalizeDeviceAuthorizationReconnect).not.toHaveBeenCalled();
+    });
+
     it("refuses an identity-less reconnect onto an identity-bound account", async () => {
       const { finalizer, writer } = subject("created");
 

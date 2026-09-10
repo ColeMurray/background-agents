@@ -98,6 +98,9 @@ describe("exchangeAnthropicAuthorizationCode", () => {
       accessToken: "sk-ant-oat01-token",
       expiresAt: NOW + 3_600_000,
       scope: "user:inference",
+      tokenUuid: undefined,
+      account: undefined,
+      organization: undefined,
     });
     expect(Object.keys(result)).not.toContain("refreshToken");
     const [url, init] = vi.mocked(fetchImpl).mock.calls[0];
@@ -115,6 +118,47 @@ describe("exchangeAnthropicAuthorizationCode", () => {
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     // Cloudflare in front of the token endpoint bans anonymous client signatures.
     expect(new Headers(init?.headers).get("User-Agent")).toBe("open-inspect-control-plane/1.0");
+  });
+
+  it("keeps the granting account, organization and token id the real response carries", async () => {
+    // Shape observed from platform.claude.com on 2026-09-10.
+    const fetchImpl = tokenResponse({
+      token_type: "Bearer",
+      access_token: "sk-ant-oat01-token",
+      expires_in: 31_536_000,
+      refresh_token: "sk-ant-ort01-never-stored",
+      refresh_token_expires_in: 2_511_418,
+      scope: "user:inference",
+      token_uuid: "11111111-2222-4333-8444-555555555555",
+      organization: { uuid: "org-uuid", name: "Owner's Organization" },
+      account: { uuid: "account-uuid", email_address: "owner@example.com" },
+    });
+
+    const result = await exchangeAnthropicAuthorizationCode(EXCHANGE_INPUT, fetchImpl, NOW);
+
+    expect(result).toEqual({
+      accessToken: "sk-ant-oat01-token",
+      expiresAt: NOW + 31_536_000_000,
+      scope: "user:inference",
+      tokenUuid: "11111111-2222-4333-8444-555555555555",
+      account: { uuid: "account-uuid", email: "owner@example.com" },
+      organization: { uuid: "org-uuid", name: "Owner's Organization" },
+    });
+    expect(JSON.stringify(result)).not.toContain("ort01");
+  });
+
+  it("ignores identity objects without a uuid", async () => {
+    const fetchImpl = tokenResponse({
+      access_token: "sk-ant-oat01-token",
+      scope: "user:inference",
+      account: { email_address: "owner@example.com" },
+      organization: "not-an-object",
+      token_uuid: "",
+    });
+    const result = await exchangeAnthropicAuthorizationCode(EXCHANGE_INPUT, fetchImpl, NOW);
+    expect(result.account).toBeUndefined();
+    expect(result.organization).toBeUndefined();
+    expect(result.tokenUuid).toBeUndefined();
   });
 
   it.each([

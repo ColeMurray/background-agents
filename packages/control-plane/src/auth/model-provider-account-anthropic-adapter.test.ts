@@ -154,6 +154,9 @@ describe("AnthropicProviderAuthorizationCode", () => {
       accessToken: "sk-ant-oat01-new",
       expiresAt: NOW + HOUR_MS,
       scope: "user:inference user:profile",
+      tokenUuid: "token-uuid",
+      account: { uuid: "account-uuid", email: "owner@example.com" },
+      organization: { uuid: "org-uuid", name: "Owner Org" },
     }));
     const capability = new AnthropicProviderAuthorizationCode(undefined, exchange);
 
@@ -165,7 +168,11 @@ describe("AnthropicProviderAuthorizationCode", () => {
         token: "sk-ant-oat01-new",
         expiresAt: NOW + HOUR_MS,
         scopes: ["user:inference", "user:profile"],
+        tokenUuid: "token-uuid",
+        organizationName: "Owner Org",
       },
+      // The granting account becomes the slot's identity.
+      externalAccountId: "account-uuid",
       accessTokenExpiresAt: NOW + HOUR_MS,
     });
     expect(exchange).toHaveBeenCalledWith({
@@ -173,6 +180,25 @@ describe("AnthropicProviderAuthorizationCode", () => {
       pastedState: "state",
       expectedState: "state",
       codeVerifier: "verifier",
+    });
+  });
+
+  it("stays identity-less when the exchange names no account", async () => {
+    const exchange = vi.fn(async () => ({
+      accessToken: "sk-ant-oat01-new",
+      expiresAt: NOW + HOUR_MS,
+      scope: "user:inference",
+    }));
+    const capability = new AnthropicProviderAuthorizationCode(undefined, exchange);
+    const result = await capability.complete({ codeVerifier: "v", state: "s" }, "code#s");
+    expect(result.externalAccountId).toBeUndefined();
+    expect(result.credential).toEqual({
+      kind: "setup_token",
+      token: "sk-ant-oat01-new",
+      expiresAt: NOW + HOUR_MS,
+      scopes: ["user:inference"],
+      tokenUuid: undefined,
+      organizationName: undefined,
     });
   });
 
