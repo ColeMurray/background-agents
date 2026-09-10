@@ -5,7 +5,11 @@
  * snake_case rows in the database, camelCase types at the API boundary.
  */
 
-import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
+import {
+  DEFAULT_HARNESS,
+  getValidHarnessOrDefault,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import type {
   Automation,
   AutomationExecutionSummary,
@@ -363,7 +367,7 @@ export class AutomationStore {
         row.trigger_type,
         row.schedule_cron,
         row.schedule_tz,
-        row.harness,
+        row.harness ?? DEFAULT_HARNESS,
         row.model,
         row.reasoning_effort,
         row.enabled,
