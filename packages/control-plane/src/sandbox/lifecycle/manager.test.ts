@@ -406,6 +406,103 @@ function createTestConfig(): SandboxLifecycleConfig {
 
 type ProviderStartupKind = "spawn" | "restore" | "resume";
 
+describe.each(["spawn", "restore"] as const)("%s common launch inputs", (kind) => {
+  it("forwards the full common config and publishes terminal access with the reserved identity", async () => {
+    const repositories = [
+      { repoOwner: "group/subgroup", repoName: "repo", baseBranch: "dev", baseSha: "abc" },
+    ];
+    const mcpServers = [
+      {
+        id: "mcp",
+        name: "tools",
+        type: "remote" as const,
+        url: "https://mcp.test",
+        headers: { Authorization: "secret" },
+        enabled: true,
+      },
+    ];
+    const mcpServerLookup = { getDecryptedForSession: vi.fn(async () => mcpServers) };
+    const slackAgentNotifyLookup = { isEnabledForRepo: vi.fn(async () => true) };
+    const sandboxSettings = {
+      tunnelPorts: [3000],
+      cpuCores: 2,
+      memoryMib: 4096,
+      sandboxTimeoutMs: 14_400_000,
+    };
+    const sandbox = createMockSandbox({
+      status: kind === "spawn" ? "pending" : "stopped",
+      snapshot_image_id: kind === "restore" ? "snapshot-image" : null,
+      snapshot_runtime_version: kind === "restore" ? COMPATIBLE_RUNTIME_VERSION : null,
+    });
+    const storage = createMockStorage(
+      createMockSession({
+        repo_owner: "group/subgroup",
+        repo_name: "repo",
+        base_branch: "dev",
+        model: "openai/gpt-5.3-codex",
+        code_server_enabled: 1,
+        vnc_enabled: 1,
+        sandbox_settings: JSON.stringify(sandboxSettings),
+      }),
+      sandbox,
+      { TOKEN: "value" },
+      repositories
+    );
+    const provider = createMockProvider();
+    const launch = vi.fn(async (_input: CreateSandboxConfig | RestoreConfig) => ({
+      success: true,
+      sandboxId: "provider-returned-id",
+      createdAt: Date.now(),
+      ttydUrl: "https://terminal.test",
+    }));
+    if (kind === "spawn") provider.createSandbox = launch;
+    else provider.restoreFromSnapshot = launch;
+    const manager = new SandboxLifecycleManager(
+      provider,
+      storage,
+      storage,
+      createMockBroadcaster(),
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      { ...createTestConfig(), mcpServerLookup, slackAgentNotifyLookup }
+    );
+
+    await manager.spawnSandbox();
+
+    expect(launch).toHaveBeenCalledExactlyOnceWith({
+      sessionId: "test-session",
+      sandboxId: sandbox.modal_sandbox_id,
+      sandboxAuthToken: "generated-id-1",
+      controlPlaneUrl: "https://test.workers.dev",
+      repoOwner: "group/subgroup",
+      repoName: "repo",
+      branch: "dev",
+      repositories,
+      provider: "openai",
+      model: "gpt-5.3-codex",
+      userEnvVars: { TOKEN: "value" },
+      codeServerEnabled: true,
+      vncEnabled: true,
+      agentSlackNotifyEnabled: true,
+      mcpServers,
+      sandboxSettings,
+      timeoutSeconds: 14_400,
+      ...(kind === "spawn"
+        ? { prebuiltImageId: null, prebuiltImageSha: null }
+        : { snapshotImageId: "snapshot-image" }),
+    });
+    expect(storage.calls.indexOf("updateSandboxForSpawn")).toBeLessThan(
+      storage.calls.indexOf("getUserEnvVars")
+    );
+    const claims = JSON.parse(
+      atob(sandbox.ttyd_token!.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))
+    );
+    expect(claims).toMatchObject({ sub: "test-session", sid: sandbox.modal_sandbox_id });
+    expect(sandbox.ttyd_url).toBe("https://terminal.test");
+  });
+});
+
 async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void> {
   const sandbox = createMockSandbox({
     status: kind === "spawn" ? "pending" : "stopped",
