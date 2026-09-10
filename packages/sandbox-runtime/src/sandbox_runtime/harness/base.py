@@ -129,6 +129,9 @@ DETERMINISTIC_FAILURE_EXIT_CODE = 78  # EX_CONFIG
 class AgentHarness(Protocol):
     """Bridge half of the seam: a per-session client for one agent vendor."""
 
+    session_id: str | None
+    """The vendor session id, once created or resumed; None before that."""
+
     @property
     def id(self) -> HarnessId: ...
 

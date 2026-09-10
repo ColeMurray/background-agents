@@ -681,7 +681,7 @@ class AgentBridge:
                     message_cost_usd = event["messageCostUsd"]
                 await self._send_event(event)
 
-            outcome: TurnOutcome = await self.harness.run_prompt(
+            turn: TurnOutcome = await self.harness.run_prompt(
                 HarnessPrompt(
                     message_id=message_id,
                     text=content,
@@ -692,12 +692,12 @@ class AgentBridge:
                 ),
                 emit,
             )
-            if outcome.message_cost_usd is not None:
-                message_cost_usd = outcome.message_cost_usd
-            if not outcome.success:
+            if turn.message_cost_usd is not None:
+                message_cost_usd = turn.message_cost_usd
+            if not turn.success:
                 had_error = True
-                error_message = outcome.error or "Unknown error"
-            if outcome.cancelled:
+                error_message = turn.error or "Unknown error"
+            if turn.cancelled:
                 raise asyncio.CancelledError
 
             if not had_error and not emitted_output:
