@@ -18,6 +18,7 @@ vi.mock("@/lib/warm-session", () => ({ retireWarmDraftSession: vi.fn() }));
 const request = (model = "openai/gpt-5.4"): WarmDraftSessionRequest => ({
   repoOwner: "open-inspect",
   repoName: "background-agents",
+  harness: "opencode",
   model,
   skillSelection: { mode: "all" },
   providerSelections: {
@@ -47,6 +48,7 @@ describe("useWarmDraftSession", () => {
           },
           skillSelection: { mode: "all" },
           model: "openai/gpt-5.4",
+          harness: "opencode",
           repoName: "background-agents",
           repoOwner: "open-inspect",
         },

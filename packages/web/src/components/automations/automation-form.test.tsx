@@ -1211,3 +1211,64 @@ describe("model normalization", () => {
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
   });
 });
+
+describe("agent harness", () => {
+  const baseInitialValues = {
+    name: "Daily review",
+    repositories: singleRepository,
+    model: "openai/gpt-5.4",
+    scheduleCron: "0 9 * * *",
+    scheduleTz: "UTC",
+    instructions: "Review the repo.",
+    triggerType: "schedule" as const,
+  };
+
+  const renderForm = (initialValues: Partial<AutomationFormValues>, mode: "create" | "edit") => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode={mode}
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...baseInitialValues, ...initialValues }}
+      />
+    );
+    return { onSubmit, submit: () => fireEvent.submit(container.querySelector("form")!) };
+  };
+
+  it("submits the built-in harness when none was chosen", () => {
+    const { onSubmit, submit } = renderForm({}, "create");
+    expect(screen.getByRole("combobox", { name: "Agent harness" })).toHaveTextContent("OpenCode");
+
+    submit();
+
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      harness: "opencode",
+      model: "openai/gpt-5.4",
+    });
+  });
+
+  it("loads an existing automation's harness and keeps the model inside it", () => {
+    enabledModelsValue = ["openai/gpt-5.4", DEFAULT_MODEL];
+    const { onSubmit, submit } = renderForm({ harness: "claude" }, "edit");
+    expect(screen.getByRole("combobox", { name: "Agent harness" })).toHaveTextContent(
+      "Claude Agent"
+    );
+
+    submit();
+
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ harness: "claude", model: DEFAULT_MODEL });
+  });
+
+  it("submits a newly selected harness and coerces the model to one it can run", () => {
+    enabledModelsValue = ["openai/gpt-5.4", DEFAULT_MODEL];
+    const { onSubmit, submit } = renderForm({}, "create");
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Agent harness" }));
+    fireEvent.click(screen.getByRole("option", { name: "Claude Agent" }));
+    submit();
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ harness: "claude", model: DEFAULT_MODEL });
+  });
+});

@@ -21,6 +21,7 @@ describe("automation update BFF", () => {
       {
         json: async () => ({
           name: "Updated",
+          harness: "claude",
           providerSelections,
           providerAuth: [{ token: "secret" }],
           createdBy: "attacker",
@@ -30,6 +31,6 @@ describe("automation update BFF", () => {
     );
 
     const body = JSON.parse(String(vi.mocked(controlPlaneUserFetch).mock.calls[0][1]?.body));
-    expect(body).toEqual({ name: "Updated", providerSelections });
+    expect(body).toEqual({ name: "Updated", harness: "claude", providerSelections });
   });
 });

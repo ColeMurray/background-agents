@@ -13,12 +13,14 @@ import {
   type AutomationRepositoryInput,
 } from "@open-inspect/shared/types/automations";
 import { DEFAULT_MODEL, isValidReasoningEffort } from "@open-inspect/shared/models";
+import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 
 export interface AutomationFormValues {
   name: string;
   repositories: AutomationRepositoryInput[];
   environmentIds: string[];
+  harness: HarnessId;
   model: string;
   reasoningEffort: string | null;
   scheduleCron?: string;
@@ -41,6 +43,7 @@ export interface AutomationTriggerDraft {
 }
 
 export interface AutomationAgentDraft {
+  harness: HarnessId;
   model: string;
   reasoningEffort: string;
 }
@@ -98,6 +101,7 @@ export function createAutomationFormDraft(
       sentryClientSecret: "",
     },
     agent: {
+      harness: getValidHarnessOrDefault(initialValues.harness),
       model: initialValues.model ?? DEFAULT_MODEL,
       reasoningEffort: initialValues.reasoningEffort ?? "",
     },
@@ -233,6 +237,7 @@ function buildSubmissionValues({
     name: draft.name.trim(),
     repositories: targets.repositories,
     environmentIds: targets.environmentIds,
+    harness: draft.agent.harness,
     model: resolvedModel,
     reasoningEffort:
       draft.agent.reasoningEffort &&

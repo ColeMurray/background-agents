@@ -78,6 +78,7 @@ describe("automation form policy", () => {
     ).toEqual({
       valid: true,
       values: {
+        harness: "opencode",
         name: "Daily review",
         providerSelections: {},
         repositories: [{ repoOwner: "openai", repoName: "codex", baseBranch: "main" }],
@@ -115,6 +116,7 @@ describe("automation form policy", () => {
     ).toEqual({
       valid: true,
       values: {
+        harness: "opencode",
         name: "Webhook review",
         providerSelections: {},
         repositories: [],
@@ -433,5 +435,28 @@ describe("automation form policy", () => {
     if (result.valid) {
       expect(result.values.sentryClientSecret).toBe("client-secret");
     }
+  });
+
+  it("defaults the harness and carries an explicit one into the submission", () => {
+    expect(createAutomationFormDraft().agent.harness).toBe("opencode");
+
+    const draft = createAutomationFormDraft({
+      name: "Review",
+      instructions: "Review changes",
+      harness: "claude",
+    });
+    expect(draft.agent.harness).toBe("claude");
+    expect(
+      evaluateAutomationForm({
+        mode: "create",
+        draft,
+        loadingModels: false,
+        resolvedModel: draft.agent.model,
+        targets: {
+          repositories: [{ repoOwner: "acme", repoName: "web" }],
+          environmentIds: [],
+        },
+      })
+    ).toMatchObject({ valid: true, values: { harness: "claude" } });
   });
 });

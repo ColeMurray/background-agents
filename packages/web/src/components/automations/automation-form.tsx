@@ -5,6 +5,8 @@ import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { DEFAULT_MODEL, resolveEnabledModel } from "@open-inspect/shared/models";
+import { filterModelsForHarness } from "@open-inspect/shared/harnesses";
+import { filterModelOptionsForHarness } from "@/lib/session-harness";
 import { SUBSCRIPTION_PROVIDER_IDS } from "@open-inspect/shared/types/provider-accounts";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
@@ -68,22 +70,33 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   });
   const { selectedEnvironmentIds, buildRepositoriesPayload } = targets;
 
-  // The model we display and submit. The selector only lists enabled models, so
-  // a disabled default (blank create), a disabled saved model (edit), or a
-  // disabled template suggestion is coerced to an enabled one. Until preferences
-  // load we can't know the enabled set, so the raw selection stands and submit
-  // is blocked — keeping display, reasoning, and the payload in agreement
-  // without relying on a post-load effect.
+  // The harness fixes which enabled models the selector lists and can submit.
+  const harnessEnabledModels = useMemo(
+    () => filterModelsForHarness(agent.harness, enabledModels),
+    [agent.harness, enabledModels]
+  );
+  const harnessModelOptions = useMemo(
+    () => filterModelOptionsForHarness(agent.harness, enabledModelOptions),
+    [agent.harness, enabledModelOptions]
+  );
+
+  // The model we display and submit. The selector only lists enabled models the
+  // harness can run, so a disabled default (blank create), a disabled saved
+  // model (edit), a disabled template suggestion, or a model the harness cannot
+  // run is coerced to a listed one. Until preferences load we can't know the
+  // enabled set, so the raw selection stands and submit is blocked — keeping
+  // display, reasoning, and the payload in agreement without relying on a
+  // post-load effect.
   const resolvedModel = useMemo(
     () =>
       loadingModels
         ? agent.model
         : resolveEnabledModel({
             model: agent.model,
-            enabledModels,
+            enabledModels: harnessEnabledModels,
             fallbackModel: DEFAULT_MODEL,
           }),
-    [agent.model, enabledModels, loadingModels]
+    [agent.model, harnessEnabledModels, loadingModels]
   );
 
   const formEvaluation = evaluateAutomationForm({
@@ -158,7 +171,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       <AutomationAgentFields
         value={agent}
         resolvedModel={resolvedModel}
-        enabledModelOptions={enabledModelOptions}
+        enabledModelOptions={harnessModelOptions}
         onChange={setAgent}
       />
 

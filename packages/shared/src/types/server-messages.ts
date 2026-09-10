@@ -1,3 +1,4 @@
+import { harnessIdSchema } from "../harnesses";
 import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
@@ -25,6 +26,8 @@ const sessionStateSchema = z.object({
   sandboxStatus: sandboxStatusSchema,
   messageCount: z.number(),
   createdAt: z.number(),
+  /** Agent harness the session runs on; fixed at create. */
+  harness: harnessIdSchema.optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   isProcessing: z.boolean().optional(),

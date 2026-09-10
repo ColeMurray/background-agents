@@ -5,6 +5,7 @@ import {
   isValidReasoningEffort,
   type ModelCategory,
 } from "@open-inspect/shared/models";
+import { HARNESS_IDS, getHarnessLabel, isValidHarness } from "@open-inspect/shared/harnesses";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import {
   Select,
@@ -48,11 +49,41 @@ export function AutomationAgentFields({
       value.reasoningEffort && isValidReasoningEffort(model, value.reasoningEffort)
         ? value.reasoningEffort
         : "";
-    onChange({ model, reasoningEffort });
+    onChange({ ...value, model, reasoningEffort });
   };
 
   return (
     <>
+      <div>
+        <label
+          htmlFor="automation-harness"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Agent
+        </label>
+        <Select
+          value={value.harness}
+          onValueChange={(harness) => {
+            if (isValidHarness(harness)) onChange({ ...value, harness });
+          }}
+        >
+          <SelectTrigger id="automation-harness" className="w-full" aria-label="Agent harness">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {HARNESS_IDS.map((harness) => (
+              <SelectItem key={harness} value={harness}>
+                {getHarnessLabel(harness)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <FieldDescription>
+          Agent harness that runs each session this automation creates. It decides which models are
+          available below.
+        </FieldDescription>
+      </div>
+
       <div>
         <label
           id="automation-model-label"

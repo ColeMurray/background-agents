@@ -4,7 +4,7 @@ import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useRouter } from "next/navigation";
 import { mutate } from "swr";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { ErrorBanner } from "@/components/ui/error-banner";
@@ -24,6 +24,14 @@ import {
   type ValidModel,
 } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
+import {
+  DEFAULT_HARNESS,
+  filterModelsForHarness,
+  getHarnessLabel,
+  getValidHarnessOrDefault,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
+import { filterModelOptionsForHarness } from "@/lib/session-harness";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import {
@@ -66,6 +74,7 @@ import {
 } from "@/lib/provider-selection";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
+const LAST_SELECTED_HARNESS_STORAGE_KEY = "open-inspect-last-selected-harness";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
 const LEGACY_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections";
 const LAST_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections:v1";
@@ -100,6 +109,7 @@ export default function Home() {
     reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
   });
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
+  const [harness, setHarness] = useState<HarnessId>(DEFAULT_HARNESS);
   const [prompt, setPrompt] = useState("");
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
@@ -151,6 +161,7 @@ export default function Home() {
       model: storedModel ?? DEFAULT_MODEL,
       reasoningEffort: storedReasoningEffort ?? undefined,
     });
+    setHarness(getValidHarnessOrDefault(localStorage.getItem(LAST_SELECTED_HARNESS_STORAGE_KEY)));
     if (storedProviderSelections) setProviderSelections(storedProviderSelections);
     setProviderSelectionsHydrated(true);
     hasHydratedModelPreferencesRef.current = true;
@@ -181,9 +192,20 @@ export default function Home() {
     providerSelectionsHydrated,
   ]);
 
+  // The harness fixes which enabled models can be picked; a stored or drafted
+  // model the harness cannot run resolves to a compatible one instead.
+  const harnessModels = useMemo(
+    () => filterModelsForHarness(harness, enabledModels),
+    [enabledModels, harness]
+  );
+  const harnessModelOptions = useMemo(
+    () => filterModelOptionsForHarness(harness, enabledModelOptions),
+    [enabledModelOptions, harness]
+  );
+  const harnessHasModels = loadingEnabledModels || harnessModels.length > 0;
   const { model: selectedModel, reasoningEffort } = resolveModelPreference(
     modelPreferenceDraft ?? storedPreference,
-    loadingEnabledModels ? undefined : enabledModels
+    loadingEnabledModels ? undefined : harnessModels
   );
 
   const warmRequest: WarmDraftSessionRequest | null =
@@ -192,9 +214,11 @@ export default function Home() {
     providerSelectionsHydrated &&
     !providerAccounts.loading &&
     !loadingEnabledModels &&
+    harnessHasModels &&
     targetRequestFields
       ? {
           ...targetRequestFields,
+          harness,
           model: selectedModel,
           reasoningEffort,
           skillSelection,
@@ -236,6 +260,11 @@ export default function Home() {
     },
     [saveModelPreferenceDraft, selectedModel]
   );
+
+  const handleHarnessChange = useCallback((nextHarness: HarnessId) => {
+    setHarness(nextHarness);
+    localStorage.setItem(LAST_SELECTED_HARNESS_STORAGE_KEY, nextHarness);
+  }, []);
 
   const handleProviderSelectionChange = useCallback(
     (provider: SubscriptionProviderId, selection: ProviderAuthSelection | undefined) => {
@@ -282,6 +311,10 @@ export default function Home() {
     }
     const hasAttachments = sessionAttachments.attachments.length > 0;
     if (!prompt.trim() && !hasAttachments) return;
+    if (!harnessHasModels) {
+      setError(`No enabled models can run on ${getHarnessLabel(harness)}.`);
+      return;
+    }
     if (!isLaunchable) {
       setError(
         sessionTarget?.kind === "repos"
@@ -354,6 +387,8 @@ export default function Home() {
       setSelectedModel={handleModelChange}
       reasoningEffort={reasoningEffort}
       setReasoningEffort={handleReasoningEffortChange}
+      harness={harness}
+      setHarness={handleHarnessChange}
       prompt={prompt}
       handlePromptChange={handlePromptChange}
       attachments={{
@@ -368,7 +403,7 @@ export default function Home() {
       providerSelectionsHydrated={providerSelectionsHydrated}
       error={error}
       handleSubmit={handleSubmit}
-      modelOptions={enabledModelOptions}
+      modelOptions={harnessModelOptions}
       skillSelection={skillSelection}
       setSkillSelection={setSkillSelection}
       skillPreviewTarget={currentSkillPreviewTarget}
@@ -390,6 +425,8 @@ function HomeContent({
   setSelectedModel,
   reasoningEffort,
   setReasoningEffort,
+  harness,
+  setHarness,
   prompt,
   handlePromptChange,
   attachments,
@@ -416,6 +453,8 @@ function HomeContent({
   setSelectedModel: (value: ValidModel) => void;
   reasoningEffort: ReasoningEffort | undefined;
   setReasoningEffort: (value: ReasoningEffort | undefined) => void;
+  harness: HarnessId;
+  setHarness: (value: HarnessId) => void;
   prompt: string;
   handlePromptChange: (value: string) => void;
   attachments: {
@@ -592,6 +631,8 @@ function HomeContent({
                       items={modelOptions}
                       onModelChange={setSelectedModel}
                       onReasoningEffortChange={setReasoningEffort}
+                      harness={harness}
+                      onHarnessChange={setHarness}
                       disabled={creating}
                     />
 

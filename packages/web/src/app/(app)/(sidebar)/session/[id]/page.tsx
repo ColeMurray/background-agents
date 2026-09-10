@@ -36,6 +36,8 @@ import {
   type ValidModel,
 } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
+import { filterModelsForHarness, type HarnessId } from "@open-inspect/shared/harnesses";
+import { filterModelOptionsForHarness, resolveSessionHarness } from "@/lib/session-harness";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useSessionDiffs } from "@/hooks/use-session-diffs";
 import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
@@ -121,6 +123,8 @@ export default function SessionPage() {
     authoritativeTitle: sessionState?.title,
     awaitAuthoritativeTitle: true,
   });
+  // Fixed at create; per-message model overrides must stay within it.
+  const sessionHarness = resolveSessionHarness(sessionState ?? initialSnapshot.session);
   const {
     selectedModel,
     reasoningEffort,
@@ -128,7 +132,7 @@ export default function SessionPage() {
     handleModelChange,
     enabledModelOptions,
     loadingEnabledModels,
-  } = useModelSelection(sessionState);
+  } = useModelSelection(sessionState, sessionHarness);
   const {
     prompt,
     sessionAttachments,
@@ -354,6 +358,7 @@ export default function SessionPage() {
             onArchive: handleArchive,
             onUnarchive: handleUnarchive,
             capabilities,
+            harness: sessionHarness,
           }}
           prompt={{
             value: prompt,
@@ -608,12 +613,28 @@ function useSessionListActions(sessionId: string) {
 
 /**
  * Model and reasoning-effort selection derived from session state until the
- * user takes ownership of an explicit draft.
+ * user takes ownership of an explicit draft. When the session's harness is
+ * known, only models it can run are offered.
  */
-function useModelSelection(sessionState: SessionState) {
+function useModelSelection(sessionState: SessionState, harness: HarnessId | null) {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
 
-  const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
+  const {
+    enabledModels,
+    enabledModelOptions: allEnabledModelOptions,
+    loading: loadingEnabledModels,
+  } = useEnabledModels();
+  const harnessModels = useMemo(
+    () => (harness ? filterModelsForHarness(harness, enabledModels) : enabledModels),
+    [enabledModels, harness]
+  );
+  const enabledModelOptions = useMemo(
+    () =>
+      harness
+        ? filterModelOptionsForHarness(harness, allEnabledModelOptions)
+        : allEnabledModelOptions,
+    [allEnabledModelOptions, harness]
+  );
   const { model: selectedModel, reasoningEffort } = resolveModelPreference(
     modelPreferenceDraft ?? {
       model: sessionState?.model ?? DEFAULT_MODEL,
@@ -621,7 +642,7 @@ function useModelSelection(sessionState: SessionState) {
         sessionState?.reasoningEffort ??
         getDefaultReasoningEffort(sessionState?.model ?? DEFAULT_MODEL),
     },
-    loadingEnabledModels ? undefined : enabledModels
+    loadingEnabledModels ? undefined : harnessModels
   );
   const handleModelChange = useCallback((model: ValidModel) => {
     setModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
