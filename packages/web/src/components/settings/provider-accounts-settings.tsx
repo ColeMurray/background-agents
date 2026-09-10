@@ -66,7 +66,7 @@ type ConnectionStrategy = {
   reconnect: (account: ModelProviderAccount) => Connection;
 };
 
-const CONNECTION_STRATEGIES: Record<SubscriptionProviderId, ConnectionStrategy> = {
+const CONNECTION_STRATEGIES: Partial<Record<SubscriptionProviderId, ConnectionStrategy>> = {
   openai: {
     add: () => ({ kind: "device", target: { provider: "openai", operation: "create" } }),
     reconnect: (account) => ({
@@ -95,6 +95,11 @@ const CONNECTION_STRATEGIES: Record<SubscriptionProviderId, ConnectionStrategy> 
         : { kind: "legacy-xai", account },
   },
 };
+
+/** Providers this page can connect; the rest are listed but wait for their flow. */
+function connectionStrategy(provider: SubscriptionProviderId): ConnectionStrategy | undefined {
+  return CONNECTION_STRATEGIES[provider];
+}
 
 function dateLabel(timestamp: number | null) {
   return timestamp ? new Date(timestamp).toLocaleString() : "Never";
@@ -275,10 +280,11 @@ export function ProviderAccountsSettings() {
                     {providers.map((provider) => (
                       <DropdownMenuItem
                         key={provider.provider}
-                        disabled={saving}
-                        onSelect={() =>
-                          beginConnection(CONNECTION_STRATEGIES[provider.provider].add())
-                        }
+                        disabled={saving || !connectionStrategy(provider.provider)}
+                        onSelect={() => {
+                          const strategy = connectionStrategy(provider.provider);
+                          if (strategy) beginConnection(strategy.add());
+                        }}
                       >
                         <SubscriptionProviderIcon
                           provider={provider.provider}
@@ -369,12 +375,11 @@ export function ProviderAccountsSettings() {
                             {account.status === "reconnect_required" && (
                               <Button
                                 size="xs"
-                                disabled={saving}
-                                onClick={() =>
-                                  beginConnection(
-                                    CONNECTION_STRATEGIES[account.provider].reconnect(account)
-                                  )
-                                }
+                                disabled={saving || !connectionStrategy(account.provider)}
+                                onClick={() => {
+                                  const strategy = connectionStrategy(account.provider);
+                                  if (strategy) beginConnection(strategy.reconnect(account));
+                                }}
                               >
                                 Reconnect
                               </Button>
@@ -408,12 +413,11 @@ export function ProviderAccountsSettings() {
                               <DropdownMenuContent align="end">
                                 {account.status !== "reconnect_required" && (
                                   <DropdownMenuItem
-                                    disabled={saving}
-                                    onSelect={() =>
-                                      beginConnection(
-                                        CONNECTION_STRATEGIES[account.provider].reconnect(account)
-                                      )
-                                    }
+                                    disabled={saving || !connectionStrategy(account.provider)}
+                                    onSelect={() => {
+                                      const strategy = connectionStrategy(account.provider);
+                                      if (strategy) beginConnection(strategy.reconnect(account));
+                                    }}
                                   >
                                     Reconnect
                                   </DropdownMenuItem>
