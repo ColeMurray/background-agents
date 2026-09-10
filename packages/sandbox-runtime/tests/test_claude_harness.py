@@ -134,7 +134,7 @@ class Harness:
         oauth_managed = overrides.pop("oauth_managed", False)
         credential_client = overrides.pop("credential_client", None)
         environ = overrides.pop("environ", {"ANTHROPIC_API_KEY": "sk-ant-key", "PATH": "/bin"})
-        transcript_exists = overrides.pop("transcript_exists", lambda _id, _dir: False)
+        transcript_exists = overrides.pop("transcript_exists", lambda _id, _dir, _cfg: False)
         self.config = ClaudeHarnessConfig(
             workdir=tmp_path / "repo",
             config_dir=tmp_path / "claude",
@@ -255,7 +255,7 @@ class TestSession:
     @pytest.mark.asyncio
     async def test_persisted_session_resumes_when_the_transcript_exists(self, tmp_path: Path):
         h = Harness(
-            tmp_path, turns=[[_result(0.1)]], transcript_exists=lambda sid, _d: sid == "old"
+            tmp_path, turns=[[_result(0.1)]], transcript_exists=lambda sid, _d, _c: sid == "old"
         )
         await h.harness.open()
         assert await h.harness.resume_session("old") is True
@@ -670,3 +670,24 @@ class TestReconnectPolicy:
         await _run(h.harness)
         await h.harness.close()
         assert h.client.disconnected is True
+
+
+class TestDefaultTranscriptLookup:
+    """The transcript lives under the child's config dir, not the bridge's."""
+
+    def test_finds_the_transcript_under_the_config_dir(self, tmp_path: Path) -> None:
+        from sandbox_runtime.harness.claude import _default_transcript_exists
+
+        config_dir = tmp_path / "claude-config"
+        session_id = "617347e9-9ff5-4205-9efe-c185b3459127"
+        project_dir = config_dir / "projects" / "-private-tmp-repo"
+        project_dir.mkdir(parents=True)
+        (project_dir / f"{session_id}.jsonl").write_text("{}\n")
+
+        # The workdir spelling need not match the child's canonical project key.
+        assert _default_transcript_exists(session_id, tmp_path / "repo", config_dir)
+        assert not _default_transcript_exists(
+            "00000000-0000-4000-8000-000000000000", tmp_path / "repo", config_dir
+        )
+        assert not _default_transcript_exists("not-a-uuid", tmp_path / "repo", config_dir)
+        assert not _default_transcript_exists(session_id, tmp_path / "repo", tmp_path / "missing")

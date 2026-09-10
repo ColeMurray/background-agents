@@ -231,7 +231,7 @@ class ClaudeHarness:
         client_factory: SdkClientFactory | None = None,
         options_factory: Callable[..., Any] | None = None,
         tool_server_factory: Callable[[ControlPlaneToolClient], Any] | None = None,
-        transcript_exists: Callable[[str, Path], bool] | None = None,
+        transcript_exists: Callable[[str, Path, Path], bool] | None = None,
         binary: Path | None = None,
     ) -> None:
         self.config = config
@@ -312,7 +312,7 @@ class ClaudeHarness:
             self._tool_client = None
 
     async def resume_session(self, persisted_id: str) -> bool:
-        if not self._transcript_exists(persisted_id, self.config.workdir):
+        if not self._transcript_exists(persisted_id, self.config.workdir, self.config.config_dir):
             self.log.info("claude.session.invalid", agent_session_id=persisted_id)
             return False
         self.session_id = persisted_id
@@ -738,13 +738,25 @@ class _InactivityTimeout(Exception):
     pass
 
 
-def _default_transcript_exists(session_id: str, workdir: Path) -> bool:
-    try:
-        from claude_agent_sdk import get_session_info
+def _default_transcript_exists(session_id: str, workdir: Path, config_dir: Path) -> bool:
+    """Whether the child wrote a transcript for ``session_id`` under ``config_dir``.
 
-        return get_session_info(session_id, directory=str(workdir)) is not None
-    except Exception:
+    The SDK's ``get_session_info`` resolves the projects directory from the
+    *bridge's* ``CLAUDE_CONFIG_DIR``, which is never set: the config dir only
+    reaches the child through ``options.env``. Look under the directory the
+    child actually writes to. Session ids are UUIDs, so a glob across project
+    directories is unambiguous and immune to path-canonicalisation drift
+    between ``workdir`` and the child's realpath.
+    """
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
         return False
+    projects = config_dir / "projects"
+    if not projects.is_dir():
+        return False
+    del workdir  # informational; the transcript is keyed by session id
+    return any(path.is_file() for path in projects.glob(f"*/{session_id}.jsonl"))
 
 
 def _default_options_factory(**kwargs: Any) -> Any:
