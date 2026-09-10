@@ -371,7 +371,7 @@ describe("provider account sandbox broker route", () => {
     expect(absentBinding.headers.get("Cache-Control")).toBe("no-store");
 
     const unsupportedProvider = await SELF.fetch(
-      `https://test.local/sessions/${sessionName}/provider-auth/anthropic/access-token`,
+      `https://test.local/sessions/${sessionName}/provider-auth/gemini/access-token`,
       {
         method: "POST",
         headers: { Authorization: `Bearer ${sandboxToken}` },
@@ -439,6 +439,7 @@ describe("provider account sandbox broker route", () => {
           selectionSource: "explicit",
         },
         { provider: "xai", authMode: "api_key", selectionSource: "fallback_api_key" },
+        { provider: "anthropic", authMode: "api_key", selectionSource: "fallback_api_key" },
       ],
     });
     const sandboxToken = "provider-broker-success-token";
