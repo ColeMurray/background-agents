@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import type { ReactNode } from "react";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -109,14 +109,21 @@ describe("useProviderAccounts", () => {
     );
 
     expect(browserApiFetch).not.toHaveBeenCalled();
-    expect(result.current.accounts).toMatchObject({ accounts: [], defaults: [], loading: false });
+    expect(result.current.accounts).toMatchObject({
+      accounts: [],
+      defaults: [],
+      loading: false,
+      accountsStatus: "unavailable",
+    });
     expect(result.current.legacy).toMatchObject({ legacyKeys: [], loading: false });
   });
 
   it("clears provider resources when read permission is revoked", async () => {
-    vi.mocked(browserApiFetch)
-      .mockResolvedValueOnce(Response.json({ accounts: [account] }))
-      .mockResolvedValueOnce(Response.json({ defaults: [] }));
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      Response.json(
+        path === "/api/model-provider-account-defaults" ? { defaults: [] } : { accounts: [account] }
+      )
+    );
 
     const { result, rerender } = renderHook(() => useProviderAccounts(), { wrapper });
     await waitFor(() => expect(result.current.accounts).toEqual([account]));
@@ -129,19 +136,123 @@ describe("useProviderAccounts", () => {
   });
 
   it("uses the shared static provider catalog without fetching it", async () => {
-    vi.mocked(browserApiFetch)
-      .mockResolvedValueOnce(Response.json({ accounts: [] }))
-      .mockResolvedValueOnce(Response.json({ defaults: [] }));
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      Response.json(
+        path === "/api/model-provider-account-defaults" ? { defaults: [] } : { accounts: [] }
+      )
+    );
 
     const { result } = renderHook(() => useProviderAccounts(), { wrapper });
 
     await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.accountsStatus).toBe("ready");
     expect(result.current.providers).toEqual([
       { provider: "openai", displayName: "OpenAI", subscriptionName: "ChatGPT" },
       { provider: "xai", displayName: "xAI", subscriptionName: "SuperGrok" },
     ]);
     expect(browserApiFetch).toHaveBeenCalledTimes(2);
     expect(browserApiFetch).not.toHaveBeenCalledWith("/api/model-subscription-providers");
+  });
+
+  it("marks failed account loads unavailable and becomes ready after recovery", async () => {
+    let failed = true;
+    vi.mocked(browserApiFetch).mockImplementation(async (path) => {
+      if (path === "/api/model-provider-account-defaults") return Response.json({ defaults: [] });
+      return failed
+        ? Response.json({ error: "Service unavailable" }, { status: 503 })
+        : Response.json({ accounts: [account] });
+    });
+    const { result } = renderHook(() => useProviderAccounts(), { wrapper });
+    expect(result.current.accountsStatus).toBe("loading");
+    await waitFor(() => expect(result.current.accountsStatus).toBe("unavailable"));
+    expect(result.current.accounts).toEqual([]);
+
+    failed = false;
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.accountsStatus).toBe("ready");
+    expect(result.current.accounts).toEqual([account]);
+
+    failed = true;
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.accountsStatus).toBe("unavailable");
+    expect(result.current.accounts).toEqual([account]);
+  });
+
+  it("keeps successful accounts authoritative when only defaults fail", async () => {
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/model-provider-account-defaults"
+        ? Response.json({ error: "Service unavailable" }, { status: 503 })
+        : Response.json({ accounts: [] })
+    );
+    const { result } = renderHook(() => useProviderAccounts(), { wrapper });
+    await waitFor(() => expect(result.current.error).toBeInstanceOf(Error));
+    expect(result.current.accountsStatus).toBe("ready");
+  });
+
+  it("does not authorize cached accounts on remount until revalidation succeeds", async () => {
+    const cache = new Map();
+    const cachedWrapper = ({ children }: { children: ReactNode }) => (
+      <SWRConfig value={{ provider: () => cache, dedupingInterval: 0, shouldRetryOnError: false }}>
+        {children}
+      </SWRConfig>
+    );
+    let accountResponse = Promise.resolve(Response.json({ accounts: [] }));
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/model-provider-account-defaults"
+        ? Response.json({ defaults: [] })
+        : accountResponse
+    );
+    const first = renderHook(() => useProviderAccounts(), { wrapper: cachedWrapper });
+    await waitFor(() => expect(first.result.current.accountsStatus).toBe("ready"));
+    first.unmount();
+
+    let resolve!: (response: Response) => void;
+    accountResponse = new Promise((done) => {
+      resolve = done;
+    });
+    const statuses: string[] = [];
+    const { result } = renderHook(
+      () => {
+        const value = useProviderAccounts();
+        statuses.push(value.accountsStatus);
+        return value;
+      },
+      { wrapper: cachedWrapper }
+    );
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalledTimes(4));
+    expect(result.current.accountsStatus).toBe("loading");
+    expect(statuses).not.toContain("ready");
+
+    await act(async () =>
+      resolve(Response.json({ error: "Service unavailable" }, { status: 503 }))
+    );
+    await waitFor(() => expect(result.current.accountsStatus).toBe("unavailable"));
+    expect(statuses).not.toContain("ready");
+
+    accountResponse = Promise.resolve(Response.json({ accounts: [account] }));
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.accountsStatus).toBe("ready");
+    expect(result.current.accounts).toEqual([account]);
+
+    accountResponse = new Promise((done) => {
+      resolve = done;
+    });
+    let refresh!: ReturnType<typeof result.current.refresh>;
+    act(() => {
+      refresh = result.current.refresh();
+    });
+    expect(result.current.accountsStatus).toBe("loading");
+    await act(async () => {
+      resolve(Response.json({ accounts: [account] }));
+      await refresh;
+    });
+    expect(result.current.accountsStatus).toBe("ready");
   });
 });
 
@@ -201,9 +312,11 @@ describe("provider account API response boundaries", () => {
   });
 
   it("uses the same status policy for query resources", async () => {
-    vi.mocked(browserApiFetch)
-      .mockResolvedValueOnce(Response.json({ error: "Accounts unavailable" }, { status: 503 }))
-      .mockResolvedValueOnce(Response.json({ defaults: [] }));
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/model-provider-account-defaults"
+        ? Response.json({ defaults: [] })
+        : Response.json({ error: "Accounts unavailable" }, { status: 503 })
+    );
 
     const { result } = renderHook(() => useProviderAccounts(), { wrapper });
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -215,11 +328,11 @@ describe("provider account API response boundaries", () => {
   });
 
   it("falls back when the error response body is malformed", async () => {
-    vi.mocked(browserApiFetch)
-      .mockResolvedValueOnce(
-        Response.json({ error: "Untrusted error", retryable: "no" }, { status: 502 })
-      )
-      .mockResolvedValueOnce(Response.json({ defaults: [] }));
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/model-provider-account-defaults"
+        ? Response.json({ defaults: [] })
+        : Response.json({ error: "Untrusted error", retryable: "no" }, { status: 502 })
+    );
 
     const { result } = renderHook(() => useProviderAccounts(), { wrapper });
     await waitFor(() => expect(result.current.loading).toBe(false));

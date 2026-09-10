@@ -156,14 +156,15 @@ export default function Home() {
     hasHydratedModelPreferencesRef.current = true;
   }, []);
 
-  const availableProviderSelections = providerAccounts.loading
-    ? providerSelections
-    : reconcileProviderSelections(providerSelections, providerAccounts.accounts);
+  const availableProviderSelections =
+    providerAccounts.accountsStatus === "ready"
+      ? reconcileProviderSelections(providerSelections, providerAccounts.accounts)
+      : providerSelections;
 
   useEffect(() => {
     if (
       !providerSelectionsHydrated ||
-      providerAccounts.loading ||
+      providerAccounts.accountsStatus !== "ready" ||
       availableProviderSelections === providerSelections
     ) {
       return;
@@ -176,7 +177,7 @@ export default function Home() {
     );
   }, [
     availableProviderSelections,
-    providerAccounts.loading,
+    providerAccounts.accountsStatus,
     providerSelections,
     providerSelectionsHydrated,
   ]);
@@ -457,7 +458,7 @@ function HomeContent({
     handleDragOver,
     handleDragLeave,
   } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
-  const { sessionTarget, selectedRepo, repos, loadingRepos, isLaunchable } = picker;
+  const { sessionTarget, selectedRepo, repos, reposStatus, isLaunchable } = picker;
   const selectedProvider = getSubscriptionProviderForModel(selectedModel);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -652,7 +653,7 @@ function HomeContent({
                 </div>
               )}
 
-              {repos.length === 0 && !loadingRepos && (
+              {repos.length === 0 && reposStatus === "ready" && (
                 <p className="mt-3 text-sm text-muted-foreground text-center">
                   No repositories found. You can start without a repository or grant repository
                   access in settings.

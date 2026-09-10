@@ -22,9 +22,10 @@ export function SessionTargetPicker({
   branches,
   loadingBranches,
   repos,
-  loadingRepos,
+  reposStatus,
   disabled,
 }: SessionTargetPickerProps & { disabled: boolean }) {
+  const loadingRepos = reposStatus === "loading";
   return (
     <>
       {/* Target selector */}

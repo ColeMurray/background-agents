@@ -13,6 +13,7 @@ import {
 import Home from "./page";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
+import type { PrerequisiteStatus } from "@/lib/prerequisite-status";
 
 expect.extend(matchers);
 
@@ -28,8 +29,8 @@ const mocks = vi.hoisted(() => ({
     private: boolean;
     defaultBranch: string;
   }>,
-  loadingReposValue: false,
-  environmentsLoadingValue: false,
+  reposStatus: "ready" as PrerequisiteStatus,
+  environmentsStatus: "ready" as PrerequisiteStatus,
   environmentsValue: [] as Array<{
     id: string;
     name: string;
@@ -63,7 +64,7 @@ const mocks = vi.hoisted(() => ({
     updatedAt: number;
     archivedAt: null;
   }>,
-  providerAccountsLoadingValue: false,
+  providerAccountsStatus: "ready" as PrerequisiteStatus,
   skillPreview: {
     skills: [
       {
@@ -119,7 +120,7 @@ vi.mock("@/hooks/use-environments", () => ({
   ENVIRONMENTS_KEY: "/api/environments",
   useEnvironments: () => ({
     environments: mocks.environmentsValue,
-    loading: mocks.environmentsLoadingValue,
+    status: mocks.environmentsStatus,
   }),
 }));
 
@@ -136,7 +137,10 @@ vi.mock("@/components/model-reasoning-selector", () => ({
 }));
 
 vi.mock("@/hooks/use-repos", () => ({
-  useRepos: () => ({ repos: mocks.reposValue, loading: mocks.loadingReposValue }),
+  useRepos: () => ({
+    repos: mocks.reposValue,
+    status: mocks.reposStatus,
+  }),
 }));
 
 vi.mock("@/hooks/use-branches", () => ({
@@ -169,8 +173,8 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
     providers: [],
     accounts: mocks.providerAccountsValue,
     defaults: [],
-    loading: mocks.providerAccountsLoadingValue,
-    error: undefined,
+    loading: mocks.providerAccountsStatus === "loading",
+    accountsStatus: mocks.providerAccountsStatus,
     refresh: vi.fn(),
   }),
 }));
@@ -191,8 +195,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   mocks.reposValue = [repo];
-  mocks.loadingReposValue = false;
-  mocks.environmentsLoadingValue = false;
+  mocks.reposStatus = "ready";
+  mocks.environmentsStatus = "ready";
   mocks.environmentsValue = [];
   mocks.enabledModelsValue = [DEFAULT_MODEL];
   mocks.enabledModelOptionsValue = [
@@ -202,7 +206,7 @@ beforeEach(() => {
     },
   ];
   mocks.providerAccountsValue = [];
-  mocks.providerAccountsLoadingValue = false;
+  mocks.providerAccountsStatus = "ready";
   mocks.keyboardShortcuts = DEFAULT_KEYBOARD_SHORTCUTS;
   mocks.canCreateSession = true;
   mocks.routerPush.mockReset();
@@ -403,6 +407,22 @@ describe("Home", () => {
     expect(sessionCreateBody()).not.toHaveProperty("branch");
   });
 
+  it.each(["loading", "unavailable", "ready"] as const)(
+    "only shows an authoritative repository empty state when ready (status: %s)",
+    (status) => {
+      mocks.reposValue = [];
+      mocks.reposStatus = status;
+      render(<Home />);
+
+      const emptyMessage = screen.queryByText(/No repositories found/);
+      if (status === "ready") {
+        expect(emptyMessage).toBeInTheDocument();
+      } else {
+        expect(emptyMessage).not.toBeInTheDocument();
+      }
+    }
+  );
+
   it("defaults to a no-repository session target when no repositories are available", async () => {
     mocks.reposValue = [];
     const user = userEvent.setup();
@@ -455,47 +475,57 @@ describe("Home", () => {
     expect(body).not.toHaveProperty("branch");
   });
 
-  it("launches an ad-hoc set sending only repositories, seeded from the selected repo", async () => {
-    mocks.reposValue = [
-      repo,
-      {
-        id: 2,
-        fullName: "open-inspect/docs",
-        owner: "open-inspect",
-        name: "docs",
-        description: null,
-        private: false,
-        defaultBranch: "main",
-      },
-    ];
-    const user = userEvent.setup();
-    render(<Home />);
+  it.each(["ready", "unavailable"] as const)(
+    "edits and launches an ad-hoc set with cached repositories (status: %s)",
+    async (status) => {
+      mocks.reposValue = [
+        repo,
+        {
+          id: 2,
+          fullName: "open-inspect/docs",
+          owner: "open-inspect",
+          name: "docs",
+          description: null,
+          private: false,
+          defaultBranch: "main",
+        },
+      ];
+      const user = userEvent.setup();
+      const view = render(<Home />);
 
-    await screen.findByRole("button", { name: /background-agents/i });
-    await user.click(screen.getByRole("button", { name: /background-agents/i }));
-    const listbox = screen.getByRole("listbox");
-    await user.click(within(listbox).getByRole("option", { name: /multiple repositories/i }));
+      await screen.findByRole("button", { name: /background-agents/i });
+      await user.click(screen.getByRole("button", { name: /background-agents/i }));
+      const listbox = screen.getByRole("listbox");
+      await user.click(within(listbox).getByRole("option", { name: /multiple repositories/i }));
 
-    // The multi-select opens seeded with the previously selected repo; add docs.
-    await user.click(screen.getByRole("button", { name: /repository selection/i }));
-    await user.click(screen.getByRole("checkbox", { name: /open-inspect\/docs/i }));
-    await user.click(screen.getByRole("button", { name: /done/i }));
+      mocks.reposStatus = "loading";
+      view.rerender(<Home />);
+      expect(screen.getByRole("button", { name: /repository selection/i })).toBeDisabled();
+      mocks.reposStatus = status;
+      view.rerender(<Home />);
+      expect(screen.getByRole("button", { name: /repository selection/i })).toBeEnabled();
 
-    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Sync the docs");
-    await user.click(screen.getByRole("button", { name: /send/i }));
+      // The multi-select opens seeded with the previously selected repo; add docs.
+      await user.click(screen.getByRole("button", { name: /repository selection/i }));
+      await user.click(screen.getByRole("checkbox", { name: /open-inspect\/docs/i }));
+      await user.click(screen.getByRole("button", { name: /done/i }));
 
-    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
-    const body = sessionCreateBody();
-    expect(body).toMatchObject({
-      repositories: [
-        { repoOwner: "open-inspect", repoName: "background-agents" },
-        { repoOwner: "open-inspect", repoName: "docs" },
-      ],
-    });
-    expect(body).not.toHaveProperty("repoOwner");
-    expect(body).not.toHaveProperty("environmentId");
-    expect(body).not.toHaveProperty("branch");
-  });
+      await user.type(screen.getByPlaceholderText("What do you want to build?"), "Sync the docs");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+
+      await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+      const body = sessionCreateBody();
+      expect(body).toMatchObject({
+        repositories: [
+          { repoOwner: "open-inspect", repoName: "background-agents" },
+          { repoOwner: "open-inspect", repoName: "docs" },
+        ],
+      });
+      expect(body).not.toHaveProperty("repoOwner");
+      expect(body).not.toHaveProperty("environmentId");
+      expect(body).not.toHaveProperty("branch");
+    }
+  );
 
   const environment = {
     id: "env-1",
@@ -625,7 +655,7 @@ describe("Home", () => {
       "open-inspect-last-provider-selections:v1",
       JSON.stringify({ xai: { mode: "provider_account", accountId: staleAccountId } })
     );
-    mocks.providerAccountsLoadingValue = true;
+    mocks.providerAccountsStatus = "loading";
     const user = userEvent.setup();
     const view = render(<Home />);
 
@@ -636,7 +666,7 @@ describe("Home", () => {
     expect(vi.mocked(fetch)).not.toHaveBeenCalledWith("/api/sessions", expect.anything());
     expect(screen.queryByText("Failed to create session")).not.toBeInTheDocument();
 
-    mocks.providerAccountsLoadingValue = false;
+    mocks.providerAccountsStatus = "ready";
     view.rerender(<Home />);
     await user.click(screen.getByRole("button", { name: /send/i }));
 
@@ -644,16 +674,86 @@ describe("Home", () => {
     expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe("{}");
   });
 
+  it.each([true, false])(
+    "preserves provider choices during failure and reconciles recovery (account exists: %s)",
+    async (exists) => {
+      const accountId = "a".repeat(32);
+      const selection = { openai: { mode: "provider_account", accountId } };
+      const stored = JSON.stringify(selection);
+      localStorage.setItem("open-inspect-last-provider-selections:v1", stored);
+      mocks.providerAccountsStatus = "unavailable";
+      const view = render(<Home />);
+
+      expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe(stored);
+
+      mocks.providerAccountsStatus = "ready";
+      mocks.providerAccountsValue = exists ? [activeOpenAiAccount(accountId)] : [];
+      view.rerender(<Home />);
+      expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe(
+        exists ? stored : "{}"
+      );
+      const user = userEvent.setup();
+      await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() =>
+        expect(sessionCreateBody()).toMatchObject({
+          providerSelections: exists ? selection : {},
+        })
+      );
+    }
+  );
+
+  it.each([true, false])(
+    "preserves a stored environment during failure and restores after recovery (exists: %s)",
+    async (exists) => {
+      localStorage.setItem("open-inspect-last-selected-repo", "env:env-1");
+      mocks.environmentsStatus = "unavailable";
+      const view = render(<Home />);
+
+      expect(screen.getByRole("button", { name: /select repo/i })).toBeInTheDocument();
+      expect(localStorage.getItem("open-inspect-last-selected-repo")).toBe("env:env-1");
+      fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+        target: { value: "Continue work" },
+      });
+      expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+      expect(fetch).not.toHaveBeenCalled();
+
+      mocks.environmentsStatus = "ready";
+      mocks.environmentsValue = exists ? [environment] : [];
+      view.rerender(<Home />);
+      await screen.findByRole("button", { name: exists ? /full-stack/i : /background-agents/i });
+      expect(localStorage.getItem("open-inspect-last-selected-repo")).toBe(
+        exists ? "env:env-1" : repo.fullName
+      );
+    }
+  );
+
+  it("restores a saved repository after a failed repository request recovers", async () => {
+    localStorage.setItem("open-inspect-last-selected-repo", repo.fullName);
+    mocks.reposValue = [];
+    mocks.reposStatus = "unavailable";
+    const view = render(<Home />);
+
+    expect(screen.getByRole("button", { name: /select repo/i })).toBeInTheDocument();
+    expect(localStorage.getItem("open-inspect-last-selected-repo")).toBe(repo.fullName);
+    expect(screen.queryByText(/No repositories found/)).not.toBeInTheDocument();
+
+    mocks.reposStatus = "ready";
+    mocks.reposValue = [repo];
+    view.rerender(<Home />);
+    await screen.findByRole("button", { name: /background-agents/i });
+  });
+
   it("waits for environments to load before restoring a stored environment", async () => {
     localStorage.setItem("open-inspect-last-selected-repo", "env:env-1");
-    mocks.environmentsLoadingValue = true;
+    mocks.environmentsStatus = "loading";
     const { rerender } = render(<Home />);
 
     // Must not commit the repo default while the stored environment is pending.
     await screen.findByRole("button", { name: /select repo/i });
     expect(screen.queryByRole("button", { name: /background-agents/i })).not.toBeInTheDocument();
 
-    mocks.environmentsLoadingValue = false;
+    mocks.environmentsStatus = "ready";
     mocks.environmentsValue = [environment];
     rerender(<Home />);
     await screen.findByRole("button", { name: /full-stack/i });
