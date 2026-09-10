@@ -97,7 +97,7 @@ describe("provider account authorization-code routes", () => {
     expect(result.transactionId).toMatch(/^[0-9a-f]{64}$/);
     expect(result).toMatchObject({ provider: "anthropic", operation: "create" });
     const url = new URL(result.authorizationUrl);
-    expect(url.origin + url.pathname).toBe("https://claude.ai/oauth/authorize");
+    expect(url.origin + url.pathname).toBe("https://claude.com/cai/oauth/authorize");
     expect(url.searchParams.get("code")).toBe("true");
     expect(url.searchParams.get("scope")).toBe("user:inference");
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");

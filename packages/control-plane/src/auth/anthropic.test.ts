@@ -40,7 +40,7 @@ describe("startAnthropicAuthorization", () => {
     const request = await startAnthropicAuthorization();
     const url = new URL(request.authorizationUrl);
 
-    expect(url.origin + url.pathname).toBe("https://claude.ai/oauth/authorize");
+    expect(url.origin + url.pathname).toBe("https://claude.com/cai/oauth/authorize");
     expect(Object.fromEntries(url.searchParams)).toEqual({
       code: "true",
       client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
@@ -110,6 +110,7 @@ describe("exchangeAnthropicAuthorizationCode", () => {
       state: "state-1",
       code_verifier: "verifier-1",
       redirect_uri: ANTHROPIC_OAUTH_REDIRECT_URI,
+      expires_in: 31_536_000,
     });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     // Cloudflare in front of the token endpoint bans anonymous client signatures.

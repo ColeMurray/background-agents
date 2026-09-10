@@ -9,16 +9,22 @@
  */
 
 const CLAUDE_CODE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-export const ANTHROPIC_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
-export const ANTHROPIC_OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
-/** Anthropic's hosted callback shows the code for the user to paste back. */
-export const ANTHROPIC_OAUTH_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback";
+/**
+ * Hosts exactly as `claude setup-token` (2.1.259) uses them. The consent page
+ * is the Claude.ai sign-in (a subscription is required); codes minted for the
+ * older claude.ai / console.anthropic.com pair are rejected by the token
+ * endpoint as an invalid code.
+ */
+export const ANTHROPIC_OAUTH_AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize";
+export const ANTHROPIC_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+/** Anthropic's hosted callback shows `code#state` for the user to paste back. */
+export const ANTHROPIC_OAUTH_REDIRECT_URI = "https://platform.claude.com/oauth/code/callback";
 export const ANTHROPIC_SETUP_TOKEN_SCOPE = "user:inference";
 /** What the CLI and Anthropic's documentation state for a setup token's lifetime. */
 export const ANTHROPIC_SETUP_TOKEN_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
 const EXCHANGE_TIMEOUT_MS = 30_000;
 /**
- * Cloudflare in front of console.anthropic.com bans generic client
+ * Cloudflare in front of the token endpoint bans generic client
  * signatures (error 1010), and a Worker's outbound fetch carries no
  * User-Agent at all. Identify the deployment explicitly.
  */
@@ -147,6 +153,8 @@ export async function exchangeAnthropicAuthorizationCode(
         state: input.expectedState,
         code_verifier: input.codeVerifier,
         redirect_uri: ANTHROPIC_OAUTH_REDIRECT_URI,
+        // setup-token asks for its one-year lifetime explicitly.
+        expires_in: Math.floor(ANTHROPIC_SETUP_TOKEN_LIFETIME_MS / 1000),
       }),
       signal: AbortSignal.timeout(EXCHANGE_TIMEOUT_MS),
     });

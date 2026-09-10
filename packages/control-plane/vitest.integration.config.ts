@@ -83,7 +83,7 @@ export default defineConfig({
                 expires_in: 3600,
               });
             }
-            if (url.href === "https://console.anthropic.com/v1/oauth/token") {
+            if (url.href === "https://platform.claude.com/v1/oauth/token") {
               const body = JSON.parse(await request.text()) as {
                 code?: string;
                 state?: string;
