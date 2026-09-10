@@ -1,13 +1,16 @@
-"""Clean-environment launch for the Claude Agent SDK child.
+"""Clean-credential launch for the Claude Agent SDK child.
 
 The SDK merges ``os.environ`` under ``ClaudeAgentOptions.env`` when it spawns
 the ``claude`` binary, and the bridge inherits the supervisor's full
-environment: the platform-delivered ``ANTHROPIC_API_KEY``, the sandbox auth
-token, ``SESSION_CONFIG`` and every user secret. So the harness never hands
-the SDK the real binary. It hands it a generated wrapper that re-executes the
-binary with exactly the allowlisted variables and nothing else, for every
-invocation including the SDK's version probe.
+environment, including the platform-delivered ``ANTHROPIC_API_KEY``. So the
+harness never hands the SDK the real binary. It hands it a generated wrapper
+that re-executes the binary with the sandbox environment minus the Anthropic
+credentials that do not belong to the active auth mode, for every invocation
+including the SDK's version probe.
 
+Everything else passes through, exactly as it does for OpenCode: the sandbox
+token, ``SESSION_CONFIG`` and user secrets are what ``oi-git-sign``,
+``oi-git-credentials``, ``upload-media`` and the agent's own commands need.
 The wrapper carries variable *names* only. Credential values travel through
 ``ClaudeAgentOptions.env`` in process memory and are never written to disk.
 """
@@ -25,55 +28,15 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-# Variables the child always receives when the bridge has them.
-BASE_ALLOWLIST: Final[tuple[str, ...]] = (
-    "PATH",
-    "HOME",
-    "USER",
-    "LANG",
-    "LC_ALL",
-    "TERM",
-    "TMPDIR",
-    "SHELL",
-    "PWD",
-    "NODE_OPTIONS",
-    "NODE_EXTRA_CA_CERTS",
-    "SSL_CERT_FILE",
-    "SSL_CERT_DIR",
-    "https_proxy",
-    "HTTPS_PROXY",
-    "http_proxy",
-    "HTTP_PROXY",
-    "no_proxy",
-    "NO_PROXY",
-    "GIT_CONFIG_GLOBAL",
-    "GIT_CONFIG_SYSTEM",
-    "GIT_SSH_COMMAND",
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-    # Set by the SDK itself on every spawn.
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_AGENT_SDK_VERSION",
-    "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING",
-    # Set by the harness through options.env.
-    "CLAUDE_CONFIG_DIR",
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
-    "CLAUDE_CODE_SUBAGENT_MODEL",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-    "DISABLE_TELEMETRY",
-    "DISABLE_ERROR_REPORTING",
-    "DISABLE_AUTOUPDATER",
-    "MAX_THINKING_TOKENS",
-)
-
-# Credential variables per auth mode. Exactly one mode is ever active, so the
-# child sees either the key family or the OAuth token, never both.
-API_KEY_ALLOWLIST: Final[tuple[str, ...]] = (
+# Credential variables per auth mode. Exactly one mode is ever active: the
+# child sees either the key family or the OAuth token, never both, so the
+# family of the *other* mode is what the wrapper strips.
+API_KEY_CREDENTIAL_VARS: Final[tuple[str, ...]] = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_AUTH_TOKEN",
 )
-OAUTH_ALLOWLIST: Final[tuple[str, ...]] = ("CLAUDE_CODE_OAUTH_TOKEN",)
+OAUTH_CREDENTIAL_VARS: Final[tuple[str, ...]] = ("CLAUDE_CODE_OAUTH_TOKEN",)
 
 OAUTH_TOKEN_ENV_VAR: Final = "CLAUDE_CODE_OAUTH_TOKEN"
 API_KEY_ENV_VAR: Final = "ANTHROPIC_API_KEY"
@@ -103,7 +66,7 @@ class ClaudeCredential:
             return None
         return cls(
             ClaudeAuthMode.API_KEY,
-            {name: environ[name] for name in API_KEY_ALLOWLIST if environ.get(name)},
+            {name: environ[name] for name in API_KEY_CREDENTIAL_VARS if environ.get(name)},
         )
 
     @classmethod
@@ -111,21 +74,22 @@ class ClaudeCredential:
         return cls(ClaudeAuthMode.OAUTH_TOKEN, {OAUTH_TOKEN_ENV_VAR: token})
 
 
-def allowlist_for(mode: ClaudeAuthMode) -> tuple[str, ...]:
-    credential = API_KEY_ALLOWLIST if mode is ClaudeAuthMode.API_KEY else OAUTH_ALLOWLIST
-    return BASE_ALLOWLIST + credential
+def denylist_for(mode: ClaudeAuthMode) -> tuple[str, ...]:
+    """The credential family the child must never see in ``mode``."""
+    return OAUTH_CREDENTIAL_VARS if mode is ClaudeAuthMode.API_KEY else API_KEY_CREDENTIAL_VARS
 
 
 def clean_child_env(
     parent: Mapping[str, str], mode: ClaudeAuthMode, extra: Mapping[str, str]
 ) -> dict[str, str]:
-    """What the child ends up with: the allowlisted subset of parent+extra.
+    """What the child ends up with: parent+extra minus the other mode's credentials.
 
     This is the reference the sentinel test compares the wrapper's real
     output against.
     """
     merged = {**parent, **extra}
-    return {name: merged[name] for name in allowlist_for(mode) if name in merged}
+    stripped = set(denylist_for(mode))
+    return {name: value for name, value in merged.items() if name not in stripped}
 
 
 def bundled_claude_binary() -> Path:
@@ -148,13 +112,13 @@ def write_clean_env_wrapper(
 ) -> Path:
     """Generate the wrapper set as ``ClaudeAgentOptions.cli_path``.
 
-    A Python script rather than a shell one so the allowlist is applied
+    A Python script rather than a shell one so the denylist is applied
     exactly (no word splitting, no accidental empty exports). It re-executes
-    ``binary`` with the allowlisted variables it finds in its own environment,
-    which is the SDK's merged ``os.environ`` + ``options.env``.
+    ``binary`` with its own environment, which is the SDK's merged
+    ``os.environ`` + ``options.env``, minus the other mode's credentials.
     """
     python = python_executable or sys.executable
-    names = allowlist_for(mode)
+    names = denylist_for(mode)
     script = "\n".join(
         [
             f"#!{python}",
@@ -163,9 +127,9 @@ def write_clean_env_wrapper(
             "import sys",
             "",
             f"BINARY = {str(binary)!r}",
-            f"ALLOWLIST = {names!r}",
+            f"DENYLIST = frozenset({names!r})",
             "",
-            "env = {name: os.environ[name] for name in ALLOWLIST if name in os.environ}",
+            "env = {name: value for name, value in os.environ.items() if name not in DENYLIST}",
             "os.execve(BINARY, [BINARY, *sys.argv[1:]], env)",
             "",
         ]

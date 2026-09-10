@@ -1,4 +1,4 @@
-"""The clean-environment launch: the child sees the allowlist and nothing else."""
+"""The clean-credential launch: the child sees the sandbox environment minus the other mode's credentials."""
 
 import json
 import os
@@ -7,13 +7,12 @@ import sys
 from pathlib import Path
 
 from sandbox_runtime.harness.claude_env import (
-    API_KEY_ALLOWLIST,
-    BASE_ALLOWLIST,
-    OAUTH_ALLOWLIST,
+    API_KEY_CREDENTIAL_VARS,
+    OAUTH_CREDENTIAL_VARS,
     ClaudeAuthMode,
     ClaudeCredential,
-    allowlist_for,
     clean_child_env,
+    denylist_for,
     harness_env,
     write_clean_env_wrapper,
 )
@@ -67,29 +66,40 @@ def _polluted_parent_env(**overrides: str) -> dict[str, str]:
 
 
 class TestSentinel:
-    """The design's sentinel: the child's environment equals the allowlist exactly."""
+    """The design's sentinel: the child's environment is the parent's minus the other credential family."""
 
-    def test_oauth_mode_strips_the_platform_api_key(self, tmp_path: Path) -> None:
+    def test_oauth_mode_strips_the_platform_api_key_and_nothing_else(self, tmp_path: Path) -> None:
         wrapper = write_clean_env_wrapper(
             tmp_path / "bin", mode=ClaudeAuthMode.OAUTH_TOKEN, binary=_fake_binary(tmp_path)
         )
         # What the SDK builds: os.environ merged under options.env.
-        parent = _polluted_parent_env()
+        parent = _polluted_parent_env(ANTHROPIC_BASE_URL="https://gateway.example")
         options_env = harness_env(tmp_path / "cfg", ClaudeCredential.oauth_token("sk-ant-oat01-x"))
         child = _run_wrapper(wrapper, {**parent, **options_env}, "-v")["env"]
 
         expected = clean_child_env(parent, ClaudeAuthMode.OAUTH_TOKEN, options_env)
         assert child == expected
-        assert "ANTHROPIC_API_KEY" not in child
+        for stripped in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
+            assert stripped not in child
         assert child["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-x"
-        for secret in ("SANDBOX_AUTH_TOKEN", "SESSION_CONFIG", "DB_PASSWORD", "OPENAI_API_KEY"):
-            assert secret not in child
+        # Parity with OpenCode: the sandbox helpers (oi-git-sign, oi-git-credentials,
+        # upload-media) and the agent's commands need the session context and secrets.
+        assert child["SANDBOX_AUTH_TOKEN"] == parent["SANDBOX_AUTH_TOKEN"]
+        assert child["SESSION_CONFIG"] == parent["SESSION_CONFIG"]
+        assert child["CONTROL_PLANE_URL"] == parent["CONTROL_PLANE_URL"]
+        assert child["DB_PASSWORD"] == "user-secret"
+        assert child["OPENAI_API_KEY"] == "sk-openai"
 
-    def test_api_key_mode_forwards_the_key_family_only(self, tmp_path: Path) -> None:
+    def test_api_key_mode_forwards_the_key_family_and_strips_the_oauth_token(
+        self, tmp_path: Path
+    ) -> None:
         wrapper = write_clean_env_wrapper(
             tmp_path / "bin", mode=ClaudeAuthMode.API_KEY, binary=_fake_binary(tmp_path)
         )
-        parent = _polluted_parent_env(ANTHROPIC_BASE_URL="https://gateway.example")
+        parent = _polluted_parent_env(
+            ANTHROPIC_BASE_URL="https://gateway.example",
+            CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-stray",
+        )
         credential = ClaudeCredential.api_key(parent)
         assert credential is not None
         options_env = harness_env(tmp_path / "cfg", credential)
@@ -99,7 +109,7 @@ class TestSentinel:
         assert child["ANTHROPIC_API_KEY"] == "sk-ant-platform-key"
         assert child["ANTHROPIC_BASE_URL"] == "https://gateway.example"
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in child
-        assert "SANDBOX_AUTH_TOKEN" not in child
+        assert child["SANDBOX_AUTH_TOKEN"] == parent["SANDBOX_AUTH_TOKEN"]
 
     def test_wrapper_forwards_arguments_including_the_version_probe(self, tmp_path: Path) -> None:
         wrapper = write_clean_env_wrapper(
@@ -113,20 +123,22 @@ class TestSentinel:
             tmp_path / "bin", mode=ClaudeAuthMode.OAUTH_TOKEN, binary=_fake_binary(tmp_path)
         )
         text = wrapper.read_text()
-        assert "CLAUDE_CODE_OAUTH_TOKEN" in text
+        # The script names what it strips, never what it forwards, and no value.
+        assert "ANTHROPIC_API_KEY" in text
         assert "sk-ant" not in text
 
 
-class TestAllowlist:
+class TestDenylist:
     def test_modes_are_mutually_exclusive(self) -> None:
-        assert set(API_KEY_ALLOWLIST).isdisjoint(OAUTH_ALLOWLIST)
-        assert allowlist_for(ClaudeAuthMode.OAUTH_TOKEN) == BASE_ALLOWLIST + OAUTH_ALLOWLIST
-        assert allowlist_for(ClaudeAuthMode.API_KEY) == BASE_ALLOWLIST + API_KEY_ALLOWLIST
+        assert set(API_KEY_CREDENTIAL_VARS).isdisjoint(OAUTH_CREDENTIAL_VARS)
+        assert denylist_for(ClaudeAuthMode.OAUTH_TOKEN) == API_KEY_CREDENTIAL_VARS
+        assert denylist_for(ClaudeAuthMode.API_KEY) == OAUTH_CREDENTIAL_VARS
 
-    def test_base_allowlist_never_carries_a_credential(self) -> None:
-        assert "ANTHROPIC_API_KEY" not in BASE_ALLOWLIST
-        assert "CLAUDE_CODE_OAUTH_TOKEN" not in BASE_ALLOWLIST
-        assert "SANDBOX_AUTH_TOKEN" not in BASE_ALLOWLIST
+    def test_only_anthropic_credentials_are_ever_stripped(self) -> None:
+        stripped = set(API_KEY_CREDENTIAL_VARS) | set(OAUTH_CREDENTIAL_VARS)
+        assert all(name.startswith(("ANTHROPIC_", "CLAUDE_CODE_OAUTH_")) for name in stripped)
+        for needed in ("SANDBOX_AUTH_TOKEN", "SESSION_CONFIG", "CONTROL_PLANE_URL", "PATH"):
+            assert needed not in stripped
 
     def test_api_key_credential_requires_the_key(self) -> None:
         assert ClaudeCredential.api_key({"ANTHROPIC_BASE_URL": "x"}) is None
