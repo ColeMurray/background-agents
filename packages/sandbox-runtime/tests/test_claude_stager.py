@@ -12,7 +12,7 @@ from sandbox_runtime.claude_stager import (
     resolve_claude_config_dir,
 )
 from sandbox_runtime.harness.base import HarnessProcessOwner
-from sandbox_runtime.runtime_config import ClaudeStagerConfig
+from sandbox_runtime.runtime_config import ClaudeStagerConfig, _freeze_json
 
 
 def _stager(tmp_path: Path, monkeypatch, **overrides) -> ClaudeStager:
@@ -84,3 +84,34 @@ def test_config_dir_defaults_outside_every_repository(monkeypatch, tmp_path: Pat
     assert resolve_claude_config_dir() == tmp_path / ".openinspect" / "claude"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/elsewhere")
     assert resolve_claude_config_dir() == Path("/elsewhere")
+
+
+def test_handoff_serializes_frozen_session_config(tmp_path: Path) -> None:
+    """SESSION_CONFIG is frozen recursively; nested proxies must still reach the file.
+
+    Regression: the first real Claude Agent session died in the supervisor with
+    "Object of type mappingproxy is not JSON serializable".
+    """
+    frozen = _freeze_json(
+        [
+            {
+                "name": "linear",
+                "type": "remote",
+                "url": "u",
+                "headers": {"Authorization": "Bearer x"},
+            },
+            {"name": "fs", "type": "local", "command": ["npx", "fs"], "env": {"A": "1"}},
+        ]
+    )
+    handoff = ClaudeHarnessHandoff(
+        workdir=tmp_path / "repo",
+        config_dir=tmp_path / "cfg",
+        has_repository=True,
+        mcp_servers=tuple(frozen),
+    )
+    path = tmp_path / "handoff.json"
+    handoff.write(path)
+    assert ClaudeHarnessHandoff.read(path).mcp_servers == (
+        {"name": "linear", "type": "remote", "url": "u", "headers": {"Authorization": "Bearer x"}},
+        {"name": "fs", "type": "local", "command": ["npx", "fs"], "env": {"A": "1"}},
+    )

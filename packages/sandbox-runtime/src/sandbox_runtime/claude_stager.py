@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,7 +27,7 @@ from .constants import CLAUDE_HARNESS_FILE_PATH
 from .sandbox_bin import install_bin_scripts
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
 
     from .repo_config import RepoEntry
     from .runtime_config import ClaudeStagerConfig
@@ -42,6 +43,19 @@ def resolve_claude_config_dir() -> Path:
     if override:
         return Path(override)
     return Path.home() / DEFAULT_CLAUDE_CONFIG_DIR_NAME
+
+
+def _plain_json(value: Any) -> Any:
+    """Undo ``runtime_config``'s freezing: mapping proxies and tuples → dicts and lists.
+
+    ``SESSION_CONFIG`` is frozen recursively, so an MCP server's nested ``env``
+    or ``headers`` is a ``MappingProxyType`` that ``json.dumps`` rejects.
+    """
+    if isinstance(value, Mapping):
+        return {str(key): _plain_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_json(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -60,7 +74,7 @@ class ClaudeHarnessHandoff:
                     "workdir": str(self.workdir),
                     "configDir": str(self.config_dir),
                     "hasRepository": self.has_repository,
-                    "mcpServers": [dict(server) for server in self.mcp_servers],
+                    "mcpServers": [_plain_json(server) for server in self.mcp_servers],
                 }
             )
         )
