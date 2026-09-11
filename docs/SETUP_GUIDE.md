@@ -249,6 +249,7 @@ configured/deployed.
   [docs/CONTROL_PLANE_CONTAINER.md](./CONTROL_PLANE_CONTAINER.md)
 - GitHub integration usage: [docs/integrations/GITHUB.md](./integrations/GITHUB.md)
 - Linear integration usage: [docs/integrations/LINEAR.md](./integrations/LINEAR.md)
+- MCP servers: [docs/integrations/MCP_SERVERS.md](./integrations/MCP_SERVERS.md)
 - Debugging and observability: [docs/DEBUGGING_PLAYBOOK.md](./DEBUGGING_PLAYBOOK.md)
 - Available models: [docs/AVAILABLE_MODELS.md](./AVAILABLE_MODELS.md)
 - Managed skills: [docs/MANAGED_SKILLS.md](./MANAGED_SKILLS.md)

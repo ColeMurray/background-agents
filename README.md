@@ -147,6 +147,9 @@ To set up recurring scheduled tasks, see **[docs/AUTOMATIONS.md](docs/AUTOMATION
 To create and use reusable agent instructions, see
 **[docs/MANAGED_SKILLS.md](docs/MANAGED_SKILLS.md)**.
 
+To register MCP servers (local `npx` commands or remote HTTP endpoints) for session agents, see
+**[docs/integrations/MCP_SERVERS.md](docs/integrations/MCP_SERVERS.md)**.
+
 ## Key Features
 
 ### Fast Startup
