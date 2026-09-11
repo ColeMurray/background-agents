@@ -1,7 +1,6 @@
 import {
   PROVIDER_DEVICE_AUTHORIZATION_MAX_POLL_INTERVAL_MS,
   PROVIDER_DEVICE_AUTHORIZATION_MIN_POLL_INTERVAL_MS,
-  type ModelProviderAccountStatus,
   type ProviderDeviceAuthorizationStatusResponse,
   type StartProviderDeviceAuthorizationRequest,
   type StartProviderDeviceAuthorizationResponse,
@@ -13,7 +12,6 @@ import {
 import type { ModelProviderAccountAdapterRegistry } from "../auth/model-provider-account-adapters";
 import type {
   ProviderAccountAuthorizationStore,
-  ConnectedProviderAuthorization,
   ProviderAuthorization,
   ProviderAuthorizationLive,
   ProviderAuthorizationTerminalState,
@@ -23,14 +21,17 @@ import type { Logger } from "../logger";
 import type { ModelProviderId } from "./provider-auth-contracts";
 import type { ProviderDeviceAuthorizationFinalizer } from "./device-authorization-finalizer";
 import {
-  PROVIDER_AUTHORIZATION_PROCESSING_CLAIM_TIMEOUT_MS,
-  PROVIDER_AUTHORIZATION_TRANSACTION_LIFETIME_MS,
   ProviderAuthorizationError,
+  cancelAuthorization,
+  connectedAuthorizationStatus,
+  isClaimStale,
   isTerminalAuthorization,
-  ownedAuthorization,
+  reserveAuthorization,
   resolveDurableAuthorization,
   terminalAuthorizationStatus,
 } from "./authorization-transaction";
+
+const KIND = "device";
 
 function boundedPollInterval(intervalMs: number): number {
   return Math.min(
@@ -84,52 +85,15 @@ export class ProviderDeviceAuthorizationService {
         409
       );
     }
-    let targetAccountStatus: ModelProviderAccountStatus | null = null;
-    let targetAccountLifecycleVersion: number | null = null;
-    if (input.operation === "reconnect") {
-      const snapshot = await this.accounts.getLifecycleSnapshot(input.providerAccountId);
-      if (!snapshot) throw new ProviderAuthorizationError("Provider account not found", 404);
-      const { account, lifecycleVersion } = snapshot;
-      if (account.provider !== provider) {
-        throw new ProviderAuthorizationError("Provider account does not match provider", 400);
-      }
-      if (account.archivedAt !== null) {
-        throw new ProviderAuthorizationError("Provider account is archived", 409);
-      }
-      targetAccountStatus = account.status;
-      targetAccountLifecycleVersion = lifecycleVersion;
-    }
-
-    const now = this.dependencies.now();
-    const id = this.dependencies.generateId(32);
-    const attemptId = this.dependencies.generateId(32);
-    if (!(await this.transactions.recordAttempt(attemptId, userId, now))) {
-      throw new ProviderAuthorizationError(
-        "Too many authorization attempts; try again shortly",
-        429,
-        true
-      );
-    }
-    const expiresAt = now + PROVIDER_AUTHORIZATION_TRANSACTION_LIFETIME_MS;
-    const reserved = await this.transactions.reserve({
-      id,
+    const { id, expiresAt } = await reserveAuthorization(
+      this.transactions,
+      this.accounts,
+      this.dependencies,
       userId,
       provider,
-      operation: input.operation,
-      providerAccountId: input.operation === "reconnect" ? input.providerAccountId : null,
-      targetAccountStatus,
-      targetAccountLifecycleVersion,
-      displayName: input.operation === "create" ? input.displayName : null,
-      expiresAt,
-      now,
-    });
-    if (!reserved) {
-      throw new ProviderAuthorizationError(
-        "Too many live authorization attempts; finish or cancel one first",
-        429,
-        true
-      );
-    }
+      KIND,
+      input
+    );
 
     try {
       const started = await capability.start();
@@ -183,10 +147,10 @@ export class ProviderDeviceAuthorizationService {
   ): Promise<ProviderDeviceAuthorizationStatusResponse> {
     let row = await this.resolveDurableRow(userId, provider, id, this.dependencies.now());
     let now = this.dependencies.now();
-    if (row.state === "connected") return this.connected(row);
+    if (row.state === "connected") return connectedAuthorizationStatus(this.accounts, row);
     if (this.isTerminal(row)) return this.terminal(row.state);
     if (row.state === "processing") {
-      if (row.processingStartedAt + PROVIDER_AUTHORIZATION_PROCESSING_CLAIM_TIMEOUT_MS <= now) {
+      if (isClaimStale(row, now)) {
         return this.finishAndResolve(userId, provider, id, "failed", now, row.processingOwner);
       }
       return this.pending(row);
@@ -253,12 +217,15 @@ export class ProviderDeviceAuthorizationService {
     }
   }
 
-  async cancel(userId: string, provider: ModelProviderId, id: string): Promise<void> {
-    const row = await this.owned(userId, provider, id);
-    if (!this.isTerminal(row) && row.state !== "connected") {
-      const now = this.dependencies.now();
-      await this.finishAndResolve(userId, provider, id, "cancelled", now);
-    }
+  cancel(userId: string, provider: ModelProviderId, id: string): Promise<void> {
+    return cancelAuthorization(
+      this.transactions,
+      userId,
+      provider,
+      KIND,
+      id,
+      this.dependencies.now()
+    );
   }
 
   private async finishAndResolve(
@@ -280,7 +247,7 @@ export class ProviderDeviceAuthorizationService {
     now: number
   ): Promise<ProviderDeviceAuthorizationStatusResponse> {
     const current = await this.resolveDurableRow(userId, provider, id, now);
-    if (current.state === "connected") return this.connected(current);
+    if (current.state === "connected") return connectedAuthorizationStatus(this.accounts, current);
     if (this.isTerminal(current)) return this.terminal(current.state);
     return this.pending(current);
   }
@@ -291,28 +258,7 @@ export class ProviderDeviceAuthorizationService {
     id: string,
     now: number
   ): Promise<ProviderAuthorization> {
-    return resolveDurableAuthorization(this.transactions, userId, provider, id, now);
-  }
-
-  private owned(
-    userId: string,
-    provider: ModelProviderId,
-    id: string
-  ): Promise<ProviderAuthorization> {
-    return ownedAuthorization(this.transactions, userId, provider, id);
-  }
-
-  private async connected(
-    row: ConnectedProviderAuthorization
-  ): Promise<ProviderDeviceAuthorizationStatusResponse> {
-    const account = await this.accounts.getById(row.resultProviderAccountId);
-    if (!account) throw new ProviderAuthorizationError("Connected account not found", 409);
-    return {
-      status: "connected",
-      account,
-      reconnectedExisting: row.reconnectedExisting,
-      completedAt: row.completedAt,
-    };
+    return resolveDurableAuthorization(this.transactions, userId, provider, KIND, id, now);
   }
 
   private pending(row: ProviderAuthorizationLive): ProviderDeviceAuthorizationStatusResponse {

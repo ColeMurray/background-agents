@@ -6,7 +6,11 @@ import {
 } from "./model-provider-account-anthropic-adapter";
 import { ANTHROPIC_SETUP_TOKEN_LIFETIME_MS, AnthropicTokenExchangeError } from "./anthropic";
 import { modelProviderAccountAdapterRegistry } from "./model-provider-account-default-adapters";
-import { ProviderCredentialError, ProviderRefreshError } from "./model-provider-account-adapters";
+import {
+  ProviderAuthorizationCodeExchangeError,
+  ProviderCredentialError,
+  ProviderRefreshError,
+} from "./model-provider-account-adapters";
 
 const NOW = 1_700_000_000_000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -117,9 +121,14 @@ describe("AnthropicModelProviderAccountAdapter", () => {
     expect(() => adapter.validateExternalIdentity(undefined, "acct")).not.toThrow();
     expect(() => adapter.validateExternalIdentity("acct", null)).not.toThrow();
     expect(() => adapter.validateExternalIdentity("a", "b")).toThrow(/did not match/);
-    expect(() =>
-      adapter.validateReconnectInputIdentity({ provider: "anthropic", setupToken: "x" }, "acct")
-    ).not.toThrow();
+  });
+
+  it("accepts a pasted setup token only for slots the browser never named", () => {
+    const input = { provider: "anthropic" as const, setupToken: "x" };
+    expect(() => adapter.validateReconnectInputIdentity(input, null)).not.toThrow();
+    expect(() => adapter.validateReconnectInputIdentity(input, "acct")).toThrow(
+      /connected through the browser/
+    );
   });
 });
 
@@ -202,13 +211,34 @@ describe("AnthropicProviderAuthorizationCode", () => {
     });
   });
 
-  it("propagates exchange failures untouched", async () => {
+  it.each([
+    ["invalid_grant", "rejected"],
+    ["invalid_request", "rejected"],
+    ["scope_mismatch", "rejected"],
+    ["malformed_response", "rejected"],
+    ["rate_limited", "retry_safe"],
+    ["network", "ambiguous"],
+    ["server_error", "ambiguous"],
+  ] as const)("classifies a %s exchange failure as %s", async (reason, classification) => {
+    const failure = new AnthropicTokenExchangeError("provider said no", reason);
     const capability = new AnthropicProviderAuthorizationCode(undefined, async () => {
-      throw new AnthropicTokenExchangeError("used", "invalid_grant");
+      throw failure;
+    });
+
+    const error = await capability
+      .complete({ codeVerifier: "verifier", state: "state" }, "code")
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(ProviderAuthorizationCodeExchangeError);
+    expect(error).toMatchObject({ classification, message: "provider said no", cause: failure });
+  });
+
+  it("propagates failures that are not exchange verdicts untouched", async () => {
+    const capability = new AnthropicProviderAuthorizationCode(undefined, async () => {
+      throw new TypeError("bug");
     });
 
     await expect(
       capability.complete({ codeVerifier: "verifier", state: "state" }, "code")
-    ).rejects.toMatchObject({ reason: "invalid_grant" });
+    ).rejects.toThrow(TypeError);
   });
 });

@@ -12,6 +12,7 @@ const BASE = "/model-provider-accounts/anthropic/authorization-codes";
 const GOOD_CODE = "integration-anthropic-code";
 const BAD_CODE = "integration-anthropic-unknown";
 const OUTAGE_CODE = "integration-anthropic-outage";
+const THROTTLED_CODE = "integration-anthropic-throttled";
 
 interface AuthorizationRow {
   state: string;
@@ -217,13 +218,33 @@ describe("provider account authorization-code routes", () => {
     expect(await accountCount()).toBe(0);
   });
 
-  it("returns to pending when the provider is unreachable, then fails after three attempts", async () => {
+  it("fails closed when the provider cannot be reached, since the code may be spent", async () => {
+    const { result } = await start();
+
+    const response = await complete(result.transactionId, OUTAGE_CODE);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "failed",
+      error: expect.stringMatching(/may already have been used/),
+      retryable: true,
+    });
+    expect(await authorizationRow(result.transactionId)).toMatchObject({
+      state: "failed",
+      encrypted_provider_data: null,
+    });
+    // The same code is never sent again.
+    const replay = await complete(result.transactionId, GOOD_CODE);
+    await expect(replay.json()).resolves.toMatchObject({ status: "failed" });
+    expect(await accountCount()).toBe(0);
+  });
+
+  it("returns to pending when the provider throttles, then fails after three attempts", async () => {
     const { result } = await start();
     const before = await authorizationRow(result.transactionId);
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
-      const response = await complete(result.transactionId, OUTAGE_CODE);
-      expect(response.status).toBe(502);
+      const response = await complete(result.transactionId, THROTTLED_CODE);
+      expect(response.status).toBe(503);
       await expect(response.json()).resolves.toMatchObject({ retryable: true });
       const row = await authorizationRow(result.transactionId);
       expect(row).toMatchObject({ state: "pending", processing_owner: null });
@@ -232,7 +253,7 @@ describe("provider account authorization-code routes", () => {
       await expect(status.json()).resolves.toMatchObject({ status: "pending" });
     }
 
-    const exhausted = await complete(result.transactionId, OUTAGE_CODE);
+    const exhausted = await complete(result.transactionId, THROTTLED_CODE);
     expect(exhausted.status).toBe(200);
     await expect(exhausted.json()).resolves.toMatchObject({ status: "failed", retryable: true });
     expect(await authorizationRow(result.transactionId)).toMatchObject({
@@ -264,12 +285,54 @@ describe("provider account authorization-code routes", () => {
     expect(stored?.payload.token).toBe("sk-ant-oat01-integration");
     expect(stored?.credentialVersion).toBe(2);
     expect(await accountCount()).toBe(1);
-    // A slot created without an identity (pasted token) stays identity-less.
+    // A slot created without an identity (pasted token) adopts the one the
+    // browser flow names, so it now converges and verifies like any other.
     await expect(
       env.DB.prepare("SELECT external_account_id FROM model_provider_accounts WHERE id = ?")
         .bind(ACCOUNT_ID)
         .first()
-    ).resolves.toEqual({ external_account_id: null });
+    ).resolves.toEqual({ external_account_id: "integration-anthropic-account" });
+  });
+
+  it("refuses a browser reconnect whose Claude account already has another slot", async () => {
+    await ensureAuthenticatedUser();
+    await seedAccount();
+    const created = await start({ operation: "create", displayName: "Browser Claude" });
+    await complete(created.result.transactionId, GOOD_CODE);
+    expect(await accountCount()).toBe(2);
+
+    const { result } = await start({ operation: "reconnect", providerAccountId: ACCOUNT_ID });
+    const response = await complete(result.transactionId, GOOD_CODE);
+    await expect(response.json()).resolves.toMatchObject({ status: "failed" });
+    await expect(
+      env.DB.prepare("SELECT external_account_id, status FROM model_provider_accounts WHERE id = ?")
+        .bind(ACCOUNT_ID)
+        .first()
+    ).resolves.toEqual({ external_account_id: null, status: "reconnect_required" });
+    expect(
+      (await credentials().readCredentialState(ACCOUNT_ID, "anthropic"))?.credentialVersion
+    ).toBe(1);
+  });
+
+  it("refuses a pasted setup token on an account the browser flow named", async () => {
+    const { result } = await start();
+    const connected = await complete(result.transactionId, GOOD_CODE);
+    const { account } = await connected.json<{ account: { id: string } }>();
+
+    const response = await request(`/model-provider-accounts/${account.id}/reconnect`, "POST", {
+      provider: "anthropic",
+      setupToken: "sk-ant-oat01-pasted-elsewhere",
+    });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringMatching(/connected through the browser/),
+    });
+    const stored = await credentials().readCredentialState<AnthropicProviderCredential>(
+      account.id,
+      "anthropic"
+    );
+    expect(stored?.payload.token).toBe("sk-ant-oat01-integration");
+    expect(stored?.credentialVersion).toBe(1);
   });
 
   it("refuses reconnect targets that belong to another provider or are archived", async () => {
@@ -359,23 +422,34 @@ describe("provider account authorization-code routes", () => {
     );
   });
 
-  it("keeps device-authorization rows on the device kind", async () => {
-    const response = await request(
-      "/model-provider-accounts/openai/device-authorizations",
-      "POST",
-      {
-        operation: "create",
-        displayName: "Primary OpenAI",
-      }
-    );
-    const { transactionId } = await response.json<{ transactionId: string }>();
-    expect(await authorizationRow(transactionId)).toMatchObject({
+  it("keeps each completion kind to its own routes under the same provider", async () => {
+    const device = await request("/model-provider-accounts/openai/device-authorizations", "POST", {
+      operation: "create",
+      displayName: "Primary OpenAI",
+    });
+    const { transactionId: deviceId } = await device.json<{ transactionId: string }>();
+    expect(await authorizationRow(deviceId)).toMatchObject({
       state: "pending",
       authorization_kind: "device",
     });
-    // A device row cannot be completed through the paste-back route.
-    const status = await request(`${BASE}/${transactionId}`, "GET");
-    expect(status.status).toBe(404);
+    const codeRoutes = `/model-provider-accounts/openai/authorization-codes/${deviceId}`;
+    expect((await request(codeRoutes, "GET")).status).toBe(404);
+    expect((await request(`${codeRoutes}/complete`, "POST", { code: GOOD_CODE })).status).toBe(404);
+    expect((await request(codeRoutes, "DELETE")).status).toBe(404);
+    expect(await authorizationRow(deviceId)).toMatchObject({
+      state: "pending",
+      processing_owner: null,
+    });
+
+    const { result } = await start();
+    const deviceRoutes = `/model-provider-accounts/anthropic/device-authorizations/${result.transactionId}`;
+    expect((await request(deviceRoutes, "GET")).status).toBe(404);
+    expect((await request(deviceRoutes, "DELETE")).status).toBe(404);
+    expect(await authorizationRow(result.transactionId)).toMatchObject({
+      state: "pending",
+      authorization_kind: "authorization_code",
+      processing_owner: null,
+    });
   });
 
   it("rejects an unauthenticated user's transaction as missing", async () => {

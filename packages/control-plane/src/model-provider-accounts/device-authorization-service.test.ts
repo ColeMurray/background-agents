@@ -18,6 +18,7 @@ import type {
   TerminalProviderAuthorization,
 } from "../db/provider-account-authorizations";
 import { ProviderDeviceAuthorizationService } from "./device-authorization-service";
+import { PROVIDER_AUTHORIZATION_PROCESSING_CLAIM_TIMEOUT_MS } from "./authorization-transaction";
 
 const TRANSACTION_ID = "01".repeat(32);
 const ENCRYPTION_KEY = btoa("x".repeat(32));
@@ -209,8 +210,9 @@ describe("ProviderDeviceAuthorizationService polling", () => {
   });
 
   it("fails a stale processing claim closed instead of stealing it", async () => {
-    const transaction = processing(pending(), "old-owner", 10_000);
-    const { subject, transactions } = service(40_000, transaction);
+    const staleAt = 1_000 + PROVIDER_AUTHORIZATION_PROCESSING_CLAIM_TIMEOUT_MS;
+    const transaction = processing(pending({ expiresAt: staleAt + 1 }), "old-owner", 1_000);
+    const { subject, transactions } = service(staleAt, transaction);
     await expect(subject.poll("user-1", "openai", TRANSACTION_ID)).resolves.toMatchObject({
       status: "failed",
       retryable: true,
@@ -219,9 +221,25 @@ describe("ProviderDeviceAuthorizationService polling", () => {
       TRANSACTION_ID,
       "user-1",
       "failed",
-      40_000,
+      staleAt,
       "old-owner"
     );
+  });
+
+  it("reports an authorization-code transaction of the same provider as missing", async () => {
+    const { subject, transactions } = service(
+      10_000,
+      pending({ authorizationKind: "authorization_code" })
+    );
+
+    await expect(subject.poll("user-1", "openai", TRANSACTION_ID)).rejects.toMatchObject({
+      status: 404,
+    });
+    await expect(subject.cancel("user-1", "openai", TRANSACTION_ID)).rejects.toMatchObject({
+      status: 404,
+    });
+    expect(transactions.claim).not.toHaveBeenCalled();
+    expect(transactions.finish).not.toHaveBeenCalled();
   });
 
   it("does not reveal whether another provider owns a transaction ID", async () => {

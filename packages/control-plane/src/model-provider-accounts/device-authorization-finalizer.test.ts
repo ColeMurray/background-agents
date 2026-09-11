@@ -167,12 +167,13 @@ describe("ProviderDeviceAuthorizationFinalizer", () => {
       );
     });
 
-    it("keeps an identity-less target identity-less when the reconnect names an account", async () => {
+    it("adopts the identity a reconnect names onto an identity-less target", async () => {
       const { finalizer, accounts, writer } = subject("created");
       accounts.getLifecycleSnapshot.mockResolvedValue({
         account: { ...winner.account, provider: "anthropic", externalAccountId: null },
         lifecycleVersion: 4,
       });
+      accounts.findLifecycleSnapshotByExternalIdentity.mockReset().mockResolvedValue(null);
 
       await expect(
         finalizer.finalizeTrustedConnection(
@@ -188,9 +189,45 @@ describe("ProviderDeviceAuthorizationFinalizer", () => {
           100_000
         )
       ).resolves.toBe(true);
-      expect(writer.finalizeDeviceAuthorizationReconnect).toHaveBeenCalledWith(
-        expect.objectContaining({ accountId: winner.account.id, externalAccountId: null })
+      expect(accounts.findLifecycleSnapshotByExternalIdentity).toHaveBeenCalledWith(
+        "anthropic",
+        "claude-account-uuid"
       );
+      expect(writer.finalizeDeviceAuthorizationReconnect).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountId: winner.account.id,
+          expectedExternalAccountId: null,
+          externalAccountId: "claude-account-uuid",
+        })
+      );
+    });
+
+    it("refuses to adopt an identity that already has a slot", async () => {
+      const { finalizer, accounts, writer } = subject("created");
+      accounts.getLifecycleSnapshot.mockResolvedValue({
+        account: { ...winner.account, provider: "anthropic", externalAccountId: null },
+        lifecycleVersion: 4,
+      });
+      accounts.findLifecycleSnapshotByExternalIdentity.mockReset().mockResolvedValue({
+        account: { ...winner.account, id: "05".repeat(16), provider: "anthropic" },
+        lifecycleVersion: 0,
+      });
+
+      await expect(
+        finalizer.finalizeTrustedConnection(
+          {
+            ...anthropicCreate,
+            operation: "reconnect",
+            providerAccountId: winner.account.id,
+            targetAccountStatus: "reconnect_required",
+            targetAccountLifecycleVersion: 4,
+          } as ProcessingProviderAuthorization,
+          { ...identityless, externalAccountId: "claude-account-uuid" },
+          new AnthropicModelProviderAccountAdapter(),
+          100_000
+        )
+      ).rejects.toThrow(/already connected to another account/);
+      expect(writer.finalizeDeviceAuthorizationReconnect).not.toHaveBeenCalled();
     });
 
     it("refuses a named reconnect onto a slot bound to another identity", async () => {

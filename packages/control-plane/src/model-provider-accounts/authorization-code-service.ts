@@ -1,21 +1,20 @@
 import type {
-  ModelProviderAccountStatus,
   ProviderAuthorizationCodeStatusResponse,
   StartProviderAuthorizationCodeRequest,
   StartProviderAuthorizationCodeResponse,
 } from "@open-inspect/shared/types/provider-accounts";
-import { AnthropicTokenExchangeError } from "../auth/anthropic";
-import type {
-  ErasedProviderAuthorizationCodeCapability,
-  ModelProviderAccountAdapterRegistry,
-  ProviderConnectionResult,
+import {
+  ProviderAuthorizationCodeExchangeError,
+  type ErasedProviderAuthorizationCodeCapability,
+  type ModelProviderAccountAdapterRegistry,
+  type ProviderAuthorizationCodeExchangeClassification,
+  type ProviderConnectionResult,
 } from "../auth/model-provider-account-adapters";
 import {
   decryptProviderAuthorizationPayload,
   encryptProviderAuthorizationPayload,
 } from "../auth/provider-account-crypto";
 import type {
-  ConnectedProviderAuthorization,
   ProcessingProviderAuthorization,
   ProviderAccountAuthorizationStore,
   ProviderAuthorization,
@@ -27,19 +26,21 @@ import type { Logger } from "../logger";
 import type { ModelProviderId } from "./provider-auth-contracts";
 import type { ProviderDeviceAuthorizationFinalizer } from "./device-authorization-finalizer";
 import {
-  PROVIDER_AUTHORIZATION_PROCESSING_CLAIM_TIMEOUT_MS,
-  PROVIDER_AUTHORIZATION_TRANSACTION_LIFETIME_MS,
   ProviderAuthorizationError,
+  cancelAuthorization,
+  connectedAuthorizationStatus,
+  isClaimStale,
   isTerminalAuthorization,
-  ownedAuthorization,
+  reserveAuthorization,
   resolveDurableAuthorization,
   terminalAuthorizationStatus,
 } from "./authorization-transaction";
 
+const KIND = "authorization_code";
 /**
- * Exchanges that fail without the provider answering (network, 5xx) return
- * the transaction to pending so the user can paste again; after this many
- * such attempts the transaction fails closed.
+ * A provider that refuses to look at the code (throttling) leaves it usable:
+ * the transaction returns to pending so the user can paste again. After this
+ * many such attempts the transaction fails closed.
  */
 const MAX_EXCHANGE_ATTEMPTS = 3;
 /**
@@ -47,6 +48,8 @@ const MAX_EXCHANGE_ATTEMPTS = 3;
  * poll interval; the schema still requires a positive interval on live rows.
  */
 const EXCHANGE_INTERVAL_MS = 1000;
+const AMBIGUOUS_EXCHANGE_MESSAGE =
+  "The provider did not confirm the exchange, so the code may already have been used. Start a fresh authorization.";
 
 /** What an authorization-code row keeps encrypted between start and complete. */
 interface PersistedAuthorizationCodeState {
@@ -54,26 +57,10 @@ interface PersistedAuthorizationCodeState {
   exchangeAttempts: number;
 }
 
-type ExchangeFailureClass = "rejected" | "retry_safe" | "unknown";
-
-/**
- * A rejection is the provider's verdict on this code (wrong state, used or
- * expired code, wrong scope): terminal, the user starts over. Everything
- * short of a verdict is retry-safe: the same pasted code can be exchanged
- * again.
- */
-function classifyExchangeFailure(cause: unknown): ExchangeFailureClass {
-  if (!(cause instanceof AnthropicTokenExchangeError)) return "unknown";
-  switch (cause.reason) {
-    case "invalid_grant":
-    case "invalid_request":
-    case "scope_mismatch":
-    case "malformed_response":
-      return "rejected";
-    case "network":
-    case "server_error":
-      return "retry_safe";
-  }
+function classifyExchangeFailure(
+  cause: unknown
+): ProviderAuthorizationCodeExchangeClassification | "unknown" {
+  return cause instanceof ProviderAuthorizationCodeExchangeError ? cause.classification : "unknown";
 }
 
 export type ProviderAuthorizationCodeTransactionStore = Pick<
@@ -113,53 +100,15 @@ export class ProviderAuthorizationCodeService {
     input: StartProviderAuthorizationCodeRequest
   ): Promise<StartProviderAuthorizationCodeResponse> {
     const capability = this.capability(provider);
-    let targetAccountStatus: ModelProviderAccountStatus | null = null;
-    let targetAccountLifecycleVersion: number | null = null;
-    if (input.operation === "reconnect") {
-      const snapshot = await this.accounts.getLifecycleSnapshot(input.providerAccountId);
-      if (!snapshot) throw new ProviderAuthorizationError("Provider account not found", 404);
-      const { account, lifecycleVersion } = snapshot;
-      if (account.provider !== provider) {
-        throw new ProviderAuthorizationError("Provider account does not match provider", 400);
-      }
-      if (account.archivedAt !== null) {
-        throw new ProviderAuthorizationError("Provider account is archived", 409);
-      }
-      targetAccountStatus = account.status;
-      targetAccountLifecycleVersion = lifecycleVersion;
-    }
-
-    const now = this.dependencies.now();
-    const id = this.dependencies.generateId(32);
-    const attemptId = this.dependencies.generateId(32);
-    if (!(await this.transactions.recordAttempt(attemptId, userId, now))) {
-      throw new ProviderAuthorizationError(
-        "Too many authorization attempts; try again shortly",
-        429,
-        true
-      );
-    }
-    const expiresAt = now + PROVIDER_AUTHORIZATION_TRANSACTION_LIFETIME_MS;
-    const reserved = await this.transactions.reserve({
-      id,
+    const { id, expiresAt } = await reserveAuthorization(
+      this.transactions,
+      this.accounts,
+      this.dependencies,
       userId,
       provider,
-      authorizationKind: "authorization_code",
-      operation: input.operation,
-      providerAccountId: input.operation === "reconnect" ? input.providerAccountId : null,
-      targetAccountStatus,
-      targetAccountLifecycleVersion,
-      displayName: input.operation === "create" ? input.displayName : null,
-      expiresAt,
-      now,
-    });
-    if (!reserved) {
-      throw new ProviderAuthorizationError(
-        "Too many live authorization attempts; finish or cancel one first",
-        429,
-        true
-      );
-    }
+      KIND,
+      input
+    );
 
     try {
       const started = await capability.start();
@@ -211,7 +160,7 @@ export class ProviderAuthorizationCodeService {
   ): Promise<ProviderAuthorizationCodeStatusResponse> {
     const now = this.dependencies.now();
     const row = await this.resolveDurableRow(userId, provider, id, now);
-    if (row.state === "processing" && this.claimIsStale(row, now)) {
+    if (row.state === "processing" && isClaimStale(row, now)) {
       return this.finishAndResolve(userId, provider, id, "failed", now, row.processingOwner);
     }
     return this.respond(row);
@@ -232,7 +181,7 @@ export class ProviderAuthorizationCodeService {
     if (current.state === "connected" || isTerminalAuthorization(current)) {
       return this.respond(current);
     }
-    if (current.state === "processing" && this.claimIsStale(current, now)) {
+    if (current.state === "processing" && isClaimStale(current, now)) {
       return this.finishAndResolve(userId, provider, id, "failed", now, current.processingOwner);
     }
     if (current.state !== "pending") throw this.completionInProgress();
@@ -285,11 +234,15 @@ export class ProviderAuthorizationCodeService {
     }
   }
 
-  async cancel(userId: string, provider: ModelProviderId, id: string): Promise<void> {
-    const row = await ownedAuthorization(this.transactions, userId, provider, id);
-    if (!isTerminalAuthorization(row) && row.state !== "connected") {
-      await this.finishAndResolve(userId, provider, id, "cancelled", this.dependencies.now());
-    }
+  cancel(userId: string, provider: ModelProviderId, id: string): Promise<void> {
+    return cancelAuthorization(
+      this.transactions,
+      userId,
+      provider,
+      KIND,
+      id,
+      this.dependencies.now()
+    );
   }
 
   private capability(provider: ModelProviderId): ErasedProviderAuthorizationCodeCapability {
@@ -303,6 +256,12 @@ export class ProviderAuthorizationCodeService {
     }
   }
 
+  /**
+   * A rejection is the provider's verdict on this code and ends the
+   * transaction as denied. An ambiguous failure may have consumed the
+   * one-use code, so the transaction fails and the user starts over. Only a
+   * failure that never reached the code returns the row to pending.
+   */
   private async exchangeFailed(
     userId: string,
     provider: ModelProviderId,
@@ -318,6 +277,19 @@ export class ProviderAuthorizationCodeService {
       const settled = await this.resolveDurableRow(userId, provider, row.id, now);
       if (settled.state === "denied") {
         return terminalAuthorizationStatus("denied", (cause as Error).message);
+      }
+      return this.respond(settled);
+    }
+    if (classification === "ambiguous") {
+      this.logger.error("provider_authorization_code.exchange_ambiguous", {
+        transaction_id: row.id,
+        provider,
+        error: cause instanceof Error ? cause : String(cause),
+      });
+      await this.transactions.finish(row.id, userId, "failed", now, row.processingOwner);
+      const settled = await this.resolveDurableRow(userId, provider, row.id, now);
+      if (settled.state === "failed") {
+        return terminalAuthorizationStatus("failed", AMBIGUOUS_EXCHANGE_MESSAGE);
       }
       return this.respond(settled);
     }
@@ -345,8 +317,8 @@ export class ProviderAuthorizationCodeService {
     );
     if (!returned) return this.resolveDurableResponse(userId, provider, row.id, now);
     throw new ProviderAuthorizationError(
-      "The provider could not be reached to exchange the code; paste it again",
-      502,
+      "The provider asked us to slow down before exchanging the code; paste it again in a moment",
+      503,
       true
     );
   }
@@ -378,10 +350,6 @@ export class ProviderAuthorizationCodeService {
       409,
       true
     );
-  }
-
-  private claimIsStale(row: ProcessingProviderAuthorization, now: number): boolean {
-    return row.processingStartedAt + PROVIDER_AUTHORIZATION_PROCESSING_CLAIM_TIMEOUT_MS <= now;
   }
 
   private encryptState(
@@ -424,28 +392,15 @@ export class ProviderAuthorizationCodeService {
     id: string,
     now: number
   ): Promise<ProviderAuthorization> {
-    return resolveDurableAuthorization(this.transactions, userId, provider, id, now);
+    return resolveDurableAuthorization(this.transactions, userId, provider, KIND, id, now);
   }
 
   private respond(row: ProviderAuthorization): Promise<ProviderAuthorizationCodeStatusResponse> {
-    if (row.state === "connected") return this.connected(row);
+    if (row.state === "connected") return connectedAuthorizationStatus(this.accounts, row);
     if (isTerminalAuthorization(row)) {
       return Promise.resolve(terminalAuthorizationStatus(row.state));
     }
     return Promise.resolve(this.pending(row));
-  }
-
-  private async connected(
-    row: ConnectedProviderAuthorization
-  ): Promise<ProviderAuthorizationCodeStatusResponse> {
-    const account = await this.accounts.getById(row.resultProviderAccountId);
-    if (!account) throw new ProviderAuthorizationError("Connected account not found", 409);
-    return {
-      status: "connected",
-      account,
-      reconnectedExisting: row.reconnectedExisting,
-      completedAt: row.completedAt,
-    };
   }
 
   private pending(row: ProviderAuthorizationLive): ProviderAuthorizationCodeStatusResponse {

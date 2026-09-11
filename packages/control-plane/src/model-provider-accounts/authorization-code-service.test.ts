@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { AnthropicTokenExchangeError } from "../auth/anthropic";
 import {
   ModelProviderAccountAdapterRegistry,
+  ProviderAuthorizationCodeExchangeError,
   type ProviderAuthorizationCodeCapability,
 } from "../auth/model-provider-account-adapters";
 import {
@@ -23,6 +23,7 @@ import type {
   TerminalProviderAuthorization,
 } from "../db/provider-account-authorizations";
 import { ProviderAuthorizationCodeService } from "./authorization-code-service";
+import { PROVIDER_AUTHORIZATION_PROCESSING_CLAIM_TIMEOUT_MS } from "./authorization-transaction";
 
 const TRANSACTION_ID = "01".repeat(32);
 const USER_ID = "user-1";
@@ -326,9 +327,15 @@ describe("ProviderAuthorizationCodeService status", () => {
   });
 
   it("fails a stale processing claim closed", async () => {
+    const staleAt = 1_000 + PROVIDER_AUTHORIZATION_PROCESSING_CLAIM_TIMEOUT_MS;
     const { subject, transactions } = service(
-      50_000,
-      { ...pending(), state: "processing", processingOwner: "dead", processingStartedAt: 10_000 },
+      staleAt,
+      {
+        ...pending({ expiresAt: staleAt + 1 }),
+        state: "processing",
+        processingOwner: "dead",
+        processingStartedAt: 1_000,
+      },
       registry()
     );
 
@@ -339,9 +346,29 @@ describe("ProviderAuthorizationCodeService status", () => {
       TRANSACTION_ID,
       USER_ID,
       "failed",
-      50_000,
+      staleAt,
       "dead"
     );
+  });
+
+  it("reports a device-kind transaction of the same provider as missing", async () => {
+    const { subject, transactions } = service(
+      10_000,
+      pending({ authorizationKind: "device" }),
+      registry()
+    );
+
+    await expect(subject.status(USER_ID, "anthropic", TRANSACTION_ID)).rejects.toMatchObject({
+      status: 404,
+    });
+    await expect(
+      subject.complete(USER_ID, "anthropic", TRANSACTION_ID, "code")
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(subject.cancel(USER_ID, "anthropic", TRANSACTION_ID)).rejects.toMatchObject({
+      status: 404,
+    });
+    expect(transactions.claim).not.toHaveBeenCalled();
+    expect(transactions.finish).not.toHaveBeenCalled();
   });
 
   it("does not reveal whether another provider owns a transaction ID", async () => {
@@ -391,9 +418,9 @@ describe("ProviderAuthorizationCodeService complete", () => {
 
   it("denies a code the provider rejects and never exchanges it again", async () => {
     const authorizationCode = capability(async () => {
-      throw new AnthropicTokenExchangeError(
+      throw new ProviderAuthorizationCodeExchangeError(
         "The pasted code belongs to a different authorization attempt",
-        "invalid_request"
+        "rejected"
       );
     });
     const { subject, transactions, finalizer } = service(
@@ -424,23 +451,43 @@ describe("ProviderAuthorizationCodeService complete", () => {
     expect(authorizationCode.complete).toHaveBeenCalledOnce();
   });
 
-  it.each(["invalid_grant", "scope_mismatch", "malformed_response"] as const)(
-    "treats a %s exchange verdict as denial",
-    async (reason) => {
-      const authorizationCode = capability(async () => {
-        throw new AnthropicTokenExchangeError("rejected", reason);
-      });
-      const { subject } = service(10_000, await pendingWithState(), registry(authorizationCode));
-
-      await expect(
-        subject.complete(USER_ID, "anthropic", TRANSACTION_ID, "code")
-      ).resolves.toMatchObject({ status: "denied" });
-    }
-  );
-
-  it("returns the transaction to pending after a network failure until attempts run out", async () => {
+  it("fails an ambiguous exchange closed so the possibly consumed code is never reused", async () => {
     const authorizationCode = capability(async () => {
-      throw new AnthropicTokenExchangeError("unreachable", "network");
+      throw new ProviderAuthorizationCodeExchangeError("unreachable", "ambiguous");
+    });
+    const { subject, transactions, logger } = service(
+      10_000,
+      await pendingWithState(),
+      registry(authorizationCode)
+    );
+
+    await expect(subject.complete(USER_ID, "anthropic", TRANSACTION_ID, "code")).resolves.toEqual({
+      status: "failed",
+      error: expect.stringMatching(/may already have been used.*fresh authorization/),
+      retryable: true,
+    });
+    expect(transactions.returnPending).not.toHaveBeenCalled();
+    expect(transactions.finish).toHaveBeenCalledWith(
+      TRANSACTION_ID,
+      USER_ID,
+      "failed",
+      10_000,
+      "ab".repeat(32)
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      "provider_authorization_code.exchange_ambiguous",
+      expect.objectContaining({ transaction_id: TRANSACTION_ID })
+    );
+
+    await expect(
+      subject.complete(USER_ID, "anthropic", TRANSACTION_ID, "code")
+    ).resolves.toMatchObject({ status: "failed" });
+    expect(authorizationCode.complete).toHaveBeenCalledOnce();
+  });
+
+  it("returns the transaction to pending after a throttled exchange until attempts run out", async () => {
+    const authorizationCode = capability(async () => {
+      throw new ProviderAuthorizationCodeExchangeError("slow down", "retry_safe");
     });
     const { subject, transactions, current } = service(
       10_000,
@@ -451,7 +498,7 @@ describe("ProviderAuthorizationCodeService complete", () => {
     for (const attempt of [1, 2]) {
       await expect(
         subject.complete(USER_ID, "anthropic", TRANSACTION_ID, "code")
-      ).rejects.toMatchObject({ status: 502, retryable: true });
+      ).rejects.toMatchObject({ status: 503, retryable: true });
       const row = current();
       expect(row.state).toBe("pending");
       if (row.state !== "pending") throw new Error("unreachable");
@@ -478,11 +525,11 @@ describe("ProviderAuthorizationCodeService complete", () => {
     );
   });
 
-  it("treats a provider server error as retry-safe", async () => {
+  it("fails closed on exchange failures that carry no classification", async () => {
     const authorizationCode = capability(async () => {
-      throw new AnthropicTokenExchangeError("HTTP 503", "server_error");
+      throw new TypeError("adapter bug");
     });
-    const { subject, current } = service(
+    const { subject, current, logger } = service(
       10_000,
       await pendingWithState(),
       registry(authorizationCode)
@@ -490,8 +537,12 @@ describe("ProviderAuthorizationCodeService complete", () => {
 
     await expect(
       subject.complete(USER_ID, "anthropic", TRANSACTION_ID, "code")
-    ).rejects.toMatchObject({ status: 502, retryable: true });
-    expect(current().state).toBe("pending");
+    ).resolves.toMatchObject({ status: "failed" });
+    expect(current().state).toBe("failed");
+    expect(logger.error).toHaveBeenCalledWith(
+      "provider_authorization_code.complete_failed",
+      expect.anything()
+    );
   });
 
   it("fails closed and logs when the persisted state cannot be used", async () => {
@@ -585,8 +636,7 @@ describe("ProviderAuthorizationCodeService cancel", () => {
       TRANSACTION_ID,
       USER_ID,
       "cancelled",
-      10_000,
-      undefined
+      10_000
     );
 
     const settled = service(10_000, connected(5_000), registry());

@@ -72,6 +72,12 @@ export interface FinalizeDeviceAuthorizationCreateInput extends DeviceAuthorizat
 
 export interface FinalizeDeviceAuthorizationReconnectInput extends DeviceAuthorizationCredentialInput {
   accountId: string;
+  /**
+   * The identity the target holds now; the write is fenced on it. `externalAccountId`
+   * is what the target holds afterwards: the same value, or an identity a
+   * previously identity-less slot adopts from this authorization.
+   */
+  expectedExternalAccountId: string | null;
 }
 
 export type DeviceAuthorizationCreateOutcome =
@@ -265,7 +271,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
       !snapshot ||
       snapshot.account.archivedAt !== null ||
       snapshot.account.provider !== input.authorization.provider ||
-      snapshot.account.externalAccountId !== input.externalAccountId ||
+      snapshot.account.externalAccountId !== input.expectedExternalAccountId ||
       (input.authorization.operation === "create" && snapshot.account.status === "disabled") ||
       (input.authorization.operation === "reconnect" &&
         (input.authorization.providerAccountId !== input.accountId ||
@@ -289,8 +295,8 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
       this.db
         .prepare(
           `UPDATE model_provider_accounts
-           SET status = 'active', updated_by = ?, last_verified_at = ?, updated_at = ?,
-               lifecycle_version = lifecycle_version + 1
+           SET status = 'active', external_account_id = ?, updated_by = ?, last_verified_at = ?,
+               updated_at = ?, lifecycle_version = lifecycle_version + 1
            WHERE id = ? AND provider = ? AND external_account_id IS ?
              AND archived_at IS NULL AND status = ? AND lifecycle_version = ?
              AND EXISTS (${authorizationGuard})
@@ -298,12 +304,13 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
                WHERE provider_account_id = ? AND credential_version = ?)`
         )
         .bind(
+          input.externalAccountId,
           input.authorization.userId,
           input.now,
           input.now,
           input.accountId,
           input.authorization.provider,
-          input.externalAccountId,
+          input.expectedExternalAccountId,
           snapshot.account.status,
           snapshot.lifecycleVersion,
           ...guardValues,

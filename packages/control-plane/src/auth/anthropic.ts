@@ -24,7 +24,7 @@ export const ANTHROPIC_OAUTH_REDIRECT_URI = "https://platform.claude.com/oauth/c
 export const ANTHROPIC_SETUP_TOKEN_SCOPE = "user:inference";
 /** What the CLI and Anthropic's documentation state for a setup token's lifetime. */
 export const ANTHROPIC_SETUP_TOKEN_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
-const EXCHANGE_TIMEOUT_MS = 30_000;
+export const ANTHROPIC_EXCHANGE_TIMEOUT_MS = 30_000;
 /**
  * Cloudflare in front of the token endpoint bans generic client
  * signatures (error 1010), and a Worker's outbound fetch carries no
@@ -55,6 +55,7 @@ export type AnthropicExchangeFailureReason =
   | "invalid_request"
   | "scope_mismatch"
   | "malformed_response"
+  | "rate_limited"
   | "network"
   | "server_error";
 
@@ -182,7 +183,7 @@ export async function exchangeAnthropicAuthorizationCode(
         // setup-token asks for its one-year lifetime explicitly.
         expires_in: Math.floor(ANTHROPIC_SETUP_TOKEN_LIFETIME_MS / 1000),
       }),
-      signal: AbortSignal.timeout(EXCHANGE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(ANTHROPIC_EXCHANGE_TIMEOUT_MS),
     });
   } catch (cause) {
     throw new AnthropicTokenExchangeError("Anthropic token exchange failed", "network", {
@@ -204,6 +205,9 @@ export async function exchangeAnthropicAuthorizationCode(
         : `HTTP ${response.status}`;
     if (response.status >= 500) {
       throw new AnthropicTokenExchangeError(description, "server_error");
+    }
+    if (response.status === 429) {
+      throw new AnthropicTokenExchangeError(description, "rate_limited");
     }
     throw new AnthropicTokenExchangeError(
       description,

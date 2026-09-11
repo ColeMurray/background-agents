@@ -242,6 +242,13 @@ describe("exchangeAnthropicAuthorizationCode", () => {
     expect(error).toMatchObject({ reason: "invalid_request", message: "HTTP 401" });
   });
 
+  it("classifies a 429 as rate limited", async () => {
+    const error = await failure(
+      tokenResponse({ error: "rate_limit_error", error_description: "Slow down" }, 429)
+    );
+    expect(error).toMatchObject({ reason: "rate_limited", message: "Slow down" });
+  });
+
   it("classifies 5xx responses as server errors", async () => {
     const error = await failure(
       vi.fn<typeof fetch>().mockResolvedValue(new Response("upstream down", { status: 503 }))

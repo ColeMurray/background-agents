@@ -93,6 +93,12 @@ export default defineConfig({
               if (body.code === "integration-anthropic-outage") {
                 throw new Error("Anthropic is unreachable in this integration test");
               }
+              if (body.code === "integration-anthropic-throttled") {
+                return Response.json(
+                  { error: "rate_limit_error", error_description: "Slow down" },
+                  { status: 429 }
+                );
+              }
               if (
                 body.grant_type !== "authorization_code" ||
                 body.code !== "integration-anthropic-code" ||

@@ -30,6 +30,8 @@ export class ProviderDeviceAuthorizationFinalizer {
    * known identity reconnects it, and a reconnect must present the target's
    * identity. Identity-less connections (the adapter accepts a missing id)
    * name a fresh slot on create and write straight to the target on reconnect.
+   * A slot that has no identity yet adopts the first one a connection names,
+   * unless that identity already has a slot, so no identity ever holds two.
    */
   async finalizeTrustedConnection(
     transaction: ProcessingProviderAuthorization,
@@ -51,16 +53,17 @@ export class ProviderDeviceAuthorizationFinalizer {
           throw new Error("Provider account identity could not be verified");
         }
       } else if (account.externalAccountId === null) {
-        // A slot created without an identity (a pasted setup token) stays
-        // identity-less when a later reconnect names the account: identity is
-        // fixed at creation, never adopted.
-        return this.reconnect(
-          transaction,
-          snapshot,
-          { ...connection, externalAccountId: undefined },
-          adapter,
-          now
+        // The slot was created without an identity (a pasted setup token);
+        // this connection names one, and the slot adopts it. The unique
+        // identity index refuses the write if another slot took it meanwhile.
+        const holder = await this.accounts.findLifecycleSnapshotByExternalIdentity(
+          transaction.provider,
+          identity
         );
+        if (holder) {
+          throw new Error("Provider account identity is already connected to another account");
+        }
+        return this.reconnect(transaction, snapshot, connection, adapter, now, identity);
       } else if (account.externalAccountId !== identity) {
         throw new Error("Provider account identity did not match");
       }
@@ -128,13 +131,15 @@ export class ProviderDeviceAuthorizationFinalizer {
     snapshot: ModelProviderAccountLifecycleSnapshot,
     connection: ProviderConnectionResult<unknown>,
     adapter: ModelProviderAccountAdapter<unknown, unknown>,
-    now: number
+    now: number,
+    adoptedExternalAccountId: string | null = null
   ): Promise<boolean> {
     const { account } = snapshot;
     const outcome = await this.writer.finalizeDeviceAuthorizationReconnect({
       authorization: transaction,
       accountId: account.id,
-      externalAccountId: account.externalAccountId,
+      expectedExternalAccountId: account.externalAccountId,
+      externalAccountId: adoptedExternalAccountId ?? account.externalAccountId,
       credential: connection.credential,
       credentialSchemaVersion: adapter.credentialSchemaVersion,
       accessTokenExpiresAt: connection.accessTokenExpiresAt ?? null,
