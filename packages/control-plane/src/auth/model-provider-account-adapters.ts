@@ -48,6 +48,10 @@ export interface ProviderAuthorizationCodeCapability<TCredential, TProviderState
   readonly stateSchemaVersion: number;
   start(): Promise<ProviderAuthorizationCodeStart<TProviderState>>;
   parseState(payload: unknown, schemaVersion: number): TProviderState;
+  /**
+   * Exchange the pasted code. A failure the orchestration can act on is a
+   * `ProviderAuthorizationCodeExchangeError`; anything else fails closed.
+   */
   complete(
     providerState: TProviderState,
     pastedCode: string
@@ -133,6 +137,30 @@ export class ProviderRefreshError extends Error {
 
 export class ProviderCredentialError extends Error {}
 export class ProviderIdentityError extends Error {}
+
+/**
+ * How an authorization-code exchange failed, in terms every completion
+ * strategy can act on. `rejected` is the provider's verdict on this code and
+ * is terminal. `retry_safe` means the provider refused to look at the code
+ * (throttling), so the same code can be submitted again. `ambiguous` means
+ * the provider may have received and consumed the one-use code without the
+ * control plane learning the result; only a fresh authorization is safe.
+ */
+export type ProviderAuthorizationCodeExchangeClassification =
+  | "rejected"
+  | "retry_safe"
+  | "ambiguous";
+
+export class ProviderAuthorizationCodeExchangeError extends Error {
+  constructor(
+    message: string,
+    readonly classification: ProviderAuthorizationCodeExchangeClassification,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+    this.name = "ProviderAuthorizationCodeExchangeError";
+  }
+}
 
 type ErasedAdapter = ModelProviderAccountAdapter<unknown, unknown>;
 

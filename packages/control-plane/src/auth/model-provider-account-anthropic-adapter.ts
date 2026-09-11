@@ -8,16 +8,20 @@ import {
 import {
   ANTHROPIC_SETUP_TOKEN_LIFETIME_MS,
   ANTHROPIC_SETUP_TOKEN_SCOPE,
+  AnthropicTokenExchangeError,
   exchangeAnthropicAuthorizationCode,
   parsePastedAuthorizationCode,
   startAnthropicAuthorization,
+  type AnthropicExchangeFailureReason,
 } from "./anthropic";
 import {
+  ProviderAuthorizationCodeExchangeError,
   ProviderCredentialError,
   ProviderIdentityError,
   ProviderRefreshError,
   type ModelProviderAccountAdapter,
   type ProviderAuthorizationCodeCapability,
+  type ProviderAuthorizationCodeExchangeClassification,
   type ProviderConnectionResult,
   type ProviderRefreshResult,
 } from "./model-provider-account-adapters";
@@ -32,6 +36,10 @@ const credentialSchema = z.object({
   token: z.string().min(1),
   expiresAt: z.number().int().positive(),
   scopes: z.array(z.string()).min(1),
+  /** Anthropic's token id from a browser authorization; absent for a pasted token. */
+  tokenUuid: z.string().min(1).optional(),
+  /** Organization name from a browser authorization, for the settings page. */
+  organizationName: z.string().min(1).optional(),
 });
 const connectInputSchema = z.union([
   connectAnthropicModelProviderAccountRequestSchema,
@@ -50,6 +58,24 @@ export type AnthropicAuthorizationState = z.infer<typeof authorizationStateSchem
 
 /** The runtime treats a token as unusable this long before its recorded expiry. */
 const EXPIRY_GUARD_MS = 60 * 60 * 1000;
+
+/**
+ * Anthropic's verdicts are terminal. A 429 never reached the code, so it can
+ * be submitted again. A request that timed out, failed in transit, or drew a
+ * 5xx may have consumed the one-use code before the answer was lost.
+ */
+const EXCHANGE_CLASSIFICATION: Record<
+  AnthropicExchangeFailureReason,
+  ProviderAuthorizationCodeExchangeClassification
+> = {
+  invalid_grant: "rejected",
+  invalid_request: "rejected",
+  scope_mismatch: "rejected",
+  malformed_response: "rejected",
+  rate_limited: "retry_safe",
+  network: "ambiguous",
+  server_error: "ambiguous",
+};
 
 export class AnthropicProviderAuthorizationCode implements ProviderAuthorizationCodeCapability<
   AnthropicProviderCredential,
@@ -86,19 +112,37 @@ export class AnthropicProviderAuthorizationCode implements ProviderAuthorization
     pastedCode: string
   ): Promise<ProviderConnectionResult<AnthropicProviderCredential>> {
     const { code, state } = parsePastedAuthorizationCode(pastedCode);
-    const exchanged = await this.exchange({
-      code,
-      pastedState: state,
-      expectedState: providerState.state,
-      codeVerifier: providerState.codeVerifier,
-    });
+    let exchanged;
+    try {
+      exchanged = await this.exchange({
+        code,
+        pastedState: state,
+        expectedState: providerState.state,
+        codeVerifier: providerState.codeVerifier,
+      });
+    } catch (cause) {
+      if (cause instanceof AnthropicTokenExchangeError) {
+        throw new ProviderAuthorizationCodeExchangeError(
+          cause.message,
+          EXCHANGE_CLASSIFICATION[cause.reason],
+          { cause }
+        );
+      }
+      throw cause;
+    }
     return {
       credential: {
         kind: "setup_token",
         token: exchanged.accessToken,
         expiresAt: exchanged.expiresAt,
         scopes: exchanged.scope.split(/\s+/).filter(Boolean),
+        tokenUuid: exchanged.tokenUuid,
+        organizationName: exchanged.organization?.name,
       },
+      // The browser flow names the granting Claude account, so two slots for
+      // the same subscription collide and a reconnect from another account is
+      // refused; a pasted setup token stays identity-less.
+      externalAccountId: exchanged.account?.uuid,
       accessTokenExpiresAt: exchanged.expiresAt,
     };
   }
@@ -187,12 +231,21 @@ export class AnthropicModelProviderAccountAdapter implements ModelProviderAccoun
     return { accessToken: credential.token, accessTokenExpiresAt: credential.expiresAt };
   }
 
+  /**
+   * A pasted setup token names no account, so it can only reconnect a slot
+   * that never had one. A slot the browser flow bound to a Claude account is
+   * reconnected through the browser flow, where the exchange names the
+   * granting account and the finalizer checks it.
+   */
   validateReconnectInputIdentity(
     _input: AnthropicProviderConnectInput,
-    _expectedExternalAccountId: string | null
+    expectedExternalAccountId: string | null
   ): void {
-    // Identity-less slots: the inference scope carries no account id, so a
-    // reconnect can never be checked against a previous identity.
+    if (expectedExternalAccountId !== null) {
+      throw new ProviderIdentityError(
+        "This account was connected through the browser; reconnect it the same way so the granting Claude account can be verified"
+      );
+    }
   }
 
   runtimeMetadata(_credential: AnthropicProviderCredential, _externalAccountId: string | null) {
