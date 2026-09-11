@@ -452,7 +452,7 @@ describe("provider account authorization-code routes", () => {
     });
   });
 
-  it("rejects an unauthenticated user's transaction as missing", async () => {
+  it("reports another user's transaction as missing", async () => {
     const { result } = await start();
     const now = Date.now();
     await env.DB.prepare(
