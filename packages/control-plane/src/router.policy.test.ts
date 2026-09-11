@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { enforceRoutePrincipal } from "./routing/route-admission";
+import { enforceRoutePrincipal, parseVerifiedSandboxId } from "./routing/route-admission";
 import {
   handleRequest,
   matchRoute,
@@ -426,6 +426,19 @@ describe("route policy table", () => {
       "gitlab",
     ]);
   });
+});
+
+describe("parseVerifiedSandboxId", () => {
+  it("extracts a non-empty sandbox id from the verification response", () => {
+    expect(parseVerifiedSandboxId({ sandboxId: "sandbox-1", ignored: true })).toBe("sandbox-1");
+  });
+
+  it.each([null, "sandbox-1", ["sandbox-1"], { sandboxId: "" }, { sandboxId: 123 }, {}])(
+    "treats %j as an absent sandbox id",
+    (value) => {
+      expect(parseVerifiedSandboxId(value)).toBeNull();
+    }
+  );
 });
 
 describe("route policy dispatch ordering", () => {

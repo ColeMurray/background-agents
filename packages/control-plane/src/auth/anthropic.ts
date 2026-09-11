@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /**
  * Anthropic setup-token OAuth: the authorization-code + PKCE exchange that
  * `claude setup-token` performs, done by the control plane on the
@@ -114,17 +116,19 @@ export function parsePastedAuthorizationCode(pasted: string): { code: string; st
   return { code: trimmed.slice(0, hash), state: trimmed.slice(hash + 1) };
 }
 
-interface TokenResponse {
-  access_token?: unknown;
-  expires_in?: unknown;
-  expires_at?: unknown;
-  scope?: unknown;
-  token_uuid?: unknown;
-  account?: unknown;
-  organization?: unknown;
-  error?: unknown;
-  error_description?: unknown;
-}
+export const anthropicTokenResponseSchema = z.object({
+  access_token: z.unknown().optional(),
+  expires_in: z.unknown().optional(),
+  expires_at: z.unknown().optional(),
+  scope: z.unknown().optional(),
+  token_uuid: z.unknown().optional(),
+  account: z.unknown().optional(),
+  organization: z.unknown().optional(),
+  error: z.unknown().optional(),
+  error_description: z.unknown().optional(),
+});
+
+type TokenResponse = z.infer<typeof anthropicTokenResponseSchema>;
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -193,7 +197,8 @@ export async function exchangeAnthropicAuthorizationCode(
 
   let body: TokenResponse | null = null;
   try {
-    body = (await response.json()) as TokenResponse;
+    const parsed = anthropicTokenResponseSchema.safeParse(await response.json());
+    body = parsed.success ? parsed.data : null;
   } catch {
     body = null;
   }
