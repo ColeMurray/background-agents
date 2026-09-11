@@ -329,7 +329,8 @@ export interface SlackAgentNotifyLookup {
  */
 export interface SandboxLifecycle {
   spawnSandbox(): Promise<void>;
-  isSnapshotting(): boolean;
+  /** Whether a snapshot in progress has stopped, or will stop, the source sandbox. */
+  isSnapshotStoppingSandbox(): boolean;
   updateLastActivity(timestamp: number): void;
   terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
   terminateFailedSandbox(reason: string): Promise<boolean>;
@@ -1174,7 +1175,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       createdAt: sandbox.created_at,
     };
     const runtimeVersion = sandbox.runtime_version;
-    let snapshotStoppedSandbox = false;
+    // Vercel stops the source as part of the snapshot request, whether or not
+    // the snapshot itself succeeds, so this is decided by the provider, not
+    // by the result.
+    const snapshotStopsSandbox = this.provider.capabilities.snapshotStopsSandbox === true;
 
     if (!isTerminalState) {
       this.storage.updateSandboxStatus("snapshotting");
@@ -1195,7 +1199,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       });
 
       if (result.success && result.imageId) {
-        snapshotStoppedSandbox = this.provider.capabilities.snapshotStopsSandbox === true;
         // Stamp the snapshot with the runtime that produced it: the image
         // carries that runtime's binaries, so this is what a later restore is
         // gated on, not whatever the session runs next. Recorded for the
@@ -1236,17 +1239,17 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     // Preserve provider snapshot semantics: Vercel stops the source, while
     // providers such as Modal leave it running. Change status only while the
-    // row is still this sandbox's
-    // and still says `snapshotting`: a cancel, a stale heartbeat, or an
+    // row is still this sandbox's and still says `snapshotting`: a cancel, a
+    // stale heartbeat, or an
     // unresponsive-sandbox termination during the provider call has already
     // retired the sandbox (status written, access cleared, socket detached),
     // and restoring `ready` over that would make the spawn decision wait for
     // a reconnect that cannot come; a replacement that is itself snapshotting
     // keeps its own status.
     if (!isTerminalState && reason !== "heartbeat_timeout") {
-      const nextStatus = snapshotStoppedSandbox ? "stopped" : previousStatus;
+      const nextStatus = snapshotStopsSandbox ? "stopped" : previousStatus;
       if (this.storage.transitionSandboxStatus(generation, "snapshotting", nextStatus)) {
-        if (snapshotStoppedSandbox) {
+        if (snapshotStopsSandbox) {
           this.clearSandboxAccessState();
           this.wsManager.detachSandboxWebSocket(1000, "Sandbox stopped after snapshot");
         }
@@ -1810,8 +1813,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     return this.isSpawningSandbox || this.isTerminatingSandbox;
   }
 
-  isSnapshotting(): boolean {
-    return this.storage.getSandbox()?.status === "snapshotting";
+  isSnapshotStoppingSandbox(): boolean {
+    return (
+      this.provider.capabilities.snapshotStopsSandbox === true &&
+      this.storage.getSandbox()?.status === "snapshotting"
+    );
   }
 
   isProviderStartupPending(): boolean {

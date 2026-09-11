@@ -413,9 +413,11 @@ export class SessionMessageQueue {
       }
       return;
     }
-    // Snapshot completion pumps the queue again. A provider may stop its source
-    // during snapshotting, so neither dispatch nor replace it in this window.
-    if (this.sandboxLifecycle.isSnapshotting()) {
+    // A provider that stops its source while snapshotting must neither be
+    // dispatched to nor replaced until the image is recorded; snapshot
+    // completion pumps the queue again. Providers that keep the source running
+    // dispatch through the snapshot as before.
+    if (this.sandboxLifecycle.isSnapshotStoppingSandbox()) {
       return;
     }
     const sandboxWs = this.wsManager.getSandboxSocket();

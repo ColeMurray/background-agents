@@ -141,5 +141,9 @@ export class SandboxExecutionEventHandler {
     );
     this.updateLastActivity(context.now);
     await this.scheduleInactivityCheck();
+    // The task above has already marked the sandbox `snapshotting` by now. The
+    // queue dispatches through the snapshot for providers that keep the source
+    // running and holds until the task's final pump for providers that stop it.
+    await this.processMessageQueue();
   }
 }

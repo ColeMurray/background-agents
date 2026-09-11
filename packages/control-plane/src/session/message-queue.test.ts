@@ -220,7 +220,7 @@ function buildQueue() {
   };
   const sandboxLifecycle = {
     spawnSandbox: vi.fn(async () => {}),
-    isSnapshotting: vi.fn(() => false),
+    isSnapshotStoppingSandbox: vi.fn(() => false),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
     terminateFailedSandbox: vi.fn(async () => true),
@@ -591,7 +591,7 @@ describe("SessionMessageQueue", () => {
       // Start snapshotting during the asynchronous auth lookup to exercise the
       // dispatch-time recheck as well as the already-snapshotting case.
       h.getProviderAuthenticationError.mockImplementation(async () => {
-        h.sandboxLifecycle.isSnapshotting.mockReturnValue(true);
+        h.sandboxLifecycle.isSnapshotStoppingSandbox.mockReturnValue(true);
         return null;
       });
 
@@ -602,7 +602,7 @@ describe("SessionMessageQueue", () => {
       expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
 
       h.getProviderAuthenticationError.mockResolvedValue(null);
-      h.sandboxLifecycle.isSnapshotting.mockReturnValue(false);
+      h.sandboxLifecycle.isSnapshotStoppingSandbox.mockReturnValue(false);
       h.wsManager.getSandboxSocket.mockReturnValue(null);
       await h.queue.processMessageQueue();
       expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledOnce();

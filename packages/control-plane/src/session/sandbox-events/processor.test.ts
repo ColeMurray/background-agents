@@ -181,7 +181,7 @@ function createProcessor() {
 
 describe("SessionSandboxEventProcessor", () => {
   it.each([true, false])(
-    "waits for the snapshot before dispatching after success=%s",
+    "pumps the queue before the snapshot and again after it settles (success=%s)",
     async (success) => {
       const h = createProcessor();
       h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
@@ -202,10 +202,12 @@ describe("SessionSandboxEventProcessor", () => {
       });
 
       expect(h.triggerSnapshot).toHaveBeenCalledOnce();
-      expect(h.processMessageQueue).not.toHaveBeenCalled();
+      // The queue itself decides whether to hold: providers that keep the
+      // source running dispatch now, stopping providers wait for the re-pump.
+      expect(h.processMessageQueue).toHaveBeenCalledOnce();
       finishSnapshot();
       await h.backgroundTasks.settle();
-      expect(h.processMessageQueue).toHaveBeenCalledOnce();
+      expect(h.processMessageQueue).toHaveBeenCalledTimes(2);
     }
   );
 
@@ -226,7 +228,7 @@ describe("SessionSandboxEventProcessor", () => {
     await h.backgroundTasks.settle();
 
     expect(h.triggerSnapshot).not.toHaveBeenCalled();
-    expect(h.processMessageQueue).toHaveBeenCalledOnce();
+    expect(h.processMessageQueue).toHaveBeenCalledTimes(2);
   });
 
   it("releases the next prompt without waiting for diff work", async () => {
@@ -241,7 +243,7 @@ describe("SessionSandboxEventProcessor", () => {
       timestamp: 2000,
     });
 
-    expect(h.processMessageQueue).toHaveBeenCalledOnce();
+    expect(h.processMessageQueue).toHaveBeenCalledTimes(2);
     expect(h.repository.recordMessageCompletion).toHaveBeenCalledOnce();
   });
 
@@ -261,7 +263,7 @@ describe("SessionSandboxEventProcessor", () => {
     await h.backgroundTasks.settle();
     // The failed snapshot is absorbed by the boundary, not thrown at the caller.
     expect(h.backgroundTasks.failures).toEqual([expect.any(Error)]);
-    expect(h.processMessageQueue).toHaveBeenCalledOnce();
+    expect(h.processMessageQueue).toHaveBeenCalledTimes(2);
   });
 
   it("updates heartbeat without broadcasting", async () => {
@@ -593,7 +595,7 @@ describe("SessionSandboxEventProcessor", () => {
     );
     expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
     expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(1);
-    expect(h.processMessageQueue).toHaveBeenCalledTimes(1);
+    expect(h.processMessageQueue).toHaveBeenCalledTimes(2);
     expect(h.backgroundTasks.submissions).not.toHaveLength(0);
   });
 
@@ -677,7 +679,7 @@ describe("SessionSandboxEventProcessor", () => {
     await processing;
 
     expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
-    expect(h.processMessageQueue).toHaveBeenCalledOnce();
+    expect(h.processMessageQueue).toHaveBeenCalledTimes(2);
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "ack", ackId: "ack-1" });
   });
 
@@ -962,7 +964,7 @@ describe("SessionSandboxEventProcessor", () => {
       expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
       expect(h.updateLastActivity).toHaveBeenCalledOnce();
       expect(h.scheduleInactivityCheck).toHaveBeenCalledOnce();
-      expect(h.processMessageQueue).toHaveBeenCalledOnce();
+      expect(h.processMessageQueue).toHaveBeenCalledTimes(2);
     });
 
     it("does not send ACK for non-critical events even with ackId", async () => {
