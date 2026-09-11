@@ -31,6 +31,7 @@ const routing = (
 ): InteractiveProviderRoutingIdentity => ({
   openai: { mode: "legacy_scoped_oauth" },
   xai,
+  anthropic: { mode: "legacy_scoped_oauth" },
 });
 
 describe("useWarmDraftSession", () => {

@@ -139,6 +139,7 @@ describe("useProviderAccounts", () => {
     expect(result.current.providers).toEqual([
       { provider: "openai", displayName: "OpenAI", subscriptionName: "ChatGPT" },
       { provider: "xai", displayName: "xAI", subscriptionName: "SuperGrok" },
+      { provider: "anthropic", displayName: "Anthropic", subscriptionName: "Claude" },
     ]);
     expect(browserApiFetch).toHaveBeenCalledTimes(2);
     expect(browserApiFetch).not.toHaveBeenCalledWith("/api/model-subscription-providers");

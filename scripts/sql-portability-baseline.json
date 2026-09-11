@@ -44,6 +44,12 @@
         ],
         "reason": "Merge audit payload, same constraint as authorization-store: before/after state is read inside the mutating batch. Postgres form is json_build_object."
       }
+    },
+    "terraform/d1/migrations/0076_anthropic_provider_accounts.sql": {
+      "create-trigger": {
+        "occurrences": ["CREATE TRIGGER"],
+        "reason": "sessions_seed_legacy_provider_auth (already in 0064, re-created with a third row) covers sessions the previous worker inserts between the migration and the new worker deploy, which the new worker rejects as incomplete without an anthropic row."
+      }
     }
   },
   "grandfatheredMigrations": [

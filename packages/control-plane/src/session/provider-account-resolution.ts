@@ -20,9 +20,23 @@ interface ProviderAccountResolutionStores {
   adapters: ProviderAccountAdapterLookup;
 }
 
-function legacy(provider: SubscriptionProviderId): SessionModelProviderAuthInput {
-  return { provider, authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" };
+/**
+ * What a provider resolves to when nothing was selected and no default exists.
+ * OpenAI and xAI keep the legacy scoped-OAuth path their plugins understand;
+ * Anthropic never had one, so it falls back to the API key (the platform key
+ * or a user secret), never to a placeholder.
+ */
+function noSelectionFallback(provider: SubscriptionProviderId): SessionModelProviderAuthInput {
+  if (LEGACY_SCOPED_OAUTH_PROVIDERS.has(provider)) {
+    return { provider, authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" };
+  }
+  return apiKey(provider, "api_key_fallback");
 }
+
+const LEGACY_SCOPED_OAUTH_PROVIDERS: ReadonlySet<SubscriptionProviderId> = new Set([
+  "openai",
+  "xai",
+]);
 
 export interface ProviderAccountResolutionInput {
   explicit?: ModelProviderSelections;
@@ -62,7 +76,7 @@ async function resolveProvider(
   }
 
   const providerDefault = await stores.defaults.get(provider);
-  if (!providerDefault) return legacy(provider);
+  if (!providerDefault) return noSelectionFallback(provider);
   if (!harnessSupportsProviderAuth(input.harness, provider, "provider_account")) {
     return apiKey(provider, "harness_fallback");
   }

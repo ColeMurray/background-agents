@@ -233,7 +233,10 @@ export class SandboxHandler {
     }
 
     log.info("Sandbox token verified successfully");
-    return Response.json({ valid: true }, { status: 200 });
+    return Response.json(
+      { valid: true, sandboxId: sandbox.modal_sandbox_id ?? sandbox.id },
+      { status: 200 }
+    );
   }
 
   async openaiTokenRefresh(log: Logger): Promise<Response> {

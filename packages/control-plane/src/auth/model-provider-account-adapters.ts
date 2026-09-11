@@ -32,6 +32,45 @@ export interface ProviderDeviceAuthorizationCapability<TCredential, TProviderSta
   ): Promise<ProviderDeviceAuthorizationPollResult<TCredential>>;
 }
 
+interface ProviderAuthorizationCodeStart<TProviderState> {
+  providerState: TProviderState;
+  /** The provider's consent page; it shows the code the user pastes back. */
+  authorizationUrl: string;
+  expiresInMs?: number;
+}
+
+/**
+ * Authorization-code connections: the control plane holds the PKCE verifier
+ * and state, the user grants access at the provider and pastes the displayed
+ * code back, and `complete` exchanges it. Anthropic's setup-token flow.
+ */
+export interface ProviderAuthorizationCodeCapability<TCredential, TProviderState> {
+  readonly stateSchemaVersion: number;
+  start(): Promise<ProviderAuthorizationCodeStart<TProviderState>>;
+  parseState(payload: unknown, schemaVersion: number): TProviderState;
+  complete(
+    providerState: TProviderState,
+    pastedCode: string
+  ): Promise<ProviderConnectionResult<TCredential>>;
+}
+
+export interface ErasedProviderAuthorizationCodeCapability {
+  readonly stateSchemaVersion: number;
+  start(): Promise<ProviderAuthorizationCodeStart<unknown>>;
+  completePersisted(
+    payload: unknown,
+    schemaVersion: number,
+    pastedCode: string
+  ): Promise<ProviderConnectionResult<unknown>>;
+}
+
+/**
+ * What a sandbox receives at runtime: a short-lived brokered access token
+ * minted per request (OpenAI, xAI), or the stored static secret itself,
+ * delivered once at boot (Anthropic).
+ */
+export type ProviderRuntimeCredentialKind = "brokered_access_token" | "stored_provider_secret";
+
 interface ErasedProviderDeviceAuthorizationCapability {
   readonly stateSchemaVersion: number;
   start(): Promise<ProviderDeviceAuthorizationStart<unknown>>;
@@ -59,6 +98,11 @@ export interface ModelProviderAccountAdapter<TCredential, TConnectInput> {
   readonly credentialSchemaVersion: number;
   readonly refreshBufferMs: number;
   readonly deviceAuthorization?: ProviderDeviceAuthorizationCapability<TCredential, unknown>;
+  readonly authorizationCode?: ProviderAuthorizationCodeCapability<TCredential, unknown>;
+  /** Absent means true: the provider can be asked to verify a stored credential. */
+  readonly supportsVerification?: boolean;
+  /** Absent means brokered_access_token. */
+  readonly runtimeCredentialKind?: ProviderRuntimeCredentialKind;
   parseConnectInput(input: unknown): TConnectInput;
   connect(input: TConnectInput): Promise<ProviderConnectionResult<TCredential>>;
   parseCredential(payload: unknown, schemaVersion: number): TCredential;
@@ -120,6 +164,21 @@ export class ModelProviderAccountAdapterRegistry {
     const capability = this.require(provider).deviceAuthorization;
     if (!capability) throw new Error(`Device authorization unavailable: ${provider}`);
     return eraseDeviceAuthorizationCapability(capability);
+  }
+
+  requireAuthorizationCode(provider: ModelProviderId): ErasedProviderAuthorizationCodeCapability {
+    const capability = this.require(provider).authorizationCode;
+    if (!capability) throw new Error(`Authorization code flow unavailable: ${provider}`);
+    return {
+      stateSchemaVersion: capability.stateSchemaVersion,
+      start: () => capability.start(),
+      completePersisted: (payload, schemaVersion, pastedCode) =>
+        capability.complete(capability.parseState(payload, schemaVersion), pastedCode),
+    };
+  }
+
+  runtimeCredentialKind(provider: ModelProviderId): ProviderRuntimeCredentialKind {
+    return this.require(provider).runtimeCredentialKind ?? "brokered_access_token";
   }
 }
 

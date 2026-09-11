@@ -238,7 +238,7 @@ describe("model utilities", () => {
   it("strictly derives subscription providers from canonical catalog routes", () => {
     expect(getSubscriptionProviderForModel("openai/gpt-5.6-sol")).toBe("openai");
     expect(getSubscriptionProviderForModel("xai/grok-4.6")).toBe("xai");
-    expect(getSubscriptionProviderForModel("anthropic/claude-sonnet-4-6")).toBeNull();
+    expect(getSubscriptionProviderForModel("anthropic/claude-sonnet-4-6")).toBe("anthropic");
     expect(getSubscriptionProviderForModel("deepseek/deepseek-v4-pro")).toBeNull();
   });
 
