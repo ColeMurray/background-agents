@@ -16,11 +16,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(179);
+    expect(routes).toHaveLength(180);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(136);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(179);
+    expect(new Set(paths).size).toBe(137);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(180);
   });
 
   it("declares every path in the literal-or-parameter grammar", () => {

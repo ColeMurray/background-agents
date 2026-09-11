@@ -178,6 +178,19 @@ async function resolveCallerGating(
   return { allowed: true, ghToken };
 }
 
+/**
+ * The account whose token submits reviews, and whether that is a second App.
+ * `hasReviewerApp` gates the prompt's token fetch; `submittingLogin` decides
+ * whether GitHub would refuse an approval as a self-review.
+ */
+function resolveReviewIdentity(env: Env): { submittingLogin: string; hasReviewerApp: boolean } {
+  const reviewerLogin = env.GITHUB_REVIEWER_USERNAME?.trim();
+  return {
+    submittingLogin: reviewerLogin || env.GITHUB_BOT_USERNAME,
+    hasReviewerApp: Boolean(reviewerLogin),
+  };
+}
+
 export async function handleReviewRequested(
   env: Env,
   log: Logger,
@@ -245,6 +258,7 @@ export async function handleReviewRequested(
       });
       log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
 
+      const reviewIdentity = resolveReviewIdentity(env);
       const prompt = buildCodeReviewPrompt({
         owner,
         repo: repoName,
@@ -256,6 +270,8 @@ export async function handleReviewRequested(
         head: pr.head.ref,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
+        isSelfReview: pr.user.login.toLowerCase() === reviewIdentity.submittingLogin.toLowerCase(),
+        hasReviewerApp: reviewIdentity.hasReviewerApp,
       });
 
       const messageId = await sendPrompt(env, traceId, sessionId, {
@@ -349,6 +365,7 @@ export async function handlePullRequestOpened(
       });
       log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
 
+      const reviewIdentity = resolveReviewIdentity(env);
       const prompt = buildCodeReviewPrompt({
         owner,
         repo: repoName,
@@ -360,7 +377,8 @@ export async function handlePullRequestOpened(
         head: pr.head.ref,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
-        isSelfReview: pr.user.login.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase(),
+        isSelfReview: pr.user.login.toLowerCase() === reviewIdentity.submittingLogin.toLowerCase(),
+        hasReviewerApp: reviewIdentity.hasReviewerApp,
       });
 
       const messageId = await sendPrompt(env, traceId, sessionId, {
