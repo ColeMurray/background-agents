@@ -311,6 +311,43 @@ describe("stored provider secret delivery", () => {
     expect(issuances[0]?.terminatedAt).toBe(now + 2);
   });
 
+  it("drains more live issuances than one page holds before completing the task", async () => {
+    const now = Date.now();
+    await seedAnthropicAccount(now);
+    const issuances = new ProviderCredentialIssuanceStore(env.DB);
+    const statements = Array.from({ length: 101 }, (_, index) =>
+      env.DB.prepare(
+        `INSERT INTO model_provider_credential_issuances
+           (id, provider_account_id, provider, session_id, sandbox_id, credential_version, issued_at)
+         VALUES (?, ?, 'anthropic', ?, ?, 1, ?)`
+      ).bind(`iss-${index}`, ANTHROPIC_ACCOUNT_ID, `session-${index}`, `sandbox-${index}`, now)
+    );
+    await env.DB.batch(statements);
+    expect(await issuances.listLive(ANTHROPIC_ACCOUNT_ID, 1)).toHaveLength(100);
+
+    const accounts = new ModelProviderAccountStore(env.DB);
+    expect(await accounts.setStatus(ANTHROPIC_ACCOUNT_ID, "disabled", null, now + 1)).toBe(true);
+    const outbox = new ProviderAccountCleanupOutboxStore(env.DB);
+    const revoked = new Set<string>();
+    const result = await new ProviderCredentialCleanupCoordinator(
+      issuances,
+      outbox,
+      {
+        async revoke(_sessionId, expectedSandboxId) {
+          revoked.add(expectedSandboxId);
+          return "terminated";
+        },
+      },
+      { info() {}, warn() {}, error() {} },
+      () => now + 2
+    ).drain();
+
+    expect(result).toEqual({ tasks: 1, terminated: 101, rescheduled: 0 });
+    expect(revoked.size).toBe(101);
+    expect(await issuances.listLive(ANTHROPIC_ACCOUNT_ID, 1)).toEqual([]);
+    expect(await outbox.listForAccount(ANTHROPIC_ACCOUNT_ID)).toEqual([]);
+  });
+
   it("revoke-sandbox on the session runtime stops only the named sandbox", async () => {
     const now = Date.now();
     const sessionName = `issuance-revoke-${now}`;

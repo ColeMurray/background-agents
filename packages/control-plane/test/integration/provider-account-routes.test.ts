@@ -438,8 +438,8 @@ describe("provider account sandbox broker route", () => {
           providerAccountId: OPENAI_ACCOUNT_ID,
           selectionSource: "explicit",
         },
-        { provider: "xai", authMode: "api_key", selectionSource: "fallback_api_key" },
-        { provider: "anthropic", authMode: "api_key", selectionSource: "fallback_api_key" },
+        { provider: "xai", authMode: "api_key", selectionSource: "api_key_fallback" },
+        { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
       ],
     });
     const sandboxToken = "provider-broker-success-token";
