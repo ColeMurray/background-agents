@@ -83,8 +83,7 @@ at create.
 3. On every bridge start (fresh spawn, supervised restart, snapshot restore), the Claude harness
    calls the sandbox-authenticated endpoint
    `POST /sessions/:id/provider-auth/anthropic/runtime-credential`. The control plane checks the
-   binding and the account, decrypts the token, records an **issuance** (session, sandbox,
-   credential version) and returns the token with `Cache-Control: no-store`.
+   binding and the account, decrypts the token and returns it with `Cache-Control: no-store`.
 4. The harness keeps the token in process memory and launches the `claude` binary through a
    **clean-credential wrapper**: the child sees the sandbox environment exactly as OpenCode does
    (the sandbox token, `SESSION_CONFIG`, user secrets, proxies) minus the Anthropic credentials of
@@ -103,11 +102,13 @@ exfiltration by code the agent chooses to run. The sandbox helpers (`oi-git-sign
 
 ## Lifecycle: disable, archive, reconnect
 
-Disabling, archiving or reconnecting a Claude account denies future issuance immediately and
-enqueues a durable cleanup task in the same database write. A coordinator (run every minute by the
-scheduler) stops every sandbox that holds a live issuance at or below the revoked credential
-version, using a sandbox-id-conditional stop so a session whose sandbox was respawned since is
-untouched. The next prompt on an affected session fails the pre-spawn check with reconnect guidance.
+Disabling, archiving or reconnecting a Claude account stops new hand-outs immediately: the next
+bridge start on any session bound to the account is refused, and the next prompt on such a session
+fails the pre-spawn check with reconnect guidance. A sandbox that already holds the token keeps it
+in memory until it exits (inactivity timeout, hard timeout, or a stop), so a turn already running
+finishes on the old token. Open-Inspect does not chase running sandboxes: the token stays valid at
+Anthropic whatever Open-Inspect does, so stopping its own sandboxes would only shorten a window it
+cannot close. Revocation happens at Anthropic (runbook below).
 
 The sandbox is never authoritative for account lifecycle. A runtime authentication failure fails the
 prompt with reconnect guidance and emits a warning; only local expiry (the recorded expiry
@@ -118,20 +119,22 @@ account active and appear on the session timeline.
 
 ## Runbook: revoking a Claude setup token
 
-Reconnecting or disabling in Open-Inspect rotates what Open-Inspect stores and stops the sandboxes
-that received the old token. It does **not** revoke the token at Anthropic. A token that has left
-the deployment stays valid until Anthropic expires it. To revoke:
+Reconnecting or disabling in Open-Inspect rotates or fences what Open-Inspect stores. It does
+**not** revoke the token at Anthropic, and it does not stop sandboxes that already hold the token;
+they keep it until they exit. A token that has left the deployment stays valid until Anthropic
+expires it or you revoke it. To revoke:
 
-1. In Open-Inspect, **Disable** (or **Archive**) the account. Wait one scheduler tick (one minute)
-   and confirm in the control-plane logs that `provider_credential.issuance_terminated` fired for
-   every session listed under `provider_credential.issued` for that account.
+1. In Open-Inspect, **Disable** (or **Archive**) the account so no new sandbox receives the token.
+   Sessions with a running sandbox keep it until that sandbox exits; stop those sessions from the
+   session page if you want that sooner. The control-plane log lists every hand-out under
+   `provider_credential.issued`.
 2. At Anthropic, sign in to the subscription that minted the token and revoke it. A slot connected
    in the browser stores Anthropic's `token_uuid` for the credential; quote it in a support request.
    `claude auth logout` on a workstation does **not** revoke an environment-supplied token, so use
    the account's connected-applications / API session management in the Claude console, or contact
    Anthropic support if no self-service revocation is offered for setup tokens.
 3. Mint a new token (browser authorization or `claude setup-token`) and **Reconnect** the slot.
-4. Start a new session; sessions that were stopped resume from their snapshot on the next prompt.
+4. Start a new session, or prompt an existing one; the next bridge start fetches the new token.
 
 ---
 
