@@ -8,6 +8,7 @@ import {
   harnessSupportsModel,
   harnessSupportsProviderAuth,
   isValidHarness,
+  selectedProviderAuthModes,
 } from "./harnesses";
 import { VALID_MODELS } from "./models";
 
@@ -54,6 +55,18 @@ describe("harnessSupportsProviderAuth", () => {
     expect(harnessSupportsProviderAuth("opencode", "google", "api_key")).toBe(false);
     expect(harnessSupportsProviderAuth("opencode", "google", "provider_account")).toBe(false);
     expect(harnessSupportsProviderAuth("opencode", "google", "legacy_scoped_oauth")).toBe(true);
+  });
+});
+
+describe("selectedProviderAuthModes", () => {
+  it("maps explicit selections to their modes and skips absent providers", () => {
+    expect(
+      selectedProviderAuthModes({
+        openai: { mode: "provider_account", accountId: "0123456789abcdef0123456789abcdef" },
+        xai: { mode: "api_key" },
+      })
+    ).toEqual({ openai: "provider_account", xai: "api_key" });
+    expect(selectedProviderAuthModes({ openai: undefined })).toEqual({});
   });
 });
 

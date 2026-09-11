@@ -14,7 +14,11 @@
 
 import { z } from "zod";
 import { extractProviderAndModel } from "./models";
-import type { SessionProviderAuthMode, ProviderAuthMode } from "./types/provider-accounts";
+import type {
+  ModelProviderSelections,
+  ProviderAuthMode,
+  SessionProviderAuthMode,
+} from "./types/provider-accounts";
 
 export const HARNESS_IDS = ["opencode"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
@@ -97,6 +101,21 @@ export function filterModelsForHarness<T extends string>(
   models: readonly T[]
 ): T[] {
   return models.filter((model) => harnessSupportsModel(harness, model));
+}
+
+/**
+ * The auth mode each explicit provider selection asks for, in the shape
+ * `checkHarnessCompatibility` takes. Providers without a selection are left
+ * out: they resolve later, against the harness, in the auth resolver.
+ */
+export function selectedProviderAuthModes(
+  selections: ModelProviderSelections
+): Partial<Record<string, SessionProviderAuthMode>> {
+  return Object.fromEntries(
+    Object.entries(selections).flatMap(([provider, selection]) =>
+      selection ? [[provider, selection.mode]] : []
+    )
+  );
 }
 
 export interface HarnessCompatibilityError {

@@ -210,6 +210,14 @@ export async function handleSpawnChild(
     });
     return error("Parent provider auth unavailable", 503);
   }
+  // The child inherits the parent's auth modes but may run a different model,
+  // so the auth half of the harness rule is checked against the child's model.
+  const harnessAuthIncompatibility = checkHarnessCompatibility(
+    harness,
+    model,
+    Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
+  );
+  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
 
   const childDepth = parentDepth + 1;
   const childId = generateId();

@@ -24,6 +24,7 @@ import type { PermissionId } from "@open-inspect/shared/rbac";
 import {
   checkHarnessCompatibility,
   getValidHarnessOrDefault,
+  selectedProviderAuthModes,
 } from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
 import {
@@ -32,7 +33,10 @@ import {
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
-import { AutomationModelProviderAuthStore } from "../db/automation-model-provider-auth";
+import {
+  AutomationModelProviderAuthStore,
+  toProviderSelections,
+} from "../db/automation-model-provider-auth";
 import {
   AutomationProviderSelectionError,
   parseAndValidateAutomationProviderSelections,
@@ -227,6 +231,14 @@ async function handleCreateAutomation(
     if (e instanceof ProviderAccountSelectionPolicyError) return error(e.message, e.status);
     throw e;
   }
+  // The auth half of the harness rule: an explicit selection the harness
+  // cannot use must not be saved for every future run to trip over.
+  const harnessAuthIncompatibility = checkHarnessCompatibility(
+    harness,
+    model,
+    selectedProviderAuthModes(providerSelections)
+  );
+  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
 
   // Compute next run (only for schedule triggers)
   const nextRunAt = isSchedule
@@ -433,7 +445,18 @@ async function handleUpdateAutomation(
   const nextModel = body.model !== undefined ? getValidModelOrDefault(body.model) : existing.model;
   const nextHarness =
     body.harness !== undefined ? body.harness : getValidHarnessOrDefault(existing.harness);
-  const harnessIncompatibility = checkHarnessCompatibility(nextHarness, nextModel);
+  // The selections the automation will have after this write: the replacement
+  // when one is given, else the stored pins whenever harness or model moves.
+  const nextProviderSelections =
+    replacementProviderSelections ??
+    (body.harness !== undefined || body.model !== undefined
+      ? toProviderSelections(await providerAuthStore.list(id))
+      : null);
+  const harnessIncompatibility = checkHarnessCompatibility(
+    nextHarness,
+    nextModel,
+    nextProviderSelections ? selectedProviderAuthModes(nextProviderSelections) : undefined
+  );
   if (harnessIncompatibility) return error(harnessIncompatibility.message, 400);
   const requestedReasoningEffort = body.reasoningEffort;
   const resolvedReasoningEffort =
