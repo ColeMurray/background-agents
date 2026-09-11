@@ -145,7 +145,9 @@ async function handleRuntimeCredential(
   if (!recorded) {
     // The account moved (disabled, archived, rotated) between the checks and
     // the record: never release a secret nobody will clean up after.
-    return error("Provider account changed during issuance; retry", 409);
+    // Retryable, unlike the other 409s: the sandbox client reads the flag and
+    // treats this one as transient instead of a permanent denial.
+    return json({ error: "Provider account changed during issuance; retry", retryable: true }, 409);
   }
   logger.info("provider_credential.issued", {
     event: "provider_credential.issued",
