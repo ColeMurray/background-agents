@@ -26,11 +26,17 @@ export const ANTHROPIC_SETUP_TOKEN_SCOPE = "user:inference";
 export const ANTHROPIC_SETUP_TOKEN_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
 export const ANTHROPIC_EXCHANGE_TIMEOUT_MS = 30_000;
 /**
- * Cloudflare in front of the token endpoint bans generic client
- * signatures (error 1010), and a Worker's outbound fetch carries no
- * User-Agent at all. Identify the deployment explicitly.
+ * The version of the Claude Agent CLI the sandbox runtime ships, bundled with
+ * the pinned `claude-agent-sdk`; bump it alongside that pin.
  */
-export const ANTHROPIC_EXCHANGE_USER_AGENT = "open-inspect-control-plane/1.0";
+export const CLAUDE_AGENT_CLI_VERSION = "2.1.259";
+/**
+ * Cloudflare in front of the token endpoint bans generic client signatures
+ * (error 1010), and a Worker's outbound fetch carries no User-Agent at all.
+ * The exchange presents the same identity the CLI uses on its Anthropic API
+ * traffic, so the token is minted and used under one client string.
+ */
+export const ANTHROPIC_EXCHANGE_USER_AGENT = `claude-cli/${CLAUDE_AGENT_CLI_VERSION} (external, cli)`;
 
 export interface AnthropicAuthorizationRequest {
   authorizationUrl: string;

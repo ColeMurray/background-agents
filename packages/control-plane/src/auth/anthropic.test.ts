@@ -117,7 +117,7 @@ describe("exchangeAnthropicAuthorizationCode", () => {
     });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     // Cloudflare in front of the token endpoint bans anonymous client signatures.
-    expect(new Headers(init?.headers).get("User-Agent")).toBe("open-inspect-control-plane/1.0");
+    expect(new Headers(init?.headers).get("User-Agent")).toBe("claude-cli/2.1.259 (external, cli)");
   });
 
   it("keeps the granting account, organization and token id the real response carries", async () => {
