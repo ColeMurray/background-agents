@@ -34,6 +34,13 @@ def isolate_runtime_file_paths(tmp_path, monkeypatch):
     monkeypatch.setattr("sandbox_runtime.supervisor.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
     monkeypatch.setattr("sandbox_runtime.bridge.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
     monkeypatch.setattr("sandbox_runtime.tunnel_environment.TUNNEL_ENV_FILE_PATH", tunnel_env_path)
+    # The signing runtime writes the author identity with ``git config --global``;
+    # keep that out of the real ~/.gitconfig.
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
 
 
 def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:

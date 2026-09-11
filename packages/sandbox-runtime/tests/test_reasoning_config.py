@@ -38,3 +38,22 @@ async def test_manual_variants_available_when_switching_from_adaptive_model(reas
                 "max": {"thinking": {"type": "enabled", "budgetTokens": 31_999}},
             }
         }
+
+
+async def test_runtime_instructions_are_loaded_by_opencode(reasoning_config):
+    from sandbox_runtime.opencode_server import RUNTIME_INSTRUCTIONS_PATH
+
+    assert reasoning_config["instructions"] == [str(RUNTIME_INSTRUCTIONS_PATH)]
+
+
+def test_runtime_instructions_file_ships_with_the_package():
+    from pathlib import Path
+
+    import sandbox_runtime
+    from sandbox_runtime.opencode_server import RUNTIME_INSTRUCTIONS_PATH
+
+    package_root = Path(sandbox_runtime.__path__[0])
+    bundled = package_root / RUNTIME_INSTRUCTIONS_PATH.relative_to("/app/sandbox_runtime")
+    text = bundled.read_text()
+    assert "Never" in text and "clone" in text
+    assert "create-pull-request" in text

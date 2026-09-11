@@ -32,6 +32,11 @@ AGENT_TOOLS_GATED_ON_ENV = {"slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED"}
 AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
 
 
+# Session rules the runtime imposes on the agent (working only in session repos,
+# leaving git identity alone). Shipped inside the runtime package, see runtime.sh.
+RUNTIME_INSTRUCTIONS_PATH = Path("/app/sandbox_runtime/instructions/open-inspect.md")
+
+
 def resolve_opencode_global_config_dir() -> Path:
     """Resolve OpenCode's global config directory using its xdg-basedir rules."""
     override = os.environ.get("OPENCODE_CONFIG_DIR")
@@ -420,6 +425,8 @@ class OpenCodeServer:
         opencode_config: dict[str, Any] = {
             "model": f"{self.provider}/{self.model}",
             "permission": {"*": {"*": "allow"}},
+            # Runtime-owned rules loaded alongside the repository's own AGENTS.md.
+            "instructions": [str(RUNTIME_INSTRUCTIONS_PATH)],
             "provider": {
                 "anthropic": {
                     "models": {

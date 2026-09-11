@@ -172,6 +172,7 @@ class GitSigningRuntime:
 
         if isinstance(configuration, DisabledCommitSigningConfiguration):
             effective_author = author or UNSIGNED_GIT_USER
+            await self._set_global_identity(effective_author)
             for repository in repositories:
                 await self._remove_signing_git_config(repository.path)
                 await self._set_git_config(repository.path, "user.name", effective_author.name)
@@ -196,11 +197,24 @@ class GitSigningRuntime:
             ("user.name", effective_author.name),
             ("user.email", effective_author.email),
         )
+        await self._set_global_identity(effective_author)
         for repository in repositories:
             for key, value in signing_values:
                 await self._set_git_config(repository.path, key, value)
             for key, value in author_values:
                 await self._set_git_config(repository.path, key, value)
+
+    async def _set_global_identity(self, author: GitUser) -> None:
+        """Publish the author identity to the global git config as well.
+
+        Manifest repositories get their identity via ``--local`` below, but an agent
+        may run ``git`` in a checkout the session did not create. Without a global
+        identity git refuses to commit there and the agent invents one, which then
+        fails downstream commit-author checks (e.g. Vercel). Signing settings stay
+        local: the signer is only wired up for manifest repositories.
+        """
+        for key, value in (("user.name", author.name), ("user.email", author.email)):
+            await self._run_git_config(None, "--replace-all", key, value)
 
     async def _remove_signing_git_config(self, repository: Path) -> None:
         for key in SIGNING_CONFIG_KEYS:
@@ -211,14 +225,17 @@ class GitSigningRuntime:
 
     async def _run_git_config(
         self,
-        repository: Path,
+        repository: Path | None,
         *args: str,
         allow_missing: bool = False,
     ) -> None:
-        if not (repository / ".git").exists():
-            raise GitSigningError("Session repository is unavailable for Git configuration")
-
-        command = ["git", "config", "--local", *args]
+        """Run ``git config`` locally in ``repository``, or globally when it is None."""
+        if repository is None:
+            command = ["git", "config", "--global", *args]
+        else:
+            if not (repository / ".git").exists():
+                raise GitSigningError("Session repository is unavailable for Git configuration")
+            command = ["git", "config", "--local", *args]
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=repository,

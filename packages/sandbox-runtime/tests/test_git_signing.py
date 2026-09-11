@@ -543,3 +543,48 @@ async def test_default_signer_uses_the_configured_runtime_bin(
     )
 
     assert git(repo, "config", "gpg.ssh.program").stdout.strip() == str(install_dir / "oi-git-sign")
+
+
+def global_git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "config", "--global", *args], check=check, capture_output=True, text=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_disabled_configuration_publishes_author_identity_globally(tmp_path):
+    """A checkout the agent creates itself must still commit as the session user."""
+    repo = create_repository(tmp_path / "repo")
+    manifest = create_manifest(tmp_path, [repo])
+    runtime = create_runtime(tmp_path, manifest)
+
+    await runtime.apply_configuration(
+        {"enabled": False}, GitUser(name="Jane Dev", email="123+jane@users.noreply.github.com")
+    )
+
+    assert global_git("user.name").stdout.strip() == "Jane Dev"
+    assert global_git("user.email").stdout.strip() == "123+jane@users.noreply.github.com"
+    stray = create_repository(tmp_path / "stray-clone")
+    (stray / "file.txt").write_text("hello")
+    git(stray, "add", "file.txt")
+    git(stray, "commit", "-m", "outside the manifest")
+    assert (
+        git(stray, "log", "-1", "--format=%an <%ae>").stdout.strip()
+        == "Jane Dev <123+jane@users.noreply.github.com>"
+    )
+
+
+@pytest.mark.asyncio
+async def test_enabled_configuration_publishes_author_globally_but_keeps_signing_local(tmp_path):
+    repo = create_repository(tmp_path / "repo")
+    manifest = create_manifest(tmp_path, [repo])
+    runtime = create_runtime(tmp_path, manifest)
+
+    await runtime.apply_configuration(
+        ENABLED_CONFIGURATION, GitUser(name="Ada Dev", email="456+ada@users.noreply.github.com")
+    )
+
+    assert global_git("user.name").stdout.strip() == "Ada Dev"
+    assert global_git("user.email").stdout.strip() == "456+ada@users.noreply.github.com"
+    for key in OWNED_SIGNING_CONFIG_KEYS:
+        assert global_git("--get", key, check=False).returncode == 1, key
