@@ -301,6 +301,12 @@ export function evaluateSpawnDecision(
     return { action: "skip", reason: "spawn already in progress (in-memory flag)" };
   }
 
+  // The source may already be stopped while its snapshot is still being saved.
+  // Wait for the image to be recorded before deciding how to resume the session.
+  if (state.status === "snapshotting") {
+    return { action: "wait", reason: "snapshot in progress" };
+  }
+
   if (
     supportsPersistentResume &&
     state.providerObjectId &&

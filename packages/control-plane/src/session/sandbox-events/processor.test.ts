@@ -180,6 +180,55 @@ function createProcessor() {
 }
 
 describe("SessionSandboxEventProcessor", () => {
+  it.each([true, false])(
+    "waits for the snapshot before dispatching after success=%s",
+    async (success) => {
+      const h = createProcessor();
+      h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+      let finishSnapshot!: () => void;
+      h.triggerSnapshot.mockReturnValue(
+        new Promise<void>((resolve) => {
+          finishSnapshot = resolve;
+        })
+      );
+
+      await h.processor.processSandboxEvent({
+        type: "execution_complete",
+        messageId: "msg-1",
+        success,
+        ...(!success ? { error: "Prompt exceeded max duration of 2025s." } : {}),
+        sandboxId: "sb-1",
+        timestamp: 2000,
+      });
+
+      expect(h.triggerSnapshot).toHaveBeenCalledOnce();
+      expect(h.processMessageQueue).not.toHaveBeenCalled();
+      finishSnapshot();
+      await h.backgroundTasks.settle();
+      expect(h.processMessageQueue).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("does not snapshot a newer turn that started during terminal projection", async () => {
+    const h = createProcessor();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.projectTerminalMessage.mockImplementation(async () => {
+      h.repository.getProcessingMessage.mockReturnValue({ id: "msg-2" });
+    });
+
+    await h.processor.processSandboxEvent({
+      type: "execution_complete",
+      messageId: "msg-1",
+      success: false,
+      sandboxId: "sb-1",
+      timestamp: 2000,
+    });
+    await h.backgroundTasks.settle();
+
+    expect(h.triggerSnapshot).not.toHaveBeenCalled();
+    expect(h.processMessageQueue).toHaveBeenCalledOnce();
+  });
+
   it("releases the next prompt without waiting for diff work", async () => {
     const h = createProcessor();
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
@@ -212,6 +261,7 @@ describe("SessionSandboxEventProcessor", () => {
     await h.backgroundTasks.settle();
     // The failed snapshot is absorbed by the boundary, not thrown at the caller.
     expect(h.backgroundTasks.failures).toEqual([expect.any(Error)]);
+    expect(h.processMessageQueue).toHaveBeenCalledOnce();
   });
 
   it("updates heartbeat without broadcasting", async () => {

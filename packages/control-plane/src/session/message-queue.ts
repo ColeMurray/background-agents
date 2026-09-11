@@ -413,6 +413,11 @@ export class SessionMessageQueue {
       }
       return;
     }
+    // Snapshot completion pumps the queue again. A provider may stop its source
+    // during snapshotting, so neither dispatch nor replace it in this window.
+    if (this.sandboxLifecycle.isSnapshotting()) {
+      return;
+    }
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (!sandboxWs) {
       // The provider-auth lookup above is a non-storage await. The socket

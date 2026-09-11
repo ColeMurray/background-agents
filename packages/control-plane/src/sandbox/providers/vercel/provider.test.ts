@@ -165,6 +165,7 @@ describe("VercelSandboxProvider", () => {
     expect(provider.capabilities).toEqual({
       supportsSandboxTimeout: true,
       supportsSnapshots: true,
+      snapshotStopsSandbox: true,
       supportsRestore: true,
       supportsPersistentResume: false,
       supportsExplicitStop: true,

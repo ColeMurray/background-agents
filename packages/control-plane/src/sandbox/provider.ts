@@ -56,6 +56,8 @@ export interface SandboxProviderCapabilities {
   supportsSandboxTimeout: boolean;
   /** Whether the provider supports filesystem snapshots */
   supportsSnapshots: boolean;
+  /** Whether taking a snapshot stops the source sandbox instead of leaving it running. */
+  snapshotStopsSandbox?: boolean;
   /** Whether the provider supports restoring from snapshots */
   supportsRestore: boolean;
   /** Whether the provider can resume a previously stopped sandbox in place */
