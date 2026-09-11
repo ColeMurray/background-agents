@@ -119,7 +119,7 @@ class TestImageBuildMode:
 
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -130,7 +130,7 @@ class TestImageBuildMode:
         supervisor.repository_boot.hooks.run_setup.assert_called_once()
         supervisor.repository_boot.hooks.run_start.assert_not_called()
         # OpenCode and bridge should NOT be started in build mode
-        supervisor.opencode_server.start.assert_not_called()
+        supervisor.harness_process.start.assert_not_called()
         supervisor.agent_bridge.start.assert_not_called()
         supervisor.monitor_processes.assert_not_called()
 
@@ -273,7 +273,7 @@ class TestImageBuildMode:
         )
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=False)
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -283,7 +283,7 @@ class TestImageBuildMode:
             await supervisor.run()
 
         supervisor._report_fatal_error.assert_called_once()
-        supervisor.opencode_server.start.assert_not_called()
+        supervisor.harness_process.start.assert_not_called()
         supervisor.agent_bridge.start.assert_not_called()
 
     @pytest.mark.asyncio
@@ -731,7 +731,7 @@ class TestFromRepoImage:
 
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -755,7 +755,7 @@ class TestFromRepoImage:
 
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -776,7 +776,7 @@ class TestFromRepoImage:
         )
 
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -784,7 +784,7 @@ class TestFromRepoImage:
         with patch.dict(os.environ, repo_image_env, clear=False):
             await supervisor.run()
 
-        supervisor.opencode_server.start.assert_called_once()
+        supervisor.harness_process.start.assert_called_once()
         supervisor.agent_bridge.start.assert_called_once()
 
     @pytest.mark.asyncio
@@ -797,7 +797,7 @@ class TestFromRepoImage:
         )
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=False)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -807,7 +807,7 @@ class TestFromRepoImage:
             await supervisor.run()
 
         supervisor._report_fatal_error.assert_called_once()
-        supervisor.opencode_server.start.assert_not_called()
+        supervisor.harness_process.start.assert_not_called()
         supervisor.agent_bridge.start.assert_not_called()
 
 
@@ -830,7 +830,7 @@ class TestNormalMode:
 
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -856,7 +856,7 @@ class TestNormalMode:
 
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -886,7 +886,7 @@ class TestNormalMode:
 
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -919,7 +919,7 @@ class TestSnapshotRestoreMode:
         )
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -939,7 +939,7 @@ class TestSnapshotRestoreMode:
         )
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=False)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -949,7 +949,7 @@ class TestSnapshotRestoreMode:
             await supervisor.run()
 
         supervisor._report_fatal_error.assert_called_once()
-        supervisor.opencode_server.start.assert_not_called()
+        supervisor.harness_process.start.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_resync_failure_is_reported_but_not_fatal(self, base_env, tmp_path):
@@ -967,7 +967,7 @@ class TestSnapshotRestoreMode:
         )
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -994,7 +994,7 @@ class TestSnapshotRestoreMode:
             if c.args and c.args[0] == "sandbox.startup"
         )
         assert startup_call.kwargs["git_sync_success"] is False
-        supervisor.opencode_server.start.assert_called_once()
+        supervisor.harness_process.start.assert_called_once()
         # The warning is queued for the bridge to forward as a sandbox event.
         warning_lines = (tmp_path / "warnings.jsonl").read_text().splitlines()
         assert len(warning_lines) == 1
@@ -1031,7 +1031,7 @@ class TestNoRepository:
         supervisor.repository_boot.hooks.run_start = AsyncMock(return_value=True)
         supervisor.code_server.start = AsyncMock()
         supervisor.web_terminal.start = AsyncMock()
-        supervisor.opencode_server.start = AsyncMock()
+        supervisor.harness_process.start = AsyncMock()
         supervisor.agent_bridge.start = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
@@ -1046,7 +1046,7 @@ class TestNoRepository:
         supervisor.repository_boot.synchronizer.sync.assert_called_once()
         supervisor.repository_boot.hooks.run_setup.assert_not_called()
         supervisor.repository_boot.hooks.run_start.assert_not_called()
-        supervisor.opencode_server.start.assert_called_once()
+        supervisor.harness_process.start.assert_called_once()
         supervisor.agent_bridge.start.assert_called_once()
 
 

@@ -411,7 +411,7 @@ class OpenCodeServer:
                 config[name] = entry
         return config
 
-    async def start(self, repositories: tuple[RepoEntry, ...], workdir: Path) -> None:
+    async def start(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
         """Start OpenCode server with configuration."""
         self._setup_managed_oauth()
         self.log.info("opencode.start")

@@ -7,12 +7,14 @@ import argparse
 import asyncio
 import os
 import signal
+from typing import Any
 
 from .agent_bridge_process import AgentBridgeProcess
 from .boot_warnings import BootWarningSink
 from .browser_desktop import BrowserDesktop
 from .code_server import CodeServer
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
+from .harness.base import HarnessId, HarnessProcessOwner
 from .image_environment import apply_image_environment
 from .log_config import configure_logging, get_logger
 from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
@@ -27,6 +29,24 @@ from .tunnel_environment import TunnelEnvironment
 from .web_terminal import WebTerminal
 
 configure_logging()
+
+
+def build_harness_process(
+    config: RuntimeConfig,
+    shutdown_event: asyncio.Event,
+    log: Any,
+    warnings: BootWarningSink,
+) -> HarnessProcessOwner:
+    """The supervisor-half registry: pick the process owner for the session's harness."""
+    match config.harness:
+        case HarnessId.OPENCODE:
+            return OpenCodeServer(
+                config.opencode_config(),
+                shutdown_event,
+                log,
+                warnings.record,
+            )
+    raise ValueError(f"Unsupported harness: {config.harness}")
 
 
 def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
@@ -64,12 +84,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
             global_config_dir / "skills",
             log,
         )
-    opencode_server = OpenCodeServer(
-        config.opencode_config(),
-        shutdown_event,
-        log,
-        warnings.record,
-    )
+    harness_process = build_harness_process(config, shutdown_event, log, warnings)
     agent_bridge = AgentBridgeProcess(config.bridge_process_config(), log)
     code_server = CodeServer(log)
     web_terminal = WebTerminal(log)
@@ -77,7 +92,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
     return SandboxSupervisor(
         config,
         repository_boot,
-        opencode_server,
+        harness_process,
         agent_bridge,
         code_server,
         web_terminal,

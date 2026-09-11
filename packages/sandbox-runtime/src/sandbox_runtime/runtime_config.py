@@ -11,6 +11,8 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
+from .harness.base import HarnessId, parse_harness_id
+
 
 class BootMode(StrEnum):
     FRESH = "fresh"
@@ -88,6 +90,7 @@ class BridgeProcessConfig:
     control_plane_url: str
     sandbox_token: str
     session_id: str
+    harness: HarnessId
 
 
 @dataclass(frozen=True)
@@ -142,6 +145,11 @@ class RuntimeConfig:
     def session_id(self) -> str:
         return str(self.session_config.get("session_id") or "")
 
+    @property
+    def harness(self) -> HarnessId:
+        """Which agent runs this session; absent means the built-in OpenCode harness."""
+        return parse_harness_id(self.session_config.get("harness"))
+
     def repository_config(self) -> RepositoryConfig:
         raw_repositories = self.session_config.get("repositories")
         repositories = (
@@ -183,6 +191,7 @@ class RuntimeConfig:
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
             session_id=self.session_id,
+            harness=self.harness,
         )
 
     def managed_skills_config(self) -> ManagedSkillsConfig:
