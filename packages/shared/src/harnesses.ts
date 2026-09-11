@@ -20,7 +20,7 @@ import type {
   SessionProviderAuthMode,
 } from "./types/provider-accounts";
 
-export const HARNESS_IDS = ["opencode"] as const;
+export const HARNESS_IDS = ["opencode", "claude"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 export const DEFAULT_HARNESS: HarnessId = "opencode";
 export const harnessIdSchema = z.enum(HARNESS_IDS);
@@ -48,6 +48,15 @@ export const HARNESS_CATALOG = {
       xai: ["api_key", "provider_account"],
     },
     reasoningDisplay: false,
+    resume: "session_id",
+  },
+  claude: {
+    label: "Claude Agent",
+    modelFamilies: ["anthropic"],
+    providerAuth: {
+      anthropic: ["api_key", "provider_account"],
+    },
+    reasoningDisplay: true,
     resume: "session_id",
   },
 } as const satisfies Record<HarnessId, HarnessCapabilities>;

@@ -168,4 +168,24 @@ describe("resolveProviderAccountSelections", () => {
       )
     ).rejects.toMatchObject({ status: 404 });
   });
+
+  it("takes the API-key fallback for providers the harness has no auth row for", async () => {
+    const deps = stores({
+      // The xai default points at an account that no longer exists. A Claude
+      // session never runs xai, so that stale default must not reject it.
+      defaults: [
+        providerDefault("openai", OPENAI_ACCOUNT_ID),
+        providerDefault("xai", "9".repeat(32)),
+      ],
+      accounts: [account(OPENAI_ACCOUNT_ID, "openai")],
+    });
+
+    await expect(
+      resolveProviderAccountSelections({ unattended: false, harness: "claude" }, deps)
+    ).resolves.toEqual([
+      { provider: "openai", authMode: "api_key", selectionSource: "harness_fallback" },
+      { provider: "xai", authMode: "api_key", selectionSource: "harness_fallback" },
+    ]);
+    expect(deps.accounts.getById).not.toHaveBeenCalled();
+  });
 });
