@@ -114,6 +114,7 @@ const CONNECTION_STRATEGIES: Record<SubscriptionProviderId, ConnectionStrategy> 
         operation: "reconnect",
         providerAccountId: account.id,
         displayName: account.displayName,
+        externalAccountId: account.externalAccountId,
       },
     }),
   },

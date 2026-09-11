@@ -17,6 +17,8 @@ export type ProviderAuthorizationCodeTarget =
       operation: "reconnect";
       providerAccountId: string;
       displayName: string;
+      /** The Claude account the browser flow named; a pasted token cannot reconnect such a slot. */
+      externalAccountId: string | null;
     };
 
 /** A setup token minted elsewhere, submitted through the ordinary connect/reconnect request. */
@@ -75,6 +77,10 @@ export function ProviderAuthorizationCodeDialog({
   };
   const canComplete = status === "awaiting_code" && code.trim().length > 0;
   const needsFreshTransaction = status === "failed" || status === "expired";
+  // A slot the browser flow bound to a Claude account is reconnected the same
+  // way, so the granting account can be verified; the control plane refuses a
+  // pasted token there.
+  const setupTokenAllowed = target.operation === "create" || target.externalAccountId === null;
 
   return (
     <Dialog open onOpenChange={(open) => !open && close()}>
@@ -210,13 +216,15 @@ export function ProviderAuthorizationCodeDialog({
               </div>
             </div>
 
-            <button
-              type="button"
-              className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-              onClick={() => setSetupTokenMode(true)}
-            >
-              Paste a setup token instead
-            </button>
+            {setupTokenAllowed && (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                onClick={() => setSetupTokenMode(true)}
+              >
+                Paste a setup token instead
+              </button>
+            )}
           </form>
         )}
       </DialogContent>

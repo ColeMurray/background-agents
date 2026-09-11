@@ -58,6 +58,7 @@ const reconnectTarget = {
   operation: "reconnect" as const,
   providerAccountId: "e".repeat(32),
   displayName: "Team Claude",
+  externalAccountId: null,
 };
 
 function renderDialog(
@@ -181,6 +182,16 @@ describe("ProviderAuthorizationCodeDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.getByRole("link", { name: "Open Anthropic" })).toBeInTheDocument();
+  });
+
+  it("offers no setup token for a slot the browser flow named", async () => {
+    startAuthorization.mockResolvedValue(reconnectStarted);
+    renderDialog({ target: { ...reconnectTarget, externalAccountId: "claude-account-uuid" } });
+
+    expect(await screen.findByRole("link", { name: "Open Anthropic" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Paste a setup token instead" })
+    ).not.toBeInTheDocument();
   });
 
   it("submits a reconnect setup token against the explicit account", async () => {
