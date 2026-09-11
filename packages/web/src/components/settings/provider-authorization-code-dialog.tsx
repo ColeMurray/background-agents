@@ -270,7 +270,9 @@ function SetupTokenForm({
     >
       <p className="text-sm text-muted-foreground">
         Run <code className="font-mono text-xs">claude setup-token</code> on a workstation signed in
-        to your Claude account, then paste the token it prints. The token is stored write-only.
+        to your Claude account, then paste the token it prints. Generate it right before pasting: a
+        setup token lasts a year from when it was minted, and that is what the stored expiry
+        assumes. The token is stored write-only.
       </p>
       {target.operation === "create" && (
         <div>
