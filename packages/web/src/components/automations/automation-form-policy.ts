@@ -13,7 +13,12 @@ import {
   type AutomationRepositoryInput,
 } from "@open-inspect/shared/types/automations";
 import { DEFAULT_MODEL, isValidReasoningEffort } from "@open-inspect/shared/models";
-import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
+import {
+  getValidHarnessOrDefault,
+  reconcileProviderSelectionsForHarness,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
+import type { HarnessModelAvailability } from "@/lib/session-harness";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 
 export interface AutomationFormValues {
@@ -60,6 +65,7 @@ export type AutomationFormMode = "create" | "edit";
 
 type AutomationFormInvalidReason =
   | "models-loading"
+  | "no-compatible-model"
   | "required-fields"
   | "invalid-schedule"
   | "invalid-target-selection"
@@ -88,10 +94,14 @@ export const DEFAULT_AUTOMATION_SCHEDULE_CRON = "0 9 * * *";
 export function createAutomationFormDraft(
   initialValues: InitialAutomationFormValues = {}
 ): AutomationFormDraft {
+  const harness = getValidHarnessOrDefault(initialValues.harness);
   return {
     name: initialValues.name ?? "",
     instructions: initialValues.instructions ?? "",
-    providerSelections: initialValues.providerSelections ?? {},
+    providerSelections: reconcileProviderSelectionsForHarness(
+      harness,
+      initialValues.providerSelections ?? {}
+    ),
     trigger: {
       type: initialValues.triggerType ?? "schedule",
       scheduleCron: initialValues.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
@@ -101,7 +111,7 @@ export function createAutomationFormDraft(
       sentryClientSecret: "",
     },
     agent: {
-      harness: getValidHarnessOrDefault(initialValues.harness),
+      harness,
       model: initialValues.model ?? DEFAULT_MODEL,
       reasoningEffort: initialValues.reasoningEffort ?? "",
     },
@@ -153,19 +163,22 @@ function getConditionRequirementError(
 function findInvalidEvaluation({
   mode,
   draft,
-  loadingModels,
+  modelAvailability,
   repositoryCount,
   environmentCount,
   originalTrigger,
 }: {
   mode: AutomationFormMode;
   draft: AutomationFormDraft;
-  loadingModels: boolean;
+  modelAvailability: HarnessModelAvailability;
   repositoryCount: number;
   environmentCount: number;
   originalTrigger?: AutomationTriggerDraft;
 }): Exclude<AutomationFormEvaluation, { valid: true }> | null {
-  if (loadingModels) return { valid: false, reason: "models-loading" };
+  if (modelAvailability.status === "loading") return { valid: false, reason: "models-loading" };
+  if (modelAvailability.status === "unavailable") {
+    return { valid: false, reason: "no-compatible-model" };
+  }
   if (!draft.name.trim() || !draft.instructions.trim()) {
     return { valid: false, reason: "required-fields" };
   }
@@ -268,14 +281,14 @@ function buildSubmissionValues({
 export function evaluateAutomationForm({
   mode,
   draft,
-  loadingModels,
+  modelAvailability,
   resolvedModel,
   targets,
   originalTrigger,
 }: {
   mode: AutomationFormMode;
   draft: AutomationFormDraft;
-  loadingModels: boolean;
+  modelAvailability: HarnessModelAvailability;
   resolvedModel: string;
   originalTrigger?: AutomationTriggerDraft;
   targets: {
@@ -286,7 +299,7 @@ export function evaluateAutomationForm({
   const invalidEvaluation = findInvalidEvaluation({
     mode,
     draft,
-    loadingModels,
+    modelAvailability,
     repositoryCount: targets.repositories.length,
     environmentCount: targets.environmentIds.length,
     originalTrigger,

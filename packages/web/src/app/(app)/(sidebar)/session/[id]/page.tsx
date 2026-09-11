@@ -35,9 +35,9 @@ import {
   type ReasoningEffort,
   type ValidModel,
 } from "@open-inspect/shared/models";
-import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
-import { filterModelsForHarness, type HarnessId } from "@open-inspect/shared/harnesses";
-import { filterModelOptionsForHarness, resolveSessionHarness } from "@/lib/session-harness";
+import type { ModelPreference } from "@/lib/model-selection";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
+import { resolveHarnessModelSelection } from "@/lib/session-harness";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useSessionDiffs } from "@/hooks/use-session-diffs";
 import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
@@ -124,7 +124,7 @@ export default function SessionPage() {
     awaitAuthoritativeTitle: true,
   });
   // Fixed at create; per-message model overrides must stay within it.
-  const sessionHarness = resolveSessionHarness(sessionState ?? initialSnapshot.session);
+  const sessionHarness = sessionState?.harness ?? initialSnapshot.session.harness;
   const {
     selectedModel,
     reasoningEffort,
@@ -132,6 +132,7 @@ export default function SessionPage() {
     handleModelChange,
     enabledModelOptions,
     loadingEnabledModels,
+    modelAvailability,
   } = useModelSelection(sessionState, sessionHarness);
   const {
     prompt,
@@ -364,12 +365,17 @@ export default function SessionPage() {
             value: prompt,
             isProcessing: ready && isProcessing,
             draftLocked: isSubmitting || sessionAttachments.isUploading,
-            sendBlocked: !ready || Boolean(sessionState?.budgetExhausted),
+            sendBlocked:
+              !ready ||
+              Boolean(sessionState?.budgetExhausted) ||
+              modelAvailability.status === "unavailable",
             blockedReason: sessionState?.budgetExhausted
               ? canManageBudget
                 ? `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. Raise or remove the limit to continue.`
                 : `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. The session owner must raise or remove the limit to continue.`
-              : undefined,
+              : modelAvailability.status === "unavailable"
+                ? modelAvailability.message
+                : undefined,
             submitError,
             inputRef,
             onSubmit: handleSubmit,
@@ -613,36 +619,42 @@ function useSessionListActions(sessionId: string) {
 
 /**
  * Model and reasoning-effort selection derived from session state until the
- * user takes ownership of an explicit draft. When the session's harness is
- * known, only models it can run are offered.
+ * user takes ownership of an explicit draft. Only models the session's harness
+ * can run are offered, and `modelAvailability` says when none can be sent.
  */
-function useModelSelection(sessionState: SessionState, harness: HarnessId | null) {
+function useModelSelection(sessionState: SessionState, harness: HarnessId) {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
 
+  const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
+  const sessionModel = sessionState?.model ?? DEFAULT_MODEL;
+  const sessionReasoningEffort =
+    sessionState?.reasoningEffort ?? getDefaultReasoningEffort(sessionModel);
   const {
-    enabledModels,
-    enabledModelOptions: allEnabledModelOptions,
-    loading: loadingEnabledModels,
-  } = useEnabledModels();
-  const harnessModels = useMemo(
-    () => (harness ? filterModelsForHarness(harness, enabledModels) : enabledModels),
-    [enabledModels, harness]
-  );
-  const enabledModelOptions = useMemo(
+    model: selectedModel,
+    reasoningEffort,
+    options,
+    availability: modelAvailability,
+  } = useMemo(
     () =>
-      harness
-        ? filterModelOptionsForHarness(harness, allEnabledModelOptions)
-        : allEnabledModelOptions,
-    [allEnabledModelOptions, harness]
-  );
-  const { model: selectedModel, reasoningEffort } = resolveModelPreference(
-    modelPreferenceDraft ?? {
-      model: sessionState?.model ?? DEFAULT_MODEL,
-      reasoningEffort:
-        sessionState?.reasoningEffort ??
-        getDefaultReasoningEffort(sessionState?.model ?? DEFAULT_MODEL),
-    },
-    loadingEnabledModels ? undefined : harnessModels
+      resolveHarnessModelSelection({
+        harness,
+        preference: modelPreferenceDraft ?? {
+          model: sessionModel,
+          reasoningEffort: sessionReasoningEffort,
+        },
+        enabledModels,
+        enabledModelOptions,
+        loading: loadingEnabledModels,
+      }),
+    [
+      enabledModelOptions,
+      enabledModels,
+      harness,
+      loadingEnabledModels,
+      modelPreferenceDraft,
+      sessionModel,
+      sessionReasoningEffort,
+    ]
   );
   const handleModelChange = useCallback((model: ValidModel) => {
     setModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
@@ -660,7 +672,8 @@ function useModelSelection(sessionState: SessionState, harness: HarnessId | null
     reasoningEffort,
     setReasoningEffort,
     handleModelChange,
-    enabledModelOptions,
+    enabledModelOptions: options,
     loadingEnabledModels,
+    modelAvailability,
   };
 }

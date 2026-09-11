@@ -495,6 +495,36 @@ class TestTranslation:
         assert [e for e in events if e["type"] == "token"] == []
 
     @pytest.mark.asyncio
+    async def test_first_party_tools_drop_their_mcp_qualification(self, tmp_path: Path) -> None:
+        turn = [
+            AssistantMessage(
+                content=[
+                    ToolUseBlock(
+                        id="tu_pr",
+                        name="mcp__oi__create-pull-request",
+                        input={"title": "t", "body": "b"},
+                    ),
+                    ToolUseBlock(
+                        id="tu_ext",
+                        name="mcp__linear__create_issue",
+                        input={"title": "bug"},
+                    ),
+                ],
+                model="m",
+                message_id="msg_1",
+            ),
+            _result(0.1),
+        ]
+        h = Harness(tmp_path, turns=[turn])
+        await h.harness.open()
+        await h.harness.create_session()
+        events, _ = await _run(h.harness)
+        tools = [e["tool"] for e in events if e["type"] == "tool_call"]
+        # First-party tools carry the ids OpenCode emits; external MCP tools
+        # keep their server-qualified names.
+        assert tools == ["create-pull-request", "mcp__linear__create_issue"]
+
+    @pytest.mark.asyncio
     async def test_compaction_and_provider_warnings(self, tmp_path: Path) -> None:
         turn = [
             SystemMessage(subtype="compact_boundary", data={}),

@@ -37,8 +37,8 @@ type ModelReasoningSelectorProps = {
   items: ModelCategory[];
   onModelChange: (model: ValidModel) => void;
   onReasoningEffortChange: (effort: ReasoningEffort | undefined) => void;
-  /** Agent harness shown as the trigger's prefix; omitted while unknown. */
-  harness?: HarnessId | null;
+  /** Agent harness shown as the trigger's prefix. */
+  harness?: HarnessId;
   /** Adds an Agent row to the menu; leave unset once the session's harness is fixed. */
   onHarnessChange?: (harness: HarnessId) => void;
   disabled?: boolean;
@@ -56,7 +56,7 @@ export function ModelReasoningSelector({
   items,
   onModelChange,
   onReasoningEffortChange,
-  harness = null,
+  harness,
   onHarnessChange,
   disabled = false,
 }: ModelReasoningSelectorProps) {
@@ -67,7 +67,7 @@ export function ModelReasoningSelector({
   const effortLabel = selectedEffort ? formatEffort(selectedEffort) : "Default";
   const modelLabel = formatModelNameLower(selectedModel);
   const harnessLabel = harness ? getHarnessLabel(harness) : null;
-  const canChangeHarness = harness !== null && onHarnessChange !== undefined;
+  const canChangeHarness = harness !== undefined && onHarnessChange !== undefined;
   const triggerLabel = [
     harnessLabel ? `Agent, model and effort: ${harnessLabel}` : "Model and effort:",
     modelLabel,

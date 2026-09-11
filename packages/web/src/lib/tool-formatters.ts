@@ -49,16 +49,24 @@ function getArrayArg(
   return Array.isArray(value) ? value : undefined;
 }
 
-const SUBTASK_ROOT_TOOLS: ReadonlySet<string> = new Set(["task", "agent"]);
+const SUBTASK_ROOT_TOOL = "task";
 
-/** Whether a tool call opens a nested subtask (OpenCode `task`, Claude Agent `Agent`). */
+/**
+ * Whether a tool call opens a nested subtask. Both harnesses report the root
+ * as `task`; the Claude runtime maps its sub-agent tool at the event boundary.
+ */
 export function isSubtaskRootTool(tool: string | undefined): boolean {
-  return SUBTASK_ROOT_TOOLS.has(tool?.toLowerCase() ?? "");
+  return tool?.toLowerCase() === SUBTASK_ROOT_TOOL;
 }
 
 const MCP_TOOL_PREFIX = "mcp__";
 
-/** Splits a Claude Agent MCP tool name (`mcp__<server>__<tool>`) into its parts. */
+/**
+ * Splits an external MCP tool name (`mcp__<server>__<tool>`) into its parts.
+ * First-party tools never arrive qualified: the Claude runtime strips its own
+ * server prefix at the event boundary, so they hit the same branches as
+ * OpenCode's.
+ */
 export function parseMcpToolName(
   tool: string | undefined
 ): { server: string; tool: string } | null {
@@ -155,7 +163,7 @@ export interface FormattedToolCall {
  * Tool names are matched case-insensitively: OpenCode reports lowercase names
  * (`read`, `todowrite`) while the Claude Agent SDK capitalizes them (`Read`,
  * `TodoWrite`). Argument keys differ the same way (OpenCode `filePath`, Claude
- * Agent `file_path`), so each branch accepts both spellings. Claude Agent MCP
+ * Agent `file_path`), so each branch accepts both spellings. External MCP
  * tools arrive as `mcp__<server>__<tool>`.
  */
 export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
@@ -262,11 +270,10 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
       };
     }
 
-    case "task":
-    case "agent": {
+    case "task": {
       const description = getStringArg(args, "description");
       return {
-        toolName: normalizedTool === "agent" ? "Agent" : "Task",
+        toolName: "Task",
         summary: description ?? "task",
         icon: "box",
         getDetails: () => ({ args, output }),
@@ -340,7 +347,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
     }
 
     case "apply_patch": {
-      const patchText = getStringArg(args, "patchText", "patch_text", "patch");
+      const patchText = getStringArg(args, "patchText");
       const patchSummary = summarizeApplyPatch(patchText);
 
       let summary = "patch";

@@ -25,6 +25,8 @@ interface AutomationAgentFieldsProps {
   value: AutomationAgentDraft;
   resolvedModel: string;
   enabledModelOptions: ModelCategory[];
+  /** Why no listed model can be submitted, shown under the picker. */
+  modelError?: string;
   onChange: (value: AutomationAgentDraft) => void;
 }
 
@@ -32,6 +34,7 @@ export function AutomationAgentFields({
   value,
   resolvedModel,
   enabledModelOptions,
+  modelError = "",
   onChange,
 }: AutomationAgentFieldsProps) {
   const reasoningConfig = getReasoningConfig(resolvedModel);
@@ -108,6 +111,11 @@ export function AutomationAgentFields({
         <FieldDescription>
           Model used for the agent on each run of this automation.
         </FieldDescription>
+        {modelError && (
+          <p role="alert" className="mt-1 text-xs text-destructive">
+            {modelError}
+          </p>
+        )}
       </div>
 
       <div>

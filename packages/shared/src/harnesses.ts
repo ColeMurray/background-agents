@@ -123,6 +123,33 @@ export function selectedProviderAuthModes(
   );
 }
 
+/**
+ * Explicit selections the harness can honour. A selection is dropped only
+ * when the harness runs that provider but not in the selected mode (an
+ * Anthropic account on OpenCode): kept, it would fail every session or run
+ * created with it. A provider the harness does not run at all cannot be
+ * reached through it, so that selection survives a switch back untouched.
+ * Returns the same object when nothing changes.
+ */
+export function reconcileProviderSelectionsForHarness(
+  harness: HarnessId,
+  selections: ModelProviderSelections
+): ModelProviderSelections {
+  const providerAuth = getHarnessCapabilities(harness).providerAuth;
+  const next: ModelProviderSelections = {};
+  let changed = false;
+  for (const [provider, selection] of Object.entries(selections)) {
+    if (!selection) continue;
+    const modes = providerAuth[provider];
+    if (modes !== undefined && !modes.includes(selection.mode)) {
+      changed = true;
+      continue;
+    }
+    next[provider as keyof ModelProviderSelections] = selection;
+  }
+  return changed ? next : selections;
+}
+
 export interface HarnessCompatibilityError {
   readonly code: "model" | "provider_auth";
   readonly message: string;

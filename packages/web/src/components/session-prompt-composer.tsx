@@ -27,8 +27,8 @@ type SessionPromptComposerProps = {
     onArchive: () => void | Promise<void>;
     onUnarchive: () => void | Promise<void>;
     capabilities: SessionCapabilities;
-    /** Agent harness the session runs on; null while the state does not report one. */
-    harness?: HarnessId | null;
+    /** Agent harness the session runs on; fixed at create. */
+    harness: HarnessId;
   };
   prompt: {
     value: string;

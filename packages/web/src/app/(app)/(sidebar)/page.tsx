@@ -23,15 +23,14 @@ import {
   type ReasoningEffort,
   type ValidModel,
 } from "@open-inspect/shared/models";
-import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
+import type { ModelPreference } from "@/lib/model-selection";
 import {
   DEFAULT_HARNESS,
-  filterModelsForHarness,
-  getHarnessLabel,
   getValidHarnessOrDefault,
+  reconcileProviderSelectionsForHarness,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
-import { filterModelOptionsForHarness } from "@/lib/session-harness";
+import { resolveHarnessModelSelection } from "@/lib/session-harness";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import {
@@ -167,9 +166,14 @@ export default function Home() {
     hasHydratedModelPreferencesRef.current = true;
   }, []);
 
-  const availableProviderSelections = providerAccounts.loading
-    ? providerSelections
-    : reconcileProviderSelections(providerSelections, providerAccounts.accounts);
+  // Selections both the account list and the harness can honour. The effect
+  // below persists any change, so a pin the harness cannot use stays dropped.
+  const availableProviderSelections = reconcileProviderSelectionsForHarness(
+    harness,
+    providerAccounts.loading
+      ? providerSelections
+      : reconcileProviderSelections(providerSelections, providerAccounts.accounts)
+  );
 
   useEffect(() => {
     if (
@@ -194,19 +198,26 @@ export default function Home() {
 
   // The harness fixes which enabled models can be picked; a stored or drafted
   // model the harness cannot run resolves to a compatible one instead.
-  const harnessModels = useMemo(
-    () => filterModelsForHarness(harness, enabledModels),
-    [enabledModels, harness]
+  const modelSelection = useMemo(
+    () =>
+      resolveHarnessModelSelection({
+        harness,
+        preference: modelPreferenceDraft ?? storedPreference,
+        enabledModels,
+        enabledModelOptions,
+        loading: loadingEnabledModels,
+      }),
+    [
+      enabledModelOptions,
+      enabledModels,
+      harness,
+      loadingEnabledModels,
+      modelPreferenceDraft,
+      storedPreference,
+    ]
   );
-  const harnessModelOptions = useMemo(
-    () => filterModelOptionsForHarness(harness, enabledModelOptions),
-    [enabledModelOptions, harness]
-  );
-  const harnessHasModels = loadingEnabledModels || harnessModels.length > 0;
-  const { model: selectedModel, reasoningEffort } = resolveModelPreference(
-    modelPreferenceDraft ?? storedPreference,
-    loadingEnabledModels ? undefined : harnessModels
-  );
+  const { model: selectedModel, reasoningEffort } = modelSelection;
+  const harnessHasModels = modelSelection.availability.status !== "unavailable";
 
   const warmRequest: WarmDraftSessionRequest | null =
     canCreateSession &&
@@ -311,8 +322,8 @@ export default function Home() {
     }
     const hasAttachments = sessionAttachments.attachments.length > 0;
     if (!prompt.trim() && !hasAttachments) return;
-    if (!harnessHasModels) {
-      setError(`No enabled models can run on ${getHarnessLabel(harness)}.`);
+    if (modelSelection.availability.status === "unavailable") {
+      setError(modelSelection.availability.message);
       return;
     }
     if (!isLaunchable) {
@@ -403,7 +414,7 @@ export default function Home() {
       providerSelectionsHydrated={providerSelectionsHydrated}
       error={error}
       handleSubmit={handleSubmit}
-      modelOptions={harnessModelOptions}
+      modelOptions={modelSelection.options}
       skillSelection={skillSelection}
       setSkillSelection={setSkillSelection}
       skillPreviewTarget={currentSkillPreviewTarget}
@@ -647,6 +658,7 @@ function HomeContent({
 
                     {selectedProvider && (
                       <ProviderAuthControls
+                        harness={harness}
                         variant="menu"
                         provider={selectedProvider}
                         accounts={providerAccounts.accounts}

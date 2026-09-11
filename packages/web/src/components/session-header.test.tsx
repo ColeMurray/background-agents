@@ -58,6 +58,7 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
     branchName: "feature/status-icons",
     status: "active",
     sandboxStatus: "ready",
+    harness: "opencode",
     messageCount: 0,
     createdAt: 1,
     ...overrides,

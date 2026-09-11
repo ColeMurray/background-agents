@@ -68,7 +68,7 @@ function ComposerHarness({
   withSkill = false,
   blockedReason,
   canManageLifecycle = true,
-  harness = null,
+  harness = "opencode",
 }: {
   initialValue?: string;
   isProcessing?: boolean;
@@ -79,7 +79,7 @@ function ComposerHarness({
   withSkill?: boolean;
   blockedReason?: string;
   canManageLifecycle?: boolean;
-  harness?: "opencode" | "claude" | null;
+  harness?: "opencode" | "claude";
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -154,7 +154,7 @@ describe("SessionPromptComposer", () => {
     fireEvent.change(input, { target: { value: "Updated while connecting" } });
     expect(screen.getByDisplayValue("Updated while connecting")).toBeEnabled();
     expect(screen.getByTitle("Attach images")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Model and effort" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /model and effort/i })).toBeEnabled();
     expect(screen.getByTitle(/Send/)).toBeDisabled();
   });
 
@@ -203,7 +203,7 @@ describe("SessionPromptComposer", () => {
   it("keeps model controls editable while processing and blocks terminal sessions", () => {
     const { rerender } = render(<ComposerHarness initialValue="Follow up" isProcessing />);
     expect(screen.getByTitle("Queue follow-up; runs after the current prompt")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Model and effort" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /model and effort/i })).toBeEnabled();
 
     rerender(<ComposerHarness initialValue="Cannot send" status="archived" />);
     expect(screen.getByTitle(/Send/)).toBeDisabled();
@@ -260,13 +260,10 @@ describe("SessionPromptComposer", () => {
   });
 
   it("hands the session's fixed agent harness to the model control without an editor", () => {
-    const { rerender } = render(<ComposerHarness harness="claude" />);
+    render(<ComposerHarness harness="claude" />);
 
     const trigger = screen.getByRole("button", { name: "Agent, model and effort: claude" });
     expect(trigger).toHaveAttribute("data-agent-editable", "false");
     expect(screen.queryByRole("button", { name: /switch agent/i })).not.toBeInTheDocument();
-
-    rerender(<ComposerHarness harness={null} />);
-    expect(screen.getByRole("button", { name: "Model and effort" })).toBeInTheDocument();
   });
 });

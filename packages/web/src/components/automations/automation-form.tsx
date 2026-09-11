@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useCallback, useState, useMemo } from "react";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
-import { DEFAULT_MODEL, resolveEnabledModel } from "@open-inspect/shared/models";
-import { filterModelsForHarness } from "@open-inspect/shared/harnesses";
-import { filterModelOptionsForHarness } from "@/lib/session-harness";
+import { reconcileProviderSelectionsForHarness } from "@open-inspect/shared/harnesses";
+import { resolveHarnessModelSelection } from "@/lib/session-harness";
 import { SUBSCRIPTION_PROVIDER_IDS } from "@open-inspect/shared/types/provider-accounts";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
@@ -26,6 +25,7 @@ import {
   createAutomationFormDraft,
   evaluateAutomationForm,
   requiresRepositoryContext,
+  type AutomationAgentDraft,
   type AutomationFormValues,
 } from "./automation-form-policy";
 
@@ -70,39 +70,42 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   });
   const { selectedEnvironmentIds, buildRepositoriesPayload } = targets;
 
-  // The harness fixes which enabled models the selector lists and can submit.
-  const harnessEnabledModels = useMemo(
-    () => filterModelsForHarness(agent.harness, enabledModels),
-    [agent.harness, enabledModels]
-  );
-  const harnessModelOptions = useMemo(
-    () => filterModelOptionsForHarness(agent.harness, enabledModelOptions),
-    [agent.harness, enabledModelOptions]
-  );
-
-  // The model we display and submit. The selector only lists enabled models the
-  // harness can run, so a disabled default (blank create), a disabled saved
-  // model (edit), a disabled template suggestion, or a model the harness cannot
-  // run is coerced to a listed one. Until preferences load we can't know the
-  // enabled set, so the raw selection stands and submit is blocked — keeping
-  // display, reasoning, and the payload in agreement without relying on a
-  // post-load effect.
-  const resolvedModel = useMemo(
+  // The model we display and submit, and whether it may be submitted. The
+  // selector only lists enabled models the harness can run, so a disabled
+  // default (blank create), a disabled saved model (edit), a disabled template
+  // suggestion, or a model the harness cannot run is coerced to a listed one.
+  // Until preferences load we can't know the enabled set, so the selection
+  // stands and submit is blocked; when the harness can run none of the enabled
+  // models the form says so and blocks too — keeping display, reasoning, and
+  // the payload in agreement without relying on a post-load effect.
+  const modelSelection = useMemo(
     () =>
-      loadingModels
-        ? agent.model
-        : resolveEnabledModel({
-            model: agent.model,
-            enabledModels: harnessEnabledModels,
-            fallbackModel: DEFAULT_MODEL,
-          }),
-    [agent.model, harnessEnabledModels, loadingModels]
+      resolveHarnessModelSelection({
+        harness: agent.harness,
+        preference: { model: agent.model },
+        enabledModels,
+        enabledModelOptions,
+        loading: loadingModels,
+      }),
+    [agent.harness, agent.model, enabledModelOptions, enabledModels, loadingModels]
   );
+  const resolvedModel = modelSelection.model;
+  const modelError =
+    modelSelection.availability.status === "unavailable" ? modelSelection.availability.message : "";
+
+  // A harness switch drops pins the new harness cannot honour, so the form
+  // never offers to save a configuration the server would refuse.
+  const handleAgentChange = useCallback((next: AutomationAgentDraft) => {
+    setAgent(next);
+    setProviderSelections((current) =>
+      reconcileProviderSelectionsForHarness(next.harness, current)
+    );
+  }, []);
 
   const formEvaluation = evaluateAutomationForm({
     mode,
     originalTrigger: initialDraft.trigger,
-    loadingModels,
+    modelAvailability: modelSelection.availability,
     resolvedModel,
     draft: {
       name,
@@ -171,8 +174,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       <AutomationAgentFields
         value={agent}
         resolvedModel={resolvedModel}
-        enabledModelOptions={harnessModelOptions}
-        onChange={setAgent}
+        enabledModelOptions={modelSelection.options}
+        modelError={modelError}
+        onChange={handleAgentChange}
       />
 
       <fieldset className="space-y-3 rounded-md border border-border-muted p-4">
@@ -187,6 +191,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           <ProviderAuthControls
             key={provider}
             provider={provider}
+            harness={agent.harness}
             accounts={providerAccounts.accounts}
             defaultValue={providerAccounts.defaults.find((item) => item.provider === provider)}
             value={providerSelections[provider]}

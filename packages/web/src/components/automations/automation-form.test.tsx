@@ -7,6 +7,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
 import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
+import { DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
 import { AutomationForm, type AutomationFormValues } from "./automation-form";
 import { CronPicker } from "./cron-picker";
 
@@ -1243,7 +1244,7 @@ describe("agent harness", () => {
     submit();
 
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
-      harness: "opencode",
+      harness: DEFAULT_HARNESS,
       model: "openai/gpt-5.4",
     });
   });
@@ -1270,5 +1271,41 @@ describe("agent harness", () => {
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ harness: "claude", model: DEFAULT_MODEL });
+  });
+
+  it("drops a connected Anthropic account pin when the harness switches to OpenCode", () => {
+    enabledModelsValue = ["openai/gpt-5.4", DEFAULT_MODEL];
+    const accountId = "b".repeat(32);
+    const { onSubmit, submit } = renderForm(
+      {
+        harness: "claude",
+        model: DEFAULT_MODEL,
+        providerSelections: { anthropic: { mode: "provider_account", accountId } },
+      },
+      "edit"
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Agent harness" }));
+    fireEvent.click(screen.getByRole("option", { name: "OpenCode" }));
+    submit();
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      harness: "opencode",
+      model: DEFAULT_MODEL,
+      providerSelections: {},
+    });
+  });
+
+  it("blocks submission and says so when the harness can run none of the enabled models", () => {
+    enabledModelsValue = ["openai/gpt-5.4"];
+    const { onSubmit, submit } = renderForm({ harness: "claude" }, "edit");
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "No enabled models can run on Claude Agent."
+    );
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    submit();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

@@ -116,14 +116,12 @@ describe("formatToolCall Claude Agent tool names", () => {
     });
   });
 
-  it("formats Agent like task and treats both as subtask roots", () => {
-    expect(formatToolCall(toolCall("Agent", { description: "Audit tests" }))).toMatchObject({
-      toolName: "Agent",
-      summary: "Audit tests",
-      icon: "box",
-    });
-    expect(isSubtaskRootTool("Agent")).toBe(true);
+  it("treats only the runtime-neutral task tool as a subtask root", () => {
+    // The Claude runtime maps its Agent tool to `task` at the event boundary,
+    // so the vendor spelling never reaches the timeline.
     expect(isSubtaskRootTool("task")).toBe(true);
+    expect(isSubtaskRootTool("Task")).toBe(true);
+    expect(isSubtaskRootTool("Agent")).toBe(false);
     expect(isSubtaskRootTool("TaskCreate")).toBe(false);
     expect(isSubtaskRootTool(undefined)).toBe(false);
   });
