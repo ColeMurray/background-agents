@@ -328,6 +328,11 @@ async def test_upload_media_video_carries_every_required_field(tmp_path: Path) -
         assert f"require {missing}" in _text(await tools.upload_media(args))
         assert seen == []
 
+    seen.clear()
+    text = _text(await tools.upload_media({**video, "hasAudio": True}))
+    assert "do not support audio" in text
+    assert seen == []
+
 
 @pytest.mark.asyncio
 async def test_upload_media_rejects_unsupported_files(tmp_path: Path) -> None:

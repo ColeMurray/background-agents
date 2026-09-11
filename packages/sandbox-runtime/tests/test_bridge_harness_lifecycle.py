@@ -132,13 +132,44 @@ class TestSessionIdentity:
         assert bridge.agent_session_id == harness.session_id == "oc-session-new"
         assert bridge.session_id_file.read_text() == "oc-session-new"
 
+    @pytest.mark.asyncio
+    async def test_an_id_rotated_during_a_turn_is_persisted(self, tmp_path: Path) -> None:
+        # A conversation reset gives the vendor session a new id mid-connection;
+        # the file a restore resumes from must follow it.
+        class RotatingHarness(ScriptedHarness):
+            async def run_prompt(self, prompt, emit):
+                self.session_id = "rotated-id"
+                return TurnOutcome.ok()
+
+        bridge = _bridge(RotatingHarness(session_id="original-id"))
+        bridge._configure_git_identity = AsyncMock()
+        bridge._send_event = AsyncMock()
+        bridge.session_id_file = tmp_path / "agent-session-id"
+        bridge.session_id_file.write_text("original-id")
+
+        await bridge._handle_command(
+            {
+                "type": "prompt",
+                "messageId": "m1",
+                "content": "hi",
+                "model": "claude-sonnet-4-6",
+                "author": {"userId": "user-1", "gitIdentity": {"mode": "agent-only"}},
+            }
+        )
+        task = bridge._current_prompt_task
+        assert task is not None
+        await task
+
+        assert bridge.session_id_file.read_text() == "rotated-id"
+
 
 class TestHarnessContracts:
     def test_only_deployable_harness_ids_parse(self) -> None:
         assert parse_harness_id(None) is HarnessId.OPENCODE
         assert parse_harness_id("opencode") is HarnessId.OPENCODE
-        with pytest.raises(ValueError, match="Unsupported harness: 'claude'"):
-            parse_harness_id("claude")
+        assert parse_harness_id("claude") is HarnessId.CLAUDE
+        with pytest.raises(ValueError, match="Unsupported harness: 'codex'"):
+            parse_harness_id("codex")
 
     def test_turn_outcome_rejects_contradictions(self) -> None:
         with pytest.raises(ValueError, match="cancelled"):

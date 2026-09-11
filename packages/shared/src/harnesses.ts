@@ -20,7 +20,7 @@ import type {
   SessionProviderAuthMode,
 } from "./types/provider-accounts";
 
-export const HARNESS_IDS = ["opencode"] as const;
+export const HARNESS_IDS = ["opencode", "claude"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 export const DEFAULT_HARNESS: HarnessId = "opencode";
 export const harnessIdSchema = z.enum(HARNESS_IDS);
@@ -32,8 +32,6 @@ export interface HarnessCapabilities {
   readonly modelFamilies: "any" | readonly string[];
   /** Provider id → auth modes the harness can *select* for that provider. */
   readonly providerAuth: Readonly<Partial<Record<string, readonly ProviderAuthMode[]>>>;
-  /** Whether the harness surfaces thinking text to the timeline. */
-  readonly reasoningDisplay: boolean;
   /** How a sandbox restore resumes the conversation. */
   readonly resume: "session_id";
 }
@@ -47,7 +45,14 @@ export const HARNESS_CATALOG = {
       openai: ["api_key", "provider_account"],
       xai: ["api_key", "provider_account"],
     },
-    reasoningDisplay: false,
+    resume: "session_id",
+  },
+  claude: {
+    label: "Claude Agent",
+    modelFamilies: ["anthropic"],
+    providerAuth: {
+      anthropic: ["api_key", "provider_account"],
+    },
     resume: "session_id",
   },
 } as const satisfies Record<HarnessId, HarnessCapabilities>;

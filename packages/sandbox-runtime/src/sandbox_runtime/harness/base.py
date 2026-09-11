@@ -31,6 +31,7 @@ class HarnessId(StrEnum):
     """Harnesses this runtime can run. Only deployable implementations are listed."""
 
     OPENCODE = "opencode"
+    CLAUDE = "claude"
 
 
 DEFAULT_HARNESS_ID = HarnessId.OPENCODE
@@ -151,6 +152,7 @@ class AgentHarness(Protocol):
         ...
 
 
+@runtime_checkable
 class HarnessProcessOwner(Protocol):
     """Supervisor half of the seam: staging plus any resident vendor process."""
 

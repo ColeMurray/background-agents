@@ -48,6 +48,7 @@ from .harness import (
     DEFAULT_HARNESS_ID,
     DETERMINISTIC_FAILURE_EXIT_CODE,
     AgentHarness,
+    BridgeIdentity,
     HarnessId,
     HarnessPrompt,
     HarnessStartError,
@@ -201,6 +202,13 @@ class AgentBridge:
         # registry in production.
         self.harness: AgentHarness = harness or build_agent_harness(
             harness_id,
+            identity=BridgeIdentity(
+                sandbox_id=sandbox_id,
+                session_id=session_id,
+                control_plane_url=control_plane_url,
+                auth_token=auth_token,
+                repo_manifest_path=self.repo_manifest_path,
+            ),
             attachment_processor=self.attachment_processor,
             log=self.log,
             limits=self.prompt_limits,
@@ -706,6 +714,7 @@ class AgentBridge:
                 ),
                 emit,
             )
+            await self._persist_rotated_session_id()
             # The outcome is authoritative for cost and success once it
             # exists; the bridge adds only the no-output guard below.
             if turn.message_cost_usd is not None:
@@ -846,6 +855,16 @@ class AgentBridge:
             self.log.error("agent.session.load_error", exc=e)
             return
         if resumed:
+            await self._save_session_id()
+
+    async def _persist_rotated_session_id(self) -> None:
+        """A conversation reset rotates the vendor id mid-connection; keep the file current."""
+        try:
+            persisted = self._read_persisted_session_id()
+        except Exception as e:
+            self.log.error("agent.session.load_error", exc=e)
+            return
+        if self.agent_session_id and self.agent_session_id != persisted:
             await self._save_session_id()
 
     async def _save_session_id(self) -> None:
