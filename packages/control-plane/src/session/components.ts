@@ -514,11 +514,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     () => messageQueue.broadcastPromptQueue(),
     budgetService,
     transaction,
-    {
-      hasTitle: () => Boolean(sessionCoreRepository.getSession()?.title),
-      apply: (title) => {
-        titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
-      },
+    (title) => {
+      titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
     }
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(

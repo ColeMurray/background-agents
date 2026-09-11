@@ -42,23 +42,20 @@ export class SandboxExecutionEventHandler {
       "observeExecutionCost" | "deliverTransition"
     >,
     private readonly transaction: <T>(closure: () => T) => T,
-    private readonly titleFallback: {
-      hasTitle: () => boolean;
-      apply: (title: string) => void;
-    }
+    private readonly offerFallbackTitle: (title: string) => void
   ) {}
 
   /**
    * A harness that never suggests a title (the Claude harness emits no
    * `session_title`) leaves the session untitled forever. Once its first turn
-   * settles, fall back to the prompt text. A vendor suggestion that arrived
-   * mid-turn has already set the title, so it wins.
+   * settles, offer the prompt text. The offer lands only while the title is
+   * still unset (null or blank): that one atomic write owns the rule, so a
+   * vendor suggestion that arrived mid-turn wins.
    */
   private applyFallbackTitle(messageId: string): void {
-    if (this.titleFallback.hasTitle()) return;
     const content = this.messageRepository.getMessageContent(messageId);
     const title = content ? deriveFallbackSessionTitle(content) : null;
-    if (title) this.titleFallback.apply(title);
+    if (title) this.offerFallbackTitle(title);
   }
 
   async handleExecutionComplete(

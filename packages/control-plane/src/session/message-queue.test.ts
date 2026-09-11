@@ -164,6 +164,7 @@ function buildQueue() {
     listUnfinishedMessages: vi.fn((): MessageRow[] => []),
     listPromptQueue: vi.fn(() => []),
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
+    getMessageContent: vi.fn(() => null as string | null),
     getMessageAwaitingStopConfirmation: vi.fn(() => awaitingStop),
     clearMessageAwaitingStopConfirmation: vi.fn((messageId: string) => {
       if (awaitingStop?.id === messageId) awaitingStop = null;
@@ -363,7 +364,7 @@ describe("SessionMessageQueue", () => {
       () => h.queue.broadcastPromptQueue(),
       budget,
       (closure) => closure(),
-      { hasTitle: () => true, apply: () => {} }
+      () => {}
     );
     const finishing = handler.handleExecutionComplete(
       {
