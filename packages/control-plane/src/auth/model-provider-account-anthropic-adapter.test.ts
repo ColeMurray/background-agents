@@ -28,7 +28,7 @@ describe("AnthropicModelProviderAccountAdapter", () => {
       AnthropicModelProviderAccountAdapter
     );
     expect(modelProviderAccountAdapterRegistry.runtimeCredentialKind("anthropic")).toBe(
-      "sandbox_bootstrap_secret"
+      "stored_provider_secret"
     );
     expect(modelProviderAccountAdapterRegistry.requireAuthorizationCode("anthropic")).toMatchObject(
       { stateSchemaVersion: 1 }
