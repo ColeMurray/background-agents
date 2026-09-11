@@ -1,5 +1,5 @@
 /**
- * Sandbox bootstrap delivery for static provider credentials.
+ * Delivery of stored provider secrets to sandboxes.
  *
  * `POST /sessions/:id/provider-auth/:provider/runtime-credential` is the
  * second result type of the sandbox broker boundary: where the access-token
@@ -38,12 +38,12 @@ const EXPIRY_GUARD_MS = 60 * 60 * 1000;
 
 export const providerRuntimeCredentialRoutes = new Hono<ControlPlaneHonoEnv>();
 
-interface BootstrapCredential {
+interface StoredCredential {
   token: string;
   expiresAt: number;
 }
 
-function bootstrapCredential(payload: unknown): BootstrapCredential | null {
+function storedCredential(payload: unknown): StoredCredential | null {
   if (!payload || typeof payload !== "object") return null;
   const record = payload as Record<string, unknown>;
   if (typeof record.token !== "string" || record.token.length === 0) return null;
@@ -62,9 +62,9 @@ async function handleRuntimeCredential(
   if (!parsedProvider.success) return error("Unsupported provider", 400);
   const provider = parsedProvider.data;
   const registry = modelProviderAccountAdapterRegistry;
-  if (registry.runtimeCredentialKind(provider) !== "sandbox_bootstrap_secret") {
+  if (registry.runtimeCredentialKind(provider) !== "stored_provider_secret") {
     return error(
-      "Provider does not deliver a bootstrap credential; use the access-token route",
+      "Provider does not deliver a stored provider secret; use the access-token route",
       409
     );
   }
@@ -107,12 +107,12 @@ async function handleRuntimeCredential(
   const credentials = new ProviderCredentialStore(ctx.db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY);
   const state = await credentials.readCredentialState(account.id, provider);
   if (!state) return error("Provider credential not found", 409);
-  let credential: BootstrapCredential | null;
+  let credential: StoredCredential | null;
   try {
     const parsed = registry
       .require(provider)
       .parseCredential(state.payload, state.credentialSchemaVersion);
-    credential = bootstrapCredential(parsed);
+    credential = storedCredential(parsed);
   } catch {
     credential = null;
   }
@@ -159,7 +159,7 @@ async function handleRuntimeCredential(
   });
   await accounts.touchLastUsed(account.id, account.lastUsedAt ?? 0, now).catch(() => false);
   return json({
-    kind: "sandbox_bootstrap_secret",
+    kind: "stored_provider_secret",
     secret: credential.token,
     credentialVersion: state.credentialVersion,
     expiresAt: credential.expiresAt,

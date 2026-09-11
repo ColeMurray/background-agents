@@ -115,7 +115,7 @@ export class AnthropicModelProviderAccountAdapter implements ModelProviderAccoun
   /** Manual "Verify" would only prove the token is a token; nothing to call. */
   readonly supportsVerification = false;
   /** Runtime credentials are the token itself, delivered at sandbox boot. */
-  readonly runtimeCredentialKind = "sandbox_bootstrap_secret" as const;
+  readonly runtimeCredentialKind = "stored_provider_secret" as const;
 
   constructor(
     readonly authorizationCode: ProviderAuthorizationCodeCapability<

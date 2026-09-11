@@ -131,7 +131,7 @@ BEGIN
   VALUES (NEW.id, 'anthropic', 'api_key', 'legacy_migration', NEW.created_at);
 END;
 
--- 4. Sandbox bootstrap issuance: every time a sandbox receives a static
+-- 4. Stored-secret issuance: every time a sandbox receives a stored
 --    provider credential the control plane records who got which version, so
 --    disable/archive/reconnect can terminate exactly those sandboxes.
 CREATE TABLE model_provider_credential_issuances (
@@ -155,7 +155,7 @@ CREATE INDEX idx_provider_credential_issuances_session
   ON model_provider_credential_issuances(session_id, sandbox_id);
 
 -- 5. Durable cleanup outbox: written atomically with the account mutation
---    that revokes future bootstrap; drained by the fast path and the
+--    that revokes future issuance; drained by the fast path and the
 --    scheduled worker until every recorded issuance is terminated.
 CREATE TABLE model_provider_account_cleanup_outbox (
   id TEXT PRIMARY KEY,
@@ -176,7 +176,7 @@ CREATE INDEX idx_provider_account_cleanup_outbox_due
   ON model_provider_account_cleanup_outbox(next_attempt_at)
   WHERE processed_at IS NULL;
 
--- 6. The outbox is written by triggers, so revoking future bootstrap and
+-- 6. The outbox is written by triggers, so revoking future issuance and
 --    recording the cleanup are one statement for every mutation path
 --    (disable, archive, reconnect/rotate, expiry fence). Providers whose
 --    sandboxes never received a static secret drain with nothing to do.

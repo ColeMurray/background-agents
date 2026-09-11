@@ -69,7 +69,7 @@ export interface ErasedProviderAuthorizationCodeCapability {
  * minted per request (OpenAI, xAI), or the stored static secret itself,
  * delivered once at boot (Anthropic).
  */
-export type ProviderRuntimeCredentialKind = "brokered_access_token" | "sandbox_bootstrap_secret";
+export type ProviderRuntimeCredentialKind = "brokered_access_token" | "stored_provider_secret";
 
 interface ErasedProviderDeviceAuthorizationCapability {
   readonly stateSchemaVersion: number;

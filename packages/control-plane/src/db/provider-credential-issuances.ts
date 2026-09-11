@@ -1,5 +1,5 @@
 /**
- * Sandbox bootstrap issuance and the cleanup outbox.
+ * Stored-provider-secret issuance and the cleanup outbox.
  *
  * A static provider credential (a Claude setup token) is handed to a sandbox
  * once at boot. Every hand-out is an issuance row: which sandbox of which

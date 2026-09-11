@@ -61,7 +61,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Subscription provider account management and sandbox access broker
   modelProviderAccountRoutes,
-  // Sandbox bootstrap delivery of static provider credentials (Anthropic)
+  // Delivery of stored provider secrets to sandboxes (Anthropic)
   providerRuntimeCredentialRoutes,
 
   // Integration settings

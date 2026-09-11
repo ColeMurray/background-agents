@@ -74,7 +74,7 @@ async function fetchRuntimeCredential(
   );
 }
 
-describe("sandbox bootstrap credential delivery", () => {
+describe("stored provider secret delivery", () => {
   beforeEach(async () => {
     await cleanD1Tables();
     await env.DB.exec(
@@ -85,16 +85,16 @@ describe("sandbox bootstrap credential delivery", () => {
   it("delivers the setup token to the bound sandbox and records the issuance", async () => {
     const now = Date.now();
     await seedAnthropicAccount(now);
-    const sessionName = `bootstrap-${now}`;
+    const sessionName = `issuance-${now}`;
     const { stub } = await initNamedSession(sessionName, { providerAuth: anthropicSessionAuth() });
-    await seedSandboxAuth(stub, { authToken: "bootstrap-token", sandboxId: "sandbox-1" });
+    await seedSandboxAuth(stub, { authToken: "sandbox-token", sandboxId: "sandbox-1" });
 
-    const response = await fetchRuntimeCredential(sessionName, "bootstrap-token", "sandbox-1");
+    const response = await fetchRuntimeCredential(sessionName, "sandbox-token", "sandbox-1");
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toContain("no-store");
     expect(await response.json()).toEqual({
-      kind: "sandbox_bootstrap_secret",
+      kind: "stored_provider_secret",
       secret: "sk-ant-oat01-integration-secret",
       credentialVersion: 1,
       expiresAt: expect.any(Number),
@@ -112,11 +112,11 @@ describe("sandbox bootstrap credential delivery", () => {
   it("refuses a caller that names another sandbox", async () => {
     const now = Date.now();
     await seedAnthropicAccount(now);
-    const sessionName = `bootstrap-wrong-sandbox-${now}`;
+    const sessionName = `issuance-wrong-sandbox-${now}`;
     const { stub } = await initNamedSession(sessionName, { providerAuth: anthropicSessionAuth() });
-    await seedSandboxAuth(stub, { authToken: "bootstrap-token", sandboxId: "sandbox-1" });
+    await seedSandboxAuth(stub, { authToken: "sandbox-token", sandboxId: "sandbox-1" });
 
-    const response = await fetchRuntimeCredential(sessionName, "bootstrap-token", "sandbox-other");
+    const response = await fetchRuntimeCredential(sessionName, "sandbox-token", "sandbox-other");
 
     expect(response.status).toBe(403);
     expect(await new ProviderCredentialIssuanceStore(env.DB).listForSession(sessionName)).toEqual(
@@ -127,15 +127,15 @@ describe("sandbox bootstrap credential delivery", () => {
   it("refuses sessions that are not bound to a connected account", async () => {
     const now = Date.now();
     await seedAnthropicAccount(now);
-    const sessionName = `bootstrap-api-key-${now}`;
+    const sessionName = `issuance-api-key-${now}`;
     const { stub } = await initNamedSession(sessionName);
-    await seedSandboxAuth(stub, { authToken: "bootstrap-token", sandboxId: "sandbox-1" });
+    await seedSandboxAuth(stub, { authToken: "sandbox-token", sandboxId: "sandbox-1" });
 
-    const response = await fetchRuntimeCredential(sessionName, "bootstrap-token", "sandbox-1");
+    const response = await fetchRuntimeCredential(sessionName, "sandbox-token", "sandbox-1");
     expect(response.status).toBe(404);
   });
 
-  it("rejects brokered providers on the bootstrap route", async () => {
+  it("rejects brokered providers on the stored-secret route", async () => {
     const now = Date.now();
     await env.DB.prepare(
       `INSERT INTO model_provider_accounts
@@ -144,7 +144,7 @@ describe("sandbox bootstrap credential delivery", () => {
     )
       .bind(OPENAI_ACCOUNT_ID, now, now)
       .run();
-    const sessionName = `bootstrap-openai-${now}`;
+    const sessionName = `issuance-openai-${now}`;
     const { stub } = await initNamedSession(sessionName, {
       providerAuth: [
         {
@@ -157,11 +157,11 @@ describe("sandbox bootstrap credential delivery", () => {
         { provider: "anthropic", authMode: "api_key", selectionSource: "explicit" },
       ],
     });
-    await seedSandboxAuth(stub, { authToken: "bootstrap-token", sandboxId: "sandbox-1" });
+    await seedSandboxAuth(stub, { authToken: "sandbox-token", sandboxId: "sandbox-1" });
 
     const response = await fetchRuntimeCredential(
       sessionName,
-      "bootstrap-token",
+      "sandbox-token",
       "sandbox-1",
       "openai"
     );
@@ -171,11 +171,11 @@ describe("sandbox bootstrap credential delivery", () => {
   it("fences an expired token to reconnect_required and enqueues cleanup", async () => {
     const now = Date.now();
     await seedAnthropicAccount(now, now + 60_000);
-    const sessionName = `bootstrap-expired-${now}`;
+    const sessionName = `issuance-expired-${now}`;
     const { stub } = await initNamedSession(sessionName, { providerAuth: anthropicSessionAuth() });
-    await seedSandboxAuth(stub, { authToken: "bootstrap-token", sandboxId: "sandbox-1" });
+    await seedSandboxAuth(stub, { authToken: "sandbox-token", sandboxId: "sandbox-1" });
 
-    const response = await fetchRuntimeCredential(sessionName, "bootstrap-token", "sandbox-1");
+    const response = await fetchRuntimeCredential(sessionName, "sandbox-token", "sandbox-1");
 
     expect(response.status).toBe(409);
     const account = await new ModelProviderAccountStore(env.DB).getById(ANTHROPIC_ACCOUNT_ID);
@@ -189,17 +189,17 @@ describe("sandbox bootstrap credential delivery", () => {
   it("denies a disabled account, and the cleanup drains its live issuances", async () => {
     const now = Date.now();
     await seedAnthropicAccount(now);
-    const sessionName = `bootstrap-disable-${now}`;
+    const sessionName = `issuance-disable-${now}`;
     const { stub } = await initNamedSession(sessionName, { providerAuth: anthropicSessionAuth() });
-    await seedSandboxAuth(stub, { authToken: "bootstrap-token", sandboxId: "sandbox-1" });
-    expect((await fetchRuntimeCredential(sessionName, "bootstrap-token", "sandbox-1")).status).toBe(
+    await seedSandboxAuth(stub, { authToken: "sandbox-token", sandboxId: "sandbox-1" });
+    expect((await fetchRuntimeCredential(sessionName, "sandbox-token", "sandbox-1")).status).toBe(
       200
     );
 
     const accounts = new ModelProviderAccountStore(env.DB);
     expect(await accounts.setStatus(ANTHROPIC_ACCOUNT_ID, "disabled", null, now + 1)).toBe(true);
-    // Future bootstrap is denied immediately.
-    expect((await fetchRuntimeCredential(sessionName, "bootstrap-token", "sandbox-1")).status).toBe(
+    // Future issuance is denied immediately.
+    expect((await fetchRuntimeCredential(sessionName, "sandbox-token", "sandbox-1")).status).toBe(
       409
     );
     // The mutation enqueued the cleanup atomically (trigger).
@@ -231,7 +231,7 @@ describe("sandbox bootstrap credential delivery", () => {
 
   it("revoke-sandbox on the session runtime stops only the named sandbox", async () => {
     const now = Date.now();
-    const sessionName = `bootstrap-revoke-${now}`;
+    const sessionName = `issuance-revoke-${now}`;
     const { stub } = await initNamedSession(sessionName);
     await seedSandboxAuth(stub, { authToken: "t", sandboxId: "sandbox-1" });
 

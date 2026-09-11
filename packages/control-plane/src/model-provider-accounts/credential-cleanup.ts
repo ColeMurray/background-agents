@@ -1,5 +1,5 @@
 /**
- * Revocation coordinator for sandbox-bootstrapped credentials.
+ * Revocation coordinator for stored provider secrets issued to sandboxes.
  *
  * Drains the cleanup outbox: for every task, every live issuance at or below
  * the revoked credential version is terminated through a sandbox-id
