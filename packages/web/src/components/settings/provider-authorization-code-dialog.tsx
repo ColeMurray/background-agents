@@ -25,7 +25,7 @@ export type ProviderSetupTokenSubmission =
   | { operation: "reconnect"; providerAccountId: string; setupToken: string };
 
 export const ANTHROPIC_CREDENTIAL_ROTATION_WARNING =
-  "Running sessions that received this credential will be stopped. Reconnecting rotates what Open Inspect stores; it does not revoke the token at Anthropic.";
+  "Sessions that already received this credential keep it until their sandbox exits. Reconnecting rotates what Open Inspect stores; it does not revoke the token at Anthropic.";
 
 const PROVIDER_CONTENT = {
   anthropic: {
