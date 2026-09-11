@@ -103,7 +103,7 @@ exfiltration by code the agent chooses to run. The sandbox helpers (`oi-git-sign
 
 ## Lifecycle: disable, archive, reconnect
 
-Disabling, archiving or reconnecting a Claude account denies future bootstrap immediately and
+Disabling, archiving or reconnecting a Claude account denies future issuance immediately and
 enqueues a durable cleanup task in the same database write. A coordinator (run every minute by the
 scheduler) stops every sandbox that holds a live issuance at or below the revoked credential
 version, using a sandbox-id-conditional stop so a session whose sandbox was respawned since is
