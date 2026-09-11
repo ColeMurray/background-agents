@@ -412,6 +412,34 @@ describe("ProviderAccountsSettings", () => {
     );
   });
 
+  it("closes the setup token form once the connect succeeds even if the refresh fails", async () => {
+    refresh.mockRejectedValueOnce(new Error("Failed to load provider accounts"));
+    render(<ProviderAccountsSettings />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Claude" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Paste a setup token instead" }));
+    fireEvent.change(screen.getByLabelText("Setup token"), {
+      target: { value: "sk-ant-oat01-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Connect your Claude account" })
+      ).not.toBeInTheDocument()
+    );
+    expect(connectAccount).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledWith("Claude account connected");
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Saved, but the account list could not be refreshed. Reload the page to see it."
+      )
+    );
+  });
+
   it("reconnects a Claude account with a setup token against the explicit account", async () => {
     accountsResult = [claudeAccount];
     startAuthorizationCode.mockResolvedValue({ ...authorizationCodeStart, operation: "reconnect" });

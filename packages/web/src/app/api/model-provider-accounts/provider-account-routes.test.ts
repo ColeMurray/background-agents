@@ -189,6 +189,21 @@ describe("provider account BFF routes", () => {
     );
   });
 
+  it("refuses authorization codes for a provider that connects by device authorization", async () => {
+    const cookie = { Cookie: "openinspect.session_token=value" };
+    const response = await startAuthorizationCode(
+      new NextRequest("http://localhost/api/model-provider-accounts/authorization-codes/openai", {
+        method: "POST",
+        headers: cookie,
+        body: JSON.stringify({ operation: "create", displayName: "ChatGPT" }),
+      }),
+      { params: Promise.resolve({ provider: "openai" }) }
+    );
+
+    expect(response.status).toBe(400);
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid authorization code provider and transaction parameters", async () => {
     const cookie = { Cookie: "openinspect.session_token=value" };
     const invalidProvider = await startAuthorizationCode(

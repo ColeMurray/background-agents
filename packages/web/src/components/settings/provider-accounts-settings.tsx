@@ -231,15 +231,24 @@ export function ProviderAccountsSettings() {
     setSaving(true);
     try {
       await operation();
-      await refresh();
-      setConnection(null);
-      setConfirm(null);
-      toast.success(success);
     } catch (caught) {
       toast.error(caught instanceof Error ? caught.message : "Provider account request failed");
+      return;
     } finally {
       operationInFlightRef.current = false;
       setSaving(false);
+    }
+    // The write is durable once the request succeeds, so the form closes
+    // before the list refreshes: a refresh failure must not leave a form that
+    // would repeat the write (an identity-less setup-token account has no
+    // uniqueness backstop).
+    setConnection(null);
+    setConfirm(null);
+    toast.success(success);
+    try {
+      await refresh();
+    } catch {
+      toast.error("Saved, but the account list could not be refreshed. Reload the page to see it.");
     }
   }
 

@@ -72,8 +72,12 @@ function renderDialog(
     onClose: vi.fn(),
     ...overrides,
   };
-  render(<ProviderAuthorizationCodeDialog {...props} />);
-  return props;
+  const view = render(<ProviderAuthorizationCodeDialog {...props} />);
+  return {
+    ...props,
+    rerender: (next: Partial<typeof props>) =>
+      view.rerender(<ProviderAuthorizationCodeDialog {...props} {...next} />),
+  };
 }
 
 describe("ProviderAuthorizationCodeDialog", () => {
@@ -109,7 +113,12 @@ describe("ProviderAuthorizationCodeDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Complete" }));
 
     await waitFor(() =>
-      expect(completeAuthorization).toHaveBeenCalledWith("anthropic", transactionId, "code#state")
+      expect(completeAuthorization).toHaveBeenCalledWith(
+        "anthropic",
+        transactionId,
+        "code#state",
+        expect.any(AbortSignal)
+      )
     );
     await waitFor(() => expect(onConnected).toHaveBeenCalledWith(connected));
     expect(cancelAuthorization).not.toHaveBeenCalled();
@@ -126,7 +135,7 @@ describe("ProviderAuthorizationCodeDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Complete" }));
 
     expect(await screen.findByText("Invalid authorization code")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start over" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Complete" })).toBeEnabled();
     expect(document.querySelector('[aria-live="polite"]')).toHaveTextContent(
       "Authorization failed: Invalid authorization code"
@@ -141,7 +150,7 @@ describe("ProviderAuthorizationCodeDialog", () => {
     renderDialog();
 
     expect(await screen.findByText("Anthropic is temporarily unavailable")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start over" }));
 
     expect(await screen.findByRole("link", { name: "Open Anthropic" })).toBeInTheDocument();
     expect(startAuthorization).toHaveBeenCalledTimes(2);
@@ -179,9 +188,49 @@ describe("ProviderAuthorizationCodeDialog", () => {
       setupToken: "sk-ant-oat01-token",
     });
     expect(completeAuthorization).not.toHaveBeenCalled();
+    // Switching methods ended the browser transaction; Back starts a fresh one.
+    expect(cancelAuthorization).toHaveBeenCalledWith("anthropic", transactionId);
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(screen.getByRole("link", { name: "Open Anthropic" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Open Anthropic" })).toBeInTheDocument();
+    expect(startAuthorization).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers a fresh transaction after the provider rejects the code", async () => {
+    completeAuthorization.mockResolvedValueOnce({
+      status: "denied",
+      error: "Anthropic rejected the code",
+      retryable: false,
+    });
+    startAuthorization.mockResolvedValue(started);
+    renderDialog();
+    await screen.findByRole("link", { name: "Open Anthropic" });
+
+    fireEvent.change(screen.getByLabelText("Authorization code"), { target: { value: "used" } });
+    fireEvent.click(screen.getByRole("button", { name: "Complete" }));
+
+    expect(await screen.findByText("Anthropic rejected the code")).toBeInTheDocument();
+    expect(screen.getByLabelText("Authorization code")).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Start over" }));
+
+    await waitFor(() => expect(startAuthorization).toHaveBeenCalledTimes(2));
+    expect(await screen.findByLabelText("Authorization code")).toHaveValue("");
+  });
+
+  it("cancelling with a pasted code closes without completing it", async () => {
+    const { onClose } = renderDialog();
+    await screen.findByRole("link", { name: "Open Anthropic" });
+    fireEvent.change(screen.getByLabelText("Authorization code"), {
+      target: { value: "code#state" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    await waitFor(() =>
+      expect(cancelAuthorization).toHaveBeenCalledWith("anthropic", transactionId)
+    );
+    expect(completeAuthorization).not.toHaveBeenCalled();
   });
 
   it("offers no setup token for a slot the browser flow named", async () => {
@@ -213,14 +262,26 @@ describe("ProviderAuthorizationCodeDialog", () => {
     });
   });
 
-  it("disables the setup token form while a save is in flight", async () => {
-    renderDialog({ saving: true });
+  it("locks the setup token form, navigation and dismissal while a save is in flight", async () => {
+    const { onClose, rerender } = renderDialog();
     await screen.findByRole("link", { name: "Open Anthropic" });
-
     fireEvent.click(screen.getByRole("button", { name: "Paste a setup token instead" }));
     fireEvent.change(screen.getByLabelText("Setup token"), { target: { value: "token" } });
 
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    rerender({ saving: true });
+
+    expect(screen.getByRole("button", { name: "Saving..." })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(screen.getByLabelText("Setup token")).toBeDisabled();
+    expect(screen.getByLabelText("Account name")).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.keyDown(screen.getByLabelText("Setup token"), { key: "Escape" });
+    expect(screen.queryByRole("link", { name: "Open Anthropic" })).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    // The browser transaction ended when the method switched, so nothing can
+    // complete alongside the save.
+    expect(startAuthorization).toHaveBeenCalledOnce();
   });
 
   it("cancels the unfinished transaction when closed", async () => {

@@ -26,6 +26,11 @@ export type ProviderSetupTokenSubmission =
   | { operation: "create"; displayName: string; setupToken: string }
   | { operation: "reconnect"; providerAccountId: string; setupToken: string };
 
+type ConnectedAuthorization = Extract<
+  ProviderAuthorizationCodeStatusResponse,
+  { status: "connected" }
+>;
+
 export const ANTHROPIC_CREDENTIAL_ROTATION_WARNING =
   "Sessions that already received this credential keep it until their sandbox exits. Reconnecting rotates what Open Inspect stores; it does not revoke the token at Anthropic.";
 
@@ -44,6 +49,13 @@ function countdownLabel(remainingMs: number): string {
   return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+/**
+ * One connection method is mounted at a time. The browser flow lives in
+ * `AuthorizationCodeForm`, which owns its transaction: switching to the
+ * setup-token form unmounts it and cancels the transaction, and switching
+ * back starts a fresh one. While a setup token is being saved the dialog
+ * cannot be dismissed or switched, so two credential writes never overlap.
+ */
 export function ProviderAuthorizationCodeDialog({
   target,
   saving,
@@ -53,37 +65,19 @@ export function ProviderAuthorizationCodeDialog({
 }: {
   target: ProviderAuthorizationCodeTarget;
   saving: boolean;
-  onConnected: (
-    result: Extract<ProviderAuthorizationCodeStatusResponse, { status: "connected" }>
-  ) => void;
+  onConnected: (result: ConnectedAuthorization) => void;
   onSubmitSetupToken: (submission: ProviderSetupTokenSubmission) => void;
   onClose: () => void;
 }) {
-  const [code, setCode] = useState("");
-  const [setupTokenMode, setSetupTokenMode] = useState(false);
+  const [method, setMethod] = useState<"browser" | "setup_token">("browser");
   const content = PROVIDER_CONTENT[target.provider];
-  const { authorization, failure, status, remainingMs, complete, retry, cancel } =
-    useProviderAuthorizationCode(
-      target.provider,
-      target.operation === "create"
-        ? { operation: "create", displayName: content.defaultDisplayName }
-        : { operation: "reconnect", providerAccountId: target.providerAccountId },
-      onConnected
-    );
-
-  const close = () => {
-    cancel();
-    onClose();
-  };
-  const canComplete = status === "awaiting_code" && code.trim().length > 0;
-  const needsFreshTransaction = status === "failed" || status === "expired";
   // A slot the browser flow bound to a Claude account is reconnected the same
   // way, so the granting account can be verified; the control plane refuses a
   // pasted token there.
   const setupTokenAllowed = target.operation === "create" || target.externalAccountId === null;
 
   return (
-    <Dialog open onOpenChange={(open) => !open && close()}>
+    <Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
       <DialogContent className="max-h-[calc(100vh-2rem)] w-[calc(100%-1.5rem)] max-w-2xl overflow-y-auto p-0 sm:w-full">
         <div className="border-b border-border-muted bg-muted/30 px-5 py-5 sm:px-7">
           <div className="flex items-start gap-3">
@@ -109,126 +103,169 @@ export function ProviderAuthorizationCodeDialog({
           </div>
         </div>
 
-        {setupTokenMode ? (
+        {method === "setup_token" ? (
           <SetupTokenForm
             target={target}
             defaultDisplayName={content.defaultDisplayName}
             saving={saving}
             onSubmit={onSubmitSetupToken}
-            onBack={() => setSetupTokenMode(false)}
-            onCancel={close}
+            onBack={() => setMethod("browser")}
+            onCancel={onClose}
           />
         ) : (
-          <form
-            className="space-y-3 px-5 py-5 sm:px-7"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (canComplete) void complete(code);
-            }}
-          >
-            <AuthorizationStep number={1} title="Open Anthropic and grant access to Claude Agent.">
-              {authorization ? (
-                <Button asChild size="sm" variant="outline">
-                  <a
-                    href={authorization.authorizationUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Open Anthropic
-                  </a>
-                </Button>
-              ) : (
-                <Button size="sm" variant="outline" disabled>
-                  Open Anthropic
-                </Button>
-              )}
-            </AuthorizationStep>
-
-            <AuthorizationStep number={2} title="Paste the code Anthropic shows you.">
-              <Label htmlFor="provider-authorization-code" className="sr-only">
-                Authorization code
-              </Label>
-              <Textarea
-                id="provider-authorization-code"
-                rows={2}
-                autoComplete="off"
-                spellCheck={false}
-                className="font-mono text-sm"
-                placeholder="Paste the code here"
-                value={code}
-                disabled={status !== "awaiting_code"}
-                onChange={(event) => setCode(event.target.value)}
-              />
-              <Button type="submit" size="sm" disabled={!canComplete}>
-                {status === "completing" ? "Completing..." : "Complete"}
-              </Button>
-            </AuthorizationStep>
-
-            <div className="flex flex-col gap-3 border-t border-border-muted pt-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0 text-sm">
-                {failure ? (
-                  <p className="text-destructive">{failure.message}</p>
-                ) : (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    {(status === "starting" || status === "completing") && (
-                      <span className="size-4 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                    )}
-                    <span>
-                      {status === "starting"
-                        ? "Starting authorization..."
-                        : status === "completing"
-                          ? "Completing authorization..."
-                          : status === "connected"
-                            ? "Connected."
-                            : remainingMs !== null && (
-                                <>Waiting for the code · expires in {countdownLabel(remainingMs)}</>
-                              )}
-                    </span>
-                  </div>
-                )}
-              </div>
-              <p aria-live="polite" aria-atomic="true" className="sr-only">
-                {failure
-                  ? `Authorization failed: ${failure.message}`
-                  : status === "awaiting_code"
-                    ? "Authorization started. Waiting for the code from Anthropic."
-                    : status === "completing"
-                      ? "Completing authorization."
-                      : status === "connected"
-                        ? "Claude account connected."
-                        : "Starting authorization."}
-              </p>
-              <div className="flex shrink-0 gap-2">
-                {failure?.retryable && needsFreshTransaction && (
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      setCode("");
-                      retry();
-                    }}
-                  >
-                    Retry
-                  </Button>
-                )}
-                <Button size="sm" variant="subtle" onClick={close}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-
-            {setupTokenAllowed && (
-              <button
-                type="button"
-                className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                onClick={() => setSetupTokenMode(true)}
-              >
-                Paste a setup token instead
-              </button>
-            )}
-          </form>
+          <AuthorizationCodeForm
+            target={target}
+            defaultDisplayName={content.defaultDisplayName}
+            onConnected={onConnected}
+            onClose={onClose}
+            onUseSetupToken={setupTokenAllowed ? () => setMethod("setup_token") : undefined}
+          />
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function AuthorizationCodeForm({
+  target,
+  defaultDisplayName,
+  onConnected,
+  onClose,
+  onUseSetupToken,
+}: {
+  target: ProviderAuthorizationCodeTarget;
+  defaultDisplayName: string;
+  onConnected: (result: ConnectedAuthorization) => void;
+  onClose: () => void;
+  onUseSetupToken?: () => void;
+}) {
+  const [code, setCode] = useState("");
+  const { authorization, failure, status, remainingMs, complete, retry, cancel } =
+    useProviderAuthorizationCode(
+      target.provider,
+      target.operation === "create"
+        ? { operation: "create", displayName: defaultDisplayName }
+        : { operation: "reconnect", providerAccountId: target.providerAccountId },
+      onConnected
+    );
+
+  const close = () => {
+    cancel();
+    onClose();
+  };
+  const canComplete = status === "awaiting_code" && code.trim().length > 0;
+  const settled = status !== "starting" && status !== "awaiting_code" && status !== "completing";
+  // A settled transaction is over; a fresh one is the way forward whenever the
+  // failure is transient or the provider rejected the code (`denied`). Only a
+  // start refused outright (a permission or archived-account error) offers
+  // nothing to start over with.
+  const canStartOver = settled && failure !== null && (failure.retryable || status === "denied");
+
+  return (
+    <form
+      className="space-y-3 px-5 py-5 sm:px-7"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canComplete) void complete(code);
+      }}
+    >
+      <AuthorizationStep number={1} title="Open Anthropic and grant access to Claude Agent.">
+        {authorization ? (
+          <Button asChild size="sm" variant="outline">
+            <a href={authorization.authorizationUrl} target="_blank" rel="noopener noreferrer">
+              Open Anthropic
+            </a>
+          </Button>
+        ) : (
+          <Button size="sm" variant="outline" disabled>
+            Open Anthropic
+          </Button>
+        )}
+      </AuthorizationStep>
+
+      <AuthorizationStep number={2} title="Paste the code Anthropic shows you.">
+        <Label htmlFor="provider-authorization-code" className="sr-only">
+          Authorization code
+        </Label>
+        <Textarea
+          id="provider-authorization-code"
+          rows={2}
+          autoComplete="off"
+          spellCheck={false}
+          className="font-mono text-sm"
+          placeholder="Paste the code here"
+          value={code}
+          disabled={status !== "awaiting_code"}
+          onChange={(event) => setCode(event.target.value)}
+        />
+        <Button type="submit" size="sm" disabled={!canComplete}>
+          {status === "completing" ? "Completing..." : "Complete"}
+        </Button>
+      </AuthorizationStep>
+
+      <div className="flex flex-col gap-3 border-t border-border-muted pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 text-sm">
+          {failure ? (
+            <p className="text-destructive">{failure.message}</p>
+          ) : (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              {(status === "starting" || status === "completing") && (
+                <span className="size-4 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              )}
+              <span>
+                {status === "starting"
+                  ? "Starting authorization..."
+                  : status === "completing"
+                    ? "Completing authorization..."
+                    : status === "connected"
+                      ? "Connected."
+                      : remainingMs !== null && (
+                          <>Waiting for the code · expires in {countdownLabel(remainingMs)}</>
+                        )}
+              </span>
+            </div>
+          )}
+        </div>
+        <p aria-live="polite" aria-atomic="true" className="sr-only">
+          {failure
+            ? `Authorization failed: ${failure.message}`
+            : status === "awaiting_code"
+              ? "Authorization started. Waiting for the code from Anthropic."
+              : status === "completing"
+                ? "Completing authorization."
+                : status === "connected"
+                  ? "Claude account connected."
+                  : "Starting authorization."}
+        </p>
+        <div className="flex shrink-0 gap-2">
+          {canStartOver && (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                setCode("");
+                retry();
+              }}
+            >
+              Start over
+            </Button>
+          )}
+          <Button type="button" size="sm" variant="subtle" onClick={close}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+
+      {onUseSetupToken && (
+        <button
+          type="button"
+          className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          onClick={onUseSetupToken}
+        >
+          Paste a setup token instead
+        </button>
+      )}
+    </form>
   );
 }
 
@@ -290,6 +327,7 @@ function SetupTokenForm({
             autoComplete="off"
             maxLength={100}
             value={displayName}
+            disabled={saving}
             onChange={(event) => setDisplayName(event.target.value)}
           />
         </div>
@@ -301,17 +339,18 @@ function SetupTokenForm({
           type="password"
           autoComplete="off"
           value={setupToken}
+          disabled={saving}
           onChange={(event) => setSetupToken(event.target.value)}
         />
       </div>
       <div className="flex flex-wrap gap-2">
         <Button type="submit" size="sm" disabled={!canSubmit}>
-          Save
+          {saving ? "Saving..." : "Save"}
         </Button>
-        <Button type="button" size="sm" variant="outline" onClick={onBack}>
+        <Button type="button" size="sm" variant="outline" disabled={saving} onClick={onBack}>
           Back
         </Button>
-        <Button type="button" size="sm" variant="subtle" onClick={onCancel}>
+        <Button type="button" size="sm" variant="subtle" disabled={saving} onClick={onCancel}>
           Cancel
         </Button>
       </div>
