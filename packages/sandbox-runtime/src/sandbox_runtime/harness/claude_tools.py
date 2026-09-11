@@ -656,7 +656,11 @@ class OpenInspectTools:
                 data[key] = str(args[key])
             data["dimensions"] = _dimensions_field(args["dimensions"])
             data["truncated"] = "true" if args.get("truncated") else "false"
-            data["hasAudio"] = "true" if args.get("hasAudio") else "false"
+            # The endpoint rejects audio tracks; refuse here so the agent gets a
+            # clear message instead of a 400 after uploading the whole file.
+            if args.get("hasAudio") is True:
+                return _text_result("Video uploads do not support audio (hasAudio must be false).")
+            data["hasAudio"] = "false"
         try:
             response = await self.client.request(
                 "POST",
@@ -933,7 +937,11 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
                         "required": ["width", "height"],
                     },
                     "truncated": {"type": "boolean", "description": "Video only."},
-                    "hasAudio": {"type": "boolean", "description": "Video only."},
+                    "hasAudio": {
+                        "type": "boolean",
+                        "enum": [False],
+                        "description": "Video only. Audio tracks are not supported.",
+                    },
                 },
                 "required": ["filePath"],
             },
