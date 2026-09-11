@@ -115,7 +115,10 @@ class AgentBridge:
     HEARTBEAT_INTERVAL = 30.0
     RECONNECT_BACKOFF_BASE = 2.0
     RECONNECT_MAX_DELAY = 60.0
-    SSE_INACTIVITY_TIMEOUT = 120.0
+    # Liveness check for a harness that stopped talking, not a budget for how
+    # long the model may think. Stays under the control plane's own inactivity
+    # watchdog (SANDBOX_INACTIVITY_TIMEOUT_MS) so the bridge owns the outcome.
+    SSE_INACTIVITY_TIMEOUT = 300.0
     SSE_INACTIVITY_TIMEOUT_MIN = 5.0
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
