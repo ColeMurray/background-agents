@@ -57,13 +57,15 @@ Alternatively, register the server from the web app's API directly:
 curl -X POST "$OPENINSPECT_URL/api/mcp-servers" \
   -H "Authorization: Bearer $OPENINSPECT_SESSION_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-        "name": "you-search",
-        "type": "remote",
-        "url": "https://api.you.com/mcp",
-        "headers": { "Authorization": "Bearer $YDC_API_KEY" },
-        "enabled": true
-      }'
+  -d @- <<JSON
+{
+  "name": "you-search",
+  "type": "remote",
+  "url": "https://api.you.com/mcp",
+  "headers": { "Authorization": "Bearer ${YDC_API_KEY}" },
+  "enabled": true
+}
+JSON
 ```
 
 Sessions started after the server is registered can use it right away; in-flight sessions are not
