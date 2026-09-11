@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS session (
   branch_name TEXT,                                 -- Working branch (set after first commit)
   base_sha TEXT,                                    -- SHA of base branch at session start
   current_sha TEXT,                                 -- Current HEAD SHA
-  opencode_session_id TEXT,                         -- OpenCode session ID (for 1:1 mapping)
+  agent_session_id TEXT,                            -- The agent's own conversation id (1:1 mapping)
+  harness TEXT NOT NULL DEFAULT 'opencode',         -- Agent harness: 'opencode' | 'claude'; fixed at create
   model TEXT DEFAULT 'anthropic/claude-haiku-4-5',   -- LLM model to use
   reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'failed', 'archived', 'cancelled'
@@ -670,6 +671,21 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         sql,
         `ALTER TABLE messages ADD COLUMN reported_cost_usd REAL NOT NULL DEFAULT 0`
       );
+    },
+  },
+  {
+    id: 50,
+    description: "Add session harness and rename opencode_session_id to agent_session_id",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN harness TEXT NOT NULL DEFAULT 'opencode'`);
+      // A fresh DO already created agent_session_id through SCHEMA_SQL, so the
+      // legacy column is absent there; only an existing DO has it to rename.
+      try {
+        sql.exec(`ALTER TABLE session RENAME COLUMN opencode_session_id TO agent_session_id`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!msg.includes("no such column") && !msg.includes("duplicate column")) throw e;
+      }
     },
   },
 ];

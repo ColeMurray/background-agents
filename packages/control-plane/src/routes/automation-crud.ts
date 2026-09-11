@@ -21,6 +21,11 @@ import {
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import type { PermissionId } from "@open-inspect/shared/rbac";
+import {
+  checkHarnessCompatibility,
+  getValidHarnessOrDefault,
+  selectedProviderAuthModes,
+} from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
 import {
   AutomationStore,
@@ -28,7 +33,10 @@ import {
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
-import { AutomationModelProviderAuthStore } from "../db/automation-model-provider-auth";
+import {
+  AutomationModelProviderAuthStore,
+  toProviderSelections,
+} from "../db/automation-model-provider-auth";
 import {
   AutomationProviderSelectionError,
   parseAndValidateAutomationProviderSelections,
@@ -200,8 +208,11 @@ async function handleCreateAutomation(
     };
   }
 
-  // Validate model
+  // Validate harness and model
+  const harness = getValidHarnessOrDefault(body.harness);
   const model = getValidModelOrDefault(body.model);
+  const harnessIncompatibility = checkHarnessCompatibility(harness, model);
+  if (harnessIncompatibility) return error(harnessIncompatibility.message, 400);
   const reasoningEffort = resolveReasoningEffort(model, body.reasoningEffort);
   if (body.reasoningEffort !== undefined && body.reasoningEffort !== null && !reasoningEffort) {
     return error("Invalid reasoning effort for selected model", 400);
@@ -220,6 +231,14 @@ async function handleCreateAutomation(
     if (e instanceof ProviderAccountSelectionPolicyError) return error(e.message, e.status);
     throw e;
   }
+  // The auth half of the harness rule: an explicit selection the harness
+  // cannot use must not be saved for every future run to trip over.
+  const harnessAuthIncompatibility = checkHarnessCompatibility(
+    harness,
+    model,
+    selectedProviderAuthModes(providerSelections)
+  );
+  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
 
   // Compute next run (only for schedule triggers)
   const nextRunAt = isSchedule
@@ -262,6 +281,7 @@ async function handleCreateAutomation(
     trigger_type: triggerType,
     schedule_cron: body.scheduleCron ?? null,
     schedule_tz: body.scheduleTz ?? "UTC",
+    harness,
     model,
     reasoning_effort: reasoningEffort,
     enabled: 1,
@@ -423,6 +443,21 @@ async function handleUpdateAutomation(
   }
 
   const nextModel = body.model !== undefined ? getValidModelOrDefault(body.model) : existing.model;
+  const nextHarness =
+    body.harness !== undefined ? body.harness : getValidHarnessOrDefault(existing.harness);
+  // The selections the automation will have after this write: the replacement
+  // when one is given, else the stored pins whenever harness or model moves.
+  const nextProviderSelections =
+    replacementProviderSelections ??
+    (body.harness !== undefined || body.model !== undefined
+      ? toProviderSelections(await providerAuthStore.list(id))
+      : null);
+  const harnessIncompatibility = checkHarnessCompatibility(
+    nextHarness,
+    nextModel,
+    nextProviderSelections ? selectedProviderAuthModes(nextProviderSelections) : undefined
+  );
+  if (harnessIncompatibility) return error(harnessIncompatibility.message, 400);
   const requestedReasoningEffort = body.reasoningEffort;
   const resolvedReasoningEffort =
     requestedReasoningEffort !== undefined
@@ -445,6 +480,7 @@ async function handleUpdateAutomation(
   if (body.instructions !== undefined) updateFields.instructions = body.instructions;
   if (body.scheduleCron !== undefined) updateFields.schedule_cron = body.scheduleCron;
   if (body.scheduleTz !== undefined) updateFields.schedule_tz = body.scheduleTz;
+  if (body.harness !== undefined) updateFields.harness = nextHarness;
   if (body.model !== undefined) updateFields.model = nextModel;
   if (body.reasoningEffort !== undefined || body.model !== undefined) {
     updateFields.reasoning_effort = resolvedReasoningEffort;

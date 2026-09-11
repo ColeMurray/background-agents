@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { harnessIdSchema } from "../harnesses";
 import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 import { githubAutofixOriginSchema } from "./github-autofix";
@@ -52,10 +53,12 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     status: z.string(),
   }),
   sandboxEventBaseSchema.extend({
-    // Emitted once when the sandbox bridge connects and OpenCode is ready.
-    // Present in essentially every session's replay history.
+    // Emitted on every sandbox bridge connect (bridge readiness, not vendor
+    // readiness). Present in essentially every session's replay history.
     type: z.literal("ready"),
     opencodeSessionId: z.string().nullable().optional(),
+    /** Which harness the runtime booted; the session DO warns when it differs from the session's. */
+    harness: harnessIdSchema.optional(),
     // SANDBOX_VERSION of the image this sandbox booted from. Stamped onto any
     // snapshot it produces so a later restore can be gated on it.
     runtimeVersion: z.string().optional(),
@@ -159,7 +162,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   // unknown union entries, so this entry must exist before runtimes emit it.
   z.object({
     type: z.literal("warning"),
-    scope: z.enum(["sync", "setup", "start", "assembly", "secrets", "media", "budget"]),
+    scope: z.enum(["sync", "setup", "start", "assembly", "secrets", "media", "budget", "provider"]),
     message: z.string(),
     repoOwner: z.string().optional(),
     repoName: z.string().optional(),
@@ -170,6 +173,12 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   sandboxEventBaseSchema.extend({
     type: z.literal("session_title"),
     title: z.string(),
+  }),
+  // The bridge's answer to the `snapshot` command; carries the agent session
+  // id so the snapshot can be resumed. Critical (ack'd) on the bridge side.
+  sandboxEventBaseSchema.extend({
+    type: z.literal("snapshot_ready"),
+    opencodeSessionId: z.string().nullable().optional(),
   }),
   z.object({
     type: z.literal("user_message"),

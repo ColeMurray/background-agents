@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import {
   fakeSessionRuntimeDispatch,
   handleRequest,
@@ -41,6 +42,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     repoId: number | null;
     baseBranch?: string | null;
     model: string;
+    harness: HarnessId;
     reasoningEffort: string | null;
     sandboxTimeoutMs?: number;
     promptAuthor: {
@@ -74,6 +76,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     repoOwner: "acme",
     repoName: "web-app",
     repoId: 12345,
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
     sandboxTimeoutMs: 14_400_000,

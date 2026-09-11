@@ -1,3 +1,8 @@
+import {
+  DEFAULT_HARNESS,
+  getValidHarnessOrDefault,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import type {
   PullRequestSummary,
   SessionReadAction,
@@ -62,6 +67,8 @@ export interface SessionEntry {
   title: string | null;
   repoOwner: string | null;
   repoName: string | null;
+  /** Agent harness; absent on reads of pre-harness rows is impossible (column default). */
+  harness?: HarnessId;
   model: string;
   reasoningEffort: string | null;
   baseBranch: string | null;
@@ -108,6 +115,7 @@ interface SessionRow {
   title: string | null;
   repo_owner: string | null;
   repo_name: string | null;
+  harness: HarnessId;
   model: string;
   reasoning_effort: string | null;
   base_branch: string | null;
@@ -162,6 +170,7 @@ function toEntry(row: SessionRow): SessionEntry {
     title: row.title,
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
+    harness: getValidHarnessOrDefault(row.harness),
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     baseBranch: row.base_branch,
@@ -267,14 +276,15 @@ export class SessionIndexStore {
 
     const sessionStmt = this.db
       .prepare(
-        `INSERT INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
         session.title,
         repository.repoOwner,
         repository.repoName,
+        session.harness ?? DEFAULT_HARNESS,
         session.model,
         session.reasoningEffort,
         repository.baseBranch,

@@ -1,3 +1,7 @@
+import {
+  checkHarnessCompatibility,
+  getValidHarnessOrDefault,
+} from "@open-inspect/shared/harnesses";
 import { generateId, hashToken } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
@@ -92,6 +96,14 @@ export class PromptRequestConflictError extends Error {
   constructor() {
     super("clientRequestId was already used for a different prompt");
     this.name = "PromptRequestConflictError";
+  }
+}
+
+/** A per-prompt model override the session's harness cannot run. */
+export class HarnessModelIncompatibleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HarnessModelIncompatibleError";
   }
 }
 
@@ -291,6 +303,15 @@ export class SessionMessageQueue {
         });
         return;
       }
+      if (error instanceof HarnessModelIncompatibleError) {
+        this.wsManager.send(ws, {
+          type: "error",
+          code: "HARNESS_MODEL_INCOMPATIBLE",
+          message: error.message,
+          clientRequestId: data.clientRequestId,
+        });
+        return;
+      }
       throw error;
     }
 
@@ -371,7 +392,14 @@ export class SessionMessageQueue {
     const now = Date.now();
     const session = this.repository.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
-    const authenticationError = await this.getProviderAuthenticationError(resolvedModel);
+    // The same rule as admission, applied at dispatch: the harness is fixed
+    // at create, so nothing may reach the sandbox on a model it cannot run.
+    const harnessIncompatibility = checkHarnessCompatibility(
+      getValidHarnessOrDefault(session?.harness),
+      resolvedModel
+    );
+    const authenticationError =
+      harnessIncompatibility?.message ?? (await this.getProviderAuthenticationError(resolvedModel));
     if (this.repository.getSession()?.budget_exhausted === 1) return;
     if (authenticationError) {
       this.log.error("provider_auth.unavailable", {
@@ -719,6 +747,11 @@ export class SessionMessageQueue {
     let messageModel: string | null = null;
     if (data.model) {
       if (isValidModel(data.model)) {
+        // An override the session's harness cannot run is a user-visible
+        // rejection, never a silent fallback to a model it can run.
+        const harness = getValidHarnessOrDefault(this.repository.getSession()?.harness);
+        const incompatibility = checkHarnessCompatibility(harness, data.model);
+        if (incompatibility) throw new HarnessModelIncompatibleError(incompatibility.message);
         messageModel = data.model;
       } else {
         this.log.warn("Invalid message model, ignoring override", { model: data.model });
