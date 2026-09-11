@@ -9,7 +9,8 @@ subscriptions are configured in **Settings > Provider Accounts**; Z.AI Coding Pl
 OpenAI, xAI and Anthropic session selectors offer provider policy, any active connected account, and
 API-key mode. Automation editors can resolve defaults on each run or pin an account/API-key choice.
 Unattended Slack, GitHub, Linear, and unpinned automation launches follow the provider's configured
-unattended mode.
+unattended mode. For Anthropic that policy reaches only Claude Agent automations: Slack, GitHub and
+Linear launches run on OpenCode, which uses the API key.
 
 ## Harnesses
 

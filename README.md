@@ -111,7 +111,7 @@ ownership, bots, and member suspension.
 │  │  │ Supervisor│──│  Harness  │──│   Bridge  │─────────────────┼──┼──▶ Control Plane
 │  │  └───────────┘  │ (OpenCode │  └───────────┘                 │  │
 │  │                 │ or Claude)│                                │  │
-│  │  └───────────┘  └───────────┘  └───────────┘                 │  │
+│  │                 └───────────┘                                │  │
 │  │                      │                                       │  │
 │  │              Full Dev Environment                            │  │
 │  │      (Node.js, Python, git, agent-browser)                   │  │

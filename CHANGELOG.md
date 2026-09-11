@@ -12,12 +12,12 @@ beside OpenCode. Choose the harness in the composer; the model list follows what
 run, child sessions inherit it, and automations carry it. Claude Agent sessions can use a
 **connected Claude subscription** from Settings > Provider Accounts (browser authorization or a
 pasted `claude setup-token`), delivered to the sandbox at boot and never written to disk. Disabling
-or reconnecting an account stops the sandboxes that received it. See
-[Using the Claude Agent Harness](docs/CLAUDE_AGENT.md).
+or reconnecting an account stops new hand-outs; a sandbox that already holds the token keeps it
+until it exits. See [Using the Claude Agent Harness](docs/CLAUDE_AGENT.md).
 
-**Deploy note.** This release ships D1 migrations `0075` and `0076`. Session create/resume and the
-Provider Accounts page are unavailable for a few minutes between the migration apply and the worker
-deploy; the runtime manifest bump retires existing snapshots and prebuilt images once.
+**Deploy note.** This release ships D1 migrations `0075` and `0076`. Session create/resume is
+unavailable for a few minutes between the migration apply and the worker deploy; the runtime
+manifest bump retires existing snapshots and prebuilt images once.
 
 ## September 1, 2026
 
