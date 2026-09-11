@@ -1,7 +1,7 @@
 """Sandbox-side client for platform-managed provider credentials.
 
 The Claude harness fetches its subscription credential (a Claude setup token)
-from the control plane's sandbox-only bootstrap endpoint on every bridge
+from the control plane's sandbox-only runtime-credential endpoint on every bridge
 start, so a supervised restart and a snapshot restore both re-fetch and each
 fetch is an issuance record on the control plane. The token lives in process
 memory only.
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from ..log_config import StructuredLogger
 
 RUNTIME_CREDENTIAL_TIMEOUT_SECONDS: Final = 30.0
-BOOTSTRAP_SECRET_KIND: Final = "sandbox_bootstrap_secret"
+STORED_PROVIDER_SECRET_KIND: Final = "stored_provider_secret"
 # Statuses that describe the moment, not the account.
 RETRYABLE_STATUSES: Final = frozenset({408, 425, 429})
 
@@ -118,9 +118,9 @@ class RuntimeCredentialClient:
             raise RuntimeCredentialDenied("credential response was not an object")
         kind = body.get("kind")
         secret = body.get("secret")
-        if kind != BOOTSTRAP_SECRET_KIND or not isinstance(secret, str) or not secret:
+        if kind != STORED_PROVIDER_SECRET_KIND or not isinstance(secret, str) or not secret:
             raise RuntimeCredentialDenied(
-                f"credential response for {provider} was not a {BOOTSTRAP_SECRET_KIND}"
+                f"credential response for {provider} was not a {STORED_PROVIDER_SECRET_KIND}"
             )
         version = body.get("credentialVersion")
         expires_at = body.get("expiresAt")

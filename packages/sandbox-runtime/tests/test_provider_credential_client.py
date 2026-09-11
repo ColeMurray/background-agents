@@ -37,7 +37,7 @@ async def test_fetch_posts_with_sandbox_principal_headers_and_returns_the_secret
         lambda _request: httpx.Response(
             200,
             json={
-                "kind": "sandbox_bootstrap_secret",
+                "kind": "stored_provider_secret",
                 "secret": "sk-ant-oat01-abc",
                 "credentialVersion": 3,
                 "expiresAt": 1_800_000_000_000,
@@ -118,5 +118,5 @@ async def test_a_brokered_token_is_rejected_as_the_wrong_kind() -> None:
     client, _ = _client(
         lambda _r: httpx.Response(200, json={"kind": "brokered_access_token", "secret": "x"})
     )
-    with pytest.raises(RuntimeCredentialDenied, match="sandbox_bootstrap_secret"):
+    with pytest.raises(RuntimeCredentialDenied, match="stored_provider_secret"):
         await client.fetch("anthropic")
