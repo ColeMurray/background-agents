@@ -1,17 +1,20 @@
 """ClaudeStager: staging only, no process, a handoff the bridge can read."""
 
+import asyncio
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from sandbox_runtime.claude_stager import (
     ClaudeHarnessHandoff,
     ClaudeStager,
+    isolated_claude_config_dir,
     resolve_claude_config_dir,
 )
 from sandbox_runtime.constants import BIN_INSTALL_DIR_ENV_VAR
+from sandbox_runtime.entrypoint import build_supervisor
 from sandbox_runtime.harness.base import HarnessProcessOwner
 from sandbox_runtime.repo_config import RepoEntry
 from sandbox_runtime.runtime_config import ClaudeStagerConfig, _freeze_json
@@ -135,22 +138,45 @@ async def test_start_preinstalls_local_mcp_packages(tmp_path: Path, monkeypatch)
     assert packages.installed == [list(servers)]
 
 
-@pytest.mark.asyncio
-async def test_config_dir_inside_a_checkout_falls_back_to_the_default(
+def test_config_dir_inside_the_workspace_or_a_checkout_falls_back_to_the_default(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    workdir = tmp_path / "workspace"
-    repo = workdir / "repo"
-    repo.mkdir(parents=True)
-    stager = _stager(tmp_path, monkeypatch, config_dir=repo / ".claude")
+    workspace = tmp_path / "workspace"
+    repo = workspace / "repo"
+    elsewhere = tmp_path / "elsewhere"
     entry = RepoEntry(owner="acme", name="repo", branch="main", path=repo)
+    fallback = tmp_path / "home" / ".openinspect" / "claude"
 
-    await stager.start((entry,), workdir)
+    log = MagicMock()
+    assert isolated_claude_config_dir(repo / ".claude", workspace, (entry,), log) == fallback
+    assert isolated_claude_config_dir(workspace / ".claude", workspace, (entry,), log) == fallback
+    assert isolated_claude_config_dir(workspace, workspace, (entry,), log) == fallback
+    assert log.warn.call_count == 3
+    assert isolated_claude_config_dir(elsewhere, workspace, (entry,), log) == elsewhere
 
-    assert stager.config_dir == tmp_path / "home" / ".openinspect" / "claude"
-    assert not (repo / ".claude").exists()
-    assert ClaudeHarnessHandoff.read(tmp_path / "handoff.json").config_dir == stager.config_dir
+
+def test_managed_skills_and_the_stager_share_the_decided_config_dir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Managed skills land before the stager runs, so a rejected override must
+    # be replaced once, for both, not by the stager alone.
+    environment = {
+        "HOME": str(tmp_path / "home"),
+        "CONTROL_PLANE_URL": "https://control.example",
+        "REPO_OWNER": "acme",
+        "REPO_NAME": "repo",
+        "SESSION_CONFIG": json.dumps({"session_id": "session-1", "harness": "claude"}),
+        "CLAUDE_CONFIG_DIR": "/workspace/repo/.claude",
+    }
+    with patch.dict("os.environ", environment, clear=True):
+        supervisor = build_supervisor(asyncio.Event())
+
+    decided = tmp_path / "home" / ".openinspect" / "claude"
+    assert isinstance(supervisor.harness_process, ClaudeStager)
+    assert supervisor.harness_process.config_dir == decided
+    assert supervisor.managed_skills is not None
+    assert supervisor.managed_skills.destination == decided / "skills"
 
 
 def test_config_dir_defaults_outside_every_repository(monkeypatch, tmp_path: Path) -> None:

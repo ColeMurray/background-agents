@@ -107,6 +107,13 @@ async def test_transport_errors_are_transient() -> None:
 
 
 @pytest.mark.asyncio
+async def test_an_undecodable_success_body_is_transient() -> None:
+    client, _ = _client(lambda _r: httpx.Response(200, text=""))
+    with pytest.raises(RuntimeCredentialUnavailable, match="not valid JSON"):
+        await client.fetch("anthropic")
+
+
+@pytest.mark.asyncio
 async def test_a_brokered_token_is_rejected_as_the_wrong_kind() -> None:
     client, _ = _client(
         lambda _r: httpx.Response(200, json={"kind": "brokered_access_token", "secret": "x"})

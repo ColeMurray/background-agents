@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from .agent_bridge_process import AgentBridgeProcess
 from .boot_warnings import BootWarningSink
 from .browser_desktop import BrowserDesktop
-from .claude_stager import ClaudeStager, resolve_claude_config_dir
+from .claude_stager import ClaudeStager, isolated_claude_config_dir, resolve_claude_config_dir
 from .code_server import CodeServer
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
 from .harness.base import HarnessId, HarnessProcessOwner
@@ -30,7 +30,10 @@ from .tunnel_environment import TunnelEnvironment
 from .web_terminal import WebTerminal
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
+
+    from .repo_config import RepoEntry
 
 configure_logging()
 
@@ -40,6 +43,7 @@ def build_harness_process(
     shutdown_event: asyncio.Event,
     log: Any,
     warnings: BootWarningSink,
+    claude_config_dir: Path | None,
 ) -> HarnessProcessOwner:
     """The supervisor-half registry: pick the process owner for the session's harness."""
     match config.harness:
@@ -51,17 +55,34 @@ def build_harness_process(
                 warnings.record,
             )
         case HarnessId.CLAUDE:
-            return ClaudeStager(config.claude_stager_config(), log)
+            return ClaudeStager(config.claude_stager_config(), log, config_dir=claude_config_dir)
     raise ValueError(f"Unsupported harness: {config.harness}")
 
 
-def managed_skills_destination(harness: HarnessId) -> Path:
+def claude_config_dir_for(
+    config: RuntimeConfig, repositories: Sequence[RepoEntry], log: Any
+) -> Path | None:
+    """Where Claude keeps its state, decided once before anything is written there.
+
+    Managed skills are materialized before the stager runs, so both take the
+    directory from here rather than deciding separately.
+    """
+    if config.harness is not HarnessId.CLAUDE:
+        return None
+    return isolated_claude_config_dir(
+        resolve_claude_config_dir(), config.workspace_path, repositories, log
+    )
+
+
+def managed_skills_destination(harness: HarnessId, claude_config_dir: Path | None) -> Path:
     """Where managed skills land: each harness discovers skills from its own tree."""
     match harness:
         case HarnessId.OPENCODE:
             return resolve_opencode_global_config_dir() / "skills"
         case HarnessId.CLAUDE:
-            return resolve_claude_config_dir() / "skills"
+            if claude_config_dir is None:
+                raise ValueError("Claude sessions need a config dir decided")
+            return claude_config_dir / "skills"
     raise ValueError(f"Unsupported harness: {harness}")
 
 
@@ -87,6 +108,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         RepositoryHooks(log),
         RepositorySynchronizer(config.vcs_host, log),
     )
+    claude_config_dir = claude_config_dir_for(config, repository_boot.repositories, log)
     managed_skills_config = config.managed_skills_config()
     managed_skills = None
     if managed_skills_config.control_plane_url and managed_skills_config.session_id:
@@ -96,10 +118,12 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
                 managed_skills_config.session_id,
                 managed_skills_config.sandbox_token,
             ),
-            managed_skills_destination(config.harness),
+            managed_skills_destination(config.harness, claude_config_dir),
             log,
         )
-    harness_process = build_harness_process(config, shutdown_event, log, warnings)
+    harness_process = build_harness_process(
+        config, shutdown_event, log, warnings, claude_config_dir
+    )
     agent_bridge = AgentBridgeProcess(config.bridge_process_config(), log)
     code_server = CodeServer(log)
     web_terminal = WebTerminal(log)

@@ -23,6 +23,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     ConversationResetMessage,
+    MessageOrigin,
     RateLimitEvent,
     ResultMessage,
     StreamEvent,
@@ -138,6 +139,13 @@ class _MessageText:
     text: str = ""
 
 
+def _injected_origin(origin: MessageOrigin | None) -> MessageOrigin | None:
+    """The origin when it names a turn the session started on its own."""
+    if origin is None or origin.get("kind") == "human":
+        return None
+    return origin
+
+
 @dataclass
 class _TurnState:
     message_id: str
@@ -150,6 +158,9 @@ class _TurnState:
     tool_args: dict[str, dict[str, Any]] = field(default_factory=dict)
     emitted_error: bool = False
     step_started: bool = False
+    # Inside a turn the session injected (background task, channel, peer):
+    # skip everything until that turn's result.
+    injected: bool = False
 
     def turn_text(self) -> str:
         return "\n\n".join(entry.text for entry in self.texts if entry.text)
@@ -459,7 +470,7 @@ class ClaudeHarness:
         except TimeoutError:
             self.log.error("claude.connect_timeout", message_id=prompt.message_id)
             self._needs_reconnect = True
-            await self._cleanup_after_timeout()
+            await self._interrupt_within_budget()
             return TurnOutcome.failed(
                 f"Claude agent did not start within {self.limits.prompt_max_duration_seconds:.0f}s."
             )
@@ -482,7 +493,7 @@ class ClaudeHarness:
                         break
                     except TimeoutError as error:
                         raise _InactivityTimeout from error
-                    if self._answers_another_turn(message):
+                    if self._belongs_to_injected_turn(state, message):
                         continue
                     events, outcome = self._translate(state, message)
                     for event in events:
@@ -498,13 +509,13 @@ class ClaudeHarness:
             self._needs_reconnect = True
             raise
         except TimeoutError:
-            await self._cleanup_after_timeout()
+            await self._interrupt_within_budget()
             self._needs_reconnect = True
             return TurnOutcome.failed(
                 f"Prompt exceeded max duration of {self.limits.prompt_max_duration_seconds:.0f}s."
             )
         except _InactivityTimeout:
-            await self._cleanup_after_timeout()
+            await self._interrupt_within_budget()
             self._needs_reconnect = True
             return TurnOutcome.failed(
                 f"Claude agent produced no output for {self.limits.inactivity_timeout_seconds:.0f}s."
@@ -514,29 +525,42 @@ class ClaudeHarness:
             self._needs_reconnect = True
             return TurnOutcome.failed(f"Claude agent transport failed: {error}")
 
-    def _answers_another_turn(self, message: Any) -> bool:
-        """A result of a turn the session injected, not of this prompt.
+    def _belongs_to_injected_turn(self, state: _TurnState, message: Any) -> bool:
+        """Every message of a turn the session injected, not of this prompt.
 
         The streaming connection can interleave turns the CLI starts on its
-        own (task notifications, channel and peer messages). Our prompts are
-        stamped ``origin: human``, so a result carrying any other origin ends
-        someone else's turn and must not end this one.
+        own (task notifications, channel and peer messages). Only the user
+        message that opens such a turn and the result that closes it carry
+        ``origin``; the assistant messages, stream events and tool results
+        between them do not. So a non-human user message opens the skip, its
+        result closes it, and nothing in between reaches the timeline. Our
+        own prompts are stamped ``origin: human``. The injected turn's spend
+        stays in the running total and lands on the prompt in flight, so the
+        session's cost still adds up.
         """
-        if not isinstance(message, ResultMessage):
+        if isinstance(message, UserMessage):
+            if (origin := _injected_origin(message.origin)) is not None:
+                state.injected = True
+                self.log.info("claude.injected_turn_started", origin_kind=origin["kind"])
+            return state.injected
+        if isinstance(message, ResultMessage):
+            if (origin := _injected_origin(message.origin)) is not None:
+                state.injected = False
+                self.log.info("claude.injected_turn_ignored", origin_kind=origin["kind"])
+                return True
+            state.injected = False
             return False
-        origin = message.origin
-        if origin is None or origin.get("kind") == "human":
-            return False
-        self.log.info("claude.injected_turn_ignored", origin_kind=origin.get("kind"))
-        return True
+        return state.injected
 
-    async def _cleanup_after_timeout(self) -> None:
-        """Interrupt within the cleanup budget; drop the child if that hangs too."""
+    async def _interrupt_within_budget(self) -> bool:
+        """Interrupt within the cleanup budget; drop the child if that hangs too.
+
+        True when the child acknowledged the interrupt.
+        """
         budget = self.limits.prompt_cleanup_timeout_seconds
         try:
             async with asyncio.timeout(budget):
-                await self._interrupt_quietly()
-            return
+                return await self._interrupt_quietly()
         except TimeoutError:
             self.log.warn("claude.interrupt_timeout", timeout_s=budget)
         try:
@@ -545,14 +569,17 @@ class ClaudeHarness:
         except TimeoutError:
             self.log.warn("claude.disconnect_timeout", timeout_s=budget)
             self._client = None
+        return False
 
-    async def _interrupt_quietly(self) -> None:
+    async def _interrupt_quietly(self) -> bool:
         if self._client is None:
-            return
+            return False
         try:
             await self._client.interrupt()
         except Exception as error:
             self.log.warn("claude.interrupt_error", exc=error)
+            return False
+        return True
 
     async def abort(self) -> bool:
         if self._client is None:
@@ -561,12 +588,9 @@ class ClaudeHarness:
         # The bridge cancels the prompt task too; the next prompt reconnects so
         # the interrupted turn's trailing messages never leak into it.
         self._needs_reconnect = True
-        try:
-            await self._client.interrupt()
-        except Exception as error:
-            self.log.warn("claude.interrupt_error", exc=error)
-            return False
-        return True
+        # The bridge awaits this inline on its command loop, so a hung
+        # interrupt would stall every later command; bound it like cleanup.
+        return await self._interrupt_within_budget()
 
     async def _user_messages(self, prompt: HarnessPrompt) -> AsyncIterator[dict[str, Any]]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt.text}]

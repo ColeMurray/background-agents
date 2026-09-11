@@ -47,6 +47,31 @@ def resolve_claude_config_dir() -> Path:
     return Path.home() / DEFAULT_CLAUDE_CONFIG_DIR_NAME
 
 
+def isolated_claude_config_dir(
+    candidate: Path, workspace: Path, repositories: Sequence[RepoEntry], log: Any
+) -> Path:
+    """``candidate``, unless it lies inside the workspace or a checkout.
+
+    A user-supplied ``CLAUDE_CONFIG_DIR`` pointing into a repository would put
+    transcripts, skills and the wrapper into the user's diff. Decided once, in
+    the composition root, so managed skills and the stager agree on the
+    directory before either writes to it.
+    """
+    resolved = _resolve_lenient(candidate)
+    for root in (workspace, *(repo.path for repo in repositories)):
+        root_resolved = _resolve_lenient(root)
+        if resolved == root_resolved or root_resolved in resolved.parents:
+            fallback = Path.home() / DEFAULT_CLAUDE_CONFIG_DIR_NAME
+            log.warn(
+                "claude.config_dir_rejected",
+                config_dir=str(candidate),
+                inside=str(root),
+                fallback=str(fallback),
+            )
+            return fallback
+    return candidate
+
+
 @dataclass(frozen=True)
 class ClaudeHarnessHandoff:
     """What the supervisor decided and the bridge must use. Never a secret."""
@@ -106,7 +131,6 @@ class ClaudeStager:
         return self.config_dir / "skills"
 
     async def start(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
-        self.config_dir = self._isolated_config_dir(workdir, repositories)
         self.log.info("claude.stage", config_dir=str(self.config_dir), workdir=str(workdir))
         self.config_dir.mkdir(parents=True, exist_ok=True)
         # Nothing the harness writes here is a credential; the directory is
@@ -126,27 +150,6 @@ class ClaudeStager:
         ).write(self.handoff_path)
         self.started = True
         self.log.info("claude.staged", repo_count=len(repositories))
-
-    def _isolated_config_dir(self, workdir: Path, repositories: Sequence[RepoEntry]) -> Path:
-        """The configured directory, unless it lies inside the workspace or a checkout.
-
-        A user-supplied ``CLAUDE_CONFIG_DIR`` pointing into a repository would
-        put transcripts, skills and the wrapper into the user's diff.
-        """
-        candidate = self.config_dir
-        resolved = _resolve_lenient(candidate)
-        for root in (workdir, *(repo.path for repo in repositories)):
-            root_resolved = _resolve_lenient(root)
-            if resolved == root_resolved or root_resolved in resolved.parents:
-                fallback = Path.home() / DEFAULT_CLAUDE_CONFIG_DIR_NAME
-                self.log.warn(
-                    "claude.config_dir_rejected",
-                    config_dir=str(candidate),
-                    inside=str(root),
-                    fallback=str(fallback),
-                )
-                return fallback
-        return candidate
 
     def _install_bundled_skills(self) -> None:
         if not self.bundled_skills_path.is_dir():

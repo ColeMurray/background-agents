@@ -562,20 +562,40 @@ class TestTranslation:
     async def test_prompts_are_stamped_human_and_injected_results_are_skipped(
         self, tmp_path: Path
     ) -> None:
-        # A background task's result arrives on the same connection first; it
-        # ends that turn, not ours.
-        turn = [
+        # A background task's whole turn arrives on the same connection first:
+        # its user message and result carry the origin, the assistant output,
+        # stream events and tool results between them do not. None of it is
+        # ours, and its result ends that turn, not ours.
+        injected_turn = [
+            UserMessage(content="task finished", origin={"kind": "task-notification"}),
+            _text_delta("injected"),
+            AssistantMessage(
+                content=[
+                    TextBlock("injected answer"),
+                    ToolUseBlock(id="call_bg", name="Bash", input={"command": "ls"}),
+                ],
+                model="m",
+                message_id="msg_bg",
+            ),
+            UserMessage(
+                content=[ToolResultBlock(tool_use_id="call_bg", content="x", is_error=False)]
+            ),
             _result(0.1, origin={"kind": "task-notification"}),
+        ]
+        our_turn = [
             AssistantMessage(content=[TextBlock("real answer")], model="m", message_id="msg_1"),
             _result(0.3, origin={"kind": "human"}),
         ]
-        h = Harness(tmp_path, turns=[turn])
+        h = Harness(tmp_path, turns=[injected_turn + our_turn])
         await h.harness.open()
         await h.harness.create_session()
         events, outcome = await _run(h.harness)
         assert h.client.queries[0][0]["origin"] == {"kind": "human"}
+        # The injected turn's spend stays in the running total and lands here,
+        # so the session's cost still adds up.
         assert outcome.success is True and outcome.message_cost_usd == pytest.approx(0.3)
         assert [e["content"] for e in events if e["type"] == "token"] == ["real answer"]
+        assert [e for e in events if e["type"] == "tool"] == []
         assert len([e for e in events if e["type"] == "step_finish"]) == 1
 
 
@@ -712,6 +732,22 @@ class TestReconnectPolicy:
         assert h.client.interrupts == 1
         await _run(h.harness)
         assert len(h.clients) == 2
+
+    @pytest.mark.asyncio
+    async def test_abort_is_bounded_when_interrupt_hangs(self, tmp_path: Path) -> None:
+        # The bridge awaits abort() inline on its command loop.
+        limits = PromptLimits(
+            inactivity_timeout_seconds=5.0,
+            prompt_max_duration_seconds=5.0,
+            prompt_cleanup_timeout_seconds=0.05,
+        )
+        h = Harness(tmp_path, turns=[[]], limits=limits, client_kwargs={"hang_interrupt": True})
+        await h.harness.open()
+        await h.harness.create_session()
+        await h.harness._ensure_client("claude-sonnet-4-6", None)
+        assert await asyncio.wait_for(h.harness.abort(), timeout=2.0) is False
+        assert h.client.interrupts == 1
+        assert h.client.disconnected is True
 
     @pytest.mark.asyncio
     async def test_cancellation_propagates_to_the_bridge(self, tmp_path: Path) -> None:

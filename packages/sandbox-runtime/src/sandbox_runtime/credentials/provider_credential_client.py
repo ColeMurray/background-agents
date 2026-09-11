@@ -106,7 +106,14 @@ class RuntimeCredentialClient:
         if response.status_code != 200:
             raise RuntimeCredentialDenied(self._denial_message(provider, response))
 
-        body: Any = response.json()
+        try:
+            body: Any = response.json()
+        except ValueError as error:
+            # An empty or truncated 200 body is a transport-class failure:
+            # the same request usually succeeds on retry.
+            raise RuntimeCredentialUnavailable(
+                f"credential response for {provider} was not valid JSON"
+            ) from error
         if not isinstance(body, dict):
             raise RuntimeCredentialDenied("credential response was not an object")
         kind = body.get("kind")
