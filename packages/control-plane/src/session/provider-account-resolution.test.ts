@@ -215,6 +215,7 @@ describe("resolveProviderAccountSelections", () => {
     ).resolves.toEqual([
       { provider: "openai", authMode: "api_key", selectionSource: "harness_fallback" },
       { provider: "xai", authMode: "api_key", selectionSource: "harness_fallback" },
+      { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
     ]);
     expect(deps.accounts.getById).not.toHaveBeenCalled();
   });
