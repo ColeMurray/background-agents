@@ -1,12 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createExecutionContext, env } from "cloudflare:test";
 import { ProviderCredentialStore } from "../../src/db/provider-account-credentials";
-import {
-  ProviderAccountCleanupOutboxStore,
-  ProviderCredentialIssuanceStore,
-} from "../../src/db/provider-credential-issuances";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
-import { ProviderCredentialCleanupCoordinator } from "../../src/model-provider-accounts/credential-cleanup";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, routeRequest, seedSandboxAuth } from "./helpers";
 
@@ -78,11 +73,11 @@ describe("stored provider secret delivery", () => {
   beforeEach(async () => {
     await cleanD1Tables();
     await env.DB.exec(
-      "DELETE FROM model_provider_account_cleanup_outbox; DELETE FROM model_provider_credential_issuances; DELETE FROM model_provider_account_defaults; DELETE FROM model_provider_account_credentials; DELETE FROM model_provider_accounts;"
+      "DELETE FROM model_provider_account_defaults; DELETE FROM model_provider_account_credentials; DELETE FROM model_provider_accounts;"
     );
   });
 
-  it("delivers the setup token to the bound sandbox and records the issuance", async () => {
+  it("delivers the setup token to the bound sandbox", async () => {
     const now = Date.now();
     await seedAnthropicAccount(now);
     const sessionName = `issuance-${now}`;
@@ -99,51 +94,6 @@ describe("stored provider secret delivery", () => {
       credentialVersion: 1,
       expiresAt: expect.any(Number),
     });
-    const issuances = await new ProviderCredentialIssuanceStore(env.DB).listForSession(sessionName);
-    expect(issuances).toHaveLength(1);
-    expect(issuances[0]).toMatchObject({
-      providerAccountId: ANTHROPIC_ACCOUNT_ID,
-      sandboxId: "sandbox-1",
-      credentialVersion: 1,
-      terminatedAt: null,
-    });
-  });
-
-  it("keeps one issuance row per sandbox however often it asks", async () => {
-    const now = Date.now();
-    await seedAnthropicAccount(now);
-    const sessionName = `issuance-repeat-${now}`;
-    const { stub } = await initNamedSession(sessionName, { providerAuth: anthropicSessionAuth() });
-    await seedSandboxAuth(stub, { authToken: "sandbox-token", sandboxId: "sandbox-1" });
-
-    expect((await fetchRuntimeCredential(sessionName, "sandbox-token", "sandbox-1")).status).toBe(
-      200
-    );
-    expect((await fetchRuntimeCredential(sessionName, "sandbox-token", "sandbox-1")).status).toBe(
-      200
-    );
-
-    const issuances = await new ProviderCredentialIssuanceStore(env.DB).listForSession(sessionName);
-    expect(issuances).toHaveLength(1);
-  });
-
-  it("keeps the issuance as revocation evidence after the session row is deleted", async () => {
-    const now = Date.now();
-    await seedAnthropicAccount(now);
-    const sessionName = `issuance-deleted-${now}`;
-    const { stub } = await initNamedSession(sessionName, { providerAuth: anthropicSessionAuth() });
-    await seedSandboxAuth(stub, { authToken: "sandbox-token", sandboxId: "sandbox-1" });
-    expect((await fetchRuntimeCredential(sessionName, "sandbox-token", "sandbox-1")).status).toBe(
-      200
-    );
-
-    await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(sessionName).run();
-
-    const live = await new ProviderCredentialIssuanceStore(env.DB).listLive(
-      ANTHROPIC_ACCOUNT_ID,
-      1
-    );
-    expect(live.map((row) => row.sessionId)).toEqual([sessionName]);
   });
 
   it("refuses the access-token route for a stored-secret provider", async () => {
@@ -164,9 +114,6 @@ describe("stored provider secret delivery", () => {
 
     expect(response.status).toBe(409);
     expect(await response.text()).not.toContain("sk-ant-oat01");
-    expect(await new ProviderCredentialIssuanceStore(env.DB).listForSession(sessionName)).toEqual(
-      []
-    );
   });
 
   it("refuses a caller that names another sandbox", async () => {
@@ -179,9 +126,6 @@ describe("stored provider secret delivery", () => {
     const response = await fetchRuntimeCredential(sessionName, "sandbox-token", "sandbox-other");
 
     expect(response.status).toBe(403);
-    expect(await new ProviderCredentialIssuanceStore(env.DB).listForSession(sessionName)).toEqual(
-      []
-    );
   });
 
   it("refuses sessions that are not bound to a connected account", async () => {
@@ -228,7 +172,7 @@ describe("stored provider secret delivery", () => {
     expect(response.status).toBe(409);
   });
 
-  it("fences an expired token to reconnect_required and enqueues cleanup", async () => {
+  it("fences an expired token to reconnect_required", async () => {
     const now = Date.now();
     await seedAnthropicAccount(now, now + 60_000);
     const sessionName = `issuance-expired-${now}`;
@@ -240,35 +184,26 @@ describe("stored provider secret delivery", () => {
     expect(response.status).toBe(409);
     const account = await new ModelProviderAccountStore(env.DB).getById(ANTHROPIC_ACCOUNT_ID);
     expect(account?.status).toBe("reconnect_required");
-    const outbox = await new ProviderAccountCleanupOutboxStore(env.DB).listForAccount(
-      ANTHROPIC_ACCOUNT_ID
-    );
-    expect(outbox.map((task) => task.reason)).toEqual(["expired"]);
   });
 
   it("fences expiry only while the inspected credential version is still current", async () => {
     const now = Date.now();
     await seedAnthropicAccount(now, now + 60_000);
     const accounts = new ModelProviderAccountStore(env.DB);
-    const outbox = new ProviderAccountCleanupOutboxStore(env.DB);
 
     // A reader that inspected version 2 lost to a reconnect: nothing changes.
     expect(await accounts.requireReconnectForExpiredCredential(ANTHROPIC_ACCOUNT_ID, 2, now)).toBe(
       false
     );
     expect((await accounts.getById(ANTHROPIC_ACCOUNT_ID))?.status).toBe("active");
-    expect(await outbox.listForAccount(ANTHROPIC_ACCOUNT_ID)).toEqual([]);
 
     expect(await accounts.requireReconnectForExpiredCredential(ANTHROPIC_ACCOUNT_ID, 1, now)).toBe(
       true
     );
     expect((await accounts.getById(ANTHROPIC_ACCOUNT_ID))?.status).toBe("reconnect_required");
-    expect((await outbox.listForAccount(ANTHROPIC_ACCOUNT_ID)).map((task) => task.reason)).toEqual([
-      "expired",
-    ]);
   });
 
-  it("denies a disabled account, and the cleanup drains its live issuances", async () => {
+  it("denies a disabled account from then on", async () => {
     const now = Date.now();
     await seedAnthropicAccount(now);
     const sessionName = `issuance-disable-${now}`;
@@ -280,102 +215,10 @@ describe("stored provider secret delivery", () => {
 
     const accounts = new ModelProviderAccountStore(env.DB);
     expect(await accounts.setStatus(ANTHROPIC_ACCOUNT_ID, "disabled", null, now + 1)).toBe(true);
-    // Future issuance is denied immediately.
+    // A sandbox that already holds the token keeps it until it exits; a new
+    // hand-out is refused.
     expect((await fetchRuntimeCredential(sessionName, "sandbox-token", "sandbox-1")).status).toBe(
       409
     );
-    // The mutation enqueued the cleanup atomically (trigger).
-    const outbox = new ProviderAccountCleanupOutboxStore(env.DB);
-    const tasks = await outbox.listForAccount(ANTHROPIC_ACCOUNT_ID);
-    expect(tasks.map((task) => task.reason)).toEqual(["disabled"]);
-
-    const revoked: Array<{ sessionId: string; sandboxId: string }> = [];
-    const coordinator = new ProviderCredentialCleanupCoordinator(
-      new ProviderCredentialIssuanceStore(env.DB),
-      outbox,
-      {
-        async revoke(sessionId, expectedSandboxId) {
-          revoked.push({ sessionId, sandboxId: expectedSandboxId });
-          return "terminated";
-        },
-      },
-      { info() {}, warn() {}, error() {} },
-      () => now + 2
-    );
-    const result = await coordinator.drain();
-
-    expect(result).toEqual({ tasks: 1, terminated: 1, rescheduled: 0 });
-    expect(revoked).toEqual([{ sessionId: sessionName, sandboxId: "sandbox-1" }]);
-    expect(await outbox.listForAccount(ANTHROPIC_ACCOUNT_ID)).toEqual([]);
-    const issuances = await new ProviderCredentialIssuanceStore(env.DB).listForSession(sessionName);
-    expect(issuances[0]?.terminatedAt).toBe(now + 2);
-  });
-
-  it("drains more live issuances than one page holds before completing the task", async () => {
-    const now = Date.now();
-    await seedAnthropicAccount(now);
-    const issuances = new ProviderCredentialIssuanceStore(env.DB);
-    const statements = Array.from({ length: 101 }, (_, index) =>
-      env.DB.prepare(
-        `INSERT INTO model_provider_credential_issuances
-           (id, provider_account_id, provider, session_id, sandbox_id, credential_version, issued_at)
-         VALUES (?, ?, 'anthropic', ?, ?, 1, ?)`
-      ).bind(`iss-${index}`, ANTHROPIC_ACCOUNT_ID, `session-${index}`, `sandbox-${index}`, now)
-    );
-    await env.DB.batch(statements);
-    expect(await issuances.listLive(ANTHROPIC_ACCOUNT_ID, 1)).toHaveLength(100);
-
-    const accounts = new ModelProviderAccountStore(env.DB);
-    expect(await accounts.setStatus(ANTHROPIC_ACCOUNT_ID, "disabled", null, now + 1)).toBe(true);
-    const outbox = new ProviderAccountCleanupOutboxStore(env.DB);
-    const revoked = new Set<string>();
-    const result = await new ProviderCredentialCleanupCoordinator(
-      issuances,
-      outbox,
-      {
-        async revoke(_sessionId, expectedSandboxId) {
-          revoked.add(expectedSandboxId);
-          return "terminated";
-        },
-      },
-      { info() {}, warn() {}, error() {} },
-      () => now + 2
-    ).drain();
-
-    expect(result).toEqual({ tasks: 1, terminated: 101, rescheduled: 0 });
-    expect(revoked.size).toBe(101);
-    expect(await issuances.listLive(ANTHROPIC_ACCOUNT_ID, 1)).toEqual([]);
-    expect(await outbox.listForAccount(ANTHROPIC_ACCOUNT_ID)).toEqual([]);
-  });
-
-  it("revoke-sandbox on the session runtime stops only the named sandbox", async () => {
-    const now = Date.now();
-    const sessionName = `issuance-revoke-${now}`;
-    const { stub } = await initNamedSession(sessionName);
-    await seedSandboxAuth(stub, { authToken: "t", sandboxId: "sandbox-1" });
-
-    const stale = await stub.fetch("http://internal/internal/revoke-sandbox", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expectedSandboxId: "sandbox-old", reason: "test" }),
-    });
-    expect(await stale.json()).toEqual({ outcome: "not_current" });
-
-    const current = await stub.fetch("http://internal/internal/revoke-sandbox", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expectedSandboxId: "sandbox-1", reason: "test" }),
-    });
-    // The integration provider (Modal) cannot stop a sandbox on request: the
-    // runtime is told to exit and the issuance stays unsettled until a later
-    // pass finds the sandbox gone.
-    expect(await current.json()).toEqual({ outcome: "shutdown_requested" });
-
-    const again = await stub.fetch("http://internal/internal/revoke-sandbox", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expectedSandboxId: "sandbox-1", reason: "test" }),
-    });
-    expect(await again.json()).toEqual({ outcome: "no_sandbox" });
   });
 });

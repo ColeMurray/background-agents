@@ -55,7 +55,6 @@ export interface SessionInternalRouteHandlers {
   childSummary: SessionInternalRouteHandler;
   parentPrompt: SessionInternalRouteHandler;
   cancel: SessionInternalRouteHandler;
-  revokeSandbox: SessionInternalRouteHandler;
   childSessionUpdate: SessionInternalRouteHandler;
   diffState: SessionInternalRouteHandler;
   diffStore: SessionInternalRouteHandler;
@@ -146,7 +145,6 @@ export function createSessionInternalRoutes(
     { method: "GET", path: SessionInternalPaths.childSummary, handler: handlers.childSummary },
     { method: "POST", path: SessionInternalPaths.parentPrompt, handler: handlers.parentPrompt },
     { method: "POST", path: SessionInternalPaths.cancel, handler: handlers.cancel },
-    { method: "POST", path: SessionInternalPaths.revokeSandbox, handler: handlers.revokeSandbox },
     {
       method: "POST",
       path: SessionInternalPaths.childSessionUpdate,

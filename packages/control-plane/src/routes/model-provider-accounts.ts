@@ -479,7 +479,7 @@ async function handleProviderAccess(
     "brokered_access_token"
   ) {
     // The stored secret only leaves through the runtime-credential route,
-    // which records the issuance the cleanup needs to find the sandbox.
+    // which applies the account and expiry checks for it.
     return error(
       "Provider delivers a stored provider secret; use the runtime-credential route",
       409

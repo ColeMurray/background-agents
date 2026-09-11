@@ -15,13 +15,7 @@
  */
 
 import { checkAutofixQueueHealth } from "./autofix/queue-health";
-import {
-  ProviderAccountCleanupOutboxStore,
-  ProviderCredentialIssuanceStore,
-} from "./db/provider-credential-issuances";
 import { SessionIndexStore } from "./db/session-index";
-import { ProviderCredentialCleanupCoordinator } from "./model-provider-accounts/credential-cleanup";
-import { SessionRuntimeSandboxRevoker } from "./model-provider-accounts/sandbox-revoker";
 import type { SqlDatabase } from "./db/sql-database";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 import type { CorrelationContext, Logger } from "./logger";
@@ -61,22 +55,10 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
   {
     name: "scheduler_tick",
     cron: SCHEDULER_TICK_CRON,
-    async run({ env, db, sessions, backgroundTasks, log }) {
+    async run({ env, db, backgroundTasks, log }) {
       backgroundTasks.submit(() => checkAutofixQueueHealth(env, log), {
         name: "autofix_queue_health",
       });
-      // Terminate sandboxes that hold a revoked static provider credential
-      // (Anthropic setup tokens). Idempotent: issuances are terminated once.
-      backgroundTasks.submit(
-        () =>
-          new ProviderCredentialCleanupCoordinator(
-            new ProviderCredentialIssuanceStore(db),
-            new ProviderAccountCleanupOutboxStore(db),
-            new SessionRuntimeSandboxRevoker(sessions),
-            log
-          ).drain(),
-        { name: "provider_credential_cleanup" }
-      );
       // The tick runs both the recovery sweep (orphaned/timed-out runs) and
       // processes overdue automations.
       await new Scheduler(db, env, backgroundTasks).tick();

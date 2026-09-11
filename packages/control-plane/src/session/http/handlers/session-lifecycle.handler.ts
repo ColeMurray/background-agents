@@ -2,7 +2,6 @@ import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
-import type { SandboxRevocationTermination } from "../../../sandbox/lifecycle/manager";
 import type { MessageRepository } from "../../message-repository";
 import type { SessionStatusService } from "../../session-status-service";
 import type { SessionTitleService } from "../../title-service";
@@ -57,48 +56,8 @@ export class SessionLifecycleHandler {
     private readonly titleService: SessionTitleService,
     private readonly sockets: WebSocketManager,
     private readonly durableObjectId: string,
-    private readonly cancelSession: () => Promise<void>,
-    private readonly terminateSandbox: (
-      reason: string
-    ) => Promise<SandboxRevocationTermination> = async () => "gone"
+    private readonly cancelSession: () => Promise<void>
   ) {}
-
-  /**
-   * Credential revocation: stop the sandbox only if it is still the one that
-   * received the credential. A respawned sandbox never held it, so the call
-   * is a no-op there. The session itself stays resumable; the next prompt
-   * fails the pre-spawn account check with reconnect guidance. `terminated`
-   * is reported only when the provider confirmed the stop; a stop failure is
-   * a 503 so the caller retries rather than settling.
-   */
-  async revokeSandbox(request: Request): Promise<Response> {
-    let raw: unknown;
-    try {
-      raw = await request.json();
-    } catch {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-    const body = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
-    const expectedSandboxId = body?.expectedSandboxId;
-    const reason = typeof body?.reason === "string" ? body.reason : "provider credential revoked";
-    if (typeof expectedSandboxId !== "string" || !expectedSandboxId) {
-      return Response.json({ error: "expectedSandboxId is required" }, { status: 400 });
-    }
-    const sandbox = this.sandboxRepository.getSandbox();
-    if (!sandbox) return Response.json({ outcome: "no_sandbox" });
-    const currentId = sandbox.modal_sandbox_id ?? sandbox.id;
-    if (currentId !== expectedSandboxId) return Response.json({ outcome: "not_current" });
-    let termination: SandboxRevocationTermination;
-    try {
-      termination = await this.terminateSandbox(reason);
-    } catch (error) {
-      return Response.json(
-        { error: error instanceof Error ? error.message : "Sandbox stop failed" },
-        { status: 503 }
-      );
-    }
-    return Response.json({ outcome: termination === "gone" ? "no_sandbox" : termination });
-  }
 
   getState(): Response {
     const session = this.sessionCoreRepository.getSession();

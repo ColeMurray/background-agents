@@ -2,9 +2,8 @@
 
 The Claude harness fetches its subscription credential (a Claude setup token)
 from the control plane's sandbox-only runtime-credential endpoint on every bridge
-start, so a supervised restart and a snapshot restore both re-fetch and each
-fetch is an issuance record on the control plane. The token lives in process
-memory only.
+start, so a supervised restart and a snapshot restore both re-fetch. The
+token lives in process memory only.
 """
 
 from __future__ import annotations

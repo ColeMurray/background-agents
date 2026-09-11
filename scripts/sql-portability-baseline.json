@@ -47,8 +47,8 @@
     },
     "terraform/d1/migrations/0076_anthropic_provider_accounts.sql": {
       "create-trigger": {
-        "occurrences": ["CREATE TRIGGER", "CREATE TRIGGER", "CREATE TRIGGER"],
-        "reason": "Two invariants the store cannot hold alone. (1) sessions_seed_legacy_provider_auth (already in 0064, re-created with a third row) covers sessions the previous worker inserts between the migration and the new worker deploy, which the new worker rejects as incomplete without an anthropic row. (2) The cleanup outbox must be written in the same statement as every mutation that revokes bootstrap (disable, archive, expiry fence, credential rotation); a trigger makes that a property of the table rather than of each writer. Portable form: enqueue from every status/credential writer in the same batch."
+        "occurrences": ["CREATE TRIGGER"],
+        "reason": "sessions_seed_legacy_provider_auth (already in 0064, re-created with a third row) covers sessions the previous worker inserts between the migration and the new worker deploy, which the new worker rejects as incomplete without an anthropic row."
       }
     }
   },

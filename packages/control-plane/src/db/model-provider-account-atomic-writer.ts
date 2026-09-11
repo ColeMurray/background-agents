@@ -100,13 +100,6 @@ export interface ModelProviderAccountAtomicWriter {
   fenceExchangeAndRequireReconnect(input: FenceProviderCredentialExchangeInput): Promise<boolean>;
 }
 
-/**
- * Change counts: the cleanup-outbox triggers (migration 0076) write a row
- * inside the account status/credential-version updates below, and D1 folds
- * trigger writes into `meta.changes`. Every guarded statement targets one row
- * by primary key, so "at least one change" is the exact-one check.
- */
-
 export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountAtomicWriter {
   private readonly accounts: ModelProviderAccountStore;
   private readonly credentials: ProviderCredentialStore;
@@ -158,7 +151,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
         encryptedPayload: prepared.encryptedPayload,
       }),
     ]);
-    return results[0].meta.changes >= 1 && results[1].meta.changes >= 1;
+    return results[0].meta.changes === 1 && results[1].meta.changes === 1;
   }
 
   async completeVerificationCredentialAndAccount(
@@ -173,7 +166,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
         encryptedPayload: prepared.encryptedPayload,
       }),
     ]);
-    return results[0].meta.changes >= 1 && results[1].meta.changes >= 1;
+    return results[0].meta.changes === 1 && results[1].meta.changes === 1;
   }
 
   async finalizeDeviceAuthorizationCreate(
@@ -338,7 +331,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
         reconnectedExisting: true,
       }),
     ]);
-    if (results.every((result) => result.meta.changes >= 1)) return { type: "connected" };
+    if (results.every((result) => result.meta.changes === 1)) return { type: "connected" };
     if (results.some((result) => result.meta.changes !== 0)) {
       throw new Error("Provider authorization reconnect finalization violated atomic invariants");
     }
@@ -473,6 +466,6 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
           input.exchangeOwner
         ),
     ]);
-    return results[0].meta.changes >= 1 && results[1].meta.changes >= 1;
+    return results[0].meta.changes === 1 && results[1].meta.changes === 1;
   }
 }

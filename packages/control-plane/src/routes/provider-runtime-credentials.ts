@@ -7,18 +7,17 @@
  * route hands the sandbox the stored static secret itself (a Claude setup
  * token), once per bridge start. It reads the session's immutable binding,
  * requires an active unarchived account, decrypts only after every check,
- * fences an expired credential to reconnect_required, records the issuance
- * under an active-account/version guard, and returns the plaintext with
- * Cache-Control: no-store.
+ * fences an expired credential to reconnect_required, and returns the
+ * plaintext with Cache-Control: no-store. A sandbox that already holds the
+ * token keeps it until it exits; disabling the account stops new hand-outs,
+ * and revoking the token itself happens at Anthropic.
  */
 
 import { Hono } from "hono";
 import { subscriptionProviderIdSchema } from "@open-inspect/shared/types/provider-accounts";
-import { generateId } from "../auth/crypto";
 import { modelProviderAccountAdapterRegistry } from "../auth/model-provider-account-default-adapters";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import { ProviderCredentialStore } from "../db/provider-account-credentials";
-import { ProviderCredentialIssuanceStore } from "../db/provider-credential-issuances";
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
 import { admit, dispatch } from "../routing/admit";
@@ -131,6 +130,8 @@ async function handleRuntimeCredential(
       now
     );
     if (!fenced) {
+      // Retryable, unlike the other 409s: the sandbox client reads the flag
+      // and asks again instead of treating it as a denial.
       return json(
         { error: "Provider account changed during issuance; retry", retryable: true },
         409
@@ -145,23 +146,6 @@ async function handleRuntimeCredential(
     return error("Provider credential has expired; reconnect the account", 409);
   }
 
-  const issuances = new ProviderCredentialIssuanceStore(ctx.db);
-  const recorded = await issuances.record({
-    id: generateId(),
-    providerAccountId: account.id,
-    provider,
-    sessionId,
-    sandboxId,
-    credentialVersion: state.credentialVersion,
-    now,
-  });
-  if (!recorded) {
-    // The account moved (disabled, archived, rotated) between the checks and
-    // the record: never release a secret nobody will clean up after.
-    // Retryable, unlike the other 409s: the sandbox client reads the flag and
-    // treats this one as transient instead of a permanent denial.
-    return json({ error: "Provider account changed during issuance; retry", retryable: true }, 409);
-  }
   logger.info("provider_credential.issued", {
     event: "provider_credential.issued",
     provider,

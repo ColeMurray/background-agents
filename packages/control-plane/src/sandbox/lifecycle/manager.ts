@@ -335,14 +335,6 @@ export interface SandboxLifecycle {
   reportSandboxError(reason: string): void;
 }
 
-/**
- * How a credential-revocation stop ended: `terminated` only when the provider
- * confirmed it; `shutdown_requested` when the provider cannot stop a sandbox
- * on request and the runtime was told to exit instead; `gone` when there was
- * no live sandbox to stop.
- */
-export type SandboxRevocationTermination = "terminated" | "shutdown_requested" | "gone";
-
 export type UnresponsiveSandboxTrigger =
   | "prompt_dispatch_send_failed"
   | "stop_send_failed"
@@ -1595,7 +1587,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
 
     this.isTerminatingSandbox = true;
-    this.failSandbox(sandbox, reason);
+    if (sandbox.status !== "failed") {
+      this.storage.updateSandboxStatus("failed");
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+    }
+    this.reportSandboxError(reason);
+    this.clearSandboxAccessState();
 
     const canStopProvider = this.canStopProviderSandbox();
     if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
@@ -1611,44 +1608,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.isTerminatingSandbox = false;
     }
     return true;
-  }
-
-  /**
-   * Stop the sandbox because the provider credential it holds was revoked.
-   * Unlike the fatal-error path this never claims more than it knows: a
-   * provider stop failure propagates so the revocation is retried, and a
-   * provider without an explicit stop reports `shutdown_requested` after
-   * telling the runtime to exit. Dead sandboxes are `gone`.
-   */
-  async terminateSandboxForRevocation(reason: string): Promise<SandboxRevocationTermination> {
-    const sandbox = this.storage.getSandbox();
-    if (!sandbox || isDeadSandboxStatus(sandbox.status)) return "gone";
-    if (this.isTerminatingSandbox) return "shutdown_requested";
-
-    this.isTerminatingSandbox = true;
-    try {
-      this.failSandbox(sandbox, reason);
-      if (this.canStopProviderSandbox()) {
-        this.wsManager.detachSandboxWebSocket(1011, "Provider credential revoked");
-        await this.stopProviderSandbox("credential_revoked");
-        return "terminated";
-      }
-      this.wsManager.sendToSandbox({ type: "shutdown" });
-      this.wsManager.detachSandboxWebSocket(1011, "Provider credential revoked");
-      return "shutdown_requested";
-    } finally {
-      this.isTerminatingSandbox = false;
-    }
-  }
-
-  /** Mark the sandbox failed, tell clients why, and drop its access URLs. */
-  private failSandbox(sandbox: SandboxRow, reason: string): void {
-    if (sandbox.status !== "failed") {
-      this.storage.updateSandboxStatus("failed");
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-    }
-    this.reportSandboxError(reason);
-    this.clearSandboxAccessState();
   }
 
   /**

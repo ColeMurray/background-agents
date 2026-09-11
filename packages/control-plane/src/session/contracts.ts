@@ -38,8 +38,6 @@ export const SessionInternalPaths = {
   unarchive: "/internal/unarchive",
   expireDraft: "/internal/expire-draft",
   verifySandboxToken: "/internal/verify-sandbox-token",
-  // Stop the sandbox only if it is still the named one (credential revocation).
-  revokeSandbox: "/internal/revoke-sandbox",
   openaiTokenRefresh: "/internal/openai-token-refresh",
   xaiTokenRefresh: "/internal/xai-token-refresh",
   scmCredentials: "/internal/scm-credentials",
