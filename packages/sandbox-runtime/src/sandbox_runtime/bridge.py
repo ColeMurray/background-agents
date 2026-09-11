@@ -115,7 +115,19 @@ class AgentBridge:
     HEARTBEAT_INTERVAL = 30.0
     RECONNECT_BACKOFF_BASE = 2.0
     RECONNECT_MAX_DELAY = 60.0
-    SSE_INACTIVITY_TIMEOUT = 120.0
+    # How long a turn may go without the harness producing anything before the
+    # bridge gives up on it. This is a liveness check for a harness that has
+    # stopped talking, not a budget for how long the model may think: a reasoning
+    # model on a high effort setting can be silent for minutes before its first
+    # streamed message, and the old two-minute value failed those turns while
+    # they were still working.
+    #
+    # Kept below the control plane's own inactivity watchdog
+    # (SANDBOX_INACTIVITY_TIMEOUT_MS, 10 minutes) so the bridge still owns the
+    # outcome. That watchdog snapshots and stops the sandbox for sessions with
+    # no client attached, which loses the turn's partial output and reports a
+    # stuck-processing error instead of this one.
+    SSE_INACTIVITY_TIMEOUT = 300.0
     SSE_INACTIVITY_TIMEOUT_MIN = 5.0
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
