@@ -55,12 +55,15 @@ class TestStartupLifecycle:
             HarnessStartError("credential denied"), close_error=RuntimeError("close blew up")
         )
         bridge = _bridge(harness)
+        diff_close_error = RuntimeError("diff flush blew up")
+        bridge.diff_refresh.close = AsyncMock(side_effect=diff_close_error)
 
         with pytest.raises(HarnessStartError, match="credential denied"):
             await bridge.run()
 
         assert harness.closed is True
         assert fatal_path.read_text() == "credential denied"
+        bridge.log.error.assert_any_call("bridge.diff_refresh_close_failed", exc=diff_close_error)
         bridge.log.error.assert_any_call("bridge.harness_close_failed", exc=harness._close_error)
 
     @pytest.mark.asyncio

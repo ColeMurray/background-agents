@@ -341,12 +341,16 @@ class AgentBridge:
                 self._current_prompt_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._current_prompt_task
-            await self.diff_refresh.close(
-                timeout_seconds=self.DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS
-            )
-            # A failing close() must not replace the exception that ended the
-            # run: a HarnessStartError still has to reach main() as itself so
-            # the supervisor sees the deterministic exit code.
+            # Cleanup failures are logged, never raised: an exception here
+            # would replace the one that ended the run, and a HarnessStartError
+            # has to reach main() as itself so the supervisor sees the
+            # deterministic exit code.
+            try:
+                await self.diff_refresh.close(
+                    timeout_seconds=self.DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS
+                )
+            except Exception as close_error:
+                self.log.error("bridge.diff_refresh_close_failed", exc=close_error)
             try:
                 await self.harness.close()
             except Exception as close_error:
