@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from sandbox_runtime.constants import BIN_INSTALL_DIR_ENV_VAR
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from sandbox_runtime.sandbox_bin import install_bin_scripts
@@ -339,7 +340,8 @@ class TestInstallBinScripts:
 
     @staticmethod
     def _install(monkeypatch, src: Path, dest: Path) -> list[str]:
-        monkeypatch.setattr("sandbox_runtime.sandbox_bin.DEFAULT_BIN_INSTALL_DIR", str(dest))
+        # The canonical override, so an ambient value on the host never wins.
+        monkeypatch.setenv(BIN_INSTALL_DIR_ENV_VAR, str(dest))
         return install_bin_scripts(get_logger("test"), bin_dir=src)
 
     def test_scripts_installed_to_bin(self, tmp_path, monkeypatch):
@@ -363,22 +365,22 @@ class TestInstallBinScripts:
         assert signer.read_text() == "#!/bin/sh\n# signer launcher"
         assert signer.stat().st_mode & 0o755
 
-    def test_scripts_installed_to_configured_bin(self, tmp_path, monkeypatch):
-        """OPENINSPECT_BIN_INSTALL_DIR can override the install directory."""
+    def test_scripts_fall_back_to_the_default_bin_without_the_override(self, tmp_path, monkeypatch):
+        """Without OPENINSPECT_BIN_INSTALL_DIR the default directory is used."""
         src = tmp_path / "app" / "sandbox_runtime" / "bin"
         src.mkdir(parents=True)
         (src / "upload-media.js").write_text("#!/usr/bin/env node\n// upload cli")
         default_dest = tmp_path / "usr-local-bin"
-        default_dest.mkdir()
-        user_dest = tmp_path / "configured-bin"
-        monkeypatch.setenv("OPENINSPECT_BIN_INSTALL_DIR", str(user_dest))
+        monkeypatch.delenv(BIN_INSTALL_DIR_ENV_VAR, raising=False)
+        monkeypatch.setattr(
+            "sandbox_runtime.sandbox_bin.DEFAULT_BIN_INSTALL_DIR", str(default_dest)
+        )
 
-        self._install(monkeypatch, src, default_dest)
+        install_bin_scripts(get_logger("test"), bin_dir=src)
 
-        installed = user_dest / "upload-media"
+        installed = default_dest / "upload-media"
         assert installed.exists()
         assert installed.read_text() == "#!/usr/bin/env node\n// upload cli"
-        assert not (default_dest / "upload-media").exists()
 
     def test_non_js_files_skipped(self, tmp_path, monkeypatch):
         """Files that are neither extensionless nor .js are not installed."""

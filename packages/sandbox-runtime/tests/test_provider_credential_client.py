@@ -1,4 +1,4 @@
-"""The sandbox-side runtime-credential client: denial is final, 5xx is transient."""
+"""The sandbox-side runtime-credential client: denial is final; the moment is not."""
 
 from unittest.mock import MagicMock
 
@@ -63,6 +63,29 @@ async def test_fetch_posts_with_sandbox_principal_headers_and_returns_the_secret
 async def test_denials_are_final(status: int) -> None:
     client, _ = _client(lambda _r: httpx.Response(status, json={"error": "account disabled"}))
     with pytest.raises(RuntimeCredentialDenied, match="account disabled"):
+        await client.fetch("anthropic")
+
+
+@pytest.mark.parametrize("status", [408, 425, 429])
+@pytest.mark.asyncio
+async def test_timeouts_and_rate_limits_are_transient(status: int) -> None:
+    client, _ = _client(lambda _r: httpx.Response(status, json={"error": "slow down"}))
+    with pytest.raises(RuntimeCredentialUnavailable):
+        await client.fetch("anthropic")
+
+
+@pytest.mark.asyncio
+async def test_the_issuance_race_is_transient_while_other_conflicts_are_final() -> None:
+    client, _ = _client(
+        lambda _r: httpx.Response(
+            409,
+            json={"error": "Provider account changed during issuance; retry", "retryable": True},
+        )
+    )
+    with pytest.raises(RuntimeCredentialUnavailable):
+        await client.fetch("anthropic")
+    client, _ = _client(lambda _r: httpx.Response(409, json={"error": "expired"}))
+    with pytest.raises(RuntimeCredentialDenied, match="expired"):
         await client.fetch("anthropic")
 
 

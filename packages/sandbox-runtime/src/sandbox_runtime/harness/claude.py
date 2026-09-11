@@ -18,6 +18,21 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ConversationResetMessage,
+    RateLimitEvent,
+    ResultMessage,
+    StreamEvent,
+    SystemMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+)
+
 from ..credentials.provider_credential_client import (
     RuntimeCredentialClient,
     RuntimeCredentialDenied,
@@ -77,6 +92,10 @@ ALLOWED_TOOLS: Final = (
     "KillShell",
 )
 DISALLOWED_TOOLS: Final = ("AskUserQuestion",)
+# Claude's sub-agent tool. The timeline groups child activity under the
+# runtime-neutral task tool, so the vendor name never reaches the wire.
+SUBAGENT_TOOL_NAME: Final = "Agent"
+TASK_TOOL_NAME: Final = "task"
 MAX_RECONNECTS_PER_SESSION: Final = 3
 AUTHENTICATION_FAILED_MESSAGE: Final = (
     "Anthropic rejected this session's credential. Reconnect the Claude account in "
@@ -95,7 +114,7 @@ class SdkClient(Protocol):
 
     async def interrupt(self) -> None: ...
 
-    def receive_response(self) -> AsyncIterator[Any]: ...
+    def receive_messages(self) -> AsyncIterator[Any]: ...
 
 
 SdkClientFactory = Callable[[Any], SdkClient]
@@ -122,7 +141,9 @@ class _MessageText:
 @dataclass
 class _TurnState:
     message_id: str
-    cost_baseline: float
+    # None: the previous turn reported no running total, so the next total
+    # cannot be split between the two turns.
+    cost_baseline: float | None
     texts: list[_MessageText] = field(default_factory=list)
     last_token_content: str = ""
     tool_names: dict[str, str] = field(default_factory=dict)
@@ -254,7 +275,9 @@ class ClaudeHarness:
         self._resume_on_connect = False
         self._needs_reconnect = False
         self._reconnects = 0
-        self._cost_baseline = 0.0
+        self._cost_baseline: float | None = 0.0
+        # Set by a conversation reset: the next result carries the new id.
+        self._session_rotated = False
         self._interrupted = False
         self._tool_client: ControlPlaneToolClient | None = None
         self._tool_server: Any = None
@@ -374,20 +397,23 @@ class ClaudeHarness:
         )
         if same_shape and self._client is not None:
             return self._client
-        if self._client is not None:
-            if self._needs_reconnect:
-                self._reconnects += 1
-                if self._reconnects > MAX_RECONNECTS_PER_SESSION:
-                    raise RuntimeError(
-                        "The Claude agent process failed repeatedly for this session; "
-                        "start a new session."
-                    )
-            await self._disconnect()
+        if self._needs_reconnect:
+            # Spent whether or not the previous attempt produced a client: a
+            # connect that fails or hangs still counts against the budget.
+            self._reconnects += 1
+            if self._reconnects > MAX_RECONNECTS_PER_SESSION:
+                raise RuntimeError(
+                    "The Claude agent process failed repeatedly for this session; "
+                    "start a new session."
+                )
+        await self._disconnect()
         options = self.build_options(model, reasoning_effort)
         factory = self._client_factory or _default_client_factory
         client = factory(options)
-        await client.connect()
+        # Held before connect so a connect the deadline cuts short is still
+        # closed by the next reconnect rather than leaked.
         self._client = client
+        await client.connect()
         self._connected_model = model
         self._connected_effort = reasoning_effort
         self._needs_reconnect = False
@@ -419,10 +445,24 @@ class ClaudeHarness:
             model = bare_model_id(prompt.model, self.config.default_model)
         except ValueError as error:
             return TurnOutcome.failed(str(error))
+        # One budget covers the whole turn: connect, submit, every read and
+        # every emit. The inactivity budget applies to each read alone, and
+        # cleanup after either has its own budget, so a hung SDK call can
+        # never eat the snapshot reserve.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.limits.prompt_max_duration_seconds
         try:
-            client = await self._ensure_client(model, prompt.reasoning_effort)
+            async with asyncio.timeout_at(deadline):
+                client = await self._ensure_client(model, prompt.reasoning_effort)
         except HarnessStartError:
             raise
+        except TimeoutError:
+            self.log.error("claude.connect_timeout", message_id=prompt.message_id)
+            self._needs_reconnect = True
+            await self._cleanup_after_timeout()
+            return TurnOutcome.failed(
+                f"Claude agent did not start within {self.limits.prompt_max_duration_seconds:.0f}s."
+            )
         except Exception as error:
             self.log.error("claude.connect_error", exc=error, message_id=prompt.message_id)
             self._needs_reconnect = True
@@ -430,31 +470,25 @@ class ClaudeHarness:
 
         self._interrupted = False
         state = _TurnState(message_id=prompt.message_id, cost_baseline=self._cost_baseline)
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.limits.prompt_max_duration_seconds
         try:
-            await client.query(self._user_messages(prompt))
-            stream = aiter(client.receive_response())
-            while True:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    raise _PromptMaxDurationTimeout
-                try:
-                    async with asyncio.timeout(
-                        min(remaining, self.limits.inactivity_timeout_seconds)
-                    ):
-                        message = await anext(stream)
-                except StopAsyncIteration:
-                    break
-                except TimeoutError as error:
-                    if deadline - loop.time() <= 0:
-                        raise _PromptMaxDurationTimeout from error
-                    raise _InactivityTimeout from error
-                events, outcome = self._translate(state, message)
-                for event in events:
-                    await emit(event)
-                if outcome is not None:
-                    return outcome
+            async with asyncio.timeout_at(deadline):
+                await client.query(self._user_messages(prompt))
+                stream = aiter(client.receive_messages())
+                while True:
+                    try:
+                        async with asyncio.timeout(self.limits.inactivity_timeout_seconds):
+                            message = await anext(stream)
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError as error:
+                        raise _InactivityTimeout from error
+                    if self._answers_another_turn(message):
+                        continue
+                    events, outcome = self._translate(state, message)
+                    for event in events:
+                        await emit(event)
+                    if outcome is not None:
+                        return outcome
             self._needs_reconnect = True
             return TurnOutcome.failed(
                 "The Claude agent stream ended before the turn completed.",
@@ -463,14 +497,14 @@ class ClaudeHarness:
         except asyncio.CancelledError:
             self._needs_reconnect = True
             raise
-        except _PromptMaxDurationTimeout:
-            await self._interrupt_quietly()
+        except TimeoutError:
+            await self._cleanup_after_timeout()
             self._needs_reconnect = True
             return TurnOutcome.failed(
                 f"Prompt exceeded max duration of {self.limits.prompt_max_duration_seconds:.0f}s."
             )
         except _InactivityTimeout:
-            await self._interrupt_quietly()
+            await self._cleanup_after_timeout()
             self._needs_reconnect = True
             return TurnOutcome.failed(
                 f"Claude agent produced no output for {self.limits.inactivity_timeout_seconds:.0f}s."
@@ -479,6 +513,38 @@ class ClaudeHarness:
             self.log.error("claude.turn_error", exc=error, message_id=prompt.message_id)
             self._needs_reconnect = True
             return TurnOutcome.failed(f"Claude agent transport failed: {error}")
+
+    def _answers_another_turn(self, message: Any) -> bool:
+        """A result of a turn the session injected, not of this prompt.
+
+        The streaming connection can interleave turns the CLI starts on its
+        own (task notifications, channel and peer messages). Our prompts are
+        stamped ``origin: human``, so a result carrying any other origin ends
+        someone else's turn and must not end this one.
+        """
+        if not isinstance(message, ResultMessage):
+            return False
+        origin = message.origin
+        if origin is None or origin.get("kind") == "human":
+            return False
+        self.log.info("claude.injected_turn_ignored", origin_kind=origin.get("kind"))
+        return True
+
+    async def _cleanup_after_timeout(self) -> None:
+        """Interrupt within the cleanup budget; drop the child if that hangs too."""
+        budget = self.limits.prompt_cleanup_timeout_seconds
+        try:
+            async with asyncio.timeout(budget):
+                await self._interrupt_quietly()
+            return
+        except TimeoutError:
+            self.log.warn("claude.interrupt_timeout", timeout_s=budget)
+        try:
+            async with asyncio.timeout(budget):
+                await self._disconnect()
+        except TimeoutError:
+            self.log.warn("claude.disconnect_timeout", timeout_s=budget)
+            self._client = None
 
     async def _interrupt_quietly(self) -> None:
         if self._client is None:
@@ -520,6 +586,8 @@ class ClaudeHarness:
             "message": {"role": "user", "content": content},
             "parent_tool_use_id": None,
             "session_id": self.session_id,
+            # Lets the result of this prompt be told apart from injected turns.
+            "origin": {"kind": "human"},
         }
 
     # --- translation (§5.2) -------------------------------------------------
@@ -527,19 +595,6 @@ class ClaudeHarness:
     def _translate(
         self, state: _TurnState, message: Any
     ) -> tuple[list[BridgeEvent], TurnOutcome | None]:
-        from claude_agent_sdk import (
-            AssistantMessage,
-            ConversationResetMessage,
-            RateLimitEvent,
-            ResultMessage,
-            StreamEvent,
-            SystemMessage,
-            TextBlock,
-            ToolResultBlock,
-            ToolUseBlock,
-            UserMessage,
-        )
-
         events: list[BridgeEvent] = []
         if isinstance(message, SystemMessage):
             if message.subtype == "init":
@@ -588,7 +643,9 @@ class ClaudeHarness:
                         events.extend(self._token_event(state))
             for block in message.content:
                 if isinstance(block, ToolUseBlock):
-                    state.tool_names[block.id] = block.name
+                    state.tool_names[block.id] = (
+                        TASK_TOOL_NAME if block.name == SUBAGENT_TOOL_NAME else block.name
+                    )
                     state.tool_args[block.id] = dict(block.input)
                     events.append(
                         self._tool_event(
@@ -631,19 +688,51 @@ class ClaudeHarness:
             return events, None
 
         if isinstance(message, ConversationResetMessage):
+            # The running total restarts, and the messages that follow carry
+            # the new session id the next resume and snapshot must use.
             self._cost_baseline = 0.0
             state.cost_baseline = 0.0
+            self._session_rotated = True
             return events, None
 
         if isinstance(message, ResultMessage):
+            if (
+                self._session_rotated
+                and message.session_id
+                and message.session_id != self.session_id
+            ):
+                self.log.info(
+                    "claude.session.rotated",
+                    agent_session_id=message.session_id,
+                    previous_session_id=self.session_id,
+                )
+                self.session_id = message.session_id
+                self._session_rotated = False
             total = message.total_cost_usd
             if total is None:
+                # No total means no baseline for the next turn either.
                 message_cost = 0.0
+                self._cost_baseline = None
                 events.append(
                     {
                         "type": "warning",
                         "scope": "provider",
                         "message": "The Claude agent reported no cost for this turn; it is recorded as 0.",
+                    }
+                )
+            elif state.cost_baseline is None:
+                # The previous turn's share of this total is unknowable, so
+                # neither turn is charged and the baseline re-anchors here.
+                message_cost = 0.0
+                self._cost_baseline = total
+                events.append(
+                    {
+                        "type": "warning",
+                        "scope": "provider",
+                        "message": (
+                            "The Claude agent reported no cost for the previous turn, so this "
+                            "turn's cost cannot be separated from it; it is recorded as 0."
+                        ),
                     }
                 )
             else:
@@ -730,10 +819,6 @@ class ClaudeHarness:
         ]
 
 
-class _PromptMaxDurationTimeout(Exception):
-    pass
-
-
 class _InactivityTimeout(Exception):
     pass
 
@@ -760,14 +845,10 @@ def _default_transcript_exists(session_id: str, workdir: Path, config_dir: Path)
 
 
 def _default_options_factory(**kwargs: Any) -> Any:
-    from claude_agent_sdk import ClaudeAgentOptions
-
     return ClaudeAgentOptions(**kwargs)
 
 
 def _default_client_factory(options: Any) -> SdkClient:
-    from claude_agent_sdk import ClaudeSDKClient
-
     return ClaudeSDKClient(options=options)
 
 

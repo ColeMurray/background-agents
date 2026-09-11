@@ -146,6 +146,11 @@ def harness_env(config_dir: Path, credential: ClaudeCredential) -> dict[str, str
     return {
         CONFIG_DIR_ENV_VAR: str(config_dir),
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        # A background sub-agent returns a result before its work is done and
+        # delivers the findings on a later injected turn. Foreground sub-agents
+        # launched in one message still run concurrently, as OpenCode's task
+        # tool does.
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
         "DISABLE_AUTOUPDATER": "1",
         "DISABLE_ERROR_REPORTING": "1",
         "DISABLE_TELEMETRY": "1",

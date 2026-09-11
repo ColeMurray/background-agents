@@ -148,6 +148,12 @@ class TestDenylist:
         assert credential is not None
         assert dict(credential.env) == {"ANTHROPIC_API_KEY": "k", "ANTHROPIC_AUTH_TOKEN": "t"}
 
+    def test_harness_env_keeps_sub_agents_in_the_foreground(self, tmp_path: Path) -> None:
+        # A background sub-agent would let the turn end before its work is done
+        # and deliver its result on a turn the harness never reads.
+        env = harness_env(tmp_path, ClaudeCredential.oauth_token("tok"))
+        assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
     def test_harness_env_sets_config_dir_and_policy(self, tmp_path: Path) -> None:
         env = harness_env(tmp_path, ClaudeCredential.oauth_token("tok"))
         assert env["CLAUDE_CONFIG_DIR"] == str(tmp_path)

@@ -71,7 +71,9 @@ def build_agent_harness(
             config = ClaudeHarnessConfig(
                 workdir=handoff.workdir,
                 config_dir=handoff.config_dir,
-                mcp_servers=handoff.mcp_servers,
+                # From the bridge's own SESSION_CONFIG: MCP entries can carry
+                # credentials, and the handoff file never does.
+                mcp_servers=_mcp_servers_from(session_config),
                 default_model=str(session_config.get("model") or "claude-sonnet-4-6"),
                 oauth_managed=oauth_managed,
                 system_prompt_append=_repository_guidance(handoff.workdir),
@@ -114,6 +116,13 @@ def _session_config_from_env() -> dict[str, object]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _mcp_servers_from(session_config: dict[str, object]) -> tuple[dict[str, object], ...]:
+    servers = session_config.get("mcp_servers")
+    if not isinstance(servers, list):
+        return ()
+    return tuple(server for server in servers if isinstance(server, dict))
 
 
 def _repository_guidance(workdir: Path) -> str | None:

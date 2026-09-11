@@ -20,18 +20,25 @@ if TYPE_CHECKING:
 
 RUNTIME_CREDENTIAL_TIMEOUT_SECONDS: Final = 30.0
 BOOTSTRAP_SECRET_KIND: Final = "sandbox_bootstrap_secret"
+# Statuses that describe the moment, not the account.
+RETRYABLE_STATUSES: Final = frozenset({408, 425, 429})
 
 
 class RuntimeCredentialDenied(Exception):
     """The control plane refused to issue the credential; retrying is futile.
 
-    Raised for 401/403/404/409/410 (disabled, archived, expired or unbound
-    account; wrong provider; dead sandbox). The message is user-facing.
+    Raised for 401/403/404/410 and for a 409 the endpoint does not mark
+    retryable (disabled, archived, expired or unbound account; wrong
+    provider; dead sandbox). The message is user-facing.
     """
 
 
 class RuntimeCredentialUnavailable(Exception):
-    """A transient failure (network, 5xx); the caller may retry."""
+    """A transient failure; the caller may retry.
+
+    Network errors, 5xx, 408/425/429, and a 409 whose body says
+    ``retryable`` (the endpoint's issuance race).
+    """
 
 
 @dataclass(frozen=True)
@@ -83,6 +90,13 @@ class RuntimeCredentialClient:
         except httpx.HTTPError as error:
             raise RuntimeCredentialUnavailable(str(error)) from error
 
+        if response.status_code in RETRYABLE_STATUSES or (
+            response.status_code == 409 and _marked_retryable(response)
+        ):
+            raise RuntimeCredentialUnavailable(
+                f"control plane returned HTTP {response.status_code} for the {provider} "
+                "credential; retry"
+            )
         if response.status_code in (401, 403, 404, 409, 410):
             raise RuntimeCredentialDenied(self._denial_message(provider, response))
         if response.status_code >= 500:
@@ -117,16 +131,28 @@ class RuntimeCredentialClient:
 
     @staticmethod
     def _denial_message(provider: str, response: httpx.Response) -> str:
-        detail = ""
-        try:
-            body = response.json()
-            if isinstance(body, dict):
-                detail = str(body.get("error") or body.get("message") or "")
-        except ValueError:
-            detail = response.text[:200]
-        suffix = f": {detail}" if detail else ""
-        return (
-            f"The control plane refused the {provider} subscription credential "
-            f"(HTTP {response.status_code}){suffix}. Reconnect the account in Settings "
-            "and start a new session."
-        )
+        return _denial_message(provider, response)
+
+
+def _marked_retryable(response: httpx.Response) -> bool:
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("retryable") is True
+
+
+def _denial_message(provider: str, response: httpx.Response) -> str:
+    detail = ""
+    try:
+        body = response.json()
+        if isinstance(body, dict):
+            detail = str(body.get("error") or body.get("message") or "")
+    except ValueError:
+        detail = response.text[:200]
+    suffix = f": {detail}" if detail else ""
+    return (
+        f"The control plane refused the {provider} subscription credential "
+        f"(HTTP {response.status_code}){suffix}. Reconnect the account in Settings "
+        "and start a new session."
+    )

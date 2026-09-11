@@ -10,7 +10,7 @@
  * spawn attempts within the same request.
  */
 
-import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
+import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
 import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
@@ -585,12 +585,14 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       if (session.environment_id) {
         selectedImage = await this.lookupImageBuildForSpawn(
           { kind: "environment", id: session.environment_id },
-          repositories
+          repositories,
+          getValidHarnessOrDefault(session.harness)
         );
       } else if (hasRepository && repositories.length === 1) {
         selectedImage = await this.lookupImageBuildForSpawn(
           repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName),
-          repositories
+          repositories,
+          getValidHarnessOrDefault(session.harness)
         );
       }
 
@@ -741,12 +743,13 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    */
   private async lookupImageBuildForSpawn(
     scope: ImageBuildScope,
-    repositories: SessionRepositoryInfo[]
+    repositories: SessionRepositoryInfo[],
+    harness: HarnessId
   ): Promise<SelectedImageBuild | null> {
     if (!this.imageBuildLookup || repositories.length === 0) return null;
     try {
       const image = await this.imageBuildLookup.getLatestReady(scope);
-      const result = await evaluateImageBuildForSpawn(image, repositories);
+      const result = await evaluateImageBuildForSpawn(image, repositories, harness);
       if (result.outcome === "selected") {
         this.log.info("Using prebuilt image", {
           event: "image_build.spawn_selected",

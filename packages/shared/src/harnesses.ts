@@ -32,8 +32,6 @@ export interface HarnessCapabilities {
   readonly modelFamilies: "any" | readonly string[];
   /** Provider id → auth modes the harness can *select* for that provider. */
   readonly providerAuth: Readonly<Partial<Record<string, readonly ProviderAuthMode[]>>>;
-  /** Whether the harness surfaces thinking text to the timeline. */
-  readonly reasoningDisplay: boolean;
   /** How a sandbox restore resumes the conversation. */
   readonly resume: "session_id";
 }
@@ -47,7 +45,6 @@ export const HARNESS_CATALOG = {
       openai: ["api_key", "provider_account"],
       xai: ["api_key", "provider_account"],
     },
-    reasoningDisplay: false,
     resume: "session_id",
   },
   claude: {
@@ -56,7 +53,6 @@ export const HARNESS_CATALOG = {
     providerAuth: {
       anthropic: ["api_key", "provider_account"],
     },
-    reasoningDisplay: true,
     resume: "session_id",
   },
 } as const satisfies Record<HarnessId, HarnessCapabilities>;

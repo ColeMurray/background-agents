@@ -54,14 +54,21 @@ LIMITS = PromptLimits(
 )
 
 
-def _result(total_cost: float | None, *, subtype: str = "success", is_error: bool = False, **extra):
+def _result(
+    total_cost: float | None,
+    *,
+    subtype: str = "success",
+    is_error: bool = False,
+    session_id: str = "sess",
+    **extra,
+):
     return ResultMessage(
         subtype=subtype,
         duration_ms=10,
         duration_api_ms=5,
         is_error=is_error,
         num_turns=1,
-        session_id="sess",
+        session_id=session_id,
         total_cost_usd=total_cost,
         **extra,
     )
@@ -86,8 +93,15 @@ class FakeSdkClient:
     interrupts: int = 0
     queries: list[list[dict[str, Any]]] = field(default_factory=list)
     hang: bool = False
+    hang_connect: bool = False
+    hang_interrupt: bool = False
+    fail_connect: bool = False
 
     async def connect(self) -> None:
+        if self.fail_connect:
+            raise RuntimeError("spawn failed")
+        if self.hang_connect:
+            await asyncio.Event().wait()
         self.connected = True
 
     async def disconnect(self) -> None:
@@ -99,8 +113,10 @@ class FakeSdkClient:
 
     async def interrupt(self) -> None:
         self.interrupts += 1
+        if self.hang_interrupt:
+            await asyncio.Event().wait()
 
-    async def receive_response(self) -> AsyncIterator[Any]:
+    async def receive_messages(self) -> AsyncIterator[Any]:
         if self.hang:
             await asyncio.Event().wait()
         turn = self.turns.pop(0) if self.turns else []
@@ -131,6 +147,7 @@ class Harness:
     def __init__(self, tmp_path: Path, *, turns: list[list[Any]] | None = None, **overrides: Any):
         self.clients: list[FakeSdkClient] = []
         self.turns = turns or []
+        self.client_kwargs: dict[str, Any] = overrides.pop("client_kwargs", {})
         oauth_managed = overrides.pop("oauth_managed", False)
         credential_client = overrides.pop("credential_client", None)
         environ = overrides.pop("environ", {"ANTHROPIC_API_KEY": "sk-ant-key", "PATH": "/bin"})
@@ -148,7 +165,7 @@ class Harness:
         binary.write_text("#!/bin/sh\n")
 
         def client_factory(options: Any) -> FakeSdkClient:
-            client = FakeSdkClient(options=options, turns=self.turns)
+            client = FakeSdkClient(options=options, turns=self.turns, **self.client_kwargs)
             self.clients.append(client)
             return client
 
@@ -470,7 +487,8 @@ class TestTranslation:
         await h.harness.create_session()
         events, _ = await _run(h.harness)
         tool_events = [e for e in events if e["type"] == "tool_call"]
-        assert tool_events[0]["tool"] == "Agent" and "isSubtask" not in tool_events[0]
+        # The vendor name is normalised to the task tool the timeline groups under.
+        assert tool_events[0]["tool"] == "task" and "isSubtask" not in tool_events[0]
         assert tool_events[1]["tool"] == "Read"
         assert tool_events[1]["isSubtask"] is True and tool_events[1]["taskCallId"] == "agent_1"
         assert tool_events[2]["status"] == "error" and tool_events[2]["output"] == "ok"
@@ -540,6 +558,26 @@ class TestTranslation:
         assert outcome.message_cost_usd == 0.0
         assert any(e["type"] == "warning" and "no cost" in e["message"] for e in events)
 
+    @pytest.mark.asyncio
+    async def test_prompts_are_stamped_human_and_injected_results_are_skipped(
+        self, tmp_path: Path
+    ) -> None:
+        # A background task's result arrives on the same connection first; it
+        # ends that turn, not ours.
+        turn = [
+            _result(0.1, origin={"kind": "task-notification"}),
+            AssistantMessage(content=[TextBlock("real answer")], model="m", message_id="msg_1"),
+            _result(0.3, origin={"kind": "human"}),
+        ]
+        h = Harness(tmp_path, turns=[turn])
+        await h.harness.open()
+        await h.harness.create_session()
+        events, outcome = await _run(h.harness)
+        assert h.client.queries[0][0]["origin"] == {"kind": "human"}
+        assert outcome.success is True and outcome.message_cost_usd == pytest.approx(0.3)
+        assert [e["content"] for e in events if e["type"] == "token"] == ["real answer"]
+        assert len([e for e in events if e["type"] == "step_finish"]) == 1
+
 
 class TestCostBaseline:
     """§5.3: messageCostUsd = running total at turn end - baseline."""
@@ -579,6 +617,48 @@ class TestCostBaseline:
         _, second = await _run(h.harness, HarnessPrompt(message_id="m2", text="b"))
         assert second.message_cost_usd == pytest.approx(0.2)
 
+    @pytest.mark.asyncio
+    async def test_conversation_reset_rotates_the_session_id(self, tmp_path: Path) -> None:
+        # After a reset the messages carry a new session id; the next resume
+        # and the persisted id must follow it, or the post-reset conversation
+        # is lost on the next reconnect.
+        turns = [
+            [_result(0.5)],
+            [
+                ConversationResetMessage(new_conversation_id="c2", uuid="u", session_id="s"),
+                _result(0.2, session_id="rotated-id"),
+            ],
+            [_result(0.1)],
+        ]
+        h = Harness(tmp_path, turns=turns)
+        await h.harness.open()
+        await h.harness.create_session()
+        original = h.harness.session_id
+        await _run(h.harness, HarnessPrompt(message_id="m1", text="a"))
+        assert h.harness.session_id == original
+        await _run(h.harness, HarnessPrompt(message_id="m2", text="b"))
+        assert h.harness.session_id == "rotated-id"
+        h.harness._needs_reconnect = True
+        await _run(h.harness, HarnessPrompt(message_id="m3", text="c"))
+        assert h.clients[1].options["resume"] == "rotated-id"
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_total_never_charges_a_later_turn(self, tmp_path: Path) -> None:
+        # 0.10 -> None -> 0.40: the third turn's true cost is unknowable, so it
+        # is 0 with a warning, not 0.30.
+        h = Harness(tmp_path, turns=[[_result(0.10)], [_result(None)], [_result(0.40)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        _, first = await _run(h.harness, HarnessPrompt(message_id="m1", text="a"))
+        _, second = await _run(h.harness, HarnessPrompt(message_id="m2", text="b"))
+        events, third = await _run(h.harness, HarnessPrompt(message_id="m3", text="c"))
+        assert first.message_cost_usd == pytest.approx(0.10)
+        assert second.message_cost_usd == 0.0
+        assert third.message_cost_usd == 0.0
+        assert any("previous turn" in e.get("message", "") for e in events)
+        _, fourth = await _run(h.harness, HarnessPrompt(message_id="m4", text="d"))
+        assert fourth.success is False  # no scripted turn left; baseline is re-anchored at 0.40
+
 
 class TestReconnectPolicy:
     @pytest.mark.asyncio
@@ -610,6 +690,17 @@ class TestReconnectPolicy:
         _, outcome = await _run(h.harness)
         assert outcome.success is False
         assert "repeatedly" in (outcome.error or "")
+
+    @pytest.mark.asyncio
+    async def test_failed_connects_spend_the_reconnect_budget(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path, turns=[], client_kwargs={"fail_connect": True})
+        await h.harness.open()
+        await h.harness.create_session()
+        outcomes = [(await _run(h.harness))[1] for _ in range(5)]
+        assert all(outcome.success is False for outcome in outcomes)
+        assert all("failed to start" in (o.error or "") for o in outcomes[:4])
+        assert "repeatedly" in (outcomes[4].error or "")
+        assert len(h.clients) == 4
 
     @pytest.mark.asyncio
     async def test_abort_interrupts_and_forces_a_fresh_stream_next_time(self, tmp_path: Path):
@@ -661,6 +752,39 @@ class TestReconnectPolicy:
         _, outcome = await _run(h.harness)
         assert outcome.success is False and "no output" in (outcome.error or "")
         assert h.client.interrupts == 1
+
+    @pytest.mark.asyncio
+    async def test_a_hung_connect_is_cut_by_the_prompt_budget(self, tmp_path: Path) -> None:
+        limits = PromptLimits(
+            inactivity_timeout_seconds=5.0,
+            prompt_max_duration_seconds=0.05,
+            prompt_cleanup_timeout_seconds=0.05,
+        )
+        h = Harness(tmp_path, turns=[], limits=limits, client_kwargs={"hang_connect": True})
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await asyncio.wait_for(_run(h.harness), timeout=2.0)
+        assert outcome.success is False and "did not start" in (outcome.error or "")
+
+    @pytest.mark.asyncio
+    async def test_cleanup_after_a_timeout_is_bounded_even_when_interrupt_hangs(
+        self, tmp_path: Path
+    ) -> None:
+        limits = PromptLimits(
+            inactivity_timeout_seconds=0.05,
+            prompt_max_duration_seconds=5.0,
+            prompt_cleanup_timeout_seconds=0.05,
+        )
+        h = Harness(tmp_path, turns=[[]], limits=limits, client_kwargs={"hang_interrupt": True})
+        await h.harness.open()
+        await h.harness.create_session()
+        await h.harness._ensure_client("claude-sonnet-4-6", None)
+        h.client.hang = True
+        _, outcome = await asyncio.wait_for(_run(h.harness), timeout=2.0)
+        assert outcome.success is False and "no output" in (outcome.error or "")
+        assert h.client.interrupts == 1
+        # Interrupt never settled, so the child was dropped instead.
+        assert h.client.disconnected is True
 
     @pytest.mark.asyncio
     async def test_close_disconnects_the_child(self, tmp_path: Path) -> None:

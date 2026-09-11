@@ -1,6 +1,9 @@
 {
   "runtimeVersion": "v64-claude-harness",
   "generation": 64,
-  "minimumCompatibleGeneration": 64,
-  "minimumRebuildGeneration": 64
+  "minimumCompatibleGeneration": 62,
+  "minimumRebuildGeneration": 64,
+  "harnessMinimumGeneration": {
+    "claude": 64
+  }
 }
