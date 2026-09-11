@@ -63,7 +63,35 @@ follow-up after a draft becomes ready, mention the bot in a PR comment.
 ### What It Posts
 
 The agent can submit a general review comment, approve the PR, request changes, or add inline review
-comments when useful.
+comments when useful. By default, reviews of PRs opened by the main GitHub App use `COMMENT`:
+GitHub does not allow a PR author to approve their own PR. An optional separate reviewer App
+lets the review approve those PRs instead. Reviews of PRs authored by the reviewer App itself
+still use `COMMENT`.
+
+### Optional Separate Reviewer App
+
+Create a second GitHub App with only **Pull requests: Read & write** (GitHub also grants the
+mandatory Metadata read permission). Disable its webhooks and install it on the repositories
+you want reviewed. The main App continues to receive webhook events and handle other GitHub
+operations; the second App is only the review-submission identity.
+
+Set all four Terraform values together, or leave all four empty:
+
+- `github_reviewer_app_id`: the second App's ID
+- `github_reviewer_app_private_key`: its private key in PKCS#8 PEM format
+- `github_reviewer_app_installation_id`: its installation ID
+- `github_reviewer_username`: its exact bot login, such as `my-reviewer[bot]`
+
+The three credentials are control-plane bindings (`GITHUB_REVIEWER_APP_*`); the login is a
+GitHub bot binding (`GITHUB_REVIEWER_USERNAME`). For non-Terraform deployments, configure the
+same four values on their respective services. A login without credentials makes token
+fetching fail, while credentials without the login leave reviews on the main App's identity.
+
+The agent fetches a short-lived installation token from `GET /sessions/:id/review-token`
+using its sandbox token immediately before submitting the review. The route authenticates
+the caller against that session and returns `Cache-Control: no-store`. Only the review POST
+uses this credential; other GitHub calls retain their existing credential. With no reviewer
+App configured, the endpoint returns 404 and the prompt omits the token fetch.
 
 ---
 

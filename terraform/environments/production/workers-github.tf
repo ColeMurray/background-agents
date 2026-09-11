@@ -67,6 +67,7 @@ module "github_bot_worker" {
     { name = "APP_NAME", value = var.app_name },
     { name = "DEFAULT_MODEL", value = var.github_bot_default_model },
     { name = "GITHUB_BOT_USERNAME", value = var.github_bot_username },
+    { name = "GITHUB_REVIEWER_USERNAME", value = var.github_reviewer_username },
   ]
 
   secrets = [

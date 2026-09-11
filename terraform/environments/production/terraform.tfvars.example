@@ -148,6 +148,14 @@ EOF
 
 github_app_installation_id = ""
 
+# Optional second App to submit reviews, so PRs opened by the main App can be
+# approved. Install it on the reviewed repositories with only Pull requests:
+# Read & write. Disable its webhooks. Set all four together or leave all empty.
+github_reviewer_app_id              = ""
+github_reviewer_app_private_key     = "" # PKCS#8 PEM
+github_reviewer_app_installation_id  = ""
+github_reviewer_username            = "" # e.g., my-reviewer[bot]
+
 # GitHub Bot (Optional)
 # Set enable_github_bot = true to deploy the GitHub bot worker for PR reviews
 # and @mention commands. Requires github_webhook_secret and github_bot_username.

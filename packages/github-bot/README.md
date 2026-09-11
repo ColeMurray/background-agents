@@ -73,6 +73,7 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 | `DEPLOYMENT_NAME`            | Plain text            | Deployment identifier for logging                                                   |
 | `DEFAULT_MODEL`              | Plain text            | Model ID for new sessions (e.g., `anthropic/claude-haiku-4-5`)                      |
 | `GITHUB_BOT_USERNAME`        | Plain text            | Bot's GitHub login (e.g., `my-app[bot]`) for @mention detection and loop prevention |
+| `GITHUB_REVIEWER_USERNAME` | Plain text (optional) | Reviewer App login (e.g., `my-reviewer[bot]`); unset uses the main App |
 | `GITHUB_APP_ID`              | Secret                | GitHub App ID for JWT generation                                                    |
 | `GITHUB_APP_PRIVATE_KEY`     | Secret                | GitHub App private key (must be PKCS#8 format)                                      |
 | `GITHUB_APP_INSTALLATION_ID` | Secret                | GitHub App installation ID for token exchange                                       |
@@ -98,6 +99,22 @@ permission list.
 **Webhook URL**: `https://open-inspect-github-bot-{suffix}.{account}.workers.dev/webhooks/github`
 
 **Webhook secret**: Must match `GITHUB_WEBHOOK_SECRET` in the Terraform configuration.
+
+### Optional Reviewer App
+
+GitHub refuses to let a PR author approve their own PR. To let the bot approve PRs opened
+by the main App, install a second App with only **Pull requests: Read & write** (plus
+GitHub's mandatory Metadata read permission), with webhooks disabled. Set
+`github_reviewer_username` and all three `github_reviewer_app_*` Terraform variables
+together, or leave all four empty. Use the reviewer's exact bot login, such as
+`my-reviewer[bot]`. See the [two-App setup](../../docs/integrations/GITHUB.md#optional-separate-reviewer-app).
+
+The control plane holds the reviewer's App credentials and brokers its installation token
+through the sandbox-authenticated `GET /sessions/:id/review-token` route. The bot receives
+only `GITHUB_REVIEWER_USERNAME`; the prompt fetches the token before the review POST and
+sets `GH_TOKEN` for that command alone. Other calls retain their existing credential. No
+reviewer App means no token fetch and a self-authored PR still gets `COMMENT`. The same
+self-review check applies to the reviewer App if it authored the PR.
 
 ### Sandbox Prerequisites
 
@@ -136,7 +153,8 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 3. Post eyes reaction on the PR (fire-and-forget)
 4. Create session via control plane
 5. Send code review prompt (includes PR metadata + `gh` CLI instructions). Reviews of the bot's own
-   PRs use `COMMENT`, because GitHub does not allow pull request authors to approve their own PRs.
+   PRs use `COMMENT` unless a separate reviewer App submits the review, because GitHub does not
+   allow pull request authors to approve their own PRs.
 
 **Review Requested (compatibility path):**
 

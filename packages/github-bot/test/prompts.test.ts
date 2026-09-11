@@ -81,6 +81,25 @@ describe("buildCodeReviewPrompt", () => {
     expect(prompt).not.toContain("COMMENT|APPROVE|REQUEST_CHANGES");
   });
 
+  it("authenticates the review POST as the reviewer App when one submits reviews", () => {
+    const prompt = buildCodeReviewPrompt({ ...baseParams, hasReviewerApp: true });
+
+    expect(prompt).toContain("/sessions/$session_id/review-token");
+    expect(prompt).toContain('GH_TOKEN="$review_token" gh api repos/acme/widgets/pulls/42/reviews');
+    // The fetch is chained into the POST, so a failure stops before the write.
+    expect(prompt).toContain('review_token="$(curl -fsS');
+    expect(prompt).toMatch(/review-token"[\s\S]*&& \\\n   GH_TOKEN="\$review_token" gh api/);
+  });
+
+  it("leaves the review POST on the default credential without a reviewer App", () => {
+    const prompt = buildCodeReviewPrompt(baseParams);
+
+    expect(prompt).not.toContain("review-token");
+    expect(prompt).not.toContain("GH_TOKEN");
+    expect(prompt).not.toContain("SANDBOX_AUTH_TOKEN");
+    expect(prompt).toContain("   gh api repos/acme/widgets/pulls/42/reviews");
+  });
+
   it("includes custom instructions section when codeReviewInstructions provided", () => {
     const prompt = buildCodeReviewPrompt({
       ...baseParams,
