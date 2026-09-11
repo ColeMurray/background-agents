@@ -55,10 +55,12 @@ A slot connected by **browser authorization** records the Claude account that gr
 returns the account and organization with the token), so a second slot for the same account is
 rejected as a duplicate and a reconnect from a different Claude account is refused. A slot connected
 by **pasting a setup token** has no identity: Open-Inspect cannot tell two pasted tokens apart and
-does not de-duplicate them. A slot's identity is fixed when it is created: reconnecting a pasted
-slot in the browser keeps it identity-less. Neither kind can be verified against Anthropic on
-demand. Reconnecting replaces what Open-Inspect stores for that slot; it does not revoke the
-previous token at Anthropic (see the runbook below).
+does not de-duplicate them. A pasted slot adopts an identity the first time it is reconnected in the
+browser, unless that Claude account already has a slot. Once a slot has an identity it is
+reconnected in the browser only; the setup-token option is not offered for it, so the granting
+account is always verified. Neither kind can be verified against Anthropic on demand. Reconnecting
+replaces what Open-Inspect stores for that slot; it does not revoke the previous token at Anthropic
+(see the runbook below).
 
 ### Step 2: Configure defaults
 
