@@ -474,6 +474,17 @@ async function handleProviderAccess(
   if (binding.authMode === "api_key") {
     return error("Session uses API-key mode for this provider", 409);
   }
+  if (
+    modelProviderAccountAdapterRegistry.runtimeCredentialKind(parsedProvider) !==
+    "brokered_access_token"
+  ) {
+    // The stored secret only leaves through the runtime-credential route,
+    // which records the issuance the cleanup needs to find the sandbox.
+    return error(
+      "Provider delivers a stored provider secret; use the runtime-credential route",
+      409
+    );
+  }
   const broker = new ModelProviderAccountBroker(
     {
       accounts: new ModelProviderAccountStore(ctx.db),

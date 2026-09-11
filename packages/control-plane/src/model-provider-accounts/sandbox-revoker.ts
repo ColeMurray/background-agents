@@ -23,6 +23,7 @@ export class SessionRuntimeSandboxRevoker implements SandboxRevoker {
     const body = (await response.json()) as { outcome?: unknown };
     switch (body.outcome) {
       case "terminated":
+      case "shutdown_requested":
       case "not_current":
       case "no_sandbox":
         return body.outcome;

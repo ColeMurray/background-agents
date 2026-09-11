@@ -121,8 +121,21 @@ async function handleRuntimeCredential(
   const now = Date.now();
   if (credential.expiresAt - now <= EXPIRY_GUARD_MS) {
     // Local expiry is the one sandbox-adjacent signal allowed to fence the
-    // account; the trigger enqueues the cleanup with this status change.
-    await accounts.setStatus(account.id, "reconnect_required", null, now);
+    // account; the trigger enqueues the cleanup with this status change. The
+    // fence is conditional on the credential version this request inspected:
+    // a reconnect that rotated it in the meantime wins, and the sandbox
+    // simply asks again.
+    const fenced = await accounts.requireReconnectForExpiredCredential(
+      account.id,
+      state.credentialVersion,
+      now
+    );
+    if (!fenced) {
+      return json(
+        { error: "Provider account changed during issuance; retry", retryable: true },
+        409
+      );
+    }
     logger.warn("provider_credential.expired", {
       event: "provider_credential.expired",
       provider,

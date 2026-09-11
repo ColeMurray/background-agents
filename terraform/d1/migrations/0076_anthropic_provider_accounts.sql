@@ -133,7 +133,11 @@ END;
 
 -- 4. Stored-secret issuance: every time a sandbox receives a stored
 --    provider credential the control plane records who got which version, so
---    disable/archive/reconnect can terminate exactly those sandboxes.
+--    disable/archive/reconnect can terminate exactly those sandboxes. The row
+--    is revocation evidence, so it does not reference the session row:
+--    deleting a session must not erase the record of a sandbox that may
+--    still hold the secret. One row per (account, version, session,
+--    sandbox); a repeated hand-out to the same sandbox refreshes it.
 CREATE TABLE model_provider_credential_issuances (
   id TEXT PRIMARY KEY,
   provider_account_id TEXT NOT NULL,
@@ -145,7 +149,7 @@ CREATE TABLE model_provider_credential_issuances (
   terminated_at INTEGER,
   FOREIGN KEY (provider_account_id, provider)
     REFERENCES model_provider_accounts(id, provider),
-  FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+  UNIQUE (provider_account_id, credential_version, session_id, sandbox_id)
 );
 
 CREATE INDEX idx_provider_credential_issuances_account_live

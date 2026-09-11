@@ -90,7 +90,9 @@ export class ProviderCredentialIssuanceStore {
    * Record a hand-out under an active-account/version guard: the row is only
    * written while the account is active, unarchived, and still on the
    * credential version being handed out. Returns false when the guard fails,
-   * and the caller must not release the secret.
+   * and the caller must not release the secret. A repeated hand-out to the
+   * same sandbox (a retry, a bridge restart) refreshes the one row rather
+   * than adding another.
    */
   async record(input: {
     id: string;
@@ -113,7 +115,9 @@ export class ProviderCredentialIssuanceStore {
            WHERE accounts.id = ? AND accounts.provider = ?
              AND accounts.status = 'active' AND accounts.archived_at IS NULL
              AND credentials.credential_version = ?
-         )`
+         )
+         ON CONFLICT (provider_account_id, credential_version, session_id, sandbox_id)
+         DO UPDATE SET issued_at = excluded.issued_at, terminated_at = NULL`
       )
       .bind(
         input.id,

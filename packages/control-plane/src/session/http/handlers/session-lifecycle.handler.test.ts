@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SandboxRow, SessionRow } from "../../types";
 import { SessionLifecycleHandler } from "./session-lifecycle.handler";
+import type { SandboxRevocationTermination } from "../../../sandbox/lifecycle/manager";
 import type { SessionTitleService } from "../../title-service";
 import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
 import type { SessionStatusService } from "../../session-status-service";
@@ -508,5 +509,82 @@ describe("SessionLifecycleHandler", () => {
     expect(cancelSession).toHaveBeenCalledOnce();
     expect(sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
     expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");
+  });
+});
+
+describe("SessionLifecycleHandler.revokeSandbox", () => {
+  function revocationHandler(
+    sandbox: SandboxRow | null,
+    terminate: (reason: string) => Promise<SandboxRevocationTermination>
+  ) {
+    return new SessionLifecycleHandler(
+      {} as unknown as SessionCoreRepository,
+      { getSandbox: () => sandbox } as unknown as SandboxRepository,
+      {} as unknown as MessageRepository,
+      {} as unknown as SessionStatusService,
+      {} as unknown as SessionTitleService,
+      {} as unknown as WebSocketManager,
+      "session-do-id",
+      async () => {},
+      terminate
+    );
+  }
+
+  function revoke(handler: SessionLifecycleHandler, expectedSandboxId = "sb-1") {
+    return handler.revokeSandbox(
+      new Request("http://internal/internal/revoke-sandbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedSandboxId, reason: "provider account disabled" }),
+      })
+    );
+  }
+
+  it("reports terminated only when the stop was confirmed", async () => {
+    const terminate = vi.fn(async () => "terminated" as const);
+    const response = await revoke(
+      revocationHandler(createSandbox({ modal_sandbox_id: "sb-1" }), terminate)
+    );
+    expect(await response.json()).toEqual({ outcome: "terminated" });
+    expect(terminate).toHaveBeenCalledWith("provider account disabled");
+  });
+
+  it("passes an unconfirmed shutdown through unsettled", async () => {
+    const response = await revoke(
+      revocationHandler(
+        createSandbox({ modal_sandbox_id: "sb-1" }),
+        async () => "shutdown_requested"
+      )
+    );
+    expect(await response.json()).toEqual({ outcome: "shutdown_requested" });
+  });
+
+  it("reports a dead sandbox as no_sandbox", async () => {
+    const response = await revoke(
+      revocationHandler(
+        createSandbox({ modal_sandbox_id: "sb-1", status: "failed" }),
+        async () => "gone"
+      )
+    );
+    expect(await response.json()).toEqual({ outcome: "no_sandbox" });
+  });
+
+  it("does not touch a sandbox other than the one that received the credential", async () => {
+    const terminate = vi.fn(async () => "terminated" as const);
+    const response = await revoke(
+      revocationHandler(createSandbox({ modal_sandbox_id: "sb-2" }), terminate)
+    );
+    expect(await response.json()).toEqual({ outcome: "not_current" });
+    expect(terminate).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a stop failure as a retryable 503 instead of settling", async () => {
+    const response = await revoke(
+      revocationHandler(createSandbox({ modal_sandbox_id: "sb-1" }), async () => {
+        throw new Error("provider stop failed");
+      })
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "provider stop failed" });
   });
 });

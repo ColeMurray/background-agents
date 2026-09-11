@@ -670,7 +670,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());
     },
-    (reason) => lifecycleManager.terminateFailedSandbox(reason)
+    (reason) => lifecycleManager.terminateSandboxForRevocation(reason)
   );
   const sessionBudgetHandler = new SessionBudgetHandler(sessionCoreRepository, budgetService, () =>
     Date.now()
