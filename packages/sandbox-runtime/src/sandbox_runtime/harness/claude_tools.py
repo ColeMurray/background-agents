@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,13 +25,15 @@ import httpx
 from ..repo_config import load_repo_manifest
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from ..log_config import StructuredLogger
 
 OI_TOOL_SERVER_NAME: Final = "oi"
 TOOL_REQUEST_TIMEOUT_SECONDS: Final = 30.0
 MEDIA_UPLOAD_TIMEOUT_SECONDS: Final = 120.0
+# ``POST /pr`` waits synchronously for the sandbox push; the control plane
+# gives that push 360 seconds before it reports a timeout of its own. The tool
+# must outlast the server so a slow push is reported once, by the server.
+PULL_REQUEST_TIMEOUT_SECONDS: Final = 390.0
 
 _STATUS_LABELS: Final = {
     "created": "PENDING",
@@ -220,6 +223,13 @@ def _current_branch(repo_path: Path | None) -> str | None:
     return branch if branch and branch != "HEAD" else None
 
 
+def _dimensions_field(value: Any) -> str:
+    """A ``{width, height}`` object as the JSON string the media endpoint parses."""
+    if isinstance(value, Mapping):
+        return json.dumps({"width": value.get("width"), "height": value.get("height")})
+    return str(value)
+
+
 def _slack_failure(reason: str, message: str | None = None, retry_after: Any = None) -> str:
     guidance = _SLACK_REASON_GUIDANCE.get(reason, _SLACK_REASON_GUIDANCE["slack_api_error"])
     detail = f"{guidance} ({message})" if message else guidance
@@ -406,14 +416,23 @@ class OpenInspectTools:
     def _format_child_detail(
         detail: Mapping[str, Any], child_id: str, args: Mapping[str, Any]
     ) -> str:
-        status = _format_status(str(detail.get("status") or ""))
+        # ``ChildSessionDetail``: the session row sits under ``session``;
+        # sandbox, artifacts, responses and events sit beside it.
+        session = detail.get("session") or {}
+        status = _format_status(str(session.get("status") or ""))
         lines = [
-            f"Child {child_id}",
+            f"Child {session.get('id') or child_id}",
             f"  Status: {status}",
-            f"  Title: {detail.get('title') or '(untitled)'}",
-            f"  Created: {_format_timestamp(detail.get('createdAt'))}",
-            f"  Updated: {_format_timestamp(detail.get('updatedAt'))}",
+            f"  Title: {session.get('title') or '(untitled)'}",
+            f"  Model: {session.get('model') or 'default'}",
+            f"  Repo: {session.get('repoOwner') or ''}/{session.get('repoName') or ''}",
+            f"  Branch: {session.get('branchName') or '(none)'}",
+            f"  Created: {_format_timestamp(session.get('createdAt'))}",
+            f"  Updated: {_format_timestamp(session.get('updatedAt'))}",
         ]
+        sandbox = detail.get("sandbox")
+        if sandbox:
+            lines.append(f"  Sandbox: {sandbox.get('status')}")
         artifacts = detail.get("artifacts") or []
         if artifacts:
             lines.extend(["", "  Artifacts:"])
@@ -456,8 +475,23 @@ class OpenInspectTools:
                 )
                 if args.get("includeEventData") and "data" in event:
                     lines.append(f"      {json.dumps(event.get('data'))}")
-            if trajectory.get("nextCursor"):
-                lines.append(f"  Next cursor: {trajectory['nextCursor']}")
+            if trajectory.get("hasMore") and trajectory.get("cursor"):
+                lines.append(
+                    f'    More events available. Re-run with trajectoryCursor="{trajectory["cursor"]}".'
+                )
+        recent = detail.get("recentEvents") or []
+        if recent:
+            lines.extend(["", "  Recent events:"])
+            for event in recent:
+                data = event.get("data") if isinstance(event.get("data"), Mapping) else None
+                raw = (
+                    (data or {}).get("message") or (data or {}).get("content") or event.get("type")
+                )
+                summary = raw if isinstance(raw, str) else json.dumps(raw)
+                lines.append(
+                    f"    [{_format_timestamp(event.get('createdAt'))}] {event.get('type')}: "
+                    f"{summary[:120]}"
+                )
         return "\n".join(lines)
 
     # --- pull requests --------------------------------------------------
@@ -500,19 +534,31 @@ class OpenInspectTools:
                     f"— pass repo with one of: {valid_values}."
                 )
             )
+        elif repositories:
+            # The bridge runs from the workspace root, one level above the
+            # checkout; the branch must be read from the repository itself.
+            repo_path = repositories[0].path
         head_branch = _current_branch(repo_path)
-        payload = {
+        # Absent optionals stay absent: the route accepts an omitted field but
+        # rejects JSON null, and ``draft`` omitted means "the repository's default".
+        payload: dict[str, Any] = {
             "title": title,
             "body": body,
-            "baseBranch": args.get("baseBranch"),
-            "headBranch": head_branch,
-            "repoOwner": repo_owner,
-            "repoName": repo_name,
-            "draft": args.get("draft"),
             "timestamp": int(datetime.now(tz=UTC).timestamp() * 1000),
         }
+        for key, value in (
+            ("baseBranch", args.get("baseBranch")),
+            ("headBranch", head_branch),
+            ("repoOwner", repo_owner),
+            ("repoName", repo_name),
+            ("draft", args.get("draft")),
+        ):
+            if value is not None:
+                payload[key] = value
         try:
-            response = await self.client.request("POST", "/pr", json_body=payload)
+            response = await self.client.request(
+                "POST", "/pr", json_body=payload, timeout_seconds=PULL_REQUEST_TIMEOUT_SECONDS
+            )
         except httpx.HTTPError as error:
             return _text_result(_pull_request_failure(f"Failed to create pull request: {error}"))
         if response.status_code >= 400:
@@ -591,17 +637,24 @@ class OpenInspectTools:
         if mime == "video/mp4" and artifact_type != "video":
             return _text_result("MP4 files must be uploaded with artifactType 'video'.")
         data: dict[str, Any] = {"artifactType": artifact_type}
-        for key in ("caption", "sourceUrl", "endUrl", "viewport"):
+        for key in ("caption", "sourceUrl", "endUrl"):
             if args.get(key):
                 data[key] = str(args[key])
+        # Sizes travel as JSON object strings; that is what the endpoint parses.
+        if args.get("viewport") is not None:
+            data["viewport"] = _dimensions_field(args["viewport"])
         for key in ("fullPage", "annotated"):
             if args.get(key):
                 data[key] = "true"
         if artifact_type == "video":
-            for key in ("durationMs", "recordingStartedAt", "recordingEndedAt", "dimensions"):
-                if args.get(key) is None:
+            for key in ("caption", "durationMs", "recordingStartedAt", "recordingEndedAt"):
+                if not args.get(key):
                     return _text_result(f"Video uploads require {key}.")
+            if args.get("dimensions") is None:
+                return _text_result("Video uploads require dimensions.")
+            for key in ("durationMs", "recordingStartedAt", "recordingEndedAt"):
                 data[key] = str(args[key])
+            data["dimensions"] = _dimensions_field(args["dimensions"])
             data["truncated"] = "true" if args.get("truncated") else "false"
             data["hasAudio"] = "true" if args.get("hasAudio") else "false"
         try:
@@ -852,17 +905,33 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
                     },
                     "fullPage": {"type": "boolean"},
                     "annotated": {"type": "boolean"},
-                    "viewport": {"type": "string", "description": "Viewport size as WIDTHxHEIGHT."},
-                    "durationMs": {"type": "integer", "description": "Video only."},
+                    "viewport": {
+                        "type": "object",
+                        "description": "Viewport size of a screenshot, in pixels.",
+                        "properties": {
+                            "width": {"type": "integer"},
+                            "height": {"type": "integer"},
+                        },
+                        "required": ["width", "height"],
+                    },
+                    "durationMs": {"type": "integer", "description": "Video only (required)."},
                     "recordingStartedAt": {
                         "type": "integer",
-                        "description": "Video only: epoch milliseconds.",
+                        "description": "Video only (required): epoch milliseconds.",
                     },
                     "recordingEndedAt": {
                         "type": "integer",
-                        "description": "Video only: epoch milliseconds.",
+                        "description": "Video only (required): epoch milliseconds.",
                     },
-                    "dimensions": {"type": "string", "description": "Video only: WIDTHxHEIGHT."},
+                    "dimensions": {
+                        "type": "object",
+                        "description": "Video only (required): frame size in pixels.",
+                        "properties": {
+                            "width": {"type": "integer"},
+                            "height": {"type": "integer"},
+                        },
+                        "required": ["width", "height"],
+                    },
                     "truncated": {"type": "boolean", "description": "Video only."},
                     "hasAudio": {"type": "boolean", "description": "Video only."},
                 },
