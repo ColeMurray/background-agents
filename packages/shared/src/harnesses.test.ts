@@ -10,6 +10,7 @@ import {
   harnessSupportsProviderAuth,
   isValidHarness,
   selectedProviderAuthModes,
+  reconcileProviderSelectionsForHarness,
 } from "./harnesses";
 import { VALID_MODELS } from "./models";
 
@@ -79,6 +80,29 @@ describe("harnessSupportsProviderAuth", () => {
     expect(harnessSupportsProviderAuth("claude", "openai", "api_key")).toBe(false);
     expect(harnessSupportsProviderAuth("claude", "xai", "provider_account")).toBe(false);
     expect(harnessSupportsProviderAuth("opencode", "google", "api_key")).toBe(false);
+  });
+});
+
+describe("reconcileProviderSelectionsForHarness", () => {
+  const account = { mode: "provider_account" as const, accountId: "a".repeat(32) };
+
+  it("drops a selection the harness runs the provider without", () => {
+    expect(
+      reconcileProviderSelectionsForHarness("opencode", { anthropic: account, openai: account })
+    ).toEqual({ openai: account });
+  });
+
+  it("keeps selections for providers the harness does not run", () => {
+    const selections = { openai: account, xai: { mode: "api_key" as const } };
+    expect(reconcileProviderSelectionsForHarness("claude", selections)).toBe(selections);
+  });
+
+  it("returns the same object when every selection is usable", () => {
+    const selections = { anthropic: account };
+    expect(reconcileProviderSelectionsForHarness("claude", selections)).toBe(selections);
+    expect(
+      reconcileProviderSelectionsForHarness("opencode", { anthropic: { mode: "api_key" } })
+    ).toEqual({ anthropic: { mode: "api_key" } });
   });
 });
 

@@ -5,6 +5,7 @@ import {
   isValidReasoningEffort,
   type ModelCategory,
 } from "@open-inspect/shared/models";
+import { HARNESS_IDS, getHarnessLabel, isValidHarness } from "@open-inspect/shared/harnesses";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import {
   Select,
@@ -24,6 +25,8 @@ interface AutomationAgentFieldsProps {
   value: AutomationAgentDraft;
   resolvedModel: string;
   enabledModelOptions: ModelCategory[];
+  /** Why no listed model can be submitted, shown under the picker. */
+  modelError?: string;
   onChange: (value: AutomationAgentDraft) => void;
 }
 
@@ -31,6 +34,7 @@ export function AutomationAgentFields({
   value,
   resolvedModel,
   enabledModelOptions,
+  modelError = "",
   onChange,
 }: AutomationAgentFieldsProps) {
   const reasoningConfig = getReasoningConfig(resolvedModel);
@@ -48,11 +52,41 @@ export function AutomationAgentFields({
       value.reasoningEffort && isValidReasoningEffort(model, value.reasoningEffort)
         ? value.reasoningEffort
         : "";
-    onChange({ model, reasoningEffort });
+    onChange({ ...value, model, reasoningEffort });
   };
 
   return (
     <>
+      <div>
+        <label
+          htmlFor="automation-harness"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Agent
+        </label>
+        <Select
+          value={value.harness}
+          onValueChange={(harness) => {
+            if (isValidHarness(harness)) onChange({ ...value, harness });
+          }}
+        >
+          <SelectTrigger id="automation-harness" className="w-full" aria-label="Agent harness">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {HARNESS_IDS.map((harness) => (
+              <SelectItem key={harness} value={harness}>
+                {getHarnessLabel(harness)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <FieldDescription>
+          Agent harness that runs each session this automation creates. It decides which models are
+          available below.
+        </FieldDescription>
+      </div>
+
       <div>
         <label
           id="automation-model-label"
@@ -77,6 +111,11 @@ export function AutomationAgentFields({
         <FieldDescription>
           Model used for the agent on each run of this automation.
         </FieldDescription>
+        {modelError && (
+          <p role="alert" className="mt-1 text-xs text-destructive">
+            {modelError}
+          </p>
+        )}
       </div>
 
       <div>

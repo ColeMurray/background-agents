@@ -53,6 +53,7 @@ export async function POST(request: NextRequest) {
       scheduleTz: body.scheduleTz,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
+      harness: body.harness,
       eventType: body.eventType,
       triggerConfig: body.triggerConfig,
       sentryClientSecret: body.sentryClientSecret,

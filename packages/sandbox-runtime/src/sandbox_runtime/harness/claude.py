@@ -97,6 +97,10 @@ DISALLOWED_TOOLS: Final = ("AskUserQuestion",)
 # runtime-neutral task tool, so the vendor name never reaches the wire.
 SUBAGENT_TOOL_NAME: Final = "Agent"
 TASK_TOOL_NAME: Final = "task"
+# The SDK qualifies every MCP tool as ``mcp__<server>__<tool>``. First-party
+# tools drop the qualification so the wire carries the same ids OpenCode
+# emits; external servers keep theirs so the timeline can name the server.
+OI_TOOL_PREFIX: Final = f"mcp__{OI_TOOL_SERVER_NAME}__"
 MAX_RECONNECTS_PER_SESSION: Final = 3
 AUTHENTICATION_FAILED_MESSAGE: Final = (
     "Anthropic rejected this session's credential. Reconnect the Claude account in "
@@ -219,6 +223,15 @@ def mcp_server_options(servers: tuple[Mapping[str, Any], ...]) -> dict[str, Any]
                 entry["env"] = dict(server["env"])
         config[str(name)] = entry
     return config
+
+
+def _canonical_tool_name(name: str) -> str:
+    """The runtime-neutral tool id a ``tool_call`` event carries."""
+    if name == SUBAGENT_TOOL_NAME:
+        return TASK_TOOL_NAME
+    if name.startswith(OI_TOOL_PREFIX):
+        return name[len(OI_TOOL_PREFIX) :]
+    return name
 
 
 def _tool_result_text(content: Any) -> str:
@@ -667,9 +680,7 @@ class ClaudeHarness:
                         events.extend(self._token_event(state))
             for block in message.content:
                 if isinstance(block, ToolUseBlock):
-                    state.tool_names[block.id] = (
-                        TASK_TOOL_NAME if block.name == SUBAGENT_TOOL_NAME else block.name
-                    )
+                    state.tool_names[block.id] = _canonical_tool_name(block.name)
                     state.tool_args[block.id] = dict(block.input)
                     events.append(
                         self._tool_event(
