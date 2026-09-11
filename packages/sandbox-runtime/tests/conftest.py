@@ -107,10 +107,8 @@ class ScriptedHarness:
     """
 
     from sandbox_runtime.harness import HarnessId
-    from sandbox_runtime.harness.opencode import OPENCODE_CAPABILITIES
 
     id = HarnessId.OPENCODE
-    capabilities = OPENCODE_CAPABILITIES
 
     def __init__(
         self,
@@ -131,9 +129,12 @@ class ScriptedHarness:
     async def close(self) -> None:
         self.closed = True
 
-    async def create_or_resume_session(self, persisted_id: str | None) -> str:
-        self.session_id = persisted_id or self.session_id or "oc-session-new"
-        return self.session_id
+    async def resume_session(self, persisted_id: str) -> bool:
+        self.session_id = persisted_id
+        return True
+
+    async def create_session(self) -> None:
+        self.session_id = self.session_id or "oc-session-new"
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
         self.prompts.append(prompt)

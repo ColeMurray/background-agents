@@ -194,7 +194,7 @@ class SandboxSupervisor:
             return restart_count
         if exit_code == DETERMINISTIC_FAILURE_EXIT_CODE:
             # The harness could not open and told us retrying is futile
-            # (denied credential, unsupported harness); report the cause
+            # (for example a denied credential); report the cause
             # rather than spending the restart budget on it.
             cause = self._read_bridge_fatal_error() or "agent harness failed to start"
             self.log.error("bridge.deterministic_failure", exit_code=exit_code, cause=cause)

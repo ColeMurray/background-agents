@@ -248,11 +248,7 @@ class AgentBridge:
         return {
             "type": "ready",
             "sandboxId": self.sandbox_id,
-            "agentSessionId": self.agent_session_id,
-            # Pre-rename spelling, kept for one runtime generation.
             "opencodeSessionId": self.agent_session_id,
-            "harness": self.harness.id.value,
-            "capabilities": self.harness.capabilities.to_wire(),
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
@@ -273,20 +269,24 @@ class AgentBridge:
         exits gracefully for terminal errors like HTTP 410 (session terminated).
         """
         self.log.info("bridge.run_start", harness=self.harness.id.value)
-
-        try:
-            await self.harness.open()
-        except HarnessStartError as error:
-            self._record_fatal_error(str(error))
-            self.log.error("bridge.harness_open_failed", exc=error, harness=self.harness.id.value)
-            await self.harness.close()
-            raise
-        await self._load_session_id()
         reconnect_attempts = 0
-        run_outcome = "shutdown"
+        run_outcome = "harness_start_failed"
         signing_initialized = False
 
+        # One lifecycle: whatever the harness acquires in open() is released
+        # in the finally below, whether startup, session loading or the run
+        # loop is what ends the bridge.
         try:
+            try:
+                await self.harness.open()
+            except HarnessStartError as error:
+                self._record_fatal_error(str(error))
+                self.log.error(
+                    "bridge.harness_open_failed", exc=error, harness=self.harness.id.value
+                )
+                raise
+            await self._load_session_id()
+            run_outcome = "shutdown"
             while not self.shutdown_event.is_set():
                 run_outcome = "shutdown"
                 try:
@@ -344,7 +344,13 @@ class AgentBridge:
             await self.diff_refresh.close(
                 timeout_seconds=self.DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS
             )
-            await self.harness.close()
+            # A failing close() must not replace the exception that ended the
+            # run: a HarnessStartError still has to reach main() as itself so
+            # the supervisor sees the deterministic exit code.
+            try:
+                await self.harness.close()
+            except Exception as close_error:
+                self.log.error("bridge.harness_close_failed", exc=close_error)
             self.log.info(
                 "bridge.run_complete",
                 outcome=run_outcome,
@@ -677,6 +683,9 @@ class AgentBridge:
                     raise RuntimeError("harness must not emit execution_complete")
                 if event.get("type") in ("token", "tool_call", "step_finish"):
                     emitted_output = True
+                # A cancelled turn never returns an outcome, so the last cost
+                # report is the only figure execution_complete can carry then.
+                # When an outcome does arrive it is authoritative (below).
                 if event.get("type") == "step_finish" and "messageCostUsd" in event:
                     message_cost_usd = event["messageCostUsd"]
                 await self._send_event(event)
@@ -692,6 +701,8 @@ class AgentBridge:
                 ),
                 emit,
             )
+            # The outcome is authoritative for cost and success once it
+            # exists; the bridge adds only the no-output guard below.
             if turn.message_cost_usd is not None:
                 message_cost_usd = turn.message_cost_usd
             if not turn.success:
@@ -750,7 +761,7 @@ class AgentBridge:
         """Create the vendor session on first use and persist its id."""
         if self.agent_session_id:
             return
-        await self.harness.create_or_resume_session(None)
+        await self.harness.create_session()
         await self._save_session_id()
 
     async def _handle_stop(self) -> None:
@@ -768,7 +779,6 @@ class AgentBridge:
         await self._send_event(
             {
                 "type": "snapshot_ready",
-                "agentSessionId": self.agent_session_id,
                 "opencodeSessionId": self.agent_session_id,
             }
         )
@@ -812,7 +822,12 @@ class AgentBridge:
         return None
 
     async def _load_session_id(self) -> None:
-        """Resume the persisted vendor session, if any, through the harness."""
+        """Resume the persisted vendor session, if any, through the harness.
+
+        Startup only resumes. A missing or invalid id leaves the harness
+        without a session and the first prompt creates one, as it always has;
+        startup never replaces a conversation as a side effect of loading it.
+        """
         try:
             persisted = self._read_persisted_session_id()
         except Exception as e:
@@ -821,12 +836,12 @@ class AgentBridge:
         if not persisted:
             return
         try:
-            await self.harness.create_or_resume_session(persisted)
+            resumed = await self.harness.resume_session(persisted)
         except Exception as e:
-            # Creation happens lazily on the first prompt, as it always has.
             self.log.error("agent.session.load_error", exc=e)
             return
-        await self._save_session_id()
+        if resumed:
+            await self._save_session_id()
 
     async def _save_session_id(self) -> None:
         """Persist the vendor session id so a snapshot restore can resume it."""
@@ -925,7 +940,7 @@ async def main() -> None:
     parser.add_argument(
         "--harness",
         default=DEFAULT_HARNESS_ID.value,
-        help="Agent harness id (opencode | claude)",
+        help="Agent harness id",
     )
 
     args = parser.parse_args()

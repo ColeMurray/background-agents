@@ -10,7 +10,6 @@ from .base import (
     AgentHarness,
     BridgeEvent,
     EventSink,
-    HarnessCapabilities,
     HarnessId,
     HarnessProcessOwner,
     HarnessPrompt,
@@ -19,6 +18,8 @@ from .base import (
     TurnOutcome,
     parse_harness_id,
 )
+from .opencode import OpencodeHarness
+from .opencode_client import OpenCodeClient
 
 if TYPE_CHECKING:
     from ..attachment_processor import AttachmentProcessor
@@ -36,17 +37,12 @@ def build_agent_harness(
     """The bridge-half registry: one ``match`` is the whole thing."""
     match harness_id:
         case HarnessId.OPENCODE:
-            from .opencode import OpencodeHarness
-            from .opencode_client import OpenCodeClient
-
             return OpencodeHarness(
                 client=OpenCodeClient(base_url=f"http://localhost:{opencode_port}", log=log),
                 attachment_processor=attachment_processor,
                 log=log,
                 limits=limits,
             )
-        case HarnessId.CLAUDE:
-            raise ValueError("The claude harness is not available in this runtime yet")
     raise ValueError(f"Unsupported harness: {harness_id}")
 
 
@@ -56,7 +52,6 @@ __all__ = [
     "AgentHarness",
     "BridgeEvent",
     "EventSink",
-    "HarnessCapabilities",
     "HarnessId",
     "HarnessProcessOwner",
     "HarnessPrompt",

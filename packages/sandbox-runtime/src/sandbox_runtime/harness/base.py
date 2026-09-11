@@ -28,8 +28,9 @@ if TYPE_CHECKING:
 
 
 class HarnessId(StrEnum):
+    """Harnesses this runtime can run. Only deployable implementations are listed."""
+
     OPENCODE = "opencode"
-    CLAUDE = "claude"
 
 
 DEFAULT_HARNESS_ID = HarnessId.OPENCODE
@@ -50,28 +51,6 @@ def parse_harness_id(value: object) -> HarnessId:
 # ``warning``). Never ``execution_complete``.
 BridgeEvent = dict[str, Any]
 EventSink = Callable[[BridgeEvent], Awaitable[None]]
-
-
-@dataclass(frozen=True)
-class HarnessCapabilities:
-    """Static capability record, mirrored by ``HARNESS_CATALOG`` in shared TS."""
-
-    # ``None`` means any model family the catalog offers.
-    model_families: tuple[str, ...] | None
-    # Provider id -> auth modes the harness can select.
-    provider_auth: Mapping[str, tuple[str, ...]]
-    reasoning_display: bool
-    resume: str = "session_id"
-
-    def to_wire(self) -> dict[str, Any]:
-        return {
-            "modelFamilies": "any" if self.model_families is None else list(self.model_families),
-            "providerAuth": {
-                provider: list(modes) for provider, modes in self.provider_auth.items()
-            },
-            "reasoningDisplay": self.reasoning_display,
-            "resume": self.resume,
-        }
 
 
 @dataclass(frozen=True)
@@ -104,6 +83,12 @@ class TurnOutcome:
     cancelled: bool = False
     message_cost_usd: float | None = None
 
+    def __post_init__(self) -> None:
+        if self.cancelled and self.success:
+            raise ValueError("a cancelled turn cannot also be a success")
+        if not self.success and not self.error:
+            raise ValueError("a failed turn must carry an error message")
+
     @classmethod
     def ok(cls, *, message_cost_usd: float | None = None) -> TurnOutcome:
         return cls(success=True, message_cost_usd=message_cost_usd)
@@ -130,13 +115,12 @@ class AgentHarness(Protocol):
     """Bridge half of the seam: a per-session client for one agent vendor."""
 
     session_id: str | None
-    """The vendor session id, once created or resumed; None before that."""
+    """The vendor session id the harness owns: None until ``resume_session``
+    succeeds or ``create_session`` runs. The bridge reads it; only the harness
+    writes it."""
 
     @property
     def id(self) -> HarnessId: ...
-
-    @property
-    def capabilities(self) -> HarnessCapabilities: ...
 
     async def open(self) -> None:
         """Connect to the vendor. Raises ``HarnessStartError`` on a final failure."""
@@ -146,8 +130,12 @@ class AgentHarness(Protocol):
         """Tear down; must reap any child process the harness spawned."""
         ...
 
-    async def create_or_resume_session(self, persisted_id: str | None) -> str:
-        """Return the vendor session id to use, resuming ``persisted_id`` when it still exists."""
+    async def resume_session(self, persisted_id: str) -> bool:
+        """Adopt ``persisted_id`` when the vendor still has it; ``False`` leaves ``session_id`` unset."""
+        ...
+
+    async def create_session(self) -> None:
+        """Create a fresh vendor session and set ``session_id``. The bridge calls this lazily."""
         ...
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:

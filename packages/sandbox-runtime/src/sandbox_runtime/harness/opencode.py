@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 from .base import (
     EventSink,
-    HarnessCapabilities,
     HarnessId,
     HarnessPrompt,
     PromptLimits,
@@ -20,17 +19,6 @@ if TYPE_CHECKING:
     from ..log_config import StructuredLogger
     from .opencode_client import OpenCodeClient
 
-OPENCODE_CAPABILITIES = HarnessCapabilities(
-    model_families=None,
-    provider_auth={
-        "anthropic": ("api_key",),
-        "openai": ("api_key", "provider_account"),
-        "xai": ("api_key", "provider_account"),
-    },
-    # OpenCode does not stream thinking text to the timeline.
-    reasoning_display=False,
-)
-
 
 class OpencodeHarness:
     """OpenCode behind the seam: HTTP/SSE transport plus the SSE translator.
@@ -42,7 +30,6 @@ class OpencodeHarness:
     """
 
     id = HarnessId.OPENCODE
-    capabilities = OPENCODE_CAPABILITIES
 
     def __init__(
         self,
@@ -81,28 +68,30 @@ class OpencodeHarness:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def create_or_resume_session(self, persisted_id: str | None) -> str:
-        if persisted_id:
-            try:
-                exists = await self.client.session_exists(persisted_id)
-            except Exception:
-                exists = False
-            if exists:
-                self.session_id = persisted_id
-                self.log.info(
-                    "opencode.session.ensure",
-                    opencode_session_id=persisted_id,
-                    action="loaded",
-                )
-                return persisted_id
+    async def resume_session(self, persisted_id: str) -> bool:
+        # A probe failure counts as "not there", as it always has: the first
+        # prompt then starts a fresh conversation instead of the bridge dying.
+        try:
+            exists = await self.client.session_exists(persisted_id)
+        except Exception:
+            exists = False
+        if not exists:
             self.log.info("opencode.session.invalid", opencode_session_id=persisted_id)
+            return False
+        self.session_id = persisted_id
+        self.log.info(
+            "opencode.session.ensure",
+            opencode_session_id=persisted_id,
+            action="loaded",
+        )
+        return True
 
+    async def create_session(self) -> None:
         created = await self.client.create_session()
         if not created:
             raise RuntimeError("OpenCode did not return a session id")
         self.session_id = created
         self.log.info("opencode.session.ensure", opencode_session_id=created, action="created")
-        return created
 
     def stream_events(self, prompt: HarnessPrompt) -> Any:
         """The raw translated event stream for one prompt (test seam)."""

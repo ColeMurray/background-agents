@@ -67,10 +67,6 @@ class SessionConfig(BaseModel):
     repo_name: str | None = None
     branch: str | None = None
     base_sha: str | None = None
-    # The agent's own conversation id. `opencode_session_id` is the pre-rename
-    # spelling, accepted for one runtime generation so snapshots and older
-    # control planes keep resuming.
-    agent_session_id: str | None = None
     opencode_session_id: str | None = None
     # Which agent runs the session; absent means the built-in OpenCode harness.
     harness: str = "opencode"

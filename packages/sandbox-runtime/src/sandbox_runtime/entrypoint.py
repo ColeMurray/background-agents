@@ -46,8 +46,6 @@ def build_harness_process(
                 log,
                 warnings.record,
             )
-        case HarnessId.CLAUDE:
-            raise ValueError("The claude harness is not available in this runtime yet")
     raise ValueError(f"Unsupported harness: {config.harness}")
 
 

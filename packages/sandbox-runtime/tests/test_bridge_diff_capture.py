@@ -13,7 +13,6 @@ from sandbox_runtime.diff_capture import (
     ControlPlaneDiffClient,
     SessionDiffRefreshWorker,
 )
-from sandbox_runtime.harness.opencode import OPENCODE_CAPABILITIES
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.repo_config import RepoEntry, dump_repo_manifest
 
@@ -86,10 +85,7 @@ def test_ready_event_reports_fixed_baselines_without_a_capability_gate(tmp_path:
     assert event == {
         "type": "ready",
         "sandboxId": "sandbox-1",
-        "agentSessionId": None,
         "opencodeSessionId": None,
-        "harness": "opencode",
-        "capabilities": OPENCODE_CAPABILITIES.to_wire(),
         "repositories": [
             {
                 "position": 0,
