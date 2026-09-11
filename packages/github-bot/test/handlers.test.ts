@@ -305,6 +305,68 @@ describe("handlePullRequestOpened", () => {
     expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('"event": "COMMENT"');
   });
 
+  it("approves a bot-authored PR when a separate reviewer App submits the review", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: ["test-bot[bot]"],
+    });
+    const env = { ...createMockEnv(), GITHUB_REVIEWER_USERNAME: "test-reviewer[bot]" };
+    const log = createMockLogger();
+    const payload: PullRequestOpenedPayload = {
+      ...pullRequestOpenedPayload,
+      pull_request: {
+        ...pullRequestOpenedPayload.pull_request,
+        user: { login: "test-bot[bot]" },
+      },
+      sender: {
+        login: "test-bot[bot]",
+        id: 1004,
+        avatar_url: "https://avatars.githubusercontent.com/u/1004",
+      },
+    };
+
+    await handlePullRequestOpened(env, log, payload, "trace-0");
+
+    const content = promptSendBody(getControlPlaneFetch(env)).content;
+    // The reviewer App is not the PR's author, so GitHub accepts an approval.
+    expect(content).toContain('"event": "<APPROVE, REQUEST_CHANGES, or COMMENT>"');
+    expect(content).toContain("/sessions/$session_id/review-token");
+  });
+
+  it("still comments on a PR the reviewer App itself opened", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: ["test-reviewer[bot]"],
+    });
+    const env = { ...createMockEnv(), GITHUB_REVIEWER_USERNAME: "test-reviewer[bot]" };
+    const log = createMockLogger();
+    const payload: PullRequestOpenedPayload = {
+      ...pullRequestOpenedPayload,
+      pull_request: {
+        ...pullRequestOpenedPayload.pull_request,
+        user: { login: "test-reviewer[bot]" },
+      },
+      sender: {
+        login: "test-reviewer[bot]",
+        id: 1005,
+        avatar_url: "https://avatars.githubusercontent.com/u/1005",
+      },
+    };
+
+    await handlePullRequestOpened(env, log, payload, "trace-0");
+
+    expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('"event": "COMMENT"');
+  });
+
+  it("omits the reviewer token fetch when no reviewer App is configured", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0");
+
+    expect(promptSendBody(getControlPlaneFetch(env)).content).not.toContain("review-token");
+  });
+
   it("rejects a bot-authored PR when the bot is not an allowed trigger user", async () => {
     vi.mocked(getGitHubConfig).mockResolvedValue({
       ...defaultConfig,
