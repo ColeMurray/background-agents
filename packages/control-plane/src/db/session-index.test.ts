@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "./session-index";
 import type { SessionEntry } from "./session-index";
@@ -8,7 +9,7 @@ type SessionRow = {
   title: string | null;
   repo_owner: string | null;
   repo_name: string | null;
-  harness: "opencode" | "claude";
+  harness: HarnessId;
   model: string;
   reasoning_effort: string | null;
   base_branch: string | null;
@@ -218,7 +219,7 @@ class FakeD1Database {
         string | null,
         string | null,
         string | null,
-        "opencode" | "claude",
+        HarnessId,
         string,
         string | null,
         string | null,

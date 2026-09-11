@@ -6,13 +6,17 @@
  * capability record for each harness, and `checkHarnessCompatibility` is the
  * one rule applied wherever a model or a provider-auth selection enters a
  * session.
+ *
+ * An id enters the catalog together with the runtime that boots it: the
+ * catalog is exactly the set a session can be created on, never a wider set
+ * of recognized names.
  */
 
 import { z } from "zod";
 import { extractProviderAndModel } from "./models";
 import type { SessionProviderAuthMode, ProviderAuthMode } from "./types/provider-accounts";
 
-export const HARNESS_IDS = ["opencode", "claude"] as const;
+export const HARNESS_IDS = ["opencode"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 export const DEFAULT_HARNESS: HarnessId = "opencode";
 export const harnessIdSchema = z.enum(HARNESS_IDS);
@@ -40,15 +44,6 @@ export const HARNESS_CATALOG = {
       xai: ["api_key", "provider_account"],
     },
     reasoningDisplay: false,
-    resume: "session_id",
-  },
-  claude: {
-    label: "Claude Agent",
-    modelFamilies: ["anthropic"],
-    providerAuth: {
-      anthropic: ["api_key", "provider_account"],
-    },
-    reasoningDisplay: true,
     resume: "session_id",
   },
 } as const satisfies Record<HarnessId, HarnessCapabilities>;
@@ -90,10 +85,10 @@ export function harnessSupportsProviderAuth(
 ): boolean {
   if (mode === "legacy_scoped_oauth") return true;
   const modes = getHarnessCapabilities(harness).providerAuth[provider];
-  // A provider the harness has no row for is one it does not run at all; the
-  // model check reports that. Auth for it is irrelevant here.
-  if (!modes) return true;
-  return modes.includes(mode);
+  // No row means the harness does not run the provider at all, so it cannot
+  // select any auth mode for it either. The model check reports that to the
+  // user; the auth resolver falls back to the API key.
+  return modes !== undefined && modes.includes(mode);
 }
 
 /** Models from a list that the harness can run. */
