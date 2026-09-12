@@ -21,6 +21,7 @@ import { modelProviderAccountAdapterRegistry } from "../auth/model-provider-acco
 import {
   ModelProviderAccountBroker,
   ModelProviderAccountBrokerError,
+  type ModelProviderAccountBrokerErrorCode,
 } from "../auth/model-provider-account-broker";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import { D1ModelProviderAccountAtomicWriter } from "../db/model-provider-account-atomic-writer";
@@ -533,6 +534,22 @@ async function handleLegacyProviderAccess(
   });
 }
 
+export function modelProviderBrokerHttpStatus(
+  code: ModelProviderAccountBrokerErrorCode
+): 404 | 409 | 502 | 503 {
+  switch (code) {
+    case "account_not_found":
+      return 404;
+    case "upstream_retry_safe":
+      return 502;
+    case "provider_unavailable":
+    case "exchange_busy":
+      return 503;
+    default:
+      return 409;
+  }
+}
+
 async function handleProviderAccess(
   _request: Request,
   env: Env,
@@ -593,9 +610,7 @@ async function handleProviderAccess(
     return json(await broker.getAccess(binding.providerAccountId, parsedProvider));
   } catch (cause) {
     if (cause instanceof ModelProviderAccountBrokerError) {
-      const status =
-        cause.code === "account_not_found" ? 404 : cause.code === "upstream_retry_safe" ? 502 : 409;
-      return error(cause.message, status);
+      return error(cause.message, modelProviderBrokerHttpStatus(cause.code));
     }
     return error("Provider access unavailable", 503);
   }
