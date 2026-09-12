@@ -373,7 +373,8 @@ describe("SessionWebSocketManagerImpl", () => {
     });
 
     it("closes an attached sandbox socket after the in-memory pointer is lost", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
       const oldWs = createFakeWebSocket();
       const newWs = createFakeWebSocket();
       manager.acceptAndSetSandboxSocket(oldWs, "sb-1");

@@ -24,12 +24,11 @@ async def test_execution_initialization_waits_for_health_before_session_and_sign
     first_health_check = asyncio.Event()
     allow_health = asyncio.Event()
 
-    async def is_healthy() -> bool:
+    async def open_harness() -> None:
         first_health_check.set()
         await allow_health.wait()
-        return True
 
-    bridge.opencode_client.is_healthy = is_healthy
+    bridge.harness.open = open_harness
     bridge._load_session_id = AsyncMock()
     bridge.git_signing.initialize = AsyncMock()
     bridge._build_ready_event = MagicMock(return_value={"type": "ready"})

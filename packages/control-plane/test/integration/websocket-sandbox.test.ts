@@ -4,9 +4,6 @@ import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import { hostContract } from "../conformance/session-core-conformance";
 import { encryptToken } from "../../src/auth/crypto";
-import type { Logger } from "../../src/logger";
-import { SessionWebSocketManagerImpl } from "../../src/session/websocket-manager";
-import { WsClientMappingRepository } from "../../src/session/ws-client-mapping-repository";
 import { DEFAULT_HEARTBEAT_CONFIG } from "../../src/sandbox/lifecycle/decisions";
 import {
   collectMessages,
@@ -704,16 +701,10 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       firstWs!.addEventListener("close", () => resolve(), { once: true });
     });
 
-    await runInSessionDO(stub, async (instance: SessionDO, state) => {
+    await runInSessionDO(stub, async (instance: SessionDO) => {
       const pair = new WebSocketPair();
-      // A fresh manager models a rehydrated DO whose socket cache is empty.
-      const manager = new SessionWebSocketManagerImpl(
-        state,
-        componentsOf(instance).sandboxRepository,
-        new WsClientMappingRepository(state.storage.sql),
-        { debug() {}, info() {}, warn() {}, error() {}, child() {} } as unknown as Logger,
-        { authTimeoutMs: 1000 }
-      );
+      const manager = componentsOf(instance).wsManager;
+      manager.clearSandboxSocket();
       manager.acceptAndSetSandboxSocket(pair[1], SANDBOX_ID);
       pair[0].accept();
       await instance.webSocketMessage(

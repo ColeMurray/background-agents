@@ -967,6 +967,7 @@ describe("connect watchdog and spawn staleness defaults", () => {
       evaluateConnectingTimeout(
         "connecting",
         state.createdAt,
+        null,
         DEFAULT_CONNECTING_TIMEOUT_CONFIG,
         now
       ).isTimedOut

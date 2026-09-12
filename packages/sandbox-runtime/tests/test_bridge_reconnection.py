@@ -146,7 +146,7 @@ class TestIsFatalConnectionError:
         self, bridge, monkeypatch
     ):
         bridge.log = MagicMock()
-        bridge.opencode_client.is_healthy = AsyncMock(return_value=True)
+        bridge.harness.open = AsyncMock()
         bridge.git_signing.initialize = AsyncMock(
             side_effect=[
                 GitSigningError("Commit signing configuration unavailable", retryable=True),
@@ -170,7 +170,7 @@ class TestIsFatalConnectionError:
         self, bridge, monkeypatch, status
     ):
         bridge.log = MagicMock()
-        bridge.opencode_client.is_healthy = AsyncMock(return_value=True)
+        bridge.harness.open = AsyncMock()
         bridge.git_signing.initialize = AsyncMock(
             side_effect=GitSigningError(
                 "Commit signing configuration unavailable", status_code=status
@@ -191,7 +191,7 @@ class TestIsFatalConnectionError:
         self, bridge, monkeypatch
     ):
         bridge.log = MagicMock()
-        bridge.opencode_client.is_healthy = AsyncMock(return_value=True)
+        bridge.harness.open = AsyncMock()
         bridge.git_signing.initialize = AsyncMock(
             side_effect=GitSigningError("Invalid commit signing configuration")
         )

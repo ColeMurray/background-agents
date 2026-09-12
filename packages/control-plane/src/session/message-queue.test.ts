@@ -378,7 +378,12 @@ describe("SessionMessageQueue", () => {
         sandboxId: "sb",
         timestamp: 2,
       },
-      { now: 2000, messageId: "msg-finishing", processingMessage: { id: "msg-finishing" } }
+      {
+        now: 2000,
+        messageId: "msg-finishing",
+        processingMessage: { id: "msg-finishing" },
+        sender: null,
+      }
     );
     await h.queue.processMessageQueue();
     try {

@@ -239,7 +239,6 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       replaced_existing: replaced,
       duration_ms: Date.now() - now,
     });
-
   }
 
   /** Validate the client token and current permission before granting an authorization lease. */

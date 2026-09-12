@@ -1,5 +1,6 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
+import type { SessionWebSocket } from "../../platform-ports";
 import type { MessageRepository } from "../message-repository";
 import type { SandboxPushService } from "../sandbox-push-service";
 import type { SessionWebSocketManager } from "../websocket-manager";
@@ -41,7 +42,7 @@ export class SessionSandboxEventProcessor {
 
   async processSandboxEvent(
     event: SandboxEventWithAck,
-    sender: WebSocket | null = null
+    sender: SessionWebSocket | null = null
   ): Promise<void> {
     if (event.type === "heartbeat" || event.type === "token") {
       this.log.debug("Sandbox event", { event_type: event.type });
@@ -126,7 +127,7 @@ export class SessionSandboxEventProcessor {
     }
   }
 
-  private sendAck(sender: WebSocket, ackId: string | undefined): void {
+  private sendAck(sender: SessionWebSocket, ackId: string | undefined): void {
     if (!ackId) return;
     if (!this.wsManager.send(sender, { type: "ack", ackId })) {
       this.log.debug("Cannot send ACK: sender unavailable", { ack_id: ackId });
