@@ -526,6 +526,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     diffService,
     (title, options) => titleService.applySessionTitleUpdate(title, options),
     updateLastActivity,
+    (messageId, timestamp) =>
+      backgroundTasks.submit(() => callbackService.refreshSlackActivity(messageId, timestamp), {
+        name: "callback.refresh_slack_activity",
+        context: { message_id: messageId },
+      }),
     log
   );
   const pushService = new SandboxPushService(log, wsManager);
