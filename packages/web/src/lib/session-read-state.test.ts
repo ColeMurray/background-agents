@@ -7,6 +7,7 @@ import {
   applySessionReadResult,
   findLatestTerminalMessageId,
   getSessionReadOverlay,
+  getSessionReadSnapshot,
   isSessionMessageRead,
   readStateSupersedes,
   resetSessionReadOverlay,
@@ -91,6 +92,85 @@ describe("readStateSupersedes", () => {
 });
 
 describe("applySessionReadResult", () => {
+  it("returns a stable empty snapshot and restores it on reset", () => {
+    const empty = getSessionReadSnapshot(null);
+    expect(empty).toEqual({ overlay: new Map(), inboxRevision: 0 });
+    expect(getSessionReadSnapshot(VIEWER)).toBe(empty);
+    applySessionReadResult(
+      { sessionId: "session-1", outcome: "marked_read", ...readFirst },
+      noRevalidate,
+      VIEWER
+    );
+    resetSessionReadOverlay();
+    expect(getSessionReadSnapshot(VIEWER)).toBe(empty);
+  });
+
+  it.each(["marked_read", "not_latest"] as const)(
+    "publishes overlay and revision atomically for repeated %s results",
+    (outcome) => {
+      const readState = outcome === "marked_read" ? readFirst : unreadSecond;
+      const result = { sessionId: "session-1", outcome, ...readState };
+      const listener = vi.fn(() => getSessionReadSnapshot(VIEWER));
+      const unsubscribe = subscribeSessionReadOverlay(listener);
+      try {
+        applySessionReadResult(result, noRevalidate, VIEWER);
+        const first = getSessionReadSnapshot(VIEWER);
+        expect(first.inboxRevision).toBe(1);
+        expect(first.overlay.get("session-1")).toEqual(readState);
+        expect(getSessionReadOverlay(VIEWER)).toBe(first.overlay);
+        expect(getSessionReadSnapshot(VIEWER)).toBe(first);
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(listener.mock.results[0]?.value).toBe(first);
+
+        applySessionReadResult(result, noRevalidate, VIEWER);
+        const second = getSessionReadSnapshot(VIEWER);
+        expect(second).not.toBe(first);
+        expect(second.overlay).toBe(first.overlay);
+        expect(second.inboxRevision).toBe(2);
+        expect(first.inboxRevision).toBe(1);
+        expect(listener).toHaveBeenCalledTimes(2);
+        expect(listener.mock.results[1]?.value).toBe(second);
+        expect(noRevalidate).toHaveBeenCalledTimes(2);
+      } finally {
+        unsubscribe();
+      }
+    }
+  );
+
+  it.each(["already_read", "no_terminal_message"] as const)(
+    "does not invalidate the inbox for %s or publish identical repeats",
+    (outcome) => {
+      const readState =
+        outcome === "already_read"
+          ? readFirst
+          : ({ latestMessageId: null, unread: false, version: 0 } as const);
+      const result =
+        outcome === "already_read"
+          ? { sessionId: "session-1", outcome, ...readFirst }
+          : {
+              sessionId: "session-1",
+              outcome,
+              latestMessageId: null,
+              unread: false as const,
+              version: 0,
+            };
+      const listener = vi.fn();
+      const unsubscribe = subscribeSessionReadOverlay(listener);
+      try {
+        applySessionReadResult(result, noRevalidate, VIEWER);
+        const snapshot = getSessionReadSnapshot(VIEWER);
+        expect(snapshot.inboxRevision).toBe(0);
+        expect(snapshot.overlay.get("session-1")).toEqual(readState);
+        applySessionReadResult(result, noRevalidate, VIEWER);
+        expect(getSessionReadSnapshot(VIEWER)).toBe(snapshot);
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(noRevalidate).not.toHaveBeenCalled();
+      } finally {
+        unsubscribe();
+      }
+    }
+  );
+
   it("records the server's decision and refetches the inbox when placement can change", async () => {
     const listener = vi.fn();
     const unsubscribe = subscribeSessionReadOverlay(listener);
@@ -147,6 +227,7 @@ describe("applySessionReadResult", () => {
   });
 
   it("keeps each viewer's reads apart", () => {
+    const viewerSnapshot = getSessionReadSnapshot(VIEWER);
     applySessionReadResult(
       { sessionId: "session-1", outcome: "marked_read", ...readFirst },
       noRevalidate,
@@ -156,6 +237,9 @@ describe("applySessionReadResult", () => {
     expect(getSessionReadOverlay(VIEWER).size).toBe(0);
     expect(getSessionReadOverlay("viewer-b").get("session-1")).toEqual(readFirst);
     expect(getSessionReadOverlay(null).size).toBe(0);
+    expect(getSessionReadSnapshot(VIEWER)).toBe(viewerSnapshot);
+    expect(getSessionReadSnapshot("viewer-b").inboxRevision).toBe(1);
+    expect(getSessionReadSnapshot(null).inboxRevision).toBe(0);
     expect(isSessionMessageRead(VIEWER, "session-1", "message-1")).toBe(false);
     expect(isSessionMessageRead("viewer-b", "session-1", "message-1")).toBe(true);
   });
@@ -173,9 +257,10 @@ describe("applySessionReadResult", () => {
     );
     await vi.waitFor(() => expect(error).toHaveBeenCalledOnce());
     expect(getSessionReadOverlay(VIEWER).get("session-1")).toEqual(readFirst);
+    expect(getSessionReadSnapshot(VIEWER).inboxRevision).toBe(1);
   });
 
-  it("keeps the newest state per session and ignores repeats", async () => {
+  it("keeps the newest overlay while invalidating for stale and repeated results", async () => {
     const listener = vi.fn();
     const unsubscribe = subscribeSessionReadOverlay(listener);
 
@@ -184,6 +269,7 @@ describe("applySessionReadResult", () => {
       noRevalidate,
       VIEWER
     );
+    const overlay = getSessionReadOverlay(VIEWER);
     applySessionReadResult(
       { sessionId: "session-1", outcome: "marked_read", ...readFirst },
       noRevalidate,
@@ -196,7 +282,9 @@ describe("applySessionReadResult", () => {
       noRevalidate,
       VIEWER
     );
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(getSessionReadOverlay(VIEWER)).toBe(overlay);
+    expect(getSessionReadSnapshot(VIEWER).inboxRevision).toBe(3);
+    expect(listener).toHaveBeenCalledTimes(3);
     unsubscribe();
   });
 

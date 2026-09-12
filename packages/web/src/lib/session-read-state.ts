@@ -90,17 +90,26 @@ export function readStateSupersedes(next: SessionReadState, current: SessionRead
  */
 export type SessionReadOverlay = ReadonlyMap<string, SessionReadState>;
 
-const EMPTY_OVERLAY: SessionReadOverlay = new Map();
-let overlays: ReadonlyMap<string, SessionReadOverlay> = new Map();
+type SessionReadSnapshot = {
+  readonly overlay: SessionReadOverlay;
+  readonly inboxRevision: number;
+};
+
+const EMPTY_SNAPSHOT: SessionReadSnapshot = { overlay: new Map(), inboxRevision: 0 };
+let snapshots: ReadonlyMap<string, SessionReadSnapshot> = new Map();
 const overlayListeners = new Set<() => void>();
 
-function replaceOverlays(next: ReadonlyMap<string, SessionReadOverlay>): void {
-  overlays = next;
+function replaceSnapshots(next: ReadonlyMap<string, SessionReadSnapshot>): void {
+  snapshots = next;
   for (const listener of overlayListeners) listener();
 }
 
+export function getSessionReadSnapshot(viewerId: string | null): SessionReadSnapshot {
+  return (viewerId !== null && snapshots.get(viewerId)) || EMPTY_SNAPSHOT;
+}
+
 export function getSessionReadOverlay(viewerId: string | null): SessionReadOverlay {
-  return (viewerId !== null && overlays.get(viewerId)) || EMPTY_OVERLAY;
+  return getSessionReadSnapshot(viewerId).overlay;
 }
 
 export function subscribeSessionReadOverlay(listener: () => void): () => void {
@@ -110,7 +119,7 @@ export function subscribeSessionReadOverlay(listener: () => void): () => void {
 
 /** Forgets every viewer's reads; tests start from a clean page. */
 export function resetSessionReadOverlay(): void {
-  if (overlays.size > 0) replaceOverlays(new Map());
+  if (snapshots.size > 0) replaceSnapshots(new Map());
 }
 
 /** Whether this page already read `messageId` for this viewer, so opening it again need not ask. */
@@ -123,23 +132,33 @@ export function isSessionMessageRead(
   return entry?.latestMessageId === messageId && !entry.unread;
 }
 
-function recordReadState(viewerId: string, sessionId: string, readState: SessionReadState): void {
-  const entries = getSessionReadOverlay(viewerId);
-  const current = entries.get(sessionId);
-  if (current && !readStateSupersedes(readState, current)) return;
+function recordReadState(
+  viewerId: string,
+  sessionId: string,
+  readState: SessionReadState,
+  invalidateInbox: boolean
+): void {
+  const snapshot = getSessionReadSnapshot(viewerId);
+  let overlay = snapshot.overlay;
+  const current = overlay.get(sessionId);
   if (
-    current &&
-    current.version === readState.version &&
-    current.latestMessageId === readState.latestMessageId &&
-    current.unread === readState.unread
+    !current ||
+    (readStateSupersedes(readState, current) &&
+      (current.version !== readState.version ||
+        current.latestMessageId !== readState.latestMessageId ||
+        current.unread !== readState.unread))
   ) {
-    return;
+    const next = new Map(overlay);
+    next.set(sessionId, readState);
+    overlay = next;
   }
-  const next = new Map(entries);
-  next.set(sessionId, readState);
-  const nextOverlays = new Map(overlays);
-  nextOverlays.set(viewerId, next);
-  replaceOverlays(nextOverlays);
+  if (overlay === snapshot.overlay && !invalidateInbox) return;
+  const nextSnapshots = new Map(snapshots);
+  nextSnapshots.set(viewerId, {
+    overlay,
+    inboxRevision: snapshot.inboxRevision + (invalidateInbox ? 1 : 0),
+  });
+  replaceSnapshots(nextSnapshots);
 }
 
 /**
@@ -157,8 +176,10 @@ export function applySessionReadResult(
   mutate: ScopedMutator,
   viewerId: string
 ): void {
-  recordReadState(viewerId, result.sessionId, readStateFromResult(result));
-  if (result.outcome === "marked_read" || result.outcome === "not_latest") {
+  const invalidateInbox = result.outcome === "marked_read" || result.outcome === "not_latest";
+  // Invalidate local page chains even when the overlay or refetched head cursor is unchanged.
+  recordReadState(viewerId, result.sessionId, readStateFromResult(result), invalidateInbox);
+  if (invalidateInbox) {
     void mutate(isSessionInboxKey).catch((error: unknown) => {
       console.error("Failed to refresh session inbox after read", error);
     });

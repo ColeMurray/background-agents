@@ -19,7 +19,7 @@ import {
 import {
   applySessionReadOverlay,
   applySessionReadResult,
-  getSessionReadOverlay,
+  getSessionReadSnapshot,
   markLatestMessageRead,
   subscribeSessionReadOverlay,
 } from "@/lib/session-read-state";
@@ -43,11 +43,11 @@ interface LoadedPage {
  *
  * A chain of loaded pages continues the head page from its cursor, so it is
  * only coherent with the head it was loaded after. When the head's boundary
- * moves (a row entered or left the first page) the chain is discarded along
- * with any response still in flight; keeping it would hide the rows between
- * the new boundary and the old tail. `generation` counts those resets so a
- * response for an earlier chain can never land in a later one, even one
- * with the same identity.
+ * moves, or a read result invalidates category membership, the chain is
+ * discarded along with any response still in flight. An unchanged boundary
+ * alone cannot detect a session entering an already loaded tail.
+ * `generation` counts those resets so a response for an earlier chain can
+ * never land in a later one, even one with the same identity.
  */
 interface LoadedPagesState {
   identity: string;
@@ -68,7 +68,7 @@ function withoutRoots(page: SessionInboxPage, rootIds: Set<string>): SessionInbo
 function useCategoryPagination(
   category: SessionInboxCategory,
   snapshot: SessionInboxSnapshot | undefined,
-  filterIdentity: string,
+  paginationIdentity: string,
   canonicalRootIds: Set<string>,
   mine: boolean,
   refreshSnapshot: () => Promise<unknown>,
@@ -79,7 +79,7 @@ function useCategoryPagination(
   // loading state renders cannot send the same cursor twice.
   const inFlightGeneration = useRef<number | null>(null);
   const firstPage = snapshot?.categories[category];
-  const chainIdentity = JSON.stringify([filterIdentity, firstPage?.nextCursor ?? null]);
+  const chainIdentity = JSON.stringify([paginationIdentity, firstPage?.nextCursor ?? null]);
   const [state, setState] = useState<LoadedPagesState>(() => emptyPages(chainIdentity, 0));
   const current =
     state.identity === chainIdentity ? state : emptyPages(chainIdentity, state.generation);
@@ -93,8 +93,8 @@ function useCategoryPagination(
     );
   }, [chainIdentity]);
 
-  // Once the head snapshot carries a root, the loaded copy is stale for good:
-  // the session may since have been archived or ranked past every loaded page.
+  // Reconcile both head refreshes and newly arrived pages against the current
+  // head. Once canonical, a loaded copy must not resurface after an archive.
   useEffect(() => {
     setState((previous) => {
       let changed = false;
@@ -106,7 +106,7 @@ function useCategoryPagination(
       });
       return changed ? { ...previous, pages } : previous;
     });
-  }, [canonicalRootIds]);
+  }, [canonicalRootIds, state.pages]);
 
   const requestPage = useCallback(async () => {
     const cursor = lastPage?.nextCursor;
@@ -122,6 +122,8 @@ function useCategoryPagination(
     );
     try {
       if (!fetcher) throw new Error("Missing SWR fetcher");
+      // Also exclude roots canonical at request time, even if they were
+      // archived before this response arrived. The effect handles newer heads.
       const page = withoutRoots((await fetcher(key)) as SessionInboxPage, canonicalRootIds);
       setState((previous) =>
         previous.generation === generation
@@ -189,8 +191,8 @@ function useCategoryPagination(
   };
 }
 
-function useSessionReadOverlay(viewerId: string | null) {
-  const getSnapshot = useCallback(() => getSessionReadOverlay(viewerId), [viewerId]);
+function useSessionReadState(viewerId: string | null) {
+  const getSnapshot = useCallback(() => getSessionReadSnapshot(viewerId), [viewerId]);
   return useSyncExternalStore(subscribeSessionReadOverlay, getSnapshot, getSnapshot);
 }
 
@@ -237,7 +239,8 @@ export function useSidebarSessions() {
     refreshWhenHidden: false,
   });
   const userId = authSession?.user.id ?? null;
-  const paginationFilterIdentity = JSON.stringify([userId, mine]);
+  const { overlay, inboxRevision } = useSessionReadState(userId);
+  const paginationIdentity = JSON.stringify([userId, mine, inboxRevision]);
   const nextPageSequence = useRef(0);
   const canonicalRootIds = useMemo(
     () =>
@@ -256,7 +259,7 @@ export function useSidebarSessions() {
   const attention = useCategoryPagination(
     "needs_attention",
     snapshot,
-    paginationFilterIdentity,
+    paginationIdentity,
     canonicalRootIds,
     mine,
     refreshSnapshot,
@@ -265,7 +268,7 @@ export function useSidebarSessions() {
   const inProgress = useCategoryPagination(
     "in_progress",
     snapshot,
-    paginationFilterIdentity,
+    paginationIdentity,
     canonicalRootIds,
     mine,
     refreshSnapshot,
@@ -274,7 +277,7 @@ export function useSidebarSessions() {
   const finished = useCategoryPagination(
     "finished",
     snapshot,
-    paginationFilterIdentity,
+    paginationIdentity,
     canonicalRootIds,
     mine,
     refreshSnapshot,
@@ -325,8 +328,6 @@ export function useSidebarSessions() {
     inProgress.firstPageItems,
     inProgress.loadedPages,
   ]);
-
-  const overlay = useSessionReadOverlay(userId);
 
   // Reads this page established are merged over the fetched rows at render.
   // The server places sessions; the client only stops showing a hierarchy in

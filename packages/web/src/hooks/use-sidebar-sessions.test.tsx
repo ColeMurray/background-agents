@@ -137,6 +137,136 @@ afterEach(() => {
 });
 
 describe("useSidebarSessions", () => {
+  it.each(["in_progress", "finished"] as const)(
+    "finds a read hierarchy inserted behind an unchanged %s boundary",
+    async (category) => {
+      let markedRead = false;
+      const ranked = (id: string, updatedAt: number, unread = false) => {
+        const row = unread ? item(id) : readItem(id);
+        row.rootSession.updatedAt = updatedAt;
+        return row;
+      };
+      // Model the server's one-root pages and strict timestamp/root-ID cursor.
+      const serverPage = (rows: SessionInboxItem[], cursor: string | null): SessionInboxPage => {
+        const [timestamp, id] = cursor?.split(":") ?? [];
+        const remaining = rows.filter(({ rootSession: row }) =>
+          cursor === null
+            ? true
+            : row.updatedAt < Number(timestamp) ||
+              (row.updatedAt === Number(timestamp) && row.id < id)
+        );
+        const first = remaining[0];
+        const hasMore = remaining.length > 1;
+        return {
+          items: first ? [first] : [],
+          hasMore,
+          nextCursor: hasMore ? `${first.rootSession.updatedAt}:${first.rootSession.id}` : null,
+        };
+      };
+      const fetcher = vi.fn(async (key: string) => {
+        const url = new URL(key, "http://localhost");
+        const destination = [
+          ranked("head", 100),
+          ...(markedRead ? [ranked("moving", 80)] : []),
+          ranked("loaded-tail", 60),
+          ranked("last", 20),
+        ];
+        if (url.searchParams.has("category")) {
+          expect(url.searchParams.get("category")).toBe(category);
+          return serverPage(destination, url.searchParams.get("cursor"));
+        }
+        return snapshot({
+          needs_attention: serverPage(markedRead ? [] : [ranked("moving", 80, true)], null),
+          in_progress: page([]),
+          finished: page([]),
+          [category]: serverPage(destination, null),
+        });
+      });
+      markLatestMessageRead.mockImplementation(async (sessionId: string) => {
+        markedRead = true;
+        return readResult(sessionId);
+      });
+      const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+      const section = category === "in_progress" ? "inProgress" : "finished";
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      act(() => result.current.sectionPagination[section].loadMore());
+      await waitFor(() =>
+        expect(result.current[section].map(({ id }) => id)).toEqual(["head", "loaded-tail"])
+      );
+
+      await act(async () => result.current.handleMarkLatestMessageRead("moving"));
+      await act(async () => result.current.refreshSnapshot());
+      expect(result.current.needsAttention).toEqual([]);
+      expect(result.current.sectionPagination[section].firstPageItems[0].rootSession.id).toBe(
+        "head"
+      );
+      // Exhaust pagination: restarting the destination chain would discover moving.
+      while (result.current.sectionPagination[section].hasMore) {
+        act(() => result.current.sectionPagination[section].loadMore());
+        await waitFor(() =>
+          expect(result.current.sectionPagination[section].loadingMore).toBe(false)
+        );
+      }
+      await act(async () => result.current.refreshSnapshot());
+      expect(result.current[section].map(({ id }) => id)).toContain("moving");
+    }
+  );
+
+  it.each([false, true])(
+    "does not resurrect a canonical root (archive before response: %s)",
+    async (archiveBeforeResponse) => {
+      const pendingPage = deferred<SessionInboxPage>();
+      let phase: "unread" | "read-remotely" | "archived-remotely" = archiveBeforeResponse
+        ? "read-remotely"
+        : "unread";
+      const ranked = (id: string, updatedAt: number, read = false) => {
+        const row = read ? readItem(id) : item(id);
+        row.rootSession.updatedAt = updatedAt;
+        return row;
+      };
+      const fetcher = vi.fn(async (key: string) => {
+        if (key.includes("category=")) return pendingPage.promise;
+        return snapshot({
+          // Another unread tail remains in every phase, so the head cursor stays fixed.
+          needs_attention: { items: [ranked("head", 100)], hasMore: true, nextCursor: "100:head" },
+          in_progress: {
+            items: phase === "read-remotely" ? [ranked("moving", 80, true)] : [],
+            hasMore: false,
+            nextCursor: null,
+          },
+          finished: page([]),
+        });
+      });
+      const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      act(() => result.current.sectionPagination.needsAttention.loadMore());
+      await waitFor(() =>
+        expect(result.current.sectionPagination.needsAttention.loadingMore).toBe(true)
+      );
+
+      phase = "read-remotely";
+      await act(async () => result.current.refreshSnapshot());
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual(["moving"]);
+      if (archiveBeforeResponse) {
+        phase = "archived-remotely";
+        await act(async () => result.current.refreshSnapshot());
+      }
+      await act(async () =>
+        pendingPage.resolve({
+          items: [ranked("moving", 80)],
+          hasMore: true,
+          nextCursor: "80:moving",
+        })
+      );
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["head"]);
+
+      phase = "archived-remotely";
+      await act(async () => result.current.refreshSnapshot());
+      expect(result.current.inProgress).toEqual([]);
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["head"]);
+    }
+  );
+
   it("uses exactly one canonical request to supply all three categories", async () => {
     const fetcher = vi.fn(async () => snapshot());
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
@@ -477,32 +607,34 @@ describe("useSidebarSessions", () => {
     act(() => result.current.sectionPagination.needsAttention.loadMore());
     await waitFor(() => expect(result.current.needsAttention).toHaveLength(3));
 
-    const marked = act(async () => result.current.handleMarkLatestMessageRead("tail-read"));
+    await act(async () => result.current.handleMarkLatestMessageRead("tail-read"));
     await waitFor(() =>
-      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-other"])
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"])
     );
     // Nothing on the client moved the session: it is absent until the server places it.
     expect(result.current.inProgress.map(({ id }) => id)).toEqual(["running"]);
-    expect(
-      result.current.needsAttention.find(({ id }) => id === "tail-other")?.readState.unread
-    ).toBe(true);
+    expect(result.current.sectionPagination.needsAttention.hasMore).toBe(true);
     expect(headRequests).toBe(2);
 
-    refetchedSnapshot.resolve(
-      snapshot({
-        needs_attention: page(["attention"], "next"),
-        in_progress: {
-          items: [readItem("tail-read"), item("running")],
-          hasMore: false,
-          nextCursor: null,
-        },
-      })
+    await act(async () =>
+      refetchedSnapshot.resolve(
+        snapshot({
+          needs_attention: page(["attention"], "next"),
+          in_progress: {
+            items: [readItem("tail-read"), item("running")],
+            hasMore: false,
+            nextCursor: null,
+          },
+        })
+      )
     );
-    await marked;
     await waitFor(() =>
       expect(result.current.inProgress.map(({ id }) => id)).toEqual(["tail-read", "running"])
     );
-    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-other"]);
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() =>
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-other"])
+    );
   });
 
   it("hides a read head row from attention until the server places it", async () => {
@@ -558,7 +690,7 @@ describe("useSidebarSessions", () => {
     expect(snapshotFetches).toBe(fetchesBefore);
   });
 
-  it("shows a newer unread message from a not_latest result and refetches the snapshot", async () => {
+  it("invalidates loaded pages for not_latest and lets the server place the unread row", async () => {
     markLatestMessageRead.mockImplementation(async (sessionId: string) => ({
       sessionId,
       outcome: "not_latest",
@@ -572,6 +704,7 @@ describe("useSidebarSessions", () => {
         return { items: [readItem("finished-tail")], hasMore: false, nextCursor: null };
       }
       snapshotFetches += 1;
+      if (snapshotFetches > 1) return snapshot({ needs_attention: page(["finished-tail"]) });
       return snapshot({ finished: page(["finished"], "finished-next") });
     });
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
@@ -582,14 +715,16 @@ describe("useSidebarSessions", () => {
 
     await act(async () => result.current.handleMarkLatestMessageRead("finished-tail"));
 
-    const tail = result.current.finished.find(({ id }) => id === "finished-tail");
-    expect(tail?.readState).toEqual({ latestMessageId: "msg-9", version: 9, unread: true });
-    // The server owns placement: a newer unread message means a refetch, so
-    // the row can move to attention where the inbox query puts it.
     await waitFor(() => expect(snapshotFetches).toBe(fetchesBefore + 1));
+    const tail = result.current.needsAttention.find(({ id }) => id === "finished-tail");
+    expect(tail?.readState).toEqual({ latestMessageId: "msg-9", version: 9, unread: true });
+    expect(result.current.finished.map(({ id }) => id)).not.toContain("finished-tail");
   });
 
-  it("shows a read on a loaded page row without dropping it", async () => {
+  it("shows an already_read confirmation on a loaded page row without dropping it", async () => {
+    markLatestMessageRead.mockImplementation(async (sessionId: string) =>
+      readResult(sessionId, "already_read")
+    );
     const fetcher = vi.fn(async (key: string) =>
       key.includes("category=")
         ? { items: [item("finished-tail")], hasMore: false, nextCursor: null }
@@ -773,6 +908,36 @@ describe("useSidebarSessions", () => {
       ])
     );
   });
+
+  it.each(["marked_read", "not_latest"] as const)(
+    "drops in-flight pages only for the viewer whose page reports %s",
+    async (outcome) => {
+      const pendingPage = deferred<SessionInboxPage>();
+      let paginationRequests = 0;
+      const fetcher = vi.fn(async (key: string) => {
+        if (!key.includes("category=")) {
+          return snapshot({ finished: page(["head"], "next") });
+        }
+        return ++paginationRequests === 1 ? pendingPage.promise : page(["fresh-tail"]);
+      });
+      const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      act(() => result.current.sectionPagination.finished.loadMore());
+      await waitFor(() => expect(result.current.sectionPagination.finished.loadingMore).toBe(true));
+
+      act(() => applySessionReadResult(readResult("child", outcome), noRevalidate, "other-viewer"));
+      expect(result.current.sectionPagination.finished.loadingMore).toBe(true);
+      act(() => recordPageRead(readResult("child", outcome)));
+      expect(result.current.sectionPagination.finished.loadingMore).toBe(false);
+      await act(async () => pendingPage.resolve(page(["stale-tail"])));
+      expect(result.current.finished.map(({ id }) => id)).toEqual(["head"]);
+
+      act(() => result.current.sectionPagination.finished.loadMore());
+      await waitFor(() =>
+        expect(result.current.finished.map(({ id }) => id)).toEqual(["head", "fresh-tail"])
+      );
+    }
+  );
 
   it("starts pagination from the head after a remount", async () => {
     let sessionRead = false;
