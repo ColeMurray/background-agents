@@ -51,7 +51,7 @@ const mocks = vi.hoisted(() => ({
   }>,
   providerAccountsValue: [] as Array<{
     id: string;
-    provider: "openai" | "xai";
+    provider: "openai" | "xai" | "anthropic";
     displayName: string;
     externalAccountId: string | null;
     status: "active";
@@ -128,10 +128,35 @@ vi.mock("@/components/sidebar-layout", () => ({
 }));
 
 vi.mock("@/components/model-reasoning-selector", () => ({
-  ModelReasoningSelector: ({ disabled }: { disabled?: boolean }) => (
-    <button type="button" disabled={disabled} aria-label="Model and effort">
-      Model and effort
-    </button>
+  ModelReasoningSelector: ({
+    disabled,
+    harness,
+    onHarnessChange,
+  }: {
+    disabled?: boolean;
+    harness?: string | null;
+    onHarnessChange?: (harness: "opencode" | "claude") => void;
+  }) => (
+    <>
+      <button
+        type="button"
+        disabled={disabled}
+        aria-label={harness ? `Agent, model and effort: ${harness}` : "Model and effort"}
+        data-agent-editable={onHarnessChange ? "true" : "false"}
+      >
+        Model and effort
+      </button>
+      {onHarnessChange && (
+        <>
+          <button type="button" onClick={() => onHarnessChange("claude")}>
+            Switch agent to claude
+          </button>
+          <button type="button" onClick={() => onHarnessChange("opencode")}>
+            Switch agent to opencode
+          </button>
+        </>
+      )}
+    </>
   ),
 }));
 
@@ -234,6 +259,10 @@ function sessionCreateBody(): Record<string, unknown> {
   const createCall = calls.find(([input]) => String(input) === "/api/sessions");
   expect(createCall).toBeDefined();
   return JSON.parse(String(createCall?.[1]?.body)) as Record<string, unknown>;
+}
+
+function activeAnthropicAccount(id: string): (typeof mocks.providerAccountsValue)[number] {
+  return { ...activeOpenAiAccount(id), provider: "anthropic", displayName: "Owner Claude" };
 }
 
 function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[number] {
@@ -733,5 +762,139 @@ describe("Home", () => {
 
     expect(await screen.findByText("Prompt rejected")).toBeInTheDocument();
     expect(mocks.routerPush).not.toHaveBeenCalled();
+  });
+
+  it("sends the default harness with a model it can run", async () => {
+    const openAiModel = "openai/gpt-5.4";
+    mocks.enabledModelsValue = [DEFAULT_MODEL, openAiModel];
+    localStorage.setItem("open-inspect-last-selected-model", openAiModel);
+    render(<Home />);
+
+    expect(
+      await screen.findByRole("button", { name: "Agent, model and effort: opencode" })
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ harness: "opencode", model: openAiModel })
+    );
+  });
+
+  it("restores a stored harness and switches an incompatible model to one it can run", async () => {
+    const openAiModel = "openai/gpt-5.4";
+    mocks.enabledModelsValue = [DEFAULT_MODEL, openAiModel];
+    localStorage.setItem("open-inspect-last-selected-model", openAiModel);
+    localStorage.setItem("open-inspect-last-selected-harness", "claude");
+    render(<Home />);
+
+    expect(
+      await screen.findByRole("button", { name: "Agent, model and effort: claude" })
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ harness: "claude", model: DEFAULT_MODEL })
+    );
+  });
+
+  it("persists a harness choice and re-warms the draft session with it", async () => {
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await waitFor(() => expect(sessionCreateBody()).toMatchObject({ harness: "opencode" }));
+
+    const trigger = await screen.findByRole("button", {
+      name: "Agent, model and effort: opencode",
+    });
+    expect(trigger).toHaveAttribute("data-agent-editable", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Switch agent to claude" }));
+
+    expect(localStorage.getItem("open-inspect-last-selected-harness")).toBe("claude");
+    expect(
+      await screen.findByRole("button", { name: "Agent, model and effort: claude" })
+    ).toBeInTheDocument();
+
+    // The prompt is already non-empty, so warm again through the attachment path.
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it again" },
+    });
+    await waitFor(() => {
+      const createCalls = vi
+        .mocked(fetch)
+        .mock.calls.filter(([input]) => String(input) === "/api/sessions");
+      expect(createCalls.length).toBe(2);
+      expect(JSON.parse(String(createCalls[1][1]?.body))).toMatchObject({ harness: "claude" });
+    });
+  });
+
+  it("drops a connected Anthropic account pin when the harness switches to OpenCode", async () => {
+    const accountId = "c".repeat(32);
+    mocks.providerAccountsValue = [activeAnthropicAccount(accountId)];
+    localStorage.setItem("open-inspect-last-selected-harness", "claude");
+    localStorage.setItem(
+      "open-inspect-last-provider-selections:v1",
+      JSON.stringify({ anthropic: { mode: "provider_account", accountId } })
+    );
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({
+        harness: "claude",
+        providerSelections: { anthropic: { mode: "provider_account", accountId } },
+      })
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Switch agent to opencode" }));
+
+    await waitFor(() =>
+      expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe("{}")
+    );
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it again" },
+    });
+    await waitFor(() => {
+      const createCalls = vi
+        .mocked(fetch)
+        .mock.calls.filter(([input]) => String(input) === "/api/sessions");
+      expect(createCalls.length).toBe(2);
+      expect(JSON.parse(String(createCalls[1][1]?.body))).toMatchObject({
+        harness: "opencode",
+        providerSelections: {},
+      });
+    });
+  });
+
+  it("refuses to warm or send when the harness can run none of the enabled models", async () => {
+    const openAiModel = "openai/gpt-5.4";
+    mocks.enabledModelsValue = [openAiModel];
+    mocks.enabledModelOptionsValue = [
+      { category: "OpenAI", models: [{ id: openAiModel, name: "GPT-5.4", description: "" }] },
+    ];
+    localStorage.setItem("open-inspect-last-selected-harness", "claude");
+    render(<Home />);
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(
+      await screen.findByText("No enabled models can run on Claude Agent.")
+    ).toBeInTheDocument();
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/sessions")
+    ).toHaveLength(0);
   });
 });

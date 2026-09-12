@@ -76,6 +76,7 @@ const baseCreateConfig = {
   repoName: "r",
   controlPlaneUrl: "https://cp.test",
   sandboxAuthToken: "tok",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "claude",
   codeServerEnabled: true,

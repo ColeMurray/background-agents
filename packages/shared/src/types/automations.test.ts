@@ -17,6 +17,7 @@ const automation = {
   scheduleCron: "0 9 * * *",
   scheduleTz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
+  harness: "opencode",
   reasoningEffort: null,
   enabled: true,
   nextRunAt: 123,
@@ -147,7 +148,7 @@ describe("automation provider selection contracts", () => {
   });
 
   it("rejects unknown providers in create, update, and response records", () => {
-    const providerSelections = { anthropic: { mode: "api_key" } };
+    const providerSelections = { gemini: { mode: "api_key" } };
     expect(
       createAutomationRequestSchema.safeParse({
         name: "Daily sync",

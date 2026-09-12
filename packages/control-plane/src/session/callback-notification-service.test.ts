@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Logger } from "../logger";
 import {
   CallbackNotificationService,
+  SLACK_ACTIVITY_REFRESH_INTERVAL_MS,
   type CallbackRepository,
   type CallbackServiceEnv,
   type CallbackServiceDeps,
@@ -12,6 +13,8 @@ import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import {
   linearCompletionCallbackSchema,
   linearToolCallCallbackSchema,
+  slackCallbackContextSchema,
+  SLACK_ACTIVITY_REFRESH_KIND,
 } from "@open-inspect/shared/types/session-api";
 
 const LINEAR_CALLBACK_CONTEXT = {
@@ -37,6 +40,9 @@ function createMockLogger(): Logger {
 function createMockRepository() {
   return {
     getMessageCallbackContext: vi.fn<MessageRepository["getMessageCallbackContext"]>(() => null),
+    getProcessingMessageWithStartedAt: vi.fn<
+      MessageRepository["getProcessingMessageWithStartedAt"]
+    >(() => null),
     getSession: vi.fn(() => null),
   };
 }
@@ -501,6 +507,252 @@ describe("CallbackNotificationService", () => {
         expect(harness.linearBot.fetch).not.toHaveBeenCalled();
       }
     );
+  });
+
+  describe("refreshSlackActivity", () => {
+    // The real shape the slack-bot stores and its own route re-validates —
+    // a thinner fixture would sign a body the route rejects.
+    const SLACK_CONTEXT = {
+      source: "slack",
+      channel: "C123",
+      threadTs: "111.222",
+      repoFullName: "acme/app",
+      model: "anthropic/claude-haiku-4-5",
+    };
+    // `now` is a wall-clock reading taken by the sandbox-event router.
+    const NOW = 1_700_000_000_000;
+
+    function withSlackMessage(processingId: string | null = "msg-1") {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(SLACK_CONTEXT),
+        source: "slack",
+      });
+      vi.mocked(harness.repository.getProcessingMessageWithStartedAt).mockReturnValue(
+        processingId === null ? null : { id: processingId, started_at: NOW - 1000 }
+      );
+      const fetchMock = vi.mocked(harness.slackBot.fetch);
+      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+      return fetchMock;
+    }
+
+    it("posts a signed refresh for a slack message", async () => {
+      const fetchMock = withSlackMessage();
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://internal/callbacks/activity",
+        expect.objectContaining({ method: "POST" })
+      );
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+      expect(body).toMatchObject({
+        kind: SLACK_ACTIVITY_REFRESH_KIND,
+        sessionId: "session-123",
+        messageId: "msg-1",
+        timestamp: NOW,
+      });
+      // The route re-parses the context it is handed, so the producer must
+      // already satisfy the canonical contract.
+      expect(slackCallbackContextSchema.safeParse(body.context).success).toBe(true);
+      expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+    });
+
+    it("does not refresh a message that is no longer processing", async () => {
+      const fetchMock = withSlackMessage(null);
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("does not refresh once a different message owns the turn", async () => {
+      const fetchMock = withSlackMessage("msg-2");
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("abandons a refresh whose message terminates before it reaches the wire", async () => {
+      const fetchMock = withSlackMessage();
+      // The turn completes between the heartbeat that asked for this refresh
+      // and the moment the refresh is ready to send.
+      vi.mocked(harness.repository.getProcessingMessageWithStartedAt).mockImplementation(
+        () => null
+      );
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("holds the next refresh until the interval has passed", async () => {
+      const fetchMock = withSlackMessage();
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await harness.service.refreshSlackActivity(
+        "msg-1",
+        NOW + SLACK_ACTIVITY_REFRESH_INTERVAL_MS - 1
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await harness.service.refreshSlackActivity("msg-1", NOW + SLACK_ACTIVITY_REFRESH_INTERVAL_MS);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("refreshes on the first heartbeat after a runtime is rebuilt", async () => {
+      const fetchMock = withSlackMessage();
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // An evicted Durable Object reconstructs the service, so the window is
+      // gone. Losing it can only make a refresh earlier, never later.
+      const rebuilt = createTestHarness();
+      vi.mocked(rebuilt.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(SLACK_CONTEXT),
+        source: "slack",
+      });
+      vi.mocked(rebuilt.repository.getProcessingMessageWithStartedAt).mockReturnValue({
+        id: "msg-1",
+        started_at: NOW - 1000,
+      });
+      vi.mocked(rebuilt.slackBot.fetch).mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await rebuilt.service.refreshSlackActivity("msg-1", NOW + 30_000);
+      expect(rebuilt.slackBot.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not read the message while the window is still open", async () => {
+      withSlackMessage();
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+      harness.repository.getMessageCallbackContext.mockClear();
+
+      await harness.service.refreshSlackActivity("msg-1", NOW + 30_000);
+      expect(harness.repository.getMessageCallbackContext).not.toHaveBeenCalled();
+    });
+
+    it("sends one bounded attempt and leaves the window open when it fails", async () => {
+      const fetchMock = withSlackMessage();
+      fetchMock.mockResolvedValue(new Response("nope", { status: 500 }));
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+
+      // A heartbeat well inside the interval still retries: nothing was
+      // delivered, so nothing moved the window.
+      await harness.service.refreshSlackActivity("msg-1", NOW + 30_000);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("swallows a delivery that throws", async () => {
+      const fetchMock = withSlackMessage();
+      fetchMock.mockRejectedValue(new Error("binding exploded"));
+
+      await expect(harness.service.refreshSlackActivity("msg-1", NOW)).resolves.toBeUndefined();
+      expect(harness.log.warn).toHaveBeenCalled();
+    });
+
+    it("skips a non-slack message without calling any bot", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(LINEAR_CALLBACK_CONTEXT),
+        source: "linear",
+      });
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+      expect(harness.linearBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it("skips a slack message that carries no callback context", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: null,
+        source: "slack",
+      });
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it("skips when the slack binding is absent", async () => {
+      harness = createTestHarness({ env: { SLACK_BOT: undefined } });
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(SLACK_CONTEXT),
+        source: "slack",
+      });
+
+      await expect(harness.service.refreshSlackActivity("msg-1", NOW)).resolves.toBeUndefined();
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it("is renewed by a delivered tool-call callback, so a busy turn pays nothing", async () => {
+      const fetchMock = withSlackMessage();
+      const toolCallAt = Date.now();
+
+      await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // That callback set the Slack indicator, so a heartbeat arriving inside
+      // the interval has nothing left to do.
+      await harness.service.refreshSlackActivity("msg-1", toolCallAt + 30_000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not let an in-flight refresh rewind the window past a newer tool call", async () => {
+      vi.useFakeTimers();
+      try {
+        const fetchMock = withSlackMessage();
+        let release!: (response: Response) => void;
+        let markOnWire!: () => void;
+        // Park the refresh on the wire, keyed on its route rather than on call
+        // order — the refresh awaits HMAC signing first, so the tool call can
+        // otherwise reach `fetch` before it does.
+        const refreshOnWire = new Promise<void>((resolve) => {
+          markOnWire = resolve;
+        });
+        fetchMock.mockImplementation((url) => {
+          if (!String(url).endsWith("/callbacks/activity")) {
+            return Promise.resolve(new Response("ok", { status: 200 }));
+          }
+          markOnWire();
+          return new Promise<Response>((resolve) => {
+            release = resolve;
+          });
+        });
+
+        vi.setSystemTime(NOW);
+        const refresh = harness.service.refreshSlackActivity("msg-1", NOW);
+        await refreshOnWire;
+
+        // A tool call asserts the indicator two intervals later, while the
+        // refresh minted at NOW is still in flight.
+        vi.setSystemTime(NOW + 2 * SLACK_ACTIVITY_REFRESH_INTERVAL_MS);
+        await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
+
+        release(new Response("ok", { status: 200 }));
+        await refresh;
+
+        // Back to a plain responder so the probe below fails on the assertion
+        // rather than by parking on the wire.
+        fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+        const sent = fetchMock.mock.calls.length;
+        // The tool call's assertion is the newer truth. If the resolved
+        // refresh had rewound the window to NOW, this would re-send.
+        await harness.service.refreshSlackActivity(
+          "msg-1",
+          NOW + 2 * SLACK_ACTIVITY_REFRESH_INTERVAL_MS + 1_000
+        );
+        expect(fetchMock.mock.calls).toHaveLength(sent);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("notifyToolCall", () => {

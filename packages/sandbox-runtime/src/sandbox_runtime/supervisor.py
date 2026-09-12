@@ -11,7 +11,12 @@ from urllib.parse import quote
 
 import httpx
 
-from .constants import BOOT_WARNINGS_FILE_PATH, IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+from .constants import (
+    BOOT_WARNINGS_FILE_PATH,
+    BRIDGE_FATAL_ERROR_FILE_PATH,
+    IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
+)
+from .harness.base import DETERMINISTIC_FAILURE_EXIT_CODE
 from .repo_image_callback import RepoImageBuildCallback
 from .runtime_config import BootMode, RuntimeConfig
 
@@ -22,8 +27,8 @@ if TYPE_CHECKING:
     from .agent_bridge_process import AgentBridgeProcess
     from .browser_desktop import BrowserDesktop
     from .code_server import CodeServer
+    from .harness.base import HarnessProcessOwner
     from .managed_skills import ManagedSkillsMaterializer
-    from .opencode_server import OpenCodeServer
     from .repository_boot import RepositoryBoot, RepositoryBootResult
     from .web_terminal import WebTerminal
 
@@ -50,7 +55,7 @@ class SandboxSupervisor:
         self,
         config: RuntimeConfig,
         repository_boot: RepositoryBoot,
-        opencode_server: OpenCodeServer,
+        harness_process: HarnessProcessOwner,
         agent_bridge: AgentBridgeProcess,
         code_server: CodeServer,
         web_terminal: WebTerminal,
@@ -61,7 +66,9 @@ class SandboxSupervisor:
     ) -> None:
         self.config = config
         self.repository_boot = repository_boot
-        self.opencode_server = opencode_server
+        # Supervisor half of the harness seam: staging plus any resident
+        # vendor process (``opencode serve`` today; nothing for claude).
+        self.harness_process = harness_process
         self.agent_bridge = agent_bridge
         self.code_server = code_server
         self.web_terminal = web_terminal
@@ -135,8 +142,8 @@ class SandboxSupervisor:
             return False
         return True
 
-    async def _handle_opencode_exit(self, restart_count: int) -> int:
-        exit_code = self.opencode_server.exit_code()
+    async def _handle_harness_process_exit(self, restart_count: int) -> int:
+        exit_code = self.harness_process.exit_code()
         if exit_code is None:
             return restart_count
 
@@ -162,11 +169,20 @@ class SandboxSupervisor:
             return restart_count
         if self._repository_boot_result is None:
             raise RuntimeError("OpenCode restart requested before repository boot")
-        await self.opencode_server.start(
+        await self.harness_process.start(
             self._repository_boot_result.repositories,
             self._repository_boot_result.workdir,
         )
         return restart_count
+
+    def _read_bridge_fatal_error(self) -> str:
+        path = Path(BRIDGE_FATAL_ERROR_FILE_PATH)
+        try:
+            message = path.read_text().strip()
+            path.unlink(missing_ok=True)
+        except OSError:
+            return ""
+        return message
 
     async def _handle_bridge_exit(self, restart_count: int) -> int:
         exit_code = self.agent_bridge.exit_code()
@@ -174,6 +190,15 @@ class SandboxSupervisor:
             return restart_count
         if exit_code == 0:
             self.log.info("bridge.graceful_exit", exit_code=exit_code)
+            self.shutdown_event.set()
+            return restart_count
+        if exit_code == DETERMINISTIC_FAILURE_EXIT_CODE:
+            # The harness could not open and told us retrying is futile
+            # (for example a denied credential); report the cause
+            # rather than spending the restart budget on it.
+            cause = self._read_bridge_fatal_error() or "agent harness failed to start"
+            self.log.error("bridge.deterministic_failure", exit_code=exit_code, cause=cause)
+            await self._report_fatal_error(cause)
             self.shutdown_event.set()
             return restart_count
 
@@ -280,14 +305,16 @@ class SandboxSupervisor:
 
     async def monitor_processes(self) -> None:
         """Monitor each concrete process owner with its explicit restart policy."""
-        opencode_restarts = 0
+        harness_process_restarts = 0
         bridge_restarts = 0
         code_server_restarts = 0
         terminal_restarts = 0
         desktop_restarts = 0
 
         while not self.shutdown_event.is_set():
-            opencode_restarts = await self._handle_opencode_exit(opencode_restarts)
+            harness_process_restarts = await self._handle_harness_process_exit(
+                harness_process_restarts
+            )
             if self.shutdown_event.is_set():
                 break
             bridge_restarts = await self._handle_bridge_exit(bridge_restarts)
@@ -380,7 +407,7 @@ class SandboxSupervisor:
         expected_tunnel_ports = self.repository_boot.prepare_tunnel_environment(self.boot_mode)
         Path(BOOT_WARNINGS_FILE_PATH).unlink(missing_ok=True)
 
-        opencode_ready = False
+        harness_ready = False
         try:
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
@@ -430,8 +457,8 @@ class SandboxSupervisor:
                 self.log.warn("web_terminal.start_failed", exc=error)
                 await self.web_terminal.stop()
 
-            await self.opencode_server.start(boot_result.repositories, boot_result.workdir)
-            opencode_ready = True
+            await self.harness_process.start(boot_result.repositories, boot_result.workdir)
+            harness_ready = True
             await self.agent_bridge.start()
             self.log.info(
                 "sandbox.startup",
@@ -443,7 +470,8 @@ class SandboxSupervisor:
                 git_sync_success=boot_result.git_sync_success,
                 setup_success=boot_result.setup_success,
                 start_success=boot_result.start_success,
-                opencode_ready=opencode_ready,
+                harness=self.config.harness.value,
+                opencode_ready=harness_ready,
                 duration_ms=int((time.time() - startup_start) * 1000),
                 outcome="success",
             )
@@ -485,5 +513,5 @@ class SandboxSupervisor:
         await self.web_terminal.stop()
         await self.code_server.stop()
         await self.browser_desktop.stop()
-        await self.opencode_server.stop()
+        await self.harness_process.stop()
         self.log.info("supervisor.shutdown_complete")

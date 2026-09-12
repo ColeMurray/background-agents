@@ -11,6 +11,9 @@ class RuntimeManifest(TypedDict):
     generation: int
     minimumCompatibleGeneration: int
     minimumRebuildGeneration: int
+    # Per-harness floors for prebuilt-image selection: a harness whose runtime
+    # support arrived later than the global floor names its own generation.
+    harnessMinimumGeneration: dict[str, int]
 
 
 _MANIFEST_PATH = Path(__file__).with_name("runtime_manifest.json")

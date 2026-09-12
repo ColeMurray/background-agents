@@ -218,6 +218,7 @@ describe("ModalClient", () => {
       sessionId: "session-123",
       sandboxId: "sandbox-456",
       sandboxAuthToken: "auth-token",
+      harness: "opencode" as const,
       controlPlaneUrl: "https://control-plane.test",
       repoOwner: "testowner",
       repoName: "testrepo",
@@ -229,6 +230,7 @@ describe("ModalClient", () => {
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body.session_config).toEqual({
       session_id: "session-123",
+      harness: "opencode",
       repo_owner: "testowner",
       repo_name: "testrepo",
       provider: "anthropic",
@@ -258,6 +260,7 @@ describe("ModalClient", () => {
       repoName: "testrepo",
       controlPlaneUrl: "https://control-plane.test",
       sandboxAuthToken: "auth-token",
+      harness: "opencode" as const,
       repositories: [
         { repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" },
         { repoOwner: "testowner", repoName: "backend", baseBranch: "develop" },
@@ -289,6 +292,7 @@ describe("ModalClient", () => {
       repoName: "testrepo",
       controlPlaneUrl: "https://control-plane.test",
       sandboxAuthToken: "auth-token",
+      harness: "opencode" as const,
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
@@ -325,6 +329,7 @@ describe("ModalClient", () => {
         repoName: "testrepo",
         controlPlaneUrl: "https://control-plane.test",
         sandboxAuthToken: "auth-token",
+        harness: "opencode" as const,
       })
     ).resolves.toEqual({
       sandboxId: "sb-1",
@@ -368,6 +373,7 @@ describe("ModalClient", () => {
       repoName: "testrepo",
       controlPlaneUrl: "https://control-plane.test",
       sandboxAuthToken: "auth-token",
+      harness: "opencode" as const,
     });
 
     expect(result).toEqual({
@@ -402,6 +408,7 @@ describe("ModalClient", () => {
         repoName: "testrepo",
         controlPlaneUrl: "https://control-plane.test",
         sandboxAuthToken: "auth-token",
+        harness: "opencode" as const,
       })
     ).rejects.toThrow("Modal API error: Invalid response");
   });
@@ -420,6 +427,7 @@ describe("ModalClient", () => {
       sessionId: "session-123",
       sandboxId: "sandbox-456",
       sandboxAuthToken: "auth-token",
+      harness: "opencode" as const,
       controlPlaneUrl: "https://control-plane.test",
       repoOwner: "testowner",
       repoName: "testrepo",
@@ -453,6 +461,7 @@ describe("ModalClient", () => {
         sessionId: "session-123",
         sandboxId: "sandbox-456",
         sandboxAuthToken: "auth-token",
+        harness: "opencode" as const,
         controlPlaneUrl: "https://control-plane.test",
         repoOwner: "testowner",
         repoName: "testrepo",
@@ -490,6 +499,7 @@ describe("ModalClient", () => {
         sessionId: "session-123",
         sandboxId: "sandbox-456",
         sandboxAuthToken: "auth-token",
+        harness: "opencode" as const,
         controlPlaneUrl: "https://control-plane.test",
         repoOwner: "testowner",
         repoName: "testrepo",
@@ -528,6 +538,7 @@ describe("ModalClient", () => {
       repoName: null,
       controlPlaneUrl: "https://control-plane.test",
       sandboxAuthToken: "auth-token",
+      harness: "opencode" as const,
       vncEnabled: true,
     });
     await client.restoreSandbox({
@@ -535,6 +546,7 @@ describe("ModalClient", () => {
       sessionId: "session-123",
       sandboxId: "sandbox-456",
       sandboxAuthToken: "auth-token",
+      harness: "opencode" as const,
       controlPlaneUrl: "https://control-plane.test",
       repoOwner: null,
       repoName: null,

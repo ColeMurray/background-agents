@@ -93,7 +93,7 @@ const claimedJobRowSchema = z.object({
   id: z.string(),
   kind: z.string(),
   payload: z.string(),
-  attempts: z.number().int(),
+  attempts: z.number().int().positive(),
 });
 
 export function parseClaimedJobRow(row: unknown, token: string): ClaimedJob {
@@ -250,7 +250,17 @@ export function openJobStore(dataDir: string): JobStore {
       const token = crypto.randomUUID();
       return claimFor(kinds.length)
         .all(token, leaseUntil, now, ...kinds, limit)
-        .map((row) => parseClaimedJobRow(row, token));
+        .flatMap((row) => {
+          try {
+            return [parseClaimedJobRow(row, token)];
+          } catch {
+            // Claiming already leased the entire batch. Quarantine a corrupt
+            // row without discarding healthy deliveries or spending their
+            // retry budgets on work the poller never received.
+            kill.run("Malformed claimed job row", row.id, token);
+            return [];
+          }
+        });
     },
     complete: (id, token) => {
       remove.run(id, token);

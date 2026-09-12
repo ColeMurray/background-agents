@@ -26,10 +26,30 @@ vi.mock("@/components/attachment-preview-strip", () => ({
   AttachmentPreviewStrip: () => null,
 }));
 vi.mock("@/components/model-reasoning-selector", () => ({
-  ModelReasoningSelector: ({ disabled }: { disabled?: boolean }) => (
-    <button type="button" disabled={disabled} aria-label="Model and effort">
-      Model and effort
-    </button>
+  ModelReasoningSelector: ({
+    disabled,
+    harness,
+    onHarnessChange,
+  }: {
+    disabled?: boolean;
+    harness?: string | null;
+    onHarnessChange?: (harness: "opencode" | "claude") => void;
+  }) => (
+    <>
+      <button
+        type="button"
+        disabled={disabled}
+        aria-label={harness ? `Agent, model and effort: ${harness}` : "Model and effort"}
+        data-agent-editable={onHarnessChange ? "true" : "false"}
+      >
+        Model and effort
+      </button>
+      {onHarnessChange && (
+        <button type="button" onClick={() => onHarnessChange("claude")}>
+          Switch agent to claude
+        </button>
+      )}
+    </>
   ),
 }));
 
@@ -48,6 +68,7 @@ function ComposerHarness({
   withSkill = false,
   blockedReason,
   canManageLifecycle = true,
+  harness = "opencode",
 }: {
   initialValue?: string;
   isProcessing?: boolean;
@@ -58,6 +79,7 @@ function ComposerHarness({
   withSkill?: boolean;
   blockedReason?: string;
   canManageLifecycle?: boolean;
+  harness?: "opencode" | "claude";
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -71,6 +93,7 @@ function ComposerHarness({
         onArchive: vi.fn(),
         onUnarchive: vi.fn(),
         capabilities: { ...FULL_CAPABILITIES, lifecycle: canManageLifecycle },
+        harness,
       }}
       prompt={{
         value,
@@ -131,7 +154,7 @@ describe("SessionPromptComposer", () => {
     fireEvent.change(input, { target: { value: "Updated while connecting" } });
     expect(screen.getByDisplayValue("Updated while connecting")).toBeEnabled();
     expect(screen.getByTitle("Attach images")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Model and effort" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /model and effort/i })).toBeEnabled();
     expect(screen.getByTitle(/Send/)).toBeDisabled();
   });
 
@@ -180,7 +203,7 @@ describe("SessionPromptComposer", () => {
   it("keeps model controls editable while processing and blocks terminal sessions", () => {
     const { rerender } = render(<ComposerHarness initialValue="Follow up" isProcessing />);
     expect(screen.getByTitle("Queue follow-up; runs after the current prompt")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Model and effort" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /model and effort/i })).toBeEnabled();
 
     rerender(<ComposerHarness initialValue="Cannot send" status="archived" />);
     expect(screen.getByTitle(/Send/)).toBeDisabled();
@@ -234,5 +257,13 @@ describe("SessionPromptComposer", () => {
       "mb-3",
       "md:block"
     );
+  });
+
+  it("hands the session's fixed agent harness to the model control without an editor", () => {
+    render(<ComposerHarness harness="claude" />);
+
+    const trigger = screen.getByRole("button", { name: "Agent, model and effort: claude" });
+    expect(trigger).toHaveAttribute("data-agent-editable", "false");
+    expect(screen.queryByRole("button", { name: /switch agent/i })).not.toBeInTheDocument();
   });
 });

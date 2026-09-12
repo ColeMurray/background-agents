@@ -7,6 +7,13 @@ import {
 import { assertModelProviderId } from "../model-provider-accounts/provider-auth-contracts";
 
 export type ProviderAuthorizationOperation = "create" | "reconnect";
+/**
+ * How the transaction completes: `device` polls the provider for a user-code
+ * approval; `authorization_code` waits for the user to paste the code the
+ * provider's consent page displayed.
+ */
+export const PROVIDER_AUTHORIZATION_KINDS = ["device", "authorization_code"] as const;
+export type ProviderAuthorizationKind = (typeof PROVIDER_AUTHORIZATION_KINDS)[number];
 export const PROVIDER_AUTHORIZATION_LIVE_STATES = ["initiating", "pending", "processing"] as const;
 export const PROVIDER_AUTHORIZATION_TERMINAL_STATES = [
   "denied",
@@ -22,6 +29,7 @@ interface ProviderAuthorizationRow {
   id: string;
   user_id: string;
   provider: string;
+  authorization_kind: string;
   operation: string;
   provider_account_id: string | null;
   target_account_status: string | null;
@@ -46,6 +54,7 @@ interface ProviderAuthorizationCommon {
   id: string;
   userId: string;
   provider: ModelProviderId;
+  authorizationKind: ProviderAuthorizationKind;
   intervalMs: number;
   nextPollAt: number;
   expiresAt: number;
@@ -142,12 +151,20 @@ function requireProviderStateCleared(row: ProviderAuthorizationRow): void {
   requireNull(row.provider_state_version, "terminal provider state version");
 }
 
+function decodeAuthorizationKind(value: string): ProviderAuthorizationKind {
+  if (!PROVIDER_AUTHORIZATION_KINDS.includes(value as ProviderAuthorizationKind)) {
+    throw new Error(`Invalid provider authorization kind: ${value}`);
+  }
+  return value as ProviderAuthorizationKind;
+}
+
 function decodeAuthorization(row: ProviderAuthorizationRow): ProviderAuthorization {
   assertModelProviderId(row.provider);
   const common: ProviderAuthorizationCommon = {
     id: row.id,
     userId: row.user_id,
     provider: row.provider,
+    authorizationKind: decodeAuthorizationKind(row.authorization_kind),
     intervalMs: row.interval_ms,
     nextPollAt: row.next_poll_at,
     expiresAt: row.expires_at,
@@ -274,6 +291,8 @@ export class ProviderAccountAuthorizationStore {
     id: string;
     userId: string;
     provider: ModelProviderId;
+    /** Defaults to device authorization, the original completion mode. */
+    authorizationKind?: ProviderAuthorizationKind;
     operation: ProviderAuthorizationOperation;
     providerAccountId: string | null;
     targetAccountStatus: ModelProviderAccountStatus | null;
@@ -282,6 +301,7 @@ export class ProviderAccountAuthorizationStore {
     expiresAt: number;
     now: number;
   }): Promise<boolean> {
+    const authorizationKind: ProviderAuthorizationKind = input.authorizationKind ?? "device";
     const sameTarget =
       input.operation === "create"
         ? "provider = ? AND operation = 'create'"
@@ -291,10 +311,10 @@ export class ProviderAccountAuthorizationStore {
     const inserted = this.db
       .prepare(
         `INSERT INTO model_provider_account_authorizations
-           (id, user_id, provider, operation, provider_account_id, target_account_status,
-            target_account_lifecycle_version, display_name, next_poll_at, expires_at, state,
-            created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'initiating', ?, ?
+           (id, user_id, provider, authorization_kind, operation, provider_account_id,
+            target_account_status, target_account_lifecycle_version, display_name, next_poll_at,
+            expires_at, state, created_at, updated_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'initiating', ?, ?
          WHERE (
            SELECT COUNT(*) FROM model_provider_account_authorizations
            WHERE user_id = ? AND state IN (${LIVE_STATES_SQL}) AND NOT (${sameTarget})
@@ -304,6 +324,7 @@ export class ProviderAccountAuthorizationStore {
         input.id,
         input.userId,
         input.provider,
+        authorizationKind,
         input.operation,
         input.providerAccountId,
         input.targetAccountStatus,
@@ -348,7 +369,9 @@ export class ProviderAccountAuthorizationStore {
     providerStateVersion: number,
     intervalMs: number,
     expiresAt: number,
-    now: number
+    now: number,
+    /** Defaults to one interval from activation, when the provider is first polled. */
+    nextPollAt: number = now + intervalMs
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
@@ -362,7 +385,7 @@ export class ProviderAccountAuthorizationStore {
         encryptedProviderData,
         providerStateVersion,
         intervalMs,
-        now + intervalMs,
+        nextPollAt,
         expiresAt,
         now,
         id,
@@ -409,16 +432,26 @@ export class ProviderAccountAuthorizationStore {
     authorization: ProcessingProviderAuthorization,
     nextPollAt: number,
     intervalMs: number,
-    now: number
+    now: number,
+    /** Replacement encrypted provider state; the claimed state is kept when omitted. */
+    encryptedProviderData: string = authorization.encryptedProviderData
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE model_provider_account_authorizations
          SET state = 'pending', processing_owner = NULL, processing_started_at = NULL,
-             interval_ms = ?, next_poll_at = ?, updated_at = ?
+             encrypted_provider_data = ?, interval_ms = ?, next_poll_at = ?, updated_at = ?
          WHERE id = ? AND state = 'processing' AND processing_owner = ? AND expires_at > ?`
       )
-      .bind(intervalMs, nextPollAt, now, authorization.id, authorization.processingOwner, now)
+      .bind(
+        encryptedProviderData,
+        intervalMs,
+        nextPollAt,
+        now,
+        authorization.id,
+        authorization.processingOwner,
+        now
+      )
       .run();
     return result.meta.changes === 1;
   }

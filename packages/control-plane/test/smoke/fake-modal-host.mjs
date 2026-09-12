@@ -97,7 +97,7 @@ async function runBridge({ sessionId, sandboxId, controlPlaneUrl, authToken }) {
       socket.on("open", () => {
         state.bridgeConnections += 1;
         log("bridge.connected", { session_id: sessionId, sandbox_id: sandboxId, attempt });
-        send({ type: "ready", opencodeSessionId: null, runtimeVersion: "smoke" });
+        send({ type: "ready", agentSessionId: null, harness: "opencode", runtimeVersion: "smoke" });
         resolve(true);
       });
 

@@ -47,6 +47,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       providerAuth: [
         { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
         { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+        { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
       ],
       createdAt: now,
       updatedAt: now,

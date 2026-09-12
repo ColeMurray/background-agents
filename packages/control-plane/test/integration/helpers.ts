@@ -71,6 +71,7 @@ const TEST_NAMED_SESSION_DEFAULTS = {
 export const TEST_SESSION_PROVIDER_AUTH: SessionModelProviderAuthInput[] = [
   { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
   { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+  { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
 ];
 
 async function signCookieValue(value: string, secret: string): Promise<string> {

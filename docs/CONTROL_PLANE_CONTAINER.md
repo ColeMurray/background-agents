@@ -13,8 +13,8 @@ providers behave the same; only the platform adapters differ.
 | Service      | Image                   | Role                                                                                  |
 | ------------ | ----------------------- | ------------------------------------------------------------------------------------- |
 | `app`        | built from this repo    | The control plane: HTTP API, session WebSockets, cron jobs. Port 8787.                |
-| `minio`      | `minio/minio`           | S3-compatible object storage for media and backups. Console on port 9001.             |
-| `minio-init` | `minio/mc`              | Creates the `media` and `backups` buckets, then exits.                                |
+| `minio`      | `quay.io/minio/minio`   | S3-compatible object storage for media and backups. Console on port 9001.             |
+| `minio-init` | `quay.io/minio/mc`      | Creates the `media` and `backups` buckets, then exits.                                |
 | `litestream` | `litestream/litestream` | Replicates the global store (`/data/global.db`) to the `backups` bucket every second. |
 | `caddy`      | `caddy` (profile `tls`) | Optional TLS termination for a public hostname.                                       |
 

@@ -9,6 +9,11 @@
  */
 
 import {
+  DEFAULT_HARNESS,
+  getValidHarnessOrDefault,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
+import {
   matchesConditions,
   conditionRegistry,
   buildSlackContextBlock,
@@ -260,11 +265,12 @@ type SchedulerPromptRequest = Pick<
 
 export async function resolveAutomationProviderAuth(
   db: SqlDatabase,
-  automationId: string
+  automationId: string,
+  harness: HarnessId = DEFAULT_HARNESS
 ): Promise<SessionModelProviderAuthInput[]> {
   const pinRows = await new AutomationModelProviderAuthStore(db).list(automationId);
   const explicit = toProviderSelections(pinRows);
-  const resolved = await resolveSessionProviderAuth(db, { explicit, unattended: true });
+  const resolved = await resolveSessionProviderAuth(db, { explicit, unattended: true, harness });
   const pinnedProviders = new Set(pinRows.map((pin) => pin.provider));
   return resolved.map((auth) =>
     pinnedProviders.has(auth.provider) && auth.selectionSource === "explicit"
@@ -465,7 +471,11 @@ export class Scheduler {
     if (launchCandidates.length > 0) {
       try {
         providerAuthSnapshot = {
-          providerAuth: await resolveAutomationProviderAuth(this.db, automation.id),
+          providerAuth: await resolveAutomationProviderAuth(
+            this.db,
+            automation.id,
+            getValidHarnessOrDefault(automation.harness)
+          ),
         };
       } catch (error) {
         providerAuthSnapshot = { error };
@@ -1492,6 +1502,7 @@ export class Scheduler {
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,
+      harness: getValidHarnessOrDefault(automation.harness),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,
       participantUserId: executionPrincipal.participantUserId,

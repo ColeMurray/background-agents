@@ -291,7 +291,7 @@ class TestVncLifecycle:
     @pytest.mark.asyncio
     async def test_component_crash_restarts_stack_non_fatally(self):
         supervisor = _make_lifecycle_supervisor()
-        supervisor.opencode_server._opencode_process = _process()
+        supervisor.harness_process._opencode_process = _process()
         supervisor.agent_bridge._process = _process()
         supervisor.browser_desktop._x11vnc_process = _process(returncode=1)
         supervisor.browser_desktop.stop = AsyncMock()
@@ -320,7 +320,7 @@ class TestVncLifecycle:
     async def test_component_crash_stops_after_restart_budget(self):
         supervisor = _make_lifecycle_supervisor()
         supervisor.MAX_RESTARTS = 0
-        supervisor.opencode_server._opencode_process = _process()
+        supervisor.harness_process._opencode_process = _process()
         supervisor.agent_bridge._process = _process()
         supervisor.browser_desktop._x11vnc_process = _process(returncode=1)
 
@@ -348,7 +348,7 @@ class TestVncLifecycle:
     @pytest.mark.asyncio
     async def test_retries_after_a_restart_attempt_fails(self):
         supervisor = _make_lifecycle_supervisor()
-        supervisor.opencode_server._opencode_process = _process()
+        supervisor.harness_process._opencode_process = _process()
         supervisor.agent_bridge._process = _process()
         supervisor.browser_desktop._x11vnc_process = _process(returncode=1)
         supervisor.browser_desktop.stop = AsyncMock()

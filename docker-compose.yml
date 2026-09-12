@@ -37,8 +37,10 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # quay.io, not Docker Hub: MinIO withdrew both images from Hub, so a Hub
+  # reference now fails to pull anonymously. Same releases, same digests.
   minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -60,7 +62,7 @@ services:
   # Creates the media and backup buckets once, then exits. It sees only the
   # variables named here, never the app's secrets.
   minio-init:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set; generate one with openssl rand -hex 16}

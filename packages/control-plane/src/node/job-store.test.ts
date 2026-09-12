@@ -1,8 +1,15 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openJobStore, parseClaimedJobRow, type ClaimedJob, type JobStore } from "./job-store";
+import {
+  JOB_STORE_FILE,
+  openJobStore,
+  parseClaimedJobRow,
+  type ClaimedJob,
+  type JobStore,
+} from "./job-store";
 
 const KINDS = ["image_build.finalize", "github.autofix"] as const;
 const LEASE_MS = 60_000;
@@ -50,6 +57,34 @@ describe("openJobStore", () => {
         parseClaimedJobRow({ id: "job-1", kind: "image_build.finalize", attempts: 1 }, "token-1")
       ).toThrow("Malformed claimed job row");
     });
+  });
+
+  it.each([
+    ["payload", "UPDATE jobs SET payload = x'0102' WHERE id = 'poison'"],
+    ["attempt count", "UPDATE jobs SET attempts = 0.5 WHERE id = 'poison'"],
+    ["id", "UPDATE jobs SET id = x'0102' WHERE id = 'poison'"],
+  ])("quarantines an invalid %s without dropping healthy claims", (_field, corruptSql) => {
+    add("poison", 1_000);
+    add("healthy", 1_000);
+    const database = new DatabaseSync(join(dataDir, JOB_STORE_FILE));
+    try {
+      database.exec(corruptSql);
+
+      const claimed = claim(1_000);
+
+      expect(claimed).toEqual([
+        expect.objectContaining({ id: "healthy", attempts: 1, token: expect.any(String) }),
+      ]);
+      expect(store.stats(1_000)).toMatchObject({ pending: 0, running: 1, dead: 1 });
+      expect(database.prepare("SELECT last_error FROM jobs WHERE status = 'dead'").get()).toEqual({
+        last_error: "Malformed claimed job row",
+      });
+      store.complete(claimed[0]!.id, claimed[0]!.token);
+      expect(store.recoverExpiredClaims(1_000 + LEASE_MS)).toEqual([]);
+      expect(claim(1_000 + LEASE_MS)).toEqual([]);
+    } finally {
+      database.close();
+    }
   });
 
   it("reports the soonest runnable job", () => {

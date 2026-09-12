@@ -12,14 +12,11 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from .constants import (
-    BIN_INSTALL_DIR_ENV_VAR,
-    DEFAULT_BIN_INSTALL_DIR,
-    OPENCODE_PORT,
-)
+from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
 from .mcp_packages import McpPackageInstaller
 from .process_output import iter_process_lines
+from .sandbox_bin import install_bin_scripts
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -255,30 +252,8 @@ class OpenCodeServer:
         except Exception as e:
             self.log.warn("opencode.global_deps_seed_failed", exc=e)
         installed.update(self._install_skills(workdir))
-        self._install_bin_scripts()
+        install_bin_scripts(self.log)
         return installed
-
-    def _install_bin_scripts(self) -> None:
-        """Install standalone CLI scripts into the sandbox bin directory.
-
-        Scripts in bin/ are standalone CLIs (not OpenCode tool plugins) and must
-        NOT be placed in .opencode/tool/ — OpenCode would import() them during
-        tool discovery, executing module-level code with the parent process argv.
-        """
-        bin_dir = Path("/app/sandbox_runtime/bin")
-        if not bin_dir.is_dir():
-            return
-
-        install_dir = Path(os.environ.get(BIN_INSTALL_DIR_ENV_VAR, DEFAULT_BIN_INSTALL_DIR))
-        install_dir.mkdir(parents=True, exist_ok=True)
-        for script in bin_dir.iterdir():
-            if not script.is_file() or script.suffix not in {"", ".js"}:
-                continue
-            command_name = script.stem if script.suffix == ".js" else script.name
-            dest = install_dir / command_name
-            shutil.copy(script, dest)
-            dest.chmod(0o755)
-            self.log.info("bin.installed", script=command_name)
 
     def _install_skills(self, workdir: Path) -> set[str]:
         """Copy bundled Skills into the .opencode/skills directory."""
@@ -411,7 +386,7 @@ class OpenCodeServer:
                 config[name] = entry
         return config
 
-    async def start(self, repositories: tuple[RepoEntry, ...], workdir: Path) -> None:
+    async def start(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
         """Start OpenCode server with configuration."""
         self._setup_managed_oauth()
         self.log.info("opencode.start")

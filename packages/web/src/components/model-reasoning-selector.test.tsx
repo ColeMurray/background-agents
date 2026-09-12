@@ -73,6 +73,79 @@ describe("ModelReasoningSelector", () => {
     expect(trigger.querySelectorAll("svg")).toHaveLength(1);
   });
 
+  it("prefixes the trigger with the agent and switches it through an Agent submenu", async () => {
+    const onHarnessChange = vi.fn();
+    render(
+      <ModelReasoningSelector
+        selectedModel="anthropic/claude-sonnet-4-6"
+        reasoningEffort="high"
+        items={items}
+        onModelChange={vi.fn()}
+        onReasoningEffortChange={vi.fn()}
+        harness="claude"
+        onHarnessChange={onHarnessChange}
+      />
+    );
+
+    const trigger = screen.getByRole("button", {
+      name: "Agent, model and effort: Claude Agent, claude sonnet 4.6, High",
+    });
+    expect(trigger).toHaveTextContent("Claude Agent:claude sonnet 4.6High");
+    expect(trigger.querySelector("svg title")).toHaveTextContent("Anthropic");
+
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    const agentMenu = await screen.findByRole("menuitem", { name: /^agent/i });
+    expect(agentMenu).toHaveTextContent("Claude Agent");
+    agentMenu.focus();
+    fireEvent.keyDown(agentMenu, { key: "ArrowRight" });
+    const openCode = await screen.findByRole("menuitemradio", { name: "OpenCode" });
+    expect(openCode.querySelector("svg title")).toHaveTextContent("OpenCode");
+    fireEvent.click(openCode);
+    expect(onHarnessChange).toHaveBeenCalledWith("opencode");
+  });
+
+  it("keeps the agent prefix but offers no Agent row once the harness is fixed", async () => {
+    render(
+      <ModelReasoningSelector
+        selectedModel="anthropic/claude-sonnet-4-6"
+        reasoningEffort="high"
+        items={items}
+        onModelChange={vi.fn()}
+        onReasoningEffortChange={vi.fn()}
+        harness="opencode"
+      />
+    );
+
+    const trigger = screen.getByRole("button", { name: /^Agent, model and effort: OpenCode,/ });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    await screen.findByRole("menuitem", { name: /model/i });
+    expect(screen.queryByRole("menuitem", { name: /^agent/i })).not.toBeInTheDocument();
+  });
+
+  it("drills into agent options on mobile", async () => {
+    mocks.isMobile = true;
+    const onHarnessChange = vi.fn();
+    render(
+      <ModelReasoningSelector
+        selectedModel="anthropic/claude-sonnet-4-6"
+        reasoningEffort="high"
+        items={items}
+        onModelChange={vi.fn()}
+        onReasoningEffortChange={vi.fn()}
+        harness="claude"
+        onHarnessChange={onHarnessChange}
+      />
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /model and effort/i }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^agent/i }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "OpenCode" }));
+    expect(onHarnessChange).toHaveBeenCalledWith("opencode");
+  });
+
   it("selects model and effort through nested menus", async () => {
     const onModelChange = vi.fn();
     const onReasoningEffortChange = vi.fn();

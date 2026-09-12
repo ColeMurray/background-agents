@@ -202,6 +202,52 @@ describe("automation read, update, and delete routes", () => {
       );
     });
 
+    it("rejects a replacement pin the automation's harness cannot use", async () => {
+      mockProviderAccountStore.getById.mockResolvedValue({
+        id: "0123456789abcdef0123456789abcdef",
+        provider: "anthropic",
+        status: "active",
+        archivedAt: null,
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          providerSelections: {
+            anthropic: {
+              mode: "provider_account",
+              accountId: "0123456789abcdef0123456789abcdef",
+            },
+          },
+        },
+      });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({
+        error: expect.stringContaining("select an API key"),
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it("checks the stored pins when the harness changes", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, harness: "claude" });
+      mockProviderAuthStore.list.mockResolvedValue([
+        {
+          automation_id: "auto-1",
+          provider: "anthropic",
+          auth_mode: "provider_account",
+          provider_account_id: "0123456789abcdef0123456789abcdef",
+        },
+      ]);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { harness: "opencode" },
+      });
+
+      expect(res.status).toBe(400);
+      expect(mockProviderAuthStore.list).toHaveBeenCalledWith("auto-1");
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
     it("leaves provider pins unchanged when providerSelections is omitted", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 

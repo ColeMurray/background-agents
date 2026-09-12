@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from sandbox_runtime.opencode_client import (
+from sandbox_runtime.harness.opencode_client import (
     OpenCodeClient,
     SSEConnectionError,
     SSEInactivityTimeoutError,

@@ -15,11 +15,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(172);
+    expect(routes).toHaveLength(177);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(131);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(172);
+    expect(new Set(paths).size).toBe(135);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(177);
   });
 
   it("declares every path in the literal-or-parameter grammar", () => {
@@ -288,6 +288,14 @@ describe("route policy table", () => {
       "user",
     ],
     ["DELETE", `/model-provider-accounts/openai/device-authorizations/${"0".repeat(64)}`, "user"],
+    ["POST", "/model-provider-accounts/anthropic/authorization-codes", "user"],
+    ["GET", `/model-provider-accounts/anthropic/authorization-codes/${"0".repeat(64)}`, "user"],
+    [
+      "POST",
+      `/model-provider-accounts/anthropic/authorization-codes/${"0".repeat(64)}/complete`,
+      "user",
+    ],
+    ["DELETE", `/model-provider-accounts/anthropic/authorization-codes/${"0".repeat(64)}`, "user"],
     ["GET", "/model-provider-accounts/legacy-credentials", "user"],
     ["GET", "/model-provider-account-defaults", "user"],
     ["PUT", "/model-provider-account-defaults/openai", "user"],
@@ -325,6 +333,7 @@ describe("route policy table", () => {
     ["POST", "/sessions/session-1/xai-token-refresh"],
     ["GET", "/sessions/session-1/sandbox-skills"],
     ["POST", "/sessions/session-1/provider-auth/openai/access-token"],
+    ["POST", "/sessions/session-1/provider-auth/anthropic/runtime-credential"],
   ])("requires the bound sandbox for %s %s", (method, path) => {
     const { route, params } = matchRoute(routes, method, path)!;
     expect(route.authentication.kind).toBe("sandbox");
@@ -373,7 +382,14 @@ describe("route policy table", () => {
       routeFor("POST", "/model-provider-accounts/openai/device-authorizations")?.cacheControl
     ).toBe("private, no-store");
     expect(
+      routeFor("POST", "/model-provider-accounts/anthropic/authorization-codes")?.cacheControl
+    ).toBe("private, no-store");
+    expect(
       routeFor("POST", "/sessions/session-1/provider-auth/openai/access-token")?.cacheControl
+    ).toBe("no-store");
+    expect(
+      routeFor("POST", "/sessions/session-1/provider-auth/anthropic/runtime-credential")
+        ?.cacheControl
     ).toBe("no-store");
   });
 

@@ -12,7 +12,7 @@ import httpx
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from .log_config import StructuredLogger
+    from ..log_config import StructuredLogger
 
 HTTP_CONNECT_TIMEOUT_SECONDS: Final = 30.0
 OPENCODE_REQUEST_TIMEOUT_SECONDS: Final = 30.0
