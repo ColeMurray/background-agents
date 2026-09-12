@@ -31,6 +31,15 @@ function readRequiredNumberColumn(result: SqlResult, column: string): number {
   return row[column];
 }
 
+function parseMessageStatus(value: unknown): MessageStatus | null {
+  return value === "pending" ||
+    value === "processing" ||
+    value === "completed" ||
+    value === "failed"
+    ? value
+    : null;
+}
+
 /** Data for creating a message. */
 export interface CreateMessageData {
   id: string;
@@ -206,7 +215,7 @@ export class MessageRepository {
 
   getMessageStatus(messageId: string): MessageStatus | null {
     const result = this.sql.exec(`SELECT status FROM messages WHERE id = ? LIMIT 1`, messageId);
-    return (result.toArray() as Array<{ status: MessageStatus }>)[0]?.status ?? null;
+    return parseMessageStatus((result.toArray() as Array<{ status?: unknown }>)[0]?.status);
   }
 
   admitAutofixMessage(data: AdmitAutofixMessageData): AutofixMessageAdmission {
@@ -276,11 +285,12 @@ export class MessageRepository {
   }
 
   listPromptQueue(): PromptQueueItem[] {
-    return this.listUnfinishedMessages().map((message) => ({
-      messageId: message.id,
-      content: message.content,
-      status: message.status as "pending" | "processing",
-    }));
+    return this.listUnfinishedMessages().flatMap((message) => {
+      const status = parseMessageStatus(message.status);
+      return status === "pending" || status === "processing"
+        ? [{ messageId: message.id, content: message.content, status }]
+        : [];
+    });
   }
 
   cancelPendingMessage(messageId: string): boolean {
@@ -291,13 +301,15 @@ export class MessageRepository {
       );
       const message = (
         result.toArray() as Array<{
-          status: MessageStatus;
+          status?: unknown;
           source: string;
           callback_context: string | null;
         }>
       )[0];
+      const status = parseMessageStatus(message?.status);
       if (
-        message?.status !== "pending" ||
+        !message ||
+        status !== "pending" ||
         message.source !== "web" ||
         message.callback_context !== null
       ) {
@@ -419,12 +431,13 @@ export class MessageRepository {
       );
       const message = (
         result.toArray() as Array<{
-          status: MessageStatus;
+          status?: unknown;
           created_at: number;
           started_at: number | null;
         }>
       )[0];
-      if (!message || message.status !== expectedStatus) return null;
+      const messageStatus = parseMessageStatus(message?.status);
+      if (!message || messageStatus !== expectedStatus) return null;
 
       const status = event.success ? "completed" : "failed";
       this.sql.exec(
