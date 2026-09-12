@@ -1,0 +1,214 @@
+# Deploys the control-plane image to an AWS instance, and puts the previous one
+# back if the new one does not come up.
+#
+# The Cloudflare deploy is `terraform apply` from terraform.yml. This is the
+# equivalent for the AWS environments, and deliberately not the same shape: no
+# Terraform runs here. The image is built and pushed, the deployed-version SSM
+# parameter is moved, and the instance activates it over SSM Session Manager's
+# command channel. Infrastructure changes stay with `terraform apply`.
+#
+# Authentication is OIDC. The token's `sub` claim names the repository *and the
+# GitHub environment this job requested*, and the AWS role's trust policy pins
+# both -- so an environment's rules gate AWS access, not just the UI. There is
+# no AWS key in this repository.
+#
+# The subject names no branch, and GitHub creates a referenced environment with
+# no protection rules if it does not already exist. So the environment has to
+# carry a deployment-branch rule for that pin to mean anything; setting one is a
+# step in docs/AWS_BRING_UP.md, not an optional hardening.
+#
+# Configuration lives on the GitHub environment, all of it from
+# `terraform output` (see docs/AWS_BRING_UP.md):
+#
+#   AWS_DEPLOY_ROLE_ARN          github_deploy_role_arn
+#   AWS_REGION                   region
+#   AWS_ECR_REPOSITORY           ecr_repository_url
+#   AWS_INSTANCE_ID              instance_id
+#   AWS_DEPLOYED_IMAGE_PARAMETER deployed_image_parameter
+#   AWS_PUBLIC_URL               https://<hostname>
+name: Deploy (AWS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "GitHub environment to deploy"
+        type: choice
+        options:
+          - aws-staging
+          - aws-production
+        default: aws-staging
+  push:
+    branches: [main]
+    paths:
+      # What the control-plane image is built from.
+      - "packages/control-plane/**"
+      - "packages/shared/**"
+      - "packages/sandbox-runtime/src/sandbox_runtime/*.json"
+      - "terraform/d1/migrations/**"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/deploy-aws.sh"
+      - ".github/workflows/deploy-aws.yml"
+
+# Granted per job below. Only the deploy job mints an OIDC token, and picking an
+# environment name needs nothing at all.
+permissions: {}
+
+concurrency:
+  # One deploy per environment at a time, and never cancelled: a cancelled
+  # deploy is one that has moved the parameter and not verified the result.
+  group: deploy-aws-${{ inputs.environment || vars.AWS_DEPLOY_ON_PUSH_ENVIRONMENT }}
+  cancel-in-progress: false
+
+jobs:
+  # Which environment. Separate from the deploy job so the name is checked
+  # before it is used: `deploy` puts it in `environment:`, which is evaluated as
+  # the job starts and has no step to run first.
+  target:
+    name: Pick the target
+    # An installation that has configured no AWS environment skips the whole
+    # workflow rather than spending a runner to discover it has nothing to do.
+    # `vars` is readable here, which is the only reason this can be decided
+    # before a job starts -- `on:` has no access to it, so the alternative is a
+    # job that runs on every push to say it has nothing to deploy.
+    if: inputs.environment != '' || vars.AWS_DEPLOY_ON_PUSH_ENVIRONMENT != ''
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 2
+    outputs:
+      environment: ${{ steps.pick.outputs.environment }}
+    steps:
+      - name: Pick the environment
+        id: pick
+        env:
+          DISPATCHED: ${{ inputs.environment }}
+          ON_PUSH: ${{ vars.AWS_DEPLOY_ON_PUSH_ENVIRONMENT }}
+        run: |
+          if [ -n "$DISPATCHED" ]; then
+            environment="$DISPATCHED"
+          else
+            environment="$ON_PUSH"
+          fi
+
+          # A repository variable is free text somebody typed, and it goes on to
+          # name a job, a concurrency group and an OIDC subject. Anything that is
+          # not a plain environment name is a mistake, and worth failing on here
+          # rather than passing along.
+          case "$environment" in
+            *[!A-Za-z0-9._-]*)
+              echo "::error::AWS_DEPLOY_ON_PUSH_ENVIRONMENT is not a plain environment name."
+              exit 1
+              ;;
+          esac
+
+          printf 'environment=%s\n' "$environment" >>"$GITHUB_OUTPUT"
+          echo "deploying to $environment"
+
+  deploy:
+    name: Deploy
+    needs: [target]
+    if: needs.target.outputs.environment != ''
+    # Native arm64: the instance is Graviton and the image has no amd64 build,
+    # so an x86 runner would mean QEMU and a build several times longer.
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      id-token: write # the OIDC token this exchanges for the deploy role
+    environment:
+      name: ${{ needs.target.outputs.environment }}
+      url: ${{ vars.AWS_PUBLIC_URL }}
+    # Wide enough for the worst case scripts/deploy-aws.sh allows -- a deploy
+    # that times out remotely and then a rollback that does too, about 34
+    # minutes -- plus the build and push in front of it. A job cancelled part
+    # way through is one that has moved the parameter and not verified it.
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # This job holds AWS credentials; it has no reason to also hold a git
+          # token. Nothing after this pushes, tags or fetches.
+          persist-credentials: false
+
+      - name: Check the environment's deploy configuration
+        env:
+          ENVIRONMENT: ${{ needs.target.outputs.environment }}
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ECR_REPOSITORY: ${{ vars.AWS_ECR_REPOSITORY }}
+          AWS_INSTANCE_ID: ${{ vars.AWS_INSTANCE_ID }}
+          AWS_DEPLOYED_IMAGE_PARAMETER: ${{ vars.AWS_DEPLOYED_IMAGE_PARAMETER }}
+          AWS_PUBLIC_URL: ${{ vars.AWS_PUBLIC_URL }}
+        run: |
+          missing=""
+          for name in AWS_DEPLOY_ROLE_ARN AWS_REGION AWS_ECR_REPOSITORY \
+            AWS_INSTANCE_ID AWS_DEPLOYED_IMAGE_PARAMETER AWS_PUBLIC_URL; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+
+          if [ -n "$missing" ]; then
+            echo "::error::Environment $ENVIRONMENT is missing:$missing. Each is a \`terraform output\`; see docs/AWS_BRING_UP.md."
+            exit 1
+          fi
+
+      - name: Assume the deploy role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Pin the current image before overwriting tags
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ECR_REPOSITORY: ${{ vars.AWS_ECR_REPOSITORY }}
+          DEPLOYED_IMAGE_PARAMETER: ${{ vars.AWS_DEPLOYED_IMAGE_PARAMETER }}
+        run: scripts/deploy-aws.sh --pin-current-image
+
+      - name: Build and push the image
+        id: image
+        env:
+          REPOSITORY: ${{ vars.AWS_ECR_REPOSITORY }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -o pipefail
+          image="$REPOSITORY:$GITHUB_SHA"
+
+          docker build -f packages/control-plane/Dockerfile -t "$image" .
+          docker push "$image"
+
+          # `latest` is what a freshly applied module points a first boot at,
+          # before any deploy has ever moved the parameter. The previous step
+          # pins that bootstrap image before either tag can be overwritten.
+          docker tag "$image" "$REPOSITORY:latest"
+          docker push "$REPOSITORY:latest"
+
+          # What gets deployed is the digest. The repository is MUTABLE, so both
+          # tags above move: re-running this workflow on a commit that is already
+          # deployed would otherwise repoint `:<sha>` at the new build, and the
+          # rollback -- which restores whatever string the parameter held -- would
+          # put back the very image it is rolling back from.
+          digest="$(aws ecr describe-images \
+            --repository-name "${REPOSITORY#*/}" \
+            --image-ids "imageTag=$GITHUB_SHA" \
+            --region "$REGION" \
+            --query 'imageDetails[0].imageDigest' --output text)"
+
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "::error::could not resolve $image to a digest (got '$digest')"; exit 1 ;;
+          esac
+
+          echo "ref=$REPOSITORY@$digest" >>"$GITHUB_OUTPUT"
+
+      - name: Deploy, verify, and roll back if unhealthy
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          INSTANCE_ID: ${{ vars.AWS_INSTANCE_ID }}
+          DEPLOYED_IMAGE_PARAMETER: ${{ vars.AWS_DEPLOYED_IMAGE_PARAMETER }}
+          HEALTHCHECK_URL: ${{ vars.AWS_PUBLIC_URL }}/healthz
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: scripts/deploy-aws.sh
