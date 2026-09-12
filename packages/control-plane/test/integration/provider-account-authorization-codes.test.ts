@@ -1,7 +1,10 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ProviderCredentialStore } from "../../src/db/provider-account-credentials";
-import type { AnthropicProviderCredential } from "../../src/auth/model-provider-account-anthropic-adapter";
+import {
+  AnthropicModelProviderAccountAdapter,
+  type AnthropicProviderCredential,
+} from "../../src/auth/model-provider-account-anthropic-adapter";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 
@@ -61,6 +64,15 @@ async function accountCount(): Promise<number> {
 
 function credentials(): ProviderCredentialStore {
   return new ProviderCredentialStore(env.DB, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!);
+}
+
+function parseAnthropicCredential(
+  state: NonNullable<Awaited<ReturnType<ProviderCredentialStore["readCredentialState"]>>>
+) {
+  return new AnthropicModelProviderAccountAdapter().parseCredential(
+    state.payload,
+    state.credentialSchemaVersion
+  );
 }
 
 async function seedAccount(status = "reconnect_required"): Promise<void> {
@@ -137,10 +149,7 @@ describe("provider account authorization-code routes", () => {
     });
     expect(JSON.stringify(body)).not.toMatch(/sk-ant|refresh|verifier/i);
 
-    const stored = await credentials().readCredentialState<AnthropicProviderCredential>(
-      body.account.id,
-      "anthropic"
-    );
+    const stored = await credentials().readCredentialState(body.account.id, "anthropic");
     expect(stored?.payload).toEqual({
       kind: "setup_token",
       token: "sk-ant-oat01-integration",
@@ -278,11 +287,10 @@ describe("provider account authorization-code routes", () => {
       account: { id: ACCOUNT_ID, displayName: "Preserved Claude", status: "active" },
       reconnectedExisting: true,
     });
-    const stored = await credentials().readCredentialState<AnthropicProviderCredential>(
-      ACCOUNT_ID,
-      "anthropic"
+    const stored = await credentials().readCredentialState(ACCOUNT_ID, "anthropic");
+    expect(stored ? parseAnthropicCredential(stored).token : undefined).toBe(
+      "sk-ant-oat01-integration"
     );
-    expect(stored?.payload.token).toBe("sk-ant-oat01-integration");
     expect(stored?.credentialVersion).toBe(2);
     expect(await accountCount()).toBe(1);
     // A slot created without an identity (pasted token) adopts the one the
@@ -327,11 +335,10 @@ describe("provider account authorization-code routes", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: expect.stringMatching(/connected through the browser/),
     });
-    const stored = await credentials().readCredentialState<AnthropicProviderCredential>(
-      account.id,
-      "anthropic"
+    const stored = await credentials().readCredentialState(account.id, "anthropic");
+    expect(stored ? parseAnthropicCredential(stored).token : undefined).toBe(
+      "sk-ant-oat01-integration"
     );
-    expect(stored?.payload.token).toBe("sk-ant-oat01-integration");
     expect(stored?.credentialVersion).toBe(1);
   });
 

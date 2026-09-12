@@ -72,12 +72,12 @@ async function encryptPayload(
   return `${FORMAT_VERSION}.${encodeBase64(iv)}.${encodeBase64(new Uint8Array(ciphertext))}`;
 }
 
-async function decryptPayload<T>(
+async function decryptPayload(
   encrypted: string,
   encryptionKey: string,
   aad: Uint8Array,
   payloadName: string
-): Promise<T> {
+): Promise<unknown> {
   const [version, encodedIv, encodedCiphertext, extra] = encrypted.split(".");
   if (version !== FORMAT_VERSION) {
     throw new Error(`Unsupported ${payloadName} encryption format version: ${version}`);
@@ -92,7 +92,8 @@ async function decryptPayload<T>(
     await importKey(encryptionKey),
     decodeBase64(encodedCiphertext)
   );
-  return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+  const parsed: unknown = JSON.parse(new TextDecoder().decode(plaintext));
+  return parsed;
 }
 
 export function encryptProviderAccountPayload(
@@ -111,19 +112,19 @@ export function encryptProviderAuthorizationPayload(
   return encryptPayload(payload, encryptionKey, authorizationAdditionalData(context));
 }
 
-export async function decryptProviderAccountPayload<T = unknown>(
+export async function decryptProviderAccountPayload(
   encrypted: string,
   encryptionKey: string,
   context: ProviderAccountCryptoContext
-): Promise<T> {
+): Promise<unknown> {
   return decryptPayload(encrypted, encryptionKey, additionalData(context), "provider credential");
 }
 
-export async function decryptProviderAuthorizationPayload<T = unknown>(
+export async function decryptProviderAuthorizationPayload(
   encrypted: string,
   encryptionKey: string,
   context: ProviderAuthorizationCryptoContext
-): Promise<T> {
+): Promise<unknown> {
   return decryptPayload(
     encrypted,
     encryptionKey,
