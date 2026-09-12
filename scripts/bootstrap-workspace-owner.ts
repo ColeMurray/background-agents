@@ -12,9 +12,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const CANONICAL_USER_ID = /^[0-9a-f]{32}$/;
@@ -29,12 +27,16 @@ export interface BootstrapCliOptions {
   execute: boolean;
 }
 
-/** Inputs used to build an Owner bootstrap preflight or execution script. */
+/** Inputs shared by the Owner bootstrap mutation and its verification query. */
 export interface BootstrapSqlOptions {
   userId: string;
-  execute: boolean;
   auditId: string;
   now: number;
+}
+
+interface BootstrapSql {
+  preflight: string;
+  execution: readonly [string, string, string];
 }
 
 /** Parse and validate Owner bootstrap command-line arguments. */
@@ -83,8 +85,8 @@ function sqlLiteral(value: string | number): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-/** Build guarded SQL for an Owner bootstrap preflight or execution. */
-export function buildBootstrapSql(options: BootstrapSqlOptions): string {
+/** Build preflight and a result-bearing atomic batch from one audit identity. */
+export function buildBootstrapSql(options: BootstrapSqlOptions): BootstrapSql {
   const userId = sqlLiteral(options.userId);
   const auditId = sqlLiteral(options.auditId);
   const requestId = sqlLiteral(`operator-cli:${options.auditId}`);
@@ -174,11 +176,7 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
   (SELECT suspended_at FROM users WHERE id = ${userId}) AS suspended_at,
   (SELECT role_id FROM user_role_assignments WHERE user_id = ${userId}) AS role_id;`;
 
-  if (!options.execute) return `${preflight}\n`;
-
-  return `${preflight}
-
-INSERT INTO authorization_audit_events
+  const insertAudit = `INSERT INTO authorization_audit_events
   (id, occurred_at, request_id, principal_kind,
    actor_service_snapshot, action, resource_type,
     target_user_id_snapshot, reason_code, operation_result, metadata_json)
@@ -193,13 +191,16 @@ SELECT ${auditId}, ${now}, ${requestId}, 'service',
          'after', json_object('roleId', ${ownerRoleId})
        )
 WHERE ${ready};
+`;
 
-UPDATE user_role_assignments
+  const assignOwner = `UPDATE user_role_assignments
 SET role_id = ${ownerRoleId}
 WHERE user_id = ${userId} AND (${ready}) AND ${exactAudit};
+`;
 
-SELECT 'postcondition' AS report,
+  const verification = `SELECT 'postcondition' AS report,
   CASE
+    WHEN NOT (${commonPreconditions}) OR (${anotherUnsuspendedOwner}) THEN 'refused'
     WHEN (${targetIsOwner}) AND (${exactAudit}) THEN 'executed'
     WHEN ${targetIsOwner} THEN 'no-op'
     ELSE 'refused'
@@ -207,33 +208,47 @@ SELECT 'postcondition' AS report,
   u.id AS user_id,
   u.suspended_at,
   assignment.role_id,
-  EXISTS(SELECT 1 FROM authorization_audit_events WHERE id = ${auditId}) AS audit_written
+  ${exactAudit} AS audit_written
 FROM users u
 JOIN user_role_assignments assignment ON assignment.user_id = u.id
 WHERE u.id = ${userId};
 `;
-}
 
-interface WranglerResult {
-  results?: Array<Record<string, unknown>>;
+  return { preflight, execution: [insertAudit, assignOwner, verification] };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseWranglerResults(stdout: string): WranglerResult[] {
+function readReport(
+  stdout: string,
+  statementCount: number,
+  report: "preflight" | "postcondition"
+): Record<string, unknown> {
   const parsed: unknown = JSON.parse(stdout);
   if (!Array.isArray(parsed)) throw new Error("Wrangler returned a malformed JSON result");
+  if (parsed.length !== statementCount) {
+    throw new Error(`Wrangler returned ${parsed.length} results for ${statementCount} statements`);
+  }
 
-  return parsed.map((result) => {
-    if (!isRecord(result)) throw new Error("Wrangler returned a malformed JSON result");
-    const rows = result.results;
-    if (rows !== undefined && (!Array.isArray(rows) || !rows.every(isRecord))) {
+  const results = parsed.map((result) => {
+    if (
+      !isRecord(result) ||
+      result.success !== true ||
+      !Array.isArray(result.results) ||
+      !result.results.every(isRecord)
+    ) {
       throw new Error("Wrangler returned a malformed JSON result");
     }
-    return { results: rows };
+    return result.results;
   });
+  const rows = results.at(-1);
+  if (rows?.length !== 1 || rows[0].report !== report) {
+    throw new Error(`Wrangler returned no valid Owner bootstrap ${report}`);
+  }
+  console.log(JSON.stringify(rows[0]));
+  return rows[0];
 }
 
 type WranglerRunner = (database: string, operation: readonly string[]) => string;
@@ -243,13 +258,6 @@ export interface BootstrapRunDependencies {
   runWrangler?: WranglerRunner;
   randomUUID?: () => string;
   now?: () => number;
-}
-
-function reportRows(stdout: string): Array<Record<string, unknown>> {
-  const parsed = parseWranglerResults(stdout);
-  const rows = parsed.flatMap((result) => result.results ?? []).filter((row) => row.report);
-  for (const row of rows) console.log(JSON.stringify(row));
-  return rows;
 }
 
 function runWrangler(database: string, operation: readonly string[]): string {
@@ -264,14 +272,6 @@ function runWrangler(database: string, operation: readonly string[]): string {
   return child.stdout;
 }
 
-function preflight(database: string, userId: string, runner: WranglerRunner): string {
-  const sql = buildBootstrapSql({ userId, execute: false, auditId: "unused", now: 0 });
-  const rows = reportRows(runner(database, ["--command", sql]));
-  const status = rows.find((row) => row.report === "preflight")?.status;
-  if (typeof status !== "string") throw new Error("Wrangler returned no Owner bootstrap preflight");
-  return status;
-}
-
 /** Run the remote Owner bootstrap workflow and verify its postcondition. */
 export async function run(
   options: BootstrapCliOptions,
@@ -279,7 +279,19 @@ export async function run(
 ): Promise<void> {
   const runner = dependencies.runWrangler ?? runWrangler;
   console.error(`${options.execute ? "Executing" : "Dry-running"} Owner bootstrap on remote D1...`);
-  const status = preflight(options.database, options.userId, runner);
+  const sql = buildBootstrapSql({
+    userId: options.userId,
+    auditId: dependencies.randomUUID?.() ?? crypto.randomUUID(),
+    now: dependencies.now?.() ?? Date.now(),
+  });
+  const { status } = readReport(
+    runner(options.database, ["--command", sql.preflight]),
+    1,
+    "preflight"
+  );
+  if (status !== "ready" && status !== "no-op" && status !== "refused") {
+    throw new Error("Wrangler returned no valid Owner bootstrap preflight");
+  }
   if (status === "refused") throw new Error("Owner bootstrap preflight was refused");
   if (status === "no-op") return;
   if (!options.execute) {
@@ -287,32 +299,19 @@ export async function run(
     return;
   }
 
-  const directory = await mkdtemp(join(tmpdir(), "open-inspect-owner-bootstrap-"));
-  const sqlPath = join(directory, "bootstrap.sql");
-  let executionRows: Array<Record<string, unknown>>;
-  try {
-    const auditId = dependencies.randomUUID?.() ?? crypto.randomUUID();
-    const now = dependencies.now?.() ?? Date.now();
-    await writeFile(
-      sqlPath,
-      buildBootstrapSql({
-        userId: options.userId,
-        execute: true,
-        auditId,
-        now,
-      }),
-      { encoding: "utf8", mode: 0o600 }
+  // Like WranglerD1Database.batch, use D1's result-bearing /query transaction:
+  // the mutation and its proof commit together, with one result per statement.
+  const postcondition = readReport(
+    runner(options.database, ["--command", sql.execution.join("\n")]),
+    sql.execution.length,
+    "postcondition"
+  );
+  if (postcondition.status === "no-op") {
+    throw new Error(
+      "Owner bootstrap did not prove this invocation completed; ownership may have changed concurrently"
     );
-    executionRows = reportRows(runner(options.database, ["--file", sqlPath]));
-  } finally {
-    await rm(directory, { recursive: true, force: true });
   }
-
-  const postcondition = executionRows.find((row) => row.report === "postcondition");
-  if (postcondition?.status === "no-op") {
-    throw new Error("Owner bootstrap did not execute because ownership changed concurrently");
-  }
-  if (postcondition?.status !== "executed" || Number(postcondition.audit_written) !== 1) {
+  if (postcondition.status !== "executed" || postcondition.audit_written !== 1) {
     throw new Error("Owner bootstrap execution did not prove its exact audit and assignment");
   }
   console.error(
