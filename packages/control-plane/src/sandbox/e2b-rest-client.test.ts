@@ -204,6 +204,30 @@ describe("E2BRestClient", () => {
     expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
   });
 
+  it.each(["get", "pause"])(
+    "caller cancellation interrupts an in-flight %s request",
+    async (operation) => {
+      const client = new E2BRestClient(defaultConfig);
+      const caller = new AbortController();
+      fetchSpy.mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError"))
+            );
+          })
+      );
+      const promise =
+        operation === "get"
+          ? client.getSandbox("sb-1", caller.signal)
+          : client.pauseSandbox("sb-1", undefined, caller.signal);
+      const assertion = expect(promise).rejects.toThrow();
+      caller.abort();
+      await assertion;
+      expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
+    }
+  );
+
   it("rejects malformed E2B success responses", async () => {
     const client = new E2BRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-1" }));

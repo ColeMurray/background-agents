@@ -62,6 +62,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     // SANDBOX_VERSION of the image this sandbox booted from. Stamped onto any
     // snapshot it produces so a later restore can be gated on it.
     runtimeVersion: z.string().optional(),
+    capabilities: z.array(z.string()).optional(),
     repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),
   }),
   messageSandboxEventBaseSchema.extend({
@@ -118,6 +119,10 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   messageSandboxEventBaseSchema.extend({
     type: z.literal("execution_complete"),
     success: z.boolean(),
+    /** True only after harness-specific evidence establishes execution cessation. */
+    executionStopped: z.boolean().optional(),
+    /** Existing shared cleanup bound, including time already consumed in the runtime. */
+    cleanupDeadlineMs: z.number().nonnegative().optional(),
     error: z.string().optional(),
     /** Final cumulative reported cost of the turn. */
     messageCostUsd: z.number().nonnegative().optional(),
@@ -178,6 +183,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   // id so the snapshot can be resumed. Critical (ack'd) on the bridge side.
   sandboxEventBaseSchema.extend({
     type: z.literal("snapshot_ready"),
+    requestId: z.string().optional(),
     opencodeSessionId: z.string().nullable().optional(),
   }),
   z.object({

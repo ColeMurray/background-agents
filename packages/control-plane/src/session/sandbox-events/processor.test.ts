@@ -37,6 +37,11 @@ function createProcessor() {
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
     recordReportedSandboxRuntimeVersion: vi.fn(),
+    recordReportedRuntimeCapabilities: vi.fn(),
+    getMessageExecutionMetadata: vi.fn<MessageRepository["getMessageExecutionMetadata"]>(
+      () => null
+    ),
+    beginMessageCleanup: vi.fn<MessageRepository["beginMessageCleanup"]>(() => null),
     getSession: vi.fn(() => null),
     getProcessingMessage,
     getMessageContent: vi.fn(() => null as string | null),
@@ -544,7 +549,7 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.callbackService.notifyComplete.mock.invocationCallOrder[0]).toBeLessThan(
       h.statusService.reconcileAfterExecution.mock.invocationCallOrder[0]
     );
-    expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
+    expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete", undefined);
     expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(1);
     expect(h.processMessageQueue).toHaveBeenCalledTimes(1);
     expect(h.backgroundTasks.submissions).not.toHaveLength(0);
@@ -629,7 +634,7 @@ describe("SessionSandboxEventProcessor", () => {
     resolveCompletion();
     await processing;
 
-    expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
+    expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete", undefined);
     expect(h.processMessageQueue).toHaveBeenCalledOnce();
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "ack", ackId: "ack-1" });
   });
@@ -939,7 +944,7 @@ describe("SessionSandboxEventProcessor", () => {
         ackId: "execution_complete:msg-1",
       });
       expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
-      expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
+      expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete", undefined);
       expect(h.updateLastActivity).toHaveBeenCalledOnce();
       expect(h.scheduleInactivityCheck).toHaveBeenCalledOnce();
       expect(h.processMessageQueue).toHaveBeenCalledOnce();

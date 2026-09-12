@@ -92,6 +92,29 @@ const testConfig = {
 // ==================== Tests ====================
 
 describe("ModalSandboxProvider", () => {
+  it("does not infer expiry from a legacy creation timestamp", async () => {
+    const provider = new ModalSandboxProvider(createMockModalClient());
+    expect(
+      (await provider.createSandbox({ ...testConfig, timeoutSeconds: 100 })).executionExpiry
+    ).toEqual({ kind: "unknown" });
+  });
+
+  it("preserves provider lifetime evidence without adding API latency", async () => {
+    const provider = new ModalSandboxProvider(
+      createMockModalClient({
+        createSandbox: vi.fn(async () => ({
+          sandboxId: "sb-1",
+          createdAt: Date.now(),
+          executionExpiry: { kind: "conservative" as const, expiresAtMs: 123456 },
+        })),
+      })
+    );
+    expect((await provider.createSandbox(testConfig)).executionExpiry).toEqual({
+      kind: "conservative",
+      expiresAtMs: 123456,
+    });
+  });
+
   describe("capabilities", () => {
     it("reports correct capabilities", () => {
       const client = createMockModalClient();

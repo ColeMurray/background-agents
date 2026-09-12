@@ -5,6 +5,7 @@ import type { EventRepository } from "../event-repository";
 import type { SessionMessenger } from "../messenger";
 import type { SandboxRepository } from "../sandbox-repository";
 import type { SessionCoreRepository } from "../session-core-repository";
+import type { MessageRepository } from "../message-repository";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "../title";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
 
@@ -28,7 +29,8 @@ export class SandboxRuntimeEventHandler {
     ) => SessionTitleUpdateResult,
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly refreshSlackActivity: (messageId: string, timestamp: number) => void,
-    private readonly log: Logger
+    private readonly log: Logger,
+    private readonly messageRepository?: MessageRepository
   ) {}
 
   handleHeartbeat(context: SandboxEventContext): void {
@@ -36,12 +38,16 @@ export class SandboxRuntimeEventHandler {
     // A quiet tool call may emit no events for longer than the inactivity
     // timeout. While its message is processing, the bridge heartbeat proves
     // the sandbox is still occupied and should renew its activity timestamp.
-    if (context.processingMessage !== null) {
+    if (
+      context.processingMessage !== null ||
+      this.messageRepository?.getMessageAwaitingStopConfirmation()
+    ) {
       this.updateLastActivity(context.now);
       // The same proof drives Slack's assistant-thread indicator, which Slack
       // clears two minutes after the last update. Refreshing it from here, and
       // not from a timer, is what keeps it from outliving the turn it claims.
-      this.refreshSlackActivity(context.processingMessage.id, context.now);
+      if (context.processingMessage)
+        this.refreshSlackActivity(context.processingMessage.id, context.now);
     }
   }
 
@@ -65,6 +71,10 @@ export class SandboxRuntimeEventHandler {
     // Fills the column a fresh spawn cleared; a restore has already seeded
     // the snapshot's version, which outranks whatever this sandbox reports.
     this.sandboxRepository.recordReportedSandboxRuntimeVersion(event.runtimeVersion ?? null);
+    this.sandboxRepository.recordReportedRuntimeCapabilities(event.capabilities ?? []);
+    if (event.capabilities?.includes("stop-confirmation-v1")) {
+      this.messageRepository?.requireStopEvidenceForSandbox(event.sandboxId);
+    }
     persistSandboxEvent(this.eventRepository, event, context);
     this.messenger.broadcast({ type: "sandbox_event", event });
   }

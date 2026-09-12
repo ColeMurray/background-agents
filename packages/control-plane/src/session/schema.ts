@@ -134,6 +134,11 @@ CREATE TABLE IF NOT EXISTS messages (
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
+  execution_deadline_ms INTEGER,
+  cleanup_deadline_ms INTEGER,
+  cleanup_reserve_ms INTEGER,
+  execution_sandbox_id TEXT,
+  requires_stop_evidence INTEGER NOT NULL DEFAULT 0,
   reported_cost_usd REAL NOT NULL DEFAULT 0,        -- Highest cumulative cost the runtime reported for this turn
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
@@ -686,6 +691,27 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         const msg = e instanceof Error ? e.message : String(e);
         if (!msg.includes("no such column") && !msg.includes("duplicate column")) throw e;
       }
+    },
+  },
+  {
+    id: 51,
+    description: "Persist turn deadlines and correlated runtime cessation evidence",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN execution_deadline_ms INTEGER`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN cleanup_deadline_ms INTEGER`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN cleanup_reserve_ms INTEGER`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN execution_sandbox_id TEXT`);
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN requires_stop_evidence INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN runtime_capabilities TEXT`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN provider_execution_expiry_kind TEXT`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN provider_execution_expires_at_ms INTEGER`);
+      // Legacy live instances have no expiry guarantee; NULL is reserved for
+      // a newly launched generation whose provider response is still pending.
+      sql.exec(`UPDATE sandbox SET provider_execution_expiry_kind = 'unknown'
+        WHERE provider_execution_expiry_kind IS NULL`);
     },
   },
 ];

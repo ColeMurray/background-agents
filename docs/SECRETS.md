@@ -181,6 +181,12 @@ the legacy-bound sessions that depend on them are no longer needed.
 
 ### Secrets and prebuilt images
 
+Managed raw hook diagnostics are temporary: image builds remove them before success publication, and
+supporting runtimes require cleanup before filesystem snapshots. E2B/OpenComputer runtime hooks
+discard raw output because their memory-preserving captures cannot prove log exclusion. See
+[hook log safety and compatibility](TIMEOUTS.md#hook-completion-and-diagnostics). This policy does
+not remove arbitrary files written by repository scripts.
+
 Image builds (repository images and environment images) run your `.openinspect/setup.sh` with the
 same secrets a session would get. Anything the script **persists to disk** — an `.npmrc`, a `.env`
 file, a downloaded credential — is captured in the image and re-served to every session that boots

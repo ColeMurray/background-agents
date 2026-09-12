@@ -164,6 +164,10 @@ function buildQueue() {
     listUnfinishedMessages: vi.fn((): MessageRow[] => []),
     listPromptQueue: vi.fn(() => []),
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
+    getMessageExecutionMetadata: vi.fn<MessageRepository["getMessageExecutionMetadata"]>(
+      () => null
+    ),
+    beginMessageCleanup: vi.fn<MessageRepository["beginMessageCleanup"]>(() => null),
     getMessageContent: vi.fn(() => null as string | null),
     getMessageAwaitingStopConfirmation: vi.fn(() => awaitingStop),
     clearMessageAwaitingStopConfirmation: vi.fn((messageId: string) => {
@@ -221,7 +225,7 @@ function buildQueue() {
   const sandboxLifecycle = {
     spawnSandbox: vi.fn(async () => {}),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
-    terminateUnresponsiveSandbox: vi.fn(async () => {}),
+    terminateUnresponsiveSandbox: vi.fn(async () => true),
     terminateFailedSandbox: vi.fn(async () => true),
     reportSandboxError: vi.fn((_reason: string) => {}),
   };
@@ -1079,7 +1083,8 @@ describe("SessionMessageQueue", () => {
         type: "user_message",
         messageId: "msg-1",
         content: "hello",
-      })
+      }),
+      expect.objectContaining({ executionDeadlineMs: expect.any(Number) })
     );
     const event = h.repository.startMessageProcessing.mock.calls[0][2];
     expect(event).not.toHaveProperty("attachments");
@@ -1242,7 +1247,8 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.startMessageProcessing).toHaveBeenCalledWith(
       "msg-42",
       expect.any(Number),
-      expect.objectContaining({ type: "user_message", messageId: "msg-42" })
+      expect.objectContaining({ type: "user_message", messageId: "msg-42" }),
+      expect.objectContaining({ executionDeadlineMs: expect.any(Number) })
     );
     expect(h.wsManager.send).toHaveBeenCalledWith(
       sandboxWs,
@@ -1266,7 +1272,8 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.startMessageProcessing).toHaveBeenCalledWith(
       "msg-unsent",
       expect.any(Number),
-      expect.objectContaining({ type: "user_message", messageId: "msg-unsent" })
+      expect.objectContaining({ type: "user_message", messageId: "msg-unsent" }),
+      expect.objectContaining({ executionDeadlineMs: expect.any(Number) })
     );
     expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-unsent");
     expect(
@@ -1276,7 +1283,8 @@ describe("SessionMessageQueue", () => {
     ).toHaveLength(0);
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
-      "prompt_dispatch_send_failed"
+      "prompt_dispatch_send_failed",
+      h.repository.startMessageProcessing.mock.calls[0][3]?.cleanupDeadlineMs
     );
     expect(h.repository.getNextPendingMessage).toHaveBeenCalledTimes(2);
   });
@@ -1448,8 +1456,8 @@ describe("SessionMessageQueue", () => {
 
       expect(h.setAlarm).toHaveBeenCalledTimes(1);
       const deadline = h.setAlarm.mock.calls[0][0];
-      expect(deadline).toBeGreaterThanOrEqual(before + EXECUTION_TIMEOUT_MS);
-      expect(deadline).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS);
+      expect(deadline).toBeGreaterThanOrEqual(before + EXECUTION_TIMEOUT_MS * 0.75);
+      expect(deadline).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS * 0.75);
     });
 
     it("arms each deadline with the timeout current at that dispatch", async () => {
@@ -1463,8 +1471,8 @@ describe("SessionMessageQueue", () => {
 
       expect(h.setAlarm).toHaveBeenCalledTimes(1);
       const first = h.setAlarm.mock.calls[0][0];
-      expect(first).toBeGreaterThanOrEqual(before + EXECUTION_TIMEOUT_MS * 3);
-      expect(first).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS * 3);
+      expect(first).toBeGreaterThanOrEqual(before + EXECUTION_TIMEOUT_MS * 3 * 0.75);
+      expect(first).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS * 3 * 0.75);
 
       // A later dispatch must re-resolve — the value is never captured, not
       // even at first use.
@@ -1474,8 +1482,8 @@ describe("SessionMessageQueue", () => {
 
       expect(h.setAlarm).toHaveBeenCalledTimes(2);
       const second = h.setAlarm.mock.calls[1][0];
-      expect(second).toBeGreaterThanOrEqual(beforeSecond + EXECUTION_TIMEOUT_MS * 5);
-      expect(second).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS * 5);
+      expect(second).toBeGreaterThanOrEqual(beforeSecond + EXECUTION_TIMEOUT_MS * 5 * 0.75);
+      expect(second).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS * 5 * 0.75);
     });
 
     it("keeps an earlier existing alarm", async () => {
@@ -1496,8 +1504,8 @@ describe("SessionMessageQueue", () => {
 
       expect(h.setAlarm).toHaveBeenCalledTimes(1);
       const deadline = h.setAlarm.mock.calls[0][0];
-      expect(deadline).toBeGreaterThanOrEqual(before + EXECUTION_TIMEOUT_MS);
-      expect(deadline).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS);
+      expect(deadline).toBeGreaterThanOrEqual(before + EXECUTION_TIMEOUT_MS * 0.75);
+      expect(deadline).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS * 0.75);
     });
 
     it("does not schedule when the prompt is deferred for sandbox spawn", async () => {
@@ -1544,7 +1552,10 @@ describe("SessionMessageQueue", () => {
       expect.any(Number)
     );
     expect(h.alarmDeadlines.setPendingEarliest).toHaveBeenCalledWith(expect.any(Number));
-    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      sandboxWs,
+      expect.objectContaining({ type: "stop", messageId: expect.any(String) })
+    );
   });
 
   it("continues budget stop delivery when alarm scheduling fails", async () => {
@@ -1563,9 +1574,13 @@ describe("SessionMessageQueue", () => {
     await expect(h.executionStop.deliver(preparation)).resolves.toBeUndefined();
 
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
-    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      sandboxWs,
+      expect.objectContaining({ type: "stop", messageId: expect.any(String) })
+    );
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
-      "stop_alarm_failed"
+      "stop_alarm_failed",
+      undefined
     );
     expect(h.log.error).toHaveBeenCalledWith(
       "Stop confirmation alarm failed",
@@ -1681,7 +1696,10 @@ describe("SessionMessageQueue", () => {
       expect.any(Number)
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
-    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      sandboxWs,
+      expect.objectContaining({ type: "stop", messageId: expect.any(String) })
+    );
     expect(h.repository.recordMessageCompletion.mock.invocationCallOrder[0]).toBeLessThan(
       h.repository.markMessageAwaitingStopConfirmation.mock.invocationCallOrder[0]
     );
@@ -1732,7 +1750,10 @@ describe("SessionMessageQueue", () => {
       "msg-next",
       expect.any(Number)
     );
-    expect(h.wsManager.send).toHaveBeenCalledWith(expect.anything(), { type: "stop" });
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "stop", messageId: expect.any(String) })
+    );
     expect(h.wsManager.send).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ type: "prompt", messageId: "msg-next" })
@@ -1752,7 +1773,8 @@ describe("SessionMessageQueue", () => {
     await h.executionStop.stop();
 
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
-      "stop_send_failed"
+      "stop_send_failed",
+      undefined
     );
     expect(h.repository.getNextPendingMessage).toHaveBeenCalled();
     expect(h.repository.clearMessageAwaitingStopConfirmation).toHaveBeenCalledWith("msg-running");
@@ -1770,7 +1792,8 @@ describe("SessionMessageQueue", () => {
     await h.executionStop.stop();
 
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
-      "stop_send_failed"
+      "stop_send_failed",
+      undefined
     );
     expect(h.repository.getNextPendingMessage).toHaveBeenCalled();
   });
@@ -1787,7 +1810,8 @@ describe("SessionMessageQueue", () => {
     await h.executionStop.recoverStopConfirmationTimeout();
 
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
-      "stop_confirmation_timeout"
+      "stop_confirmation_timeout",
+      undefined
     );
     expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
     expect(h.repository.getNextPendingMessage).toHaveBeenCalled();
@@ -1807,13 +1831,42 @@ describe("SessionMessageQueue", () => {
     expect(h.setAlarm).toHaveBeenCalledExactlyOnceWith(deadline);
   });
 
+  it("retains an upgraded runtime fence when provider termination is unconfirmed", async () => {
+    const h = buildQueue();
+    const cleanupDeadlineMs = Date.now() + 60_000;
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-running",
+      created_at: 900,
+    });
+    h.repository.getMessageExecutionMetadata.mockReturnValue({
+      execution_deadline_ms: Date.now() - 1,
+      cleanup_deadline_ms: cleanupDeadlineMs,
+      cleanup_reserve_ms: 60_000,
+      execution_sandbox_id: "sandbox-1",
+      requires_stop_evidence: 1,
+    });
+    h.sandboxLifecycle.terminateUnresponsiveSandbox.mockResolvedValue(false);
+
+    await h.executionStop.stop("Turn duration limit reached");
+    await h.queue.processMessageQueue();
+
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
+      "stop_send_failed",
+      cleanupDeadlineMs
+    );
+    expect(h.repository.getMessageAwaitingStopConfirmation()).toMatchObject({ id: "msg-running" });
+    expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
+    expect(h.repository.getNextPendingMessage).not.toHaveBeenCalled();
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+  });
+
   it("clears the marker and resumes only after definitive sandbox termination", async () => {
     const h = buildQueue();
     h.repository.getMessageAwaitingStopConfirmation
       .mockReturnValueOnce({ id: "msg-stopped", deadline: Date.now() - 1 })
       .mockReturnValue(null);
 
-    await h.executionStop.resumeAfterSandboxTermination();
+    await h.executionStop.resumeAfterSandboxTermination("msg-stopped");
 
     expect(h.repository.clearMessageAwaitingStopConfirmation).toHaveBeenCalledWith("msg-stopped");
   });
@@ -1840,7 +1893,10 @@ describe("SessionMessageQueue", () => {
     await h.queue.failStuckProcessingMessage();
 
     expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
-    expect(h.wsManager.send).not.toHaveBeenCalledWith(expect.anything(), { type: "stop" });
+    expect(h.wsManager.send).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "stop", messageId: expect.any(String) })
+    );
     expect(h.sessionStatus.reconcileAfterExecution).not.toHaveBeenCalled();
   });
 
@@ -1876,6 +1932,7 @@ describe("SessionMessageQueue", () => {
 
   it("reconciles session status when failing a stuck processing message", async () => {
     const h = buildQueue();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-timeout" });
     h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
       id: "msg-timeout",
       created_at: 800,
@@ -1885,7 +1942,7 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
         messageId: "msg-timeout",
-        error: "Execution timed out (stuck processing)",
+        error: "Sandbox became unavailable before execution completed",
       }),
       expect.any(Number),
       "processing"
@@ -1895,6 +1952,7 @@ describe("SessionMessageQueue", () => {
 
   it("uses a fatal sandbox reason for completion and callback notification", async () => {
     const h = buildQueue();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-crashed" });
     h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
       id: "msg-crashed",
       created_at: 800,
@@ -1937,7 +1995,10 @@ describe("SessionMessageQueue", () => {
     await handling;
     await h.backgroundTasks.settle();
 
-    expect(h.sandboxLifecycle.terminateFailedSandbox).toHaveBeenCalledWith("Sandbox crashed");
+    expect(h.sandboxLifecycle.terminateFailedSandbox).toHaveBeenCalledWith(
+      "Sandbox crashed",
+      undefined
+    );
     expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledOnce();
   });
 

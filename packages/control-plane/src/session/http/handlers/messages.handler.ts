@@ -7,6 +7,7 @@ import {
 import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
+import { executionStateRequestSchema } from "../../contracts";
 import {
   BudgetExhaustedError,
   PromptQueueFullError,
@@ -72,6 +73,19 @@ export class MessagesHandler {
 
   async stop(): Promise<Response> {
     return Response.json(await this.messageService.stop());
+  }
+
+  async reconcileExecutionState(request: Request): Promise<Response> {
+    const parsed = executionStateRequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return Response.json({ error: "Invalid execution state request" }, { status: 400 });
+    }
+    return Response.json(
+      await this.messageService.reconcileExecutionState(
+        parsed.data.automationRunId,
+        parsed.data.executionLaunchId
+      )
+    );
   }
 
   listEvents(url: URL): Response {

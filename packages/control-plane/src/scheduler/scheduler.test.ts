@@ -109,7 +109,9 @@ function createMockStore() {
     getRunById: vi.fn().mockResolvedValue(null),
     countOverdue: vi.fn().mockResolvedValue(0),
     getOrphanedStartingRuns: vi.fn().mockResolvedValue([]),
-    getTimedOutRunningRuns: vi.fn().mockResolvedValue([]),
+    getRunsNeedingExecutionRecovery: vi.fn().mockResolvedValue([]),
+    recordRunExecutionState: vi.fn().mockResolvedValue(undefined),
+    markRunExecutionUnresolved: vi.fn().mockResolvedValue(undefined),
     incrementConsecutiveFailures: vi.fn().mockResolvedValue(1),
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
     autoPause: vi.fn().mockResolvedValue(undefined),
@@ -213,6 +215,15 @@ function createMockSessionStub(): SessionStub {
       if (path === "/internal/init") return Response.json({ status: "ok" });
       if (path === "/internal/prompt")
         return Response.json({ messageId: "msg-1", status: "queued" });
+      if (path === "/internal/execution-state")
+        return Response.json({
+          executionState: "idle",
+          messageId: "msg-1",
+          messageStatus: "completed",
+          deadlineAt: null,
+          cleanupDeadlineAt: null,
+          error: null,
+        });
       return new Response("Not Found", { status: 404 });
     }),
   } as never;
@@ -1480,6 +1491,177 @@ describe("Scheduler", () => {
 
     // ── Recovery sweep ──────────────────────────────────────────────────────
 
+    it("leaves a healthy long-running turn to its session-owned deadline", async () => {
+      mockStore.getRunsNeedingExecutionRecovery.mockResolvedValue([
+        sampleRunRow({ started_at: now - 3 * 60 * 60 * 1000 }),
+      ]);
+      const sessionStub = {
+        fetch: vi.fn(async (_request: Request) =>
+          Response.json({
+            executionState: "running",
+            messageId: "msg-1",
+            messageStatus: "processing",
+            deadlineAt: now + 60_000,
+            cleanupDeadlineAt: now + 120_000,
+            error: null,
+          })
+        ),
+      };
+      await createScheduler(createEnv({ EXECUTION_TIMEOUT_MS: "1" }, sessionStub)).tick();
+
+      expect(mockStore.updateRun).not.toHaveBeenCalled();
+      expect(mockStore.bulkFailRunningRuns).not.toHaveBeenCalled();
+      expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
+        "run-1",
+        "sess-1",
+        true,
+        null,
+        expect.any(Number),
+        null
+      );
+      const request = sessionStub.fetch.mock.calls[0]?.[0] as Request | undefined;
+      expect(request?.url).toBe("http://internal/internal/execution-state");
+      expect(await request?.json()).toEqual({ automationRunId: "run-1" });
+    });
+
+    it("reports an authoritative timeout while retaining unresolved cancellation", async () => {
+      mockStore.getRunsNeedingExecutionRecovery.mockResolvedValue([sampleRunRow()]);
+      const sessionStub = {
+        fetch: vi.fn(async () =>
+          Response.json({
+            executionState: "stopping",
+            messageId: "msg-1",
+            messageStatus: "failed",
+            deadlineAt: now - 1,
+            cleanupDeadlineAt: now + 60_000,
+            error: "Execution deadline exceeded",
+          })
+        ),
+      };
+      await createScheduler(createEnv(undefined, sessionStub)).tick();
+
+      expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
+        status: "failed",
+        failure_reason: "Execution deadline exceeded",
+        completed_at: expect.any(Number),
+      });
+      expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
+        "run-1",
+        "sess-1",
+        true,
+        "execution_stopping",
+        expect.any(Number),
+        null
+      );
+    });
+
+    it("preserves uncertain execution when the session cannot be reached", async () => {
+      mockStore.getRunsNeedingExecutionRecovery.mockResolvedValue([sampleRunRow()]);
+      const sessionStub = { fetch: vi.fn().mockRejectedValue(new Error("Session unavailable")) };
+      await createScheduler(createEnv(undefined, sessionStub)).tick();
+
+      expect(mockStore.updateRun).not.toHaveBeenCalled();
+      expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
+        "run-1",
+        "sess-1",
+        true,
+        "session_state_unreachable",
+        expect.any(Number),
+        null
+      );
+    });
+
+    it("releases confirmed terminal execution without reversing a prior timeout report", async () => {
+      mockStore.getRunsNeedingExecutionRecovery.mockResolvedValue([
+        sampleRunRow({ status: "failed", execution_unresolved: 1 }),
+      ]);
+      await createScheduler().tick();
+
+      expect(mockStore.updateRun).not.toHaveBeenCalled();
+      expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
+        "run-1",
+        "sess-1",
+        false,
+        null,
+        expect.any(Number),
+        null
+      );
+    });
+
+    it("keeps startup timeout distinct and does not assume a late launcher stopped", async () => {
+      mockStore.getRunsNeedingExecutionRecovery.mockResolvedValue([
+        sampleRunRow({ started_at: now - 10 * 60 * 1000 }),
+      ]);
+      const sessionStub = {
+        fetch: vi.fn(async () =>
+          Response.json({
+            executionState: "idle",
+            messageId: null,
+            messageStatus: null,
+            deadlineAt: null,
+            cleanupDeadlineAt: null,
+            error: null,
+          })
+        ),
+      };
+      await createScheduler(createEnv(undefined, sessionStub)).tick();
+
+      expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
+        status: "failed",
+        failure_reason: "session_creation_timeout",
+        completed_at: expect.any(Number),
+      });
+      expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
+        "run-1",
+        "sess-1",
+        true,
+        "session_startup_unresolved",
+        expect.any(Number),
+        null
+      );
+    });
+
+    it.each([false, true])(
+      "requires observation of an in-flight follow-up before releasing admission (observed=%s)",
+      async (launchObserved) => {
+        mockStore.getRunsNeedingExecutionRecovery.mockResolvedValue([
+          sampleRunRow({
+            status: "completed",
+            execution_unresolved: 1,
+            execution_launch_id: "launch-2",
+          }),
+        ]);
+        const sessionStub = {
+          fetch: vi.fn(async (_request: Request) =>
+            Response.json({
+              executionState: "idle",
+              messageId: "msg-1",
+              messageStatus: "completed",
+              deadlineAt: null,
+              cleanupDeadlineAt: null,
+              error: null,
+              launchObserved,
+            })
+          ),
+        };
+        await createScheduler(createEnv(undefined, sessionStub)).tick();
+
+        expect(mockStore.updateRun).not.toHaveBeenCalled();
+        expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
+          "run-1",
+          "sess-1",
+          !launchObserved,
+          launchObserved ? null : "execution_launch_unresolved",
+          expect.any(Number),
+          "launch-2"
+        );
+        expect(await sessionStub.fetch.mock.calls[0][0].json()).toEqual({
+          automationRunId: "run-1",
+          executionLaunchId: "launch-2",
+        });
+      }
+    );
+
     it("applies one CAS-guarded strike per invocation for recovered children", async () => {
       // Two stuck children of the SAME invocation → one strike, not two.
       const orphanedRuns = [
@@ -1516,15 +1698,16 @@ describe("Scheduler", () => {
       expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledExactlyOnceWith("auto-1");
     });
 
-    it("recovers timed-out running runs", async () => {
+    it("recovers the authoritative terminal outcome without an independent execution budget", async () => {
       const timedOutRun = {
         id: "timeout-1",
         automation_id: "auto-1",
         invocation_id: "inv-timeout",
+        session_id: "sess-1",
         status: "running",
         started_at: now - 2 * 60 * 60 * 1000,
       };
-      mockStore.getTimedOutRunningRuns.mockResolvedValue([timedOutRun]);
+      mockStore.getRunsNeedingExecutionRecovery.mockResolvedValue([timedOutRun]);
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ total: 1, active: 0, failed: 1 })
       );
@@ -1532,11 +1715,21 @@ describe("Scheduler", () => {
       const scheduler = createScheduler();
       await scheduler.tick();
 
-      expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
-        ["timeout-1"],
-        "execution_timeout",
-        expect.any(Number)
+      expect(mockStore.updateRun).toHaveBeenCalledWith("timeout-1", {
+        status: "completed",
+        failure_reason: null,
+        completed_at: expect.any(Number),
+      });
+      expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
+        "timeout-1",
+        "sess-1",
+        false,
+        null,
+        expect.any(Number),
+        null
       );
+      expect(mockStore.getRunsNeedingExecutionRecovery).toHaveBeenCalledWith(50);
+      expect(mockStore.bulkFailRunningRuns).not.toHaveBeenCalled();
     });
 
     it("recovers one category when the other recovery query fails", async () => {
@@ -1544,11 +1737,12 @@ describe("Scheduler", () => {
         id: "timeout-1",
         automation_id: "auto-1",
         invocation_id: "inv-timeout",
+        session_id: "sess-1",
         status: "running",
         started_at: now - 2 * 60 * 60 * 1000,
       };
       mockStore.getOrphanedStartingRuns.mockRejectedValue(new Error("D1 orphan query timeout"));
-      mockStore.getTimedOutRunningRuns.mockResolvedValue([timedOutRun]);
+      mockStore.getRunsNeedingExecutionRecovery.mockResolvedValue([timedOutRun]);
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ total: 1, active: 0, failed: 1 })
       );
@@ -1559,11 +1753,11 @@ describe("Scheduler", () => {
         .mockImplementation(() => {});
 
       await scheduler.tick();
-      expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
-        ["timeout-1"],
-        "execution_timeout",
-        expect.any(Number)
-      );
+      expect(mockStore.updateRun).toHaveBeenCalledWith("timeout-1", {
+        status: "completed",
+        failure_reason: null,
+        completed_at: expect.any(Number),
+      });
       expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-timeout");
 
       const queryErrorCall = errorSpy.mock.calls.find(
@@ -1758,12 +1952,13 @@ describe("Scheduler", () => {
         id: "timeout-1",
         automation_id: "auto-2",
         invocation_id: "inv-timeout",
+        session_id: "sess-1",
         status: "running",
         started_at: now - 2 * 60 * 60 * 1000,
       };
       mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
-      mockStore.getTimedOutRunningRuns.mockResolvedValue([timedOutRun]);
-      mockStore.bulkFailRunningRuns.mockRejectedValue(new Error("D1 timeout"));
+      mockStore.getRunsNeedingExecutionRecovery.mockResolvedValue([timedOutRun]);
+      mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ total: 1, active: 0, failed: 1 })
       );
@@ -1780,24 +1975,23 @@ describe("Scheduler", () => {
         "session_creation_timeout",
         expect.any(Number)
       );
-      expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
-        ["timeout-1"],
-        "execution_timeout",
-        expect.any(Number)
-      );
+      expect(mockStore.updateRun).toHaveBeenCalledWith("timeout-1", {
+        status: "completed",
+        failure_reason: null,
+        completed_at: expect.any(Number),
+      });
 
       expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-orphan");
 
       const bulkFailErrorCall = errorSpy.mock.calls.find(
         ([, data]) =>
           (data as Record<string, unknown> | undefined)?.event ===
-          "scheduler.recovery.bulk_fail_error"
+          "scheduler.recovery.execution_error"
       );
       expect(bulkFailErrorCall).toBeDefined();
       expect(bulkFailErrorCall![1]).toMatchObject({
-        event: "scheduler.recovery.bulk_fail_error",
-        category: "timed_out",
-        count: 1,
+        event: "scheduler.recovery.execution_error",
+        run_id: "timeout-1",
         error: "D1 timeout",
       });
     });
@@ -1874,6 +2068,36 @@ describe("Scheduler", () => {
   describe("runComplete", () => {
     beforeEach(() => {
       mockStore.getRunById.mockResolvedValue(sampleRunRow());
+    });
+
+    it("does not let a late success reverse the session's recorded execution timeout", async () => {
+      const sessionStub = {
+        fetch: vi.fn(async () =>
+          Response.json({
+            executionState: "stopping",
+            messageId: "msg-1",
+            messageStatus: "failed",
+            deadlineAt: now - 1,
+            cleanupDeadlineAt: now + 60_000,
+            error: "Execution deadline exceeded",
+          })
+        ),
+      };
+      await createScheduler(createEnv(undefined, sessionStub)).runComplete(runCompletion());
+
+      expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
+        status: "failed",
+        failure_reason: "Execution deadline exceeded",
+        completed_at: expect.any(Number),
+      });
+      expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
+        "run-1",
+        "sess-1",
+        true,
+        "execution_stopping",
+        expect.any(Number),
+        null
+      );
     });
 
     it("marks run as completed and resets failures once every sibling completed", async () => {

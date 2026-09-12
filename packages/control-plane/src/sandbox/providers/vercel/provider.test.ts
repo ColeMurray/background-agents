@@ -2,14 +2,19 @@
  * Unit tests for VercelSandboxProvider.
  */
 
-import { describe, expect, it, vi } from "vitest";
-import { VercelSandboxProvider, type VercelProviderConfig } from "./provider";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  VERCEL_MAX_SANDBOX_TIMEOUT_MS,
+  VercelSandboxProvider,
+  type VercelProviderConfig,
+} from "./provider";
 import type { CreateSandboxConfig, RestoreConfig } from "../../provider";
 import type {
   VercelCreateSandboxRequest,
   VercelCreateSandboxResponse,
   VercelRunCommandRequest,
   VercelSandboxClient,
+  VercelSandboxSession,
   VercelSnapshotMetadata,
   VercelSnapshotResponse,
 } from "./client";
@@ -59,6 +64,7 @@ function createMockClient(
     snapshotSession: (sessionId: string) => Promise<VercelSnapshotResponse>;
     listSnapshots: () => Promise<VercelSnapshotMetadata[]>;
     stopSession: (sessionId: string) => Promise<void>;
+    getSession: (sessionId: string) => Promise<VercelSandboxSession>;
     deleteSnapshot: (snapshotId: string) => Promise<void>;
   }> = {}
 ): VercelSandboxClient {
@@ -87,6 +93,7 @@ function createMockClient(
     ),
     deleteSnapshot: vi.fn(async () => {}),
     stopSession: vi.fn(async () => {}),
+    getSession: vi.fn(async () => ({ ...createSessionResponse().session, status: "stopped" })),
     ...overrides,
   } as unknown as VercelSandboxClient;
 }
@@ -125,9 +132,6 @@ const baseRestoreConfig: RestoreConfig = {
   model: "anthropic/claude-sonnet-4-5",
 };
 
-// Mirrors VERCEL_MAX_SANDBOX_TIMEOUT_MS in provider.ts — Vercel rejects timeouts above 45 minutes.
-const VERCEL_MAX_SANDBOX_TIMEOUT_MS = 45 * 60 * 1000;
-
 function environmentBuildConfig() {
   return {
     buildId: "envimg-1",
@@ -145,6 +149,71 @@ function environmentBuildConfig() {
 }
 
 describe("VercelSandboxProvider", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["create", "restore"])(
+    "bounds %s expiry before provider API and entrypoint setup consume lifetime",
+    async (operation) => {
+      const requestStartedAtMs = 1_800_000_000_000;
+      let nowMs = requestStartedAtMs;
+      vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+      const client = createMockClient({
+        createSandbox: vi.fn(async () => {
+          nowMs += 10_000;
+          return createSessionResponse();
+        }),
+        startCommand: vi.fn(async () => {
+          nowMs += 20_000;
+          return { commandId: "cmd-2", exitCode: null };
+        }),
+      });
+      const provider = new VercelSandboxProvider(client, providerConfig);
+
+      const result =
+        operation === "create"
+          ? await provider.createSandbox(baseCreateConfig)
+          : await provider.restoreFromSnapshot(baseRestoreConfig);
+
+      expect(result.executionExpiry).toEqual({
+        kind: "conservative",
+        expiresAtMs: requestStartedAtMs + VERCEL_MAX_SANDBOX_TIMEOUT_MS,
+      });
+      expect(Date.now()).toBe(requestStartedAtMs + 30_000);
+    }
+  );
+
+  it("uses a shorter acknowledged provider duration", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const client = createMockClient({
+      createSandbox: vi.fn(async () => {
+        const response = createSessionResponse();
+        response.session.timeout = 60_000;
+        return response;
+      }),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    expect((await provider.createSandbox(baseCreateConfig)).executionExpiry).toEqual({
+      kind: "conservative",
+      expiresAtMs: 1_800_000_060_000,
+    });
+  });
+
+  it("does not claim provider lifetime when no positive duration is acknowledged", async () => {
+    const client = createMockClient({
+      createSandbox: vi.fn(async () => {
+        const response = createSessionResponse();
+        response.session.timeout = 0;
+        return response;
+      }),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    expect((await provider.createSandbox(baseCreateConfig)).executionExpiry).toEqual({
+      kind: "unknown",
+    });
+  });
+
   it("classifies request deadline failures as transient", async () => {
     const client = createMockClient({
       createSandbox: vi.fn(async () => {
@@ -625,6 +694,98 @@ describe("VercelSandboxProvider", () => {
 
     expect(result).toEqual({ success: true });
     expect(vi.mocked(client.stopSession)).toHaveBeenCalledWith("vercel-session-1", correlation);
+    expect(vi.mocked(client.getSession)).toHaveBeenCalledWith("vercel-session-1", correlation);
+  });
+
+  it.each(["running", "stopping", "snapshotting", "failed", "aborted"] as const)(
+    "does not treat an accepted stop with %s state as confirmed cessation",
+    async (status) => {
+      const client = createMockClient({
+        getSession: vi.fn(async () => ({ ...createSessionResponse().session, status })),
+      });
+      const provider = new VercelSandboxProvider(client, providerConfig);
+
+      expect(
+        await provider.stopSandbox({
+          providerObjectId: "vercel-session-1",
+          sessionId: "session-123",
+          reason: "execution_timeout",
+        })
+      ).toMatchObject({ success: false });
+    }
+  );
+
+  it.each([409, 422])("confirms session state after a stop returns %i", async (status) => {
+    const client = createMockClient({
+      stopSession: vi.fn(async () => {
+        throw new VercelSandboxApiError("already stopping", status);
+      }),
+      getSession: vi.fn(async () => ({
+        ...createSessionResponse().session,
+        status: "stopping" as const,
+      })),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    expect(
+      await provider.stopSandbox({
+        providerObjectId: "vercel-session-1",
+        sessionId: "session-123",
+        reason: "execution_timeout",
+      })
+    ).toMatchObject({ success: false });
+    expect(client.getSession).toHaveBeenCalled();
+  });
+
+  it("confirms cessation when the exact stopped session is missing", async () => {
+    const client = createMockClient({
+      getSession: vi.fn(async () => {
+        throw new VercelSandboxApiError("not found", 404);
+      }),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    expect(
+      await provider.stopSandbox({
+        providerObjectId: "vercel-session-1",
+        sessionId: "session-123",
+        reason: "execution_timeout",
+      })
+    ).toEqual({ success: true });
+  });
+
+  it("does not accept stop evidence belonging to another provider session", async () => {
+    const client = createMockClient({
+      getSession: vi.fn(async () => ({
+        ...createSessionResponse("another-session").session,
+        status: "stopped" as const,
+      })),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    expect(
+      await provider.stopSandbox({
+        providerObjectId: "vercel-session-1",
+        sessionId: "session-123",
+        reason: "execution_timeout",
+      })
+    ).toMatchObject({ success: false });
+  });
+
+  it("passes the caller's cleanup signal to both stop and confirmation reads", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+    const signal = new AbortController().signal;
+
+    await provider.stopSandbox({
+      providerObjectId: "vercel-session-1",
+      sessionId: "session-123",
+      reason: "execution_timeout",
+      signal,
+    });
+
+    expect(client.stopSession).toHaveBeenCalledWith("vercel-session-1", undefined, signal);
+    expect(client.getSession).toHaveBeenCalledWith("vercel-session-1", undefined, signal);
   });
 
   it("reports a failed snapshot status without throwing", async () => {

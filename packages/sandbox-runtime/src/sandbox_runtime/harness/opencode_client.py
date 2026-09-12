@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -27,7 +27,11 @@ class SSEStreamDisconnectedError(SSEConnectionError):
 
 
 class SSEInactivityTimeoutError(Exception):
-    """Raised when no SSE data arrives within the inactivity deadline."""
+    """Raised when stream consumption exceeds its responsiveness deadline.
+
+    Time blocked in the consumer is included; this does not identify a silent
+    model, or prove that the server has stopped working.
+    """
 
 
 class OpenCodeClient:
@@ -100,27 +104,41 @@ class OpenCodeClient:
     ) -> AsyncIterator[AsyncIterator[dict[str, Any]]]:
         """Open the ``/event`` SSE stream and hand back decoded event dicts.
 
-        Owns the response lifecycle and the inactivity deadline: the deadline
-        is armed before connecting, reset on every chunk received, and covers
-        the caller's body for the lifetime of the context; expiry raises
-        ``SSEInactivityTimeoutError``. A non-200 handshake raises
+        The deadline starts before connecting and resets on consumed chunks.
+        Downstream delays count, but expiry is checked on the next read, never
+        by cancelling a caller while an async generator is suspended at yield.
+        The bridge's whole-turn deadline bounds a permanently blocked consumer.
+        A non-200 handshake raises
         ``SSEConnectionError``; httpx transport failures (while connecting or
         mid-stream) are translated into ``SSEStreamDisconnectedError``.
         """
+        deadline_monotonic = asyncio.get_running_loop().time() + inactivity_timeout_seconds
         try:
-            async with asyncio.timeout(inactivity_timeout_seconds) as timeout_ctx:
-                async with self._client().stream(
-                    "GET",
-                    f"{self._base_url}/event",
-                    timeout=httpx.Timeout(None, connect=self._connect_timeout_seconds, read=None),
-                ) as response:
-                    if response.status_code != 200:
-                        raise SSEConnectionError(f"SSE connection failed: {response.status_code}")
-                    yield self._decoded_events(response, timeout_ctx, inactivity_timeout_seconds)
-        except TimeoutError:
-            raise SSEInactivityTimeoutError(
-                f"SSE stream inactive for {inactivity_timeout_seconds:.0f}s (no data received)."
-            )
+            # Keep timeout scopes out of yielded consumer code. In particular,
+            # an SSE timeout must not escape a stalled event sink as a user Stop.
+            async with AsyncExitStack() as stack:
+                try:
+                    async with asyncio.timeout_at(deadline_monotonic):
+                        response = await stack.enter_async_context(
+                            self._client().stream(
+                                "GET",
+                                f"{self._base_url}/event",
+                                timeout=httpx.Timeout(
+                                    None, connect=self._connect_timeout_seconds, read=None
+                                ),
+                            )
+                        )
+                        if response.status_code != 200:
+                            raise SSEConnectionError(
+                                f"SSE connection failed: {response.status_code}"
+                            )
+                except TimeoutError:
+                    raise self._consumption_timeout(inactivity_timeout_seconds) from None
+                yield self._decoded_events(
+                    response,
+                    inactivity_timeout_seconds=inactivity_timeout_seconds,
+                    deadline_monotonic=deadline_monotonic,
+                )
         except httpx.TransportError as e:
             self._log.error("bridge.sse_transport_error", exc=e)
             raise SSEStreamDisconnectedError(str(e)) from e
@@ -142,15 +160,16 @@ class OpenCodeClient:
             raise RuntimeError(f"Async prompt failed: {prompt_response.status_code} - {error_body}")
 
     async def request_stop(self, opencode_session_id: str | None, *, reason: str) -> bool:
-        """Best-effort abort of the active OpenCode prompt (saves LLM compute)."""
+        """Request abort; success is acceptance, never evidence of cessation."""
         if not opencode_session_id:
             return False
 
         try:
-            await self._client().post(
+            response = await self._client().post(
                 f"{self._base_url}/session/{opencode_session_id}/abort",
                 timeout=self._request_timeout_seconds,
             )
+            response.raise_for_status()
             self._log.info("bridge.stop_requested", reason=reason)
             return True
         except Exception as e:
@@ -175,8 +194,8 @@ class OpenCodeClient:
     async def _decoded_events(
         self,
         response: httpx.Response,
-        timeout_ctx: asyncio.Timeout | None = None,
         inactivity_timeout_seconds: float | None = None,
+        deadline_monotonic: float | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Parse Server-Sent Events stream from OpenCode.
 
@@ -186,16 +205,29 @@ class OpenCodeClient:
             data: {"type": "...", "properties": {...}}
 
         Events are separated by double newlines.
-        If timeout_ctx is provided, its deadline is reset to now plus
-        ``inactivity_timeout_seconds`` on every chunk received.
+        The responsiveness deadline resets on consumed chunks, including
+        server heartbeat frames. A delayed consumer can also expire it.
         """
         buffer = ""
-        async for chunk in response.aiter_text():
+        chunks = aiter(response.aiter_text())
+        while True:
+            if (
+                deadline_monotonic is not None
+                and asyncio.get_running_loop().time() >= deadline_monotonic
+            ):
+                assert inactivity_timeout_seconds is not None
+                raise self._consumption_timeout(inactivity_timeout_seconds)
+            try:
+                async with asyncio.timeout_at(deadline_monotonic):
+                    chunk = await anext(chunks)
+            except StopAsyncIteration:
+                break
+            except TimeoutError:
+                assert inactivity_timeout_seconds is not None
+                raise self._consumption_timeout(inactivity_timeout_seconds) from None
             buffer += chunk
-            if timeout_ctx is not None and inactivity_timeout_seconds is not None:
-                timeout_ctx.reschedule(
-                    asyncio.get_running_loop().time() + inactivity_timeout_seconds
-                )
+            if inactivity_timeout_seconds is not None:
+                deadline_monotonic = asyncio.get_running_loop().time() + inactivity_timeout_seconds
 
             # Frames split on LF-LF only: the peer is the bundled localhost
             # OpenCode server (Bun/Hono), which emits LF-framed SSE. CRLF
@@ -220,3 +252,11 @@ class OpenCodeClient:
                         yield event
                     except json.JSONDecodeError as e:
                         self._log.debug("bridge.sse_parse_error", exc=e)
+
+    @staticmethod
+    def _consumption_timeout(timeout_seconds: float) -> SSEInactivityTimeoutError:
+        return SSEInactivityTimeoutError(
+            f"The bridge did not consume OpenCode stream data within its "
+            f"{timeout_seconds:g}s responsiveness limit; receive or downstream "
+            "processing may be stalled."
+        )

@@ -12,6 +12,8 @@ import type { SessionWebSocketManager } from "./websocket-manager";
 
 export interface ExecutionStopPreparation {
   stopConfirmationDeadline: number;
+  sandboxId?: string | null;
+  cleanupDeadlineMs?: number;
   failure: RecordedMessageFailure;
 }
 
@@ -42,7 +44,17 @@ export class ExecutionStopCoordinator {
 
   prepare(reason: string, now: number): ExecutionStopPreparation | null {
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
-    const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
+    const metadata = processingMessage
+      ? this.messageRepository.getMessageExecutionMetadata(processingMessage.id)
+      : null;
+    const cleanupDeadlineMs = processingMessage
+      ? (this.messageRepository.beginMessageCleanup(processingMessage.id, now) ??
+        metadata?.cleanup_deadline_ms)
+      : undefined;
+    const stopConfirmationDeadline = Math.min(
+      now + STOP_CONFIRMATION_TIMEOUT_MS,
+      cleanupDeadlineMs ?? Infinity
+    );
     const failure = processingMessage
       ? this.messageFailures.record(processingMessage.id, reason, now, "processing")
       : null;
@@ -52,7 +64,12 @@ export class ExecutionStopCoordinator {
       stopConfirmationDeadline
     );
     this.alarmDeadlines.setPendingEarliest(stopConfirmationDeadline);
-    return { stopConfirmationDeadline, failure };
+    return {
+      stopConfirmationDeadline,
+      failure,
+      sandboxId: metadata?.execution_sandbox_id ?? null,
+      cleanupDeadlineMs: cleanupDeadlineMs ?? undefined,
+    };
   }
 
   async deliver(preparation: ExecutionStopPreparation): Promise<void> {
@@ -64,8 +81,21 @@ export class ExecutionStopCoordinator {
     });
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
 
+    const currentFence = this.messageRepository.getMessageAwaitingStopConfirmation();
+    if (
+      currentFence?.id !== preparation.failure.completion.messageId ||
+      currentFence.deadline !== preparation.stopConfirmationDeadline
+    )
+      return;
     const sandboxWs = this.wsManager.getSandboxSocket();
-    const stopSent = sandboxWs !== null && this.wsManager.send(sandboxWs, { type: "stop" });
+    const stopSent =
+      sandboxWs !== null &&
+      this.wsManager.send(sandboxWs, {
+        type: "stop",
+        messageId: preparation.failure.completion.messageId,
+        sandboxId: preparation.sandboxId ?? undefined,
+        cleanupDeadlineMs: preparation.cleanupDeadlineMs,
+      });
     const [alarm, status] = await Promise.allSettled([
       this.alarmScheduler.schedule(preparation.stopConfirmationDeadline),
       this.sessionStatus.reconcileAfterExecution(false),
@@ -87,8 +117,20 @@ export class ExecutionStopCoordinator {
       ) {
         return;
       }
-      await this.sandboxLifecycle.terminateUnresponsiveSandbox(reason);
-      await this.resumeAfterSandboxTermination();
+      const terminated = await this.sandboxLifecycle.terminateUnresponsiveSandbox(
+        reason,
+        preparation.cleanupDeadlineMs
+      );
+      if (terminated)
+        await this.resumeAfterSandboxTermination(
+          preparation.failure.completion.messageId,
+          preparation.sandboxId
+        );
+      else
+        await this.retainFenceAfterFailedTermination(
+          preparation.failure.completion.messageId,
+          preparation.sandboxId
+        );
     }
   }
 
@@ -105,13 +147,56 @@ export class ExecutionStopCoordinator {
       event: "prompt.stop_confirmation_timeout",
       message_id: awaitingStop.id,
     });
-    await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_confirmation_timeout");
-    await this.resumeAfterSandboxTermination();
+    const metadata = this.messageRepository.getMessageExecutionMetadata(awaitingStop.id);
+    const terminated = await this.sandboxLifecycle.terminateUnresponsiveSandbox(
+      "stop_confirmation_timeout",
+      metadata?.cleanup_deadline_ms ?? undefined
+    );
+    if (terminated)
+      await this.resumeAfterSandboxTermination(awaitingStop.id, metadata?.execution_sandbox_id);
+    else
+      await this.retainFenceAfterFailedTermination(awaitingStop.id, metadata?.execution_sandbox_id);
   }
 
-  async resumeAfterSandboxTermination(): Promise<void> {
+  private async retainFenceAfterFailedTermination(
+    messageId: string,
+    sandboxId?: string | null
+  ): Promise<void> {
+    const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
+    if (awaitingStop?.id !== messageId) return;
+    const metadata = this.messageRepository.getMessageExecutionMetadata(messageId);
+    if (sandboxId !== undefined && (metadata?.execution_sandbox_id ?? null) !== sandboxId) return;
+    if (metadata?.requires_stop_evidence !== 1) {
+      // Compatibility only: pre-capability images used best-effort detach.
+      // This is expressly not evidence that provider execution has ceased.
+      this.log.warn("Legacy runtime stop recovery without cessation evidence", {
+        event: "prompt.stop_legacy_exception",
+        message_id: messageId,
+      });
+      await this.resumeAfterSandboxTermination(messageId, metadata?.execution_sandbox_id);
+      return;
+    }
+    // This is a retry of containment, never a fresh runtime cleanup allowance.
+    // Keep the original cleanup deadline in metadata and the dispatch fence
+    // durable even after the provider can no longer confirm termination.
+    const retryAt = Date.now() + STOP_CONFIRMATION_TIMEOUT_MS;
+    this.messageRepository.markMessageAwaitingStopConfirmation(messageId, retryAt);
+    await this.alarmScheduler.schedule(retryAt);
+  }
+
+  async resumeAfterSandboxTermination(
+    expectedMessageId: string | null,
+    expectedSandboxId?: string | null
+  ): Promise<void> {
     const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
     if (awaitingStop) {
+      const metadata = this.messageRepository.getMessageExecutionMetadata(awaitingStop.id);
+      if (
+        awaitingStop.id !== expectedMessageId ||
+        (expectedSandboxId !== undefined &&
+          (metadata?.execution_sandbox_id ?? null) !== expectedSandboxId)
+      )
+        return;
       this.messageRepository.clearMessageAwaitingStopConfirmation(awaitingStop.id);
     }
     await this.processMessageQueue();

@@ -41,6 +41,44 @@ describe("buildModalWorkspaceSlug", () => {
   });
 });
 
+describe("Modal termination evidence", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("rejects a bare success response without termination confirmation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ success: true }))
+    );
+    const client = createModalClient("secret", "workspace");
+    await expect(
+      client.terminateSandbox({
+        providerObjectId: "sb-exact",
+        sessionId: "session-1",
+        reason: "stop_confirmation_timeout",
+      })
+    ).rejects.toThrow();
+  });
+
+  it("requires authenticated exact-instance termination acknowledgement", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({ success: true, data: { terminated: true } })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createModalClient("secret", "workspace");
+    expect(
+      await client.terminateSandbox({
+        providerObjectId: "sb-exact",
+        sessionId: "session-1",
+        reason: "stop_confirmation_timeout",
+      })
+    ).toEqual({ success: true });
+    const [url, request] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain("api-terminate-sandbox");
+    expect(JSON.parse(request.body as string)).toEqual({ sandbox_id: "sb-exact" });
+    expect(new Headers(request.headers).get("Authorization")).toMatch(/^Bearer /);
+  });
+});
+
 describe("buildModalSandboxDashboardUrl", () => {
   it("builds a Modal dashboard URL for a sandbox object", () => {
     expect(
@@ -333,6 +371,7 @@ describe("ModalClient", () => {
       })
     ).resolves.toEqual({
       sandboxId: "sb-1",
+      executionExpiry: { kind: "unknown" },
       modalObjectId: "mo-1",
       createdAt: 1,
       codeServerUrl: "https://code.test",
@@ -378,6 +417,7 @@ describe("ModalClient", () => {
 
     expect(result).toEqual({
       sandboxId: "sb-1",
+      executionExpiry: { kind: "unknown" },
       modalObjectId: undefined,
       createdAt: 1,
       codeServerUrl: undefined,
@@ -509,6 +549,7 @@ describe("ModalClient", () => {
     ).resolves.toEqual({
       success: true,
       sandboxId: "sb-1",
+      executionExpiry: { kind: "unknown" },
       modalObjectId: undefined,
       codeServerUrl: undefined,
       codeServerPassword: undefined,

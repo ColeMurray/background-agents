@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { seedActiveUser, sqlDatabase } from "./helpers";
+import {
+  initNamedSession,
+  queryDO,
+  seedActiveUser,
+  seedMessage,
+  sqlDatabase,
+  waitForSandboxStatus,
+} from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import type { AutomationRunStatus } from "@open-inspect/shared/types/automations";
 import { cleanD1Tables } from "./cleanup";
@@ -17,6 +24,51 @@ import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
 function createScheduler(schedulerEnv = createCloudflareEnv(env)) {
   return new Scheduler(env.DB, schedulerEnv, { submit() {} });
+}
+
+/** Place recovery evidence in the real session owner, not the D1 reporting projection. */
+async function seedAutomationSessionMessage(input: {
+  automationId: string;
+  runId: string;
+  sessionId: string;
+  messageId: string;
+  status: "processing" | "completed" | "failed";
+  startedAt?: number;
+  executionDeadlineMs?: number;
+}) {
+  const { stub } = await initNamedSession(input.sessionId);
+  // The integration provider cannot launch runtimes. Let warm-up settle before
+  // installing a historical execution state so it cannot race the fixture.
+  await waitForSandboxStatus(stub, "failed");
+  const [participant] = await queryDO<{ id: string }>(stub, "SELECT id FROM participants LIMIT 1");
+  if (!participant) throw new Error("Session fixture did not create its participant");
+  const now = Date.now();
+  await seedMessage(stub, {
+    id: input.messageId,
+    authorId: participant.id,
+    content: "Run tests",
+    source: "automation",
+    status: input.status,
+    createdAt: input.startedAt ?? now,
+    startedAt: input.startedAt ?? now,
+  });
+  await queryDO(
+    stub,
+    `UPDATE messages SET callback_context = ?, error_message = ?, completed_at = ?,
+     execution_deadline_ms = ?, cleanup_deadline_ms = ?, requires_stop_evidence = 1 WHERE id = ?`,
+    JSON.stringify({
+      source: "automation",
+      automationId: input.automationId,
+      runId: input.runId,
+      automationName: "Test Automation",
+    }),
+    input.status === "failed" ? "boom" : null,
+    input.status === "processing" ? null : now,
+    input.executionDeadlineMs ?? null,
+    input.executionDeadlineMs == null ? null : now + 60_000,
+    input.messageId
+  );
+  return stub;
 }
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -332,14 +384,13 @@ describe("Scheduler (integration)", () => {
       expect(automation!.consecutive_failures).toBe(1);
     });
 
-    it("recovers timed-out running runs during sweep", async () => {
+    it("reconciles the session's expired execution deadline and retains its stop fence", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(
         makeAutomation({ id: "auto-t2", next_run_at: now + 86400000, enabled: 1 })
       );
 
-      // Default EXECUTION_TIMEOUT_MS is 90 minutes
       const twoHoursAgo = now - 2 * 60 * 60 * 1000;
       await seedRun(
         makeRunRow("auto-t2", {
@@ -351,13 +402,29 @@ describe("Scheduler (integration)", () => {
           created_at: twoHoursAgo,
         })
       );
+      await seedAutomationSessionMessage({
+        automationId: "auto-t2",
+        runId: "run-timeout-t2",
+        sessionId: "sess-timeout",
+        messageId: "msg-timeout-t2",
+        status: "processing",
+        startedAt: twoHoursAgo,
+        executionDeadlineMs: now - 1,
+      });
 
       const result = await createScheduler().tick();
       expect(result).toEqual({ processed: 0, skipped: 0, failed: 0 });
 
       const run = await store.getRunById("auto-t2", "run-timeout-t2");
       expect(run!.status).toBe("failed");
-      expect(run!.failure_reason).toBe("execution_timeout");
+      expect(run!.failure_reason).toBe("Execution deadline exceeded");
+      expect(run!.execution_unresolved).toBe(1);
+      expect(run!.execution_recovery_reason).toBe("execution_stopping");
+      expect(await store.getActiveRunForAutomation("auto-t2")).toMatchObject({
+        id: "run-timeout-t2",
+        status: "failed",
+        execution_unresolved: 1,
+      });
     });
 
     it("skips overdue automations with active runs (concurrency guard)", async () => {
@@ -849,6 +916,13 @@ describe("Scheduler (integration)", () => {
     }
 
     async function completeRun(automationId: string, runId: string, success: boolean) {
+      await seedAutomationSessionMessage({
+        automationId,
+        runId,
+        sessionId: `sess-${runId}`,
+        messageId: `msg-${runId}`,
+        status: success ? "completed" : "failed",
+      });
       return createScheduler().runComplete({
         automationId,
         runId,

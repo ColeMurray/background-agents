@@ -126,6 +126,11 @@ export interface MessageRow {
   status: MessageStatus;
   error_message: string | null;
   stop_confirmation_deadline: number | null;
+  execution_deadline_ms?: number | null;
+  cleanup_deadline_ms?: number | null;
+  cleanup_reserve_ms?: number | null;
+  execution_sandbox_id?: string | null;
+  requires_stop_evidence?: number;
   created_at: number;
   started_at: number | null;
   completed_at: number | null;
@@ -172,6 +177,9 @@ export interface SandboxRow {
   snapshot_image_id: string | null; // Modal Image ID for filesystem snapshot restoration
   snapshot_runtime_version: string | null; // SANDBOX_VERSION that produced snapshot_image_id
   runtime_version: string | null; // SANDBOX_VERSION reported by the running sandbox
+  provider_execution_expiry_kind?: "hard" | "conservative" | "unknown" | null;
+  provider_execution_expires_at_ms?: number | null;
+  runtime_capabilities?: string | null;
   auth_token: string | null;
   auth_token_hash: string | null; // SHA-256 hash of sandbox auth token
   status: SandboxStatus;
@@ -207,6 +215,9 @@ export type SandboxAccessKind = "codeServer" | "vnc" | "ttyd";
 interface PromptCommand {
   type: "prompt";
   messageId: string;
+  sandboxId?: string;
+  executionDeadlineMs?: number;
+  cleanupDeadlineMs?: number;
   content: string;
   model?: string; // LLM model for per-message override
   reasoningEffort?: string; // Reasoning effort level
@@ -219,10 +230,14 @@ interface PromptCommand {
 
 interface StopCommand {
   type: "stop";
+  messageId?: string;
+  sandboxId?: string;
+  cleanupDeadlineMs?: number;
 }
 
 interface SnapshotCommand {
   type: "snapshot";
+  requestId?: string;
 }
 
 interface ShutdownCommand {

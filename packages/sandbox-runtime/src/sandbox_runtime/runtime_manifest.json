@@ -1,8 +1,8 @@
 {
-  "runtimeVersion": "v65-turn-inactivity-timeout",
-  "generation": 65,
+  "runtimeVersion": "v66-timeout-redesign",
+  "generation": 66,
   "minimumCompatibleGeneration": 62,
-  "minimumRebuildGeneration": 65,
+  "minimumRebuildGeneration": 66,
   "harnessMinimumGeneration": {
     "claude": 64
   }

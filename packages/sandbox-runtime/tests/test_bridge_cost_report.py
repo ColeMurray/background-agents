@@ -1,7 +1,7 @@
 """The turn's final cumulative cost rides on execution_complete."""
 
 import asyncio
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, Mock
 
 import pytest
 
@@ -63,7 +63,10 @@ class TestExecutionCompleteCostReport:
             {
                 "type": "execution_complete",
                 "messageId": "msg-1",
+                "sandboxId": "test-sandbox",
                 "success": False,
+                "executionStopped": True,
+                "cleanupDeadlineMs": ANY,
                 "error": "Task was cancelled",
                 "messageCostUsd": 0.5,
             }

@@ -424,15 +424,15 @@ describe("AutomationStore", () => {
     });
   });
 
-  describe("getTimedOutRunningRuns", () => {
-    it("returns runs stuck in running state", async () => {
+  describe("getRunsNeedingExecutionRecovery", () => {
+    it("returns execution recovery candidates without a run-age cutoff", async () => {
       const { db, statements } = createFakeD1({
         allResults: [{ ...sampleRunRow, status: "running", started_at: now }],
       });
       const store = new AutomationStore(db);
-      const result = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
+      const result = await store.getRunsNeedingExecutionRecovery(50);
       expect(result).toHaveLength(1);
-      expect(statements[0].sql).toContain("status = 'running'");
+      expect(statements[0].params).toEqual([50]);
     });
   });
 
@@ -468,6 +468,7 @@ describe("AutomationStore", () => {
       await store.claimRunSession("run_test1", "session-1", now);
 
       expect(statements[0].sql).toContain("SET status = 'running'");
+      expect(statements[0].sql).toContain("execution_unresolved = 1");
       expect(statements[0].sql).toContain("WHERE id = ? AND status = 'starting'");
       expect(statements[0].params).toEqual(["session-1", now, "run_test1"]);
     });

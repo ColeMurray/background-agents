@@ -56,7 +56,11 @@ EventSink = Callable[[BridgeEvent], Awaitable[None]]
 
 @dataclass(frozen=True)
 class PromptLimits:
-    """Per-prompt time budgets the bridge derives from the sandbox timeout."""
+    """Legacy turn-policy defaults, not the provider's remaining lifetime.
+
+    Only OpenCode consumes the stream responsiveness setting. The bridge owns
+    execution and cleanup deadlines and includes preparation in the turn budget.
+    """
 
     inactivity_timeout_seconds: float
     prompt_max_duration_seconds: float
@@ -83,6 +87,9 @@ class TurnOutcome:
     error: str | None = None
     cancelled: bool = False
     message_cost_usd: float | None = None
+    # False on lost observation (EOF, transport failure, cancelled reader).
+    # A request to interrupt is not evidence that active tools have stopped.
+    execution_stopped: bool = True
 
     def __post_init__(self) -> None:
         if self.cancelled and self.success:
@@ -95,8 +102,19 @@ class TurnOutcome:
         return cls(success=True, message_cost_usd=message_cost_usd)
 
     @classmethod
-    def failed(cls, error: str, *, message_cost_usd: float | None = None) -> TurnOutcome:
-        return cls(success=False, error=error, message_cost_usd=message_cost_usd)
+    def failed(
+        cls,
+        error: str,
+        *,
+        message_cost_usd: float | None = None,
+        execution_stopped: bool = True,
+    ) -> TurnOutcome:
+        return cls(
+            success=False,
+            error=error,
+            message_cost_usd=message_cost_usd,
+            execution_stopped=execution_stopped,
+        )
 
 
 class HarnessStartError(RuntimeError):
@@ -149,6 +167,16 @@ class AgentHarness(Protocol):
 
     async def abort(self) -> bool:
         """Best-effort stop of the in-flight turn; ``True`` when a stop was requested."""
+        ...
+
+    async def stop(self, deadline_monotonic: float) -> bool:
+        """Contain active execution within one bridge-owned cleanup deadline.
+
+        Return True only with evidence that the turn and its outstanding tools
+        have ceased. An interrupt acknowledgement, reader cancellation, parent
+        process exit, or disconnect alone is insufficient. False quarantines the
+        runtime for provider termination; it must never receive another prompt.
+        """
         ...
 
 

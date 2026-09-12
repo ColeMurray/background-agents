@@ -621,6 +621,187 @@ describe("AutomationStore (D1 integration)", () => {
 
   // ─── Recovery sweep queries ────────────────────────────────────────────────
 
+  describe("execution recovery fences", () => {
+    it.each(["failed", "completed"] as const)(
+      "keeps a %s report unresolved until execution is confirmed stopped",
+      async (status) => {
+        const store = new AutomationStore(env.DB);
+        await store.create(makeAutomation({ id: "auto-fence" }));
+        await seedRunForKey("auto-fence", "pr:42", { id: "run-fence" });
+
+        expect(await store.claimRunSession("run-fence", "session-fence", 100)).toBe(true);
+        expect(await store.getRunById("auto-fence", "run-fence")).toMatchObject({
+          status: "running",
+          execution_unresolved: 1,
+        });
+        await store.updateRun("run-fence", { status, completed_at: 200 });
+
+        expect(await store.getActiveRunForAutomation("auto-fence")).toMatchObject({
+          id: "run-fence",
+          status,
+          execution_unresolved: 1,
+        });
+        expect(await store.getActiveRunForKey("auto-fence", "pr:42")).toMatchObject({
+          id: "run-fence",
+        });
+        expect(await store.getActiveRunForKey("auto-fence", "pr:43")).toBeNull();
+        expect((await store.getRunsNeedingExecutionRecovery(50)).map((run) => run.id)).toEqual([
+          "run-fence",
+        ]);
+
+        await store.recordRunExecutionState(
+          "run-fence",
+          "session-fence",
+          true,
+          "session_unreachable",
+          300
+        );
+        expect(await store.getActiveRunForAutomation("auto-fence")).not.toBeNull();
+        await store.recordRunExecutionState("run-fence", "session-fence", false, null, 400);
+
+        expect(await store.getActiveRunForAutomation("auto-fence")).toBeNull();
+        expect(await store.getActiveRunForKey("auto-fence", "pr:42")).toBeNull();
+        expect(await store.getRunsNeedingExecutionRecovery(50)).toEqual([]);
+        expect(await store.getRunById("auto-fence", "run-fence")).toMatchObject({
+          status,
+          completed_at: 200,
+          execution_unresolved: 0,
+          execution_recovery_reason: null,
+          execution_checked_at: 400,
+        });
+      }
+    );
+
+    it("rejects stale observations and wrong-session updates after a follow-up renews the fence", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-refence" }));
+      await seedRun(
+        makeRun("auto-refence", {
+          id: "run-refence",
+          session_id: "session-current",
+          status: "completed",
+          completed_at: 100,
+        })
+      );
+      await store.recordRunExecutionState("run-refence", "session-current", false, null, 200);
+
+      // Steering a previously completed session must fence it before the prompt is sent.
+      await store.markRunExecutionUnresolved("run-refence", "session-current", "launch-current");
+      const renewed = (await store.getRunById("auto-refence", "run-refence"))!;
+      expect(renewed.execution_unresolved).toBe(1);
+      const renewedAt = renewed.execution_checked_at!;
+      expect(renewedAt).toBeGreaterThan(200);
+
+      await store.recordRunExecutionState(
+        "run-refence",
+        "session-current",
+        false,
+        null,
+        renewedAt - 1,
+        "launch-current"
+      );
+      await store.recordRunExecutionState(
+        "run-refence",
+        "session-current",
+        false,
+        null,
+        renewedAt,
+        "launch-current"
+      );
+      await store.recordRunExecutionState(
+        "run-refence",
+        "session-stale",
+        false,
+        null,
+        renewedAt + 100,
+        "launch-current"
+      );
+      expect(await store.getRunById("auto-refence", "run-refence")).toMatchObject({
+        execution_unresolved: 1,
+        execution_checked_at: renewedAt,
+      });
+
+      await store.recordRunExecutionState(
+        "run-refence",
+        "session-current",
+        false,
+        null,
+        renewedAt + 1,
+        "launch-current"
+      );
+      await store.markRunExecutionUnresolved("run-refence", "session-stale", "launch-stale");
+      expect(await store.getActiveRunForAutomation("auto-refence")).toBeNull();
+      expect(await store.getRunById("auto-refence", "run-refence")).toMatchObject({
+        status: "completed",
+        execution_unresolved: 0,
+        execution_checked_at: renewedAt + 1,
+        execution_launch_id: null,
+      });
+    });
+
+    it.each([null, "launch-previous"])(
+      "does not let an observation of launch %s release a newer launch fence",
+      async (staleLaunchId) => {
+        const store = new AutomationStore(env.DB);
+        await store.create(makeAutomation({ id: "auto-launch-race" }));
+        await seedRun(
+          makeRun("auto-launch-race", {
+            id: "run-launch-race",
+            session_id: "session-current",
+            status: "completed",
+            completed_at: 100,
+          })
+        );
+        if (staleLaunchId !== null) {
+          await store.markRunExecutionUnresolved(
+            "run-launch-race",
+            "session-current",
+            staleLaunchId
+          );
+        }
+
+        // The new prompt has been fenced but has not necessarily reached the session yet.
+        await store.markRunExecutionUnresolved(
+          "run-launch-race",
+          "session-current",
+          "launch-current"
+        );
+        const renewedAt = (await store.getRunById("auto-launch-race", "run-launch-race"))!
+          .execution_checked_at!;
+
+        // A later read of the old idle session is still not evidence about the new prompt.
+        await store.recordRunExecutionState(
+          "run-launch-race",
+          "session-current",
+          false,
+          null,
+          renewedAt + 100,
+          staleLaunchId
+        );
+        expect(await store.getActiveRunForAutomation("auto-launch-race")).toMatchObject({
+          execution_unresolved: 1,
+          execution_checked_at: renewedAt,
+          execution_launch_id: "launch-current",
+        });
+
+        await store.recordRunExecutionState(
+          "run-launch-race",
+          "session-current",
+          false,
+          null,
+          renewedAt + 1,
+          "launch-current"
+        );
+        expect(await store.getActiveRunForAutomation("auto-launch-race")).toBeNull();
+        expect(await store.getRunById("auto-launch-race", "run-launch-race")).toMatchObject({
+          execution_unresolved: 0,
+          execution_checked_at: renewedAt + 1,
+          execution_launch_id: null,
+        });
+      }
+    );
+  });
+
   describe("recovery sweep queries", () => {
     it("finds orphaned starting runs older than threshold", async () => {
       const store = new AutomationStore(env.DB);
@@ -655,7 +836,7 @@ describe("AutomationStore (D1 integration)", () => {
       expect(orphaned).toHaveLength(0);
     });
 
-    it("finds timed-out running runs older than threshold", async () => {
+    it("finds older running sessions for authoritative execution reconciliation", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-rec3" }));
@@ -672,12 +853,11 @@ describe("AutomationStore (D1 integration)", () => {
         })
       );
 
-      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
-      expect(timedOut).toHaveLength(1);
-      expect(timedOut[0].id).toBe("run-timeout-1");
+      const candidates = await store.getRunsNeedingExecutionRecovery(50);
+      expect(candidates.map((run) => run.id)).toEqual(["run-timeout-1"]);
     });
 
-    it("does not find recent running runs", async () => {
+    it("includes recent running sessions without treating their age as expiry", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-rec4" }));
@@ -691,8 +871,9 @@ describe("AutomationStore (D1 integration)", () => {
         })
       );
 
-      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
-      expect(timedOut).toHaveLength(0);
+      const candidates = await store.getRunsNeedingExecutionRecovery(50);
+      expect(candidates.map((run) => run.id)).toEqual(["run-recent-running"]);
+      expect((await store.getRunById("auto-rec4", "run-recent-running"))!.status).toBe("running");
     });
 
     it("drains oldest orphaned runs first when LIMIT is hit", async () => {
@@ -717,7 +898,7 @@ describe("AutomationStore (D1 integration)", () => {
       expect(orphaned.map((r) => r.id)).toEqual(["run-order-0", "run-order-1", "run-order-2"]);
     });
 
-    it("drains oldest timed-out runs first when LIMIT is hit", async () => {
+    it("rotates checked sessions behind unchecked ones when the recovery limit is hit", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-order2" }));
@@ -736,9 +917,35 @@ describe("AutomationStore (D1 integration)", () => {
         );
       }
 
-      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 3);
-      expect(timedOut).toHaveLength(3);
-      expect(timedOut.map((r) => r.id)).toEqual(["run-to-0", "run-to-1", "run-to-2"]);
+      const firstBatch = await store.getRunsNeedingExecutionRecovery(3);
+      expect(firstBatch.map((r) => r.id)).toEqual(["run-to-0", "run-to-1", "run-to-2"]);
+      for (const [index, run] of firstBatch.entries()) {
+        await store.recordRunExecutionState(
+          run.id,
+          run.session_id!,
+          true,
+          "session_unreachable",
+          now + index
+        );
+      }
+
+      // A repeatedly unreachable oldest session must not starve later sessions.
+      const secondBatch = await store.getRunsNeedingExecutionRecovery(3);
+      expect(secondBatch.map((r) => r.id)).toEqual(["run-to-3", "run-to-4", "run-to-0"]);
+      for (const [index, run] of secondBatch.entries()) {
+        await store.recordRunExecutionState(
+          run.id,
+          run.session_id!,
+          true,
+          "session_unreachable",
+          now + 3 + index
+        );
+      }
+      expect((await store.getRunsNeedingExecutionRecovery(3)).map((r) => r.id)).toEqual([
+        "run-to-1",
+        "run-to-2",
+        "run-to-3",
+      ]);
     });
 
     // The behavioural tests above pass with or without the index (a scan returns
@@ -754,14 +961,16 @@ describe("AutomationStore (D1 integration)", () => {
       expect(detail).toContain("USING INDEX idx_runs_orphan_sweep");
     });
 
-    it("timeout sweep is served by idx_runs_timeout_sweep, not a full scan", async () => {
+    it("execution recovery uses its partial index without a temporary sort", async () => {
       const plan = await env.DB.prepare(
-        `EXPLAIN QUERY PLAN ${AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL}`
+        `EXPLAIN QUERY PLAN ${AutomationStore.EXECUTION_RECOVERY_RUNS_SQL}
+         ORDER BY execution_checked_at ASC, created_at ASC LIMIT ?`
       )
-        .bind(Date.now())
+        .bind(50)
         .all<{ detail: string }>();
       const detail = plan.results.map((r) => r.detail).join("\n");
-      expect(detail).toContain("USING INDEX idx_runs_timeout_sweep");
+      expect(detail).toContain("USING INDEX idx_runs_execution_recovery");
+      expect(detail).not.toContain("TEMP B-TREE");
     });
   });
 

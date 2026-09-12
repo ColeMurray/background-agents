@@ -166,6 +166,12 @@ repository. Build-time secrets are exactly what the scope's sessions get: global
 secrets for a repository scope, global + environment secrets for an environment scope
 ([session-target scoping](SECRETS.md#which-secrets-a-session-receives)).
 
+Setup success requires the shell to finish required provisioning, not just exhaust its wait.
+Background services no longer hold boot open through inherited output pipes. Failed or cancelled
+hooks are cleaned up before publication; managed raw hook logs are restricted temporary diagnostics
+and removed before the build-success callback. See
+[hook readiness and log policy](TIMEOUTS.md#hook-completion-and-diagnostics).
+
 Everything your setup scripts install — dependencies, build artifacts, caches — is captured in the
 image artifact. Depending on the active sandbox provider, this is stored as a Modal image, Vercel
 snapshot, or OpenComputer checkpoint.

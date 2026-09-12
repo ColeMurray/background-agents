@@ -6,10 +6,19 @@ import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import type { MessageRow } from "./types";
+import type { ExecutionBudget } from "./execution-deadline";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
+
+export interface MessageExecutionMetadata {
+  execution_deadline_ms: number | null;
+  cleanup_deadline_ms: number | null;
+  cleanup_reserve_ms?: number | null;
+  execution_sandbox_id: string | null;
+  requires_stop_evidence: number;
+}
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -131,6 +140,96 @@ export class MessageRepository {
     );
     const row = (result.toArray() as Array<{ id: string; stop_confirmation_deadline: number }>)[0];
     return row ? { id: row.id, deadline: row.stop_confirmation_deadline } : null;
+  }
+
+  getMessageExecutionMetadata(messageId: string): MessageExecutionMetadata | null {
+    return (
+      (
+        this.sql
+          .exec(
+            `SELECT execution_deadline_ms, cleanup_deadline_ms, cleanup_reserve_ms, execution_sandbox_id,
+              requires_stop_evidence FROM messages WHERE id = ?`,
+            messageId
+          )
+          .toArray() as MessageExecutionMetadata[]
+      )[0] ?? null
+    );
+  }
+
+  /** Early completion/Stop starts the one cleanup interval, never renews it. */
+  beginMessageCleanup(messageId: string, now: number, observedDeadlineMs?: number): number | null {
+    if (observedDeadlineMs !== undefined) {
+      this.sql.exec(
+        `UPDATE messages SET cleanup_deadline_ms = MIN(COALESCE(cleanup_deadline_ms, ?), ?)
+         WHERE id = ?`,
+        observedDeadlineMs,
+        observedDeadlineMs,
+        messageId
+      );
+    }
+    const row = (
+      this.sql
+        .exec(
+          `UPDATE messages SET cleanup_deadline_ms = MIN(cleanup_deadline_ms, ? + cleanup_reserve_ms)
+       WHERE id = ? AND cleanup_reserve_ms IS NOT NULL
+       RETURNING cleanup_deadline_ms`,
+          now,
+          messageId
+        )
+        .toArray() as Array<{ cleanup_deadline_ms: number }>
+    )[0];
+    return row?.cleanup_deadline_ms ?? observedDeadlineMs ?? null;
+  }
+
+  getAutomationMessage(runId: string): Pick<MessageRow, "id" | "status" | "error_message"> | null {
+    return (
+      (
+        this.sql
+          .exec(
+            `SELECT id, status, error_message FROM messages
+       WHERE json_valid(callback_context)
+         AND json_extract(callback_context, '$.source') = 'automation'
+         AND json_extract(callback_context, '$.runId') = ?
+       ORDER BY created_at, rowid LIMIT 1`,
+            runId
+          )
+          .toArray() as Array<Pick<MessageRow, "id" | "status" | "error_message">>
+      )[0] ?? null
+    );
+  }
+
+  hasExecutionLaunch(launchId: string): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT id FROM messages WHERE json_valid(callback_context)
+         AND json_extract(callback_context, '$.executionLaunchId') = ? LIMIT 1`,
+          launchId
+        )
+        .toArray().length > 0
+    );
+  }
+
+  /** A delayed ready frame must upgrade the already-dispatched turn as well. */
+  requireStopEvidenceForSandbox(sandboxId: string): void {
+    this.sql.exec(
+      `UPDATE messages SET requires_stop_evidence = 1
+       WHERE execution_sandbox_id = ?
+         AND (status = 'processing' OR stop_confirmation_deadline IS NOT NULL)`,
+      sandboxId
+    );
+  }
+
+  requireStopEvidenceForMessage(messageId: string, sandboxId: string): void {
+    this.sql.exec(
+      `UPDATE messages SET requires_stop_evidence = 1,
+         execution_sandbox_id = COALESCE(execution_sandbox_id, ?)
+       WHERE id = ? AND (execution_sandbox_id IS NULL OR execution_sandbox_id = ?)
+         AND (status = 'processing' OR stop_confirmation_deadline IS NOT NULL)`,
+      sandboxId,
+      messageId,
+      sandboxId
+    );
   }
 
   markMessageAwaitingStopConfirmation(messageId: string, deadline: number): void {
@@ -296,7 +395,7 @@ export class MessageRepository {
   cancelPendingMessage(messageId: string): boolean {
     return this.transactionSync(() => {
       const result = this.sql.exec(
-        `SELECT status, source, callback_context FROM messages WHERE id = ?`,
+        `SELECT status, source, callback_context, stop_confirmation_deadline FROM messages WHERE id = ?`,
         messageId
       );
       const message = (
@@ -304,12 +403,14 @@ export class MessageRepository {
           status?: unknown;
           source: string;
           callback_context: string | null;
+          stop_confirmation_deadline?: number | null;
         }>
       )[0];
       const status = parseMessageStatus(message?.status);
       if (
         !message ||
         status !== "pending" ||
+        message.stop_confirmation_deadline != null ||
         message.source !== "web" ||
         message.callback_context !== null
       ) {
@@ -318,7 +419,7 @@ export class MessageRepository {
 
       this.attachments.releaseForMessage(messageId);
       const deleted = this.sql.exec(
-        `DELETE FROM messages WHERE id = ? AND status = 'pending'`,
+        `DELETE FROM messages WHERE id = ? AND status = 'pending' AND stop_confirmation_deadline IS NULL`,
         messageId
       );
       deleted.toArray();
@@ -381,18 +482,37 @@ export class MessageRepository {
   startMessageProcessing(
     messageId: string,
     startedAt: number,
-    userMessageEvent: Extract<SandboxEvent, { type: "user_message" }>
+    userMessageEvent: Extract<SandboxEvent, { type: "user_message" }>,
+    budget?: ExecutionBudget
   ): boolean {
     return this.transactionSync(() => {
       const claimed = this.sql.exec(
-        `UPDATE messages SET status = 'processing', started_at = ?
+        `UPDATE messages SET status = 'processing', started_at = COALESCE(started_at, ?)
          WHERE id = ? AND status = 'pending'
            AND NOT EXISTS (SELECT 1 FROM messages WHERE status = 'processing')
+           AND NOT EXISTS (SELECT 1 FROM messages WHERE stop_confirmation_deadline IS NOT NULL)
          RETURNING id`,
         startedAt,
         messageId
       );
       if (claimed.toArray().length !== 1) return false;
+
+      if (budget) {
+        this.sql.exec(
+          `UPDATE messages SET execution_deadline_ms = MIN(COALESCE(execution_deadline_ms, ?), ?),
+             cleanup_deadline_ms = MIN(COALESCE(cleanup_deadline_ms, ?), ?),
+             cleanup_reserve_ms = COALESCE(cleanup_reserve_ms, ?),
+             execution_sandbox_id = ?, requires_stop_evidence = ? WHERE id = ?`,
+          budget.executionDeadlineMs,
+          budget.executionDeadlineMs,
+          budget.cleanupDeadlineMs,
+          budget.cleanupDeadlineMs,
+          budget.cleanupReserveMs,
+          budget.sandboxId,
+          budget.requiresStopEvidence ? 1 : 0,
+          messageId
+        );
+      }
 
       this.eventRepository.createEvent({
         id: `user_message:${messageId}`,
@@ -408,7 +528,7 @@ export class MessageRepository {
   updateMessageToPending(messageId: string): void {
     this.transactionSync(() => {
       const updated = this.sql.exec(
-        `UPDATE messages SET status = 'pending', started_at = NULL
+        `UPDATE messages SET status = 'pending'
          WHERE id = ? AND status = 'processing'
          RETURNING id`,
         messageId

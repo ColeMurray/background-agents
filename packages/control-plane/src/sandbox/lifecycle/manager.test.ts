@@ -517,6 +517,185 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
 // ==================== Tests ====================
 
 describe("SandboxLifecycleManager", () => {
+  describe("timeout redesign containment", () => {
+    function fixture(overrides: Partial<SandboxRow> = {}) {
+      const sandbox = createMockSandbox(overrides);
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true },
+        stopSandbox: vi.fn(async () => ({ success: true })),
+      });
+      const sockets = createMockWebSocketManager(true);
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        sockets,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+      return { sandbox, storage, provider, sockets, manager };
+    }
+
+    it("does not claim termination after provider failure and permits a confirmed retry", async () => {
+      const { manager, provider } = fixture();
+      vi.mocked(provider.stopSandbox!).mockResolvedValueOnce({ success: false, error: "busy" });
+      expect(await manager.terminateUnresponsiveSandbox("stop_confirmation_timeout")).toBe(false);
+      expect(await manager.terminateUnresponsiveSandbox("stop_confirmation_timeout")).toBe(true);
+    });
+
+    it("can confirm containment recovery after cleanup expires without attempting a snapshot", async () => {
+      const { manager, provider } = fixture();
+      expect(
+        await manager.terminateUnresponsiveSandbox("stop_confirmation_timeout", Date.now() - 1)
+      ).toBe(true);
+      expect(provider.stopSandbox).toHaveBeenCalledOnce();
+      expect(provider.takeSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("does not treat a missing provider identity as confirmed termination", async () => {
+      const { manager, provider } = fixture({ modal_object_id: null });
+      expect(await manager.terminateUnresponsiveSandbox("stop_confirmation_timeout")).toBe(false);
+      expect(provider.stopSandbox).not.toHaveBeenCalled();
+    });
+
+    it("requires the exact snapshot-preparation request and sandbox generation", async () => {
+      const { manager, provider, sockets, sandbox } = fixture({
+        runtime_capabilities: '["hook_logs_snapshot_v1"]',
+      });
+      let requestId = "";
+      vi.mocked(sockets.sendToSandbox).mockImplementation((command) => {
+        requestId = (command as { requestId: string }).requestId;
+        return true;
+      });
+      const snapshot = manager.triggerSnapshot("execution_complete");
+      manager.onSnapshotReady("old-request", sandbox.modal_sandbox_id!);
+      manager.onSnapshotReady(requestId, "old-sandbox");
+      await Promise.resolve();
+      expect(provider.takeSnapshot).not.toHaveBeenCalled();
+      manager.onSnapshotReady(requestId, sandbox.modal_sandbox_id!);
+      await snapshot;
+      expect(provider.takeSnapshot).toHaveBeenCalledOnce();
+    });
+
+    it("skips capture if managed logs cannot be prepared", async () => {
+      const { manager, provider, sockets, sandbox } = fixture({
+        runtime_capabilities: '["hook_logs_snapshot_v1"]',
+      });
+      vi.mocked(sockets.sendToSandbox).mockReturnValue(false);
+      await manager.triggerSnapshot("inactivity_timeout");
+      expect(provider.takeSnapshot).not.toHaveBeenCalled();
+      expect(sandbox.status).toBe("ready");
+    });
+
+    it("does not capture while cancellation remains unresolved", async () => {
+      const { manager, provider, storage } = fixture();
+      storage.hasUnresolvedExecution = () => true;
+      await manager.triggerSnapshot("execution_complete");
+      expect(provider.takeSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("does not release an upgraded execution fence on an unconfirmed heartbeat stop", async () => {
+      const { manager, provider, storage } = fixture({
+        runtime_capabilities: '["stop-confirmation-v1"]',
+        last_heartbeat: Date.now() - 10 * 60_000,
+      });
+      storage.hasUnresolvedExecution = () => true;
+      vi.mocked(provider.stopSandbox!).mockResolvedValue({
+        success: false,
+        error: "still running",
+      });
+      expect(await manager.handleAlarm()).toBe("sandbox_failed");
+      expect(provider.stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "heartbeat_execution_unconfirmed",
+        })
+      );
+      expect(provider.takeSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("does not give a snapshot a new cleanup allowance", async () => {
+      const { manager, provider } = fixture({ runtime_capabilities: '["hook_logs_snapshot_v1"]' });
+      await manager.triggerSnapshot("execution_complete", Date.now() - 1);
+      expect(provider.takeSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("anchors active-heartbeat cleanup before provider retirement and shares its remaining time", async () => {
+      vi.useFakeTimers();
+      try {
+        const { manager, provider, storage } = fixture({
+          runtime_capabilities: '["stop-confirmation-v1"]',
+          last_heartbeat: Date.now() - 10 * 60_000,
+        });
+        storage.hasUnresolvedExecution = () => true;
+        const beganAt = Date.now();
+        storage.beginExecutionCleanup = vi.fn(() => beganAt + 25);
+        let providerSignal: AbortSignal | undefined;
+        vi.mocked(provider.stopSandbox!).mockImplementation((config) => {
+          expect(storage.beginExecutionCleanup).toHaveBeenCalledExactlyOnceWith(beganAt);
+          providerSignal = config.signal;
+          return new Promise(() => {});
+        });
+        const retirement = manager.handleAlarm();
+        await vi.advanceTimersByTimeAsync(24);
+        expect(providerSignal?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await retirement).toBe("sandbox_failed");
+        expect(providerSignal?.aborted).toBe(true);
+        expect(provider.takeSnapshot).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("prepares idle snapshots before closing their transport and fences dispatch meanwhile", async () => {
+      const { manager, provider, sockets, sandbox } = fixture({
+        runtime_capabilities: '["hook_logs_snapshot_v1"]',
+        last_activity: Date.now() - 11 * 60_000,
+      });
+      vi.mocked(sockets.sendToSandbox).mockImplementation((command) => {
+        if (["stopped", "stale", "failed"].includes(sandbox.status)) return false;
+        if ((command as { type: string }).type === "snapshot") {
+          expect(manager.isRetiring()).toBe(true);
+          manager.onSnapshotReady(
+            (command as { requestId: string }).requestId,
+            sandbox.modal_sandbox_id!
+          );
+        }
+        return true;
+      });
+      expect(await manager.handleAlarm()).toBe("sandbox_terminated");
+      expect(provider.takeSnapshot).toHaveBeenCalledOnce();
+      expect(manager.isRetiring()).toBe(false);
+    });
+
+    it("never detaches a replacement that arrived during snapshot preparation", async () => {
+      const { manager, provider, sockets, sandbox } = fixture({
+        last_activity: Date.now() - 11 * 60_000,
+      });
+      let finishSnapshot!: () => void;
+      vi.mocked(provider.takeSnapshot!).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishSnapshot = () => resolve({ success: true, imageId: "old-image" });
+          })
+      );
+      const retirement = manager.handleAlarm();
+      await vi.waitFor(() => expect(provider.takeSnapshot).toHaveBeenCalledOnce());
+      expect(manager.isRetiring()).toBe(true);
+      sandbox.modal_sandbox_id = "replacement";
+      sandbox.created_at += 1;
+      sandbox.status = "ready";
+      finishSnapshot();
+      expect(await retirement).toBe("no_action");
+      expect(sockets.detachSandboxWebSocket).not.toHaveBeenCalled();
+      expect(provider.stopSandbox).not.toHaveBeenCalled();
+      expect(sandbox.status).toBe("ready");
+    });
+  });
+
   describe("spawnSandbox", () => {
     it("spawns when all conditions pass", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
@@ -2066,7 +2245,7 @@ describe("SandboxLifecycleManager", () => {
 
       const result = await manager.handleAlarm();
 
-      expect(result).toBe("sandbox_terminated");
+      expect(result).toBe("sandbox_failed");
       expect(storage.calls).toContain("updateSandboxStatus:stale");
       expect(broadcaster.messages.some((m) => (m as { status?: string }).status === "stale")).toBe(
         true
@@ -2100,7 +2279,7 @@ describe("SandboxLifecycleManager", () => {
 
       const result = await manager.handleAlarm();
 
-      expect(result).toBe("sandbox_terminated");
+      expect(result).toBe("sandbox_failed");
       expect(storage.calls).toContain("updateSandboxStatus:stopped");
       expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
     });

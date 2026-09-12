@@ -92,6 +92,7 @@ export default function SessionPage() {
     currentParticipantId,
     canManageBudget,
     isProcessing,
+    quietTurnMessageId,
     promptQueue,
     loadingHistory,
     sendPrompt,
@@ -326,6 +327,7 @@ export default function SessionPage() {
               currentParticipantId={currentParticipantId}
               participantProfiles={profiles}
               isProcessing={isProcessing}
+              quietTurnMessageId={quietTurnMessageId}
               promptQueue={promptQueue}
               loadingHistory={loadingHistory}
               showSkeleton={false}

@@ -7,6 +7,7 @@ function createHandler() {
   const messageService = {
     enqueuePrompt: vi.fn(),
     stop: vi.fn(),
+    reconcileExecutionState: vi.fn(),
     listEvents: vi.fn(),
     listArtifacts: vi.fn(),
     getArtifact: vi.fn(),
@@ -29,6 +30,39 @@ function createHandler() {
 }
 
 describe("MessagesHandler", () => {
+  it("rejects an unscoped execution reconciliation request", async () => {
+    const { handler, messageService } = createHandler();
+    const response = await handler.reconcileExecutionState(
+      new Request("http://internal/internal/execution-state", {
+        method: "POST",
+        body: JSON.stringify({}),
+      })
+    );
+    expect(response.status).toBe(400);
+    expect(messageService.reconcileExecutionState).not.toHaveBeenCalled();
+  });
+
+  it("reconciles the requested automation run through the session owner", async () => {
+    const { handler, messageService } = createHandler();
+    const state = {
+      executionState: "stopping" as const,
+      messageId: "msg-1",
+      messageStatus: "failed" as const,
+      deadlineAt: 1,
+      cleanupDeadlineAt: 2,
+      error: "Execution deadline exceeded",
+    };
+    vi.mocked(messageService.reconcileExecutionState).mockResolvedValue(state);
+    const response = await handler.reconcileExecutionState(
+      new Request("http://internal/internal/execution-state", {
+        method: "POST",
+        body: JSON.stringify({ automationRunId: "run-1" }),
+      })
+    );
+    expect(await response.json()).toEqual(state);
+    expect(messageService.reconcileExecutionState).toHaveBeenCalledWith("run-1", undefined);
+  });
+
   it("enqueues prompt and returns queued response", async () => {
     const { handler, messageService, log } = createHandler();
     vi.mocked(messageService.enqueuePrompt).mockResolvedValue({

@@ -76,6 +76,11 @@ class _PromptState:
     # session.compacted. If still set at idle with no error emitted, the
     # promised compaction never happened and the prompt must fail.
     pending_overflow_error: str | None = None
+    parent_idle: bool = False
+    observed_turn_activity: bool = False
+    idle_child_sessions: set[str] = field(default_factory=set)
+    owned_descendant_sessions: set[str] = field(default_factory=set)
+    active_tool_calls: set[tuple[str, str]] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.attribution = MessageAttribution(
@@ -88,6 +93,17 @@ class _PromptState:
     def message_cost_usd(self) -> float:
         """Cumulative priced cost of this turn, including subtask steps."""
         return sum(self.step_costs.values())
+
+    @property
+    def execution_stopped(self) -> bool:
+        """Idle parent alone cannot retire a turn with unresolved owned work."""
+        return (
+            self.parent_idle
+            and self.observed_turn_activity
+            and not self.active_tool_calls
+            and (self.child_activity.tracked_session_ids | self.owned_descendant_sessions)
+            <= self.idle_child_sessions
+        )
 
 
 class _Disposition(Enum):
@@ -164,6 +180,11 @@ class OpenCodePromptStream:
         # Session title dedupe survives across prompts so an unchanged title
         # is forwarded to the control plane at most once.
         self._last_forwarded_session_title: str | None = None
+        self._active_state: _PromptState | None = None
+
+    @property
+    def execution_stopped(self) -> bool:
+        return self._active_state is not None and self._active_state.execution_stopped
 
     async def stream_prompt(
         self,
@@ -174,6 +195,7 @@ class OpenCodePromptStream:
         model: str | None = None,
         reasoning_effort: str | None = None,
         attachments: list[HydratedSessionAttachment] | None = None,
+        bridge_managed: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 
@@ -193,12 +215,17 @@ class OpenCodePromptStream:
             opencode_message_id=opencode_message_id,
             start_time=time.time(),
         )
+        self._active_state = state
         loop = asyncio.get_running_loop()
-        prompt_deadline = loop.time() + self._prompt_max_duration_seconds
+        # The production bridge owns one deadline including preparation and one
+        # containment budget. Local budgets remain only for the raw stream seam.
+        prompt_deadline = (
+            None if bridge_managed else loop.time() + self._prompt_max_duration_seconds
+        )
         try:
             async with AsyncExitStack() as stack:
                 try:
-                    async with asyncio.timeout(prompt_deadline - loop.time()):
+                    async with asyncio.timeout_at(prompt_deadline):
                         sse_events = await stack.enter_async_context(
                             self._client.events(
                                 inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
@@ -210,11 +237,10 @@ class OpenCodePromptStream:
                 event_iterator = aiter(sse_events)
 
                 while True:
-                    remaining_seconds = prompt_deadline - loop.time()
-                    if remaining_seconds <= 0:
+                    if prompt_deadline is not None and prompt_deadline <= loop.time():
                         raise _PromptMaxDurationTimeout
                     try:
-                        async with asyncio.timeout(remaining_seconds):
+                        async with asyncio.timeout_at(prompt_deadline):
                             sse_event = await anext(event_iterator)
                     except StopAsyncIteration:
                         break
@@ -237,6 +263,9 @@ class OpenCodePromptStream:
 
                 for event in self._flush_unassociated_child_activity(state):
                     yield event
+                raise SSEStreamDisconnectedError(
+                    "OpenCode event stream ended before confirmed turn completion."
+                )
 
         except _PromptMaxDurationTimeout:
             elapsed = time.time() - state.start_time
@@ -269,32 +298,35 @@ class OpenCodePromptStream:
                 f"Prompt exceeded max duration of {self._prompt_max_duration_seconds:.0f}s."
             )
 
-        except SSEInactivityTimeoutError:
+        except SSEInactivityTimeoutError as error:
             elapsed = time.time() - state.start_time
             self._log.error(
-                "bridge.sse_inactivity_timeout",
-                timeout_name="sse_inactivity",
+                "bridge.opencode_stream_consumption_timeout",
+                timeout_name="opencode_stream_responsiveness",
                 timeout_ms=int(self._sse_inactivity_timeout_seconds * 1000),
                 elapsed_ms=int(elapsed * 1000),
-                operation="bridge.sse",
+                operation="bridge.opencode_stream_consumption",
                 message_id=message_id,
             )
             pending_child_events = self._flush_unassociated_child_activity(state)
             for event in pending_child_events:
                 yield event
-            await self._client.request_stop(opencode_session_id, reason="inactivity_timeout")
-            async for final_event in self._fetch_final_message_state(state):
-                yield final_event
-            raise RuntimeError(
-                f"SSE stream inactive for {self._sse_inactivity_timeout_seconds:.0f}s "
-                f"(no data received). Total elapsed: {elapsed:.0f}s"
-            )
+            if not bridge_managed:
+                async with asyncio.timeout(self._prompt_cleanup_timeout_seconds):
+                    await self._client.request_stop(
+                        opencode_session_id, reason="opencode_stream_consumption_timeout"
+                    )
+                    async for final_event in self._fetch_final_message_state(state):
+                        yield final_event
+            raise RuntimeError(str(error)) from error
 
         except SSEStreamDisconnectedError as e:
             for event in self._flush_unassociated_child_activity(state):
                 yield event
-            async for final_event in self._fetch_final_message_state(state):
-                yield final_event
+            if not bridge_managed:
+                async with asyncio.timeout(self._prompt_cleanup_timeout_seconds):
+                    async for final_event in self._fetch_final_message_state(state):
+                        yield final_event
             raise SSEConnectionError(
                 "OpenCode event stream disconnected before completion; "
                 "partial output was preserved when available."
@@ -325,6 +357,16 @@ class OpenCodePromptStream:
 
         event_session_id = props.get("sessionID") or props.get("part", {}).get("sessionID")
         is_child = state.child_activity.is_tracked(event_session_id)
+        if event_session_id in state.owned_descendant_sessions:
+            # Nested agents remain outside the direct-child timeline contract,
+            # but must still be accounted for before the runtime is reusable.
+            if event_type == "session.idle":
+                state.idle_child_sessions.add(event_session_id)
+            elif event_type == "session.status":
+                if props.get("status", {}).get("type") == "idle":
+                    state.idle_child_sessions.add(event_session_id)
+                else:
+                    state.idle_child_sessions.discard(event_session_id)
         if event_session_id and event_session_id != state.opencode_session_id and not is_child:
             return _StreamStep(events=events, disposition=_Disposition.CONTINUE)
 
@@ -335,19 +377,26 @@ class OpenCodePromptStream:
             events.extend(self._on_part_updated(state, props))
 
         elif event_type == "session.idle":
-            # Only parent idle terminates the stream
             if props.get("sessionID") == state.opencode_session_id:
+                state.parent_idle = True
                 self._log_parent_idle(state, "bridge.session_idle")
                 events.extend(self._unrecovered_overflow_events(state))
                 return _StreamStep(events=events, disposition=_Disposition.FINISHED_IDLE)
+            elif is_child:
+                state.idle_child_sessions.add(event_session_id)
 
         elif event_type == "session.status":
             status = props.get("status", {})
-            # Only parent status=idle terminates the stream
             if props.get("sessionID") == state.opencode_session_id and status.get("type") == "idle":
+                state.parent_idle = True
                 self._log_parent_idle(state, "bridge.session_status_idle")
                 events.extend(self._unrecovered_overflow_events(state))
                 return _StreamStep(events=events, disposition=_Disposition.FINISHED_IDLE)
+            elif is_child:
+                if status.get("type") == "idle":
+                    state.idle_child_sessions.add(event_session_id)
+                else:
+                    state.idle_child_sessions.discard(event_session_id)
 
         elif event_type == "session.error":
             return self._on_session_error(state, props)
@@ -372,6 +421,11 @@ class OpenCodePromptStream:
                     child_session_id=child_id,
                     source="session.created",
                 )
+        elif child_id and (
+            state.child_activity.is_tracked(child_parent)
+            or child_parent in state.owned_descendant_sessions
+        ):
+            state.owned_descendant_sessions.add(child_id)
 
     def _on_message_updated(
         self, state: _PromptState, props: dict[str, Any]
@@ -414,6 +468,8 @@ class OpenCodePromptStream:
                     is_summary=is_compaction_summary,
                     created_epoch_ms=_message_created_epoch_ms(info),
                 )
+                if disposition is not AssistantMessageDisposition.REJECT:
+                    state.observed_turn_activity = True
                 if disposition is not AssistantMessageDisposition.REJECT and info.get("error"):
                     error_event = self._parent_error_event_once(state, info["error"])
                     if error_event:
@@ -435,6 +491,7 @@ class OpenCodePromptStream:
             return events
 
         if state.child_activity.is_tracked(msg_session_id):
+            state.idle_child_sessions.discard(msg_session_id)
             oc_msg_id = info.get("id", "")
             role = info.get("role", "")
             if role == "assistant" and oc_msg_id:
@@ -630,6 +687,15 @@ class OpenCodePromptStream:
                 )
 
         elif part_type == "tool":
+            tool_state = part.get("state", {})
+            status = tool_state.get("status", "")
+            call_id = part.get("callID") or part_id
+            tool_identity = (str(part.get("sessionID", "")), str(call_id))
+            if status in ("completed", "error"):
+                state.active_tool_calls.discard(tool_identity)
+            else:
+                state.active_tool_calls.add(tool_identity)
+                state.idle_child_sessions.discard(tool_identity[0])
             tool_event = self._tool_call_event(part, state.message_id)
             if tool_event:
                 tool_state = part.get("state", {})

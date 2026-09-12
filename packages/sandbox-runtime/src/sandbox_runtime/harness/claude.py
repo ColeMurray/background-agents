@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from claude_agent_sdk import (
+    TERMINAL_TASK_STATUSES,
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -45,7 +46,6 @@ from .base import (
     HarnessId,
     HarnessPrompt,
     HarnessStartError,
-    PromptLimits,
     TurnOutcome,
 )
 from .claude_env import (
@@ -160,11 +160,16 @@ class _TurnState:
     last_token_content: str = ""
     tool_names: dict[str, str] = field(default_factory=dict)
     tool_args: dict[str, dict[str, Any]] = field(default_factory=dict)
+    active_tools: set[str] = field(default_factory=set)
+    active_tasks: dict[str, str | None] = field(default_factory=dict)
     emitted_error: bool = False
     step_started: bool = False
     # Inside a turn the session injected (background task, channel, peer):
     # skip everything until that turn's result.
     injected: bool = False
+
+    def execution_stopped(self) -> bool:
+        return not self.active_tools and not self.active_tasks
 
     def turn_text(self) -> str:
         return "\n\n".join(entry.text for entry in self.texts if entry.text)
@@ -270,7 +275,6 @@ class ClaudeHarness:
         *,
         config: ClaudeHarnessConfig,
         log: StructuredLogger,
-        limits: PromptLimits,
         credential_client: RuntimeCredentialClient | None = None,
         environ: Mapping[str, str] | None = None,
         client_factory: SdkClientFactory | None = None,
@@ -281,7 +285,6 @@ class ClaudeHarness:
     ) -> None:
         self.config = config
         self.log = log
-        self.limits = limits
         self.credential_client = credential_client
         self.environ = environ if environ is not None else os.environ
         self._client_factory = client_factory
@@ -303,6 +306,9 @@ class ClaudeHarness:
         # Set by a conversation reset: the next result carries the new id.
         self._session_rotated = False
         self._interrupted = False
+        # A missing client/reader is not evidence that tools stopped. Keep this
+        # independent of transport ownership, including after disconnect.
+        self._execution_stopped = True
         self._tool_client: ControlPlaneToolClient | None = None
         self._tool_server: Any = None
         self.init_info: dict[str, Any] | None = None
@@ -388,8 +394,18 @@ class ClaudeHarness:
             mcp_servers[OI_TOOL_SERVER_NAME] = self._tool_server
             allowed_tools.append(f"mcp__{OI_TOOL_SERVER_NAME}__*")
         system_prompt: dict[str, Any] = {"type": "preset", "preset": "claude_code"}
-        if self.config.system_prompt_append:
-            system_prompt["append"] = self.config.system_prompt_append
+        prompt_notes = (
+            [self.config.system_prompt_append] if self.config.system_prompt_append else []
+        )
+        if hook_log_dir := self.environ.get("OPENINSPECT_HOOK_LOG_DIR"):
+            prompt_notes.append(
+                f"Repository boot logs, when hooks ran, are under {hook_log_dir}/<repo-name>/ "
+                "as setup.log and start.log. These are private, bounded, best-effort diagnostics "
+                "and are discarded before snapshots; do not copy raw log contents into shared "
+                "artifacts because they may contain secrets."
+            )
+        if prompt_notes:
+            system_prompt["append"] = "\n\n".join(prompt_notes)
         kwargs: dict[str, Any] = {
             "cwd": str(self.config.workdir),
             "cli_path": str(self.wrapper_path),
@@ -454,13 +470,15 @@ class ClaudeHarness:
         return client
 
     async def _disconnect(self) -> None:
-        client, self._client = self._client, None
+        client = self._client
         if client is None:
             return
         try:
             await client.disconnect()
         except Exception as error:
             self.log.warn("claude.disconnect_error", exc=error)
+        else:
+            self._client = None
 
     # --- prompt ------------------------------------------------------------
 
@@ -469,74 +487,115 @@ class ClaudeHarness:
             model = bare_model_id(prompt.model, self.config.default_model)
         except ValueError as error:
             return TurnOutcome.failed(str(error))
-        # One budget covers the whole turn: connect, submit, every read and
-        # every emit. The inactivity budget applies to each read alone, and
-        # cleanup after either has its own budget, so a hung SDK call can
-        # never eat the snapshot reserve.
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.limits.prompt_max_duration_seconds
+        # The bridge owns the whole-turn deadline, including preparation before
+        # this call. Parsed SDK messages are not heartbeats: quiet thinking,
+        # tools and subagents must not start a separate silence deadline.
+        self._interrupted = False
+        self._execution_stopped = False
         try:
-            async with asyncio.timeout_at(deadline):
-                client = await self._ensure_client(model, prompt.reasoning_effort)
+            client = await self._ensure_client(model, prompt.reasoning_effort)
         except HarnessStartError:
             raise
-        except TimeoutError:
-            self.log.error("claude.connect_timeout", message_id=prompt.message_id)
+        except asyncio.CancelledError:
             self._needs_reconnect = True
-            await self._interrupt_within_budget()
-            return TurnOutcome.failed(
-                f"Claude agent did not start within {self.limits.prompt_max_duration_seconds:.0f}s."
-            )
+            raise
         except Exception as error:
             self.log.error("claude.connect_error", exc=error, message_id=prompt.message_id)
             self._needs_reconnect = True
-            return TurnOutcome.failed(f"Claude agent failed to start: {error}")
+            return TurnOutcome.failed(
+                f"Claude agent failed to start: {error}", execution_stopped=False
+            )
 
-        self._interrupted = False
         state = _TurnState(message_id=prompt.message_id, cost_baseline=self._cost_baseline)
+        observed_outcome: TurnOutcome | None = None
         try:
-            async with asyncio.timeout_at(deadline):
-                await client.query(self._user_messages(prompt))
-                stream = aiter(client.receive_messages())
-                while True:
-                    try:
-                        async with asyncio.timeout(self.limits.inactivity_timeout_seconds):
-                            message = await anext(stream)
-                    except StopAsyncIteration:
-                        break
-                    except TimeoutError as error:
-                        raise _InactivityTimeout from error
-                    if self._belongs_to_injected_turn(state, message):
-                        continue
-                    events, outcome = self._translate(state, message)
-                    for event in events:
-                        await emit(event)
-                    if outcome is not None:
-                        return outcome
+            await client.query(self._user_messages(prompt))
+            async for message in client.receive_messages():
+                # Injected text is hidden from the user's turn, but its tools
+                # still share the mutable runtime and must enter the ledger.
+                self._observe_execution(state, message)
+                if self._belongs_to_injected_turn(state, message):
+                    continue
+                events, outcome = self._translate(state, message)
+                if outcome is not None:
+                    observed_outcome = outcome
+                    self._execution_stopped = outcome.execution_stopped
+                for event in events:
+                    await emit(event)
+                if outcome is not None:
+                    return outcome
             self._needs_reconnect = True
             return TurnOutcome.failed(
                 "The Claude agent stream ended before the turn completed.",
                 message_cost_usd=None,
+                execution_stopped=False,
             )
         except asyncio.CancelledError:
             self._needs_reconnect = True
             raise
-        except TimeoutError:
-            await self._interrupt_within_budget()
-            self._needs_reconnect = True
-            return TurnOutcome.failed(
-                f"Prompt exceeded max duration of {self.limits.prompt_max_duration_seconds:.0f}s."
-            )
-        except _InactivityTimeout:
-            await self._interrupt_within_budget()
-            self._needs_reconnect = True
-            return TurnOutcome.failed(
-                f"Claude agent produced no output for {self.limits.inactivity_timeout_seconds:.0f}s."
-            )
         except Exception as error:
             self.log.error("claude.turn_error", exc=error, message_id=prompt.message_id)
             self._needs_reconnect = True
-            return TurnOutcome.failed(f"Claude agent transport failed: {error}")
+            return TurnOutcome.failed(
+                f"Claude agent transport failed: {error}",
+                message_cost_usd=(
+                    observed_outcome.message_cost_usd if observed_outcome is not None else None
+                ),
+                execution_stopped=self._execution_stopped,
+            )
+
+    def _observe_execution(self, state: _TurnState, message: Any) -> None:
+        """Track explicit tool/task lifecycle evidence, not just the parent result.
+
+        The pinned SDK exposes task lifecycle payloads as SystemMessage
+        subclasses. A terminal task_updated patch may be the only completion
+        frame. Background Agent/Bash tool results acknowledge async launch,
+        not command completion. An ordinary Bash command that starts a service
+        with ``server &`` and exits has a terminal tool result, so preserving
+        that service needs no exemption from active-task evidence.
+        """
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, ToolUseBlock):
+                    state.tool_names[block.id] = _canonical_tool_name(block.name)
+                    state.tool_args[block.id] = dict(block.input)
+                    state.active_tools.add(block.id)
+        elif isinstance(message, UserMessage) and not isinstance(message.content, str):
+            for block in message.content:
+                if not isinstance(block, ToolResultBlock):
+                    continue
+                tool_id = block.tool_use_id
+                name = state.tool_names.get(tool_id)
+                background = state.tool_args.get(tool_id, {}).get("run_in_background") is True
+                if name not in (TASK_TOOL_NAME, "Bash") or not background or block.is_error:
+                    state.active_tools.discard(tool_id)
+        elif isinstance(message, SystemMessage):
+            task_id = message.data.get("task_id")
+            if not isinstance(task_id, str) or not task_id:
+                return
+            if message.subtype in ("task_started", "task_progress"):
+                task_tool_id = message.data.get("tool_use_id")
+                state.active_tasks[task_id] = (
+                    task_tool_id
+                    if isinstance(task_tool_id, str)
+                    else state.active_tasks.get(task_id)
+                )
+            elif message.subtype in ("task_notification", "task_updated"):
+                patch = message.data.get("patch")
+                if message.subtype == "task_updated":
+                    status = patch.get("status") if isinstance(patch, dict) else None
+                else:
+                    status = message.data.get("status")
+                if status in TERMINAL_TASK_STATUSES:
+                    finished_tool_id = state.active_tasks.pop(task_id, None)
+                    if finished_tool_id is None:
+                        finished_tool_id = message.data.get("tool_use_id")
+                    if isinstance(finished_tool_id, str) and state.tool_names.get(
+                        finished_tool_id
+                    ) in (TASK_TOOL_NAME, "Bash"):
+                        state.active_tools.discard(finished_tool_id)
+                elif message.subtype == "task_updated" and status is not None:
+                    state.active_tasks.setdefault(task_id, None)
 
     def _belongs_to_injected_turn(self, state: _TurnState, message: Any) -> bool:
         """Every message of a turn the session injected, not of this prompt.
@@ -565,25 +624,6 @@ class ClaudeHarness:
             return False
         return state.injected
 
-    async def _interrupt_within_budget(self) -> bool:
-        """Interrupt within the cleanup budget; drop the child if that hangs too.
-
-        True when the child acknowledged the interrupt.
-        """
-        budget = self.limits.prompt_cleanup_timeout_seconds
-        try:
-            async with asyncio.timeout(budget):
-                return await self._interrupt_quietly()
-        except TimeoutError:
-            self.log.warn("claude.interrupt_timeout", timeout_s=budget)
-        try:
-            async with asyncio.timeout(budget):
-                await self._disconnect()
-        except TimeoutError:
-            self.log.warn("claude.disconnect_timeout", timeout_s=budget)
-            self._client = None
-        return False
-
     async def _interrupt_quietly(self) -> bool:
         if self._client is None:
             return False
@@ -601,9 +641,33 @@ class ClaudeHarness:
         # The bridge cancels the prompt task too; the next prompt reconnects so
         # the interrupted turn's trailing messages never leak into it.
         self._needs_reconnect = True
-        # The bridge awaits this inline on its command loop, so a hung
-        # interrupt would stall every later command; bound it like cleanup.
-        return await self._interrupt_within_budget()
+        # This only requests interruption. The bridge's stop task bounds it;
+        # its acknowledgment does not establish that tools stopped.
+        return await self._interrupt_quietly()
+
+    async def stop(self, deadline_monotonic: float) -> bool:
+        """Attempt cleanup without promoting SDK acknowledgments to stop proof.
+
+        The pinned SDK's disconnect reaps the CLI parent, not every descendant,
+        and abandons SDK MCP tool calls that do not react to cancellation. An
+        interrupted result likewise does not prove those tools ceased. Unless
+        an ordinary completed result with no observed outstanding tools/tasks
+        was already observed (or no execution was attempted), the bridge must
+        quarantine and escalate to the provider.
+        """
+        if self._execution_stopped:
+            return True
+        if asyncio.get_running_loop().time() >= deadline_monotonic:
+            return False
+        try:
+            # Interruption and disconnect consume one shared interval; neither
+            # receives a fresh cleanup allowance after the preceding step.
+            async with asyncio.timeout_at(deadline_monotonic):
+                await self.abort()
+                await self._disconnect()
+        except TimeoutError:
+            self.log.warn("claude.stop_timeout")
+        return False
 
     async def _user_messages(self, prompt: HarnessPrompt) -> AsyncIterator[dict[str, Any]]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt.text}]
@@ -680,8 +744,6 @@ class ClaudeHarness:
                         events.extend(self._token_event(state))
             for block in message.content:
                 if isinstance(block, ToolUseBlock):
-                    state.tool_names[block.id] = _canonical_tool_name(block.name)
-                    state.tool_args[block.id] = dict(block.input)
                     events.append(
                         self._tool_event(
                             state,
@@ -790,6 +852,7 @@ class ClaudeHarness:
                     error="Task was cancelled",
                     cancelled=True,
                     message_cost_usd=message_cost,
+                    execution_stopped=False,
                 )
             if message.is_error or message.subtype != "success":
                 detail = message.result or "; ".join(message.errors or []) or message.subtype
@@ -797,8 +860,16 @@ class ClaudeHarness:
                     events.append(
                         {"type": "error", "error": str(detail), "messageId": state.message_id}
                     )
-                return events, TurnOutcome.failed(str(detail), message_cost_usd=message_cost)
-            return events, TurnOutcome.ok(message_cost_usd=message_cost)
+                return events, TurnOutcome.failed(
+                    str(detail),
+                    message_cost_usd=message_cost,
+                    execution_stopped=state.execution_stopped(),
+                )
+            return events, TurnOutcome(
+                success=True,
+                message_cost_usd=message_cost,
+                execution_stopped=state.execution_stopped(),
+            )
 
         return events, None
 
@@ -852,10 +923,6 @@ class ClaudeHarness:
                 "message": f"Anthropic reported {error.replace('_', ' ')} on this turn.",
             }
         ]
-
-
-class _InactivityTimeout(Exception):
-    pass
 
 
 def _default_transcript_exists(session_id: str, workdir: Path, config_dir: Path) -> bool:

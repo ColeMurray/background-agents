@@ -134,6 +134,9 @@ class RepositoryBoot:
                 "",
             ]
         )
+        hook_context = self.hooks.diagnostic_context()
+        if hook_context:
+            lines.extend(["", hook_context, ""])
         try:
             (self.workspace_path / "AGENTS.md").write_text("\n".join(lines))
             self.log.info("workspace.manifest_written", repo_count=len(self.repositories))

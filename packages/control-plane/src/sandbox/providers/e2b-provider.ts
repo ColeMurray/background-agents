@@ -55,6 +55,7 @@ import {
   type ResumeResult,
   type SandboxProvider,
   type SandboxProviderCapabilities,
+  type SandboxExecutionExpiry,
   type SnapshotConfig,
   type SnapshotResult,
   type StopConfig,
@@ -167,10 +168,13 @@ export class E2BSandboxProvider implements SandboxProvider {
   readonly name = "e2b";
 
   /**
-   * Stop reasons after which the provider object cannot be resumed, including
-   * replacement by a newly-created sandbox.
+   * Only retention cleanup may preserve process memory for a later resume.
+   * Cancellation escalation must never freeze unfinished work for reuse.
    */
-  private static readonly TERMINAL_STOP_REASONS = new Set(["connecting_timeout", "respawn"]);
+  private static readonly RESUMABLE_STOP_REASONS = new Set([
+    "inactivity_timeout",
+    "heartbeat_timeout",
+  ]);
 
   /**
    * Session continuity on E2B is provider-managed: stop pauses the sandbox and
@@ -218,6 +222,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         extraEnv
       );
 
+      const requestStartedAtMs = Date.now();
       const sandbox = await this.client.createSandbox({
         templateID: config.prebuiltImageId || this.client.config.templateId,
         envVars,
@@ -234,11 +239,17 @@ export class E2BSandboxProvider implements SandboxProvider {
         autoResume: false,
       });
 
+      let executionExpiry: SandboxExecutionExpiry;
       try {
         await this.startEntrypoint(sandbox);
+        executionExpiry = await this.readExecutionExpiry(
+          sandbox.sandboxID,
+          requestStartedAtMs,
+          timeoutSeconds
+        );
       } catch (error) {
-        // The sandbox exists but can never boot — kill it rather than leak it
-        // until its TTL, then let the create fail loudly.
+        // Boot or expiry discovery failed after create; clean up the sandbox
+        // before surfacing the unsuccessful create.
         await this.cleanupSandbox(sandbox.sandboxID, "e2b.cleanup_kill_failed");
         throw error;
       }
@@ -255,6 +266,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.sandboxID,
         createdAt: Date.now(),
+        executionExpiry,
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
@@ -382,7 +394,9 @@ export class E2BSandboxProvider implements SandboxProvider {
       }
 
       const timeoutSeconds = config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
+      let executionExpiry: SandboxExecutionExpiry;
       try {
+        const requestStartedAtMs = Date.now();
         if (sandbox.state === "paused") {
           await this.client.connectSandbox(config.providerObjectId, timeoutSeconds);
         } else if (sandbox.state === "running") {
@@ -394,6 +408,12 @@ export class E2BSandboxProvider implements SandboxProvider {
             shouldSpawnFresh: true,
           };
         }
+        // The old GET precedes renewal and cannot describe the new expiry.
+        executionExpiry = await this.readExecutionExpiry(
+          config.providerObjectId,
+          requestStartedAtMs,
+          timeoutSeconds
+        );
       } catch (error) {
         // The sandbox can disappear between the GET above and this call — treat a
         // late 404 the same as an initial one so the manager spawns fresh.
@@ -427,6 +447,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       return {
         success: true,
         providerObjectId: sandbox.sandboxID,
+        executionExpiry,
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
@@ -445,7 +466,7 @@ export class E2BSandboxProvider implements SandboxProvider {
    * sandbox E2B retains indefinitely.
    */
   async stopSandbox(config: StopConfig): Promise<StopResult> {
-    const terminal = E2BSandboxProvider.TERMINAL_STOP_REASONS.has(config.reason);
+    const terminal = !E2BSandboxProvider.RESUMABLE_STOP_REASONS.has(config.reason);
     try {
       try {
         if (terminal) {
@@ -454,16 +475,24 @@ export class E2BSandboxProvider implements SandboxProvider {
             ...(config.signal ? [config.signal] : [])
           );
         } else {
-          await this.client.pauseSandbox(config.providerObjectId);
+          await this.client.pauseSandbox(config.providerObjectId, undefined, config.signal);
         }
       } catch (error) {
-        // Already gone or already paused — nothing to do.
-        if (error instanceof E2BNotFoundError || error instanceof E2BConflictError) {
-          return { success: true };
-        }
+        if (error instanceof E2BNotFoundError) return { success: true };
+        // A conflict can mean an operation is in progress, not that it stopped.
+        if (!(error instanceof E2BConflictError)) throw error;
+      }
+      try {
+        const sandbox = await this.client.getSandbox(config.providerObjectId, config.signal);
+        if (!terminal && sandbox.state === "paused") return { success: true };
+        return {
+          success: false,
+          error: `E2B ${terminal ? "deletion" : "pause"} is not confirmed (state: ${sandbox.state})`,
+        };
+      } catch (error) {
+        if (error instanceof E2BNotFoundError) return { success: true };
         throw error;
       }
-      return { success: true };
     } catch (error) {
       throw this.classifyError(
         `Failed to stop (${terminal ? "kill" : "pause"}) E2B sandbox`,
@@ -471,6 +500,22 @@ export class E2BSandboxProvider implements SandboxProvider {
         "stop"
       );
     }
+  }
+
+  private async readExecutionExpiry(
+    providerObjectId: string,
+    requestStartedAtMs: number,
+    timeoutSeconds: number
+  ): Promise<SandboxExecutionExpiry> {
+    const sandbox = await this.client.getSandbox(providerObjectId);
+    const expiresAtMs = sandbox.endAt ? Date.parse(sandbox.endAt) : NaN;
+    if (Number.isFinite(expiresAtMs)) return { kind: "hard", expiresAtMs };
+    // E2B's acknowledged timeout runs from create/connect/setTimeout, not from
+    // this response or entrypoint completion. Include all request/setup latency.
+    // https://github.com/e2b-dev/E2B/blob/main/spec/openapi.yml
+    return Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
+      ? { kind: "conservative", expiresAtMs: requestStartedAtMs + timeoutSeconds * 1000 }
+      : { kind: "unknown" };
   }
 
   /**
@@ -604,7 +649,11 @@ export class E2BSandboxProvider implements SandboxProvider {
         vncPassword,
       }
     );
-    Object.assign(envVars, extraEnv, E2B_SANDBOX_ENV);
+    Object.assign(envVars, extraEnv, E2B_SANDBOX_ENV, {
+      // Auto-pause preserves memory and inherited descriptors. Discard runtime
+      // hook output until capture can exclude it; image builds still use files.
+      HOOK_LOG_MODE: "discard",
+    });
     return { envVars, codeServerPassword, vncPassword };
   }
 

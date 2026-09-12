@@ -5,6 +5,7 @@ import type { SandboxAccessKind, SandboxRow } from "./types";
 import type { Logger } from "../logger";
 import { coerceSandboxStatus } from "../sandbox/sandbox-status";
 import { encryptToken } from "../auth/crypto";
+import type { SandboxExecutionExpiry } from "../sandbox/provider";
 
 /** A sandbox row exactly as SQLite returns it, before the status is validated. */
 type RawSandboxRow = Omit<SandboxRow, "status"> & { status: string };
@@ -168,6 +169,9 @@ export class SandboxRepository {
          ttyd_url = NULL,
          ttyd_token = NULL,
          runtime_version = NULL,
+         runtime_capabilities = NULL,
+         provider_execution_expiry_kind = NULL,
+         provider_execution_expires_at_ms = NULL,
          active_socket_id = ''
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
@@ -220,7 +224,9 @@ export class SandboxRepository {
       `UPDATE sandbox SET
          status = ?,
          created_at = ?,
-         last_heartbeat = NULL
+         last_heartbeat = NULL,
+         provider_execution_expiry_kind = NULL,
+         provider_execution_expires_at_ms = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt
@@ -231,6 +237,30 @@ export class SandboxRepository {
     this.sql.exec(
       `UPDATE sandbox SET modal_object_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       modalObjectId
+    );
+  }
+
+  /** A late create/resume response cannot renew the lifetime of its replacement. */
+  updateSandboxExecutionExpiry(
+    generation: { sandboxId: string | null; createdAt: number },
+    expiry: SandboxExecutionExpiry
+  ): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET provider_execution_expiry_kind = ?, provider_execution_expires_at_ms = ?
+       WHERE modal_sandbox_id IS ? AND created_at = ?`,
+      expiry.kind,
+      expiry.kind === "unknown" ? null : expiry.expiresAtMs,
+      generation.sandboxId,
+      generation.createdAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  recordReportedRuntimeCapabilities(capabilities: string[]): void {
+    this.sql.exec(
+      `UPDATE sandbox SET runtime_capabilities = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      JSON.stringify(capabilities)
     );
   }
 

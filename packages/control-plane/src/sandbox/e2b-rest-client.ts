@@ -310,8 +310,10 @@ export class E2BRestClient {
     }
   }
 
-  async getSandbox(id: string): Promise<E2BSandboxDetail> {
-    return this.requestJson("GET", `/sandboxes/${id}`, TIMEOUT_GET_MS, e2bSandboxDetailSchema);
+  async getSandbox(id: string, signal?: AbortSignal): Promise<E2BSandboxDetail> {
+    return this.requestJson("GET", `/sandboxes/${id}`, TIMEOUT_GET_MS, e2bSandboxDetailSchema, {
+      signal,
+    });
   }
 
   /**

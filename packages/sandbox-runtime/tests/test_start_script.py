@@ -1,7 +1,9 @@
 """Tests for RepositoryHooks.run_start() and strict repository boot integration."""
 
 import asyncio
+import os
 import signal
+import stat
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -46,13 +48,13 @@ def _create_start_script(repo_path, content="#!/bin/bash\necho start\n"):
     return script
 
 
-def _fake_process(returncode=0, stdout=b""):
+def _fake_process(returncode=0):
     """Return a mock async process."""
     proc = MagicMock()
     proc.returncode = returncode
-    proc.communicate = AsyncMock(return_value=(stdout, None))
+    proc.communicate = AsyncMock(side_effect=AssertionError("hooks must not capture pipes"))
     proc.kill = MagicMock()
-    proc.wait = AsyncMock()
+    proc.wait = AsyncMock(return_value=returncode)
     return proc
 
 
@@ -85,7 +87,7 @@ class TestStartScriptSuccess:
     async def test_successful_run(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_start_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"started\n")
+        fake_proc = _fake_process(returncode=0)
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
@@ -97,7 +99,7 @@ class TestStartScriptSuccess:
     async def test_bash_called_with_correct_args(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         script = _create_start_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        fake_proc = _fake_process(returncode=0)
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
@@ -109,11 +111,17 @@ class TestStartScriptSuccess:
         assert call_args[0][0] == "bash"
         assert call_args[0][1] == str(script)
         assert call_args[1]["cwd"] == sup.repo_path
+        assert isinstance(call_args[1]["stdout"], int)
+        assert stat.S_ISREG(os.fstat(call_args[1]["stdout"]).st_mode)
+        assert call_args[1]["stderr"] == asyncio.subprocess.STDOUT
+        assert call_args[1]["start_new_session"] is True
+        fake_proc.wait.assert_awaited_once()
+        fake_proc.communicate.assert_not_awaited()
 
     async def test_sets_boot_mode_env_for_script(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_start_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        fake_proc = _fake_process(returncode=0)
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
@@ -130,7 +138,7 @@ class TestStartScriptFailure:
     async def test_nonzero_exit_returns_false(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_start_script(sup.repo_path, content="#!/bin/bash\nexit 1\n")
-        fake_proc = _fake_process(returncode=1, stdout=b"start failed\n")
+        fake_proc = _fake_process(returncode=1)
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
@@ -138,6 +146,7 @@ class TestStartScriptFailure:
             result = await sup.hooks.run_start(sup.repositories[0], BootMode.FRESH)
 
         assert result is False
+        assert fake_proc.wait.await_count == 2
 
     async def test_exception_returns_false(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
@@ -161,26 +170,25 @@ class TestStartScriptTimeout:
         _create_start_script(sup.repo_path)
         fake_proc = _fake_process(returncode=None)
         fake_proc.pid = 123
-        fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
-        fake_proc.wait.side_effect = lambda: setattr(fake_proc, "returncode", -9)
-        fake_proc.stdout = MagicMock()
-        fake_proc.stdout.read = AsyncMock(return_value=b"partial output\n")
+        fake_proc.wait.side_effect = [TimeoutError, -signal.SIGKILL]
 
         with (
             patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
             patch("sandbox_runtime.repository_hooks.os.killpg") as kill_process_group,
+            patch("sandbox_runtime.repository_hooks._group_running", return_value=False),
         ):
             result = await sup.hooks.run_start(sup.repositories[0], BootMode.FRESH)
 
         assert result is False
         kill_process_group.assert_called_once_with(fake_proc.pid, signal.SIGKILL)
         fake_proc.kill.assert_not_called()
-        fake_proc.wait.assert_awaited_once()
+        assert fake_proc.wait.await_count == 2
+        fake_proc.communicate.assert_not_awaited()
 
     async def test_default_timeout_120(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_start_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        fake_proc = _fake_process(returncode=0)
         captured_timeout = {}
 
         original_wait_for = asyncio.wait_for
@@ -204,7 +212,7 @@ class TestStartScriptTimeout:
     async def test_custom_timeout_from_env(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_start_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        fake_proc = _fake_process(returncode=0)
         captured_timeout = {}
 
         original_wait_for = asyncio.wait_for

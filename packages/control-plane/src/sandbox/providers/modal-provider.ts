@@ -21,6 +21,8 @@ import {
   type RestoreResult,
   type SnapshotConfig,
   type SnapshotResult,
+  type StopConfig,
+  type StopResult,
 } from "../provider";
 
 interface StartModalImageBuildConfig {
@@ -90,7 +92,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     supportsSnapshots: true,
     supportsRestore: true,
     supportsPersistentResume: false,
-    supportsExplicitStop: false,
+    supportsExplicitStop: true,
   };
 
   constructor(private readonly client: ModalClient) {}
@@ -131,6 +133,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         sandboxId: result.sandboxId,
         providerObjectId: result.modalObjectId,
         createdAt: result.createdAt,
+        executionExpiry: result.executionExpiry ?? { kind: "unknown" },
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
         vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
@@ -177,6 +180,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           success: true,
           sandboxId: result.sandboxId,
           providerObjectId: result.modalObjectId,
+          executionExpiry: result.executionExpiry ?? { kind: "unknown" },
           codeServerUrl: result.codeServerUrl,
           codeServerPassword: result.codeServerPassword,
           vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
@@ -240,6 +244,14 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         throw error;
       }
       throw this.classifyError("Failed to take snapshot", error);
+    }
+  }
+
+  async stopSandbox(config: StopConfig): Promise<StopResult> {
+    try {
+      return await this.client.terminateSandbox(config);
+    } catch (error) {
+      throw this.classifyError("Failed to confirm Modal sandbox termination", error);
     }
   }
 

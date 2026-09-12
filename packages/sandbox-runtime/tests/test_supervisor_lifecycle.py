@@ -15,6 +15,8 @@ def _supervisor(tmp_path, events):
     result = RepositoryBootResult(True, [], True, True, (), Path(tmp_path))
     repository = MagicMock()
     repository.prepare_tunnel_environment.return_value = []
+    repository.hooks.discard_logs = AsyncMock()
+    repository.hooks.shutdown = AsyncMock()
     repository.boot = AsyncMock(
         side_effect=lambda mode, _ports: events.append(f"repository:{mode.value}") or result
     )
@@ -69,6 +71,7 @@ async def test_regular_boot_phase_order(tmp_path, monkeypatch):
 
     assert await supervisor.run() is True
     supervisor.repository_boot.prepare_tunnel_environment.assert_called_once_with(BootMode.FRESH)
+    supervisor.repository_boot.hooks.shutdown.assert_awaited_once()
     assert events == [
         "desktop",
         "repository:fresh",
@@ -108,6 +111,7 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
     callback = MagicMock()
 
     async def report_success(**_kwargs):
+        repository.hooks.discard_logs.assert_awaited_once()
         supervisor.shutdown_event.set()
         return True
 
@@ -116,6 +120,7 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
 
     assert await supervisor.run(callback) is True
     repository.boot.assert_awaited_once_with(BootMode.BUILD, [])
+    repository.hooks.shutdown.assert_awaited_once()
     desktop.start.assert_not_awaited()
     supervisor.managed_skills.materialize.assert_not_awaited()
     opencode_server.start.assert_not_awaited()
@@ -150,7 +155,7 @@ async def test_opencode_restarts_do_not_rematerialize_managed_skills(tmp_path, m
     supervisor._repository_boot_result = RepositoryBootResult(True, [], True, True, (), tmp_path)
     opencode_server.exit_code.return_value = 1
     supervisor._report_fatal_error = AsyncMock()
-    monkeypatch.setattr("sandbox_runtime.supervisor.asyncio.sleep", AsyncMock())
+    monkeypatch.setattr(supervisor, "_wait_for_shutdown", AsyncMock(return_value=False))
 
     await SandboxSupervisor.monitor_processes(supervisor)
 

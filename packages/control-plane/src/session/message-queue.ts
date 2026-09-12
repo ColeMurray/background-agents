@@ -28,6 +28,8 @@ import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } fr
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
+import { STOP_CONFIRMATION_TIMEOUT_MS } from "./message-repository";
+import { resolveExecutionBudget } from "./execution-deadline";
 import {
   AttachmentClaimConflictError,
   type SessionAttachmentRepository,
@@ -57,7 +59,7 @@ import type {
 } from "./message-queue-types";
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
-const STUCK_PROCESSING_ERROR = "Execution timed out (stuck processing)";
+const SANDBOX_UNAVAILABLE_ERROR = "Sandbox became unavailable before execution completed";
 
 type EnqueueAutofixResponse = Extract<
   GitHubAutofixSessionResponse,
@@ -162,7 +164,16 @@ export class SessionMessageQueue {
     private readonly alarmScheduler: AlarmScheduler,
     private readonly executionStop: ExecutionStopCoordinator,
     /** Resolved per use so it honors settings persisted after construction. */
-    private readonly getExecutionTimeoutMs: () => number
+    private readonly getExecutionTimeoutMs: () => number,
+    private readonly getExecutionSandbox: () => {
+      sandboxId: string | null;
+      providerExpiresAtMs?: number | null;
+      requiresStopEvidence: boolean;
+      providerStartupPending?: boolean;
+      turnAllowanceMs?: number;
+      policySource?: string;
+      runtimeUnavailable?: boolean;
+    } = () => ({ sandboxId: null, requiresStopEvidence: false })
   ) {}
 
   async enqueueAutofix(
@@ -413,6 +424,7 @@ export class SessionMessageQueue {
       }
       return;
     }
+    if (this.getExecutionSandbox().runtimeUnavailable) return;
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (!sandboxWs) {
       // The provider-auth lookup above is a non-storage await. The socket
@@ -465,6 +477,7 @@ export class SessionMessageQueue {
       return;
     }
 
+    const dispatchAt = Date.now();
     const author = this.participantRepository.getParticipantById(message.author_id);
     if (!author) {
       throw new Error(`Missing prompt author ${message.author_id}`);
@@ -473,7 +486,7 @@ export class SessionMessageQueue {
       author,
       message.content,
       message.id,
-      now,
+      dispatchAt,
       parseStoredSessionAttachments(message.attachments, () =>
         this.log.error("prompt.invalid_stored_attachments")
       ),
@@ -487,9 +500,41 @@ export class SessionMessageQueue {
     const resolvedEffort =
       validateReasoningEffort(resolvedModel, requestedEffort ?? undefined, this.log) ?? undefined;
 
+    const executionSandbox = this.getExecutionSandbox();
+    if (executionSandbox.providerStartupPending) {
+      // A fast bridge can connect before create/resume returns its expiry.
+      // The lifecycle owner pumps the queue once that response is persisted.
+      return;
+    }
+    const budget = resolveExecutionBudget(
+      dispatchAt,
+      this.getExecutionTimeoutMs(),
+      executionSandbox,
+      message
+    );
+    if (budget.executionDeadlineMs <= dispatchAt) {
+      // Keep this workspace intact. Lifecycle refresh must be explicitly safe;
+      // launching into an exhausted provider cannot reserve cleanup time.
+      if (
+        this.failMessage(
+          message,
+          "Insufficient remaining execution budget; runtime refresh is required",
+          dispatchAt,
+          "pending"
+        )
+      ) {
+        this.broadcastPromptQueue();
+        await this.sessionStatus.reconcileAfterExecution(false);
+        await this.processMessageQueue();
+      }
+      return;
+    }
     const command: SandboxCommand = {
       type: "prompt",
       messageId: message.id,
+      sandboxId: budget.sandboxId ?? undefined,
+      executionDeadlineMs: budget.executionDeadlineMs,
+      cleanupDeadlineMs: budget.cleanupDeadlineMs,
       content: message.content,
       model: resolvedModel,
       reasoningEffort: resolvedEffort,
@@ -504,8 +549,9 @@ export class SessionMessageQueue {
 
     const claimed = this.messageRepository.startMessageProcessing(
       message.id,
-      now,
-      userMessageEvent
+      dispatchAt,
+      userMessageEvent,
+      budget
     );
     if (!claimed) {
       this.log.debug("processMessageQueue: prompt claim lost", { message_id: message.id });
@@ -516,8 +562,15 @@ export class SessionMessageQueue {
 
     if (!sent) {
       this.messageRepository.updateMessageToPending(message.id);
-      await this.sandboxLifecycle.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
-      await this.executionStop.resumeAfterSandboxTermination();
+      const retryAt = Math.min(budget.cleanupDeadlineMs, dispatchAt + STOP_CONFIRMATION_TIMEOUT_MS);
+      this.messageRepository.markMessageAwaitingStopConfirmation(message.id, retryAt);
+      const terminated = await this.sandboxLifecycle.terminateUnresponsiveSandbox(
+        "prompt_dispatch_send_failed",
+        budget.cleanupDeadlineMs
+      );
+      if (terminated)
+        await this.executionStop.resumeAfterSandboxTermination(message.id, budget.sandboxId);
+      else await this.alarmScheduler.schedule(retryAt);
     } else {
       this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
@@ -525,8 +578,7 @@ export class SessionMessageQueue {
       this.sandboxLifecycle.updateLastActivity(now);
 
       // Execution timeout shares the DO's single alarm slot with lifecycle checks.
-      const deadline = now + this.getExecutionTimeoutMs();
-      await this.alarmScheduler.schedule(deadline);
+      await this.alarmScheduler.schedule(budget.executionDeadlineMs);
 
       this.backgroundTasks.submit(() => this.callbackService.notifyStarted(message.id), {
         name: "callback.notify_started",
@@ -547,13 +599,69 @@ export class SessionMessageQueue {
       sandbox_ready_state: sandboxWs.readyState,
       queue_wait_ms: now - message.created_at,
       has_attachments: !!message.attachments,
+      execution_deadline_ms: budget.executionDeadlineMs,
+      cleanup_deadline_ms: budget.cleanupDeadlineMs,
+      execution_policy_source: executionSandbox.policySource,
+      provider_expiry_known: executionSandbox.providerExpiresAtMs != null,
     });
   }
 
+  /** Reconcile an automation observer against session-owned execution authority. */
+  async reconcileExecutionState(automationRunId: string, executionLaunchId?: string) {
+    const processing = this.messageRepository.getProcessingMessageWithStartedAt();
+    if (processing) {
+      const metadata = this.messageRepository.getMessageExecutionMetadata(processing.id);
+      const deadline =
+        metadata?.execution_deadline_ms ??
+        resolveExecutionBudget(
+          processing.started_at,
+          this.getExecutionTimeoutMs(),
+          this.getExecutionSandbox()
+        ).executionDeadlineMs;
+      if (deadline <= Date.now()) await this.executionStop.stop("Execution deadline exceeded");
+    }
+    await this.executionStop.recoverStopConfirmationTimeout();
+    const stopping = this.messageRepository.getMessageAwaitingStopConfirmation();
+    const running = this.messageRepository.getProcessingMessage();
+    const activeId = stopping?.id ?? running?.id;
+    const metadata = activeId ? this.messageRepository.getMessageExecutionMetadata(activeId) : null;
+    const message = this.messageRepository.getAutomationMessage(automationRunId);
+    const hasQueuedWork = this.messageRepository.getPendingOrProcessingCount() > 0;
+    return {
+      executionState: stopping
+        ? ("stopping" as const)
+        : running || hasQueuedWork
+          ? ("running" as const)
+          : ("idle" as const),
+      messageId: message?.id ?? null,
+      deadlineAt: metadata?.execution_deadline_ms ?? null,
+      cleanupDeadlineAt: metadata?.cleanup_deadline_ms ?? null,
+      messageStatus: message?.status ?? null,
+      error: message?.error_message ?? null,
+      ...(executionLaunchId
+        ? { launchObserved: this.messageRepository.hasExecutionLaunch(executionLaunchId) }
+        : {}),
+    };
+  }
+
   async handleFatalSandboxFailure(reason: string): Promise<void> {
-    const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
-    await this.failStuckProcessingMessage(reason);
-    if (await termination) await this.executionStop.resumeAfterSandboxTermination();
+    if (this.messageRepository.getProcessingMessage()) {
+      await this.executionStop.stop(reason);
+      return;
+    }
+    const messageId = this.messageRepository.getMessageAwaitingStopConfirmation()?.id ?? null;
+    const metadata = messageId
+      ? this.messageRepository.getMessageExecutionMetadata(messageId)
+      : null;
+    const termination = this.sandboxLifecycle.terminateFailedSandbox(
+      reason,
+      metadata?.cleanup_deadline_ms ?? undefined
+    );
+    if (await termination)
+      await this.executionStop.resumeAfterSandboxTermination(
+        messageId,
+        metadata?.execution_sandbox_id
+      );
   }
 
   /** Close every unfinished message synchronously; status projection happens afterwards. */
@@ -563,35 +671,32 @@ export class SessionMessageQueue {
       this.failMessage(message, "Execution was cancelled before it started", now, "pending");
     }
 
-    const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
-    if (processingMessage) {
-      this.failMessage(processingMessage, "Execution was cancelled", now, "processing");
-    }
+    const stop = this.repository.transaction(() =>
+      this.executionStop.prepare("Execution was cancelled", now)
+    );
+    if (stop)
+      this.backgroundTasks.submit(() => this.executionStop.deliver(stop), {
+        name: "execution.cancel",
+        context: { message_id: stop.failure.completion.messageId },
+      });
 
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.broadcastPromptQueue();
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (sandboxWs) this.wsManager.send(sandboxWs, { type: "stop" });
   }
 
   /**
    * Fail a processing message that its sandbox can no longer complete.
    *
-   * Only marks the message as failed and broadcasts — does NOT send a stop command
-   * to the sandbox or call processMessageQueue(). This avoids races where a new
-   * prompt could be dispatched to a sandbox being shut down.
+   * Settlement cannot release an occupied runtime. Lifecycle failures converge
+   * on the same containment fence as user Stop and execution expiry.
    */
-  async failStuckProcessingMessage(error = STUCK_PROCESSING_ERROR): Promise<void> {
-    const now = Date.now();
-    const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
-    if (!processingMessage) return;
-
-    if (!this.failMessage(processingMessage, error, now, "processing")) {
-      return;
-    }
-    this.messenger.broadcast({ type: "processing_status", isProcessing: false });
-    this.broadcastPromptQueue();
-    await this.sessionStatus.reconcileAfterExecution(false);
+  async failStuckProcessingMessage(
+    error = SANDBOX_UNAVAILABLE_ERROR,
+    expectedMessageId?: string | null
+  ): Promise<void> {
+    const current = this.messageRepository.getProcessingMessage();
+    if (!current || (expectedMessageId !== undefined && current.id !== expectedMessageId)) return;
+    await this.executionStop.stop(error);
   }
 
   private failMessage(

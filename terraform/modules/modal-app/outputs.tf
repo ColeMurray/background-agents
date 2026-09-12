@@ -17,3 +17,8 @@ output "api_create_sandbox_url" {
   description = "URL of the create sandbox endpoint"
   value       = "https://${local.modal_workspace_slug}--${var.app_name}-api-create-sandbox.modal.run"
 }
+
+output "api_terminate_sandbox_url" {
+  description = "URL of the sandbox termination confirmation endpoint"
+  value       = "https://${local.modal_workspace_slug}--${var.app_name}-api-terminate-sandbox.modal.run"
+}

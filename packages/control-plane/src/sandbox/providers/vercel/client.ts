@@ -341,6 +341,22 @@ export class VercelSandboxClient {
     );
   }
 
+  async getSession(
+    sessionId: string,
+    correlation?: CorrelationContext,
+    signal?: AbortSignal
+  ): Promise<VercelSandboxSession> {
+    const response = await this.requestJson(
+      `/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "GET", signal },
+      z.object({ session: vercelSandboxSessionSchema }),
+      correlation,
+      "getSession",
+      VERCEL_API_REQUEST_DEADLINE_MS
+    );
+    return response.session;
+  }
+
   async deleteSnapshot(
     snapshotId: string,
     correlation?: CorrelationContext,

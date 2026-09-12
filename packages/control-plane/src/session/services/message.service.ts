@@ -9,6 +9,7 @@ import type { SessionMessageQueue } from "../message-queue";
 import type { EnqueuePromptRequest } from "../enqueue-prompt-contract";
 import { SessionEventStream, type SessionEventListRequest } from "../event-stream";
 import { parseStoredSessionAttachments } from "../session-attachment-resolver";
+import type { SessionExecutionState } from "../contracts";
 
 export type ListEventsRequest = SessionEventListRequest;
 
@@ -43,6 +44,13 @@ export class MessageService {
   async stop(): Promise<{ status: "stopping" }> {
     await this.deps.stopExecution();
     return { status: "stopping" };
+  }
+
+  reconcileExecutionState(
+    automationRunId: string,
+    executionLaunchId?: string
+  ): Promise<SessionExecutionState> {
+    return this.deps.messageQueue.reconcileExecutionState(automationRunId, executionLaunchId);
   }
 
   listEvents(request: ListEventsRequest): ListEventsResponse {

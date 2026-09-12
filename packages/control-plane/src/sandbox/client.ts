@@ -13,7 +13,12 @@ import { z } from "zod";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
 import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
-import type { SessionRepositoryInfo } from "./provider";
+import type {
+  SandboxExecutionExpiry,
+  SessionRepositoryInfo,
+  StopConfig,
+  StopResult,
+} from "./provider";
 import { withRequestDeadline } from "./request-deadline";
 
 const log = createLogger("modal-client");
@@ -43,6 +48,8 @@ const createSandboxModalResponseSchema = z.discriminatedUnion("success", [
       sandbox_id: z.string(),
       modal_object_id: z.string().nullable().optional(),
       created_at: z.number(),
+      execution_expires_at_ms: z.number().finite().optional(),
+      execution_expiry_kind: z.enum(["conservative", "hard", "unknown"]).optional(),
       code_server_url: z.string().nullable().optional(),
       code_server_password: z.string().nullable().optional(),
       vnc_url: z.string().nullable().optional(),
@@ -61,6 +68,8 @@ const restoreSandboxModalResponseSchema = z.discriminatedUnion("success", [
       .object({
         sandbox_id: z.string().optional(),
         modal_object_id: z.string().nullable().optional(),
+        execution_expires_at_ms: z.number().finite().optional(),
+        execution_expiry_kind: z.enum(["conservative", "hard", "unknown"]).optional(),
         code_server_url: z.string().nullable().optional(),
         code_server_password: z.string().nullable().optional(),
         vnc_url: z.string().nullable().optional(),
@@ -106,6 +115,25 @@ const imageBuildOperationModalResponseSchema = z.discriminatedUnion("success", [
   }),
   modalErrorResponseSchema,
 ]);
+
+const terminateSandboxModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({ success: z.literal(true), data: z.object({ terminated: z.literal(true) }) }),
+  modalErrorResponseSchema,
+]);
+
+function modalExecutionExpiry(
+  data:
+    | {
+        execution_expires_at_ms?: number;
+        execution_expiry_kind?: "hard" | "conservative" | "unknown";
+      }
+    | undefined
+): SandboxExecutionExpiry {
+  return data?.execution_expires_at_ms !== undefined &&
+    (data.execution_expiry_kind === "hard" || data.execution_expiry_kind === "conservative")
+    ? { kind: data.execution_expiry_kind, expiresAtMs: data.execution_expires_at_ms }
+    : { kind: "unknown" };
+}
 
 function parseModalApiResponse<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
@@ -190,6 +218,7 @@ export interface CreateSandboxRequest {
 }
 
 export interface CreateSandboxResponse {
+  executionExpiry?: SandboxExecutionExpiry;
   sandboxId: string;
   modalObjectId?: string; // Modal's internal object ID for snapshot API
   createdAt: number;
@@ -225,6 +254,7 @@ export interface RestoreSandboxRequest {
 }
 
 export interface RestoreSandboxResponse {
+  executionExpiry?: SandboxExecutionExpiry;
   success: boolean;
   sandboxId?: string;
   modalObjectId?: string;
@@ -320,6 +350,7 @@ export class ModalClient {
   private createImageBuildSandboxUrl: string;
   private startImageBuildSandboxUrl: string;
   private terminateImageBuildSandboxUrl: string;
+  private terminateSandboxUrl: string;
   private secret: string;
 
   private async postJson<T>(
@@ -366,6 +397,7 @@ export class ModalClient {
     this.createImageBuildSandboxUrl = url("api-create-build-sandbox");
     this.startImageBuildSandboxUrl = url("api-start-build-sandbox");
     this.terminateImageBuildSandboxUrl = url("api-terminate-build-sandbox");
+    this.terminateSandboxUrl = url("api-terminate-sandbox");
   }
 
   /**
@@ -444,6 +476,7 @@ export class ModalClient {
         sandboxId: result.data.sandbox_id,
         modalObjectId: result.data.modal_object_id ?? undefined,
         createdAt: result.data.created_at,
+        executionExpiry: modalExecutionExpiry(result.data),
         codeServerUrl: result.data.code_server_url ?? undefined,
         codeServerPassword: result.data.code_server_password ?? undefined,
         vncUrl: result.data.vnc_url ?? undefined,
@@ -511,6 +544,7 @@ export class ModalClient {
         success: true,
         sandboxId: result.data?.sandbox_id,
         modalObjectId: result.data?.modal_object_id ?? undefined,
+        executionExpiry: modalExecutionExpiry(result.data),
         codeServerUrl: result.data?.code_server_url ?? undefined,
         codeServerPassword: result.data?.code_server_password ?? undefined,
         vncUrl: result.data?.vnc_url ?? undefined,
@@ -581,6 +615,20 @@ export class ModalClient {
         outcome,
       });
     }
+  }
+
+  async terminateSandbox(config: StopConfig): Promise<StopResult> {
+    const result = await this.postJson(
+      this.terminateSandboxUrl,
+      "terminateSandbox",
+      MODAL_CLEANUP_REQUEST_DEADLINE_MS,
+      { sandbox_id: config.providerObjectId },
+      terminateSandboxModalResponseSchema,
+      config.correlation,
+      config.signal,
+      () => {}
+    );
+    return result.success ? { success: true } : { success: false, error: result.error };
   }
 
   /**

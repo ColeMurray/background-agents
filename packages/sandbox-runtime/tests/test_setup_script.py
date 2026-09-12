@@ -1,7 +1,9 @@
 """Tests for RepositoryHooks.run_setup() and its integration in RepositoryBoot.boot()."""
 
 import asyncio
+import os
 import signal
+import stat
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sandbox_runtime.repository_boot import RepositoryBoot
@@ -39,13 +41,13 @@ def _create_setup_script(repo_path, content="#!/bin/bash\necho hello\n"):
     return script
 
 
-def _fake_process(returncode=0, stdout=b""):
+def _fake_process(returncode=0):
     """Return a mock async process."""
     proc = MagicMock()
     proc.returncode = returncode
-    proc.communicate = AsyncMock(return_value=(stdout, None))
+    proc.communicate = AsyncMock(side_effect=AssertionError("hooks must not capture pipes"))
     proc.kill = MagicMock()
-    proc.wait = AsyncMock()
+    proc.wait = AsyncMock(return_value=returncode)
     return proc
 
 
@@ -80,7 +82,7 @@ class TestSetupScriptSuccess:
     async def test_bash_called_with_correct_args(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         script = _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        fake_proc = _fake_process(returncode=0)
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
@@ -92,11 +94,17 @@ class TestSetupScriptSuccess:
         assert call_args[0][0] == "bash"
         assert call_args[0][1] == str(script)
         assert call_args[1]["cwd"] == sup.repo_path
+        assert isinstance(call_args[1]["stdout"], int)
+        assert stat.S_ISREG(os.fstat(call_args[1]["stdout"]).st_mode)
+        assert call_args[1]["stderr"] == asyncio.subprocess.STDOUT
+        assert call_args[1]["start_new_session"] is True
+        fake_proc.wait.assert_awaited_once()
+        fake_proc.communicate.assert_not_awaited()
 
     async def test_inherits_environment(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"")
+        fake_proc = _fake_process(returncode=0)
 
         with (
             patch.dict("os.environ", {"MY_VAR": "hello"}, clear=False),
@@ -122,7 +130,7 @@ class TestSetupScriptFailure:
     async def test_nonzero_exit_returns_false(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path, content="#!/bin/bash\nexit 1\n")
-        fake_proc = _fake_process(returncode=1, stdout=b"error: something broke\n")
+        fake_proc = _fake_process(returncode=1)
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
@@ -130,6 +138,7 @@ class TestSetupScriptFailure:
             result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         assert result is False
+        assert fake_proc.wait.await_count == 2
 
     async def test_exception_returns_false(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
@@ -148,11 +157,13 @@ class TestSetupScriptFailure:
         sup = _make_repository_boot(tmp_path)
         sup.hooks.log = MagicMock()
         _create_setup_script(sup.repo_path, content="#!/bin/bash\nexit 1\n")
-        fake_proc = _fake_process(returncode=1, stdout=b"secret from repository hook\n")
+        fake_proc = _fake_process(returncode=1)
 
-        with patch(
-            "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
-        ):
+        async def spawn_with_private_output(*_args, **kwargs):
+            os.write(kwargs["stdout"], b"secret from repository hook\n")
+            return fake_proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=spawn_with_private_output):
             result = await sup.hooks.run_setup(sup.repositories[0], BootMode.BUILD)
 
         assert result is False
@@ -160,6 +171,7 @@ class TestSetupScriptFailure:
         assert failure.args == ("setup.failed",)
         assert failure.kwargs["exit_code"] == 1
         assert "output_tail" not in failure.kwargs
+        assert "secret from repository hook" not in str(sup.hooks.log.mock_calls)
 
 
 # ---------------------------------------------------------------------------
@@ -175,45 +187,46 @@ class TestSetupScriptTimeout:
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=None)
         fake_proc.pid = 123
-        fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
-        fake_proc.wait.side_effect = lambda: setattr(fake_proc, "returncode", -9)
-        fake_proc.stdout = MagicMock()
-        fake_proc.stdout.read = AsyncMock(return_value=b"partial output\n")
+        fake_proc.wait.side_effect = [TimeoutError, -signal.SIGKILL]
 
         with (
             patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
             patch("sandbox_runtime.repository_hooks.os.killpg") as kill_process_group,
+            patch("sandbox_runtime.repository_hooks._group_running", return_value=False),
         ):
             result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         assert result is False
         kill_process_group.assert_called_once_with(fake_proc.pid, signal.SIGKILL)
         fake_proc.kill.assert_not_called()
-        fake_proc.wait.assert_awaited_once()
+        assert fake_proc.wait.await_count == 2
+        fake_proc.communicate.assert_not_awaited()
 
     async def test_build_timeout_log_omits_hook_output(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         sup.hooks.log = MagicMock()
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=None)
-        fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
-        fake_proc.stdout = MagicMock()
-        fake_proc.stdout.read = AsyncMock(return_value=b"secret partial output\n")
+        fake_proc.wait.side_effect = [TimeoutError, -signal.SIGKILL]
 
-        with patch(
-            "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
-        ):
+        async def spawn_with_private_output(*_args, **kwargs):
+            os.write(kwargs["stdout"], b"secret partial output\n")
+            return fake_proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=spawn_with_private_output):
             result = await sup.hooks.run_setup(sup.repositories[0], BootMode.BUILD)
 
         assert result is False
         timeout = sup.hooks.log.error.call_args
         assert timeout.args == ("setup.timeout",)
         assert "output_tail" not in timeout.kwargs
+        assert "secret partial output" not in str(sup.hooks.log.mock_calls)
+        assert timeout.kwargs["cleanup_outcome"] == "process_group_stopped"
 
     async def test_default_timeout_300(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        fake_proc = _fake_process(returncode=0)
         captured_timeout = {}
 
         original_wait_for = asyncio.wait_for
@@ -237,7 +250,7 @@ class TestSetupScriptTimeout:
     async def test_custom_timeout_from_env(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        fake_proc = _fake_process(returncode=0)
         captured_timeout = {}
 
         original_wait_for = asyncio.wait_for
@@ -258,7 +271,7 @@ class TestSetupScriptTimeout:
     async def test_invalid_timeout_env_uses_default(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        fake_proc = _fake_process(returncode=0)
         captured_timeout = {}
 
         original_wait_for = asyncio.wait_for

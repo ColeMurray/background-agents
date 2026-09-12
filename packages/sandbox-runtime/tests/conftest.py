@@ -156,6 +156,12 @@ class ScriptedHarness:
         self.abort_calls += 1
         return True
 
+    async def stop(self, deadline_monotonic: float) -> bool:
+        # This fixture owns only the consumed generator, not external tools.
+        # Its prompt reader has already unwound when the bridge calls stop.
+        self.abort_calls += 1
+        return True
+
 
 __all__ = [
     "MockResponse",

@@ -83,6 +83,12 @@ class TestRequestStop:
 
         assert stopped is False
 
+    async def test_rejected_abort_does_not_report_request_success(self):
+        http_client = AsyncMock()
+        http_client.post.return_value = MockResponse(500)
+
+        assert await make_client(http_client).request_stop(SESSION_ID, reason="command") is False
+
 
 class TestGetMessages:
     async def test_returns_parsed_message_list(self):
@@ -229,7 +235,46 @@ class TestEvents:
         http_client = MagicMock()
         http_client.stream.return_value = HangingSSEStream([])
 
-        with pytest.raises(SSEInactivityTimeoutError, match="SSE stream inactive"):
+        with pytest.raises(SSEInactivityTimeoutError, match="receive or downstream processing"):
             async with make_client(http_client).events(inactivity_timeout_seconds=0.05) as events:
                 async for _event in events:
                     pass
+
+    async def test_quiet_tool_heartbeats_keep_stream_consumption_responsive(self):
+        """Protocol regression only: not the real OpenCode Bash sleep 600 release gate."""
+
+        class HeartbeatingSSEStream(MockSSEStream):
+            async def aiter_text(self) -> AsyncIterator[str]:
+                for _ in range(6):
+                    yield sse_frame("server.heartbeat")
+                    await asyncio.sleep(0.02)
+                yield sse_frame("session.idle")
+
+        http_client = MagicMock()
+        http_client.stream.return_value = HeartbeatingSSEStream([])
+        async with make_client(http_client).events(inactivity_timeout_seconds=0.06) as events:
+            received = [event async for event in events]
+
+        assert [event["type"] for event in received] == ["server.heartbeat"] * 6 + ["session.idle"]
+
+    async def test_downstream_stall_expires_consumption_without_cancelling_consumer(self):
+        http_client = MagicMock()
+        http_client.stream.return_value = MockSSEStream(
+            [sse_frame("server.connected"), sse_frame("server.heartbeat")]
+        )
+
+        with pytest.raises(SSEInactivityTimeoutError, match="receive or downstream processing"):
+            async with make_client(http_client).events(inactivity_timeout_seconds=0.03) as events:
+                assert (await anext(events))["type"] == "server.connected"
+                # Must finish normally, not receive CancelledError from a scope
+                # suspended inside the source generator.
+                await asyncio.sleep(0.06)
+                await anext(events)
+
+    async def test_unrelated_consumer_timeout_is_not_relabelled_as_stream_failure(self):
+        http_client = MagicMock()
+        http_client.stream.return_value = MockSSEStream([])
+
+        with pytest.raises(TimeoutError, match="event sink"):
+            async with make_client(http_client).events(inactivity_timeout_seconds=1):
+                raise TimeoutError("event sink")

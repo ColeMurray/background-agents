@@ -20,6 +20,7 @@ export const SessionInternalPaths = {
   prompt: "/internal/prompt",
   autofix: "/internal/autofix",
   stop: "/internal/stop",
+  executionState: "/internal/execution-state",
   sandboxEvent: "/internal/sandbox-event",
   sandboxError: "/internal/sandbox-error",
   createMediaArtifact: "/internal/create-media-artifact",
@@ -56,6 +57,24 @@ export const SessionInternalPaths = {
   diffResolveFile: "/internal/diff-resolve-file",
   diffRetry: "/internal/diff-retry",
 } as const;
+
+export const executionStateRequestSchema = z.object({
+  automationRunId: z.string().min(1),
+  executionLaunchId: z.string().min(1).optional(),
+});
+
+/** Runtime availability is independent of an automation message's reporting outcome. */
+export const sessionExecutionStateSchema = z.object({
+  executionState: z.enum(["idle", "running", "stopping"]),
+  messageId: z.string().nullable(),
+  deadlineAt: z.number().nullable(),
+  cleanupDeadlineAt: z.number().nullable(),
+  messageStatus: z.enum(["pending", "processing", "completed", "failed"]).nullable(),
+  error: z.string().nullable(),
+  launchObserved: z.boolean().optional(),
+});
+
+export type SessionExecutionState = z.infer<typeof sessionExecutionStateSchema>;
 
 export type SessionInternalPath = (typeof SessionInternalPaths)[keyof typeof SessionInternalPaths];
 

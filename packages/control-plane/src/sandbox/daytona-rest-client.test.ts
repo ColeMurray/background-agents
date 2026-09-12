@@ -367,6 +367,27 @@ describe("DaytonaRestClient", () => {
   });
 
   describe("timeout handling", () => {
+    it.each(["stopSandbox", "getSandbox"] as const)(
+      "propagates caller cancellation during %s",
+      async (operation) => {
+        const client = new DaytonaRestClient(defaultConfig);
+        const controller = new AbortController();
+        fetchSpy.mockImplementation(
+          (_url: string, init: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+            })
+        );
+
+        const request = client[operation]("sb-1", controller.signal);
+        const assertion = expect(request).rejects.toThrow("cleanup deadline");
+        controller.abort(new Error("cleanup deadline"));
+
+        await assertion;
+        expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
+      }
+    );
+
     it("aborts request when timeout expires", async () => {
       const client = new DaytonaRestClient(defaultConfig);
 

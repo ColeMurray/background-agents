@@ -87,6 +87,7 @@ def test_ready_event_reports_fixed_baselines_without_a_capability_gate(tmp_path:
         "sandboxId": "sandbox-1",
         "opencodeSessionId": None,
         "harness": "opencode",
+        "capabilities": ["execution-deadline-v1", "stop-confirmation-v1", "hook_logs_snapshot_v1"],
         "repositories": [
             {
                 "position": 0,

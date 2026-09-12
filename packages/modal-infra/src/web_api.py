@@ -89,6 +89,10 @@ class TerminateBuildSandboxRequest(_ModalRequestModel):
     reason: NonEmptyString
 
 
+class TerminateSandboxRequest(_ModalRequestModel):
+    sandbox_id: NonEmptyString
+
+
 class InteractiveRepositoryRequest(_ModalRequestModel):
     repo_owner: NonEmptyString
     repo_name: NonEmptyString
@@ -443,6 +447,8 @@ async def api_create_sandbox(
                 "modal_object_id": handle.modal_object_id,  # Modal's internal ID for snapshot API
                 "status": handle.status.value,
                 "created_at": handle.created_at,
+                "execution_expires_at_ms": handle.execution_expires_at_ms,
+                "execution_expiry_kind": "conservative",
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
                 "vnc_url": handle.vnc_url,
@@ -458,6 +464,42 @@ async def api_create_sandbox(
 def api_health() -> dict:
     """Health check endpoint. Does not require authentication."""
     return {"success": True, "data": {"status": "healthy", "service": "open-inspect-modal"}}
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_terminate_sandbox(
+    request: dict[str, object],
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict:
+    """Terminate the supplied Modal object ID and await confirmed cessation."""
+    async with _execute_endpoint(
+        endpoint_name="api_terminate_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        session_id=x_session_id,
+        sandbox_id=x_sandbox_id,
+    ) as execution:
+        parsed_request = _parse_request(TerminateSandboxRequest, request)
+        execution.log_fields["sandbox_id"] = parsed_request.sandbox_id
+
+        from .sandbox.manager import SandboxManager
+
+        try:
+            await SandboxManager().terminate_sandbox(parsed_request.sandbox_id)
+        except TimeoutError as e:
+            raise HTTPException(
+                status_code=504, detail="Sandbox termination could not be confirmed in time"
+            ) from e
+        return {
+            "success": True,
+            "data": {"sandbox_id": parsed_request.sandbox_id, "terminated": True},
+        }
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])
@@ -665,6 +707,8 @@ async def api_restore_sandbox(
                 "sandbox_id": handle.sandbox_id,
                 "modal_object_id": handle.modal_object_id,
                 "status": handle.status.value,
+                "execution_expires_at_ms": handle.execution_expires_at_ms,
+                "execution_expiry_kind": "conservative",
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
                 "vnc_url": handle.vnc_url,

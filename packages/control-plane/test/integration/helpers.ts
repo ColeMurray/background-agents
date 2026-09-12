@@ -589,7 +589,7 @@ export async function seedSandboxAuth(
 
   await runInSessionDO(stub, (instance: SessionDO, state) => {
     state.storage.sql.exec(
-      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?",
+      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?, provider_execution_expiry_kind = 'unknown'",
       opts.authToken,
       tokenHash,
       opts.sandboxId,
@@ -613,7 +613,7 @@ export async function seedSandboxAuthHash(
 
   await runInSessionDO(stub, (instance: SessionDO, state) => {
     state.storage.sql.exec(
-      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?",
+      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?, provider_execution_expiry_kind = 'unknown'",
       tokenHash,
       opts.sandboxId,
       opts.status ?? "ready"

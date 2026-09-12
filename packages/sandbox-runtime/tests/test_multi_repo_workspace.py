@@ -8,6 +8,8 @@ the generated workspace manifest, and .opencode assembly.
 import asyncio
 import json
 import os
+import stat
+from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -95,6 +97,91 @@ def _make_opencode_server(tmp_path, session_config: str = MULTI_SESSION_CONFIG) 
     )
     core._test_repositories = tuple(repository.repositories)
     return core
+
+
+class TestOpenCodeHookContext:
+    @pytest.mark.parametrize("repository_count", [1, 2])
+    @pytest.mark.asyncio
+    async def test_retained_log_paths_are_additive_agent_context(
+        self, tmp_path, monkeypatch, repository_count
+    ):
+        session_config = json.dumps(
+            {
+                "session_id": "s",
+                "repositories": [
+                    {"repo_owner": "group/subgroup", "repo_name": name}
+                    for name in ("frontend", "backend")[:repository_count]
+                ],
+            }
+        )
+        server = _make_opencode_server(tmp_path, session_config)
+        repositories = server._test_repositories
+        workdir = repositories[0].path if repository_count == 1 else tmp_path
+        for repo in repositories:
+            repo.path.mkdir()
+        repo_config = workdir / "opencode.json"
+        configured = json.dumps(
+            {
+                "agent": {"build": {"prompt": "Keep the repository prompt"}},
+                "instructions": ["team.md"],
+            }
+        )
+        repo_config.write_text(configured)
+        (workdir / "AGENTS.md").write_text("Keep repository guidance")
+        log_root = tmp_path / ".openinspect" / "logs" / "boot-1"
+        expected_paths = []
+        for repo in repositories:
+            repo_logs = log_root / repo.name
+            repo_logs.mkdir(parents=True)
+            log_path = repo_logs / "start.log"
+            log_path.write_text("SYNTHETIC_SECRET_DO_NOT_INCLUDE")
+            expected_paths.append(log_path)
+        monkeypatch.setenv("OPENINSPECT_HOOK_LOG_DIR", str(log_root))
+
+        fake_proc = MagicMock(stdout=None)
+        with (
+            patch.object(server, "_setup_managed_oauth"),
+            patch.object(server, "_prepare_opencode_filesystem", return_value=set()),
+            patch.object(server, "_wait_for_health", AsyncMock()),
+            patch(
+                "sandbox_runtime.opencode_server.asyncio.create_subprocess_exec",
+                AsyncMock(return_value=fake_proc),
+            ) as spawn,
+        ):
+            await server.start(repositories, workdir)
+
+        config = json.loads(spawn.call_args.kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
+        assert "agent" not in config
+        assert repo_config.read_text() == configured
+        assert (workdir / "AGENTS.md").read_text() == "Keep repository guidance"
+        assert len(config["instructions"]) == 1
+        context_path = Path(config["instructions"][0])
+        assert context_path.parent == log_root
+        assert stat.S_IMODE(context_path.stat().st_mode) == 0o600
+        context = context_path.read_text()
+        for path in expected_paths:
+            assert str(path) in context
+        assert "setup.log" not in context  # Only hooks that actually ran have logs.
+        assert "SYNTHETIC_SECRET_DO_NOT_INCLUDE" not in context
+        assert "discarded before snapshots" in context
+
+    @pytest.mark.asyncio
+    async def test_omits_context_when_logs_are_not_retained(self, tmp_path, monkeypatch):
+        server = _make_opencode_server(tmp_path)
+        monkeypatch.delenv("OPENINSPECT_HOOK_LOG_DIR", raising=False)
+        with (
+            patch.object(server, "_setup_managed_oauth"),
+            patch.object(server, "_prepare_opencode_filesystem", return_value=set()),
+            patch.object(server, "_wait_for_health", AsyncMock()),
+            patch(
+                "sandbox_runtime.opencode_server.asyncio.create_subprocess_exec",
+                AsyncMock(return_value=MagicMock(stdout=None)),
+            ) as spawn,
+        ):
+            await server.start(server._test_repositories, tmp_path)
+        config = json.loads(spawn.call_args.kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
+        assert "instructions" not in config
+        assert not (tmp_path / ".openinspect").exists()
 
 
 class TestParseRepositories:

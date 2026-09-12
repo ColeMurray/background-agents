@@ -360,12 +360,13 @@ export class OpenComputerRestClient {
     );
   }
 
-  async getSandbox(id: string): Promise<OpenComputerSandboxResponse> {
+  async getSandbox(id: string, signal?: AbortSignal): Promise<OpenComputerSandboxResponse> {
     const response = await this.requestJson(
       "GET",
       this.expandPath(this.paths.sandbox, { id }),
       TIMEOUT_GET_MS,
-      openComputerSandboxApiResponseSchema
+      openComputerSandboxApiResponseSchema,
+      { signal }
     );
     return this.normalizeSandbox(response);
   }
@@ -386,11 +387,12 @@ export class OpenComputerRestClient {
     return response ? this.normalizeSandbox(response) : undefined;
   }
 
-  async hibernateSandbox(id: string): Promise<void> {
+  async hibernateSandbox(id: string, signal?: AbortSignal): Promise<void> {
     await this.requestVoid(
       "POST",
       this.expandPath(this.paths.hibernate, { id }),
-      TIMEOUT_HIBERNATE_MS
+      TIMEOUT_HIBERNATE_MS,
+      { signal }
     );
   }
 

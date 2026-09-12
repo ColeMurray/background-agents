@@ -93,8 +93,10 @@ class TestHandleStop:
         mock_task = MagicMock(spec=asyncio.Task)
         mock_task.done.return_value = False
         bridge._current_prompt_task = mock_task
+        bridge._execution = bridge._new_execution({"messageId": "msg-1"})
 
         await bridge._handle_stop()
+        await asyncio.sleep(0)
 
         mock_task.cancel.assert_called_once()
 
@@ -106,9 +108,9 @@ class TestHandleStop:
         # Should not raise
         await bridge._handle_stop()
 
-        # Still calls opencode abort (best-effort)
+        # Uncorrelated Stop must not act on another or future vendor turn.
         http_client = bridge.http_client
-        assert any(url.endswith("/abort") for url in http_client.post_urls)
+        assert not http_client.post_urls
 
     @pytest.mark.asyncio
     async def test_handle_stop_with_completed_task(self, bridge: AgentBridge):
@@ -184,8 +186,8 @@ class TestHandleStop:
         await asyncio.sleep(0)
 
     @pytest.mark.asyncio
-    async def test_older_prompt_completion_does_not_clear_newer_task(self, bridge: AgentBridge):
-        """Completing an older prompt must not clear a newer _current_prompt_task."""
+    async def test_newer_prompt_cannot_overlap_running_task(self, bridge: AgentBridge):
+        """The bridge rejects another turn until its current runtime is reusable."""
         old_can_finish = asyncio.Event()
         new_can_finish = asyncio.Event()
 
@@ -219,14 +221,17 @@ class TestHandleStop:
         )
         new_task = bridge._current_prompt_task
         assert new_task is not None
-        assert bridge._current_prompt_task is new_task
+        assert new_task is old_task
 
         old_can_finish.set()
         await old_task
         await asyncio.sleep(0)
 
-        assert bridge._current_prompt_task is new_task
+        assert bridge._current_prompt_task is None
 
+        await bridge._handle_command({"type": "prompt", "messageId": "msg-new", "content": "new"})
+        new_task = bridge._current_prompt_task
+        assert new_task is not None and new_task is not old_task
         new_can_finish.set()
         await new_task
         await asyncio.sleep(0)

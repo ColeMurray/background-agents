@@ -138,10 +138,21 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 | `api-create-sandbox` | POST | Yes | Create a new sandbox |
 | `api-snapshot-sandbox` | POST | Yes | Take filesystem snapshot |
 | `api-restore-sandbox` | POST | Yes | Restore sandbox from snapshot |
+| `api-terminate-sandbox` | POST | Yes | Terminate a Modal sandbox object ID and await confirmed cessation (idempotent when absent) |
 | `api-create-build-sandbox` | POST | Yes | Create a dormant, tagged sandbox for a prebuilt-image build |
 | `api-start-build-sandbox` | POST | Yes | Start the bound build runtime; results POST back to the control plane's `/image-builds/*` callbacks |
 | `api-snapshot-build-sandbox` | POST | Yes | Snapshot the exact tagged build sandbox |
 | `api-terminate-build-sandbox` | POST | Yes | Terminate the exact tagged build sandbox (idempotent when already absent) |
+
+Create and restore responses include `execution_expires_at_ms` and
+`execution_expiry_kind: "conservative"`. The bound starts before the Modal creation request and
+uses the timeout actually passed to Modal; creation and tunnel setup consume it. It is not an
+authoritative provider timestamp, nor does snapshot restore retain the previous instance's expiry.
+
+`api-terminate-sandbox` accepts `{ "sandbox_id": "<Modal object ID>" }`, not the logical session
+sandbox ID. It returns `data.terminated: true` only after Modal's `terminate(wait=True)` confirms
+cessation or the provider reports the object absent. Lookup and termination share a bounded wait;
+a timeout or provider failure is not confirmation and must not release the caller's reuse fence.
 
 ### Example: Create Sandbox
 

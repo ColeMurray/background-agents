@@ -48,6 +48,7 @@ export function SessionTimeline({
   currentParticipantId,
   participantProfiles,
   isProcessing,
+  quietTurnMessageId = null,
   promptQueue = EMPTY_PROMPT_QUEUE,
   loadingHistory,
   showSkeleton,
@@ -59,6 +60,7 @@ export function SessionTimeline({
   currentParticipantId: string | null;
   participantProfiles: Record<string, SessionParticipantProfile>;
   isProcessing: boolean;
+  quietTurnMessageId?: string | null;
   promptQueue?: PromptQueueItem[];
   loadingHistory: boolean;
   showSkeleton: boolean;
@@ -261,7 +263,7 @@ export function SessionTimeline({
       case "loading":
         return <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>;
       case "thinking":
-        return <ThinkingIndicator />;
+        return <ThinkingIndicator isQuiet={quietTurnMessageId !== null} />;
       case "item":
         return renderTimelineItem(row.item);
     }
@@ -304,11 +306,13 @@ export function SessionTimeline({
   );
 }
 
-function ThinkingIndicator() {
+function ThinkingIndicator({ isQuiet }: { isQuiet: boolean }) {
   return (
     <div className="bg-card p-4 flex items-center gap-2">
       <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
-      <span className="text-sm text-muted-foreground">Thinking...</span>
+      <span className="text-sm text-muted-foreground" role={isQuiet ? "status" : undefined}>
+        {isQuiet ? "No new output for 5 minutes; the turn remains active." : "Thinking..."}
+      </span>
     </div>
   );
 }
