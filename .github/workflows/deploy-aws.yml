@@ -119,7 +119,7 @@ jobs:
       name: ${{ needs.target.outputs.environment }}
       url: ${{ vars.AWS_PUBLIC_URL }}
     # Wide enough for the worst case scripts/deploy-aws.sh allows -- a deploy
-    # that times out remotely and then a rollback that does too, about 32
+    # that times out remotely and then a rollback that does too, about 34
     # minutes -- plus the build and push in front of it. A job cancelled part
     # way through is one that has moved the parameter and not verified it.
     timeout-minutes: 50
@@ -161,6 +161,13 @@ jobs:
       - name: Log in to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Pin the current image before overwriting tags
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ECR_REPOSITORY: ${{ vars.AWS_ECR_REPOSITORY }}
+          DEPLOYED_IMAGE_PARAMETER: ${{ vars.AWS_DEPLOYED_IMAGE_PARAMETER }}
+        run: scripts/deploy-aws.sh --pin-current-image
+
       - name: Build and push the image
         id: image
         env:
@@ -174,7 +181,8 @@ jobs:
           docker push "$image"
 
           # `latest` is what a freshly applied module points a first boot at,
-          # before any deploy has ever moved the parameter.
+          # before any deploy has ever moved the parameter. The previous step
+          # pins that bootstrap image before either tag can be overwritten.
           docker tag "$image" "$REPOSITORY:latest"
           docker push "$REPOSITORY:latest"
 

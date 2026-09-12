@@ -276,23 +276,46 @@ every job and only does anything when dispatched by hand, which is the right def
 
 ### What a deploy does
 
-1. Builds `packages/control-plane/Dockerfile` on a native arm64 runner, pushes it as
+1. Pins the current deployed-image parameter to its immutable digest **before pushing anything**.
+   This preserves the bootstrap image even when its `:latest` tag is overwritten by the first CI
+   deployment. An already pinned value is unchanged. A tag outside the configured ECR repository
+   must first be replaced in SSM with the digest of the running image; CI fails before pushing if it
+   cannot resolve a rollback digest.
+2. Builds `packages/control-plane/Dockerfile` on a native arm64 runner, pushes it as
    `<repo>:<commit sha>` plus `:latest` for a future first boot, and then resolves what it pushed to
    a digest. **The digest is what gets deployed.** Both tags move — re-running the workflow on a
    commit that is already deployed would repoint `:<sha>` at the new build, and a rollback restoring
    that string would put back the image it was rolling back from.
-2. Reads the current value of the deployed-image parameter — before anything moves, because that is
-   what a rollback restores.
-3. Writes the new reference and, over SSM, fetches and activates on the instance: the fetch brings
+3. Reads the current value of the deployed-image parameter — before activating a new image, because
+   that is what a rollback restores.
+4. Writes the new reference and, over SSM, fetches and activates on the instance: the fetch brings
    down the stack files, `.env` and the activation script itself, and the activation pulls and
    `up -d --wait`s **without stopping the old stack first**. A failure before the swap leaves the
    running deployment untouched. The command names those two steps rather than anything cloud-init
    installed, because the instance ignores `user_data_base64` — a host keeps whatever was written at
    its first boot, so a deploy that assumed otherwise would depend on how old the instance is.
-4. Polls `/healthz` until it answers six times in a row. One 200 proves the port is open, not that
+5. Polls `/healthz` until it answers six times in a row. One 200 proves the port is open, not that
    the deployment works.
-5. On any failure: puts the previous reference back, activates it, and fails the job anyway. A
-   working rollback is not a successful deploy.
+6. On a confirmed activation failure or failed health check: puts the previous digest back,
+   activates it, and fails the job anyway. A working rollback is not a successful deploy.
+
+The command polling budget includes delivery, execution, and a reporting grace period. If no
+terminal response arrives, the delivery times out without an agent-confirmed result, or the
+SendCommand response is lost, the job fails **without changing the parameter again or starting a
+rollback**. A local timeout is not proof that a remote activation has stopped. The job logs the
+previous digest and, when available, the command ID. Confirm the remote command has stopped and
+inspect the running stack before restoring that digest and activating it manually; do not rerun the
+workflow while the previous activation's outcome remains unknown.
+
+For manual image pushes, run the same preparation from the Terraform environment directory before
+overwriting any tags:
+
+```bash
+AWS_REGION="$(terraform output -raw region)" \
+AWS_ECR_REPOSITORY="$(terraform output -raw ecr_repository_url)" \
+DEPLOYED_IMAGE_PARAMETER="$(terraform output -raw deployed_image_parameter)" \
+  ../../../scripts/deploy-aws.sh --pin-current-image
+```
 
 `scripts/deploy-aws.sh` owns that sequence and is covered by `npm run test:deploy-aws`, which
 exercises the rollback against a stubbed AWS CLI — the path that only ever runs when something has

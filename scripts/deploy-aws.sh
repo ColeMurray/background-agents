@@ -5,6 +5,10 @@
 #   AWS_REGION=... DEPLOYED_IMAGE_PARAMETER=... INSTANCE_ID=... \
 #   HEALTHCHECK_URL=... IMAGE_REF=... scripts/deploy-aws.sh
 #
+# Before pushing any tags, pin a bootstrap deployment's rollback reference:
+#   AWS_REGION=... DEPLOYED_IMAGE_PARAMETER=... AWS_ECR_REPOSITORY=... \
+#     scripts/deploy-aws.sh --pin-current-image
+#
 # The deployed version is an SSM parameter the instance reads into `.env` on
 # every activation, so a deploy is a parameter write plus one remote command --
 # no new instance, and no ssh. The command fetches (which brings down the stack
@@ -25,15 +29,13 @@ set -euo pipefail
 
 : "${AWS_REGION:?AWS_REGION is required}"
 : "${DEPLOYED_IMAGE_PARAMETER:?DEPLOYED_IMAGE_PARAMETER is required}"
-: "${INSTANCE_ID:?INSTANCE_ID is required}"
-: "${HEALTHCHECK_URL:?HEALTHCHECK_URL is required}"
-: "${IMAGE_REF:?IMAGE_REF is required}"
 
 # How long the remote command may take, and how long after it the service has
 # to answer. The command itself pulls an image over the instance's own link.
 COMMAND_TIMEOUT_SECONDS="${COMMAND_TIMEOUT_SECONDS:-600}"
-# How long past the remote command's own deadline this waits for a final status.
-# SSM has already stopped the command by then, so a rollback cannot overlap it.
+COMMAND_DELIVERY_TIMEOUT_SECONDS="${COMMAND_DELIVERY_TIMEOUT_SECONDS:-60}"
+# Extra time to observe a terminal response after delivery plus execution.
+# Expiring this local budget does not prove that the remote command stopped.
 COMMAND_GRACE_SECONDS="${COMMAND_GRACE_SECONDS:-60}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-300}"
 # "Healthy" is sustained, not a single 200: a container that answers once and
@@ -46,8 +48,7 @@ COMMAND_POLL_SECONDS="${COMMAND_POLL_SECONDS:-5}"
 # Bounds on one SSM read. The CLI would otherwise wait 60s to connect and 60s to
 # read, three attempts over, which can carry a single poll minutes past the
 # deadline the loop below checks -- the loop is the retry, so no one call has a
-# reason to take that long. It does not affect whether a rollback can overlap
-# the command it is rolling back: `executionTimeout` has already ended that.
+# reason to take that long. Reads disable CLI retries because this loop retries.
 SSM_READ_TIMEOUT=(--cli-connect-timeout 5 --cli-read-timeout 10)
 
 log() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*"; }
@@ -67,17 +68,58 @@ write_deployed_image() {
     --region "$AWS_REGION" >/dev/null
 }
 
+is_digest_ref() {
+  [[ "$1" =~ ^.+@sha256:[a-f0-9]{64}$ ]]
+}
+
+# This runs BEFORE the build/push step. Resolving :latest afterwards would pin
+# the new image, not the bootstrap image rollback needs to restore. The module
+# preserves this parameter across instance replacements, so future boots also
+# keep the same image if the subsequent build or deployment fails.
+if [ "${1:-}" = --pin-current-image ] && [ "$#" -eq 1 ]; then
+  previous="$(read_deployed_image)"
+  if is_digest_ref "$previous"; then
+    log "rollback image already pinned: $previous"
+    exit 0
+  fi
+
+  : "${AWS_ECR_REPOSITORY:?AWS_ECR_REPOSITORY is required to resolve a tag}"
+  if [ "${previous%:*}" != "$AWS_ECR_REPOSITORY" ]; then
+    log "cannot resolve rollback image outside $AWS_ECR_REPOSITORY; pin $previous to its running digest first"
+    exit 1
+  fi
+  digest="$(aws ecr describe-images \
+    --repository-name "${AWS_ECR_REPOSITORY#*/}" \
+    --image-ids "imageTag=${previous##*:}" \
+    --region "$AWS_REGION" \
+    --query 'imageDetails[0].imageDigest' --output text)"
+  pinned="$AWS_ECR_REPOSITORY@$digest"
+  if ! is_digest_ref "$pinned"; then
+    log "could not resolve rollback image $previous to a digest"
+    exit 1
+  fi
+  write_deployed_image "$pinned"
+  log "pinned rollback image: $pinned"
+  exit 0
+elif [ "$#" -ne 0 ]; then
+  log "usage: $0 [--pin-current-image]"
+  exit 1
+fi
+
+: "${INSTANCE_ID:?INSTANCE_ID is required}"
+: "${HEALTHCHECK_URL:?HEALTHCHECK_URL is required}"
+: "${IMAGE_REF:?IMAGE_REF is required}"
+
 # Fetches and activates on the instance, waiting for the result and printing
-# whatever it wrote. Returns non-zero on any failure, including a command that
-# never reaches a terminal state inside the budget.
+# whatever it wrote. Returns 1 for a confirmed failure, or 2 when execution is
+# uncertain and starting another activation would risk overlapping this one.
 activate() {
   local command_id status deadline execution_timeout parameters
 
   # `--timeout-seconds` bounds delivery only: once AWS-RunShellScript starts, it
   # runs to completion no matter what this script does. `executionTimeout` is
-  # the document's own bound, and it is what keeps a hung activation from still
-  # pulling and recreating containers while the rollback below writes the old
-  # image and sends a second one. The document rejects anything under 30s; the
+  # the document's own bound; we still need the agent's terminal response before
+  # starting rollback. The document rejects anything under 30s; the
   # tests compress the local budget well below that, hence the floor.
   execution_timeout=$(( COMMAND_TIMEOUT_SECONDS < 30 ? 30 : COMMAND_TIMEOUT_SECONDS ))
 
@@ -97,49 +139,61 @@ activate() {
     "/usr/local/bin/open-inspect-fetch-config && exec bash /opt/open-inspect/deploy.sh" \
     "$execution_timeout")"
 
-  command_id="$(aws ssm send-command \
+  # SendCommand has no idempotency token. A lost response must not cause a CLI
+  # retry to submit a second activation, or a rollback to race the first one.
+  command_id="$(AWS_MAX_ATTEMPTS=1 aws ssm send-command \
     --instance-ids "$INSTANCE_ID" \
     --document-name AWS-RunShellScript \
     --comment "open-inspect deploy" \
     --parameters "$parameters" \
-    --timeout-seconds "$COMMAND_TIMEOUT_SECONDS" \
+    --timeout-seconds "$COMMAND_DELIVERY_TIMEOUT_SECONDS" \
     --region "$AWS_REGION" \
-    --query 'Command.CommandId' --output text)" || return 1
+    --query 'Command.CommandId' --output text)" || {
+      log "could not confirm whether SSM accepted the activation"
+      return 2
+    }
   log "command $command_id sent"
 
-  # Past the document's deadline, not up to it: the point of waiting the extra
-  # grace is to see the terminal status SSM writes when it stops the command.
-  deadline=$(( SECONDS + execution_timeout + COMMAND_GRACE_SECONDS ))
+  # Execution starts on delivery, not on SendCommand. Wait through both budgets
+  # and require a terminal response; elapsed time alone is not an execution fence.
+  deadline=$(( SECONDS + COMMAND_DELIVERY_TIMEOUT_SECONDS + execution_timeout + COMMAND_GRACE_SECONDS ))
   while [ "$SECONDS" -lt "$deadline" ]; do
     sleep "$COMMAND_POLL_SECONDS"
     # A just-sent command is briefly unknown to GetCommandInvocation.
-    status="$(aws ssm get-command-invocation \
+    status="$(AWS_MAX_ATTEMPTS=1 aws ssm get-command-invocation \
       --command-id "$command_id" --instance-id "$INSTANCE_ID" \
       --region "$AWS_REGION" "${SSM_READ_TIMEOUT[@]}" \
-      --query 'Status' --output text 2>/dev/null)" || continue
+      --query 'StatusDetails' --output text 2>/dev/null)" || continue
     case "$status" in
-      Pending | InProgress | Delayed) continue ;;
+      Pending | InProgress | "In Progress" | Delayed | Cancelling) continue ;;
       Success)
         log "command $command_id succeeded"
         return 0
         ;;
-      *)
+      Failed | "Execution Timed Out" | Cancelled | Undeliverable | "Invalid Platform" | "Access Denied")
         log "command $command_id ended $status"
         print_command_output "$command_id"
         return 1
         ;;
+      *)
+        # In particular, Delivery Timed Out can mean SSM never received the
+        # agent's terminal response, not that an executing process was stopped.
+        log "command $command_id has uncertain execution status: $status"
+        print_command_output "$command_id"
+        return 2
+        ;;
     esac
   done
 
-  log "command $command_id has no terminal status ${COMMAND_GRACE_SECONDS}s past its ${execution_timeout}s deadline"
+  log "command $command_id has no terminal status after delivery, execution and grace budgets"
   print_command_output "$command_id"
-  return 1
+  return 2
 }
 
 print_command_output() {
   # Best effort: this runs on a path that is already failing, and an error here
   # would replace the reason the deploy failed with the reason the log fetch did.
-  aws ssm get-command-invocation \
+  AWS_MAX_ATTEMPTS=1 aws ssm get-command-invocation \
     --command-id "$1" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" \
     "${SSM_READ_TIMEOUT[@]}" \
     --query '[StandardOutputContent,StandardErrorContent]' --output text 2>/dev/null ||
@@ -169,6 +223,10 @@ healthy() {
 }
 
 previous="$(read_deployed_image)"
+if ! is_digest_ref "$previous" || ! is_digest_ref "$IMAGE_REF"; then
+  log "deployment and rollback images must be digest-pinned; run --pin-current-image before pushing tags"
+  exit 1
+fi
 log "currently deployed: $previous"
 log "deploying:          $IMAGE_REF"
 
@@ -178,7 +236,15 @@ fi
 
 write_deployed_image "$IMAGE_REF"
 
-if activate && healthy; then
+activation_status=0
+activate || activation_status=$?
+if [ "$activation_status" -eq 2 ]; then
+  log "ACTIVATION OUTCOME UNKNOWN -- not rolling back while it may still be running"
+  log "confirm the remote command has stopped before recovering; previous image: $previous"
+  exit 1
+fi
+
+if [ "$activation_status" -eq 0 ] && healthy; then
   log "deployed $IMAGE_REF"
   exit 0
 fi
