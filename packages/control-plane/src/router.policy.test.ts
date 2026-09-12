@@ -15,11 +15,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(177);
+    expect(routes).toHaveLength(180);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(135);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(177);
+    expect(new Set(paths).size).toBe(137);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(180);
   });
 
   it("declares every path in the literal-or-parameter grammar", () => {
@@ -526,7 +526,7 @@ describe("route principal policy", () => {
       { kind: "service", service: "linear-bot", actor: null } as const,
     ],
   ])("accepts matching principals for %o", (authentication, principal) => {
-    expect(enforceRoutePrincipal(authentication, principal)).toBeNull();
+    expect(enforceRoutePrincipal(authentication, principal, "GET")).toBeNull();
   });
 
   it.each([
@@ -543,6 +543,40 @@ describe("route principal policy", () => {
     ],
     [{ kind: "service" } as const, { kind: "user", userId: "user-1" } as const, 403],
   ])("rejects mismatched principals for %o", (authentication, principal, status) => {
-    expect(enforceRoutePrincipal(authentication, principal)?.response.status).toBe(status);
+    expect(enforceRoutePrincipal(authentication, principal, "GET")?.response.status).toBe(status);
+  });
+
+  const tokenPrincipal = {
+    kind: "access-token",
+    userId: "user-1",
+    tokenId: "token-1",
+  } as const;
+  const readRoute = { kind: "user-or-service" } as const;
+
+  it.each(["GET", "HEAD", "get"])("lets an access token read (%s)", (method) => {
+    expect(enforceRoutePrincipal(readRoute, tokenPrincipal, method)).toBeNull();
+  });
+
+  it.each(["POST", "PUT", "PATCH", "DELETE"])(
+    "refuses an access token every mutating method (%s), whatever the route policy allows",
+    (method) => {
+      // The trust boundary for the read-only claim: the route itself accepts
+      // any user-or-service principal, so only this check stands between a
+      // leaked token and DELETE /sessions/:id.
+      expect(enforceRoutePrincipal(readRoute, tokenPrincipal, method)?.response.status).toBe(403);
+    }
+  );
+
+  it("keeps human-only routes human-only, so a token cannot mint another token", () => {
+    // /access-tokens is a { kind: "user" } route. An access token reaching it
+    // would make revocation meaningless.
+    expect(enforceRoutePrincipal({ kind: "user" }, tokenPrincipal, "GET")?.response.status).toBe(
+      403
+    );
+  });
+
+  it("leaves services unrestricted by method", () => {
+    const bot = { kind: "service", service: "linear-bot", actor: null } as const;
+    expect(enforceRoutePrincipal(readRoute, bot, "DELETE")).toBeNull();
   });
 });

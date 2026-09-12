@@ -95,6 +95,15 @@ describe("request lifecycle logging", () => {
       { principal_kind: "sandbox", session_id: "session-1" },
     ],
     [
+      { kind: "access-token", userId: "user-1", tokenId: "token-1" } satisfies Principal,
+      {
+        principal_kind: "access-token",
+        auth_scheme: "access-token",
+        user_id: "user-1",
+        token_id: "token-1",
+      },
+    ],
+    [
       {
         kind: "service",
         service: "slack-bot",
