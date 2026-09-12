@@ -49,6 +49,7 @@ from .base import (
     TurnOutcome,
 )
 from .claude_env import (
+    CLAUDE_POLICY_SETTINGS,
     ClaudeCredential,
     bundled_claude_binary,
     harness_env,
@@ -400,6 +401,7 @@ class ClaudeHarness:
             "disallowed_tools": [*DISALLOWED_TOOLS],
             "permission_mode": "dontAsk",
             "system_prompt": system_prompt,
+            "settings": CLAUDE_POLICY_SETTINGS,
             "setting_sources": ["user", "project"],
             "include_partial_messages": True,
             "forward_subagent_text": False,
