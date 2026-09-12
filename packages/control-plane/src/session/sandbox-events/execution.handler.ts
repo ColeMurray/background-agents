@@ -7,6 +7,7 @@ import type { SessionMessenger } from "../messenger";
 import type { SessionStatusService } from "../session-status-service";
 import type { SandboxEventContext } from "./context";
 import type { SessionBudgetService } from "../budget-service";
+import { deriveFallbackSessionTitle } from "../title";
 
 /**
  * Execution-lifecycle family: settle a finished turn. `execution_complete`
@@ -40,8 +41,22 @@ export class SandboxExecutionEventHandler {
       SessionBudgetService,
       "observeExecutionCost" | "deliverTransition"
     >,
-    private readonly transaction: <T>(closure: () => T) => T
+    private readonly transaction: <T>(closure: () => T) => T,
+    private readonly offerFallbackTitle: (title: string) => void
   ) {}
+
+  /**
+   * A harness that never suggests a title (the Claude harness emits no
+   * `session_title`) leaves the session untitled forever. Once its first turn
+   * settles, offer the prompt text. The offer lands only while the title is
+   * still unset (null or blank): that one atomic write owns the rule, so a
+   * vendor suggestion that arrived mid-turn wins.
+   */
+  private applyFallbackTitle(messageId: string): void {
+    const content = this.messageRepository.getMessageContent(messageId);
+    const title = content ? deriveFallbackSessionTitle(content) : null;
+    if (title) this.offerFallbackTitle(title);
+  }
 
   async handleExecutionComplete(
     event: Extract<SandboxEvent, { type: "execution_complete" }>,
@@ -83,6 +98,7 @@ export class SandboxExecutionEventHandler {
         processing_duration_ms: processingDurationMs,
         queue_duration_ms: queueDurationMs,
       });
+      this.applyFallbackTitle(completion.messageId);
       this.messenger.broadcast({ type: "sandbox_event", event });
       this.messenger.broadcast({
         type: "processing_status",

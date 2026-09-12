@@ -70,6 +70,7 @@ describe("prepareLegacyManagedProviderEnv", () => {
         providerAuthModes: {
           openai: "provider_account",
           xai: "api_key",
+          anthropic: "api_key",
         },
       })
     ).toEqual({
@@ -97,6 +98,7 @@ describe("prepareLegacyManagedProviderEnv", () => {
         providerAuthModes: {
           openai: "api_key",
           xai: "api_key",
+          anthropic: "api_key",
         },
       })
     ).toEqual({ OPENAI_API_KEY: "sk-openai", XAI_API_KEY: "xai-key" });
@@ -110,6 +112,7 @@ describe("prepareLegacyManagedProviderEnv", () => {
         providerAuthModes: {
           openai: "legacy_scoped_oauth",
           xai: "legacy_scoped_oauth",
+          anthropic: "api_key",
         },
       })
     ).toEqual({ OPENAI_OAUTH_MANAGED: "1", XAI_API_KEY: "xai-key" });
@@ -135,6 +138,7 @@ describe("prepareManagedProviderEnv", () => {
         providerAuthModes: {
           openai: "provider_account",
           xai: "api_key",
+          anthropic: "api_key",
         },
       })
     ).toEqual({
@@ -162,6 +166,7 @@ describe("prepareManagedProviderEnv", () => {
         providerAuthModes: {
           openai: "api_key",
           xai: "api_key",
+          anthropic: "api_key",
         },
       })
     ).toEqual({ OPENAI_API_KEY: "sk-openai", XAI_API_KEY: "xai-key" });
@@ -175,6 +180,7 @@ describe("prepareManagedProviderEnv", () => {
         providerAuthModes: {
           openai: "legacy_scoped_oauth",
           xai: "legacy_scoped_oauth",
+          anthropic: "api_key",
         },
       })
     ).toEqual({ OPENAI_OAUTH_MANAGED: "1", XAI_API_KEY: "xai-key" });
@@ -190,6 +196,7 @@ describe("getProviderAuthenticationError", () => {
         {
           openai: "legacy_scoped_oauth",
           xai: "legacy_scoped_oauth",
+          anthropic: "api_key",
         }
       )
     ).toEqual({
@@ -208,6 +215,7 @@ describe("getProviderAuthenticationError", () => {
       getProviderAuthenticationError("xai/grok-4.5", sandboxEnv, {
         openai: "legacy_scoped_oauth",
         xai: authMode,
+        anthropic: "api_key",
       })
     ).toBeNull();
   });
@@ -220,6 +228,7 @@ describe("getProviderAuthenticationError", () => {
         {
           openai: "api_key",
           xai: "legacy_scoped_oauth",
+          anthropic: "api_key",
         }
       )?.message
     ).toContain("OPENAI_API_KEY");
@@ -233,6 +242,7 @@ describe("getProviderAuthenticationError", () => {
         {
           openai: "legacy_scoped_oauth",
           xai: "legacy_scoped_oauth",
+          anthropic: "api_key",
         }
       )
     ).toBeNull();

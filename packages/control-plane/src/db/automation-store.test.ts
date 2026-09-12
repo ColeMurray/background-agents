@@ -87,6 +87,7 @@ const sampleRow: AutomationRow = {
   schedule_cron: "0 9 * * *",
   schedule_tz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
+  harness: "opencode" as const,
   reasoning_effort: null,
   enabled: 1,
   next_run_at: now + 86400000,

@@ -10,6 +10,7 @@ import { SessionAttachmentError } from "../../session-attachment-resolver";
 import {
   BudgetExhaustedError,
   PromptQueueFullError,
+  HarnessModelIncompatibleError,
   PromptRequestConflictError,
   SessionNotPromptableError,
 } from "../../message-queue";
@@ -49,6 +50,12 @@ export class MessagesHandler {
       }
       if (error instanceof PromptQueueFullError) {
         return Response.json({ error: error.message, code: "PROMPT_QUEUE_FULL" }, { status: 429 });
+      }
+      if (error instanceof HarnessModelIncompatibleError) {
+        return Response.json(
+          { error: error.message, code: "HARNESS_MODEL_INCOMPATIBLE" },
+          { status: 400 }
+        );
       }
       if (error instanceof PromptRequestConflictError) {
         return Response.json(

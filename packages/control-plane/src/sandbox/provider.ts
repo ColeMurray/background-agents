@@ -5,6 +5,7 @@
  * enabling unit testing and future provider support.
  */
 
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../logger";
@@ -94,14 +95,16 @@ export interface CreateSandboxConfig {
   controlPlaneUrl: string;
   /** Authentication token for sandbox */
   sandboxAuthToken: string;
+  /** Agent harness the session runs on */
+  harness: HarnessId;
   /** LLM provider (e.g., "anthropic") */
   provider: string;
   /** LLM model (e.g., "claude-sonnet-4-5") */
   model: string;
   /** User-provided environment variables (repo secrets) */
   userEnvVars?: Record<string, string>;
-  /** OpenCode session ID for resumption */
-  opencodeSessionId?: string;
+  /** The agent's own conversation id, for resumption */
+  agentSessionId?: string;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
   /**
@@ -195,6 +198,8 @@ export interface RestoreConfig {
   repoOwner: string | null;
   /** Repository name */
   repoName: string | null;
+  /** Agent harness the session runs on */
+  harness: HarnessId;
   /** LLM provider (e.g., "anthropic") */
   provider: string;
   /** LLM model (e.g., "claude-sonnet-4-5") */

@@ -1,3 +1,4 @@
+import { harnessIdSchema } from "../harnesses";
 import { z } from "zod";
 import { sessionSkillSelectionSchema } from "./skills";
 import type { AgentResponse } from "./artifacts";
@@ -45,6 +46,14 @@ export const slackCallbackContextSchema = z.object({
 });
 
 export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;
+
+/**
+ * Domain separator for the Slack activity-refresh callback. Signed into the
+ * body and required by the route, so a body minted for another callback — whose
+ * signature is equally valid — cannot satisfy this one. Shared so the producer
+ * and the route cannot drift apart on the literal.
+ */
+export const SLACK_ACTIVITY_REFRESH_KIND = "slack.activity_refresh";
 
 const linearCallbackContextBaseSchema = z.strictObject({
   source: z.literal("linear"),
@@ -221,6 +230,8 @@ const createSessionRequestBaseSchema = z.object({
   repoOwner: z.string().trim().min(1).nullish(),
   repoName: z.string().trim().min(1).nullish(),
   title: z.string().optional(),
+  /** Agent harness; fixed at create like base_branch. Omission means the built-in harness. */
+  harness: harnessIdSchema.optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   branch: z.string().optional(),

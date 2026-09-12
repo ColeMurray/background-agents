@@ -37,6 +37,7 @@ const validBody = {
   scheduleCron: "0 9 * * *",
   scheduleTz: "UTC",
   instructions: "Run tests",
+  harness: "claude",
 };
 
 const providerSelections = {

@@ -131,8 +131,10 @@ export class SessionInboxStore {
            LIMIT ?
          )
          SELECT effective_sessions.*, selected_roots.latest_updated_at, selected_roots.category
-         FROM selected_roots
-         JOIN effective_sessions USING (effective_root_session_id)
+         -- CROSS JOIN pins the join order: walk the viewer's sessions once and
+         -- probe the selected roots, instead of rescanning every session per root.
+         FROM effective_sessions
+         CROSS JOIN selected_roots USING (effective_root_session_id)
          ORDER BY selected_roots.latest_updated_at DESC,
                   selected_roots.effective_root_session_id DESC,
                   effective_sessions.updated_at DESC,
@@ -175,8 +177,10 @@ export class SessionInboxStore {
            WHERE category_rank <= ?
          )
          SELECT effective_sessions.*, selected_roots.latest_updated_at, selected_roots.category
-         FROM selected_roots
-         JOIN effective_sessions USING (effective_root_session_id)
+         -- CROSS JOIN pins the join order: walk the viewer's sessions once and
+         -- probe the selected roots, instead of rescanning every session per root.
+         FROM effective_sessions
+         CROSS JOIN selected_roots USING (effective_root_session_id)
          ORDER BY selected_roots.category,
                   selected_roots.latest_updated_at DESC,
                   selected_roots.effective_root_session_id DESC,

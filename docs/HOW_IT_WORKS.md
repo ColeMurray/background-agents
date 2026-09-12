@@ -202,7 +202,7 @@ development environment.
 - Node.js 22, Python 3.12, git, curl
 - Package managers: npm, pnpm, pip, uv
 - agent-browser CLI + headless Chrome (for browser automation)
-- OpenCode (the coding agent)
+- OpenCode and the Claude Agent SDK (the coding agent harnesses)
 
 Open-Inspect supports these sandbox backends:
 
@@ -458,8 +458,20 @@ will not see `send-child-prompt` until it starts in a fresh sandbox built from t
 
 ## The Agent
 
-Open-Inspect uses [OpenCode](https://opencode.ai) as its coding agent. OpenCode is an open-source
-agent designed to run as a server, making it ideal for background execution.
+The sandbox runtime speaks to its coding agent through one seam, the **agent harness**. A session
+runs on exactly one harness, chosen at create:
+
+- **OpenCode** (built-in): [OpenCode](https://opencode.ai) runs as a server inside the sandbox; the
+  supervisor owns the `opencode serve` process and the bridge talks to it over HTTP/SSE.
+- **Claude Agent**: the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agent-sdk) runs inside
+  the bridge and spawns the `claude` binary as its own child, launched with a clean environment that
+  carries exactly one Anthropic credential. This is the harness that can use a connected Claude
+  subscription. See [Using the Claude Agent Harness](CLAUDE_AGENT.md).
+
+Both harnesses emit the same session events (tokens, tool calls, steps, warnings), so everything
+above the sandbox is harness-neutral. The bridge owns turn completion: a harness reports the outcome
+of a turn and the bridge emits the single `execution_complete` event. Follow-up prompts queue until
+the running turn ends on both harnesses.
 
 ### What the Agent Can Do
 

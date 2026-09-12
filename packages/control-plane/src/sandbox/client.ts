@@ -5,6 +5,7 @@
  * All requests are authenticated using HMAC-signed tokens.
  */
 
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { generateInternalToken } from "@open-inspect/shared/auth";
 import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
@@ -170,7 +171,8 @@ export interface CreateSandboxRequest {
   repoName: string | null;
   controlPlaneUrl: string;
   sandboxAuthToken: string;
-  opencodeSessionId?: string;
+  agentSessionId?: string;
+  harness: HarnessId;
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
@@ -207,6 +209,7 @@ export interface RestoreSandboxRequest {
   controlPlaneUrl: string;
   repoOwner: string | null;
   repoName: string | null;
+  harness: HarnessId;
   provider: string;
   model: string;
   userEnvVars?: Record<string, string>;
@@ -405,7 +408,8 @@ export class ModalClient {
           repo_name: request.repoName,
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
-          opencode_session_id: request.opencodeSessionId || null,
+          agent_session_id: request.agentSessionId || null,
+          harness: request.harness,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,

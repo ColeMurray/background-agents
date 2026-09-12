@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
 import {
   DEFAULT_AUTOMATION_SCHEDULE_CRON,
   createAutomationFormDraft,
@@ -22,7 +23,7 @@ describe("automation form policy", () => {
       mode: "edit" as const,
       draft: { ...original, name: "Renamed review" },
       originalTrigger: original.trigger,
-      loadingModels: false,
+      modelAvailability: { status: "available" as const },
       resolvedModel: original.agent.model,
       targets: {
         repositories: [{ repoOwner: "acme", repoName: "web" }],
@@ -68,7 +69,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "create",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: {
           repositories: [{ repoOwner: "openai", repoName: "codex", baseBranch: "main" }],
@@ -78,6 +79,7 @@ describe("automation form policy", () => {
     ).toEqual({
       valid: true,
       values: {
+        harness: DEFAULT_HARNESS,
         name: "Daily review",
         providerSelections: {},
         repositories: [{ repoOwner: "openai", repoName: "codex", baseBranch: "main" }],
@@ -105,7 +107,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "edit",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: {
           repositories: [],
@@ -115,6 +117,7 @@ describe("automation form policy", () => {
     ).toEqual({
       valid: true,
       values: {
+        harness: DEFAULT_HARNESS,
         name: "Webhook review",
         providerSelections: {},
         repositories: [],
@@ -140,7 +143,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "create",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: { repositories: [], environmentIds: [] },
       })
@@ -159,7 +162,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "create",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: {
           repositories: [{ repoOwner: "openai", repoName: "codex" }],
@@ -180,7 +183,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "create",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: {
           repositories: [
@@ -204,7 +207,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "create",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: {
           repositories: [{ repoOwner: "openai", repoName: "codex" }],
@@ -226,7 +229,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "edit",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: {
           repositories: [{ repoOwner: "openai", repoName: "codex" }],
@@ -256,7 +259,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "edit",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: { repositories: [], environmentIds: [] },
       })
@@ -277,7 +280,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "edit",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: { repositories: [], environmentIds: [] },
       })
@@ -350,7 +353,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "create",
         draft,
-        loadingModels: true,
+        modelAvailability: { status: "loading" as const },
         resolvedModel: draft.agent.model,
         targets: { repositories: [], environmentIds: [] },
       })
@@ -367,7 +370,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "create",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: { repositories: [], environmentIds: [] },
       })
@@ -386,7 +389,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "create",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: { repositories: [], environmentIds: [] },
       })
@@ -405,7 +408,7 @@ describe("automation form policy", () => {
       evaluateAutomationForm({
         mode: "create",
         draft,
-        loadingModels: false,
+        modelAvailability: { status: "available" as const },
         resolvedModel: draft.agent.model,
         targets: { repositories: [], environmentIds: [] },
       })
@@ -424,7 +427,7 @@ describe("automation form policy", () => {
     const result = evaluateAutomationForm({
       mode: "create",
       draft,
-      loadingModels: false,
+      modelAvailability: { status: "available" as const },
       resolvedModel: draft.agent.model,
       targets: { repositories: [], environmentIds: [] },
     });
@@ -433,5 +436,28 @@ describe("automation form policy", () => {
     if (result.valid) {
       expect(result.values.sentryClientSecret).toBe("client-secret");
     }
+  });
+
+  it("defaults the harness and carries an explicit one into the submission", () => {
+    expect(createAutomationFormDraft().agent.harness).toBe(DEFAULT_HARNESS);
+
+    const draft = createAutomationFormDraft({
+      name: "Review",
+      instructions: "Review changes",
+      harness: "claude",
+    });
+    expect(draft.agent.harness).toBe("claude");
+    expect(
+      evaluateAutomationForm({
+        mode: "create",
+        draft,
+        modelAvailability: { status: "available" as const },
+        resolvedModel: draft.agent.model,
+        targets: {
+          repositories: [{ repoOwner: "acme", repoName: "web" }],
+          environmentIds: [],
+        },
+      })
+    ).toMatchObject({ valid: true, values: { harness: "claude" } });
   });
 });

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
 
-from .child_activity import (
+from ..child_activity import (
     MAX_PENDING_CHILD_ACTIVITY,
     ChildActivityCorrelator,
     MessageDisposition,
@@ -19,19 +19,19 @@ from .child_activity import (
     PendingChildError,
     PendingChildMessage,
 )
-from .message_attribution import AssistantMessageDisposition, MessageAttribution
+from ..message_attribution import AssistantMessageDisposition, MessageAttribution
+from ..opencode_identifier import OpenCodeIdentifier
 from .opencode_client import (
     SSEConnectionError,
     SSEInactivityTimeoutError,
     SSEStreamDisconnectedError,
 )
-from .opencode_identifier import OpenCodeIdentifier
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from .attachment_processor import AttachmentProcessor, HydratedSessionAttachment
-    from .log_config import StructuredLogger
+    from ..attachment_processor import AttachmentProcessor, HydratedSessionAttachment
+    from ..log_config import StructuredLogger
     from .opencode_client import OpenCodeClient
 
 # Cap on parts buffered for assistant messages that have not been authorized

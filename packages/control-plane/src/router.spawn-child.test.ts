@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import {
   fakeSessionRuntimeDispatch,
   handleRequest,
@@ -41,6 +42,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     repoId: number | null;
     baseBranch?: string | null;
     model: string;
+    harness: HarnessId;
     reasoningEffort: string | null;
     sandboxTimeoutMs?: number;
     promptAuthor: {
@@ -74,6 +76,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     repoOwner: "acme",
     repoName: "web-app",
     repoId: 12345,
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
     sandboxTimeoutMs: 14_400_000,
@@ -153,6 +156,31 @@ describe("handleSpawnChild prompt enqueue handling", () => {
         ],
       })
     );
+  });
+
+  it("rejects a child whose model needs an auth mode the harness cannot select", async () => {
+    const store = makeStore();
+    store.getCompleteProviderAuth.mockResolvedValue([
+      ...parentProviderAuth,
+      {
+        provider: "anthropic",
+        authMode: "provider_account",
+        providerAccountId: "3".repeat(32),
+        selectionSource: "installation_default",
+      },
+    ]);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env } = makeSuccessfulEnv(spawnContext);
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: expect.stringContaining("select an API key"),
+    });
+    expect(store.create).not.toHaveBeenCalled();
   });
 
   it("fails closed when the parent D1 provider auth snapshot is unavailable", async () => {

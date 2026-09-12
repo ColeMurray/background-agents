@@ -33,6 +33,11 @@ output "plain_text_binding_names" {
   value       = [for binding in var.plain_text_bindings : binding.name]
 }
 
+output "plain_text_bindings" {
+  description = "Configured plain-text bindings as a name => value map, so a configuration test can assert the value a binding actually carries."
+  value       = { for binding in var.plain_text_bindings : binding.name => binding.value }
+}
+
 output "secret_binding_names" {
   description = "Names of configured secret bindings; secret values are not exposed."
   value       = nonsensitive([for binding in var.secrets : binding.name])

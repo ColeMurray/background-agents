@@ -190,7 +190,15 @@ async function verifySandboxAuth(
     return error("Unauthorized: Invalid sandbox token", 401);
   }
 
-  ctx.principal = { kind: "sandbox", sessionId };
+  let sandboxId: string | null = null;
+  try {
+    const verified = (await verifyResponse.json()) as { sandboxId?: unknown };
+    if (typeof verified.sandboxId === "string" && verified.sandboxId)
+      sandboxId = verified.sandboxId;
+  } catch {
+    sandboxId = null;
+  }
+  ctx.principal = { kind: "sandbox", sessionId, sandboxId };
   return null;
 }
 

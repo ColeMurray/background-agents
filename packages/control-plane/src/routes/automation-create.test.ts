@@ -270,6 +270,34 @@ describe("automation create route", () => {
       expect(mockBatch).not.toHaveBeenCalled();
     });
 
+    it("rejects a pin the automation's harness cannot use", async () => {
+      mockProviderAccountStore.getById.mockResolvedValue({
+        id: "0123456789abcdef0123456789abcdef",
+        provider: "anthropic",
+        status: "active",
+        archivedAt: null,
+      });
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          ...validBody,
+          model: "anthropic/claude-sonnet-4-6",
+          providerSelections: {
+            anthropic: {
+              mode: "provider_account",
+              accountId: "0123456789abcdef0123456789abcdef",
+            },
+          },
+        },
+      });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({
+        error: expect.stringContaining("select an API key"),
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
     it("rejects a provider-account pin when its adapter is unavailable", async () => {
       mockProviderAdapterGet.mockReturnValue(undefined);
 

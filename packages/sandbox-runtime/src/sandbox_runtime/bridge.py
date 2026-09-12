@@ -4,9 +4,12 @@ Agent bridge - bidirectional communication between sandbox and control plane.
 This module handles:
 - WebSocket connection to control plane Durable Object
 - Heartbeat loop for connection health
-- Event forwarding from OpenCode to control plane
+- Event forwarding from the agent harness to the control plane
 - Command handling from control plane (prompt, stop, snapshot)
 - Git identity configuration per prompt author
+
+The agent itself sits behind the ``AgentHarness`` seam (see ``harness/``);
+this module never speaks a vendor protocol.
 """
 
 import argparse
@@ -15,9 +18,9 @@ import contextlib
 import json
 import math
 import os
+import sys
 import tempfile
 import time
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -27,11 +30,11 @@ from websockets.exceptions import InvalidStatus
 
 from .attachment_processor import (
     AttachmentProcessor,
-    HydratedSessionAttachment,
     parse_session_image_attachments,
 )
 from .constants import (
     BOOT_WARNINGS_FILE_PATH,
+    BRIDGE_FATAL_ERROR_FILE_PATH,
     DEFAULT_SANDBOX_TIMEOUT_SECONDS,
     MAX_SNAPSHOT_RESERVE_SECONDS,
     REPO_MANIFEST_FILE_PATH,
@@ -41,9 +44,20 @@ from .constants import (
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
 from .git_signing import GitSigningError, GitSigningRuntime
+from .harness import (
+    DEFAULT_HARNESS_ID,
+    DETERMINISTIC_FAILURE_EXIT_CODE,
+    AgentHarness,
+    BridgeIdentity,
+    HarnessId,
+    HarnessPrompt,
+    HarnessStartError,
+    PromptLimits,
+    TurnOutcome,
+    build_agent_harness,
+    parse_harness_id,
+)
 from .log_config import configure_logging, get_logger
-from .opencode_client import OpenCodeClient
-from .prompt_stream import OpenCodePromptStream
 from .push_operation import PushOperation
 from .repo_config import load_repo_manifest
 from .types import GitUser
@@ -88,12 +102,12 @@ class SessionTerminatedError(Exception):
 
 class AgentBridge:
     """
-    Bridge between sandbox OpenCode instance and control plane.
+    Bridge between the sandbox's agent harness and the control plane.
 
     Handles:
     - WebSocket connection management with reconnection
     - Heartbeat for connection health
-    - Event streaming from OpenCode to control plane
+    - Event streaming from the harness to the control plane
     - Command handling (prompt, stop, snapshot, shutdown)
     - Git identity management per prompt author
     """
@@ -101,7 +115,10 @@ class AgentBridge:
     HEARTBEAT_INTERVAL = 30.0
     RECONNECT_BACKOFF_BASE = 2.0
     RECONNECT_MAX_DELAY = 60.0
-    SSE_INACTIVITY_TIMEOUT = 120.0
+    # Liveness check for a harness that stopped talking, not a budget for how
+    # long the model may think. Stays under the control plane's own inactivity
+    # watchdog (SANDBOX_INACTIVITY_TIMEOUT_MS) so the bridge owns the outcome.
+    SSE_INACTIVITY_TIMEOUT = 300.0
     SSE_INACTIVITY_TIMEOUT_MIN = 5.0
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
@@ -113,14 +130,14 @@ class AgentBridge:
         control_plane_url: str,
         auth_token: str,
         opencode_port: int = 4096,
-        opencode_client: OpenCodeClient | None = None,
+        harness_id: HarnessId = DEFAULT_HARNESS_ID,
+        harness: AgentHarness | None = None,
     ):
         self.sandbox_id = sandbox_id
         self.session_id = session_id
         self.control_plane_url = control_plane_url
         self.auth_token = auth_token
         self.opencode_port = opencode_port
-        self.opencode_base_url = f"http://localhost:{opencode_port}"
 
         # Logger
         self.log = get_logger(
@@ -137,7 +154,7 @@ class AgentBridge:
             warn_user=self._send_media_warning,
         )
 
-        self.sse_inactivity_timeout = self._resolve_timeout_seconds(
+        inactivity_timeout_seconds = self._resolve_timeout_seconds(
             name="BRIDGE_SSE_INACTIVITY_TIMEOUT",
             default=self.SSE_INACTIVITY_TIMEOUT,
             min_value=self.SSE_INACTIVITY_TIMEOUT_MIN,
@@ -151,11 +168,14 @@ class AgentBridge:
             MAX_SNAPSHOT_RESERVE_SECONDS,
             sandbox_timeout_seconds * SNAPSHOT_RESERVE_FRACTION,
         )
-        self.prompt_cleanup_timeout_seconds = snapshot_reserve_seconds
-        self.prompt_max_duration_seconds = sandbox_timeout_seconds - snapshot_reserve_seconds
+        self.prompt_limits = PromptLimits(
+            inactivity_timeout_seconds=inactivity_timeout_seconds,
+            prompt_max_duration_seconds=sandbox_timeout_seconds - snapshot_reserve_seconds,
+            prompt_cleanup_timeout_seconds=snapshot_reserve_seconds,
+        )
         self.log.info(
             "bridge.prompt_timeout_config",
-            timeout_ms=int(self.prompt_max_duration_seconds * 1000),
+            timeout_ms=int(self.prompt_limits.prompt_max_duration_seconds * 1000),
             sandbox_timeout_ms=int(sandbox_timeout_seconds * 1000),
             snapshot_reserve_ms=int(snapshot_reserve_seconds * 1000),
         )
@@ -164,9 +184,11 @@ class AgentBridge:
         self.shutdown_event = asyncio.Event()
         self.git_sync_complete = asyncio.Event()
 
-        # Session state
-        self.opencode_session_id: str | None = None
-        self.session_id_file = Path(tempfile.gettempdir()) / "opencode-session-id"
+        # Vendor session id persistence. The legacy file name is still read so
+        # snapshots taken before the rename keep their conversation history.
+        temp_dir = Path(tempfile.gettempdir())
+        self.session_id_file = temp_dir / "agent-session-id"
+        self.legacy_session_id_file = temp_dir / "opencode-session-id"
         self.repo_path = Path("/workspace")
         # Supervisor-written canonical repo manifest; push targeting resolves
         # member checkout paths through it rather than joining spec-supplied
@@ -179,16 +201,22 @@ class AgentBridge:
             repo_manifest_path=self.repo_manifest_path,
         )
 
-        # OpenCode transport client; owns its connection pool unless one was
-        # injected (mirrors ControlPlaneDiffClient).
-        self.opencode_client = opencode_client or OpenCodeClient(
-            base_url=self.opencode_base_url,
+        # The agent behind the seam. Injected in tests; built from the
+        # registry in production.
+        self.harness: AgentHarness = harness or build_agent_harness(
+            harness_id,
+            identity=BridgeIdentity(
+                sandbox_id=sandbox_id,
+                session_id=session_id,
+                control_plane_url=control_plane_url,
+                auth_token=auth_token,
+                repo_manifest_path=self.repo_manifest_path,
+            ),
+            attachment_processor=self.attachment_processor,
             log=self.log,
+            limits=self.prompt_limits,
+            opencode_port=opencode_port,
         )
-
-        # Prompt SSE translator; created on first prompt so that
-        # sse_inactivity_timeout stays overridable until streaming starts.
-        self._prompt_stream: OpenCodePromptStream | None = None
 
         # Track the current prompt task so _handle_stop can cancel it
         self._current_prompt_task: asyncio.Task[None] | None = None
@@ -212,6 +240,11 @@ class AgentBridge:
         self._total_connected_duration_seconds = 0.0
 
     @property
+    def agent_session_id(self) -> str | None:
+        """The vendor session id, once created or resumed."""
+        return self.harness.session_id
+
+    @property
     def ws_url(self) -> str:
         """WebSocket URL for control plane connection."""
         url = self.control_plane_url.replace("https://", "wss://").replace("http://", "ws://")
@@ -226,7 +259,8 @@ class AgentBridge:
         return {
             "type": "ready",
             "sandboxId": self.sandbox_id,
-            "opencodeSessionId": self.opencode_session_id,
+            "opencodeSessionId": self.agent_session_id,
+            "harness": self.harness.id.value,
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
@@ -246,14 +280,25 @@ class AgentBridge:
         Handles reconnection for transient errors (network issues, etc.) but
         exits gracefully for terminal errors like HTTP 410 (session terminated).
         """
-        self.log.info("bridge.run_start")
-
-        await self._load_session_id()
+        self.log.info("bridge.run_start", harness=self.harness.id.value)
         reconnect_attempts = 0
-        run_outcome = "shutdown"
+        run_outcome = "harness_start_failed"
         signing_initialized = False
 
+        # One lifecycle: whatever the harness acquires in open() is released
+        # in the finally below, whether startup, session loading or the run
+        # loop is what ends the bridge.
         try:
+            try:
+                await self.harness.open()
+            except HarnessStartError as error:
+                self._record_fatal_error(str(error))
+                self.log.error(
+                    "bridge.harness_open_failed", exc=error, harness=self.harness.id.value
+                )
+                raise
+            await self._load_session_id()
+            run_outcome = "shutdown"
             while not self.shutdown_event.is_set():
                 run_outcome = "shutdown"
                 try:
@@ -308,10 +353,20 @@ class AgentBridge:
                 self._current_prompt_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._current_prompt_task
-            await self.diff_refresh.close(
-                timeout_seconds=self.DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS
-            )
-            await self.opencode_client.aclose()
+            # Cleanup failures are logged, never raised: an exception here
+            # would replace the one that ended the run, and a HarnessStartError
+            # has to reach main() as itself so the supervisor sees the
+            # deterministic exit code.
+            try:
+                await self.diff_refresh.close(
+                    timeout_seconds=self.DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS
+                )
+            except Exception as close_error:
+                self.log.error("bridge.diff_refresh_close_failed", exc=close_error)
+            try:
+                await self.harness.close()
+            except Exception as close_error:
+                self.log.error("bridge.harness_close_failed", exc=close_error)
             self.log.info(
                 "bridge.run_complete",
                 outcome=run_outcome,
@@ -596,7 +651,7 @@ class AgentBridge:
         self.diff_refresh.request(str(event.get("messageId") or "") or None)
 
     async def _handle_prompt(self, cmd: dict[str, Any]) -> None:
-        """Handle prompt command - send to OpenCode and stream response."""
+        """Handle prompt command - run the turn through the harness and terminalise it."""
         message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
         content = cmd.get("content", "")
         model = cmd.get("model")
@@ -620,8 +675,7 @@ class AgentBridge:
             prompt_author = parse_prompt_git_author(author_data)
             await self._configure_git_identity(prompt_author)
 
-            if not self.opencode_session_id:
-                await self._create_opencode_session()
+            await self._ensure_agent_session()
 
             session_attachments, rejected_attachments = parse_session_image_attachments(
                 raw_attachments
@@ -638,21 +692,45 @@ class AgentBridge:
             attachments = await self.attachment_processor.process(session_attachments)
 
             emitted_output = False
-            async for event in self._stream_opencode_response_sse(
-                message_id, content, model, reasoning_effort, attachments
-            ):
-                if event.get("type") == "error":
-                    had_error = True
-                    error_message = event.get("error")
-                elif event.get("type") in ("token", "tool_call", "step_finish"):
+
+            async def emit(event: dict[str, Any]) -> None:
+                nonlocal emitted_output, message_cost_usd
+                if event.get("type") == "execution_complete":
+                    raise RuntimeError("harness must not emit execution_complete")
+                if event.get("type") in ("token", "tool_call", "step_finish"):
                     emitted_output = True
+                # A cancelled turn never returns an outcome, so the last cost
+                # report is the only figure execution_complete can carry then.
+                # When an outcome does arrive it is authoritative (below).
                 if event.get("type") == "step_finish" and "messageCostUsd" in event:
                     message_cost_usd = event["messageCostUsd"]
                 await self._send_event(event)
 
+            turn: TurnOutcome = await self.harness.run_prompt(
+                HarnessPrompt(
+                    message_id=message_id,
+                    text=content,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                    attachments=tuple(attachments or ()),
+                    author=author_data if isinstance(author_data, dict) else {},
+                ),
+                emit,
+            )
+            await self._persist_rotated_session_id()
+            # The outcome is authoritative for cost and success once it
+            # exists; the bridge adds only the no-output guard below.
+            if turn.message_cost_usd is not None:
+                message_cost_usd = turn.message_cost_usd
+            if not turn.success:
+                had_error = True
+                error_message = turn.error or "Unknown error"
+            if turn.cancelled:
+                raise asyncio.CancelledError
+
             if not had_error and not emitted_output:
                 had_error = True
-                error_message = "OpenCode completed without emitting assistant output."
+                error_message = "The agent completed without emitting assistant output."
                 self.log.error(
                     "prompt.no_output",
                     message_id=message_id,
@@ -696,61 +774,21 @@ class AgentBridge:
             }
         )
 
-    async def _create_opencode_session(self) -> None:
-        """Create a new OpenCode session."""
-        self.opencode_session_id = await self.opencode_client.create_session()
-        self.log.info(
-            "opencode.session.ensure",
-            opencode_session_id=self.opencode_session_id,
-            action="created",
-        )
-
+    async def _ensure_agent_session(self) -> None:
+        """Create the vendor session on first use and persist its id."""
+        if self.agent_session_id:
+            return
+        await self.harness.create_session()
         await self._save_session_id()
 
-    def _ensure_prompt_stream(self) -> OpenCodePromptStream:
-        """The long-lived prompt SSE translator, created on first use."""
-        if self._prompt_stream is None:
-            self._prompt_stream = OpenCodePromptStream(
-                client=self.opencode_client,
-                attachment_processor=self.attachment_processor,
-                log=self.log,
-                sse_inactivity_timeout_seconds=self.sse_inactivity_timeout,
-                prompt_max_duration_seconds=self.prompt_max_duration_seconds,
-                prompt_cleanup_timeout_seconds=self.prompt_cleanup_timeout_seconds,
-            )
-        return self._prompt_stream
-
-    async def _stream_opencode_response_sse(
-        self,
-        message_id: str,
-        content: str,
-        model: str | None = None,
-        reasoning_effort: str | None = None,
-        attachments: list[HydratedSessionAttachment] | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
-        """Stream one prompt's response events (see prompt_stream.py)."""
-        if not self.opencode_session_id:
-            raise RuntimeError("OpenCode session not initialized")
-
-        stream = self._ensure_prompt_stream()
-        async for event in stream.stream_prompt(
-            opencode_session_id=self.opencode_session_id,
-            message_id=message_id,
-            content=content,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            attachments=attachments,
-        ):
-            yield event
-
     async def _handle_stop(self) -> None:
-        """Handle stop command - cancel prompt task and request OpenCode stop."""
+        """Handle stop command - cancel prompt task and ask the harness to abort."""
         self.log.info("bridge.stop")
         task = self._current_prompt_task
         if task and not task.done():
             task.cancel()
-        # Best-effort: also tell OpenCode to stop (saves LLM compute cost)
-        await self._request_opencode_stop(reason="command")
+        # Best-effort: also tell the agent to stop (saves LLM compute cost)
+        await self.harness.abort()
 
     async def _handle_snapshot(self) -> None:
         """Handle snapshot command - prepare for snapshot."""
@@ -758,7 +796,7 @@ class AgentBridge:
         await self._send_event(
             {
                 "type": "snapshot_ready",
-                "opencodeSessionId": self.opencode_session_id,
+                "opencodeSessionId": self.agent_session_id,
             }
         )
 
@@ -791,42 +829,61 @@ class AgentBridge:
         """Refresh signing state and configure prompt-scoped author identity."""
         await self.git_signing.refresh(user)
 
+    def _read_persisted_session_id(self) -> str | None:
+        for path in (self.session_id_file, self.legacy_session_id_file):
+            if not path.exists():
+                continue
+            persisted = path.read_text().strip()
+            if persisted:
+                return persisted
+        return None
+
     async def _load_session_id(self) -> None:
-        """Load OpenCode session ID from file if it exists."""
-        if self.session_id_file.exists():
-            try:
-                self.opencode_session_id = self.session_id_file.read_text().strip()
-                self.log.info(
-                    "opencode.session.ensure",
-                    opencode_session_id=self.opencode_session_id,
-                    action="loaded",
-                )
+        """Resume the persisted vendor session, if any, through the harness.
 
-                try:
-                    if not await self.opencode_client.session_exists(self.opencode_session_id):
-                        self.log.info(
-                            "opencode.session.invalid",
-                            opencode_session_id=self.opencode_session_id,
-                        )
-                        self.opencode_session_id = None
-                except Exception:
-                    self.opencode_session_id = None
+        Startup only resumes. A missing or invalid id leaves the harness
+        without a session and the first prompt creates one, as it always has;
+        startup never replaces a conversation as a side effect of loading it.
+        """
+        try:
+            persisted = self._read_persisted_session_id()
+        except Exception as e:
+            self.log.error("agent.session.load_error", exc=e)
+            return
+        if not persisted:
+            return
+        try:
+            resumed = await self.harness.resume_session(persisted)
+        except Exception as e:
+            self.log.error("agent.session.load_error", exc=e)
+            return
+        if resumed:
+            await self._save_session_id()
 
-            except Exception as e:
-                self.log.error("opencode.session.load_error", exc=e)
+    async def _persist_rotated_session_id(self) -> None:
+        """A conversation reset rotates the vendor id mid-connection; keep the file current."""
+        try:
+            persisted = self._read_persisted_session_id()
+        except Exception as e:
+            self.log.error("agent.session.load_error", exc=e)
+            return
+        if self.agent_session_id and self.agent_session_id != persisted:
+            await self._save_session_id()
 
     async def _save_session_id(self) -> None:
-        """Save OpenCode session ID to file for persistence."""
-        if self.opencode_session_id:
+        """Persist the vendor session id so a snapshot restore can resume it."""
+        session_id = self.agent_session_id
+        if session_id:
             try:
-                self.session_id_file.write_text(self.opencode_session_id)
+                self.session_id_file.write_text(session_id)
             except Exception as e:
-                self.log.error("opencode.session.save_error", exc=e)
+                self.log.error("agent.session.save_error", exc=e)
 
-    async def _request_opencode_stop(self, reason: str) -> bool:
-        if not self.opencode_session_id:
-            return False
-        return await self.opencode_client.request_stop(self.opencode_session_id, reason=reason)
+    @staticmethod
+    def _record_fatal_error(message: str) -> None:
+        """Leave the deterministic-failure cause where the supervisor reports it from."""
+        with contextlib.suppress(Exception):
+            Path(BRIDGE_FATAL_ERROR_FILE_PATH).write_text(message)
 
     def _resolve_timeout_seconds(
         self,
@@ -907,6 +964,11 @@ async def main() -> None:
     parser.add_argument("--control-plane", required=True, help="Control plane URL")
     parser.add_argument("--token", required=True, help="Auth token")
     parser.add_argument("--opencode-port", type=int, default=4096, help="OpenCode port")
+    parser.add_argument(
+        "--harness",
+        default=DEFAULT_HARNESS_ID.value,
+        help="Agent harness id",
+    )
 
     args = parser.parse_args()
 
@@ -916,9 +978,15 @@ async def main() -> None:
         control_plane_url=args.control_plane,
         auth_token=args.token,
         opencode_port=args.opencode_port,
+        harness_id=parse_harness_id(args.harness),
     )
 
-    await bridge.run()
+    try:
+        await bridge.run()
+    except HarnessStartError:
+        # The cause is already recorded for the supervisor; this exit code
+        # tells it not to spend its restart budget.
+        sys.exit(DETERMINISTIC_FAILURE_EXIT_CODE)
 
 
 if __name__ == "__main__":

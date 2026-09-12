@@ -1,3 +1,4 @@
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
@@ -45,6 +46,8 @@ export interface SessionInitInput {
 
   // Session config
   title?: string;
+  /** Agent harness; validated against model and provider auth by the caller. */
+  harness: HarnessId;
   model: string;
   reasoningEffort: string | null;
   codeServerEnabled?: boolean;
@@ -147,6 +150,7 @@ export async function initializeSession(
     title: input.title || null,
     repoOwner: input.repoOwner,
     repoName: input.repoName,
+    harness: input.harness,
     model: input.model,
     reasoningEffort: input.reasoningEffort,
     baseBranch,
@@ -186,6 +190,7 @@ export async function initializeSession(
           repositories,
           environmentId: input.environmentId ?? null,
           title: input.title,
+          harness: input.harness,
           model: input.model,
           reasoningEffort: input.reasoningEffort,
           userId: input.participantUserId,

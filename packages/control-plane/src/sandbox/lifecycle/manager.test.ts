@@ -78,7 +78,8 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     branch_name: null,
     base_sha: null,
     current_sha: null,
-    opencode_session_id: null,
+    agent_session_id: null,
+    harness: "opencode" as const,
     model: "anthropic/claude-sonnet-4-5",
     reasoning_effort: null,
     status: "active",
@@ -2362,7 +2363,7 @@ describe("SandboxLifecycleManager", () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
         status: "connecting" as SandboxStatus,
-        created_at: now - 130_000, // 130s ago, past 120s timeout
+        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
         last_heartbeat: null,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
@@ -2402,7 +2403,7 @@ describe("SandboxLifecycleManager", () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
         status: "connecting" as SandboxStatus,
-        created_at: now - 30_000, // 30s ago, well within 120s timeout
+        created_at: now - DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs / 2,
         last_heartbeat: null,
       });
       const storage = createMockStorage(createMockSession(), sandbox);

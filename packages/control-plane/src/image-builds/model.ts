@@ -17,7 +17,11 @@ import type {
   ImageBuildScopeKind,
   ImageBuildStatus,
 } from "@open-inspect/shared/types/image-builds";
-import { MIN_COMPATIBLE_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
+import {
+  HARNESS_MIN_RUNTIME_GENERATION,
+  MIN_COMPATIBLE_RUNTIME_GENERATION,
+} from "../sandbox/runtime-manifest";
 
 /**
  * Providers with image-build support: Modal images, Vercel snapshots,
@@ -85,6 +89,17 @@ export interface ImageBuildCallbackBuild {
  * generic token broker, so no image baked by an earlier runtime may be selected.
  */
 export const MIN_COMPATIBLE_RUNTIME_VERSION = MIN_COMPATIBLE_RUNTIME_GENERATION;
+
+/**
+ * The image floor for a session on `harness`. The global floor retires
+ * runtimes no session can boot any more; a harness whose runtime support
+ * arrived later names its own generation in the manifest, so its sessions
+ * skip older images without retiring any other session's images or
+ * snapshots.
+ */
+export function minCompatibleRuntimeVersionFor(harness: HarnessId): number {
+  return Math.max(MIN_COMPATIBLE_RUNTIME_VERSION, HARNESS_MIN_RUNTIME_GENERATION[harness] ?? 0);
+}
 
 /**
  * Parse the numeric prefix of a SANDBOX_VERSION ("v53-list-native-runtime"

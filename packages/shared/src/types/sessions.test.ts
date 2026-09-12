@@ -72,7 +72,7 @@ describe("createSessionRequestSchema provider selections", () => {
   it("rejects malformed provider selections", () => {
     expect(
       createSessionRequestSchema.safeParse({
-        providerSelections: { anthropic: { mode: "api_key" } },
+        providerSelections: { gemini: { mode: "api_key" } },
       }).success
     ).toBe(false);
   });

@@ -78,6 +78,7 @@ const baseConfig: CreateSandboxConfig = {
   repoName: "repo",
   controlPlaneUrl: "https://control.example",
   sandboxAuthToken: "sandbox-token",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "claude-sonnet-4-6",
   branch: "main",

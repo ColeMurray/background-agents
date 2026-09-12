@@ -667,6 +667,7 @@ describe("boundary schemas", () => {
         type: "ready",
         sandboxId: "sandbox-1",
         opencodeSessionId: null,
+        harness: "opencode",
         timestamp: 123,
       });
 

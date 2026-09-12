@@ -163,6 +163,7 @@ describe("SessionInitHandler", () => {
     expect(await response.json()).toEqual({ sessionId: "session-do-id", status: "created" });
     expect(repository.upsertSession).toHaveBeenCalledWith({
       id: "session-do-id",
+      harness: "opencode",
       sessionName: "session-public-id",
       title: "Session title",
       repoOwner: "acme",
