@@ -68,6 +68,21 @@ interface HostState {
 /** How the previous process stopped, as the marker reports it. */
 type PreviousStop = "clean_shutdown" | "unclean_stop" | "no_marker";
 
+function isHostState(value: unknown): value is HostState {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (!("indexedThroughMs" in value) || !("cleanShutdown" in value)) return false;
+  const { indexedThroughMs, cleanShutdown } = value;
+  if (
+    typeof indexedThroughMs !== "number" ||
+    !Number.isSafeInteger(indexedThroughMs) ||
+    indexedThroughMs < 0
+  ) {
+    return false;
+  }
+  if (typeof cleanShutdown !== "boolean") return false;
+  return cleanShutdown === false || indexedThroughMs !== SCAN_EVERYTHING_MS;
+}
+
 /** What a boot's recovery found and did. */
 export interface DeadlineRecoveryReport {
   previousStop: PreviousStop;
@@ -279,10 +294,8 @@ function readHostState(dataDir: string): HostState | null {
   } catch {
     return null;
   }
-  const state = parsed as Partial<HostState> | null;
-  if (typeof state?.indexedThroughMs !== "number") return null;
-  if (typeof state.cleanShutdown !== "boolean") return null;
-  return { indexedThroughMs: state.indexedThroughMs, cleanShutdown: state.cleanShutdown };
+  if (!isHostState(parsed)) return null;
+  return { indexedThroughMs: parsed.indexedThroughMs, cleanShutdown: parsed.cleanShutdown };
 }
 
 /**

@@ -23,6 +23,7 @@ export type {
 } from "./types";
 export {
   TRIGGER_TYPE_TO_SOURCE,
+  automationTriggerTypeSchema,
   automationEventSchema,
   githubAutomationEventSchema,
   linearAutomationEventSchema,

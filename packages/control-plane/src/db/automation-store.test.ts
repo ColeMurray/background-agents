@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   AutomationStore,
   isDuplicateKeyError,
+  parseAutomationTriggerFields,
   toAutomation,
   toAutomationRun,
   type AutomationRow,
@@ -185,6 +186,52 @@ describe("toAutomation", () => {
     expect(automation.enabled).toBe(false);
   });
 
+  it("parses stored trigger_config through the trigger schema", () => {
+    const triggerConfig = {
+      conditions: [
+        {
+          type: "text_match",
+          operator: "contains",
+          value: { pattern: "urgent" },
+        },
+      ],
+    };
+
+    const automation = toAutomation(
+      {
+        ...sampleRow,
+        trigger_type: "webhook",
+        event_type: "webhook.received",
+        trigger_config: JSON.stringify(triggerConfig),
+      },
+      [],
+      [],
+      []
+    );
+
+    expect(automation.triggerType).toBe("webhook");
+    expect(automation.triggerConfig).toEqual(triggerConfig);
+  });
+
+  it("rejects malformed stored trigger_config instead of asserting it", () => {
+    expect(() =>
+      toAutomation(
+        {
+          ...sampleRow,
+          trigger_type: "webhook",
+          trigger_config: JSON.stringify({ conditions: [{ type: "unknown" }] }),
+        },
+        [],
+        [],
+        []
+      )
+    ).toThrow();
+  });
+
+  it("rejects unknown stored trigger_type instead of asserting it", () => {
+    expect(() => toAutomation({ ...sampleRow, trigger_type: "unknown" }, [], [], [])).toThrow();
+  });
+
   it("maps repo-less automations to an empty repository list", () => {
     const automation = toAutomation(sampleRow, [], [], []);
     expect(automation.repositories).toEqual([]);
@@ -222,6 +269,36 @@ describe("toAutomation", () => {
       },
       xai: { mode: "api_key" },
     });
+  });
+});
+
+describe("parseAutomationTriggerFields", () => {
+  it("decodes persisted trigger fields at the storage boundary", () => {
+    const triggerConfig = {
+      conditions: [{ type: "text_match", operator: "contains", value: { pattern: "urgent" } }],
+    };
+
+    expect(
+      parseAutomationTriggerFields({
+        ...sampleRow,
+        trigger_type: "webhook",
+        trigger_config: JSON.stringify(triggerConfig),
+      })
+    ).toEqual({ triggerType: "webhook", triggerConfig });
+  });
+
+  it("rejects an unknown persisted trigger type", () => {
+    expect(() => parseAutomationTriggerFields({ ...sampleRow, trigger_type: "made_up" })).toThrow();
+  });
+
+  it("rejects a malformed persisted trigger config", () => {
+    expect(() =>
+      parseAutomationTriggerFields({
+        ...sampleRow,
+        trigger_type: "webhook",
+        trigger_config: JSON.stringify({ conditions: [{ type: "made_up" }] }),
+      })
+    ).toThrow();
   });
 });
 

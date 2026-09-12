@@ -36,6 +36,7 @@ import { z } from "zod";
 import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
   AutomationStore,
+  parseAutomationTriggerFields,
   toAutomationRun,
   isDuplicateKeyError,
   type AutomationRow,
@@ -1077,9 +1078,17 @@ export class Scheduler {
       }
 
       // Trigger conditions gate starting a NEW run.
-      const config: TriggerConfig = automation.trigger_config
-        ? JSON.parse(automation.trigger_config)
-        : { conditions: [] };
+      let config: TriggerConfig;
+      try {
+        config = parseAutomationTriggerFields(automation).triggerConfig ?? { conditions: [] };
+      } catch {
+        this.log.error("Skipped automation with invalid stored trigger fields", {
+          event: "scheduler.invalid_trigger_fields",
+          automation_id: automation.id,
+        });
+        skipped++;
+        continue;
+      }
       if (!matchesConditions(config.conditions, event, conditionRegistry)) {
         continue;
       }

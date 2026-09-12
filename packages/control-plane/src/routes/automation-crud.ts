@@ -10,7 +10,6 @@ import {
 import {
   conditionRegistry,
   normalizeSlackChannelConditions,
-  triggerConfigSchema,
   validateTriggerConditions,
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
@@ -29,6 +28,7 @@ import {
 import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
 import {
   AutomationStore,
+  parseAutomationTriggerFields,
   type AutomationRow,
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
@@ -389,7 +389,25 @@ async function handleUpdateAutomation(
   }
   const body = parsedBody.data;
 
-  if (body.triggerConfig !== undefined && existing.trigger_type === "schedule") {
+  let existingTriggerFields: ReturnType<typeof parseAutomationTriggerFields>;
+  try {
+    existingTriggerFields = parseAutomationTriggerFields(existing);
+  } catch {
+    if (body.triggerConfig === undefined) {
+      return error("Stored automation trigger fields are invalid", 500);
+    }
+    // A full replacement may repair corrupt config, but cannot repair the
+    // immutable trigger type or grant legacy-condition exemptions.
+    try {
+      existingTriggerFields = parseAutomationTriggerFields({ ...existing, trigger_config: null });
+    } catch {
+      return error("Stored automation trigger fields are invalid", 500);
+    }
+  }
+  const { triggerType: existingTriggerType, triggerConfig: existingTriggerConfig } =
+    existingTriggerFields;
+
+  if (body.triggerConfig !== undefined && existingTriggerType === "schedule") {
     return error("Cannot set triggerConfig on schedule automations", 400);
   }
 
@@ -523,11 +541,7 @@ async function handleUpdateAutomation(
         replacementEnvironmentIds !== null
           ? replacementEnvironmentIds.length
           : (await store.getEnvironmentsForAutomation(id)).length;
-      validateTargetCounts(
-        existing.trigger_type as AutomationTriggerType,
-        finalRepositoryCount,
-        finalEnvironmentCount
-      );
+      validateTargetCounts(existingTriggerType, finalRepositoryCount, finalEnvironmentCount);
       if (replacementEnvironmentIds !== null) {
         await resolveEnvironmentSelection(ctx.db, replacementEnvironmentIds);
       }
@@ -542,7 +556,7 @@ async function handleUpdateAutomation(
 
   // Update event type — only for non-schedule types
   if (body.eventType !== undefined) {
-    if (existing.trigger_type === "schedule") {
+    if (existingTriggerType === "schedule") {
       return error("Cannot set eventType on schedule automations", 400);
     }
     updateFields.event_type = body.eventType;
@@ -550,37 +564,27 @@ async function handleUpdateAutomation(
 
   const effectiveEventType =
     body.eventType !== undefined ? body.eventType : (existing.event_type ?? undefined);
-  const eventTypeError = getTriggerEventTypeError(
-    existing.trigger_type as AutomationTriggerType,
-    effectiveEventType
-  );
+  const eventTypeError = getTriggerEventTypeError(existingTriggerType, effectiveEventType);
   if (eventTypeError) return error(eventTypeError, 400);
 
   let triggerConfigToValidate = body.triggerConfig;
   if (
     body.eventType !== undefined &&
     triggerConfigToValidate === undefined &&
-    existing.trigger_config
+    existingTriggerConfig !== null
   ) {
-    // This column was written through parseTriggerConfig, so a failure here is a
-    // corrupt row, not user input — parseTriggerConfig's per-condition messages
-    // would have no one to help.
-    try {
-      triggerConfigToValidate = triggerConfigSchema.parse(JSON.parse(existing.trigger_config));
-    } catch {
-      return error("Stored triggerConfig is invalid", 500);
-    }
+    triggerConfigToValidate = existingTriggerConfig;
   }
 
   // A slack_event's trigger_config holds its required channel scope. Clearing it
   // would leave the automation enabled but untriggerable.
-  if (body.triggerConfig === null && existing.trigger_type === "slack_event") {
+  if (body.triggerConfig === null && existingTriggerType === "slack_event") {
     return error(
       "Cannot clear triggerConfig on slack_event automations; pause or delete instead",
       400
     );
   }
-  if (body.triggerConfig && existing.trigger_type === "slack_event") {
+  if (body.triggerConfig && existingTriggerType === "slack_event") {
     const slackError = validateSlackTriggerConfig(body.triggerConfig);
     if (slackError) return error(slackError, 400);
     body.triggerConfig = {
@@ -592,24 +596,18 @@ async function handleUpdateAutomation(
 
   if (triggerConfigToValidate) {
     let previousConfig: TriggerConfig | undefined;
-    if (existing.trigger_type === "github_event" && existing.trigger_config) {
-      try {
-        const parsedExisting = triggerConfigSchema.safeParse(JSON.parse(existing.trigger_config));
-        if (parsedExisting.success) previousConfig = parsedExisting.data;
-      } catch {
-        // A valid replacement should be able to repair malformed stored JSON.
-      }
+    if (existingTriggerType === "github_event" && existingTriggerConfig !== null) {
+      previousConfig = existingTriggerConfig;
     }
-    const triggerType = existing.trigger_type as AutomationTriggerType;
     const conditionErrors = validateTriggerConditions(
       {
-        type: triggerType,
+        type: existingTriggerType,
         conditions: triggerConfigToValidate.conditions,
         eventType: effectiveEventType,
       },
       conditionRegistry,
       previousConfig && {
-        type: triggerType,
+        type: existingTriggerType,
         conditions: previousConfig.conditions,
         eventType: existing.event_type ?? undefined,
       }
@@ -630,7 +628,7 @@ async function handleUpdateAutomation(
 
   // Recompute next_run_at if schedule changed (only for schedule types)
   if (
-    existing.trigger_type === "schedule" &&
+    existingTriggerType === "schedule" &&
     (body.scheduleCron !== undefined || body.scheduleTz !== undefined)
   ) {
     const cron = body.scheduleCron ?? existing.schedule_cron;
@@ -647,7 +645,7 @@ async function handleUpdateAutomation(
   // apart on a partial failure. Tolerates a null update statement (e.g. a
   // repositories-only edit).
   const resyncSlackChannels =
-    existing.trigger_type === "slack_event" && body.triggerConfig !== undefined;
+    existingTriggerType === "slack_event" && body.triggerConfig !== undefined;
   const statements: SqlStatement[] = [];
   const updateStatement = store.bindAutomationUpdate(id, updateFields);
   if (updateStatement) statements.push(updateStatement);
