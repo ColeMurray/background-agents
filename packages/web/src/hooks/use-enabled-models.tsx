@@ -134,11 +134,10 @@ export function ModelPreferencesProvider({
 
   const confirmedModels = useMemo<ValidModel[]>(() => {
     if (isLoading) return [];
-    const normalized = normalizeValidModels(
-      Array.isArray(data?.enabledModels) ? data.enabledModels : []
-    );
+    const snapshot = data && data.revision >= confirmed.current.revision ? data : confirmed.current;
+    const normalized = normalizeValidModels(snapshot.enabledModels);
     return normalized.length > 0 ? normalized : DEFAULT_ENABLED_MODELS;
-  }, [data?.enabledModels, isLoading]);
+  }, [data, isLoading]);
 
   useLayoutEffect(() => {
     if (!data || data.revision < confirmed.current.revision) return;

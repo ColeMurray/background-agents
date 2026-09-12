@@ -337,6 +337,19 @@ describe("useEnabledModels", () => {
       "anthropic/claude-haiku-4-5",
       "anthropic/claude-sonnet-4-6",
     ]);
+
+    await act(async () => {
+      await result.current.mutate(
+        getModelPreferencesKey("test-user"),
+        { enabledModels: ["anthropic/claude-opus-4-6"], revision: 0 },
+        { revalidate: false }
+      );
+    });
+    expect(result.current.preferences.enabledModels).toEqual([
+      "openai/gpt-5.4",
+      "anthropic/claude-haiku-4-5",
+      "anthropic/claude-sonnet-4-6",
+    ]);
   });
 
   it("reconciles a failed request before continuing queued changes", async () => {
