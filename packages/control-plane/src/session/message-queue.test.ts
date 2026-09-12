@@ -221,6 +221,7 @@ function buildQueue() {
   };
   const sandboxLifecycle = {
     spawnSandbox: vi.fn(async () => {}),
+    isSnapshotStoppingSandbox: vi.fn(() => false),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
     terminateFailedSandbox: vi.fn(async () => true),
@@ -580,6 +581,34 @@ describe("SessionMessageQueue", () => {
 
     expect(h.sessionStatus.reconcileAfterQueueRemoval).toHaveBeenCalledOnce();
   });
+
+  it.each([true, false])(
+    "keeps follow-ups pending during a snapshot (socket connected=%s)",
+    async (connected) => {
+      const h = buildQueue();
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+      const socket = { readyState: WebSocket.OPEN } as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(connected ? socket : null);
+      // Start snapshotting during the asynchronous auth lookup to exercise the
+      // dispatch-time recheck as well as the already-snapshotting case.
+      h.getProviderAuthenticationError.mockImplementation(async () => {
+        h.sandboxLifecycle.isSnapshotStoppingSandbox.mockReturnValue(true);
+        return null;
+      });
+
+      await h.queue.processMessageQueue();
+
+      expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+
+      h.getProviderAuthenticationError.mockResolvedValue(null);
+      h.sandboxLifecycle.isSnapshotStoppingSandbox.mockReturnValue(false);
+      h.wsManager.getSandboxSocket.mockReturnValue(null);
+      await h.queue.processMessageQueue();
+      expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledOnce();
+    }
+  );
 
   it("spawns sandbox when queue has work but no sandbox socket", async () => {
     const h = buildQueue();

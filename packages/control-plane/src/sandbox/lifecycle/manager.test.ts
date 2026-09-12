@@ -1803,6 +1803,156 @@ describe("SandboxLifecycleManager", () => {
   });
 
   describe("triggerSnapshot", () => {
+    it.each([5000, 2025_000])(
+      "restores after a stopping snapshot at sandbox age %i ms",
+      async (ageMs) => {
+        const sandbox = createMockSandbox({ status: "ready", created_at: Date.now() - ageMs });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        const broadcaster = createMockBroadcaster();
+        const wsManager = createMockWebSocketManager();
+        let finishSnapshot!: (result: SnapshotResult) => void;
+        const provider = createMockProvider({
+          capabilities: { snapshotStopsSandbox: true },
+          takeSnapshot: vi.fn(
+            () =>
+              new Promise<SnapshotResult>((resolve) => {
+                finishSnapshot = resolve;
+              })
+          ),
+        });
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          storage,
+          broadcaster,
+          wsManager,
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        const snapshot = manager.triggerSnapshot("execution_complete");
+        expect(manager.isSnapshotStoppingSandbox()).toBe(true);
+        // Vercel closes the source socket before the snapshot response returns.
+        await manager.spawnSandbox();
+        expect(provider.createSandbox).not.toHaveBeenCalled();
+        expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+
+        finishSnapshot({ success: true, imageId: "saved-conversation-and-worktree" });
+        await snapshot;
+
+        expect(sandbox.status).toBe("stopped");
+        expect(manager.isSnapshotStoppingSandbox()).toBe(false);
+        expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledOnce();
+        expect(storage.calls).toContain("clearSandboxAccess:codeServer");
+        expect(broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "stopped" });
+
+        await manager.spawnSandbox();
+
+        expect(provider.createSandbox).not.toHaveBeenCalled();
+        expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+          expect.objectContaining({
+            snapshotImageId: "saved-conversation-and-worktree",
+          })
+        );
+      }
+    );
+
+    it("does not retire a replacement when a stopping snapshot finishes late", async () => {
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager();
+      const provider = createMockProvider({
+        capabilities: { snapshotStopsSandbox: true },
+        takeSnapshot: vi.fn(async () => {
+          sandbox.modal_sandbox_id = "replacement";
+          sandbox.created_at += 1;
+          sandbox.status = "ready";
+          return { success: true, imageId: "old-snapshot" };
+        }),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        broadcaster,
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.triggerSnapshot("execution_complete");
+
+      expect(sandbox.status).toBe("ready");
+      expect(sandbox.snapshot_image_id).toBeNull();
+      expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+      expect(storage.calls).not.toContain("clearSandboxAccess:codeServer");
+    });
+
+    it("marks a stopping provider's sandbox stopped even when the snapshot fails", async () => {
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager();
+      const provider = createMockProvider({
+        capabilities: { snapshotStopsSandbox: true },
+        takeSnapshot: vi.fn(async () => ({ success: false, error: "Snapshot status was failed" })),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        broadcaster,
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.triggerSnapshot("execution_complete");
+
+      // The provider stopped the source regardless; a `ready` row here would
+      // send follow-ups to a dead sandbox until heartbeat reconciliation.
+      expect(sandbox.status).toBe("stopped");
+      expect(sandbox.snapshot_image_id).toBeNull();
+      expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledOnce();
+      expect(broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "stopped" });
+    });
+
+    it("does not hold dispatch while a non-stopping provider snapshots", async () => {
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      let finishSnapshot!: (result: SnapshotResult) => void;
+      const provider = createMockProvider({
+        takeSnapshot: vi.fn(
+          () =>
+            new Promise<SnapshotResult>((resolve) => {
+              finishSnapshot = resolve;
+            })
+        ),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      const snapshot = manager.triggerSnapshot("execution_complete");
+      expect(sandbox.status).toBe("snapshotting");
+      expect(manager.isSnapshotStoppingSandbox()).toBe(false);
+
+      finishSnapshot({ success: true, imageId: "img" });
+      await snapshot;
+      expect(sandbox.status).toBe("ready");
+    });
+
     it("takes snapshot when provider supports it", async () => {
       const sandbox = createMockSandbox({ status: "ready" });
       const storage = createMockStorage(createMockSession(), sandbox);

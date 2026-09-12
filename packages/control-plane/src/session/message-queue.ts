@@ -413,6 +413,13 @@ export class SessionMessageQueue {
       }
       return;
     }
+    // A provider that stops its source while snapshotting must neither be
+    // dispatched to nor replaced until the image is recorded; snapshot
+    // completion pumps the queue again. Providers that keep the source running
+    // dispatch through the snapshot as before.
+    if (this.sandboxLifecycle.isSnapshotStoppingSandbox()) {
+      return;
+    }
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (!sandboxWs) {
       // The provider-auth lookup above is a non-storage await. The socket

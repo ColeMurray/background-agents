@@ -329,6 +329,8 @@ export interface SlackAgentNotifyLookup {
  */
 export interface SandboxLifecycle {
   spawnSandbox(): Promise<void>;
+  /** Whether a snapshot in progress has stopped, or will stop, the source sandbox. */
+  isSnapshotStoppingSandbox(): boolean;
   updateLastActivity(timestamp: number): void;
   terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
   terminateFailedSandbox(reason: string): Promise<boolean>;
@@ -1173,6 +1175,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       createdAt: sandbox.created_at,
     };
     const runtimeVersion = sandbox.runtime_version;
+    // Vercel stops the source as part of the snapshot request, whether or not
+    // the snapshot itself succeeds, so this is decided by the provider, not
+    // by the result.
+    const snapshotStopsSandbox = this.provider.capabilities.snapshotStopsSandbox === true;
 
     if (!isTerminalState) {
       this.storage.updateSandboxStatus("snapshotting");
@@ -1231,17 +1237,24 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       });
     }
 
-    // Restore the previous status only while the row is still this sandbox's
-    // and still says `snapshotting`: a cancel, a stale heartbeat, or an
+    // Preserve provider snapshot semantics: Vercel stops the source, while
+    // providers such as Modal leave it running. Change status only while the
+    // row is still this sandbox's and still says `snapshotting`: a cancel, a
+    // stale heartbeat, or an
     // unresponsive-sandbox termination during the provider call has already
     // retired the sandbox (status written, access cleared, socket detached),
     // and restoring `ready` over that would make the spawn decision wait for
     // a reconnect that cannot come; a replacement that is itself snapshotting
     // keeps its own status.
     if (!isTerminalState && reason !== "heartbeat_timeout") {
-      if (this.storage.transitionSandboxStatus(generation, "snapshotting", previousStatus)) {
-        this.broadcaster.broadcast({ type: "sandbox_status", status: previousStatus });
-        if (previousStatus === "ready") {
+      const nextStatus = snapshotStopsSandbox ? "stopped" : previousStatus;
+      if (this.storage.transitionSandboxStatus(generation, "snapshotting", nextStatus)) {
+        if (snapshotStopsSandbox) {
+          this.clearSandboxAccessState();
+          this.wsManager.detachSandboxWebSocket(1000, "Sandbox stopped after snapshot");
+        }
+        this.broadcaster.broadcast({ type: "sandbox_status", status: nextStatus });
+        if (nextStatus === "ready") {
           this.broadcaster.broadcast({ type: "sandbox_access_changed" });
         }
       } else {
@@ -1798,6 +1811,13 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    */
   isSpawning(): boolean {
     return this.isSpawningSandbox || this.isTerminatingSandbox;
+  }
+
+  isSnapshotStoppingSandbox(): boolean {
+    return (
+      this.provider.capabilities.snapshotStopsSandbox === true &&
+      this.storage.getSandbox()?.status === "snapshotting"
+    );
   }
 
   isProviderStartupPending(): boolean {
