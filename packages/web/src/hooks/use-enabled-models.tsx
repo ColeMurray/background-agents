@@ -27,6 +27,7 @@ import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useAuthSession } from "@/lib/auth-session";
 
 export const MODEL_PREFERENCES_KEY = "/api/model-preferences";
+const INITIAL_MODEL_PREFERENCES_REVISION = 0;
 
 export function getModelPreferencesKey(
   identity: string
@@ -116,7 +117,7 @@ export function ModelPreferencesProvider({
   const lifetime = useRef<ProviderLifetime | null>(null);
   const confirmed = useRef<ModelPreferencesResponse>({
     enabledModels: DEFAULT_ENABLED_MODELS,
-    revision: 0,
+    revision: INITIAL_MODEL_PREFERENCES_REVISION,
   });
 
   useLayoutEffect(() => {
