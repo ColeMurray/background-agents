@@ -319,6 +319,7 @@ describe("POST /callbacks/activity", () => {
 
   function activityData(overrides: Record<string, unknown> = {}) {
     return {
+      kind: "slack.activity_refresh",
       sessionId: "session-1",
       messageId: "msg-1",
       timestamp: Date.now(),
@@ -379,6 +380,40 @@ describe("POST /callbacks/activity", () => {
 
     expect(response.status).toBe(401);
     expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a validly signed completion payload replayed onto this route", async () => {
+    const fetchMock = okFetchMock();
+    // A real /callbacks/complete body: same signing key, same context, and its
+    // signature verifies. Only the domain separator keeps it off this route.
+    const payload = await signPayload({
+      sessionId: "session-1",
+      messageId: "msg-1",
+      success: true,
+      timestamp: Date.now(),
+      context: {
+        source: "slack",
+        channel: "C123",
+        threadTs: "111.222",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+      },
+    });
+
+    const { response } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a refresh carrying the wrong domain separator", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(activityData({ kind: "slack.completion" }));
+
+    const { response } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(400);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

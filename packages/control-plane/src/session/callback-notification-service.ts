@@ -12,6 +12,7 @@ import {
   automationCallbackContextSchema,
   linearCompletionCallbackPayloadSchema,
   linearToolCallCallbackPayloadSchema,
+  SLACK_ACTIVITY_REFRESH_KIND,
 } from "@open-inspect/shared/types/session-api";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
@@ -76,8 +77,20 @@ const EMPTY_TOOL_ARGS: Record<string, unknown> = {};
  * the session still believes in has proven itself within the last 90s. One
  * refresh per minute therefore lands with a full minute to spare, and costs
  * nothing on a session that is already emitting tool calls.
+ *
+ * The window is per activation, so an evicted runtime refreshes on its first
+ * heartbeat back. That can only make a refresh earlier, never later, and the
+ * floor is the 30s heartbeat itself — well under what a single turn already
+ * spends on tool-call status updates.
  */
 export const SLACK_ACTIVITY_REFRESH_INTERVAL_MS = 60_000;
+
+/**
+ * One bounded attempt per refresh. A retry would buy a second correlated shot
+ * at the same binding while widening the window in which a turn can terminate
+ * under an in-flight refresh; the next heartbeat is the better retry.
+ */
+const ACTIVITY_REFRESH_TIMEOUT_MS = 10_000;
 
 interface CallbackDeliveryResult {
   delivered: boolean;
@@ -419,42 +432,69 @@ export class CallbackNotificationService {
     }
 
     const sessionId = this.getSessionId();
-    const callbackData = { sessionId, messageId, timestamp: now, context };
+    const callbackData = {
+      kind: SLACK_ACTIVITY_REFRESH_KIND,
+      sessionId,
+      messageId,
+      timestamp: now,
+      context,
+    };
     const signature = await this.signPayload(callbackData, secret);
 
-    let lastError: unknown;
-    const delivery = await deliverWithRetry(
-      (signal) =>
-        binding.fetch("https://internal/callbacks/activity", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...callbackData, signature }),
-          signal,
-        }),
-      this.sleep,
-      ({ error }) => {
-        lastError = error;
+    // Last look before the wire. The turn can terminate between the heartbeat
+    // that asked for this refresh and here — completion posts the final reply
+    // and nothing clears the indicator afterwards, so a refresh that lands
+    // after it would re-assert `Working...` on a finished thread.
+    if (this.messageRepository.getProcessingMessageWithStartedAt()?.id !== messageId) {
+      this.log.debug("callback.activity_refresh", {
+        message_id: messageId,
+        session_id: sessionId,
+        source: "slack",
+        outcome: "skipped",
+        skip_reason: "no_longer_processing",
+      });
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ACTIVITY_REFRESH_TIMEOUT_MS);
+    try {
+      const response = await binding.fetch("https://internal/callbacks/activity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...callbackData, signature }),
+        signal: controller.signal,
+      });
+
+      const fields = {
+        message_id: messageId,
+        session_id: sessionId,
+        source: "slack",
+        outcome: response.ok ? "success" : "error",
+        http_status: response.status,
+        duration_ms: Date.now() - now,
+      };
+      if (response.ok) {
+        // `max` because a tool-call callback may have asserted the indicator
+        // while this refresh was in flight; that is the newer truth.
+        this._lastSlackActivityAt = Math.max(this._lastSlackActivityAt, now);
+        this.log.info("callback.activity_refresh", fields);
+      } else {
+        // The window stays open, so the next heartbeat retries in 30s.
+        this.log.warn("callback.activity_refresh", fields);
       }
-    );
-
-    // Only a delivered refresh moves the window. An undelivered one leaves it
-    // open so the next heartbeat retries 30s from now rather than 60s.
-    if (delivery.delivered) this._lastSlackActivityAt = now;
-
-    const fields = {
-      message_id: messageId,
-      session_id: sessionId,
-      source: "slack",
-      outcome: delivery.delivered ? "success" : "error",
-      attempts: delivery.attempts,
-      ...(delivery.httpStatus !== undefined ? { http_status: delivery.httpStatus } : {}),
-      ...(lastError !== undefined
-        ? { error: lastError instanceof Error ? lastError : new Error(String(lastError)) }
-        : {}),
-      duration_ms: Date.now() - now,
-    };
-    if (delivery.delivered) this.log.info("callback.activity_refresh", fields);
-    else this.log.warn("callback.activity_refresh", fields);
+    } catch (error) {
+      this.log.warn("callback.activity_refresh", {
+        message_id: messageId,
+        session_id: sessionId,
+        source: "slack",
+        outcome: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+        duration_ms: Date.now() - now,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   /**
@@ -581,7 +621,8 @@ export class CallbackNotificationService {
         // The bot sets the Slack indicator from this callback, so it renews the
         // same window `refreshSlackActivity` guards. A turn that keeps calling
         // tools therefore never pays for a separate refresh.
-        if (source === "slack") this._lastSlackActivityAt = now;
+        if (source === "slack")
+          this._lastSlackActivityAt = Math.max(this._lastSlackActivityAt, now);
         this.log.info("callback.tool_call", {
           message_id: messageId,
           session_id: sessionId,

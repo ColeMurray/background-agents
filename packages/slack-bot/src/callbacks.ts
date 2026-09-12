@@ -4,6 +4,7 @@
 
 import { postEphemeral } from "@open-inspect/shared/slack";
 import { verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
+import { SLACK_ACTIVITY_REFRESH_KIND } from "@open-inspect/shared/types/session-api";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { Env } from "./types";
@@ -61,7 +62,13 @@ const toolCallCallbackSchema = z.looseObject({
   context: slackCallbackContextSchema,
 });
 
+/**
+ * `kind` is the domain separator. Without it a body signed for another callback
+ * route satisfies this shape too — the HMAC covers only the body, so a valid
+ * `/callbacks/complete` payload would verify here and re-assert `Working...`.
+ */
 const activityCallbackSchema = z.looseObject({
+  kind: z.literal(SLACK_ACTIVITY_REFRESH_KIND),
   sessionId: z.string(),
   messageId: z.string(),
   timestamp: z.number(),
