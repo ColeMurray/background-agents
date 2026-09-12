@@ -20,6 +20,7 @@ import {
   slackChannelLabel,
   type AutomationEvent,
   type SlackAutomationEvent,
+  type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
 import type {
@@ -1077,7 +1078,17 @@ export class Scheduler {
       }
 
       // Trigger conditions gate starting a NEW run.
-      const config = parseAutomationTriggerFields(automation).triggerConfig ?? { conditions: [] };
+      let config: TriggerConfig;
+      try {
+        config = parseAutomationTriggerFields(automation).triggerConfig ?? { conditions: [] };
+      } catch {
+        this.log.error("Skipped automation with invalid stored trigger fields", {
+          event: "scheduler.invalid_trigger_fields",
+          automation_id: automation.id,
+        });
+        skipped++;
+        continue;
+      }
       if (!matchesConditions(config.conditions, event, conditionRegistry)) {
         continue;
       }

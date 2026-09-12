@@ -252,9 +252,16 @@ describe("recoverSessionDeadlines", () => {
     expect(recover()).toMatchObject({ previousStop: "no_marker", scanned: 1, rearmed: 1 });
   });
 
-  it("rejects a marker with the wrong field types as no marker", () => {
+  it.each([
+    { indexedThroughMs: String(BOOT_MS), cleanShutdown: true },
+    { indexedThroughMs: BOOT_MS, cleanShutdown: "true" },
+    { indexedThroughMs: BOOT_MS },
+    { cleanShutdown: true },
+    [],
+    null,
+  ])("rejects a malformed marker as no marker: %j", (hostState) => {
     writeSessionDeadline("stranded", 4_242);
-    writeMarker({ indexedThroughMs: String(BOOT_MS), cleanShutdown: "true" });
+    writeMarker(hostState);
 
     expect(recover()).toMatchObject({ previousStop: "no_marker", scanned: 1, rearmed: 1 });
     expect(index.get("stranded")).toBe(4_242);

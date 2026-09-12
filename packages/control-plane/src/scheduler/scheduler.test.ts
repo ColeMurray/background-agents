@@ -2197,6 +2197,33 @@ describe("Scheduler", () => {
   });
 
   describe("event", () => {
+    it.each([
+      { trigger_config: "{invalid" },
+      { trigger_config: "" },
+      { trigger_config: '{"conditions":[{"type":"unknown"}]}' },
+      { trigger_type: "unknown" },
+    ])(
+      "skips invalid persisted trigger fields without blocking other automations: %j",
+      async (corruption) => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([
+          { ...sampleSlackAutomation, id: "corrupt-automation", ...corruption },
+          sampleSlackAutomation,
+        ]);
+        const stub = createMockSessionStub();
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent());
+
+        expect(result).toEqual({ triggered: 1, skipped: 1, steered: 0 });
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
+          expect.objectContaining({
+            invocation: expect.objectContaining({ automation_id: sampleSlackAutomation.id }),
+          })
+        );
+        expect(promptCallCount(vi.mocked(stub.fetch))).toBe(1);
+      }
+    );
+
     describe("lazy thread context", () => {
       /** A slack-bot binding that records thread-context calls. */
       function threadContextEnv(threadContext = "<thread_context>[]</thread_context>") {

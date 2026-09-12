@@ -380,14 +380,6 @@ async function handleUpdateAutomation(
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
   const admission = admittedAutomation(ctx);
   const { automation: existing } = admission;
-  let existingTriggerFields: ReturnType<typeof parseAutomationTriggerFields>;
-  try {
-    existingTriggerFields = parseAutomationTriggerFields(existing);
-  } catch {
-    return error("Stored automation trigger fields are invalid", 500);
-  }
-  const { triggerType: existingTriggerType, triggerConfig: existingTriggerConfig } =
-    existingTriggerFields;
 
   const rawBody = await parseJsonBody(request);
   if (rawBody instanceof Response) return rawBody;
@@ -396,6 +388,24 @@ async function handleUpdateAutomation(
     return error(formatAutomationRequestError(parsedBody.error, rawBody), 400);
   }
   const body = parsedBody.data;
+
+  let existingTriggerFields: ReturnType<typeof parseAutomationTriggerFields>;
+  try {
+    existingTriggerFields = parseAutomationTriggerFields(existing);
+  } catch {
+    if (body.triggerConfig === undefined) {
+      return error("Stored automation trigger fields are invalid", 500);
+    }
+    // A full replacement may repair corrupt config, but cannot repair the
+    // immutable trigger type or grant legacy-condition exemptions.
+    try {
+      existingTriggerFields = parseAutomationTriggerFields({ ...existing, trigger_config: null });
+    } catch {
+      return error("Stored automation trigger fields are invalid", 500);
+    }
+  }
+  const { triggerType: existingTriggerType, triggerConfig: existingTriggerConfig } =
+    existingTriggerFields;
 
   if (body.triggerConfig !== undefined && existingTriggerType === "schedule") {
     return error("Cannot set triggerConfig on schedule automations", 400);

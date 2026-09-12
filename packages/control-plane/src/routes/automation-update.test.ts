@@ -323,18 +323,81 @@ describe("automation read, update, and delete routes", () => {
       });
     });
 
-    it("rejects corrupt persisted trigger fields before updating", async () => {
-      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "unknown" });
+    it.each([{ name: "Updated" }, { triggerConfig: { conditions: [] } }])(
+      "rejects an unknown stored trigger type even when replacing config",
+      async (body) => {
+        mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "unknown" });
+
+        const response = await callRoute("PUT", "/automations/auto-1", {
+          body,
+        });
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toEqual({
+          error: "Stored automation trigger fields are invalid",
+        });
+        expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(["{invalid", "", '{"conditions":null}'])(
+      "allows a valid replacement to repair corrupt stored config: %j",
+      async (trigger_config) => {
+        const existing = {
+          ...sampleRow,
+          trigger_type: "github_event",
+          event_type: "pull_request.opened",
+          trigger_config,
+        };
+        const replacement = { conditions: [] };
+        mockStore.getById
+          .mockResolvedValueOnce(existing)
+          .mockResolvedValue({ ...existing, trigger_config: JSON.stringify(replacement) });
+
+        const response = await callRoute("PUT", "/automations/auto-1", {
+          body: { triggerConfig: replacement },
+        });
+
+        expect(response.status).toBe(200);
+        expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+          "auto-1",
+          expect.objectContaining({ trigger_config: JSON.stringify(replacement) })
+        );
+        expect(mockBatch).toHaveBeenCalled();
+      }
+    );
+
+    it("allows clearing corrupt config for a trigger with optional conditions", async () => {
+      const existing = {
+        ...sampleRow,
+        trigger_type: "webhook",
+        event_type: "webhook.received",
+        trigger_config: "{invalid",
+      };
+      mockStore.getById
+        .mockResolvedValueOnce(existing)
+        .mockResolvedValue({ ...existing, trigger_config: null });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { triggerConfig: null },
+      });
+
+      expect(response.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith("auto-1", {
+        trigger_config: null,
+      });
+    });
+
+    it("rejects corrupt stored config when no replacement is supplied", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_config: "{invalid" });
 
       const response = await callRoute("PUT", "/automations/auto-1", {
         body: { name: "Updated" },
       });
 
       expect(response.status).toBe(500);
-      await expect(response.json()).resolves.toEqual({
-        error: "Stored automation trigger fields are invalid",
-      });
       expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("rejects an event type change that would leave incompatible conditions", async () => {
