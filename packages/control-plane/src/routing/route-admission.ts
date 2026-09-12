@@ -155,6 +155,13 @@ function enforceImplementedScmProvider(
   }
 }
 
+export function parseVerifiedSandboxId(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (!("sandboxId" in value)) return null;
+  const sandboxId = value.sandboxId;
+  return typeof sandboxId === "string" && sandboxId ? sandboxId : null;
+}
+
 async function verifySandboxAuth(
   request: Request,
   env: Env,
@@ -192,9 +199,7 @@ async function verifySandboxAuth(
 
   let sandboxId: string | null = null;
   try {
-    const verified = (await verifyResponse.json()) as { sandboxId?: unknown };
-    if (typeof verified.sandboxId === "string" && verified.sandboxId)
-      sandboxId = verified.sandboxId;
+    sandboxId = parseVerifiedSandboxId(await verifyResponse.json());
   } catch {
     sandboxId = null;
   }

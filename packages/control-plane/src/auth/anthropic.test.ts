@@ -4,6 +4,7 @@ import {
   ANTHROPIC_OAUTH_TOKEN_URL,
   ANTHROPIC_SETUP_TOKEN_LIFETIME_MS,
   AnthropicTokenExchangeError,
+  anthropicTokenResponseSchema,
   exchangeAnthropicAuthorizationCode,
   parsePastedAuthorizationCode,
   startAnthropicAuthorization,
@@ -76,6 +77,39 @@ describe("parsePastedAuthorizationCode", () => {
     ["abc#", { code: "abc", state: "" }],
   ])("splits %j into code and state", (pasted, expected) => {
     expect(parsePastedAuthorizationCode(pasted)).toEqual(expected);
+  });
+});
+
+describe("anthropicTokenResponseSchema", () => {
+  it("parses the object envelope returned by the token endpoint", () => {
+    const parsed = anthropicTokenResponseSchema.safeParse({
+      access_token: "sk-ant-oat01-token",
+      expires_in: 31_536_000,
+      scope: "user:inference",
+      account: { uuid: "account-uuid", email_address: "owner@example.com" },
+      organization: { uuid: "org-uuid", name: "Owner's Organization" },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects a non-object response body", () => {
+    expect(anthropicTokenResponseSchema.safeParse("not an object").success).toBe(false);
+  });
+
+  it("preserves null optional provider fields for downstream validation", () => {
+    const parsed = anthropicTokenResponseSchema.safeParse({
+      access_token: "sk-ant-oat01-token",
+      scope: "user:inference",
+      account: null,
+      organization: null,
+      token_uuid: null,
+    });
+
+    expect(parsed).toMatchObject({
+      success: true,
+      data: { account: null, organization: null, token_uuid: null },
+    });
   });
 });
 
@@ -214,6 +248,27 @@ describe("exchangeAnthropicAuthorizationCode", () => {
   it("classifies a missing access token as a malformed response", async () => {
     const error = await failure(tokenResponse({ scope: "user:inference" }));
     expect(error.reason).toBe("malformed_response");
+  });
+
+  it.each([null, "not an object", 123, true, []])(
+    "classifies the non-object token response %j as malformed",
+    async (body) => {
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json(body));
+      const error = await failure(fetchImpl);
+
+      expect(error.reason).toBe("malformed_response");
+    }
+  );
+
+  it.each([
+    [400, "invalid_request"],
+    [429, "rate_limited"],
+    [503, "server_error"],
+  ])("preserves HTTP %s classification for a non-object response", async (status, reason) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json(null, { status }));
+    const error = await failure(fetchImpl);
+
+    expect(error).toMatchObject({ reason, message: `HTTP ${status}` });
   });
 
   it("classifies a token without the inference scope as a scope mismatch", async () => {

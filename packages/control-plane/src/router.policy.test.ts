@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { enforceRoutePrincipal } from "./routing/route-admission";
+import { enforceRoutePrincipal, parseVerifiedSandboxId } from "./routing/route-admission";
 import {
+  fakeSessionRuntimeDispatch,
   handleRequest,
   matchRoute,
   routeContracts as routes,
@@ -428,6 +429,19 @@ describe("route policy table", () => {
   });
 });
 
+describe("parseVerifiedSandboxId", () => {
+  it("extracts a non-empty sandbox id from the verification response", () => {
+    expect(parseVerifiedSandboxId({ sandboxId: "sandbox-1", ignored: true })).toBe("sandbox-1");
+  });
+
+  it.each([null, "sandbox-1", ["sandbox-1"], { sandboxId: "" }, { sandboxId: 123 }, {}])(
+    "treats %j as an absent sandbox id",
+    (value) => {
+      expect(parseVerifiedSandboxId(value)).toBeNull();
+    }
+  );
+});
+
 describe("route policy dispatch ordering", () => {
   function env(scmProvider: string) {
     const statement = {
@@ -511,6 +525,32 @@ describe("route policy dispatch ordering", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
+
+  it.each(["null", '"sandbox-1"', "[]", "{}", '{"sandboxId":""}', '{"sandboxId":123}', "not-json"])(
+    "does not issue provider credentials for a verified response without an identity: %s",
+    async (body) => {
+      const testEnv = {
+        ...env("github"),
+        SESSION: fakeSessionRuntimeDispatch(async () => new Response(body)),
+      };
+      const response = await handleRequest(
+        new Request(
+          "https://test.local/sessions/session-1/provider-auth/anthropic/runtime-credential",
+          {
+            method: "POST",
+            headers: { Authorization: "Bearer sandbox-token", "X-Sandbox-ID": "sandbox-1" },
+          }
+        ),
+        testEnv as never,
+        TEST_BACKGROUND_TASK_CONTEXT
+      );
+
+      expect(response.status).toBe(403);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      await expect(response.json()).resolves.toEqual({ error: "Sandbox identity unavailable" });
+      expect(testEnv.DB.prepare).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("route principal policy", () => {
