@@ -51,7 +51,7 @@ class TestExecutionCompleteCostReport:
         bridge.diff_refresh = Mock()
         await bridge._handle_command({"type": "prompt", **_prompt_command()})
         await asyncio.wait_for(reported.wait(), timeout=1)
-        task = bridge._current_prompt_task
+        task = bridge.execution.prompt_task
         assert task is not None
         await bridge._handle_stop()
         await task

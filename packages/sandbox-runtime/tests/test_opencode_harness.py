@@ -272,3 +272,64 @@ async def test_http_stream_backpressure_is_failure_not_reader_cancellation(harne
     assert not outcome.execution_stopped
     assert "receive or downstream processing may be stalled" in outcome.error
     assert asyncio.current_task().cancelling() == 0
+
+
+@pytest.mark.parametrize("session_id", ["child", "grandchild"])
+@pytest.mark.parametrize("late_activity", ["message", "early_part", "pending_tool", "running_tool"])
+async def test_ui_filtered_late_activity_revokes_owned_session_idle(
+    harness, session_id, late_activity
+):
+    if late_activity == "message":
+        resumed = assistant(sessionID=session_id, id="late-message")
+    elif late_activity == "early_part":
+        resumed = part("text", sessionID=session_id, messageID="not-announced", text="late")
+    else:
+        resumed = part(
+            "tool",
+            sessionID=session_id,
+            messageID="not-announced",
+            tool="bash",
+            callID="late-call",
+            state={"status": "pending" if late_activity == "pending_tool" else "running"},
+        )
+    set_stream(
+        harness,
+        [
+            assistant(),
+            # Grandchild ancestry arrives before its parent; UI only tracks direct
+            # children, while the containment ledger must retain both levels.
+            event("session.created", info={"id": "grandchild", "parentID": "child"}),
+            event("session.created", info={"id": "child", "parentID": SESSION_ID}),
+            event("session.idle", sessionID="child"),
+            event("session.idle", sessionID="grandchild"),
+            resumed,
+            event("session.idle", sessionID=SESSION_ID),
+        ],
+    )
+
+    outcome = await run(harness)
+
+    assert not outcome.success
+    assert not outcome.execution_stopped
+    assert await harness.stop(asyncio.get_running_loop().time() + 1) is False
+
+
+async def test_unattributed_root_tool_is_not_hidden_by_timeline_buffering(harness):
+    set_stream(
+        harness,
+        [
+            assistant(),
+            part(
+                "tool",
+                messageID="not-announced",
+                tool="bash",
+                callID="late-call",
+                state={"status": "running"},
+            ),
+            event("session.idle", sessionID=SESSION_ID),
+        ],
+    )
+
+    outcome = await run(harness)
+
+    assert not outcome.execution_stopped

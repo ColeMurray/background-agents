@@ -66,6 +66,15 @@ async function seedAccount(externalAccountId = "acct-integration"): Promise<void
   });
 }
 
+function parseOpenAICredential(
+  state: NonNullable<Awaited<ReturnType<ProviderCredentialStore["readCredentialState"]>>>
+) {
+  return new OpenAIModelProviderAccountAdapter().parseCredential(
+    state.payload,
+    state.credentialSchemaVersion
+  );
+}
+
 describe("provider account device authorization routes", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
@@ -503,8 +512,10 @@ describe("provider account device authorization routes", () => {
     const credential = await new ProviderCredentialStore(
       env.DB,
       env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!
-    ).readCredentialState<{ refreshToken: string }>(ACCOUNT_ID, "openai");
-    expect(credential?.payload.refreshToken).toBe("old-secret");
+    ).readCredentialState(ACCOUNT_ID, "openai");
+    expect(credential ? parseOpenAICredential(credential).refreshToken : undefined).toBe(
+      "old-secret"
+    );
     expect(credential?.credentialVersion).toBe(1);
     const durable = await env.DB.prepare(
       "SELECT state, result_provider_account_id FROM model_provider_account_authorizations WHERE id = ?"
@@ -529,8 +540,10 @@ describe("provider account device authorization routes", () => {
     const credential = await new ProviderCredentialStore(
       env.DB,
       env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!
-    ).readCredentialState<{ refreshToken: string }>(ACCOUNT_ID, "openai");
-    expect(credential?.payload.refreshToken).toBe("old-secret");
+    ).readCredentialState(ACCOUNT_ID, "openai");
+    expect(credential ? parseOpenAICredential(credential).refreshToken : undefined).toBe(
+      "old-secret"
+    );
     expect(credential?.credentialVersion).toBe(1);
   });
 
@@ -659,11 +672,10 @@ describe("provider account device authorization routes", () => {
       )
     ).resolves.toBe(false);
     expect((await accounts.getLifecycleSnapshot(ACCOUNT_ID))?.account.status).toBe("active");
-    const credential = await credentials.readCredentialState<{ refreshToken: string }>(
-      ACCOUNT_ID,
-      "openai"
+    const credential = await credentials.readCredentialState(ACCOUNT_ID, "openai");
+    expect(credential ? parseOpenAICredential(credential).refreshToken : undefined).toBe(
+      "old-secret"
     );
-    expect(credential?.payload.refreshToken).toBe("old-secret");
     expect(credential?.credentialVersion).toBe(1);
     const durable = await env.DB.prepare(
       "SELECT state, result_provider_account_id FROM model_provider_account_authorizations WHERE id = ?"

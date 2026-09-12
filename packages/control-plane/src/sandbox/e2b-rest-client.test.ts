@@ -209,6 +209,7 @@ describe("E2BRestClient", () => {
     async (operation) => {
       const client = new E2BRestClient(defaultConfig);
       const caller = new AbortController();
+      const cancellation = new Error(`cancel ${operation}`);
       fetchSpy.mockImplementation(
         (_url: string, init: RequestInit) =>
           new Promise((_resolve, reject) => {
@@ -221,9 +222,8 @@ describe("E2BRestClient", () => {
         operation === "get"
           ? client.getSandbox("sb-1", caller.signal)
           : client.pauseSandbox("sb-1", undefined, caller.signal);
-      const assertion = expect(promise).rejects.toThrow();
-      caller.abort();
-      await assertion;
+      caller.abort(cancellation);
+      await expect(promise).rejects.toBe(cancellation);
       expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
     }
   );
@@ -323,15 +323,16 @@ describe("E2BRestClient", () => {
   it("createSnapshot aborts when the caller's deadline fires", async () => {
     const client = new E2BRestClient(defaultConfig);
     const caller = new AbortController();
+    const deadlineError = new Error("snapshot deadline exceeded");
     fetchSpy.mockImplementation((_url: string, init: RequestInit) => {
-      caller.abort();
+      caller.abort(deadlineError);
       const error = new Error("aborted");
       error.name = "AbortError";
       expect(init.signal?.aborted).toBe(true);
       return Promise.reject(error);
     });
-    await expect(client.createSnapshot("sb-1", { signal: caller.signal })).rejects.toThrow(
-      /timeout/
+    await expect(client.createSnapshot("sb-1", { signal: caller.signal })).rejects.toBe(
+      deadlineError
     );
   });
 

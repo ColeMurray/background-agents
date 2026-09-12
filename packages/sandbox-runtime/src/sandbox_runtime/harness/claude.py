@@ -49,6 +49,7 @@ from .base import (
     TurnOutcome,
 )
 from .claude_env import (
+    CLAUDE_POLICY_SETTINGS,
     ClaudeCredential,
     bundled_claude_binary,
     harness_env,
@@ -399,7 +400,8 @@ class ClaudeHarness:
         )
         if hook_log_dir := self.environ.get("OPENINSPECT_HOOK_LOG_DIR"):
             prompt_notes.append(
-                f"Repository boot logs, when hooks ran, are under {hook_log_dir}/<repo-name>/ "
+                "Repository boot logs, when hooks ran, are under "
+                f"{hook_log_dir}/<percent-encoded-owner>/<repo-name>/ "
                 "as setup.log and start.log. These are private, bounded, best-effort diagnostics "
                 "and are discarded before snapshots; do not copy raw log contents into shared "
                 "artifacts because they may contain secrets."
@@ -416,6 +418,7 @@ class ClaudeHarness:
             "disallowed_tools": [*DISALLOWED_TOOLS],
             "permission_mode": "dontAsk",
             "system_prompt": system_prompt,
+            "settings": CLAUDE_POLICY_SETTINGS,
             "setting_sources": ["user", "project"],
             "include_partial_messages": True,
             "forward_subagent_text": False,
@@ -470,13 +473,18 @@ class ClaudeHarness:
         return client
 
     async def _disconnect(self) -> None:
+        """Retain ownership and block reconnection if SDK teardown fails."""
         client = self._client
         if client is None:
             return
         try:
             await client.disconnect()
-        except Exception as error:
-            self.log.warn("claude.disconnect_error", exc=error)
+        except (Exception, asyncio.CancelledError):
+            # A partially disconnected client cannot be reused or replaced:
+            # its CLI may still be alive, and no owner may lose that handle.
+            self._needs_reconnect = True
+            self._execution_stopped = False
+            raise
         else:
             self._client = None
 
@@ -667,6 +675,8 @@ class ClaudeHarness:
                 await self._disconnect()
         except TimeoutError:
             self.log.warn("claude.stop_timeout")
+        except Exception as error:
+            self.log.warn("claude.stop_error", exc=error)
         return False
 
     async def _user_messages(self, prompt: HarnessPrompt) -> AsyncIterator[dict[str, Any]]:

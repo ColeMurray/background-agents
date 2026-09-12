@@ -43,6 +43,10 @@ export const slackCallbackContextSchema = z.object({
    * control plane knows which automation (if any) owns the thread.
    */
   automationId: z.string().optional(),
+  /** Correlates automation-owned follow-up admission and recovery. */
+  runId: z.string().optional(),
+  executionLaunchId: z.string().optional(),
+  admissionDeadlineMs: z.number().int().positive().optional(),
 });
 
 export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;
@@ -130,6 +134,8 @@ export const automationCallbackContextSchema = z.object({
   automationId: z.string(),
   runId: z.string(),
   automationName: z.string(),
+  executionLaunchId: z.string().optional(),
+  admissionDeadlineMs: z.number().int().positive().optional(),
 });
 
 export type AutomationCallbackContext = z.infer<typeof automationCallbackContextSchema>;

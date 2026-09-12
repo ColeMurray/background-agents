@@ -76,13 +76,14 @@ export class SandboxExecutionEventHandler {
       // ready and a terminal result race during a control-plane rollout.
       this.messageRepository.requireStopEvidenceForMessage(event.messageId, event.sandboxId);
     }
-    if (event.cleanupDeadlineMs !== undefined) {
-      this.messageRepository.beginMessageCleanup(
-        event.messageId,
-        context.now,
-        event.cleanupDeadlineMs
-      );
-    }
+    const observedCleanupDeadlineMs =
+      event.cleanupDeadlineMs !== undefined
+        ? this.messageRepository.beginMessageCleanup(
+            event.messageId,
+            context.now,
+            event.cleanupDeadlineMs
+          )
+        : null;
     if (
       event.executionStopped === false ||
       (metadata?.requires_stop_evidence === 1 && event.executionStopped !== true)
@@ -111,6 +112,7 @@ export class SandboxExecutionEventHandler {
         completion,
         cleanupDeadlineMs:
           this.messageRepository.beginMessageCleanup(event.messageId, context.now) ??
+          observedCleanupDeadlineMs ??
           metadata?.cleanup_deadline_ms ??
           undefined,
         budgetTransition: this.budget.observeExecutionCost(event, context.now),

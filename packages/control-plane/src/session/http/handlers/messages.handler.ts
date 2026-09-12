@@ -10,6 +10,7 @@ import { SessionAttachmentError } from "../../session-attachment-resolver";
 import { executionStateRequestSchema } from "../../contracts";
 import {
   BudgetExhaustedError,
+  AutomationAdmissionExpiredError,
   PromptQueueFullError,
   HarnessModelIncompatibleError,
   PromptRequestConflictError,
@@ -40,6 +41,12 @@ export class MessagesHandler {
       const body: EnqueuePromptRequest = result.data;
       return Response.json(await this.messageService.enqueuePrompt(body));
     } catch (error) {
+      if (error instanceof AutomationAdmissionExpiredError) {
+        return Response.json(
+          { error: error.message, code: "AUTOMATION_ADMISSION_EXPIRED" },
+          { status: 409 }
+        );
+      }
       if (error instanceof SessionAttachmentError) {
         return Response.json({ error: error.message }, { status: 400 });
       }
@@ -83,7 +90,8 @@ export class MessagesHandler {
     return Response.json(
       await this.messageService.reconcileExecutionState(
         parsed.data.automationRunId,
-        parsed.data.executionLaunchId
+        parsed.data.executionLaunchId,
+        parsed.data.admissionDeadlineMs
       )
     );
   }

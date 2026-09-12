@@ -75,10 +75,11 @@ initialization and return, launching long-running services in the background. A 
 exit is not an independent service-health check.
 
 The hook runner observes shell exit separately from inherited output descriptors. Successful shell
-exit preserves background children. Nonzero exit, genuine timeout, cancellation, and supervisor
-shutdown clean up the owned process group before dependent boot work proceeds. If cleanup cannot be
-confirmed within its bounded wait, boot cannot safely continue. The shared Git/subprocess helper is
-unchanged.
+exit preserves background children. On Linux, a per-hook subreaper owns descendants that detach,
+call `setsid`, or double-fork; nonzero exit, genuine timeout, cancellation, and supervisor shutdown
+kill and reap that complete descendant tree before dependent boot work proceeds. Other platforms
+retain process-group cleanup. If cleanup cannot be confirmed within its bounded wait, boot cannot
+safely continue. The shared Git/subprocess helper is unchanged.
 
 | Boot mode                            | Setup failure                                            | Start failure                                  |
 | ------------------------------------ | -------------------------------------------------------- | ---------------------------------------------- |
@@ -91,12 +92,14 @@ is still an outer constraint covering clone, hooks, tunnel waits, and harness st
 before all configured hook waits in a multi-repository boot. The hook fix does not extend it.
 
 For file logging, diagnostics live outside repositories at
-`/workspace/.openinspect/logs/<boot-id>/<repo-name>/{setup,start}.log` with private directories and
-files, no-follow path handling, and agent-visible path-only context. Raw contents are not placed in
-build callbacks. Only one boot's reachable files are retained. The janitor truncates the same inode
-at a 1 MiB target every 250 ms, including descriptors inherited by successful services. This is
-best-effort retention, not a hard disk quota against an arbitrary write burst or a durable
-service-log API. Services needing durable logs must choose their own destinations.
+`/tmp/openinspect-hook-logs-<uid>/<boot-id>/<encoded-owner>/<repo-name>/{setup,start}.log`. Private,
+atomically recorded boot ownership ensures cleanup removes only the exact directory created by the
+runtime; repository-owned `.openinspect` paths and unrecorded siblings are untouched. Paths use
+no-follow handling and agent-visible path-only context, and raw contents are not placed in build
+callbacks. The janitor truncates the same inode at a 1 MiB target every 250 ms, including
+descriptors inherited by successful services. This is best-effort retention, not a hard disk quota
+against an arbitrary write burst or a durable service-log API. Services needing durable logs must
+choose their own destinations.
 
 **Memory-capture exception:** E2B and OpenComputer session launches enforce `HOOK_LOG_MODE=discard`.
 They use the same shell-completion and cleanup policy, but retain only structured hook outcome
@@ -125,8 +128,8 @@ warning rows are persisted, and bot quiet notices are not part of this change.
 1. Deploy compatible shared/control-plane consumers and the automation recovery migration first.
    Build `@open-inspect/shared` before dependent packages. Deploy the Modal termination endpoint
    before relying on provider-confirmed Modal termination.
-2. Build and verify runtime `v66-timeout-redesign` images. The manifest generation and rebuild floor
-   are 66; the global compatibility floor stays 62 and the Claude image floor stays 64. Modal's
+2. Build and verify runtime `v67-timeout-redesign` images. The manifest generation and rebuild floor
+   are 67; the global compatibility floor stays 62 and the Claude image floor stays 64. Modal's
    cache buster derives from the runtime version; the shared image bundle also includes it.
 3. Deploy runtime-producing services through the public-first workflow. Verify downstream production
    manifest merges explicitly; do not lower the new rebuild generation during conflict resolution.

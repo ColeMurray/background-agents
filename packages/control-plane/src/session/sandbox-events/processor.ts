@@ -113,8 +113,8 @@ export class SessionSandboxEventProcessor {
         return;
       case "snapshot_ready":
         // The bridge's answer to the snapshot command. The lifecycle manager
-        // drives the snapshot itself through the provider; all this needs is
-        // the delivery ack below, which stops the bridge re-sending it.
+        // waits for this correlated preparation acknowledgement before its
+        // provider capture. The delivery ack also stops bridge retries.
         this.onSnapshotReady?.(event.requestId, event.sandboxId);
         return;
       default:

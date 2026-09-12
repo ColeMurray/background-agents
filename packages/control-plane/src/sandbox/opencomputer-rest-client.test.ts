@@ -100,14 +100,14 @@ describe("OpenComputerRestClient request timeouts", () => {
     async (operation) => {
       const client = new OpenComputerRestClient(config);
       const caller = new AbortController();
+      const cancellation = new Error(`cancel ${operation}`);
       stubHangingFetch();
       const promise =
         operation === "get"
           ? client.getSandbox("sb-1", caller.signal)
           : client.hibernateSandbox("sb-1", caller.signal);
-      const assertion = expect(promise).rejects.toThrow();
-      caller.abort();
-      await assertion;
+      caller.abort(cancellation);
+      await expect(promise).rejects.toBe(cancellation);
       expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
     }
   );

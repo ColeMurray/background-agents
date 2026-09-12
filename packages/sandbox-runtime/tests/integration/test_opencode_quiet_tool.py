@@ -55,6 +55,7 @@ pytestmark = pytest.mark.skipif(
 QUIET_DURATIONS_SECONDS = [
     int(value) for value in os.environ.get("OI_QUIET_TOOL_SECONDS", "600,660").split(",")
 ]
+OPENCODE_HEARTBEAT_INTERVAL_SECONDS = 10
 
 
 class _RecordingClient(OpenCodeClient):
@@ -391,9 +392,13 @@ async def test_real_opencode_quiet_bash_tool(quiet_seconds, tmp_path, monkeypatc
             quiet_gap_seconds = max(right - left for left, right in pairwise(timeline_times))
             evidence["longest_timeline_quiet_gap_seconds"] = quiet_gap_seconds
             assert quiet_gap_seconds >= quiet_seconds - 5
-            for key in ("opencode_heartbeats_epoch_seconds", "bridge_heartbeats_epoch_seconds"):
+            heartbeat_intervals = {
+                "opencode_heartbeats_epoch_seconds": OPENCODE_HEARTBEAT_INTERVAL_SECONDS,
+                "bridge_heartbeats_epoch_seconds": bridge.HEARTBEAT_INTERVAL,
+            }
+            for key, interval_seconds in heartbeat_intervals.items():
                 timestamps = evidence[key]
-                assert len(timestamps) >= quiet_seconds // 30 - 1, (key, timestamps)
+                assert len(timestamps) >= quiet_seconds // interval_seconds - 1, (key, timestamps)
                 all_times = [
                     evidence["started_at_epoch_seconds"],
                     *timestamps,

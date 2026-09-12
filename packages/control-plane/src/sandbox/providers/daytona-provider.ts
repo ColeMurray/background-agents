@@ -186,8 +186,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   }
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
-    const resumable =
-      config.reason === "inactivity_timeout" || config.reason === "heartbeat_timeout";
+    const resumable = config.mode === "suspend";
     try {
       let commandError: unknown;
       try {

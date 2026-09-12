@@ -38,6 +38,7 @@ def isolate_runtime_file_paths(tmp_path, monkeypatch):
     monkeypatch.setattr("sandbox_runtime.supervisor.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
     monkeypatch.setattr("sandbox_runtime.bridge.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
     monkeypatch.setattr("sandbox_runtime.tunnel_environment.TUNNEL_ENV_FILE_PATH", tunnel_env_path)
+    monkeypatch.setattr("sandbox_runtime.hook_logs.HOOK_LOG_ROOT", tmp_path / "runtime-hook-logs")
 
 
 def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:

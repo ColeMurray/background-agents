@@ -61,6 +61,7 @@ export const SessionInternalPaths = {
 export const executionStateRequestSchema = z.object({
   automationRunId: z.string().min(1),
   executionLaunchId: z.string().min(1).optional(),
+  admissionDeadlineMs: z.number().int().positive().optional(),
 });
 
 /** Runtime availability is independent of an automation message's reporting outcome. */
@@ -72,6 +73,15 @@ export const sessionExecutionStateSchema = z.object({
   messageStatus: z.enum(["pending", "processing", "completed", "failed"]).nullable(),
   error: z.string().nullable(),
   launchObserved: z.boolean().optional(),
+  launch: z
+    .object({
+      messageId: z.string(),
+      status: z.enum(["pending", "processing", "completed", "failed"]),
+      error: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
+  launchAdmissionExpired: z.boolean().optional(),
 });
 
 export type SessionExecutionState = z.infer<typeof sessionExecutionStateSchema>;

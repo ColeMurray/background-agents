@@ -958,6 +958,7 @@ describe("OpenComputerSandboxProvider", () => {
         providerObjectId: "oc-sandbox-1",
         sessionId: "session-1",
         reason: "inactivity_timeout",
+        mode: "suspend",
       })
     ).resolves.toEqual({ success: true });
 
@@ -981,6 +982,7 @@ describe("OpenComputerSandboxProvider", () => {
         providerObjectId: "oc-sandbox-1",
         sessionId: "session-1",
         reason: "respawn",
+        mode: "terminate",
         signal,
       })
     ).resolves.toEqual({ success: true });
@@ -993,8 +995,8 @@ describe("OpenComputerSandboxProvider", () => {
     expect(client.hibernateSandbox).not.toHaveBeenCalled();
   });
 
-  it.each(["execution_timeout", "cancellation_unconfirmed"])(
-    "permanently deletes on %s without accepting hibernation as cessation",
+  it.each(["execution_timeout", "inactivity_timeout", "heartbeat_timeout"])(
+    "terminate mode deletes for %s without accepting hibernation as cessation",
     async (reason) => {
       const client = createMockClient();
       const provider = new OpenComputerSandboxProvider(client, {
@@ -1005,10 +1007,31 @@ describe("OpenComputerSandboxProvider", () => {
         providerObjectId: "oc-sandbox-1",
         sessionId: "s",
         reason,
+        mode: "terminate",
       });
       expect(client.deleteSandbox).toHaveBeenCalled();
       expect(client.hibernateSandbox).not.toHaveBeenCalled();
       expect(result.success).toBe(false);
+    }
+  );
+
+  it.each(["inactivty_timeout", "new_stop_reason", "execution_timeout"])(
+    "suspend mode never deletes for diagnostic reason %s",
+    async (reason) => {
+      const client = createMockClient();
+      const provider = new OpenComputerSandboxProvider(client, {
+        scmProvider: "github",
+        sandboxAccessPasswordSecret: "secret",
+      });
+      const result = await provider.stopSandbox({
+        providerObjectId: "oc-sandbox-1",
+        sessionId: "s",
+        mode: "suspend",
+        reason,
+      });
+      expect(result.success).toBe(true);
+      expect(client.hibernateSandbox).toHaveBeenCalled();
+      expect(client.deleteSandbox).not.toHaveBeenCalled();
     }
   );
 
@@ -1030,6 +1053,7 @@ describe("OpenComputerSandboxProvider", () => {
             providerObjectId: "oc-sandbox-1",
             sessionId: "s",
             reason: "heartbeat_timeout",
+            mode: "suspend",
           })
         ).success
       ).toBe(false);
@@ -1047,6 +1071,7 @@ describe("OpenComputerSandboxProvider", () => {
       providerObjectId: "oc-sandbox-1",
       sessionId: "s",
       reason: "inactivity_timeout",
+      mode: "suspend",
       signal,
     });
     expect(client.hibernateSandbox).toHaveBeenCalledWith("oc-sandbox-1", signal);

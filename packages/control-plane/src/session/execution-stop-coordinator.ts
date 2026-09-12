@@ -10,6 +10,14 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
+export const MAX_STOP_CONTAINMENT_ATTEMPTS = 5;
+export const MAX_STOP_CONTAINMENT_RETRY_DELAY_MS = 60_000;
+
+export interface DispatchRecoveryPreparation {
+  messageId: string;
+  sandboxId: string | null;
+}
+
 export interface ExecutionStopPreparation {
   stopConfirmationDeadline: number;
   sandboxId?: string | null;
@@ -40,6 +48,26 @@ export class ExecutionStopCoordinator {
       return;
     }
     await this.deliver(preparation);
+  }
+
+  prepareDispatchRecovery(messageId: string, now: number): DispatchRecoveryPreparation | null {
+    const metadata = this.messageRepository.getMessageExecutionMetadata(messageId);
+    const deadline = Math.min(
+      now + STOP_CONFIRMATION_TIMEOUT_MS,
+      metadata?.cleanup_deadline_ms ?? Infinity
+    );
+    const prepared = this.messageRepository.prepareDispatchRecovery(messageId, deadline, () =>
+      this.alarmDeadlines.setPendingEarliest(deadline)
+    );
+    return prepared ? { messageId, sandboxId: metadata?.execution_sandbox_id ?? null } : null;
+  }
+
+  async deliverDispatchRecovery(preparation: DispatchRecoveryPreparation): Promise<void> {
+    await this.terminateFencedExecution(
+      preparation.messageId,
+      preparation.sandboxId,
+      "prompt_dispatch_send_failed"
+    );
   }
 
   prepare(reason: string, now: number): ExecutionStopPreparation | null {
@@ -117,26 +145,19 @@ export class ExecutionStopCoordinator {
       ) {
         return;
       }
-      const terminated = await this.sandboxLifecycle.terminateUnresponsiveSandbox(
-        reason,
-        preparation.cleanupDeadlineMs
+      await this.terminateFencedExecution(
+        preparation.failure.completion.messageId,
+        preparation.sandboxId,
+        reason
       );
-      if (terminated)
-        await this.resumeAfterSandboxTermination(
-          preparation.failure.completion.messageId,
-          preparation.sandboxId
-        );
-      else
-        await this.retainFenceAfterFailedTermination(
-          preparation.failure.completion.messageId,
-          preparation.sandboxId
-        );
     }
   }
 
   async recoverStopConfirmationTimeout(): Promise<void> {
     const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
     if (!awaitingStop) return;
+    const metadata = this.messageRepository.getMessageExecutionMetadata(awaitingStop.id);
+    if (metadata?.stop_escalated_at != null) return;
     if (awaitingStop.deadline > Date.now()) {
       // An earlier deadline may have consumed the single alarm slot; keep
       // this one armed so the stop cannot wait on unrelated work.
@@ -146,16 +167,80 @@ export class ExecutionStopCoordinator {
     this.log.warn("Sandbox did not confirm stop before deadline", {
       event: "prompt.stop_confirmation_timeout",
       message_id: awaitingStop.id,
+      containment_attempts: metadata?.stop_containment_attempts ?? 0,
+      max_containment_attempts: MAX_STOP_CONTAINMENT_ATTEMPTS,
     });
-    const metadata = this.messageRepository.getMessageExecutionMetadata(awaitingStop.id);
-    const terminated = await this.sandboxLifecycle.terminateUnresponsiveSandbox(
-      "stop_confirmation_timeout",
-      metadata?.cleanup_deadline_ms ?? undefined
+    await this.terminateFencedExecution(
+      awaitingStop.id,
+      metadata?.execution_sandbox_id,
+      "stop_confirmation_timeout"
     );
-    if (terminated)
-      await this.resumeAfterSandboxTermination(awaitingStop.id, metadata?.execution_sandbox_id);
-    else
-      await this.retainFenceAfterFailedTermination(awaitingStop.id, metadata?.execution_sandbox_id);
+  }
+
+  private async terminateFencedExecution(
+    messageId: string,
+    sandboxId: string | null | undefined,
+    reason: Parameters<SandboxLifecycle["terminateUnresponsiveSandbox"]>[0]
+  ): Promise<void> {
+    const metadata = this.messageRepository.getMessageExecutionMetadata(messageId);
+    if (
+      this.messageRepository.getMessageAwaitingStopConfirmation()?.id !== messageId ||
+      (sandboxId !== undefined && (metadata?.execution_sandbox_id ?? null) !== sandboxId) ||
+      metadata?.stop_escalated_at != null
+    )
+      return;
+    if (metadata?.requires_stop_evidence === 1) {
+      const attempts = metadata.stop_containment_attempts ?? 0;
+      if (attempts >= MAX_STOP_CONTAINMENT_ATTEMPTS) {
+        this.escalateContainment(messageId);
+        return;
+      }
+      const retryAt =
+        Date.now() +
+        Math.min(STOP_CONFIRMATION_TIMEOUT_MS * 2 ** attempts, MAX_STOP_CONTAINMENT_RETRY_DELAY_MS);
+      const attempt = this.messageRepository.claimStopContainmentAttempt(
+        messageId,
+        retryAt,
+        MAX_STOP_CONTAINMENT_ATTEMPTS,
+        () => this.alarmDeadlines.setPendingEarliest(retryAt)
+      );
+      if (attempt === null) return;
+      // Intent and attempt count are durable already. A failed runtime alarm
+      // write must not prevent containment, and rehydration can re-arm it.
+      try {
+        await this.alarmScheduler.schedule(retryAt);
+      } catch (error) {
+        this.log.error("Containment retry alarm failed", {
+          message_id: messageId,
+          containment_attempt: attempt,
+          error,
+        });
+      }
+    }
+    const currentMetadata = this.messageRepository.getMessageExecutionMetadata(messageId);
+    if (
+      this.messageRepository.getMessageAwaitingStopConfirmation()?.id !== messageId ||
+      (sandboxId !== undefined && (currentMetadata?.execution_sandbox_id ?? null) !== sandboxId) ||
+      currentMetadata?.stop_escalated_at != null
+    )
+      return;
+    const terminated = await this.sandboxLifecycle.terminateUnresponsiveSandbox(
+      reason,
+      currentMetadata?.cleanup_deadline_ms ?? undefined
+    );
+    if (terminated) await this.resumeAfterSandboxTermination(messageId, sandboxId);
+    else await this.retainFenceAfterFailedTermination(messageId, sandboxId);
+  }
+
+  private escalateContainment(messageId: string): void {
+    const event = this.messageRepository.recordStopContainmentEscalation(messageId, Date.now());
+    if (!event) return;
+    this.log.error("Automatic execution containment exhausted", {
+      event: "prompt.stop_containment_escalated",
+      message_id: messageId,
+      containment_attempts: MAX_STOP_CONTAINMENT_ATTEMPTS,
+    });
+    this.messenger.broadcast({ type: "sandbox_event", event });
   }
 
   private async retainFenceAfterFailedTermination(
@@ -176,12 +261,11 @@ export class ExecutionStopCoordinator {
       await this.resumeAfterSandboxTermination(messageId, metadata?.execution_sandbox_id);
       return;
     }
-    // This is a retry of containment, never a fresh runtime cleanup allowance.
-    // Keep the original cleanup deadline in metadata and the dispatch fence
-    // durable even after the provider can no longer confirm termination.
-    const retryAt = Date.now() + STOP_CONFIRMATION_TIMEOUT_MS;
-    this.messageRepository.markMessageAwaitingStopConfirmation(messageId, retryAt);
-    await this.alarmScheduler.schedule(retryAt);
+    if ((metadata.stop_containment_attempts ?? 0) >= MAX_STOP_CONTAINMENT_ATTEMPTS) {
+      this.escalateContainment(messageId);
+    }
+    // Otherwise the capped retry and its alarm intent were persisted before
+    // the attempt. Neither failure nor hibernation grants another allowance.
   }
 
   async resumeAfterSandboxTermination(

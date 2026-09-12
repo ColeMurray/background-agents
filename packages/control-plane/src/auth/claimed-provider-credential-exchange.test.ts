@@ -14,7 +14,7 @@ type Credential = { refreshToken: string };
 
 const NOW = 1_000;
 
-function state(): ProviderCredentialState<Credential> {
+function state(): ProviderCredentialState {
   return {
     payload: { refreshToken: "stored" },
     credentialSchemaVersion: 1,

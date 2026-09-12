@@ -28,7 +28,6 @@ import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } fr
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
-import { STOP_CONFIRMATION_TIMEOUT_MS } from "./message-repository";
 import { resolveExecutionBudget } from "./execution-deadline";
 import {
   AttachmentClaimConflictError,
@@ -44,6 +43,7 @@ import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
+import type { AlarmDeadlineStore } from "./alarm/scheduler";
 import type { MessageFailureService } from "./message-failure-service";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
@@ -60,6 +60,33 @@ import type {
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const SANDBOX_UNAVAILABLE_ERROR = "Sandbox became unavailable before execution completed";
+const AUTOMATION_ADMISSION_EXPIRED =
+  "Automation startup deadline expired before execution was dispatched";
+
+export class AutomationAdmissionExpiredError extends Error {
+  constructor() {
+    super(AUTOMATION_ADMISSION_EXPIRED);
+    this.name = "AutomationAdmissionExpiredError";
+  }
+}
+
+function automationAdmissionDeadlineMs(
+  context: Record<string, unknown> | undefined
+): number | null {
+  if (
+    !context ||
+    !["automation", "slack"].includes(String(context.source)) ||
+    typeof context.runId !== "string" ||
+    typeof context.executionLaunchId !== "string" ||
+    context.admissionDeadlineMs === undefined
+  )
+    return null;
+  const deadline = context.admissionDeadlineMs;
+  if (typeof deadline !== "number" || !Number.isSafeInteger(deadline) || deadline <= 0) {
+    throw new AutomationAdmissionExpiredError();
+  }
+  return deadline;
+}
 
 type EnqueueAutofixResponse = Extract<
   GitHubAutofixSessionResponse,
@@ -165,6 +192,7 @@ export class SessionMessageQueue {
     private readonly executionStop: ExecutionStopCoordinator,
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
+    private readonly alarmDeadlines: Pick<AlarmDeadlineStore, "setPendingEarliest">,
     private readonly getExecutionSandbox: () => {
       sandboxId: string | null;
       providerExpiresAtMs?: number | null;
@@ -374,6 +402,7 @@ export class SessionMessageQueue {
   }
 
   async processMessageQueue(): Promise<void> {
+    await this.expirePendingAdmissions();
     const currentSession = this.repository.getSession();
     if (!currentSession || !isSessionPromptable(currentSession.status)) {
       return;
@@ -422,6 +451,17 @@ export class SessionMessageQueue {
         await this.sessionStatus.reconcileAfterExecution(false);
         await this.processMessageQueue();
       }
+      return;
+    }
+    const admissionDeadline =
+      message.execution_deadline_ms == null
+        ? (this.messageRepository
+            .listPendingAdmissionDeadlines()
+            .find((entry) => entry.id === message.id)?.deadline ?? null)
+        : null;
+    if (admissionDeadline !== null && admissionDeadline <= Date.now()) {
+      await this.expirePendingAdmissions();
+      await this.processMessageQueue();
       return;
     }
     if (this.getExecutionSandbox().runtimeUnavailable) return;
@@ -561,16 +601,8 @@ export class SessionMessageQueue {
     const sent = this.wsManager.send(sandboxWs, command);
 
     if (!sent) {
-      this.messageRepository.updateMessageToPending(message.id);
-      const retryAt = Math.min(budget.cleanupDeadlineMs, dispatchAt + STOP_CONFIRMATION_TIMEOUT_MS);
-      this.messageRepository.markMessageAwaitingStopConfirmation(message.id, retryAt);
-      const terminated = await this.sandboxLifecycle.terminateUnresponsiveSandbox(
-        "prompt_dispatch_send_failed",
-        budget.cleanupDeadlineMs
-      );
-      if (terminated)
-        await this.executionStop.resumeAfterSandboxTermination(message.id, budget.sandboxId);
-      else await this.alarmScheduler.schedule(retryAt);
+      const recovery = this.executionStop.prepareDispatchRecovery(message.id, dispatchAt);
+      if (recovery) await this.executionStop.deliverDispatchRecovery(recovery);
     } else {
       this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
@@ -607,7 +639,12 @@ export class SessionMessageQueue {
   }
 
   /** Reconcile an automation observer against session-owned execution authority. */
-  async reconcileExecutionState(automationRunId: string, executionLaunchId?: string) {
+  async reconcileExecutionState(
+    automationRunId: string,
+    executionLaunchId?: string,
+    admissionDeadlineMs?: number
+  ) {
+    await this.expirePendingAdmissions();
     const processing = this.messageRepository.getProcessingMessageWithStartedAt();
     if (processing) {
       const metadata = this.messageRepository.getMessageExecutionMetadata(processing.id);
@@ -627,6 +664,9 @@ export class SessionMessageQueue {
     const metadata = activeId ? this.messageRepository.getMessageExecutionMetadata(activeId) : null;
     const message = this.messageRepository.getAutomationMessage(automationRunId);
     const hasQueuedWork = this.messageRepository.getPendingOrProcessingCount() > 0;
+    const launch = executionLaunchId
+      ? this.messageRepository.getExecutionLaunch(automationRunId, executionLaunchId)
+      : null;
     return {
       executionState: stopping
         ? ("stopping" as const)
@@ -638,10 +678,40 @@ export class SessionMessageQueue {
       cleanupDeadlineAt: metadata?.cleanup_deadline_ms ?? null,
       messageStatus: message?.status ?? null,
       error: message?.error_message ?? null,
-      ...(executionLaunchId
-        ? { launchObserved: this.messageRepository.hasExecutionLaunch(executionLaunchId) }
-        : {}),
+      ...(executionLaunchId ? { launchObserved: launch !== null, launch } : {}),
+      ...(admissionDeadlineMs === undefined
+        ? {}
+        : { launchAdmissionExpired: Date.now() >= admissionDeadlineMs }),
     };
+  }
+
+  /** Never-dispatched automation admission has a separate, non-renewing clock. */
+  async expirePendingAdmissions(): Promise<void> {
+    const now = Date.now();
+    const { failures, nextDeadline } = this.repository.transaction(() => {
+      const pending = this.messageRepository.listPendingAdmissionDeadlines();
+      const failures = pending
+        .filter((entry) => entry.deadline <= now)
+        .flatMap((entry) => {
+          const failure = this.messageFailures.record(
+            entry.id,
+            AUTOMATION_ADMISSION_EXPIRED,
+            now,
+            "pending"
+          );
+          return failure ? [failure] : [];
+        });
+      const future = pending.filter((entry) => entry.deadline > now).map((entry) => entry.deadline);
+      const nextDeadline = future.length ? Math.min(...future) : null;
+      if (nextDeadline !== null) this.alarmDeadlines.setPendingEarliest(nextDeadline);
+      return { failures, nextDeadline };
+    });
+    for (const failure of failures) this.messageFailures.deliver(failure);
+    if (failures.length) {
+      this.broadcastPromptQueue();
+      await this.sessionStatus.reconcileAfterQueueRemoval();
+    }
+    if (nextDeadline !== null) await this.alarmScheduler.schedule(nextDeadline);
   }
 
   async handleFatalSandboxFailure(reason: string): Promise<void> {
@@ -809,7 +879,25 @@ export class SessionMessageQueue {
     // cancel or archive can land while this request is suspended, so the
     // session is read after it, not before.
     this.assertPromptableSession();
+    const admissionDeadlineMs = automationAdmissionDeadlineMs(data.callbackContext);
+    if (admissionDeadlineMs !== null && admissionDeadlineMs <= Date.now())
+      throw new AutomationAdmissionExpiredError();
     const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
+    if (
+      (data.callbackContext?.source === "automation" || data.callbackContext?.source === "slack") &&
+      typeof data.callbackContext.runId === "string" &&
+      typeof data.callbackContext.executionLaunchId === "string"
+    ) {
+      const existing = this.messageRepository.getExecutionLaunch(
+        data.callbackContext.runId,
+        data.callbackContext.executionLaunchId
+      );
+      if (existing)
+        return {
+          messageId: existing.messageId,
+          position: this.messageRepository.getUnfinishedMessagePosition(existing.messageId),
+        };
+    }
     if (data.clientRequestId) {
       const existing = this.messageRepository.getMessageByClientRequestId(data.clientRequestId);
       if (existing) {
@@ -871,23 +959,29 @@ export class SessionMessageQueue {
       this.log
     );
     try {
-      this.messageRepository.createMessageWithAttachments(
-        {
-          id: messageId,
-          authorId: data.participant.id,
-          content: data.content,
-          source: data.source,
-          model: messageModel,
-          reasoningEffort: messageReasoningEffort,
-          attachments: attachments ? JSON.stringify(attachments) : null,
-          callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
-          clientRequestId: data.clientRequestId ?? null,
-          requestFingerprint: requestFingerprint ?? null,
-          status: "pending",
-          createdAt: now,
-        },
-        resolvedAttachments?.attachmentIds ?? []
-      );
+      this.repository.transaction(() => {
+        if (admissionDeadlineMs !== null && admissionDeadlineMs <= Date.now())
+          throw new AutomationAdmissionExpiredError();
+        this.messageRepository.createMessageWithAttachments(
+          {
+            id: messageId,
+            authorId: data.participant.id,
+            content: data.content,
+            source: data.source,
+            model: messageModel,
+            reasoningEffort: messageReasoningEffort,
+            attachments: attachments ? JSON.stringify(attachments) : null,
+            callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
+            clientRequestId: data.clientRequestId ?? null,
+            requestFingerprint: requestFingerprint ?? null,
+            status: "pending",
+            createdAt: now,
+          },
+          resolvedAttachments?.attachmentIds ?? []
+        );
+        if (admissionDeadlineMs !== null)
+          this.alarmDeadlines.setPendingEarliest(admissionDeadlineMs);
+      });
     } catch (error) {
       if (error instanceof AttachmentClaimConflictError) {
         throw new SessionAttachmentError(
@@ -897,6 +991,7 @@ export class SessionMessageQueue {
       throw error;
     }
 
+    if (admissionDeadlineMs !== null) await this.alarmScheduler.schedule(admissionDeadlineMs);
     await this.sessionStatus.transition("active");
     this.broadcastPromptQueue();
 

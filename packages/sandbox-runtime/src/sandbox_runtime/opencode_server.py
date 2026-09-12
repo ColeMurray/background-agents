@@ -15,6 +15,7 @@ import httpx
 
 from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
+from .hook_logs import log_path_for_repository
 from .mcp_packages import McpPackageInstaller
 from .process_output import iter_process_lines
 from .sandbox_bin import install_bin_scripts
@@ -457,10 +458,12 @@ class OpenCodeServer:
 
         if hook_log_dir := os.environ.get("OPENINSPECT_HOOK_LOG_DIR"):
             hook_log_paths = [
-                Path(hook_log_dir) / repo.name / f"{hook}.log"
+                path
                 for repo in repositories
                 for hook in ("setup", "start")
-                if (Path(hook_log_dir) / repo.name / f"{hook}.log").is_file()
+                if (
+                    path := log_path_for_repository(Path(hook_log_dir), repo.owner, repo.name, hook)
+                ).is_file()
             ]
             if hook_log_paths:
                 # OpenCode 1.18.29 concatenates config.instructions across config

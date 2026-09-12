@@ -3,6 +3,7 @@ import type {
   StartProviderAuthorizationCodeRequest,
   StartProviderAuthorizationCodeResponse,
 } from "@open-inspect/shared/types/provider-accounts";
+import { z } from "zod";
 import {
   ProviderAuthorizationCodeExchangeError,
   type ErasedProviderAuthorizationCodeCapability,
@@ -52,10 +53,11 @@ const AMBIGUOUS_EXCHANGE_MESSAGE =
   "The provider did not confirm the exchange, so the code may already have been used. Start a fresh authorization.";
 
 /** What an authorization-code row keeps encrypted between start and complete. */
-interface PersistedAuthorizationCodeState {
-  providerState: unknown;
-  exchangeAttempts: number;
-}
+const persistedAuthorizationCodeStateSchema = z.object({
+  providerState: z.unknown(),
+  exchangeAttempts: z.number().int().nonnegative().lt(MAX_EXCHANGE_ATTEMPTS),
+});
+type PersistedAuthorizationCodeState = z.infer<typeof persistedAuthorizationCodeStateSchema>;
 
 function classifyExchangeFailure(
   cause: unknown
@@ -199,10 +201,12 @@ export class ProviderAuthorizationCodeService {
     let persisted: PersistedAuthorizationCodeState;
     let connection: ProviderConnectionResult<unknown>;
     try {
-      persisted = await decryptProviderAuthorizationPayload<PersistedAuthorizationCodeState>(
-        row.encryptedProviderData,
-        this.encryptionKey,
-        { transactionId: id, provider, stateSchemaVersion: row.providerStateVersion }
+      persisted = persistedAuthorizationCodeStateSchema.parse(
+        await decryptProviderAuthorizationPayload(row.encryptedProviderData, this.encryptionKey, {
+          transactionId: id,
+          provider,
+          stateSchemaVersion: row.providerStateVersion,
+        })
       );
     } catch (cause) {
       return this.failClosed(userId, provider, row, cause);

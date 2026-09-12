@@ -59,6 +59,57 @@ describe("durable execution deadline and cessation boundary", () => {
     for (const socket of sockets.splice(0)) socket.close();
   });
 
+  it("expires never-dispatched automation admission through the persisted session alarm", async () => {
+    const { stub, participantId } = await connectedSession();
+    await queueMessage(stub, participantId, "admission-expired");
+    await runInSessionDO(stub, async (instance, state) => {
+      const c = componentsOf(instance);
+      const deadline = Date.now() + 1000;
+      state.storage.sql.exec(
+        "UPDATE messages SET callback_context = ? WHERE id = 'admission-expired'",
+        JSON.stringify({
+          source: "automation",
+          automationId: "automation",
+          runId: "run",
+          executionLaunchId: "launch",
+          admissionDeadlineMs: deadline,
+        })
+      );
+      await c.messageQueue.expirePendingAdmissions();
+      expect(await state.storage.getAlarm()).toBeLessThanOrEqual(deadline);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(deadline);
+      try {
+        await instance.alarm();
+        expect(
+          await c.messageQueue.reconcileExecutionState("run", "launch", deadline)
+        ).toMatchObject({
+          executionState: "idle",
+          messageStatus: "failed",
+          launchAdmissionExpired: true,
+          launch: {
+            messageId: "admission-expired",
+            status: "failed",
+            error: expect.stringContaining("startup deadline"),
+          },
+        });
+      } finally {
+        clock.mockRestore();
+      }
+      expect(
+        state.storage.sql
+          .exec(
+            "SELECT status, started_at, execution_deadline_ms, stop_confirmation_deadline FROM messages WHERE id = 'admission-expired'"
+          )
+          .one()
+      ).toEqual({
+        status: "failed",
+        started_at: null,
+        execution_deadline_ms: null,
+        stop_confirmation_deadline: null,
+      });
+    });
+  });
+
   it("persists the first dispatch budget through repository reconstruction and a dispatch retry", async () => {
     const { stub, participantId } = await connectedSession();
     await queueMessage(stub, participantId, "retry-turn");
@@ -426,6 +477,7 @@ describe("durable execution deadline and cessation boundary", () => {
       const c = componentsOf(instance);
       await c.messageQueue.processMessageQueue();
       const started = Date.now();
+      const initialSandboxStatus = state.storage.sql.exec("SELECT status FROM sandbox").one();
       state.storage.sql.exec(
         "UPDATE sandbox SET last_heartbeat = ?, modal_object_id = NULL",
         started - 300_000
@@ -442,10 +494,24 @@ describe("durable execution deadline and cessation boundary", () => {
         .one();
       expect(stopped.status).toBe("failed");
       expect(stopped.stop_confirmation_deadline).toBeTypeOf("number");
+      expect(stopped.cleanup_deadline_ms).toBeGreaterThanOrEqual(started + 900_000);
       expect(stopped.cleanup_deadline_ms).toBeLessThanOrEqual(Date.now() + 900_000);
-      expect(state.storage.sql.exec("SELECT status FROM sandbox").one()).toEqual({
-        status: "stale",
-      });
+      // The stop coordinator owns active heartbeat failure. Give the runtime
+      // its confirmation window before provider containment, not an idle reap.
+      expect(state.storage.sql.exec("SELECT status FROM sandbox").one()).toEqual(
+        initialSandboxStatus
+      );
+      const clock = vi.spyOn(Date, "now").mockReturnValue(stopped.stop_confirmation_deadline + 1);
+      try {
+        await c.messageQueue.processMessageQueue();
+      } finally {
+        clock.mockRestore();
+      }
+      expect(
+        state.storage.sql
+          .exec("SELECT stop_confirmation_deadline FROM messages WHERE id = 'lost-heartbeat'")
+          .one()
+      ).toEqual({ stop_confirmation_deadline: expect.any(Number) });
       expect(
         state.storage.sql
           .exec("SELECT status FROM messages WHERE id = 'after-lost-heartbeat'")

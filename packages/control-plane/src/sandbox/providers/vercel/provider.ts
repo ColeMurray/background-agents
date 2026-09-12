@@ -266,6 +266,12 @@ export class VercelSandboxProvider implements SandboxProvider {
   }
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
+    if (config.mode !== "terminate") {
+      return {
+        success: false,
+        error: "Vercel does not support resumable suspension; stop mode must be terminate",
+      };
+    }
     try {
       try {
         await this.client.stopSession(

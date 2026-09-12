@@ -34,18 +34,6 @@ export class LifecycleSessionContext implements SessionContextReader {
     );
   }
 
-  beginExecutionCleanup(timestamp: number): number | undefined {
-    const messageId =
-      this.messages?.getProcessingMessage()?.id ??
-      this.messages?.getMessageAwaitingStopConfirmation()?.id;
-    if (!messageId) return undefined;
-    return (
-      this.messages?.beginMessageCleanup(messageId, timestamp) ??
-      this.messages?.getMessageExecutionMetadata(messageId)?.cleanup_deadline_ms ??
-      undefined
-    );
-  }
-
   getSession(): SessionRow | null {
     return this.sessions.getSession();
   }

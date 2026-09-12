@@ -111,7 +111,8 @@ function createMockStore() {
     getOrphanedStartingRuns: vi.fn().mockResolvedValue([]),
     getRunsNeedingExecutionRecovery: vi.fn().mockResolvedValue([]),
     recordRunExecutionState: vi.fn().mockResolvedValue(undefined),
-    markRunExecutionUnresolved: vi.fn().mockResolvedValue(undefined),
+    markRunExecutionUnresolved: vi.fn().mockResolvedValue(true),
+    releaseRejectedExecutionLaunch: vi.fn().mockResolvedValue(undefined),
     incrementConsecutiveFailures: vi.fn().mockResolvedValue(1),
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
     autoPause: vi.fn().mockResolvedValue(undefined),
@@ -564,7 +565,8 @@ describe("Scheduler", () => {
       expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
-        expect.any(Number)
+        expect.any(Number),
+        expect.objectContaining({ id: expect.any(String), admissionDeadlineMs: expect.any(Number) })
       );
       await expect(getInitBody(fetchMock)).resolves.toMatchObject({
         userId: sampleAutomation.created_by,
@@ -619,7 +621,8 @@ describe("Scheduler", () => {
       expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
-        expect.any(Number)
+        expect.any(Number),
+        expect.objectContaining({ id: expect.any(String), admissionDeadlineMs: expect.any(Number) })
       );
       expect(mockStore.updateRun).toHaveBeenCalledWith(
         expect.any(String),
@@ -1131,7 +1134,8 @@ describe("Scheduler", () => {
       expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         children[1].id,
         expect.any(String),
-        expect.any(Number)
+        expect.any(Number),
+        expect.objectContaining({ id: expect.any(String), admissionDeadlineMs: expect.any(Number) })
       );
       // One strike for the invocation, not per failed child.
       expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledTimes(1);
@@ -1318,12 +1322,115 @@ describe("Scheduler", () => {
       expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
-        expect.any(Number)
+        expect.any(Number),
+        expect.objectContaining({ id: expect.any(String), admissionDeadlineMs: expect.any(Number) })
       );
       expect(mockStore.claimRunSession.mock.invocationCallOrder[0]).toBeLessThan(
         mockSessionStoreCreate.mock.invocationCallOrder[0]
       );
     });
+
+    it.each([400, 409, 429])(
+      "releases the exact initial launch after definite enqueue rejection %i",
+      async (status) => {
+        mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+        selectRepositories("auto-1", [repositoryRow("auto-1")]);
+        const stub = {
+          fetch: vi.fn(async (request: Request) =>
+            new URL(request.url).pathname === "/internal/init"
+              ? Response.json({ status: "ok" })
+              : new Response("rejected before insertion", { status })
+          ),
+        };
+        await createScheduler(createEnv(undefined, stub)).tick();
+
+        const [runId, sessionId, startedAt, launch] = mockStore.claimRunSession.mock.calls[0];
+        const body = await getPromptBody(stub.fetch);
+        expect(body.callbackContext).toMatchObject({
+          runId,
+          executionLaunchId: launch.id,
+          admissionDeadlineMs: launch.admissionDeadlineMs,
+        });
+        expect(launch.admissionDeadlineMs - startedAt).toBeLessThanOrEqual(5 * 60_000);
+        expect(mockStore.releaseRejectedExecutionLaunch).toHaveBeenCalledExactlyOnceWith(
+          runId,
+          sessionId,
+          launch.id,
+          false
+        );
+        expect(mockStore.recordRunExecutionState).not.toHaveBeenCalled();
+        expect(mockStore.updateRun).toHaveBeenCalledWith(
+          runId,
+          expect.objectContaining({ status: "failed" })
+        );
+      }
+    );
+
+    it("releases a failed initialization without requiring an absent message to become terminal", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      const stub = { fetch: vi.fn().mockRejectedValue(new Error("init response lost")) };
+      await createScheduler(createEnv(undefined, stub)).tick();
+
+      const [runId, sessionId, , launch] = mockStore.claimRunSession.mock.calls[0];
+      expect(mockStore.releaseRejectedExecutionLaunch).toHaveBeenCalledExactlyOnceWith(
+        runId,
+        sessionId,
+        launch.id,
+        false
+      );
+      expect(promptCallCount(stub.fetch)).toBe(0);
+    });
+
+    it.each([500, "transport"])(
+      "retains and reconciles an ambiguous initial enqueue %s",
+      async (failure) => {
+        mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+        selectRepositories("auto-1", [repositoryRow("auto-1")]);
+        const stub = {
+          fetch: vi.fn(async (request: Request) => {
+            const path = new URL(request.url).pathname;
+            if (path === "/internal/init") return Response.json({ status: "ok" });
+            if (path === "/internal/prompt") {
+              if (failure === "transport") throw new Error("response lost");
+              return new Response("error after insertion may have occurred", {
+                status: Number(failure),
+              });
+            }
+            return Response.json({
+              executionState: "idle",
+              messageId: null,
+              messageStatus: null,
+              deadlineAt: null,
+              cleanupDeadlineAt: null,
+              error: null,
+              launch: null,
+              launchAdmissionExpired: false,
+            });
+          }),
+        };
+        await createScheduler(createEnv(undefined, stub)).tick();
+
+        const [runId, sessionId, , launch] = mockStore.claimRunSession.mock.calls[0];
+        expect(mockStore.releaseRejectedExecutionLaunch).not.toHaveBeenCalled();
+        expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
+          runId,
+          sessionId,
+          true,
+          "execution_launch_unresolved",
+          expect.any(Number),
+          launch.id
+        );
+        const request = stub.fetch.mock.calls.find(
+          ([request]) => new URL(request.url).pathname === "/internal/execution-state"
+        )![0];
+        expect(await request.json()).toEqual({
+          automationRunId: runId,
+          executionLaunchId: launch.id,
+          admissionDeadlineMs: launch.admissionDeadlineMs,
+        });
+      }
+    );
 
     it("does not initialize a session after recovery wins the launch claim", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
@@ -1641,6 +1748,9 @@ describe("Scheduler", () => {
               cleanupDeadlineAt: null,
               error: null,
               launchObserved,
+              launch: launchObserved
+                ? { messageId: "steer-msg", status: "completed", error: null }
+                : null,
             })
           ),
         };
@@ -1661,6 +1771,40 @@ describe("Scheduler", () => {
         });
       }
     );
+
+    it("resolves a missing ambiguous launch only after the session closes its admission window", async () => {
+      mockStore.getRunsNeedingExecutionRecovery.mockResolvedValue([
+        sampleRunRow({
+          status: "failed",
+          execution_launch_id: "launch-missing",
+          execution_admission_deadline_ms: now - 1,
+        }),
+      ]);
+      const stub = {
+        fetch: vi.fn(async () =>
+          Response.json({
+            executionState: "idle",
+            messageId: null,
+            messageStatus: null,
+            deadlineAt: null,
+            cleanupDeadlineAt: null,
+            error: null,
+            launch: null,
+            launchAdmissionExpired: true,
+          })
+        ),
+      };
+      await createScheduler(createEnv(undefined, stub)).tick();
+      expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
+        "run-1",
+        "sess-1",
+        false,
+        null,
+        expect.any(Number),
+        "launch-missing"
+      );
+      expect(mockStore.updateRun).not.toHaveBeenCalled();
+    });
 
     it("applies one CAS-guarded strike per invocation for recovered children", async () => {
       // Two stuck children of the SAME invocation → one strike, not two.
@@ -2375,7 +2519,8 @@ describe("Scheduler", () => {
       expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
-        expect.any(Number)
+        expect.any(Number),
+        expect.objectContaining({ id: expect.any(String), admissionDeadlineMs: expect.any(Number) })
       );
       await expect(getInitBody(fetchMock)).resolves.toMatchObject({
         scmUserId: "123",
@@ -2421,6 +2566,33 @@ describe("Scheduler", () => {
   });
 
   describe("event", () => {
+    it.each([
+      { trigger_config: "{invalid" },
+      { trigger_config: "" },
+      { trigger_config: '{"conditions":[{"type":"unknown"}]}' },
+      { trigger_type: "unknown" },
+    ])(
+      "skips invalid persisted trigger fields without blocking other automations: %j",
+      async (corruption) => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([
+          { ...sampleSlackAutomation, id: "corrupt-automation", ...corruption },
+          sampleSlackAutomation,
+        ]);
+        const stub = createMockSessionStub();
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent());
+
+        expect(result).toEqual({ triggered: 1, skipped: 1, steered: 0 });
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
+          expect.objectContaining({
+            invocation: expect.objectContaining({ automation_id: sampleSlackAutomation.id }),
+          })
+        );
+        expect(promptCallCount(vi.mocked(stub.fetch))).toBe(1);
+      }
+    );
+
     describe("lazy thread context", () => {
       /** A slack-bot binding that records thread-context calls. */
       function threadContextEnv(threadContext = "<thread_context>[]</thread_context>") {
@@ -2651,7 +2823,11 @@ describe("Scheduler", () => {
         expect(mockStore.claimRunSession).toHaveBeenCalledWith(
           expect.any(String),
           expect.any(String),
-          expect.any(Number)
+          expect.any(Number),
+          expect.objectContaining({
+            id: expect.any(String),
+            admissionDeadlineMs: expect.any(Number),
+          })
         );
       });
 
@@ -2997,7 +3173,7 @@ describe("Scheduler", () => {
       expect(mockStore.update).not.toHaveBeenCalled();
     });
 
-    it("falls through to a new trigger when steering the session fails", async () => {
+    it("falls through to a new trigger only after a definite steering rejection", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       // A completed run is steerable, but the enqueue will fail; with the run no
       // longer active, the reply is re-evaluated as a new trigger (it matches),
@@ -3013,7 +3189,7 @@ describe("Scheduler", () => {
       // Session DO rejects every fetch → steerSession fails AND the fresh run's
       // session init fails, so the child is created then marked failed.
       const failingStub = {
-        fetch: vi.fn().mockResolvedValue(new Response("boom", { status: 500 })),
+        fetch: vi.fn().mockResolvedValue(new Response("not found", { status: 404 })),
       } as never;
       const env = createEnv(undefined, failingStub);
 
@@ -3030,6 +3206,94 @@ describe("Scheduler", () => {
       );
       // Not treated as a concurrency skip.
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      expect(mockStore.releaseRejectedExecutionLaunch).toHaveBeenCalledWith(
+        "done-run",
+        "sess-done",
+        "C1:1700000000.000200",
+        false
+      );
+    });
+
+    it.each([false, true])(
+      "does not duplicate an ambiguously delivered steer (observed=%s)",
+      async (observed) => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+          sampleRunRow({ id: "done-run", status: "completed", session_id: "sess-done" })
+        );
+        const stub = {
+          fetch: vi.fn(async (request: Request) => {
+            if (new URL(request.url).pathname === "/internal/prompt")
+              return new Response("response failed after insertion", { status: 500 });
+            return Response.json({
+              executionState: observed ? "running" : "idle",
+              messageId: "msg-1",
+              messageStatus: "completed",
+              deadlineAt: null,
+              cleanupDeadlineAt: null,
+              error: null,
+              launch: observed ? { messageId: "steer-msg", status: "pending", error: null } : null,
+              launchAdmissionExpired: false,
+            });
+          }),
+        };
+        const result = await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent());
+        expect(result).toEqual({
+          triggered: 0,
+          skipped: observed ? 0 : 1,
+          steered: observed ? 1 : 0,
+        });
+        expect(mockStore.releaseRejectedExecutionLaunch).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
+          "done-run",
+          "sess-done",
+          true,
+          observed ? null : "execution_launch_unresolved",
+          expect.any(Number),
+          "C1:1700000000.000200"
+        );
+        expect((await getPromptBody(stub.fetch)).callbackContext).toMatchObject({
+          runId: "done-run",
+          executionLaunchId: "C1:1700000000.000200",
+          admissionDeadlineMs: expect.any(Number),
+        });
+      }
+    );
+
+    it("does not overwrite another unobserved steering launch", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({
+          id: "done-run",
+          status: "completed",
+          session_id: "sess-done",
+          execution_launch_id: "earlier-launch",
+          execution_admission_deadline_ms: now + 60_000,
+        })
+      );
+      const stub = {
+        fetch: vi.fn(async () =>
+          Response.json({
+            executionState: "idle",
+            messageId: "msg-1",
+            messageStatus: "completed",
+            deadlineAt: null,
+            cleanupDeadlineAt: null,
+            error: null,
+            launch: null,
+            launchAdmissionExpired: false,
+          })
+        ),
+      };
+      expect(await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())).toEqual({
+        triggered: 0,
+        skipped: 1,
+        steered: 0,
+      });
+      expect(mockStore.markRunExecutionUnresolved).not.toHaveBeenCalled();
+      expect(promptCallCount(stub.fetch)).toBe(0);
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
   });
 });

@@ -53,6 +53,7 @@ describe("Modal termination evidence", () => {
     await expect(
       client.terminateSandbox({
         providerObjectId: "sb-exact",
+        mode: "terminate",
         sessionId: "session-1",
         reason: "stop_confirmation_timeout",
       })
@@ -68,6 +69,7 @@ describe("Modal termination evidence", () => {
     expect(
       await client.terminateSandbox({
         providerObjectId: "sb-exact",
+        mode: "terminate",
         sessionId: "session-1",
         reason: "stop_confirmation_timeout",
       })

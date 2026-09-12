@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { sqlDatabase } from "./helpers";
 import {
@@ -622,6 +622,156 @@ describe("AutomationStore (D1 integration)", () => {
   // ─── Recovery sweep queries ────────────────────────────────────────────────
 
   describe("execution recovery fences", () => {
+    it.each([false, true])(
+      "releases a definite same-millisecond rejection and restores prior uncertainty %s",
+      async (previouslyUnresolved) => {
+        const store = new AutomationStore(env.DB);
+        await store.create(makeAutomation({ id: "auto-rejected" }));
+        await seedRun(
+          makeRun("auto-rejected", {
+            id: "run-rejected",
+            session_id: "session-rejected",
+            status: "completed",
+            completed_at: 100,
+          })
+        );
+        await store.recordRunExecutionState(
+          "run-rejected",
+          "session-rejected",
+          previouslyUnresolved,
+          previouslyUnresolved ? "session_unreachable" : null,
+          200
+        );
+
+        const nowSpy = vi.spyOn(Date, "now").mockReturnValue(300);
+        try {
+          expect(
+            await store.markRunExecutionUnresolved(
+              "run-rejected",
+              "session-rejected",
+              "launch-rejected",
+              350
+            )
+          ).toBe(true);
+          expect(await store.getRunById("auto-rejected", "run-rejected")).toMatchObject({
+            execution_unresolved: 1,
+            execution_checked_at: 300,
+            execution_launch_id: "launch-rejected",
+            execution_admission_deadline_ms: 350,
+          });
+
+          await store.releaseRejectedExecutionLaunch(
+            "run-rejected",
+            "session-rejected",
+            "launch-rejected",
+            previouslyUnresolved
+          );
+          const restored = {
+            status: "completed",
+            execution_unresolved: previouslyUnresolved ? 1 : 0,
+            execution_checked_at: 300,
+            execution_launch_id: null,
+            execution_admission_deadline_ms: null,
+            execution_recovery_reason: null,
+          };
+          expect(await store.getRunById("auto-rejected", "run-rejected")).toMatchObject(restored);
+          expect((await store.getActiveRunForAutomation("auto-rejected")) !== null).toBe(
+            previouslyUnresolved
+          );
+
+          // A definite enqueue rejection also wins over a later uncertain sweep read.
+          expect(
+            await store.markRunExecutionUnresolved(
+              "run-rejected",
+              "session-rejected",
+              "launch-rejected-later",
+              450
+            )
+          ).toBe(true);
+          await store.recordRunExecutionState(
+            "run-rejected",
+            "session-rejected",
+            true,
+            "session_unreachable",
+            400,
+            "launch-rejected-later"
+          );
+          await store.releaseRejectedExecutionLaunch(
+            "run-rejected",
+            "session-rejected",
+            "launch-rejected-later",
+            previouslyUnresolved
+          );
+          expect(await store.getRunById("auto-rejected", "run-rejected")).toMatchObject(restored);
+        } finally {
+          nowSpy.mockRestore();
+        }
+      }
+    );
+
+    it("admits one competing launch and rejects stale release replies after it is replaced", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-launch-cas" }));
+      await seedRun(
+        makeRun("auto-launch-cas", {
+          id: "run-launch-cas",
+          session_id: "session-current",
+          status: "completed",
+          completed_at: 100,
+        })
+      );
+
+      const launches = [
+        { id: "launch-one", admissionDeadlineMs: 1_000 },
+        { id: "launch-two", admissionDeadlineMs: 2_000 },
+      ];
+      const claims = await Promise.all(
+        launches.map((launch) =>
+          store.markRunExecutionUnresolved(
+            "run-launch-cas",
+            "session-current",
+            launch.id,
+            launch.admissionDeadlineMs
+          )
+        )
+      );
+      expect(claims.filter(Boolean)).toHaveLength(1);
+      const winner = launches[claims.indexOf(true)];
+      expect(await store.getRunById("auto-launch-cas", "run-launch-cas")).toMatchObject({
+        execution_unresolved: 1,
+        execution_launch_id: winner.id,
+        execution_admission_deadline_ms: winner.admissionDeadlineMs,
+      });
+
+      // An admitted launch can be followed up using the exact token observed by its caller.
+      expect(
+        await store.markRunExecutionUnresolved(
+          "run-launch-cas",
+          "session-current",
+          "launch-current",
+          3_000,
+          winner.id
+        )
+      ).toBe(true);
+      await store.releaseRejectedExecutionLaunch(
+        "run-launch-cas",
+        "session-current",
+        winner.id,
+        false
+      );
+      await store.releaseRejectedExecutionLaunch(
+        "run-launch-cas",
+        "session-stale",
+        "launch-current",
+        false
+      );
+      expect(await store.getActiveRunForAutomation("auto-launch-cas")).toMatchObject({
+        execution_unresolved: 1,
+        execution_launch_id: "launch-current",
+        execution_admission_deadline_ms: 3_000,
+      });
+    });
+
     it.each(["failed", "completed"] as const)(
       "keeps a %s report unresolved until execution is confirmed stopped",
       async (status) => {
@@ -629,10 +779,17 @@ describe("AutomationStore (D1 integration)", () => {
         await store.create(makeAutomation({ id: "auto-fence" }));
         await seedRunForKey("auto-fence", "pr:42", { id: "run-fence" });
 
-        expect(await store.claimRunSession("run-fence", "session-fence", 100)).toBe(true);
+        expect(
+          await store.claimRunSession("run-fence", "session-fence", 100, {
+            id: "launch-fence",
+            admissionDeadlineMs: 250,
+          })
+        ).toBe(true);
         expect(await store.getRunById("auto-fence", "run-fence")).toMatchObject({
           status: "running",
           execution_unresolved: 1,
+          execution_launch_id: "launch-fence",
+          execution_admission_deadline_ms: 250,
         });
         await store.updateRun("run-fence", { status, completed_at: 200 });
 
@@ -654,10 +811,18 @@ describe("AutomationStore (D1 integration)", () => {
           "session-fence",
           true,
           "session_unreachable",
-          300
+          300,
+          "launch-fence"
         );
         expect(await store.getActiveRunForAutomation("auto-fence")).not.toBeNull();
-        await store.recordRunExecutionState("run-fence", "session-fence", false, null, 400);
+        await store.recordRunExecutionState(
+          "run-fence",
+          "session-fence",
+          false,
+          null,
+          400,
+          "launch-fence"
+        );
 
         expect(await store.getActiveRunForAutomation("auto-fence")).toBeNull();
         expect(await store.getActiveRunForKey("auto-fence", "pr:42")).toBeNull();
@@ -668,6 +833,8 @@ describe("AutomationStore (D1 integration)", () => {
           execution_unresolved: 0,
           execution_recovery_reason: null,
           execution_checked_at: 400,
+          execution_launch_id: null,
+          execution_admission_deadline_ms: null,
         });
       }
     );
@@ -753,19 +920,33 @@ describe("AutomationStore (D1 integration)", () => {
           })
         );
         if (staleLaunchId !== null) {
+          expect(
+            await store.markRunExecutionUnresolved(
+              "run-launch-race",
+              "session-current",
+              staleLaunchId
+            )
+          ).toBe(true);
+          expect(
+            await store.markRunExecutionUnresolved(
+              "run-launch-race",
+              "session-current",
+              "launch-current"
+            )
+          ).toBe(false);
+        }
+
+        // After confirming the previous launch was admitted, the caller may replace
+        // its exact token. The new prompt has not necessarily reached the session yet.
+        expect(
           await store.markRunExecutionUnresolved(
             "run-launch-race",
             "session-current",
+            "launch-current",
+            undefined,
             staleLaunchId
-          );
-        }
-
-        // The new prompt has been fenced but has not necessarily reached the session yet.
-        await store.markRunExecutionUnresolved(
-          "run-launch-race",
-          "session-current",
-          "launch-current"
-        );
+          )
+        ).toBe(true);
         const renewedAt = (await store.getRunById("auto-launch-race", "run-launch-race"))!
           .execution_checked_at!;
 

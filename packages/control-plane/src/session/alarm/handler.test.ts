@@ -13,6 +13,7 @@ function createHandler() {
     getMessageExecutionMetadata: vi.fn(() => null),
   };
   const messageQueue = {
+    expirePendingAdmissions: vi.fn<() => Promise<void>>().mockResolvedValue(),
     failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
   const executionStop = {
@@ -47,7 +48,7 @@ function createHandler() {
     lifecycleManager,
     terminalMessageProjection,
     alarmScheduler,
-    getExecutionTimeoutMs: () => 1000,
+    getExecutionTurnAllowanceMs: () => 750,
     now,
     log,
   });
@@ -179,6 +180,7 @@ describe("createAlarmHandler", () => {
       })),
     };
     const messageQueue = {
+      expirePendingAdmissions: vi.fn<() => Promise<void>>().mockResolvedValue(),
       failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
     };
     const executionStop = {
@@ -194,7 +196,7 @@ describe("createAlarmHandler", () => {
       lifecycleManager,
       terminalMessageProjection: { flushPending: vi.fn(async () => {}) },
       alarmScheduler,
-      getExecutionTimeoutMs: () => 1000,
+      getExecutionTurnAllowanceMs: () => 750,
       now: () => 2000,
       log: createHandler().log,
     });

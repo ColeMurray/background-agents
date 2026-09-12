@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import re
 import time
 from contextlib import AsyncExitStack
@@ -26,6 +25,8 @@ from .opencode_client import (
     SSEInactivityTimeoutError,
     SSEStreamDisconnectedError,
 )
+from .opencode_execution import OpenCodeExecutionLedger
+from .opencode_execution import message_created_epoch_ms as _message_created_epoch_ms
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -76,11 +77,7 @@ class _PromptState:
     # session.compacted. If still set at idle with no error emitted, the
     # promised compaction never happened and the prompt must fail.
     pending_overflow_error: str | None = None
-    parent_idle: bool = False
-    observed_turn_activity: bool = False
-    idle_child_sessions: set[str] = field(default_factory=set)
-    owned_descendant_sessions: set[str] = field(default_factory=set)
-    active_tool_calls: set[tuple[str, str]] = field(default_factory=set)
+    execution: OpenCodeExecutionLedger = field(init=False)
 
     def __post_init__(self) -> None:
         self.attribution = MessageAttribution(
@@ -89,21 +86,13 @@ class _PromptState:
             # OpenCode creates for this prompt can predate it.
             int(self.start_time * 1000),
         )
+        self.execution = OpenCodeExecutionLedger(
+            self.opencode_session_id, self.opencode_message_id, int(self.start_time * 1000)
+        )
 
     def message_cost_usd(self) -> float:
         """Cumulative priced cost of this turn, including subtask steps."""
         return sum(self.step_costs.values())
-
-    @property
-    def execution_stopped(self) -> bool:
-        """Idle parent alone cannot retire a turn with unresolved owned work."""
-        return (
-            self.parent_idle
-            and self.observed_turn_activity
-            and not self.active_tool_calls
-            and (self.child_activity.tracked_session_ids | self.owned_descendant_sessions)
-            <= self.idle_child_sessions
-        )
 
 
 class _Disposition(Enum):
@@ -126,24 +115,6 @@ class _StreamStep:
 
     events: list[dict[str, Any]]
     disposition: _Disposition
-
-
-def _message_created_epoch_ms(info: dict[str, Any]) -> int | None:
-    """Read `time.created` off an OpenCode message, or None when it is absent.
-
-    Non-finite values are treated as absent rather than converted: `int()`
-    raises on NaN and infinity, which would tear down the SSE loop over a
-    malformed payload.
-    """
-    time_info = info.get("time")
-    if not isinstance(time_info, dict):
-        return None
-    created = time_info.get("created")
-    if isinstance(created, bool) or not isinstance(created, (int, float)):
-        return None
-    if not math.isfinite(created):
-        return None
-    return int(created)
 
 
 class OpenCodePromptStream:
@@ -180,11 +151,11 @@ class OpenCodePromptStream:
         # Session title dedupe survives across prompts so an unchanged title
         # is forwarded to the control plane at most once.
         self._last_forwarded_session_title: str | None = None
-        self._active_state: _PromptState | None = None
+        self._execution: OpenCodeExecutionLedger | None = None
 
     @property
     def execution_stopped(self) -> bool:
-        return self._active_state is not None and self._active_state.execution_stopped
+        return self._execution is not None and self._execution.execution_stopped
 
     async def stream_prompt(
         self,
@@ -215,7 +186,7 @@ class OpenCodePromptStream:
             opencode_message_id=opencode_message_id,
             start_time=time.time(),
         )
-        self._active_state = state
+        self._execution = state.execution
         loop = asyncio.get_running_loop()
         # The production bridge owns one deadline including preparation and one
         # containment budget. Local budgets remain only for the raw stream seam.
@@ -334,6 +305,7 @@ class OpenCodePromptStream:
 
     def _apply_sse_event(self, state: _PromptState, sse_event: dict[str, Any]) -> _StreamStep:
         """Translate one OpenCode SSE event into bridge events, mutating state."""
+        state.execution.observe(sse_event)
         event_type = sse_event.get("type")
         props = sse_event.get("properties", {})
         if not isinstance(props, dict):
@@ -357,16 +329,6 @@ class OpenCodePromptStream:
 
         event_session_id = props.get("sessionID") or props.get("part", {}).get("sessionID")
         is_child = state.child_activity.is_tracked(event_session_id)
-        if event_session_id in state.owned_descendant_sessions:
-            # Nested agents remain outside the direct-child timeline contract,
-            # but must still be accounted for before the runtime is reusable.
-            if event_type == "session.idle":
-                state.idle_child_sessions.add(event_session_id)
-            elif event_type == "session.status":
-                if props.get("status", {}).get("type") == "idle":
-                    state.idle_child_sessions.add(event_session_id)
-                else:
-                    state.idle_child_sessions.discard(event_session_id)
         if event_session_id and event_session_id != state.opencode_session_id and not is_child:
             return _StreamStep(events=events, disposition=_Disposition.CONTINUE)
 
@@ -378,25 +340,16 @@ class OpenCodePromptStream:
 
         elif event_type == "session.idle":
             if props.get("sessionID") == state.opencode_session_id:
-                state.parent_idle = True
                 self._log_parent_idle(state, "bridge.session_idle")
                 events.extend(self._unrecovered_overflow_events(state))
                 return _StreamStep(events=events, disposition=_Disposition.FINISHED_IDLE)
-            elif is_child:
-                state.idle_child_sessions.add(event_session_id)
 
         elif event_type == "session.status":
             status = props.get("status", {})
             if props.get("sessionID") == state.opencode_session_id and status.get("type") == "idle":
-                state.parent_idle = True
                 self._log_parent_idle(state, "bridge.session_status_idle")
                 events.extend(self._unrecovered_overflow_events(state))
                 return _StreamStep(events=events, disposition=_Disposition.FINISHED_IDLE)
-            elif is_child:
-                if status.get("type") == "idle":
-                    state.idle_child_sessions.add(event_session_id)
-                else:
-                    state.idle_child_sessions.discard(event_session_id)
 
         elif event_type == "session.error":
             return self._on_session_error(state, props)
@@ -421,11 +374,6 @@ class OpenCodePromptStream:
                     child_session_id=child_id,
                     source="session.created",
                 )
-        elif child_id and (
-            state.child_activity.is_tracked(child_parent)
-            or child_parent in state.owned_descendant_sessions
-        ):
-            state.owned_descendant_sessions.add(child_id)
 
     def _on_message_updated(
         self, state: _PromptState, props: dict[str, Any]
@@ -468,8 +416,6 @@ class OpenCodePromptStream:
                     is_summary=is_compaction_summary,
                     created_epoch_ms=_message_created_epoch_ms(info),
                 )
-                if disposition is not AssistantMessageDisposition.REJECT:
-                    state.observed_turn_activity = True
                 if disposition is not AssistantMessageDisposition.REJECT and info.get("error"):
                     error_event = self._parent_error_event_once(state, info["error"])
                     if error_event:
@@ -491,7 +437,6 @@ class OpenCodePromptStream:
             return events
 
         if state.child_activity.is_tracked(msg_session_id):
-            state.idle_child_sessions.discard(msg_session_id)
             oc_msg_id = info.get("id", "")
             role = info.get("role", "")
             if role == "assistant" and oc_msg_id:
@@ -687,15 +632,6 @@ class OpenCodePromptStream:
                 )
 
         elif part_type == "tool":
-            tool_state = part.get("state", {})
-            status = tool_state.get("status", "")
-            call_id = part.get("callID") or part_id
-            tool_identity = (str(part.get("sessionID", "")), str(call_id))
-            if status in ("completed", "error"):
-                state.active_tool_calls.discard(tool_identity)
-            else:
-                state.active_tool_calls.add(tool_identity)
-                state.idle_child_sessions.discard(tool_identity[0])
             tool_event = self._tool_call_event(part, state.message_id)
             if tool_event:
                 tool_state = part.get("state", {})

@@ -21,8 +21,6 @@ import os
 import sys
 import tempfile
 import time
-from collections import OrderedDict
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +32,7 @@ from .attachment_processor import (
     AttachmentProcessor,
     parse_session_image_attachments,
 )
+from .bridge_signals import run_bridge_with_signals
 from .constants import (
     BOOT_WARNINGS_FILE_PATH,
     BRIDGE_FATAL_ERROR_FILE_PATH,
@@ -44,7 +43,8 @@ from .constants import (
     SNAPSHOT_RESERVE_FRACTION,
 )
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
-from .event_forwarder import SEND_TIMEOUT_SECONDS, BufferedEventForwarder
+from .event_forwarder import BufferedEventForwarder
+from .execution_coordinator import ExecutionCoordinator, PreparationFailed
 from .git_signing import GitSigningError, GitSigningRuntime
 from .harness import (
     DEFAULT_HARNESS_ID,
@@ -55,7 +55,6 @@ from .harness import (
     HarnessPrompt,
     HarnessStartError,
     PromptLimits,
-    TurnOutcome,
     build_agent_harness,
     parse_harness_id,
 )
@@ -66,35 +65,6 @@ from .repo_config import load_repo_manifest
 from .types import GitUser
 
 configure_logging()
-
-# Absolute wire deadlines assume synchronized clocks. Deduct a small allowance
-# for ordinary skew; never reconstruct an already dispatched turn from duration.
-DEADLINE_CLOCK_ALLOWANCE_SECONDS = 1.0
-GRACEFUL_STOP_MAX_SECONDS = 5.0
-MAX_COMPLETED_PROMPTS = 256
-
-
-@dataclass
-class _Execution:
-    message_id: str
-    deadline_monotonic: float
-    cleanup_deadline_monotonic: float
-    epoch_offset_seconds: float
-    stop_reason: str | None = None
-    work_started: bool = False
-    harness_started: bool = False
-    execution_stopped: bool = True
-    terminal_event: dict[str, Any] | None = None
-    observation_finished: asyncio.Event = field(default_factory=asyncio.Event)
-    interrupt_request_uncertain: bool = False
-    cleanup_started: bool = False
-
-    def begin_cleanup(self, allowance_seconds: float) -> None:
-        self.cleanup_started = True
-        self.cleanup_deadline_monotonic = min(
-            self.cleanup_deadline_monotonic,
-            asyncio.get_running_loop().time() + allowance_seconds,
-        )
 
 
 def parse_prompt_git_author(author_data: object) -> GitUser | None:
@@ -153,6 +123,7 @@ class AgentBridge:
     SSE_INACTIVITY_TIMEOUT_MIN = 5.0
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+    WEBSOCKET_CLOSE_TIMEOUT_SECONDS = 1.0
 
     def __init__(
         self,
@@ -253,12 +224,6 @@ class AgentBridge:
             opencode_port=opencode_port,
         )
 
-        # Track the current prompt task so _handle_stop can cancel it
-        self._current_prompt_task: asyncio.Task[None] | None = None
-        self._current_stop_task: asyncio.Task[None] | None = None
-        self._execution: _Execution | None = None
-        self._quarantined = False
-        self._completed_prompts: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self.diff_refresh = SessionDiffRefreshWorker(
             client=ControlPlaneDiffClient(
                 control_plane_url=self.control_plane_url,
@@ -272,6 +237,18 @@ class AgentBridge:
         # Reconnect-safe event delivery: buffers while the WS is down and
         # re-sends unacknowledged critical events (see event_forwarder.py).
         self.event_forwarder = BufferedEventForwarder(sandbox_id=sandbox_id, log=self.log)
+        self.execution = ExecutionCoordinator(
+            sandbox_id=sandbox_id,
+            harness=lambda: self.harness,
+            limits=lambda: self.prompt_limits,
+            prepare=self._prepare_prompt,
+            persist_session=self._persist_rotated_session_id,
+            send_event=lambda event: self._send_event(event),
+            on_started=lambda: self.diff_refresh.prompt_started(),
+            on_reusable=self._execution_reusable,
+            log=self.log,
+        )
+        self._shutdown_deadline_monotonic: float | None = None
 
         self._connected_at_monotonic: float | None = None
         self._connection_count = 0
@@ -392,25 +369,7 @@ class AgentBridge:
                 await asyncio.sleep(delay)
 
         finally:
-            # The prompt owns containment. Shutdown may tighten its allowance
-            # but must not interrupt an already-running cleanup or grant a new one.
-            close_deadline = (
-                asyncio.get_running_loop().time()
-                + self.prompt_limits.prompt_cleanup_timeout_seconds
-            )
-            if self._current_prompt_task and not self._current_prompt_task.done():
-                await self._handle_stop({"reason": "Sandbox shutdown requested"})
-                if self._execution is not None:
-                    close_deadline = self._execution.cleanup_deadline_monotonic
-                _, pending = await asyncio.wait(
-                    {self._current_prompt_task},
-                    timeout=max(0.0, close_deadline - asyncio.get_running_loop().time()),
-                )
-                if pending:
-                    self._quarantined = True
-                    self.log.warn("bridge.shutdown_execution_uncertain")
-            elif self._execution is not None and self._execution.stop_reason is not None:
-                close_deadline = self._execution.cleanup_deadline_monotonic
+            close_deadline = await self.execution.shutdown(self._shutdown_deadline_monotonic)
             # Cleanup failures are logged, never raised: an exception here
             # would replace the one that ended the run, and a HarnessStartError
             # has to reach main() as itself so the supervisor sees the
@@ -514,6 +473,7 @@ class AgentBridge:
                 additional_headers=additional_headers,
                 ping_interval=20,
                 ping_timeout=10,
+                close_timeout=self.WEBSOCKET_CLOSE_TIMEOUT_SECONDS,
             ) as ws:
                 self.ws = ws
                 self._mark_connected()
@@ -648,57 +608,9 @@ class AgentBridge:
         self.log.debug("bridge.command_received", cmd_type=cmd_type)
 
         if cmd_type == "prompt":
-            message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
-            if cmd.get("sandboxId", self.sandbox_id) != self.sandbox_id:
-                self.log.warn("prompt.stale_sandbox", message_id=message_id)
+            if self.shutdown_event.is_set():
                 return None
-            if message_id in self._completed_prompts:
-                return asyncio.create_task(
-                    self._send_event(dict(self._completed_prompts[message_id]))
-                )
-            if (
-                self._quarantined
-                or (self._current_prompt_task is not None and not self._current_prompt_task.done())
-                or (self._current_stop_task is not None and not self._current_stop_task.done())
-            ):
-                # Duplicate dispatch is idempotent. A different message never
-                # bypasses the local reuse boundary, even after WS reconnect.
-                self.log.warn("prompt.runtime_unavailable", message_id=message_id)
-                return None
-            self._execution = self._new_execution(cmd)
-            execution = self._execution
-            self.diff_refresh.prompt_started()
-            task = asyncio.create_task(self._handle_prompt(cmd))
-            self._current_prompt_task = task
-
-            def handle_task_exception(t: asyncio.Task[None], mid: str = message_id) -> None:
-                # An older callback cannot release a newer prompt's idle gate.
-                if self._current_prompt_task is t:
-                    self._current_prompt_task = None
-                if t.cancelled() and execution.terminal_event is None:
-                    # Cancellation before the coroutine's first instruction:
-                    # no preparation or harness operation was started.
-                    asyncio.create_task(
-                        self._finish_execution(
-                            execution,
-                            success=False,
-                            error=execution.stop_reason or "Task was cancelled",
-                        )
-                    )
-                elif not t.cancelled() and (exc := t.exception()):
-                    self._quarantined = not execution.execution_stopped
-                    asyncio.create_task(
-                        self._finish_execution(execution, success=False, error=str(exc))
-                    )
-                if self._current_prompt_task is None and not self._quarantined:
-                    self.diff_refresh.prompt_finished()
-                    self.diff_refresh.request(mid)
-
-            task.add_done_callback(handle_task_exception)
-            # Don't return the task — prompt tasks must survive WS disconnects.
-            # Returning it would add it to background_tasks, which gets cancelled
-            # in the _connect_and_run finally block on WS close.
-            return None
+            return self.execution.dispatch(cmd)
         elif cmd_type == "stop":
             await self._handle_stop(cmd)
         elif cmd_type == "snapshot":
@@ -720,296 +632,41 @@ class AgentBridge:
             self.log.debug("bridge.unknown_command", cmd_type=cmd_type)
         return None
 
-    def _new_execution(self, cmd: dict[str, Any]) -> _Execution:
-        now_monotonic = asyncio.get_running_loop().time()
-        now_epoch_seconds = time.time()
-
-        def resolve_deadline(field: str, fallback_seconds: float) -> float:
-            supplied = cmd.get(field)
-            if supplied is None:
-                return now_monotonic + fallback_seconds
-            if (
-                isinstance(supplied, bool)
-                or not isinstance(supplied, (float, int))
-                or not math.isfinite(supplied)
-            ):
-                # A malformed upgraded deadline must not fall back to a fresh
-                # legacy allowance and accidentally extend an expired turn.
-                return now_monotonic
-            remaining_seconds = (
-                supplied / 1000 - now_epoch_seconds - DEADLINE_CLOCK_ALLOWANCE_SECONDS
-            )
-            return now_monotonic + min(remaining_seconds, fallback_seconds)
-
-        deadline = resolve_deadline(
-            "executionDeadlineMs", self.prompt_limits.prompt_max_duration_seconds
-        )
-        cleanup_deadline = resolve_deadline(
-            "cleanupDeadlineMs",
-            max(0.0, deadline - now_monotonic) + self.prompt_limits.prompt_cleanup_timeout_seconds,
-        )
-        execution = _Execution(
-            message_id=cmd.get("messageId") or cmd.get("message_id", "unknown"),
-            deadline_monotonic=deadline,
-            cleanup_deadline_monotonic=cleanup_deadline,
-            epoch_offset_seconds=now_epoch_seconds - now_monotonic,
-        )
-        self.log.info(
-            "prompt.deadline_resolved",
-            message_id=execution.message_id,
-            source="control_plane" if "executionDeadlineMs" in cmd else "legacy_derived_allowance",
-            remaining_seconds=max(0.0, deadline - now_monotonic),
-            cleanup_remaining_seconds=max(0.0, cleanup_deadline - now_monotonic),
-        )
-        return execution
-
-    async def _contain_execution(self, execution: _Execution) -> None:
-        execution.begin_cleanup(self.prompt_limits.prompt_cleanup_timeout_seconds)
-        if not execution.work_started or execution.execution_stopped:
-            return
-        if not execution.harness_started:
-            # A harness cannot attest to cancellation of repository preparation.
-            self._quarantined = True
-            return
-        try:
-            async with asyncio.timeout_at(execution.cleanup_deadline_monotonic):
-                execution.execution_stopped = await self.harness.stop(
-                    execution.cleanup_deadline_monotonic
-                )
-                if execution.interrupt_request_uncertain:
-                    # An unacknowledged, session-scoped interrupt may still
-                    # arrive later; cessation alone cannot make reuse safe.
-                    execution.execution_stopped = False
-        except (Exception, asyncio.CancelledError) as error:
-            execution.execution_stopped = False
-            self.log.warn("prompt.containment_failed", message_id=execution.message_id, exc=error)
-        self._quarantined = not execution.execution_stopped
-        self.log.info(
-            "prompt.containment_complete",
-            message_id=execution.message_id,
-            execution_stopped=execution.execution_stopped,
-            quarantined=self._quarantined,
-            reason=execution.stop_reason,
-        )
-
-    async def _finish_execution(
-        self,
-        execution: _Execution,
-        *,
-        success: bool,
-        error: str | None = None,
-        message_cost_usd: float | None = None,
-    ) -> None:
-        if execution.terminal_event is not None:
-            return
-        event = {
-            "type": "execution_complete",
-            "messageId": execution.message_id,
-            "sandboxId": self.sandbox_id,
-            "success": success,
-            "executionStopped": execution.execution_stopped,
-            **(
-                {
-                    "cleanupDeadlineMs": int(
-                        (execution.cleanup_deadline_monotonic + execution.epoch_offset_seconds)
-                        * 1000
-                    )
-                }
-                if execution.cleanup_started
-                else {}
-            ),
-            **({"error": error} if error else {}),
-            **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
-        }
-        execution.terminal_event = event
-        self._completed_prompts[execution.message_id] = event
-        while len(self._completed_prompts) > MAX_COMPLETED_PROMPTS:
-            self._completed_prompts.popitem(last=False)
-        # A slow connection consumes the same cleanup interval. The forwarder
-        # retains cancelled critical sends for replay on reconnect.
-        send_deadline = min(
-            execution.cleanup_deadline_monotonic,
-            asyncio.get_running_loop().time() + SEND_TIMEOUT_SECONDS,
-        )
-        with contextlib.suppress(TimeoutError):
-            async with asyncio.timeout_at(send_deadline):
-                await self._send_event(event)
+    def _execution_reusable(self, message_id: str) -> None:
+        """Release presentation work only after the coordinator confirms reuse."""
+        self.diff_refresh.prompt_finished()
+        self.diff_refresh.request(message_id)
 
     async def _handle_prompt(self, cmd: dict[str, Any]) -> None:
-        """Handle prompt command - run the turn through the harness and terminalise it."""
+        """Await a coordinated prompt for callers outside the command receiver."""
+        await self.execution.execute(cmd)
+
+    async def _prepare_prompt(self, cmd: dict[str, Any]) -> HarnessPrompt:
+        """Prepare repository identity, vendor session and attachments before dispatch."""
         message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
-        content = cmd.get("content", "")
-        model = cmd.get("model")
-        reasoning_effort = cmd.get("reasoningEffort")
-        raw_attachments = cmd.get("attachments")
         author_data = cmd.get("author", {})
-        start_time = time.time()
-        outcome = "success"
-        message_cost_usd: float | None = None
-        had_error = False
-        error_message = None
-        emitted_output = False
-        execution = self._execution
-        if execution is None or execution.message_id != message_id:
-            execution = self._new_execution(cmd)
-            self._execution = execution
-
-        self.log.info(
-            "prompt.start",
-            message_id=message_id,
-            model=model,
-            reasoning_effort=reasoning_effort,
-        )
-
-        async def run() -> None:
-            nonlocal emitted_output, message_cost_usd, had_error, error_message
-            prompt_author = parse_prompt_git_author(author_data)
-            # Preparation can execute subprocesses too. Until it completes,
-            # interruption must conservatively retain the reuse boundary.
-            execution.work_started = True
-            execution.execution_stopped = False
-            try:
-                await self._configure_git_identity(prompt_author)
-            except GitSigningError:
-                # Its typed failure contract either rejects configuration or
-                # reports an already-reaped git-config process. Cancellation
-                # is different and remains uncertain until contained.
-                execution.execution_stopped = True
-                raise
-
-            await self._ensure_agent_session()
-
-            session_attachments, rejected_attachments = parse_session_image_attachments(
-                raw_attachments
-            )
-            if rejected_attachments:
-                self.log.warn(
-                    "prompt.invalid_attachments",
-                    message_id=message_id,
-                    rejected_count=rejected_attachments,
-                )
-                await self._send_media_warning(
-                    f"{rejected_attachments} invalid attachment(s) were skipped."
-                )
-            attachments = await self.attachment_processor.process(session_attachments)
-
-            async def emit(event: dict[str, Any]) -> None:
-                nonlocal emitted_output, message_cost_usd
-                if event.get("type") == "execution_complete":
-                    raise RuntimeError("harness must not emit execution_complete")
-                if event.get("type") in ("token", "tool_call", "step_finish"):
-                    emitted_output = True
-                # A cancelled turn never returns an outcome, so the last cost
-                # report is the only figure execution_complete can carry then.
-                # When an outcome does arrive it is authoritative (below).
-                if event.get("type") == "step_finish" and "messageCostUsd" in event:
-                    message_cost_usd = event["messageCostUsd"]
-                await self._send_event(event)
-
-            execution.harness_started = True
-            turn: TurnOutcome = await self.harness.run_prompt(
-                HarnessPrompt(
-                    message_id=message_id,
-                    text=content,
-                    model=model,
-                    reasoning_effort=reasoning_effort,
-                    attachments=tuple(attachments or ()),
-                    author=author_data if isinstance(author_data, dict) else {},
-                ),
-                emit,
-            )
-            execution.execution_stopped = turn.execution_stopped
-            await self._persist_rotated_session_id()
-            # The outcome is authoritative for cost and success once it
-            # exists; the bridge adds only the no-output guard below.
-            if turn.message_cost_usd is not None:
-                message_cost_usd = turn.message_cost_usd
-            if not turn.success:
-                had_error = True
-                error_message = turn.error or "Unknown error"
-            if turn.cancelled:
-                raise asyncio.CancelledError
-
-        deadline_timeout = asyncio.timeout_at(execution.deadline_monotonic)
         try:
-            # The deadline is captured at command receipt, so preparation,
-            # session creation, attachment processing and delivery all count.
-            if execution.deadline_monotonic <= asyncio.get_running_loop().time():
-                raise TimeoutError("Execution deadline reached; stopping execution.")
-            async with deadline_timeout:
-                await run()
-
-            if not had_error and not emitted_output:
-                had_error = True
-                error_message = "The agent completed without emitting assistant output."
-                self.log.error(
-                    "prompt.no_output",
-                    message_id=message_id,
-                    model=model,
-                    reasoning_effort=reasoning_effort,
-                )
-
-            if had_error:
-                outcome = "error"
-
-        except TimeoutError as error:
-            outcome = "timeout"
-            had_error = True
-            error_message = (
-                "Execution deadline reached; stopping execution."
-                if deadline_timeout.expired()
-                else str(error) or "An upstream operation timed out."
+            author = parse_prompt_git_author(author_data)
+            await self._configure_git_identity(author)
+        except GitSigningError as error:
+            # Typed configuration failures reject work or report an already
+            # reaped git-config process. Cancellation has no such guarantee.
+            raise PreparationFailed(str(error)) from error
+        await self._ensure_agent_session()
+        attachments, rejected = parse_session_image_attachments(cmd.get("attachments"))
+        if rejected:
+            self.log.warn(
+                "prompt.invalid_attachments", message_id=message_id, rejected_count=rejected
             )
-            execution.stop_reason = error_message
-
-        except asyncio.CancelledError:
-            # This top-level command boundary settles cancellation just like
-            # other prompt failures, while the turn's cost is still available.
-            # The done callback remains a fallback for cancellation before start.
-            outcome = "cancelled"
-            had_error = True
-            error_message = execution.stop_reason or "Task was cancelled"
-            execution.stop_reason = error_message
-        except Exception as e:
-            outcome = "error"
-            had_error = True
-            error_message = str(e)
-            self.log.error("prompt.error", exc=e, message_id=message_id)
-        finally:
-            execution.observation_finished.set()
-            if self._current_stop_task is not None and not self._current_stop_task.done():
-                # An old interrupt request must settle before admitting another
-                # turn against this vendor session. Observation is finished, so
-                # its stop driver no longer waits for this whole prompt task.
-                with contextlib.suppress(TimeoutError):
-                    async with asyncio.timeout_at(execution.cleanup_deadline_monotonic):
-                        await asyncio.shield(self._current_stop_task)
-            if execution.interrupt_request_uncertain:
-                execution.execution_stopped = False
-            if not execution.execution_stopped:
-                execution.stop_reason = (
-                    execution.stop_reason or error_message or "Execution uncertain"
-                )
-                await self._contain_execution(execution)
-            if execution.stop_reason is not None:
-                # A late result cannot reverse an already recorded Stop/expiry.
-                had_error = True
-                error_message = execution.stop_reason
-            duration_ms = int((time.time() - start_time) * 1000)
-            self.log.info(
-                "prompt.run",
-                message_id=message_id,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                outcome=outcome,
-                duration_ms=duration_ms,
-            )
-
-        await self._finish_execution(
-            execution,
-            success=not had_error,
-            error=error_message,
-            message_cost_usd=message_cost_usd,
+            await self._send_media_warning(f"{rejected} invalid attachment(s) were skipped.")
+        hydrated = await self.attachment_processor.process(attachments)
+        return HarnessPrompt(
+            message_id=message_id,
+            text=cmd.get("content", ""),
+            model=cmd.get("model"),
+            reasoning_effort=cmd.get("reasoningEffort"),
+            attachments=tuple(hydrated or ()),
+            author=author_data if isinstance(author_data, dict) else {},
         )
 
     async def _ensure_agent_session(self) -> None:
@@ -1020,84 +677,19 @@ class AgentBridge:
         await self._save_session_id()
 
     async def _handle_stop(self, cmd: dict[str, Any] | None = None) -> None:
-        """Signal the prompt owner; never block the command receiver on cleanup."""
-        self.log.info("bridge.stop")
-        cmd = cmd or {}
-        execution = self._execution
-        if cmd.get("sandboxId", self.sandbox_id) != self.sandbox_id:
-            return
-        if execution is None:
-            return
-        if cmd.get("messageId", execution.message_id) != execution.message_id:
-            return
-        if execution.terminal_event is not None or execution.stop_reason is not None:
-            return
-        execution.stop_reason = str(cmd.get("reason") or "Task was cancelled")
-        execution.begin_cleanup(self.prompt_limits.prompt_cleanup_timeout_seconds)
-        supplied_deadline = cmd.get("cleanupDeadlineMs")
-        if supplied_deadline is not None:
-            # Stop may tighten the existing allowance, never restart or extend it.
-            resolved = self._new_execution({"cleanupDeadlineMs": supplied_deadline})
-            execution.cleanup_deadline_monotonic = min(
-                execution.cleanup_deadline_monotonic, resolved.cleanup_deadline_monotonic
-            )
-        task = self._current_prompt_task
-        if task and not task.done():
-            self._current_stop_task = asyncio.create_task(
-                self._request_graceful_stop(execution, task)
-            )
-
-    async def _request_graceful_stop(self, execution: _Execution, task: asyncio.Task[None]) -> None:
-        """Keep observation alive briefly after interruption, then contain it.
-
-        The request/observation phase spends at most half the remaining cleanup
-        allowance, leaving time for harness escalation. Acknowledgement alone
-        never releases the fence; only the prompt owner's outcome can do that.
-        """
-        remaining_seconds = max(
-            0.0, execution.cleanup_deadline_monotonic - asyncio.get_running_loop().time()
-        )
-        grace_deadline = asyncio.get_running_loop().time() + min(
-            GRACEFUL_STOP_MAX_SECONDS, remaining_seconds / 2
-        )
-        request_settled = True
-        try:
-            async with asyncio.timeout_at(grace_deadline):
-                if execution.harness_started:
-                    request_settled = False
-                    accepted = await self.harness.abort()
-                    request_settled = True
-                    if accepted:
-                        await execution.observation_finished.wait()
-        except Exception as error:
-            execution.interrupt_request_uncertain = not request_settled
-            if request_settled:
-                self.log.info("prompt.stop_observation_expired", message_id=execution.message_id)
-            else:
-                self.log.warn(
-                    "prompt.interrupt_request_failed", message_id=execution.message_id, exc=error
-                )
-        finally:
-            if not execution.observation_finished.is_set() and not task.done():
-                task.cancel()
+        """Route Stop without blocking the receiver on execution cleanup."""
+        self.execution.request_stop(cmd)
 
     async def _handle_snapshot(self, cmd: dict[str, Any] | None = None) -> None:
         """Handle snapshot command - prepare for snapshot."""
         self.log.info("bridge.snapshot_prepare")
-        if self._quarantined or (
-            self._current_prompt_task is not None and not self._current_prompt_task.done()
-        ):
+        deadline = self.execution.snapshot_deadline()
+        if deadline is None:
             self.log.warn("bridge.snapshot_execution_not_quiescent")
             return
         try:
             # Managed diagnostics can contain secrets. A failed exclusion must
             # never be acknowledged as snapshot-ready.
-            deadline = (
-                asyncio.get_running_loop().time()
-                + self.prompt_limits.prompt_cleanup_timeout_seconds
-            )
-            if self._execution is not None and self._execution.stop_reason is not None:
-                deadline = min(deadline, self._execution.cleanup_deadline_monotonic)
             async with asyncio.timeout_at(deadline):
                 await prepare_hook_logs_for_snapshot(Path("/workspace"))
                 await self._send_event(
@@ -1112,8 +704,20 @@ class AgentBridge:
 
     async def _handle_shutdown(self) -> None:
         """Handle shutdown command - graceful shutdown."""
+        self.request_shutdown()
+
+    def request_shutdown(self, *, cleanup_seconds: float | None = None) -> None:
+        """Wake transport shutdown while the coordinator contains active work."""
         self.log.info("bridge.shutdown_requested")
-        await self._handle_stop({"reason": "Sandbox shutdown requested"})
+        if cleanup_seconds is not None:
+            deadline = asyncio.get_running_loop().time() + cleanup_seconds
+            self._shutdown_deadline_monotonic = min(
+                self._shutdown_deadline_monotonic or deadline, deadline
+            )
+        self.execution.request_stop(
+            {"reason": "Sandbox shutdown requested"},
+            deadline_monotonic=self._shutdown_deadline_monotonic,
+        )
         self.shutdown_event.set()
 
     async def _handle_push(self, cmd: dict[str, Any]) -> None:
@@ -1291,7 +895,7 @@ async def main() -> None:
     )
 
     try:
-        await bridge.run()
+        await run_bridge_with_signals(bridge)
     except HarnessStartError:
         # The cause is already recorded for the supervisor; this exit code
         # tells it not to spend its restart budget.

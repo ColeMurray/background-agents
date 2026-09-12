@@ -9,7 +9,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sandbox_runtime.hook_logs import HookLogs, prepare_hook_logs_for_snapshot
+from sandbox_runtime.hook_logs import (
+    HookLogs,
+    log_path_for_repository,
+    prepare_hook_logs_for_snapshot,
+)
 from sandbox_runtime.repo_config import RepoEntry
 from sandbox_runtime.repository_hooks import HookCleanupError, RepositoryHooks
 from sandbox_runtime.repository_sync import (
@@ -55,8 +59,9 @@ async def test_successful_launcher_does_not_wait_for_background_output_eof(tmp_p
             assert await getattr(hooks, f"run_{hook}")(repo, BootMode.FRESH)
         await _wait_for_path(repo.path / "child.pid")
         os.kill(int((repo.path / "child.pid").read_text()), 0)
-        path = hooks.logs.path / repo.name / f"{hook}.log"
-        assert path.parent.parent.parent == tmp_path / ".openinspect" / "logs"
+        path = log_path_for_repository(hooks.logs.path, repo.owner, repo.name, hook)
+        assert path.parent.parent.parent.parent == tmp_path / "runtime-hook-logs"
+        assert path.parent.parent.name == "group%2Fsubgroup"
         assert "group" not in path.parts
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
         for directory in (path.parent, path.parent.parent, path.parent.parent.parent):
@@ -113,7 +118,7 @@ async def test_inherited_writer_is_trimmed_on_same_inode_after_launcher_exit(tmp
     hooks = RepositoryHooks(MagicMock())
     try:
         assert await hooks.run_start(repo, BootMode.FRESH)
-        path = hooks.logs.path / repo.name / "start.log"
+        path = log_path_for_repository(hooks.logs.path, repo.owner, repo.name, "start")
         inode = path.stat().st_ino
         await _wait_for_path(repo.path / "child.pid")
         await asyncio.sleep(0.6)
@@ -137,14 +142,14 @@ async def test_snapshot_preparation_removes_paths_without_recreating_live_output
         await _wait_for_path(repo.path / "child.pid")
         await prepare_hook_logs_for_snapshot(tmp_path)
         await asyncio.sleep(0.1)
-        assert not (tmp_path / ".openinspect" / "logs").exists()
+        assert not hooks.logs.path.exists()
         assert all(b"synthetic-secret" not in path.read_bytes() for path in tmp_path.rglob("*.log"))
         os.kill(int((repo.path / "child.pid").read_text()), 0)
     finally:
         await hooks.shutdown()
 
 
-@pytest.mark.parametrize("component", [".openinspect", "logs", "boot", "repo", "file"])
+@pytest.mark.parametrize("component", ["root", "boot", "owner", "repo", "file"])
 async def test_log_paths_reject_symlinks_without_touching_targets(tmp_path, component):
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -152,23 +157,21 @@ async def test_log_paths_reject_symlinks_without_touching_targets(tmp_path, comp
     sentinel.write_text("preserve")
     logs = HookLogs(tmp_path, MagicMock())
     parents = [
-        tmp_path / ".openinspect",
-        tmp_path / ".openinspect" / "logs",
+        logs.path.parent,
         logs.path,
-        logs.path / "repo",
+        logs.path / "acme",
+        logs.path / "acme" / "repo",
     ]
-    index = [".openinspect", "logs", "boot", "repo", "file"].index(component)
+    index = ["root", "boot", "owner", "repo", "file"].index(component)
+    if index >= 2:
+        logs.open("seed", "seed", "setup")
     for path in parents[:index]:
-        path.mkdir(mode=0o700)
+        path.mkdir(mode=0o700, exist_ok=True)
     target = parents[index] if index < 4 else parents[-1] / "start.log"
     target.symlink_to(sentinel if index == 4 else outside)
-    # A new manager removes obsolete boot directories. Test path creation
-    # itself for the per-boot/repository/file links, without treating them as old.
-    if index >= 2:
-        logs._initialized = True
     try:
         with pytest.raises(OSError):
-            logs.open("repo", "start")
+            logs.open("acme", "repo", "start")
         assert sentinel.read_text() == "preserve"
     finally:
         target.unlink(missing_ok=True)
@@ -177,7 +180,7 @@ async def test_log_paths_reject_symlinks_without_touching_targets(tmp_path, comp
 
 async def test_hardlinked_logs_fail_closed_before_snapshot(tmp_path):
     logs = HookLogs(tmp_path, MagicMock())
-    path, fd = logs.open("repo", "setup")
+    path, fd = logs.open("acme", "repo", "setup")
     os.write(fd, b"secret")
     duplicate = tmp_path / "copied-log"
     os.link(path, duplicate)
@@ -192,14 +195,16 @@ async def test_hardlinked_logs_fail_closed_before_snapshot(tmp_path):
 
 async def test_new_boot_prunes_old_raw_diagnostics(tmp_path):
     old_logs = HookLogs(tmp_path, MagicMock())
-    old_path, fd = old_logs.open("repo", "setup")
+    old_path, fd = old_logs.open("acme", "repo", "setup")
     os.write(fd, b"old-secret")
     logs = HookLogs(tmp_path, MagicMock())
     try:
-        new_path, _ = logs.open("repo", "start")
+        new_path, _ = logs.open("acme", "repo", "start")
         assert not old_path.exists()
         assert new_path.exists()
-        assert list(new_path.parent.parent.parent.iterdir()) == [logs.path]
+        assert not old_logs.path.exists()
+        await old_logs.close()
+        assert new_path.exists()
     finally:
         await old_logs.close()
         await logs.close()
@@ -223,7 +228,7 @@ async def test_build_callback_sees_no_raw_hook_logs(tmp_path, monkeypatch):
     callback = MagicMock()
 
     async def capture(**_kwargs):
-        assert not (tmp_path / ".openinspect" / "logs").exists()
+        assert not repository.hooks.logs.path.exists()
         supervisor.shutdown_event.set()
         return True
 
@@ -266,7 +271,10 @@ async def test_image_build_keeps_private_file_diagnostics_with_discard_runtime_p
     hooks = RepositoryHooks(MagicMock())
     try:
         assert await hooks.run_setup(repo, BootMode.BUILD)
-        assert (hooks.logs.path / repo.name / "setup.log").read_text() == "build-secret"
+        assert (
+            log_path_for_repository(hooks.logs.path, repo.owner, repo.name, "setup").read_text()
+            == "build-secret"
+        )
     finally:
         await hooks.shutdown()
 
@@ -301,7 +309,7 @@ async def test_unfinished_setup_never_publishes_image_or_keeps_provisioning(
         assert await task is (failure == "shutdown")
     callback.report_success.assert_not_awaited()
     assert not repository.hooks._processes
-    assert not (tmp_path / ".openinspect" / "logs").exists()
+    assert not repository.hooks.logs.path.exists()
 
 
 async def test_unconfirmed_group_cleanup_aborts_boot_instead_of_warning(tmp_path, monkeypatch):
@@ -309,6 +317,7 @@ async def test_unconfirmed_group_cleanup_aborts_boot_instead_of_warning(tmp_path
     hooks = RepositoryHooks(MagicMock())
     try:
         with monkeypatch.context() as context:
+            context.setattr("sandbox_runtime.hook_process.USE_SUBREAPER", False)
             context.setattr("sandbox_runtime.repository_hooks.HOOK_CLEANUP_TIMEOUT_SECONDS", 0.02)
             context.setattr("sandbox_runtime.repository_hooks._group_running", lambda _pid: True)
             with pytest.raises(HookCleanupError, match="could not be confirmed"):

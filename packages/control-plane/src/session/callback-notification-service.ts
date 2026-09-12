@@ -67,6 +67,10 @@ export interface CallbackServiceDeps {
 const NOTIFIED_CALL_IDS_CAP = 500;
 const EMPTY_TOOL_ARGS: Record<string, unknown> = {};
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 /**
  * How stale a Slack assistant-thread activity indicator may get before the
  * next sandbox heartbeat refreshes it.
@@ -225,8 +229,11 @@ export class CallbackNotificationService {
         return;
       }
 
-      const rawContext = JSON.parse(message.callback_context);
-      source = rawContext.source === "automation" ? "automation" : (message.source ?? null);
+      const rawContext: unknown = JSON.parse(message.callback_context);
+      source =
+        isRecord(rawContext) && rawContext.source === "automation"
+          ? "automation"
+          : (message.source ?? null);
 
       // Route automation callbacks to the scheduler's completion function.
       if (source === "automation") {
@@ -573,7 +580,7 @@ export class CallbackNotificationService {
     }
 
     const sessionId = this.getSessionId();
-    const rawContext = JSON.parse(message.callback_context);
+    const rawContext: unknown = JSON.parse(message.callback_context);
 
     const callbackData = {
       sessionId,

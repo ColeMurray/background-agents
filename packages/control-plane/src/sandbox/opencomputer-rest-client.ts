@@ -619,6 +619,7 @@ export class OpenComputerRestClient {
 
       return await consume(response);
     } catch (error) {
+      if (options?.signal?.aborted) throw options.signal.reason;
       // The per-call timeout fires controller.abort(); the resulting AbortError
       // — from fetch OR a body read — must surface as an attributed timeout so
       // it is actionable in logs and build error_messages. The message must

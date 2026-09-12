@@ -168,15 +168,6 @@ export class E2BSandboxProvider implements SandboxProvider {
   readonly name = "e2b";
 
   /**
-   * Only retention cleanup may preserve process memory for a later resume.
-   * Cancellation escalation must never freeze unfinished work for reuse.
-   */
-  private static readonly RESUMABLE_STOP_REASONS = new Set([
-    "inactivity_timeout",
-    "heartbeat_timeout",
-  ]);
-
-  /**
    * Session continuity on E2B is provider-managed: stop pauses the sandbox and
    * resume reconnects to it, so there is no session snapshot/restore pair here.
    *
@@ -248,8 +239,8 @@ export class E2BSandboxProvider implements SandboxProvider {
           timeoutSeconds
         );
       } catch (error) {
-        // Boot or expiry discovery failed after create; clean up the sandbox
-        // before surfacing the unsuccessful create.
+        // Boot failed or expiry discovery proved the sandbox is gone. Optional
+        // expiry observation failures are handled by readExecutionExpiry.
         await this.cleanupSandbox(sandbox.sandboxID, "e2b.cleanup_kill_failed");
         throw error;
       }
@@ -459,14 +450,11 @@ export class E2BSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Idle/heartbeat stops are a resumable PAUSE (the manager routes them here via
-   * supportsPersistentResume, and resumeSandbox brings the sandbox back).
-   * Terminal stops (a sandbox that never connected) instead KILL: the manager
-   * marks that session `failed` and won't resume it, so pausing would orphan a
-   * sandbox E2B retains indefinitely.
+   * Execute the lifecycle owner's decision: suspend preserves a resumable VM,
+   * while terminate removes it. Diagnostic reasons never select destruction.
    */
   async stopSandbox(config: StopConfig): Promise<StopResult> {
-    const terminal = !E2BSandboxProvider.RESUMABLE_STOP_REASONS.has(config.reason);
+    const terminal = config.mode === "terminate";
     try {
       try {
         if (terminal) {
@@ -507,9 +495,19 @@ export class E2BSandboxProvider implements SandboxProvider {
     requestStartedAtMs: number,
     timeoutSeconds: number
   ): Promise<SandboxExecutionExpiry> {
-    const sandbox = await this.client.getSandbox(providerObjectId);
-    const expiresAtMs = sandbox.endAt ? Date.parse(sandbox.endAt) : NaN;
-    if (Number.isFinite(expiresAtMs)) return { kind: "hard", expiresAtMs };
+    try {
+      const sandbox = await this.client.getSandbox(providerObjectId);
+      const expiresAtMs = sandbox.endAt ? Date.parse(sandbox.endAt) : NaN;
+      if (Number.isFinite(expiresAtMs)) return { kind: "hard", expiresAtMs };
+    } catch (error) {
+      if (error instanceof E2BNotFoundError) throw error;
+      // Renewal/create already succeeded. Optional observation must not turn
+      // that success into a failed lifecycle operation or destroy its sandbox.
+      log.warn("e2b.execution_expiry_observation_failed", {
+        sandbox_id: providerObjectId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     // E2B's acknowledged timeout runs from create/connect/setTimeout, not from
     // this response or entrypoint completion. Include all request/setup latency.
     // https://github.com/e2b-dev/E2B/blob/main/spec/openapi.yml
@@ -520,9 +518,9 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   /**
    * Permanently kill a sandbox. Used to tear down the ephemeral image-build
-   * sandbox once its filesystem has been snapshotted: stopSandbox only pauses
-   * (correct for idle sessions) and would leak the single-use build sandbox
-   * until its TTL. Idempotent — a missing sandbox is treated as already gone.
+   * sandbox once its filesystem has been snapshotted. Unlike idle suspension,
+   * this releases the single-use build sandbox. Idempotent — a missing sandbox
+   * is treated as already gone.
    */
   async deleteSandbox(providerObjectId: string, signal?: AbortSignal): Promise<void> {
     try {

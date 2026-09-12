@@ -282,6 +282,7 @@ describe("E2BSandboxProvider", () => {
       providerObjectId: "x",
       sessionId: "s",
       reason: "inactivity_timeout",
+      mode: "suspend",
     });
     expect(res.success).toBe(true);
     expect(client.pauseSandbox).toHaveBeenCalledWith("x", undefined, undefined);
@@ -299,14 +300,15 @@ describe("E2BSandboxProvider", () => {
             providerObjectId: "x",
             sessionId: "s",
             reason: "inactivity_timeout",
+            mode: "suspend",
           })
         ).success
       ).toBe(true);
     }
   });
 
-  it.each(["connecting_timeout", "respawn", "execution_timeout", "cancellation_unconfirmed"])(
-    "stopSandbox KILLS on terminal reason %s",
+  it.each(["connecting_timeout", "inactivity_timeout", "heartbeat_timeout"])(
+    "terminate mode kills independently of diagnostic reason %s",
     async (reason) => {
       const client = mockClient({
         getSandbox: vi.fn(async () => {
@@ -317,10 +319,27 @@ describe("E2BSandboxProvider", () => {
         providerObjectId: "x",
         sessionId: "s",
         reason,
+        mode: "terminate",
       });
       expect(res.success).toBe(true);
       expect(client.killSandbox).toHaveBeenCalledWith("x");
       expect(client.pauseSandbox).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["inactivty_timeout", "new_stop_reason", "execution_timeout"])(
+    "suspend mode never deletes for diagnostic reason %s",
+    async (reason) => {
+      const client = mockClient();
+      const result = await new E2BSandboxProvider(client, providerConfig).stopSandbox({
+        providerObjectId: "e2b-id",
+        sessionId: "s",
+        mode: "suspend",
+        reason,
+      });
+      expect(result.success).toBe(true);
+      expect(client.pauseSandbox).toHaveBeenCalled();
+      expect(client.killSandbox).not.toHaveBeenCalled();
     }
   );
 
@@ -339,6 +358,7 @@ describe("E2BSandboxProvider", () => {
       providerObjectId: "e2b-id",
       sessionId: "s",
       reason: "heartbeat_timeout",
+      mode: "suspend",
     });
     expect(result.success).toBe(false);
   });
@@ -348,6 +368,7 @@ describe("E2BSandboxProvider", () => {
       providerObjectId: "e2b-id",
       sessionId: "s",
       reason: "execution_timeout",
+      mode: "terminate",
     });
     expect(result.success).toBe(false);
   });
@@ -390,6 +411,93 @@ describe("E2BSandboxProvider", () => {
     });
   });
 
+  it("preserves a started sandbox when optional expiry observation fails", async () => {
+    let nowMs = 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const client = mockClient({
+      startProcess: vi.fn(async () => {
+        nowMs += 30_000;
+      }),
+      getSandbox: vi.fn(async () => {
+        nowMs += 15_000;
+        throw new E2BApiError("temporarily unavailable", 503);
+      }),
+    });
+    const result = await new E2BSandboxProvider(client, providerConfig).createSandbox({
+      ...baseCreateConfig,
+      timeoutSeconds: 120,
+    });
+    expect(result.providerObjectId).toBe("e2b-id");
+    expect(result.createdAt).toBe(55_000);
+    expect(result.executionExpiry).toEqual({ kind: "conservative", expiresAtMs: 130_000 });
+    expect(client.killSandbox).not.toHaveBeenCalled();
+  });
+
+  it("still fails create when expiry observation proves the sandbox disappeared", async () => {
+    const client = mockClient({
+      getSandbox: vi.fn(async () => {
+        throw new E2BNotFoundError("gone");
+      }),
+    });
+    await expect(
+      new E2BSandboxProvider(client, providerConfig).createSandbox(baseCreateConfig)
+    ).rejects.toThrow("Failed to create E2B sandbox");
+  });
+
+  it.each(["paused", "running"])(
+    "preserves %s renewal when its optional expiry read fails",
+    async (state) => {
+      let nowMs = 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+      const client = mockClient({
+        getSandbox: vi
+          .fn()
+          .mockImplementationOnce(async () => {
+            nowMs += 5_000;
+            return { sandboxID: "e2b-id", templateID: "tmpl", state };
+          })
+          .mockImplementationOnce(async () => {
+            nowMs += 15_000;
+            throw new Error("fetch failed");
+          }),
+        connectSandbox: vi.fn(async () => {
+          nowMs += 20_000;
+          return { sandboxID: "e2b-id", templateID: "tmpl" };
+        }),
+        setSandboxTimeout: vi.fn(async () => {
+          nowMs += 20_000;
+        }),
+      });
+      const result = await new E2BSandboxProvider(client, providerConfig).resumeSandbox({
+        providerObjectId: "e2b-id",
+        sessionId: "s",
+        sandboxId: "logical",
+        timeoutSeconds: 120,
+      });
+      expect(result.success).toBe(true);
+      expect(result.executionExpiry).toEqual({ kind: "conservative", expiresAtMs: 135_000 });
+      expect(nowMs).toBe(50_000);
+      expect(client.killSandbox).not.toHaveBeenCalled();
+    }
+  );
+
+  it("preserves gone handling when the sandbox disappears during the post-renewal expiry read", async () => {
+    const client = mockClient({
+      getSandbox: vi
+        .fn()
+        .mockResolvedValueOnce({ sandboxID: "e2b-id", templateID: "tmpl", state: "paused" })
+        .mockRejectedValueOnce(new E2BNotFoundError("gone")),
+    });
+    const result = await new E2BSandboxProvider(client, providerConfig).resumeSandbox({
+      providerObjectId: "e2b-id",
+      sessionId: "s",
+      sandboxId: "logical",
+      timeoutSeconds: 120,
+    });
+    expect(result).toMatchObject({ success: false, shouldSpawnFresh: true });
+    expect(client.connectSandbox).toHaveBeenCalled();
+  });
+
   it.each(["paused", "running"])(
     "refreshes %s expiry from the renewal request, not the old GET",
     async (state) => {
@@ -426,6 +534,7 @@ describe("E2BSandboxProvider", () => {
       providerObjectId: "e2b-id",
       sessionId: "s",
       reason: "inactivity_timeout",
+      mode: "suspend",
       signal,
     });
     expect(client.pauseSandbox).toHaveBeenCalledWith("e2b-id", undefined, signal);
@@ -440,6 +549,7 @@ describe("E2BSandboxProvider", () => {
       providerObjectId: "x",
       sessionId: "s",
       reason: "respawn",
+      mode: "terminate",
       signal,
     });
 

@@ -316,8 +316,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   }
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
-    const terminal =
-      config.reason !== "inactivity_timeout" && config.reason !== "heartbeat_timeout";
+    const terminal = config.mode === "terminate";
     try {
       try {
         if (terminal) {

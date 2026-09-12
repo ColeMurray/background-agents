@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import { MessagesHandler } from "./messages.handler";
 import type { MessageService } from "../../services/message.service";
+import { AutomationAdmissionExpiredError } from "../../message-queue";
 
 function createHandler() {
   const messageService = {
@@ -56,11 +57,15 @@ describe("MessagesHandler", () => {
     const response = await handler.reconcileExecutionState(
       new Request("http://internal/internal/execution-state", {
         method: "POST",
-        body: JSON.stringify({ automationRunId: "run-1" }),
+        body: JSON.stringify({
+          automationRunId: "run-1",
+          executionLaunchId: "launch-1",
+          admissionDeadlineMs: 1234,
+        }),
       })
     );
     expect(await response.json()).toEqual(state);
-    expect(messageService.reconcileExecutionState).toHaveBeenCalledWith("run-1", undefined);
+    expect(messageService.reconcileExecutionState).toHaveBeenCalledWith("run-1", "launch-1", 1234);
   });
 
   it("enqueues prompt and returns queued response", async () => {
@@ -90,6 +95,22 @@ describe("MessagesHandler", () => {
       authorId: "user-1",
       source: "web",
     });
+  });
+
+  it("returns a definite rejection for an expired automation admission", async () => {
+    const { handler, messageService, log } = createHandler();
+    vi.mocked(messageService.enqueuePrompt).mockRejectedValue(
+      new AutomationAdmissionExpiredError()
+    );
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        body: JSON.stringify({ content: "work", authorId: "user-1", source: "automation" }),
+      }),
+      log
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "AUTOMATION_ADMISSION_EXPIRED" });
   });
 
   it("enqueues prompt with optional parsed boundary fields", async () => {

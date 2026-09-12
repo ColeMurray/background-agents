@@ -131,7 +131,7 @@ class TestOpenCodeHookContext:
         log_root = tmp_path / ".openinspect" / "logs" / "boot-1"
         expected_paths = []
         for repo in repositories:
-            repo_logs = log_root / repo.name
+            repo_logs = log_root / "group%2Fsubgroup" / repo.name
             repo_logs.mkdir(parents=True)
             log_path = repo_logs / "start.log"
             log_path.write_text("SYNTHETIC_SECRET_DO_NOT_INCLUDE")

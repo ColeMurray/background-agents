@@ -1,5 +1,4 @@
 import type { Logger } from "../../logger";
-import { executionCleanupReserveMs } from "../execution-deadline";
 import type { SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
 import type { AlarmScheduler } from "../../platform-ports";
 import type { SessionMessageQueue } from "../message-queue";
@@ -9,7 +8,7 @@ import type { SessionTerminalMessageProjection } from "../terminal-message-proje
 
 export interface AlarmHandlerDeps {
   repository: MessageRepository;
-  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage">;
+  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage" | "expirePendingAdmissions">;
   executionStop: Pick<
     ExecutionStopCoordinator,
     "recoverStopConfirmationTimeout" | "resumeAfterSandboxTermination" | "stop"
@@ -18,8 +17,7 @@ export interface AlarmHandlerDeps {
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
   /** Resolved per use so it honors settings persisted after construction. */
-  getExecutionTimeoutMs: () => number;
-  getExecutionTurnAllowanceMs?: () => number;
+  getExecutionTurnAllowanceMs: () => number;
   now: () => number;
   /** Session-scoped logger — alarms run outside any request, so there is no request correlation. */
   log: Logger;
@@ -47,6 +45,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         // Rethrow after recovery so transient storage failures still retry.
         projectionFailure = { error };
       }
+      await deps.messageQueue.expirePendingAdmissions();
       await deps.executionStop.recoverStopConfirmationTimeout();
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was
@@ -55,10 +54,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       const processing = deps.repository.getProcessingMessageWithStartedAt();
       if (processing?.started_at) {
         const now = deps.now();
-        const configuredDurationMs = deps.getExecutionTimeoutMs();
-        const executionTimeoutMs =
-          deps.getExecutionTurnAllowanceMs?.() ??
-          configuredDurationMs - executionCleanupReserveMs(configuredDurationMs);
+        const executionTimeoutMs = deps.getExecutionTurnAllowanceMs();
         const metadata = deps.repository.getMessageExecutionMetadata(processing.id);
         const deadline =
           metadata?.execution_deadline_ms ?? processing.started_at + executionTimeoutMs;

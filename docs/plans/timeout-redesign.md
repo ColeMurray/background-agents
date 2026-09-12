@@ -292,10 +292,12 @@ The script contract is:
 
 On successful shell exit, preserve its background children. On nonzero exit or genuine timeout,
 apply the existing boot-mode and repository-position policy for failure versus warning. Before
-continuing, perform bounded cleanup of the failed hook's owned process group, including after a
-secondary start failure. Cleanup after a nonzero exit is an intentional strengthening of current
-behavior; the fatal-versus-warning matrix is unchanged. Cancellation, outer build deadlines, and
-supervisor shutdown remain cleanup events, not permission to abandon provisioning processes.
+continuing, perform bounded cleanup of the failed hook's owned descendant tree, including after a
+secondary start failure. On Linux this requires per-hook descendant ownership across `setsid` and
+double-fork; other platforms retain process-group cleanup. Cleanup after a nonzero exit is an
+intentional strengthening of current behavior; the fatal-versus-warning matrix is unchanged.
+Cancellation, outer build deadlines, and supervisor shutdown remain cleanup events, not permission
+to abandon provisioning processes.
 
 Implement this behavior in the hook runner. Do not weaken the shared owned-subprocess helper used by
 Git clone/fetch and other bounded operations.
@@ -315,10 +317,10 @@ which outer deadline fired rather than promising that every configured hook wait
 
 ### 7. Treat Hook Logs As Managed Diagnostics
 
-The runtime log contract is a per-boot, per-repository directory outside Git checkouts, proposed as
-`/workspace/.openinspect/logs/<boot-id>/<repo-name>/`, containing `setup.log` and `start.log` when
-those hooks run. Repository names are unique within the workspace; owners may contain nested
-namespaces and must not be naively split into directory segments.
+The runtime log contract is a per-boot, per-repository directory outside Git checkouts:
+`/tmp/openinspect-hook-logs-<uid>/<boot-id>/<encoded-owner>/<repo-name>/`, containing `setup.log`
+and `start.log` when those hooks run. Owners are encoded as one path segment, so repositories with
+the same name do not collide and nested owner namespaces are not naively split into directories.
 
 Expose the actual log path in diagnostics and agent-visible boot context. Files are private to the
 sandbox user, opened as regular files without following pre-existing symlinks. A logging setup
@@ -365,12 +367,12 @@ Errors name the actual owner and outcome, not a guessed root cause. Examples:
 - "Sandbox lifetime is nearly exhausted; stopping execution before cleanup."
 - "The bridge did not consume OpenCode stream data within its responsiveness limit; receive or
   downstream processing may be stalled."
-- "start.sh did not exit within START_TIMEOUT_SECONDS; its process group was stopped."
+- "start.sh did not exit within START_TIMEOUT_SECONDS; its descendants were stopped."
 - "Cancellation could not be confirmed; this runtime will not receive more work."
 
-Only claim a process group was stopped or a snapshot was saved after confirmation. Include the
-resolved duration, setting source, message/sandbox identity, and cancellation outcome in structured
-logs. Preserve upstream error details subject to existing secret-handling policy.
+Only claim descendants were stopped or a snapshot was saved after confirmation. Include the resolved
+duration, setting source, message/sandbox identity, and cancellation outcome in structured logs.
+Preserve upstream error details subject to existing secret-handling policy.
 
 Python durations use seconds; TypeScript durations use milliseconds. Encode units in names and
 define each default once. Existing hook and OpenCode knobs remain reachable during migration. Do not

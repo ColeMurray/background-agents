@@ -21,7 +21,12 @@ import type {
   AutomationRunStatus,
 } from "@open-inspect/shared/types/automations";
 import { automationInvocationStatusSchema } from "@open-inspect/shared/types/automations";
-import type { TriggerConfig } from "@open-inspect/shared/triggers";
+import {
+  automationTriggerTypeSchema,
+  triggerConfigSchema,
+  type AutomationTriggerType,
+  type TriggerConfig,
+} from "@open-inspect/shared/triggers";
 import {
   toProviderSelections,
   type AutomationModelProviderAuthRow,
@@ -113,6 +118,7 @@ export interface AutomationRunRow {
   execution_recovery_reason?: string | null;
   execution_checked_at?: number | null;
   execution_launch_id?: string | null;
+  execution_admission_deadline_ms?: number | null;
 }
 
 export interface EnrichedRunRow extends AutomationRunRow {
@@ -155,6 +161,23 @@ export interface AutomationInvocationRow {
   failure_counted_at: number | null;
   created_at: number;
   updated_at: number;
+}
+
+export interface AutomationTriggerFields {
+  triggerType: AutomationTriggerType;
+  triggerConfig: TriggerConfig | null;
+}
+
+export function parseAutomationTriggerFields(
+  row: Pick<AutomationRow, "trigger_type" | "trigger_config">
+): AutomationTriggerFields {
+  return {
+    triggerType: automationTriggerTypeSchema.parse(row.trigger_type),
+    triggerConfig:
+      row.trigger_config === null
+        ? null
+        : triggerConfigSchema.parse(JSON.parse(row.trigger_config)),
+  };
 }
 
 const enrichedAutomationInvocationRowSchema = z.object({
@@ -218,15 +241,13 @@ export function toAutomation(
   environmentRows: AutomationEnvironmentRow[],
   providerAuthRows: AutomationModelProviderAuthRow[]
 ): Automation {
-  const triggerConfig: TriggerConfig | null = row.trigger_config
-    ? JSON.parse(row.trigger_config)
-    : null;
+  const { triggerType, triggerConfig } = parseAutomationTriggerFields(row);
 
   return {
     id: row.id,
     name: row.name,
     instructions: row.instructions,
-    triggerType: row.trigger_type as Automation["triggerType"],
+    triggerType,
     scheduleCron: row.schedule_cron,
     scheduleTz: row.schedule_tz,
     harness: getValidHarnessOrDefault(row.harness),
@@ -856,14 +877,20 @@ export class AutomationStore {
   }
 
   /** Atomically assign a session only while a run still awaits launch. */
-  async claimRunSession(id: string, sessionId: string, startedAt: number): Promise<boolean> {
+  async claimRunSession(
+    id: string,
+    sessionId: string,
+    startedAt: number,
+    launch?: { id: string; admissionDeadlineMs: number }
+  ): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE automation_runs
-         SET status = 'running', session_id = ?, started_at = ?, execution_unresolved = 1
+         SET status = 'running', session_id = ?, started_at = ?, execution_unresolved = 1,
+             execution_launch_id = ?, execution_admission_deadline_ms = ?
          WHERE id = ? AND status = 'starting'`
       )
-      .bind(sessionId, startedAt, id)
+      .bind(sessionId, startedAt, launch?.id ?? null, launch?.admissionDeadlineMs ?? null, id)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -873,14 +900,38 @@ export class AutomationStore {
   }
 
   /** Fence a session before enqueue, including follow-ups on terminal run reports. */
-  async markRunExecutionUnresolved(id: string, sessionId: string, launchId: string): Promise<void> {
-    await this.db
+  async markRunExecutionUnresolved(
+    id: string,
+    sessionId: string,
+    launchId: string,
+    admissionDeadlineMs?: number,
+    expectedLaunchId: string | null = null
+  ): Promise<boolean> {
+    const result = await this.db
       .prepare(
         `UPDATE automation_runs SET execution_unresolved = 1, execution_checked_at = ?,
-         execution_launch_id = ?
-         WHERE id = ? AND session_id = ?`
+         execution_launch_id = ?, execution_admission_deadline_ms = ?
+         WHERE id = ? AND session_id = ? AND execution_launch_id IS ?`
       )
-      .bind(Date.now(), launchId, id, sessionId)
+      .bind(Date.now(), launchId, admissionDeadlineMs ?? null, id, sessionId, expectedLaunchId)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /** The enqueue owner proved rejection; a later launch must never be released by this reply. */
+  async releaseRejectedExecutionLaunch(
+    id: string,
+    sessionId: string,
+    launchId: string,
+    previouslyUnresolved: boolean
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE automation_runs SET execution_unresolved = ?, execution_launch_id = NULL,
+       execution_admission_deadline_ms = NULL, execution_recovery_reason = NULL,
+       execution_checked_at = ? WHERE id = ? AND session_id = ? AND execution_launch_id = ?`
+      )
+      .bind(previouslyUnresolved ? 1 : 0, Date.now(), id, sessionId, launchId)
       .run();
   }
 
@@ -896,7 +947,8 @@ export class AutomationStore {
     await this.db
       .prepare(
         `UPDATE automation_runs SET execution_unresolved = ?, execution_recovery_reason = ?,
-         execution_checked_at = ?, execution_launch_id = CASE WHEN ? = 0 THEN NULL ELSE execution_launch_id END
+         execution_checked_at = ?, execution_launch_id = CASE WHEN ? = 0 THEN NULL ELSE execution_launch_id END,
+         execution_admission_deadline_ms = CASE WHEN ? = 0 THEN NULL ELSE execution_admission_deadline_ms END
          WHERE id = ? AND session_id = ? AND execution_launch_id IS ?
          AND (execution_checked_at IS NULL OR execution_checked_at < ?)`
       )
@@ -904,6 +956,7 @@ export class AutomationStore {
         unresolved ? 1 : 0,
         reason,
         checkedAt,
+        unresolved ? 1 : 0,
         unresolved ? 1 : 0,
         id,
         sessionId,

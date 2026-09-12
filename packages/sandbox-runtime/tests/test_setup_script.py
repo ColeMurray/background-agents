@@ -6,9 +6,18 @@ import signal
 import stat
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from sandbox_runtime.repository_boot import RepositoryBoot
 from sandbox_runtime.runtime_config import BootMode
 from tests.runtime_helpers import make_repository_boot
+
+
+@pytest.fixture(autouse=True)
+def portable_process_policy(monkeypatch):
+    # These unit tests mock the native process boundary. The Linux guardian's
+    # actual descendant lifecycle is exercised by test_hook_descendant_containment.
+    monkeypatch.setattr("sandbox_runtime.hook_process.USE_SUBREAPER", False)
 
 
 def _make_repository_boot(tmp_path) -> RepositoryBoot:

@@ -25,6 +25,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: "high",
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user",
     spawn_depth: 0,
@@ -85,11 +86,13 @@ function createHandler() {
     updateSandboxStatus,
   } as unknown as SandboxRepository;
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
+  const confirmIndexStatus = vi.fn<() => Promise<void>>();
   const repairIndexStatus = vi.fn<() => Promise<void>>();
   const settleFromMessageState = vi.fn<() => Promise<SessionRow["status"]>>();
   const statusService = {
     transition,
     repairIndexStatus,
+    confirmIndexStatus,
     settleFromMessageState,
   } as unknown as SessionStatusService;
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
@@ -130,6 +133,7 @@ function createHandler() {
     getSandbox,
     transition,
     repairIndexStatus,
+    confirmIndexStatus,
     settleFromMessageState,
     applySessionTitleUpdate,
     cancelSession,
@@ -294,7 +298,7 @@ describe("SessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "archived" });
+    expect(await response.json()).toEqual({ status: "archived", outcome: "archived" });
     expect(transition).toHaveBeenCalledWith("archived");
   });
 
@@ -508,5 +512,35 @@ describe("SessionLifecycleHandler", () => {
     expect(cancelSession).toHaveBeenCalledOnce();
     expect(sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
     expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");
+  });
+});
+
+describe("canonical archive outcomes", () => {
+  it.each(["cancelled", "active", "archived"] as const)(
+    "does not bypass eligibility for %s sessions",
+    async (status) => {
+      const h = createHandler();
+      h.getSession.mockReturnValue(createSession({ status }));
+      if (status !== "cancelled") h.repository.getPendingOrProcessingCount.mockReturnValue(1);
+      const response = await h.handler.archive();
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        outcome: status === "cancelled" ? "skipped_cancelled" : "skipped_queued_work",
+      });
+      expect(h.transition).not.toHaveBeenCalled();
+    }
+  );
+  it("returns retryable failure when the projection cannot be confirmed", async () => {
+    const h = createHandler();
+    h.getSession.mockReturnValue(createSession());
+    h.confirmIndexStatus.mockRejectedValue(new Error("projection conflict"));
+    expect((await h.handler.archive()).status).toBe(503);
+  });
+  it("confirms index agreement even for an already archived session", async () => {
+    const h = createHandler();
+    h.getSession.mockReturnValue(createSession({ status: "archived" }));
+    const response = await h.handler.archive();
+    expect(await response.json()).toEqual({ outcome: "already_archived", status: "archived" });
+    expect(h.confirmIndexStatus).toHaveBeenCalledOnce();
   });
 });

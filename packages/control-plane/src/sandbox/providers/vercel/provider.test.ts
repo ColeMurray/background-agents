@@ -688,6 +688,7 @@ describe("VercelSandboxProvider", () => {
     const result = await provider.stopSandbox({
       providerObjectId: "vercel-session-1",
       sessionId: "session-123",
+      mode: "terminate",
       reason: "inactivity_timeout",
       correlation,
     });
@@ -696,6 +697,28 @@ describe("VercelSandboxProvider", () => {
     expect(vi.mocked(client.stopSession)).toHaveBeenCalledWith("vercel-session-1", correlation);
     expect(vi.mocked(client.getSession)).toHaveBeenCalledWith("vercel-session-1", correlation);
   });
+
+  it.each(["inactivity_timeout", "inactivty_timeout", "new_diagnostic_reason"])(
+    "rejects suspension without stopping Vercel for diagnostic reason %s",
+    async (reason) => {
+      const client = createMockClient();
+      const provider = new VercelSandboxProvider(client, providerConfig);
+
+      expect(
+        await provider.stopSandbox({
+          providerObjectId: "vercel-session-1",
+          sessionId: "session-123",
+          mode: "suspend",
+          reason,
+        })
+      ).toEqual({
+        success: false,
+        error: expect.stringContaining("does not support resumable suspension"),
+      });
+      expect(client.stopSession).not.toHaveBeenCalled();
+      expect(client.getSession).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(["running", "stopping", "snapshotting", "failed", "aborted"] as const)(
     "does not treat an accepted stop with %s state as confirmed cessation",
@@ -709,6 +732,7 @@ describe("VercelSandboxProvider", () => {
         await provider.stopSandbox({
           providerObjectId: "vercel-session-1",
           sessionId: "session-123",
+          mode: "terminate",
           reason: "execution_timeout",
         })
       ).toMatchObject({ success: false });
@@ -731,6 +755,7 @@ describe("VercelSandboxProvider", () => {
       await provider.stopSandbox({
         providerObjectId: "vercel-session-1",
         sessionId: "session-123",
+        mode: "terminate",
         reason: "execution_timeout",
       })
     ).toMatchObject({ success: false });
@@ -749,6 +774,7 @@ describe("VercelSandboxProvider", () => {
       await provider.stopSandbox({
         providerObjectId: "vercel-session-1",
         sessionId: "session-123",
+        mode: "terminate",
         reason: "execution_timeout",
       })
     ).toEqual({ success: true });
@@ -767,6 +793,7 @@ describe("VercelSandboxProvider", () => {
       await provider.stopSandbox({
         providerObjectId: "vercel-session-1",
         sessionId: "session-123",
+        mode: "terminate",
         reason: "execution_timeout",
       })
     ).toMatchObject({ success: false });
@@ -780,6 +807,7 @@ describe("VercelSandboxProvider", () => {
     await provider.stopSandbox({
       providerObjectId: "vercel-session-1",
       sessionId: "session-123",
+      mode: "terminate",
       reason: "execution_timeout",
       signal,
     });

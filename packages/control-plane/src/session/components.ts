@@ -132,6 +132,7 @@ import { SessionDiffStore } from "./diffs/store";
 import { SessionDiffService } from "./diffs/service";
 import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
 import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
+import { SessionStatusProjectionStore } from "../db/session-status-projection-store";
 import { SessionStatusService } from "./session-status-service";
 import { createSessionRuntimeClientForTrace } from "./runtime-client";
 import { SessionTitleService } from "./title-service";
@@ -369,6 +370,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     artifactRepository,
     messenger,
     sessionIndexStore,
+    new SessionStatusProjectionStore(db),
     // Parent notifications have no request of their own: each is one hop
     // under this child's trace, with its own request id.
     createSessionRuntimeClientForTrace(env, durableObjectId)
@@ -410,6 +412,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     alarmScheduler,
     sandboxDashboardSettings,
     onProviderStartupComplete: () => messageQueue.processMessageQueue(),
+    requestExecutionStop: (reason) => executionStop.stop(reason),
   });
 
   // Tier 6 — the message queue.
@@ -457,11 +460,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     alarmScheduler,
     executionStop,
     getExecutionTimeoutMs,
+    alarmDeadlines,
     () => {
       const sandbox = sandboxRepository.getSandbox();
       const capabilities: string[] = sandbox?.runtime_capabilities
         ? JSON.parse(sandbox.runtime_capabilities)
         : [];
+      const policy = getExecutionPolicy();
       return {
         sandboxId: sandbox?.modal_sandbox_id ?? null,
         providerExpiresAtMs:
@@ -471,8 +476,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
             : null,
         requiresStopEvidence: capabilities.includes("stop-confirmation-v1"),
         providerStartupPending: sandbox?.provider_execution_expiry_kind === null,
-        turnAllowanceMs: getExecutionPolicy().turnAllowanceMs,
-        policySource: getExecutionPolicy().source,
+        turnAllowanceMs: policy.turnAllowanceMs,
+        policySource: policy.source,
         runtimeUnavailable: lifecycleManager.isRetiring() || sandbox?.status === "snapshotting",
       };
     }
@@ -579,7 +584,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     lifecycleManager,
     terminalMessageProjection,
     alarmScheduler,
-    getExecutionTimeoutMs,
     now: () => Date.now(),
     getExecutionTurnAllowanceMs: () => getExecutionPolicy().turnAllowanceMs,
     log,
@@ -965,6 +969,7 @@ interface LifecycleManagerDeps {
   alarmScheduler: RehydratableAlarmScheduler;
   sandboxDashboardSettings: SandboxDashboardSettings;
   onProviderStartupComplete: () => Promise<void>;
+  requestExecutionStop: (reason: string) => Promise<void>;
 }
 
 /** Create the lifecycle manager with all required adapters. */
@@ -1030,6 +1035,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const config = {
     ...DEFAULT_LIFECYCLE_CONFIG,
     onProviderStartupComplete: deps.onProviderStartupComplete,
+    requestExecutionStop: deps.requestExecutionStop,
     controlPlaneUrl,
     model: DEFAULT_MODEL,
     // Re-derived per use until the session row exists: on the first-ever

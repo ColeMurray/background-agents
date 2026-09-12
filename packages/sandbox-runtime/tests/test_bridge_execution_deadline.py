@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from sandbox_runtime.bridge import AgentBridge
+from sandbox_runtime.execution_coordinator import ExecutionPhase
 from sandbox_runtime.harness import TurnOutcome
 from tests.conftest import ScriptedHarness
 
@@ -100,16 +101,20 @@ async def test_confirmed_tool_exit_releases_runtime_and_duplicate_stop_is_idempo
     bridge = bridge_for(harness)
     try:
         await bridge._handle_command(command())
-        task = bridge._current_prompt_task
+        task = bridge.execution.prompt_task
+        assert bridge.execution.phase == ExecutionPhase.PREPARING
         await harness.started.wait()
+        assert bridge.execution.phase == ExecutionPhase.RUNNING
         await bridge._handle_command({"type": "stop", "messageId": "m1", "sandboxId": "sandbox-1"})
+        assert bridge.execution.phase == ExecutionPhase.STOPPING
         await bridge._handle_command({"type": "stop", "messageId": "m1", "sandboxId": "sandbox-1"})
         await task
         await asyncio.sleep(0)
         assert harness.process.returncode is not None
         assert harness.stop_calls == 1
         assert terminal_events(bridge)[0]["executionStopped"] is True
-        assert not bridge._quarantined
+        assert not bridge.execution.quarantined
+        assert bridge.execution.phase == ExecutionPhase.IDLE
 
         # Dispatch replay does not start a second process or reset its budget.
         await bridge._handle_command(command())
@@ -117,7 +122,7 @@ async def test_confirmed_tool_exit_releases_runtime_and_duplicate_stop_is_idempo
 
         harness.started.clear()
         await bridge._handle_command(command("m2"))
-        task = bridge._current_prompt_task
+        task = bridge.execution.prompt_task
         await harness.started.wait()
         await bridge._handle_command({"type": "stop", "messageId": "m1", "sandboxId": "sandbox-1"})
         await bridge._handle_command(
@@ -138,14 +143,15 @@ async def test_rejected_interrupt_leaves_execution_uncertain_and_blocks_reuse_an
     bridge = bridge_for(harness)
     try:
         await bridge._handle_command(command())
-        task = bridge._current_prompt_task
+        task = bridge.execution.prompt_task
         await harness.started.wait()
         await bridge._handle_stop({"messageId": "m1"})
         await task
         await asyncio.sleep(0)
         assert harness.process.returncode is None
         assert terminal_events(bridge)[0]["executionStopped"] is False
-        assert bridge._quarantined
+        assert bridge.execution.quarantined
+        assert bridge.execution.phase == ExecutionPhase.QUARANTINED
         await bridge._handle_command(command("m2"))
         await bridge._handle_snapshot({"requestId": "snap"})
         assert len(harness.prompts) == 1
@@ -172,7 +178,7 @@ async def test_graceful_stop_keeps_reader_until_tool_exit_without_escalating():
     )
     try:
         await bridge._handle_command(command())
-        task = bridge._current_prompt_task
+        task = bridge.execution.prompt_task
         await harness.started.wait()
         await bridge._handle_stop({"messageId": "m1"})
         await task
@@ -213,7 +219,7 @@ async def test_old_interrupt_request_must_settle_before_runtime_is_reused():
     harness = DelayedInterruptHarness()
     bridge = bridge_for(harness)
     await bridge._handle_command(command())
-    task = bridge._current_prompt_task
+    task = bridge.execution.prompt_task
     await harness.started.wait()
     await bridge._handle_stop({"messageId": "m1"})
     await harness.interrupt_started.wait()
@@ -227,7 +233,7 @@ async def test_old_interrupt_request_must_settle_before_runtime_is_reused():
     await asyncio.sleep(0)
     assert terminal_events(bridge)[0]["executionStopped"] is True
     await bridge._handle_command(command("m2"))
-    await bridge._current_prompt_task
+    await bridge.execution.prompt_task
     assert len(harness.prompts) == 2
 
 
@@ -250,12 +256,12 @@ async def test_unacknowledged_old_interrupt_cannot_be_released_by_a_late_result(
     bridge = bridge_for(harness)
     bridge.prompt_limits = replace(bridge.prompt_limits, prompt_cleanup_timeout_seconds=0.06)
     await bridge._handle_command(command())
-    task = bridge._current_prompt_task
+    task = bridge.execution.prompt_task
     await harness.started.wait()
     await bridge._handle_stop({"messageId": "m1"})
     await asyncio.wait_for(task, timeout=0.3)
     assert terminal_events(bridge)[0]["executionStopped"] is False
-    assert bridge._quarantined
+    assert bridge.execution.quarantined
 
 
 @pytest.mark.asyncio
@@ -263,7 +269,7 @@ async def test_expired_dispatch_does_not_start_preparation_or_harness():
     harness = ScriptedHarness()
     bridge = bridge_for(harness)
     await bridge._handle_command(command(executionDeadlineMs=(time.time() - 1) * 1000))
-    await bridge._current_prompt_task
+    await bridge.execution.prompt_task
     bridge._configure_git_identity.assert_not_awaited()
     assert not harness.prompts
     assert terminal_events(bridge)[0]["executionStopped"] is True
@@ -284,13 +290,13 @@ async def test_preparation_consumes_dispatched_deadline_and_cannot_claim_harness
 
     bridge._configure_git_identity = prepare
     # The wire deadline includes the one-second ordinary-clock-skew allowance.
-    await bridge._handle_command(command(executionDeadlineMs=(time.time() + 1.03) * 1000))
-    await asyncio.wait_for(bridge._current_prompt_task, timeout=0.5)
+    await bridge._handle_command(command(executionDeadlineMs=(time.time() + 1.2) * 1000))
+    await asyncio.wait_for(bridge.execution.prompt_task, timeout=0.5)
     assert preparation_cancelled.is_set()
     assert not harness.prompts
     assert harness.abort_calls == 0
     assert terminal_events(bridge)[0]["executionStopped"] is False
-    assert bridge._quarantined
+    assert bridge.execution.quarantined
 
 
 @pytest.mark.asyncio
@@ -325,7 +331,7 @@ async def test_cleanup_and_slow_delivery_share_one_budget_without_blocking_shutd
 
     bridge._send_event = send
     await bridge._handle_command(command())
-    task = bridge._current_prompt_task
+    task = bridge.execution.prompt_task
     await harness.started.wait()
     started = asyncio.get_running_loop().time()
     await bridge._handle_command({"type": "stop", "messageId": "m1"})

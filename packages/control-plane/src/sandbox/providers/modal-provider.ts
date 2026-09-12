@@ -248,6 +248,12 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   }
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
+    if (config.mode !== "terminate") {
+      return {
+        success: false,
+        error: "Modal does not support resumable suspension; stop mode must be terminate",
+      };
+    }
     try {
       return await this.client.terminateSandbox(config);
     } catch (error) {

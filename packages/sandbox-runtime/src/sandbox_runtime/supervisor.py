@@ -514,14 +514,35 @@ class SandboxSupervisor:
 
     async def shutdown(self) -> None:
         self.log.info("supervisor.shutdown_start")
-        if self._desktop_restart_task and not self._desktop_restart_task.done():
-            self._desktop_restart_task.cancel()
-            await asyncio.gather(self._desktop_restart_task, return_exceptions=True)
-        self._desktop_restart_task = None
-        await self.agent_bridge.stop()
-        await self.web_terminal.stop()
-        await self.code_server.stop()
-        await self.browser_desktop.stop()
-        await self.harness_process.stop()
-        await self.repository_boot.hooks.shutdown()
+        errors: list[BaseException] = []
+        try:
+            if self._desktop_restart_task and not self._desktop_restart_task.done():
+                self._desktop_restart_task.cancel()
+                try:
+                    await asyncio.gather(self._desktop_restart_task, return_exceptions=True)
+                except BaseException as error:
+                    errors.append(error)
+            self._desktop_restart_task = None
+            # The bridge must stop before its harness, but no failed service
+            # may prevent the remaining owners from attempting their cleanup.
+            for service in (
+                self.agent_bridge,
+                self.web_terminal,
+                self.code_server,
+                self.browser_desktop,
+                self.harness_process,
+            ):
+                try:
+                    await service.stop()
+                except BaseException as error:
+                    errors.append(error)
+        finally:
+            try:
+                await self.repository_boot.hooks.shutdown()
+            except BaseException as error:
+                errors.append(error)
+        if errors:
+            failure = BaseExceptionGroup("sandbox shutdown cleanup failed", errors)
+            self.log.error("supervisor.shutdown_failed", exc=failure)
+            raise failure
         self.log.info("supervisor.shutdown_complete")

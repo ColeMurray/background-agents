@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sandbox_runtime.harness.claude_env import (
     API_KEY_CREDENTIAL_VARS,
+    CLAUDE_POLICY_SETTINGS,
     OAUTH_CREDENTIAL_VARS,
     ClaudeAuthMode,
     ClaudeCredential,
@@ -157,5 +158,18 @@ class TestDenylist:
     def test_harness_env_sets_config_dir_and_policy(self, tmp_path: Path) -> None:
         env = harness_env(tmp_path, ClaudeCredential.oauth_token("tok"))
         assert env["CLAUDE_CONFIG_DIR"] == str(tmp_path)
+        assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+        assert env["DISABLE_ERROR_REPORTING"] == "1"
         assert env["DISABLE_TELEMETRY"] == "1"
+        assert env["CLAUDE_CODE_ENABLE_TELEMETRY"] == "0"
+        assert env["OTEL_METRICS_EXPORTER"] == "none"
+        assert env["OTEL_LOGS_EXPORTER"] == "none"
+        assert env["OTEL_TRACES_EXPORTER"] == "none"
         assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok"
+
+    def test_policy_settings_disable_attribution_and_feedback(self) -> None:
+        assert json.loads(CLAUDE_POLICY_SETTINGS) == {
+            "attribution": {"commit": "", "pr": "", "sessionUrl": False},
+            "feedbackDrafts": "off",
+            "feedbackSurveyRate": 0,
+        }

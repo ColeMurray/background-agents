@@ -50,6 +50,7 @@ export interface SessionRow {
   model: string; // LLM model to use (e.g., "anthropic/claude-haiku-4-5")
   reasoning_effort: string | null; // Reasoning effort level (e.g., "high", "max")
   status: SessionStatus;
+  status_revision: number;
   parent_session_id: string | null;
   spawn_source: SpawnSource;
   spawn_depth: number;
@@ -126,6 +127,8 @@ export interface MessageRow {
   status: MessageStatus;
   error_message: string | null;
   stop_confirmation_deadline: number | null;
+  stop_containment_attempts?: number;
+  stop_escalated_at?: number | null;
   execution_deadline_ms?: number | null;
   cleanup_deadline_ms?: number | null;
   cleanup_reserve_ms?: number | null;

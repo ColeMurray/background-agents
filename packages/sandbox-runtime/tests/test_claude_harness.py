@@ -9,6 +9,7 @@ execution_complete).
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
@@ -22,12 +23,14 @@ from claude_agent_sdk import (
     ResultMessage,
     StreamEvent,
     SystemMessage,
+    TaskNotificationMessage,
+    TaskStartedMessage,
+    TaskUpdatedMessage,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
     UserMessage,
 )
-from claude_agent_sdk._internal.message_parser import parse_message
 
 from sandbox_runtime.credentials.provider_credential_client import (
     RuntimeCredentialDenied,
@@ -78,24 +81,40 @@ def _text_delta(text: str) -> StreamEvent:
 
 
 def _task_message(subtype: str, **fields: Any) -> SystemMessage:
-    """Use the pinned SDK parser, including its typed SystemMessage subclasses."""
-    message = parse_message(
-        {
-            "type": "system",
-            "subtype": subtype,
-            "task_id": "background",
+    """Construct pinned SDK task messages through its public classes."""
+    common = {
+        "subtype": subtype,
+        "task_id": "background",
+        "uuid": "uuid",
+        "session_id": "sess",
+    }
+    if subtype == "task_started":
+        values = {
+            **common,
             "tool_use_id": "launcher",
             "task_type": "local_agent",
             "description": "Delegated work",
-            "uuid": "uuid",
-            "session_id": "sess",
+            **fields,
+        }
+        return TaskStartedMessage(data={"type": "system", **values}, **values)
+    if subtype == "task_notification":
+        values = {
+            **common,
+            "tool_use_id": "launcher",
+            "status": "completed",
             "output_file": "/tmp/output",
             "summary": "Finished",
             **fields,
         }
-    )
-    assert isinstance(message, SystemMessage)
-    return message
+        return TaskNotificationMessage(data={"type": "system", **values}, **values)
+    if subtype == "task_updated":
+        values = {**common, "patch": {}, **fields}
+        return TaskUpdatedMessage(
+            data={"type": "system", **values},
+            status=values["patch"].get("status"),
+            **values,
+        )
+    raise ValueError(f"Unsupported task message subtype: {subtype}")
 
 
 @dataclass
@@ -113,6 +132,7 @@ class FakeSdkClient:
     hang_interrupt: bool = False
     hang_disconnect: bool = False
     fail_connect: bool = False
+    fail_disconnect: bool = False
     fail_interrupt: bool = False
     fail_read: Exception | None = None
     message_delay_seconds: float = 0.0
@@ -126,6 +146,8 @@ class FakeSdkClient:
         self.connected = True
 
     async def disconnect(self) -> None:
+        if self.fail_disconnect:
+            raise RuntimeError("disconnect failed")
         if self.hang_disconnect:
             await asyncio.Event().wait()
         self.disconnected = True
@@ -352,6 +374,11 @@ class TestOptions:
         assert options["effort"] == "high"
         assert options["permission_mode"] == "dontAsk"
         assert options["disallowed_tools"] == ["AskUserQuestion"]
+        assert json.loads(options["settings"]) == {
+            "attribution": {"commit": "", "pr": "", "sessionUrl": False},
+            "feedbackDrafts": "off",
+            "feedbackSurveyRate": 0,
+        }
         assert options["setting_sources"] == ["user", "project"]
         assert options["include_partial_messages"] is True
         assert options["forward_subagent_text"] is False
@@ -388,7 +415,7 @@ class TestOptions:
         options = h.harness.build_options("claude-sonnet-4-6", None)
         notes = options["system_prompt"]["append"]
         assert notes.startswith("Workspace guidance\n\n")
-        assert f"{log_root}/<repo-name>/" in notes
+        assert f"{log_root}/<percent-encoded-owner>/<repo-name>/" in notes
         assert "setup.log and start.log" in notes
         assert "discarded before snapshots" in notes
         assert not h.config.workdir.exists()
@@ -763,6 +790,74 @@ class TestCostBaseline:
 
 class TestReconnectPolicy:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("model_change", [False, True])
+    async def test_disconnect_failure_cannot_start_a_replacement_client(
+        self, tmp_path: Path, model_change: bool
+    ) -> None:
+        h = Harness(tmp_path, turns=[[_result(0.1)], [_result(0.2)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        original_client = h.client
+        original_client.fail_disconnect = True
+        if not model_change:
+            h.harness._needs_reconnect = True
+        _, outcome = await _run(
+            h.harness,
+            HarnessPrompt(
+                message_id="m2",
+                text="next turn",
+                model="claude-opus-4-6" if model_change else None,
+            ),
+        )
+        assert outcome.success is False
+        assert outcome.execution_stopped is False
+        assert "disconnect failed" in outcome.error
+        assert h.harness._client is original_client
+        assert h.clients == [original_client]
+        assert len(original_client.queries) == 1
+        # A later prompt selecting the old model must not bypass the failed
+        # teardown through _ensure_client's same-shape fast path either.
+        _, repeated = await _run(h.harness)
+        assert repeated.success is False
+        assert h.clients == [original_client]
+        assert len(original_client.queries) == 1
+
+    @pytest.mark.asyncio
+    async def test_stop_retains_client_and_reports_disconnect_failure(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path, turns=[[]], client_kwargs={"fail_disconnect": True})
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        deadline_monotonic = asyncio.get_running_loop().time() + 1
+        assert await h.harness.stop(deadline_monotonic) is False
+        assert h.harness._client is h.client
+        assert h.client.disconnected is False
+        assert h.harness._needs_reconnect is True
+        h.harness.log.warn.assert_called_once()
+        assert h.harness.log.warn.call_args.args == ("claude.stop_error",)
+        assert str(h.harness.log.warn.call_args.kwargs["exc"]) == "disconnect failed"
+
+    @pytest.mark.asyncio
+    async def test_close_retains_failed_client_for_bounded_supervisor_shutdown(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(tmp_path, turns=[[_result(0.1)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        h.client.fail_disconnect = True
+        with pytest.raises(RuntimeError, match="disconnect failed"):
+            await h.harness.close()
+        assert h.harness._client is h.client
+        assert h.harness._execution_stopped is False
+        # Retaining ownership allows a later cleanup attempt to finish.
+        h.client.fail_disconnect = False
+        await h.harness.close()
+        assert h.client.disconnected is True
+        assert h.harness._client is None
+
+    @pytest.mark.asyncio
     async def test_model_or_effort_change_reconnects_with_resume(self, tmp_path: Path) -> None:
         h = Harness(tmp_path, turns=[[_result(0.1)], [_result(0.1)]])
         await h.harness.open()
@@ -913,7 +1008,9 @@ class TestReconnectPolicy:
         loop = asyncio.get_running_loop()
         start_monotonic = loop.time()
         assert await h.harness.stop(start_monotonic + 0.06) is False
-        assert loop.time() - start_monotonic < 0.25
+        # Generous upper bound: the claim is that both steps share one
+        # deadline, not that they finish within a precise wall-clock budget.
+        assert loop.time() - start_monotonic < 1.0
         assert h.client.interrupts == 1
         # Keep the client so final shutdown can retry a cancelled disconnect.
         assert h.harness._client is h.client

@@ -186,6 +186,10 @@ fix instead.
   `CLAUDE_CONFIG_DIR` (`~/.openinspect/claude/skills`); repository `.claude/` settings, hooks and
   agents load through `setting_sources=["user","project"]`, the same trust boundary as the
   repository's `.openinspect/setup.sh` and `.opencode/` directory under OpenCode.
+- **Privacy.** The harness disables Claude Code's commit, pull request, and session-link
+  attribution. It also disables nonessential Anthropic traffic, error reporting, feedback and
+  surveys, and both Anthropic and OpenTelemetry usage telemetry. Model requests and Open-Inspect's
+  own per-turn cost accounting are unaffected.
 - **Tools.** Open-Inspect's own tools are served to the Claude harness in-process as the `oi` MCP
   server: child sessions and `upload-media` always, `create-pull-request` when the session has a
   repository, and `slack-notify` when agent notifications are enabled for the repository. Session

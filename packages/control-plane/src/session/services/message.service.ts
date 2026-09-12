@@ -48,9 +48,14 @@ export class MessageService {
 
   reconcileExecutionState(
     automationRunId: string,
-    executionLaunchId?: string
+    executionLaunchId?: string,
+    admissionDeadlineMs?: number
   ): Promise<SessionExecutionState> {
-    return this.deps.messageQueue.reconcileExecutionState(automationRunId, executionLaunchId);
+    return this.deps.messageQueue.reconcileExecutionState(
+      automationRunId,
+      executionLaunchId,
+      admissionDeadlineMs
+    );
   }
 
   listEvents(request: ListEventsRequest): ListEventsResponse {

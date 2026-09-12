@@ -561,6 +561,7 @@ export class E2BRestClient {
 
       return await consume(response);
     } catch (error) {
+      if (options?.signal?.aborted) throw options.signal.reason;
       // A timeout fires controller.abort(); the resulting AbortError — from
       // fetch OR a body read — must surface as a transient timeout so it isn't
       // classified permanent and trip the circuit breaker. Our typed API errors

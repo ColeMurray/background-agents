@@ -18,6 +18,8 @@ export interface MessageExecutionMetadata {
   cleanup_reserve_ms?: number | null;
   execution_sandbox_id: string | null;
   requires_stop_evidence: number;
+  stop_containment_attempts?: number;
+  stop_escalated_at?: number | null;
 }
 
 export interface RecordedMessageCompletion {
@@ -148,7 +150,7 @@ export class MessageRepository {
         this.sql
           .exec(
             `SELECT execution_deadline_ms, cleanup_deadline_ms, cleanup_reserve_ms, execution_sandbox_id,
-              requires_stop_evidence FROM messages WHERE id = ?`,
+              requires_stop_evidence, stop_containment_attempts, stop_escalated_at FROM messages WHERE id = ?`,
             messageId
           )
           .toArray() as MessageExecutionMetadata[]
@@ -158,14 +160,18 @@ export class MessageRepository {
 
   /** Early completion/Stop starts the one cleanup interval, never renews it. */
   beginMessageCleanup(messageId: string, now: number, observedDeadlineMs?: number): number | null {
+    let observedBound: number | null = null;
     if (observedDeadlineMs !== undefined) {
-      this.sql.exec(
-        `UPDATE messages SET cleanup_deadline_ms = MIN(COALESCE(cleanup_deadline_ms, ?), ?)
-         WHERE id = ?`,
-        observedDeadlineMs,
-        observedDeadlineMs,
-        messageId
-      );
+      const observed = this.sql
+        .exec(
+          `UPDATE messages SET cleanup_deadline_ms = MIN(COALESCE(cleanup_deadline_ms, ?), ?)
+         WHERE id = ? RETURNING cleanup_deadline_ms`,
+          observedDeadlineMs,
+          observedDeadlineMs,
+          messageId
+        )
+        .toArray() as Array<{ cleanup_deadline_ms: number }>;
+      observedBound = observed[0]?.cleanup_deadline_ms ?? null;
     }
     const row = (
       this.sql
@@ -178,7 +184,7 @@ export class MessageRepository {
         )
         .toArray() as Array<{ cleanup_deadline_ms: number }>
     )[0];
-    return row?.cleanup_deadline_ms ?? observedDeadlineMs ?? null;
+    return row?.cleanup_deadline_ms ?? observedBound;
   }
 
   getAutomationMessage(runId: string): Pick<MessageRow, "id" | "status" | "error_message"> | null {
@@ -198,16 +204,39 @@ export class MessageRepository {
     );
   }
 
-  hasExecutionLaunch(launchId: string): boolean {
+  getExecutionLaunch(
+    runId: string,
+    launchId: string
+  ): { messageId: string; status: MessageStatus; error: string | null } | null {
     return (
-      this.sql
-        .exec(
-          `SELECT id FROM messages WHERE json_valid(callback_context)
+      (
+        this.sql
+          .exec(
+            `SELECT id AS messageId, status, error_message AS error FROM messages WHERE json_valid(callback_context)
+         AND json_extract(callback_context, '$.source') IN ('automation', 'slack')
+         AND json_extract(callback_context, '$.runId') = ?
          AND json_extract(callback_context, '$.executionLaunchId') = ? LIMIT 1`,
-          launchId
-        )
-        .toArray().length > 0
+            runId,
+            launchId
+          )
+          .toArray() as Array<{ messageId: string; status: MessageStatus; error: string | null }>
+      )[0] ?? null
     );
+  }
+
+  listPendingAdmissionDeadlines(): Array<{ id: string; deadline: number }> {
+    return this.sql
+      .exec(
+        `SELECT id, json_extract(callback_context, '$.admissionDeadlineMs') AS deadline
+       FROM messages WHERE status = 'pending' AND execution_deadline_ms IS NULL
+         AND stop_confirmation_deadline IS NULL AND json_valid(callback_context)
+         AND json_extract(callback_context, '$.source') IN ('automation', 'slack')
+         AND json_type(callback_context, '$.runId') = 'text'
+         AND json_type(callback_context, '$.executionLaunchId') = 'text'
+         AND json_type(callback_context, '$.admissionDeadlineMs') = 'integer'
+         AND json_extract(callback_context, '$.admissionDeadlineMs') > 0`
+      )
+      .toArray() as Array<{ id: string; deadline: number }>;
   }
 
   /** A delayed ready frame must upgrade the already-dispatched turn as well. */
@@ -240,6 +269,92 @@ export class MessageRepository {
     );
   }
 
+  /** Persist ambiguous-delivery recovery and its wake-up as one crash boundary. */
+  prepareDispatchRecovery(
+    messageId: string,
+    deadline: number,
+    persistAlarmIntent: () => void
+  ): boolean {
+    return this.transactionSync(() => {
+      const updated = this.sql.exec(
+        `UPDATE messages SET status = 'pending', stop_confirmation_deadline = ?
+         WHERE id = ? AND status = 'processing' RETURNING id`,
+        deadline,
+        messageId
+      );
+      if (updated.toArray().length !== 1) return false;
+      this.sql.exec(`DELETE FROM events WHERE id = ?`, `user_message:${messageId}`);
+      persistAlarmIntent();
+      return true;
+    });
+  }
+
+  /** Reserve an attempt before any provider await, including recovery after a crash. */
+  claimStopContainmentAttempt(
+    messageId: string,
+    nextAttemptAt: number,
+    maxAttempts: number,
+    persistAlarmIntent: () => void
+  ): number | null {
+    return this.transactionSync(() => {
+      const row = (
+        this.sql
+          .exec(
+            `UPDATE messages SET stop_containment_attempts = stop_containment_attempts + 1,
+           stop_confirmation_deadline = ? WHERE id = ? AND stop_confirmation_deadline IS NOT NULL
+           AND stop_escalated_at IS NULL AND stop_containment_attempts < ?
+         RETURNING stop_containment_attempts`,
+            nextAttemptAt,
+            messageId,
+            maxAttempts
+          )
+          .toArray() as Array<{ stop_containment_attempts: number }>
+      )[0];
+      if (!row) return null;
+      persistAlarmIntent();
+      return row.stop_containment_attempts;
+    });
+  }
+
+  /** Escalation is terminal for automatic recovery, not evidence of cessation. */
+  recordStopContainmentEscalation(
+    messageId: string,
+    now: number
+  ): Extract<SandboxEvent, { type: "warning" }> | null {
+    return this.transactionSync(() => {
+      const row = (
+        this.sql
+          .exec(
+            `UPDATE messages SET stop_escalated_at = ? WHERE id = ?
+           AND stop_confirmation_deadline IS NOT NULL AND stop_escalated_at IS NULL
+         RETURNING execution_sandbox_id, stop_containment_attempts`,
+            now,
+            messageId
+          )
+          .toArray() as Array<{
+          execution_sandbox_id: string | null;
+          stop_containment_attempts: number;
+        }>
+      )[0];
+      if (!row) return null;
+      const event: Extract<SandboxEvent, { type: "warning" }> = {
+        type: "warning",
+        scope: "provider",
+        sandboxId: row.execution_sandbox_id ?? undefined,
+        timestamp: now / 1000,
+        message: `Execution could not be confirmed stopped after ${row.stop_containment_attempts} containment attempts. Automatic recovery has stopped; this runtime remains blocked and requires operator recovery.`,
+      };
+      this.eventRepository.createEvent({
+        id: `stop_containment_escalated:${messageId}:${now}`,
+        type: "warning",
+        data: JSON.stringify(event),
+        messageId,
+        createdAt: now,
+      });
+      return event;
+    });
+  }
+
   /**
    * Record the runtime's cumulative cost report for a turn and return how much
    * it exceeds the highest report already stored. Resends, out-of-order
@@ -264,7 +379,11 @@ export class MessageRepository {
   }
 
   clearMessageAwaitingStopConfirmation(messageId: string): void {
-    this.sql.exec(`UPDATE messages SET stop_confirmation_deadline = NULL WHERE id = ?`, messageId);
+    this.sql.exec(
+      `UPDATE messages SET stop_confirmation_deadline = NULL,
+      stop_containment_attempts = 0, stop_escalated_at = NULL WHERE id = ?`,
+      messageId
+    );
   }
 
   getProcessingMessageWithCreatedAt(): { id: string; created_at: number } | null {

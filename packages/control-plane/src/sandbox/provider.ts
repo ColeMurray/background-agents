@@ -336,6 +336,8 @@ export interface ResumeResult {
  * Configuration for explicitly stopping a sandbox.
  */
 export interface StopConfig {
+  /** Lifecycle-owned policy; reason is diagnostic and must never select destructive behavior. */
+  mode: "suspend" | "terminate";
   /** Provider's internal object ID (e.g., Daytona sandbox ID) */
   providerObjectId: string;
   /** Session ID for context */

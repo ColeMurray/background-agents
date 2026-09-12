@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS session (
   model TEXT DEFAULT 'anthropic/claude-haiku-4-5',   -- LLM model to use
   reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'failed', 'archived', 'cancelled'
+  status_revision INTEGER NOT NULL DEFAULT 1,
   parent_session_id TEXT,                           -- Parent session ID (NULL for top-level)
   spawn_source TEXT NOT NULL DEFAULT 'user',        -- 'user' or 'agent'
   spawn_depth INTEGER NOT NULL DEFAULT 0,           -- 0 for top-level, parent.depth + 1 for children
@@ -134,6 +135,8 @@ CREATE TABLE IF NOT EXISTS messages (
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
+  stop_containment_attempts INTEGER NOT NULL DEFAULT 0,
+  stop_escalated_at INTEGER,
   execution_deadline_ms INTEGER,
   cleanup_deadline_ms INTEGER,
   cleanup_reserve_ms INTEGER,
@@ -199,6 +202,9 @@ CREATE TABLE IF NOT EXISTS sandbox (
   ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
   active_socket_id TEXT,                            -- Bridge socket the session dispatches to (socket:<id> tag)
+  runtime_capabilities TEXT,                        -- JSON array reported by the current runtime
+  provider_execution_expiry_kind TEXT,              -- 'hard', 'conservative', 'unknown', or NULL while startup is pending
+  provider_execution_expires_at_ms INTEGER,         -- Provider lifetime bound in epoch milliseconds
   created_at INTEGER NOT NULL
 );
 
@@ -695,8 +701,18 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 51,
+    description: "Fence session status projections independently of activity",
+    run: `ALTER TABLE session ADD COLUMN status_revision INTEGER NOT NULL DEFAULT 1`,
+  },
+  {
+    id: 52,
     description: "Persist turn deadlines and correlated runtime cessation evidence",
     run: (sql) => {
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN stop_containment_attempts INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN stop_escalated_at INTEGER`);
       runMigration(sql, `ALTER TABLE messages ADD COLUMN execution_deadline_ms INTEGER`);
       runMigration(sql, `ALTER TABLE messages ADD COLUMN cleanup_deadline_ms INTEGER`);
       runMigration(sql, `ALTER TABLE messages ADD COLUMN cleanup_reserve_ms INTEGER`);

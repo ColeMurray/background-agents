@@ -95,6 +95,7 @@ export class VercelImageBuildAdapter implements ImageBuildAdapter {
     signal?: AbortSignal;
   }): Promise<void> {
     const stopResult = await this.provider.stopSandbox({
+      mode: "terminate",
       providerObjectId: input.providerSessionId,
       sessionId: input.buildId,
       reason: "environment_image_build_complete",

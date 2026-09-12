@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .hook_logs import HookLogs
+from .hook_process import GuardedHookProcess, HookCleanupError, create_hook_process
 from .runtime_config import BootMode
 
 if TYPE_CHECKING:
@@ -17,10 +18,6 @@ if TYPE_CHECKING:
 
 HOOK_CLEANUP_TIMEOUT_SECONDS = 5.0
 HOOK_CLEANUP_POLL_SECONDS = 0.05
-
-
-class HookCleanupError(RuntimeError):
-    """Failed provisioning may still be running; boot must not continue."""
 
 
 def _group_running(process_group_id: int) -> bool:
@@ -58,11 +55,15 @@ class RepositoryHooks:
     def __init__(self, log: Any) -> None:
         self.log = log
         self.logs: HookLogs | None = None
-        self._processes: set[asyncio.subprocess.Process] = set()
+        self._processes: set[asyncio.subprocess.Process | GuardedHookProcess] = set()
 
-    async def _terminate(self, process: asyncio.subprocess.Process) -> None:
+    async def _terminate(self, process: asyncio.subprocess.Process | GuardedHookProcess) -> None:
         """Kill the owned group, even when its launcher already exited."""
         try:
+            if isinstance(process, GuardedHookProcess):
+                await process.stop(HOOK_CLEANUP_TIMEOUT_SECONDS)
+                self._processes.discard(process)
+                return
             async with asyncio.timeout(HOOK_CLEANUP_TIMEOUT_SECONDS):
                 if isinstance(process.pid, int):
                     with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -75,9 +76,9 @@ class RepositoryHooks:
                         with contextlib.suppress(ProcessLookupError, PermissionError):
                             os.killpg(process.pid, signal.SIGKILL)
                         await asyncio.sleep(HOOK_CLEANUP_POLL_SECONDS)
-        except (TimeoutError, OSError) as error:
+        except (TimeoutError, OSError, RuntimeError) as error:
             raise HookCleanupError(
-                "hook process-group cleanup could not be confirmed; repository boot stopped"
+                "hook execution cleanup could not be confirmed; repository boot stopped"
             ) from error
         self._processes.discard(process)
 
@@ -104,7 +105,7 @@ class RepositoryHooks:
         if self.logs is None:
             return ""
         return (
-            f"Repository hook diagnostics for this boot: {self.logs.path}/<repo-name>/"
+            f"Repository hook diagnostics for this boot: {self.logs.path}/<encoded-owner>/<repo-name>/"
             "setup.log and start.log (only for hooks that ran). These are private, "
             "best-effort bounded logs, discarded before snapshots. A successful launcher "
             "exit does not establish background service health."
@@ -145,7 +146,7 @@ class RepositoryHooks:
             setting_source=timeout_source,
             boot_mode=boot_mode.value,
         )
-        process: asyncio.subprocess.Process | None = None
+        process: asyncio.subprocess.Process | GuardedHookProcess | None = None
         try:
             output_policy = os.environ.get("HOOK_LOG_MODE", "file")
             if output_policy not in ("file", "discard"):
@@ -159,7 +160,7 @@ class RepositoryHooks:
             if output_policy == "file":
                 if self.logs is None:
                     self.logs = HookLogs(repo.path.parent, self.log)
-                log_path, log_fd = self.logs.open(repo.name, hook_name)
+                log_path, log_fd = self.logs.open(repo.owner, repo.name, hook_name)
                 os.environ["OPENINSPECT_HOOK_LOG_DIR"] = str(self.logs.path)
                 log_fields.update(log_path=str(log_path), boot_id=self.logs.boot_id)
             else:
@@ -168,14 +169,11 @@ class RepositoryHooks:
             env = os.environ.copy()
             env["OPENINSPECT_BOOT_MODE"] = boot_mode.value
             spawn_task = asyncio.create_task(
-                asyncio.create_subprocess_exec(
-                    "bash",
-                    str(script_path),
+                create_hook_process(
+                    script_path,
                     cwd=repo.path,
                     stdout=log_fd,
-                    stderr=asyncio.subprocess.STDOUT,
                     env=env,
-                    start_new_session=True,
                 )
             )
             try:
@@ -197,7 +195,9 @@ class RepositoryHooks:
                     "duration_ms": int((time.monotonic() - start_time) * 1000),
                     "boot_mode": boot_mode.value,
                     "setting_source": timeout_source,
-                    "cleanup_outcome": "process_group_stopped",
+                    "cleanup_outcome": "descendants_stopped"
+                    if isinstance(process, GuardedHookProcess)
+                    else "process_group_stopped",
                     **log_fields,
                 }
                 self.log.error(f"{hook_name}.timeout", **fields)
@@ -215,7 +215,11 @@ class RepositoryHooks:
                 self.log.info(f"{hook_name}.complete", **fields)
                 return True
             await self._terminate(process)
-            fields["cleanup_outcome"] = "process_group_stopped"
+            fields["cleanup_outcome"] = (
+                "descendants_stopped"
+                if isinstance(process, GuardedHookProcess)
+                else "process_group_stopped"
+            )
             self.log.error(f"{hook_name}.failed", **fields)
             return False
         except asyncio.CancelledError:
@@ -233,7 +237,9 @@ class RepositoryHooks:
                     timeout_seconds=timeout_seconds,
                     setting_source=timeout_source,
                     duration_ms=int((time.monotonic() - start_time) * 1000),
-                    cleanup_outcome="process_group_stopped",
+                    cleanup_outcome="descendants_stopped"
+                    if isinstance(process, GuardedHookProcess)
+                    else "process_group_stopped",
                 )
             raise
         except HookCleanupError:

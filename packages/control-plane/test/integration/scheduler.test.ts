@@ -32,9 +32,11 @@ async function seedAutomationSessionMessage(input: {
   runId: string;
   sessionId: string;
   messageId: string;
-  status: "processing" | "completed" | "failed";
+  status: "pending" | "processing" | "completed" | "failed";
   startedAt?: number;
   executionDeadlineMs?: number;
+  executionLaunchId?: string;
+  admissionDeadlineMs?: number;
 }) {
   const { stub } = await initNamedSession(input.sessionId);
   // The integration provider cannot launch runtimes. Let warm-up settle before
@@ -50,7 +52,7 @@ async function seedAutomationSessionMessage(input: {
     source: "automation",
     status: input.status,
     createdAt: input.startedAt ?? now,
-    startedAt: input.startedAt ?? now,
+    startedAt: input.status === "pending" ? undefined : (input.startedAt ?? now),
   });
   await queryDO(
     stub,
@@ -61,9 +63,11 @@ async function seedAutomationSessionMessage(input: {
       automationId: input.automationId,
       runId: input.runId,
       automationName: "Test Automation",
+      executionLaunchId: input.executionLaunchId,
+      admissionDeadlineMs: input.admissionDeadlineMs,
     }),
     input.status === "failed" ? "boom" : null,
-    input.status === "processing" ? null : now,
+    input.status === "processing" || input.status === "pending" ? null : now,
     input.executionDeadlineMs ?? null,
     input.executionDeadlineMs == null ? null : now + 60_000,
     input.messageId
@@ -425,6 +429,54 @@ describe("Scheduler (integration)", () => {
         status: "failed",
         execution_unresolved: 1,
       });
+    });
+
+    it("expires a never-dispatched automation admission and releases overlap without a stop", async () => {
+      const store = new AutomationStore(env.DB);
+      const automationId = "auto-admission-timeout";
+      const runId = "run-admission-timeout";
+      const sessionId = "session-admission-timeout";
+      const launchId = "launch-admission-timeout";
+      const admissionDeadlineMs = Date.now() - 1;
+      await store.create(makeAutomation({ id: automationId }));
+      await seedRun(makeRunRow(automationId, { id: runId }));
+      await store.claimRunSession(runId, sessionId, Date.now() - 10 * 60_000, {
+        id: launchId,
+        admissionDeadlineMs,
+      });
+      const stub = await seedAutomationSessionMessage({
+        automationId,
+        runId,
+        sessionId,
+        messageId: "message-admission-timeout",
+        status: "pending",
+        executionLaunchId: launchId,
+        admissionDeadlineMs,
+      });
+
+      await createScheduler().tick();
+
+      expect(await store.getRunById(automationId, runId)).toMatchObject({
+        status: "failed",
+        failure_reason: "Automation startup deadline expired before execution was dispatched",
+        execution_unresolved: 0,
+        execution_launch_id: null,
+        execution_admission_deadline_ms: null,
+      });
+      expect(await store.getActiveRunForAutomation(automationId)).toBeNull();
+      expect(
+        await queryDO(
+          stub,
+          "SELECT status, started_at, execution_deadline_ms, stop_confirmation_deadline FROM messages"
+        )
+      ).toEqual([
+        {
+          status: "failed",
+          started_at: null,
+          execution_deadline_ms: null,
+          stop_confirmation_deadline: null,
+        },
+      ]);
     });
 
     it("skips overdue automations with active runs (concurrency guard)", async () => {

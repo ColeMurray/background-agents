@@ -17,6 +17,7 @@ The wrapper carries variable *names* only. Credential values travel through
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import sys
@@ -44,6 +45,15 @@ OAUTH_MANAGED_ENV_VAR: Final = "ANTHROPIC_OAUTH_MANAGED"
 CONFIG_DIR_ENV_VAR: Final = "CLAUDE_CONFIG_DIR"
 
 WRAPPER_NAME: Final = "claude-clean-env"
+
+CLAUDE_POLICY_SETTINGS: Final = json.dumps(
+    {
+        "attribution": {"commit": "", "pr": "", "sessionUrl": False},
+        "feedbackDrafts": "off",
+        "feedbackSurveyRate": 0,
+    },
+    separators=(",", ":"),
+)
 
 
 class ClaudeAuthMode(StrEnum):
@@ -154,6 +164,11 @@ def harness_env(config_dir: Path, credential: ClaudeCredential) -> dict[str, str
         "DISABLE_AUTOUPDATER": "1",
         "DISABLE_ERROR_REPORTING": "1",
         "DISABLE_TELEMETRY": "1",
+        # Anthropic telemetry and opt-in customer OpenTelemetry are separate.
+        "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
+        "OTEL_METRICS_EXPORTER": "none",
+        "OTEL_LOGS_EXPORTER": "none",
+        "OTEL_TRACES_EXPORTER": "none",
         **credential.env,
     }
 

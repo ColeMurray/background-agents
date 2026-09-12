@@ -267,7 +267,7 @@ async def test_terminal_prompt_completion_schedules_refresh_without_blocking_com
     bridge.diff_refresh.prompt_finished = lambda: lifecycle.append("prompt_finished")
 
     result = await bridge._handle_command({"type": "prompt", "messageId": "message-1"})
-    task = bridge._current_prompt_task
+    task = bridge.execution.prompt_task
     assert result is None
     assert task is not None
     await task

@@ -156,7 +156,7 @@ class TestSessionIdentity:
                 "author": {"userId": "user-1", "gitIdentity": {"mode": "agent-only"}},
             }
         )
-        task = bridge._current_prompt_task
+        task = bridge.execution.prompt_task
         assert task is not None
         await task
 

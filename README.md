@@ -3,6 +3,8 @@
 An open-source background agents coding system inspired by
 [Ramp's Inspect](https://builders.ramp.com/post/why-we-built-our-background-agent).
 
+![Open-Inspect web UI: session sidebar and new session composer](docs/images/ui-overview.png)
+
 ## Overview
 
 Open-Inspect provides a hosted background coding agent that can:

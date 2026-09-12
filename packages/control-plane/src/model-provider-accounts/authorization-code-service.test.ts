@@ -559,6 +559,41 @@ describe("ProviderAuthorizationCodeService complete", () => {
     );
   });
 
+  it.each([
+    { payload: null },
+    { payload: [] },
+    { payload: { providerState: PROVIDER_STATE } },
+    { payload: { exchangeAttempts: 0 } },
+    { payload: { providerState: PROVIDER_STATE, exchangeAttempts: "0" } },
+    { payload: { providerState: PROVIDER_STATE, exchangeAttempts: -1 } },
+    { payload: { providerState: PROVIDER_STATE, exchangeAttempts: 0.5 } },
+    { payload: { providerState: PROVIDER_STATE, exchangeAttempts: 3 } },
+  ])(
+    "fails closed before exchange for a malformed persisted envelope: $payload",
+    async ({ payload }) => {
+      const authorizationCode = capability(async () => ({ credential: CREDENTIAL }));
+      const encryptedProviderData = await encryptProviderAuthorizationPayload(
+        payload,
+        ENCRYPTION_KEY,
+        { transactionId: TRANSACTION_ID, provider: "anthropic", stateSchemaVersion: 1 }
+      );
+      const { subject, transactions, current, finalizer } = service(
+        10_000,
+        pending({ encryptedProviderData }),
+        registry(authorizationCode)
+      );
+
+      await expect(
+        subject.complete(USER_ID, "anthropic", TRANSACTION_ID, "code")
+      ).resolves.toMatchObject({ status: "failed", retryable: true });
+      expect(current().state).toBe("failed");
+      expect(authorizationCode.parseState).not.toHaveBeenCalled();
+      expect(authorizationCode.complete).not.toHaveBeenCalled();
+      expect(transactions.returnPending).not.toHaveBeenCalled();
+      expect(finalizer.finalizeTrustedConnection).not.toHaveBeenCalled();
+    }
+  );
+
   it("fails closed when finalization does not connect", async () => {
     const authorizationCode = capability(async () => ({ credential: CREDENTIAL }));
     const { subject, finalizer } = service(
