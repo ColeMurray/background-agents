@@ -24,6 +24,19 @@ export type {
   SessionAttachmentUploadResponse,
 } from "./session-attachments";
 
+export {
+  githubAutofixEnvelopeSchema,
+  githubAutofixOriginSchema,
+  githubAutofixSessionCommandSchema,
+  githubAutofixSessionResponseSchema,
+} from "./github-autofix";
+export type {
+  GitHubAutofixEnvelope,
+  GitHubAutofixOrigin,
+  GitHubAutofixSessionCommand,
+  GitHubAutofixSessionResponse,
+} from "./github-autofix";
+
 export { clientMessageSchema, clientRequestIdSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
 
@@ -32,6 +45,7 @@ export {
   MAX_SESSION_REPOSITORIES,
   sessionRepositoryStateSchema,
   prArtifactBelongsToRepo,
+  repositoryPairInputSchema,
   repositoryInputSchema,
   repositoriesInputSchema,
   sessionRepositoriesInputSchema,
@@ -40,6 +54,7 @@ export {
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
   parseRepositoryFullName,
+  validateRepositoryPathSegments,
   normalizeOptionalRepositoryPair,
 } from "./repositories";
 export type {
@@ -156,16 +171,42 @@ export type {
 export type { AutomationTriggerType } from "../triggers/types";
 
 export {
+  MAX_AUDIT_EVENT_TIMESTAMP_MS,
+  auditEventTimestampSchema,
+  auditOperationResultSchema,
+  auditPrincipalKindSchema,
+  auditEventMetadataSchema,
+  auditEventSchema,
+  auditEventListResponseSchema,
+} from "./audit-events";
+export type {
+  AuditOperationResult,
+  AuditPrincipalKind,
+  AuditEventMetadata,
+  AuditEvent,
+  AuditEventListResponse,
+} from "./audit-events";
+
+export {
+  MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
   MAX_AUTOMATION_REPOSITORIES,
+  MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
+  validateAutomationTargetCounts,
+  sentryClientSecretSchema,
+  createAutomationRequestSchema,
+  updateAutomationRequestSchema,
   listAutomationsResponseSchema,
+  automationInvocationStatusSchema,
 } from "./automations";
 export type {
   AutomationRepository,
   AutomationRepositoryInput,
   Automation,
+  AutomationExecutionSummary,
+  AutomationListItem,
   CreateAutomationRequest,
   UpdateAutomationRequest,
   AutomationRun,
@@ -174,12 +215,77 @@ export type {
   ListAutomationInvocationsResponse,
 } from "./automations";
 
+export {
+  SUBSCRIPTION_PROVIDER_IDS,
+  SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
+  MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
+  subscriptionProviderIdSchema,
+  modelProviderAccountIdSchema,
+  providerAuthSelectionSchema,
+  providerAuthModeSchema,
+  modelProviderSelectionsSchema,
+  modelProviderAccountStatusSchema,
+  modelProviderAccountSchema,
+  modelProviderAccountResponseSchema,
+  createModelProviderAccountResponseSchema,
+  modelProviderAccountsResponseSchema,
+  modelProviderAccountDefaultSchema,
+  modelProviderAccountDefaultRequestSchema,
+  modelProviderAccountDisplayNameSchema,
+  modelProviderAccountDefaultsResponseSchema,
+  sessionModelProviderAuthSchema,
+  sessionModelProviderAuthResponseSchema,
+  legacyProviderKeyLocationSchema,
+  legacyProviderCredentialsResponseSchema,
+  connectOpenAIModelProviderAccountRequestSchema,
+  connectXaiModelProviderAccountRequestSchema,
+  connectAnthropicModelProviderAccountRequestSchema,
+  connectModelProviderAccountRequestSchema,
+  reconnectOpenAIModelProviderAccountRequestSchema,
+  reconnectXaiModelProviderAccountRequestSchema,
+  reconnectAnthropicModelProviderAccountRequestSchema,
+  startProviderAuthorizationCodeRequestSchema,
+  startProviderAuthorizationCodeResponseSchema,
+  completeProviderAuthorizationCodeRequestSchema,
+  providerAuthorizationCodeStatusResponseSchema,
+  MODEL_PROVIDER_ACCOUNT_CONNECTION_METHOD,
+  STATIC_CREDENTIAL_PROVIDER_IDS,
+  modelProviderAccountConnectionMethod,
+  reconnectModelProviderAccountRequestSchema,
+} from "./provider-accounts";
+export type {
+  SubscriptionProviderId,
+  ProviderAuthSelection,
+  ProviderAuthMode,
+  SessionProviderAuthMode,
+  ModelProviderAccountConnectionMethod,
+  StartProviderAuthorizationCodeRequest,
+  StartProviderAuthorizationCodeResponse,
+  CompleteProviderAuthorizationCodeRequest,
+  ProviderAuthorizationCodeStatusResponse,
+  ModelProviderSelections,
+  ModelProviderAccountStatus,
+  ModelProviderAccount,
+  ModelProviderAccountResponse,
+  CreateModelProviderAccountResponse,
+  ModelProviderAccountsResponse,
+  ModelProviderAccountDefault,
+  ModelProviderAccountDefaultsResponse,
+  SessionModelProviderAuth,
+  SessionModelProviderAuthResponse,
+  LegacyProviderKeyLocation,
+  LegacyProviderCredentialsResponse,
+  ConnectModelProviderAccountRequest,
+  ReconnectModelProviderAccountRequest,
+} from "./provider-accounts";
+
 export type {
   ImageBuildStatus,
   ImageBuildScopeKind,
   RepositoryShaEntry,
   ImageBuildRecordView,
 } from "./image-builds";
+export { repositoryShaEntrySchema, repositoryShasSchema } from "./image-builds";
 
 export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";
 export type {
@@ -196,6 +302,7 @@ export type {
   AnalyticsPullRequestRepoEntry,
   AnalyticsPullRequestSourceEntry,
   AnalyticsPullRequestsResponse,
+  AnalyticsDashboardResponse,
 } from "./analytics";
 
 export {
@@ -214,7 +321,6 @@ export {
   MAX_SKILL_REVISION_BYTES,
   MAX_SKILL_PATH_BYTES,
   MAX_SKILL_PATH_DEPTH,
-  MAX_MANAGED_SKILLS_PER_SESSION,
   MAX_MANAGED_SKILL_MANIFEST_BYTES,
   skillNameSchema,
   skillFileInputSchema,

@@ -202,7 +202,7 @@ development environment.
 - Node.js 22, Python 3.12, git, curl
 - Package managers: npm, pnpm, pip, uv
 - agent-browser CLI + headless Chrome (for browser automation)
-- OpenCode (the coding agent)
+- OpenCode and the Claude Agent SDK (the coding agent harnesses)
 
 Open-Inspect supports these sandbox backends:
 
@@ -300,6 +300,36 @@ from a prebuild-enabled environment, the environment's whole repository set):
 4. **Ready**: Agent starts once runtime hook succeeds
 
 If `start.sh` exists and fails, startup fails fast instead of continuing with a broken runtime.
+
+#### Preinstalling local MCP dependencies
+
+OpenInspect checks the global npm installation before preparing local `npx` MCP servers. An exact
+package version already installed with intact executable links is reused, including after a snapshot
+restore. Only missing or mismatched packages are installed. Failed or interrupted installs are
+marked for retry rather than treated as cache hits.
+
+To remove the installation from first-session startup, pin the same package version in the MCP
+command and the repository's `.openinspect/setup.sh` (or the setup hook used by its environment):
+
+```bash
+# .openinspect/setup.sh — replace this example package/version with your MCP dependency
+npm install --global @example/mcp-server@1.2.3
+```
+
+Configure the matching MCP command as `["npx", "-y", "@example/mcp-server@1.2.3"]` and rebuild the
+prebuilt image. This uses the existing setup/prebuild lifecycle; MCP settings are not automatically
+baked into images. Changing a pinned version causes an install until the image is rebuilt with it.
+
+Unversioned packages and tags such as `latest` are refreshed once per sandbox boot. Successful
+installs are reused across OpenCode process restarts within that boot, but not across snapshot
+restores. Remote MCP servers are unaffected, and server commands, arguments, and credentials are
+passed through unchanged. Unsupported `npx` option forms are left to `npx` without eager
+installation.
+
+The `mcp.package_cache` event reports hit/miss counts and lookup time; `mcp.packages_installed`
+reports preparation time on misses. This optimization removes redundant **global installation**, not
+all MCP startup work: `npx` may still resolve registry metadata or populate its own execution cache,
+particularly with explicit `--package` commands.
 
 ### When Snapshots Are Taken
 
@@ -428,8 +458,20 @@ will not see `send-child-prompt` until it starts in a fresh sandbox built from t
 
 ## The Agent
 
-Open-Inspect uses [OpenCode](https://opencode.ai) as its coding agent. OpenCode is an open-source
-agent designed to run as a server, making it ideal for background execution.
+The sandbox runtime speaks to its coding agent through one seam, the **agent harness**. A session
+runs on exactly one harness, chosen at create:
+
+- **OpenCode** (built-in): [OpenCode](https://opencode.ai) runs as a server inside the sandbox; the
+  supervisor owns the `opencode serve` process and the bridge talks to it over HTTP/SSE.
+- **Claude Agent**: the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agent-sdk) runs inside
+  the bridge and spawns the `claude` binary as its own child, launched with a clean environment that
+  carries exactly one Anthropic credential. This is the harness that can use a connected Claude
+  subscription. See [Using the Claude Agent Harness](CLAUDE_AGENT.md).
+
+Both harnesses emit the same session events (tokens, tool calls, steps, warnings), so everything
+above the sandbox is harness-neutral. The bridge owns turn completion: a harness reports the outcome
+of a turn and the bridge emits the single `execution_complete` event. Follow-up prompts queue until
+the running turn ends on both harnesses.
 
 ### What the Agent Can Do
 
@@ -575,7 +617,7 @@ was built for internal use where all employees have access to company repositori
 | User OAuth Token   | Create PRs, identify users                 | Repos the user has access to     |
 | Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                   |
 | WebSocket Token    | Authenticate client connections            | Single session                   |
-| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Provider account + secret scope  |
+| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Pinned session provider account  |
 
 Fresh and prebuilt-image sandboxes fetch git credentials on demand through the control plane instead
 of relying on a token embedded in the environment or remote URL. Snapshot restores may still receive
@@ -601,19 +643,47 @@ per-environment scope. A session receives global secrets plus its **session targ
 - Injected into sandboxes at startup
 - Never exposed to clients (only key names are visible)
 
-Managed OpenAI and xAI OAuth refresh tokens are a stricter case: they remain control-plane-only and
-are replaced with non-secret provider markers before sandbox creation. The sandbox uses its session
-auth token to request short-lived model access from a provider-specific broker. Refresh-token
-rotation is persisted back to the global, repository, or environment scope that supplied it. See
+OpenAI and xAI subscription credentials are installation-wide provider accounts. Account rows store
+display, status, and optional external identity separately from credentials encrypted with
+`PROVIDER_ACCOUNTS_ENCRYPTION_KEY`. Each provider has an optional default account and an unattended
+mode that chooses the default account or API-key mode for Slack, GitHub, Linear, and unpinned
+automation runs.
+
+The web groups OpenAI and xAI accounts from shared static provider IDs and display metadata; there
+is no provider-catalog endpoint. The control-plane adapter registry remains authoritative when an
+account is connected, selected, defaulted, or consumed.
+
+Session creation resolves every subscription provider once and persists an immutable provider
+account, API-key, or legacy scoped-OAuth auth row in D1, the sole authority for session provider
+auth. The session Durable Object remains authoritative for lifecycle and sandbox-token
+authentication but does not replicate provider-account bindings. An interactive session can follow
+provider policy, select an active account, or choose API-key mode. Automations can pin the same
+choices or resolve current defaults each run. Child sessions copy their parent's D1 auth rows, and
+later default changes do not move existing sessions between accounts.
+
+In account mode, the sandbox receives only a managed marker. Provider API keys and legacy OAuth
+fields for that provider are suppressed. The runtime plugin calls the sandbox-authenticated
+`POST /sessions/:id/provider-auth/:provider/access-token` endpoint; the control plane reads the
+trusted D1 session binding using the sandbox-authenticated session ID, refreshes the encrypted
+account credential, and returns short-lived access with `Cache-Control: no-store`. Sandbox startup
+also reads the complete D1 auth snapshot and fails closed if it is unavailable or incomplete.
+
+Legacy scoped OAuth and provider accounts can coexist. Existing sessions remain pinned to legacy
+scoped OAuth. New sessions use an explicit choice, then a provider-account default, and otherwise
+retain legacy scoped OAuth or API-key behavior. Setting a default affects only future sessions;
+operators may remove legacy keys after legacy-bound sessions are no longer needed. See
 [Using OpenAI Models](./OPENAI_MODELS.md) and
 [Using Grok with a SuperGrok Subscription](./GROK_MODELS.md).
 
-> **Daytona and Vercel users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
-> added as global secrets. Modal injects these automatically via its own secrets mechanism.
+> **LLM API keys** (e.g., `ANTHROPIC_API_KEY` for Claude models) are added as global secrets. A
+> deployment can instead configure `anthropic_api_key` in Terraform to inject one fleet-wide key
+> into Modal session sandboxes and OpenComputer sandboxes; a global secret of the same name takes
+> precedence over it, and the other providers read only the secret store.
 >
 > **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, and Z.AI Coding Plan
 > models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider. SuperGrok models
-> require managed xAI OAuth credentials and must be enabled under **Settings > Models**.
+> require an xAI provider account or `XAI_API_KEY` mode and must be enabled under **Settings >
+> Models**.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 

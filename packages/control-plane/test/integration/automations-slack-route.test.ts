@@ -3,7 +3,7 @@ import { SELF, env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { serviceFetch, sqlDatabase } from "./helpers";
 import type { TriggerConfig } from "@open-inspect/shared/triggers";
 
 function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -11,14 +11,11 @@ function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow 
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
     name: "Slack triage",
-    repo_owner: "acme",
-    repo_name: "web-app",
-    base_branch: "main",
-    repo_id: 12345,
     instructions: "Investigate and fix",
     trigger_type: "slack_event",
     schedule_cron: null,
     schedule_tz: "UTC",
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
@@ -48,13 +45,9 @@ function createBody(overrides: Record<string, unknown>) {
 }
 
 async function postAutomation(body: Record<string, unknown>): Promise<Response> {
-  // automation-create requires a participant identity: sign as a bot with an
-  // asserted actor (the userless web service credential is rejected, 403).
   return serviceFetch("https://test.local/automations", {
     method: "POST",
     body: JSON.stringify(body),
-    service: "slack-bot",
-    actor: "slack:U0123",
   });
 }
 
@@ -92,7 +85,37 @@ describe("POST /automations — slack_event validation (integration)", () => {
       })
     );
     expect(res.status).toBe(400);
-    expect(await res.text()).toContain("slack_channel");
+    expect(await res.json()).toEqual({
+      error: expect.stringContaining("triggerConfig.conditions.0.value: slack_channel:"),
+    });
+  });
+
+  it("rejects a slack_channel condition with the wrong operator (400)", async () => {
+    const res = await postAutomation(
+      createBody({
+        triggerConfig: {
+          conditions: [{ type: "slack_channel", operator: "exclude", value: ["C1"] }],
+        },
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: expect.stringContaining("triggerConfig.conditions.0.operator: slack_channel:"),
+    });
+  });
+
+  it("rejects whitespace-only slack_channel IDs (400)", async () => {
+    const res = await postAutomation(
+      createBody({
+        triggerConfig: {
+          conditions: [{ type: "slack_channel", operator: "any_of", value: [" "] }],
+        },
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "Slack Channel requires at least one nonblank channel ID",
+    });
   });
 
   it("rejects an invalid regex text_match at save time (400)", async () => {
@@ -168,7 +191,7 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
     const channels = new SlackChannelStore(env.DB);
     const auto = makeSlackAutomation();
     await store.create(auto);
-    await env.DB.batch(channels.bindChannelStatements(auto.id, ["C1"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements(auto.id, ["C1"]));
 
     const res = await putAutomation(auto.id, {
       triggerConfig: {
@@ -223,7 +246,7 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
       }),
     });
     await store.create(auto);
-    await env.DB.batch(channels.bindChannelStatements(auto.id, ["C1"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements(auto.id, ["C1"]));
 
     const res = await putAutomation(auto.id, { triggerConfig: null });
     expect(res.status).toBe(400);
@@ -257,8 +280,8 @@ describe("GET /integration-settings/slack/watched-channels (integration)", () =>
     const b = makeSlackAutomation();
     await store.create(a);
     await store.create(b);
-    await env.DB.batch(channels.bindChannelStatements(a.id, ["C1", "C2"]));
-    await env.DB.batch(channels.bindChannelStatements(b.id, ["C2", "C3"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements(a.id, ["C1", "C2"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements(b.id, ["C2", "C3"]));
 
     const res = await getWatchedChannels();
     expect(res.status).toBe(200);
@@ -271,7 +294,7 @@ describe("GET /integration-settings/slack/watched-channels (integration)", () =>
     const channels = new SlackChannelStore(env.DB);
     const disabled = makeSlackAutomation({ enabled: 0 });
     await store.create(disabled);
-    await env.DB.batch(channels.bindChannelStatements(disabled.id, ["C9"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements(disabled.id, ["C9"]));
 
     const res = await getWatchedChannels();
     expect(res.status).toBe(200);

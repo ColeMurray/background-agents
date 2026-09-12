@@ -47,6 +47,7 @@ const skill = {
   lastEditorDisplayName: "User One",
   revisionAuthorDisplayName: "User One",
   assignments: [],
+  source: null,
   createdBy: "user-1",
   updatedBy: "user-1",
   createdAt: 1,
@@ -78,7 +79,7 @@ describe("Profiles", () => {
     });
     useSkillsMock.mockReturnValue({ skills: [], loading, error, mutate: vi.fn() });
 
-    render(<Profiles />);
+    render(<Profiles canManage />);
 
     expect(screen.getByRole("button", { name: /Frontend work/ })).toHaveTextContent(message);
     expect(screen.queryByText(/Unavailable/)).not.toBeInTheDocument();

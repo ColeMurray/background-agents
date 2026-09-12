@@ -23,8 +23,6 @@ interface CallbackTokenRow {
 export type ImageBuildCompletionAcceptance = "accepted" | "replayed" | "rejected";
 
 /** Whether callback credentials are fresh or belong to an accepted replay. */
-export type ImageBuildCallbackAuthorization = "fresh" | "accepted";
-
 /** Internal columns required to resume Queue finalization and session cleanup. */
 export interface ImageBuildFinalizationRow {
   id: string;
@@ -172,10 +170,7 @@ export class ImageBuildFinalizationStore {
     providerSessionId: string;
     tokenHash: string;
     now: number;
-  }): Promise<{
-    authorization: ImageBuildCallbackAuthorization;
-    build: ImageBuildCallbackBuild;
-  } | null> {
+  }): Promise<ImageBuildCallbackBuild | null> {
     const row = await this.readCallbackTokenRowByBuildId(params.buildId);
     if (!row || !row.callback_token_hash) return null;
     if (!timingSafeEqual(row.callback_token_hash, params.tokenHash)) return null;
@@ -185,12 +180,13 @@ export class ImageBuildFinalizationStore {
       id: row.id,
       scope: { kind: row.scope_kind, id: row.scope_id },
       provider: row.provider,
-      providerSessionId: row.provider_session_id,
       status: row.status,
     };
 
+    // An already-accepted callback (used token + persisted completion hash)
+    // stays authorizable so a lost HTTP response can republish safely.
     if (row.callback_token_used_at !== null && row.completion_hash) {
-      return { authorization: "accepted", build };
+      return build;
     }
     if (
       row.status === "building" &&
@@ -198,7 +194,7 @@ export class ImageBuildFinalizationStore {
       row.callback_token_expires_at !== null &&
       row.callback_token_expires_at >= params.now
     ) {
-      return { authorization: "fresh", build };
+      return build;
     }
     return null;
   }

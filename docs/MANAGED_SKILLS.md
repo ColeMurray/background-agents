@@ -97,8 +97,8 @@ scripts/preflight.sh
 Supporting files must be UTF-8 text; binary uploads and archive imports are not supported. Mark a
 file **Executable** only when its path is under `scripts/`.
 
-You can author files directly in the editor. Managed skills currently cannot be imported from a Git
-repository, marketplace, directory, or archive.
+You can author files directly in the editor or import them from a repository. Managed skills cannot
+be imported from a marketplace, a local directory, or an archive.
 
 ### Validate before saving
 
@@ -110,6 +110,72 @@ Click **Validate** to preview and check the skill without saving it. The result 
 
 Validation is optional. **Create skill** and **Save new revision** perform the same checks when you
 save.
+
+---
+
+## Importing a Skill from a Repository
+
+Skills usually live in Git already. **Settings > Skills > Shared skills > Import from repository**
+reads a skill directory — a `SKILL.md` file plus its supporting files — from a connected repository
+instead of retyping it.
+
+### Choosing a source
+
+| Field            | What to enter                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Repository**   | Any repository the Open-Inspect app installation can read. Repositories it cannot reach are not importable.  |
+| **Ref**          | Optional branch, tag, or commit. The repository's default branch is used when this is empty.                 |
+| **Subdirectory** | Optional path to the skill inside the repository. Leave empty when the repository root holds the `SKILL.md`. |
+| **Name**         | Optional canonical name. Defaults to the `name` in `SKILL.md`, then to the last segment of the source path.  |
+
+To import one skill from a repository that holds several, name its subdirectory. If the path you
+chose has no `SKILL.md`, the error lists the subdirectories that do. Importing several skills at
+once is not supported; repeat the import for each.
+
+### How `SKILL.md` maps onto a managed skill
+
+`name`, `description`, `license`, `compatibility`, and `metadata` become the matching fields, and
+everything after the frontmatter becomes the instructions. Every other frontmatter key — for example
+`allowed-tools` or `version` — has no managed-skill field and is reported in the preview rather than
+dropped silently. All other files in the directory are imported as supporting files.
+
+Open-Inspect regenerates `SKILL.md` from the mapped fields alone. The stored file is therefore
+neither byte-identical to the upstream one nor a superset of it: unmapped frontmatter keys are
+reported in the preview and then left behind.
+
+### Reviewing before saving
+
+Nothing is stored until you review the preview, which shows the resolved commit, every file and its
+size, the total size, the content digest, the generated `SKILL.md`, and any mapping warnings.
+Assignments are chosen exactly as in the create flow. Confirming re-reads the source and refuses to
+save if the repository changed since the preview — preview again to see what changed.
+
+An import is rejected as a whole, never partially, and reports what failed: an unreachable
+repository, a missing ref or `SKILL.md`, unreadable frontmatter, a binary or oversized file, an
+executable outside `scripts/`, a symlink or submodule, or a name that is already taken. Every
+constraint under [Limits and File Rules](#limits-and-file-rules) applies exactly as it does to
+skills written in the editor.
+
+### Provenance and re-importing
+
+An imported skill records its source repository, requested ref, resolved commit, subdirectory, and a
+digest of the imported bytes. That digest covers the content read upstream and is deliberately
+different from the revision digest, which covers the complete stored revision tree, including the
+regenerated `SKILL.md` and supporting files. A moving ref is always pinned to the commit it resolved
+to.
+
+Open **Imported source** on the skill to pull the source again. Re-import reads the recorded
+repository and subdirectory; only the ref can be changed. Changed content is saved as a new
+revision, and unchanged content adds nothing — the recorded commit keeps pointing at the commit that
+produced the stored bytes. Nothing syncs on its own: upstream changes reach the catalog only when
+someone re-imports, and existing sessions are never affected.
+
+Editing an imported skill by hand is allowed and does not erase its source, so a later re-import
+replaces those edits with the source's content.
+
+> Importing makes it easy to pull third-party instructions and scripts into an installation-wide,
+> on-by-default catalog. Review the preview — especially anything under `scripts/` — before
+> confirming.
 
 ---
 
@@ -192,7 +258,7 @@ sessions created by an agent inherit the parent's exact set of skills.
 
 There is no separate installation step. Before the agent starts, Open-Inspect validates and installs
 the selected skills automatically. If selected content cannot be fetched, validated, or installed,
-the session fails to start rather than silently omitting a skill.
+the session fails to start. Name collisions are handled separately as described below.
 
 ---
 
@@ -253,8 +319,10 @@ repository or environment.
 Managed skills are pinned at session creation. Start a new session to receive a newer revision,
 changed assignments, or newly enabled skills.
 
-### A session fails to start because of a skill name collision
+### A managed skill is missing because of a name collision
 
-A managed skill cannot have the same name as another skill available in the sandbox, including one
-provided by a repository. Rename or remove the other skill, or create a new managed skill with a
-different canonical name and update its assignments and profiles.
+When a managed skill has the same name as a repository, user, or bundled skill available in the
+sandbox, Open-Inspect keeps the discovered skill and drops the colliding managed skill. Other
+managed skills are still installed and the session continues to start. Rename or remove the
+discovered skill, or create a new managed skill with a different canonical name and update its
+assignments and profiles.

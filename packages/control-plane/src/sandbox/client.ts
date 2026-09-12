@@ -5,6 +5,7 @@
  * All requests are authenticated using HMAC-signed tokens.
  */
 
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { generateInternalToken } from "@open-inspect/shared/auth";
 import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
@@ -13,6 +14,7 @@ import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
 import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
 import type { SessionRepositoryInfo } from "./provider";
+import { withRequestDeadline } from "./request-deadline";
 
 const log = createLogger("modal-client");
 
@@ -21,6 +23,11 @@ const MODAL_APP_NAME = "open-inspect";
 
 // Modal's default environment name; unrelated to the git branch named "main".
 const DEFAULT_MODAL_ENVIRONMENT = "main";
+
+export const MODAL_SANDBOX_START_REQUEST_DEADLINE_MS = 60_000;
+// Allows Modal's provider-side snapshot timeout to settle before the client deadline.
+export const MODAL_SNAPSHOT_REQUEST_DEADLINE_MS = 310_000;
+export const MODAL_CLEANUP_REQUEST_DEADLINE_MS = 60_000;
 
 const modalErrorResponseSchema = z.object({
   success: z.literal(false),
@@ -35,7 +42,6 @@ const createSandboxModalResponseSchema = z.discriminatedUnion("success", [
     data: z.object({
       sandbox_id: z.string(),
       modal_object_id: z.string().nullable().optional(),
-      status: z.string(),
       created_at: z.number(),
       code_server_url: z.string().nullable().optional(),
       code_server_password: z.string().nullable().optional(),
@@ -101,17 +107,6 @@ const imageBuildOperationModalResponseSchema = z.discriminatedUnion("success", [
   modalErrorResponseSchema,
 ]);
 
-const deleteProviderImageModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-    data: z.object({
-      provider_image_id: z.string(),
-      deleted: z.boolean(),
-    }),
-  }),
-  modalErrorResponseSchema,
-]);
-
 function parseModalApiResponse<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
   if (!result.success) {
@@ -132,6 +127,24 @@ export function buildModalWorkspaceSlug(workspace: string, environmentWebSuffix 
  */
 function getModalBaseUrl(workspace: string, environmentWebSuffix?: string): string {
   return `https://${buildModalWorkspaceSlug(workspace, environmentWebSuffix)}--${MODAL_APP_NAME}`;
+}
+
+/**
+ * Resolve one deployed function's URL by its Modal function name.
+ *
+ * Modal publishes each function at its own `*.modal.run` host derived from the
+ * workspace slug. `apiUrl` replaces that derivation with a single origin whose
+ * path carries the same function names, which is how the other providers'
+ * `*_API_URL` settings work and what a proxy or a stand-in server needs.
+ */
+function modalEndpointUrl(
+  functionName: string,
+  workspace: string,
+  environmentWebSuffix: string | undefined,
+  apiUrl: string | undefined
+): string {
+  if (apiUrl) return `${apiUrl.replace(/\/+$/, "")}/${functionName}`;
+  return `${getModalBaseUrl(workspace, environmentWebSuffix)}-${functionName}.modal.run`;
 }
 
 /**
@@ -158,7 +171,8 @@ export interface CreateSandboxRequest {
   repoName: string | null;
   controlPlaneUrl: string;
   sandboxAuthToken: string;
-  opencodeSessionId?: string;
+  agentSessionId?: string;
+  harness: HarnessId;
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
@@ -172,12 +186,12 @@ export interface CreateSandboxRequest {
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
+  signal?: AbortSignal;
 }
 
 export interface CreateSandboxResponse {
   sandboxId: string;
   modalObjectId?: string; // Modal's internal object ID for snapshot API
-  status: string;
   createdAt: number;
   codeServerUrl?: string;
   codeServerPassword?: string;
@@ -195,6 +209,7 @@ export interface RestoreSandboxRequest {
   controlPlaneUrl: string;
   repoOwner: string | null;
   repoName: string | null;
+  harness: HarnessId;
   provider: string;
   model: string;
   userEnvVars?: Record<string, string>;
@@ -206,6 +221,7 @@ export interface RestoreSandboxRequest {
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
+  signal?: AbortSignal;
 }
 
 export interface RestoreSandboxResponse {
@@ -224,7 +240,6 @@ export interface RestoreSandboxResponse {
 export interface SnapshotSandboxRequest {
   providerObjectId: string;
   sessionId: string;
-  reason: string;
   signal?: AbortSignal;
 }
 
@@ -257,6 +272,7 @@ export interface CreateImageBuildSandboxRequest {
   buildExecutionTimeoutSeconds: number;
   /** Provider-session lifetime, including deferred Queue finalization headroom. */
   providerSessionTimeoutSeconds: number;
+  signal?: AbortSignal;
 }
 
 export interface CreateImageBuildSandboxResponse {
@@ -267,6 +283,7 @@ export interface StartImageBuildSandboxRequest {
   buildId: string;
   providerSessionId: string;
   callbackToken: string;
+  signal?: AbortSignal;
 }
 
 export interface TerminateImageBuildSandboxRequest {
@@ -274,16 +291,6 @@ export interface TerminateImageBuildSandboxRequest {
   providerSessionId: string;
   reason: string;
   signal?: AbortSignal;
-}
-
-export interface DeleteProviderImageRequest {
-  providerImageId: string;
-  signal?: AbortSignal;
-}
-
-export interface DeleteProviderImageResponse {
-  providerImageId: string;
-  deleted: boolean;
 }
 
 /**
@@ -313,10 +320,36 @@ export class ModalClient {
   private createImageBuildSandboxUrl: string;
   private startImageBuildSandboxUrl: string;
   private terminateImageBuildSandboxUrl: string;
-  private deleteProviderImageUrl: string;
   private secret: string;
 
-  constructor(secret: string, workspace: string, environmentWebSuffix?: string) {
+  private async postJson<T>(
+    url: string,
+    endpoint: string,
+    deadlineMs: number,
+    body: unknown,
+    schema: z.ZodType<T>,
+    correlation: CorrelationContext | undefined,
+    callerSignal: AbortSignal | undefined,
+    onResponse: (status: number) => void
+  ): Promise<T> {
+    const headers = await this.getPostHeaders(correlation);
+    return withRequestDeadline("Modal", endpoint, deadlineMs, callerSignal, async (signal) => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        signal,
+        body: JSON.stringify(body),
+      });
+      onResponse(response.status);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+      }
+      return parseModalApiResponse(schema, await response.json());
+    });
+  }
+
+  constructor(secret: string, workspace: string, environmentWebSuffix?: string, apiUrl?: string) {
     if (!secret) {
       throw new Error("ModalClient requires MODAL_API_SECRET for authentication");
     }
@@ -324,15 +357,15 @@ export class ModalClient {
       throw new Error("ModalClient requires MODAL_WORKSPACE for URL construction");
     }
     this.secret = secret;
-    const baseUrl = getModalBaseUrl(workspace, environmentWebSuffix);
-    this.createSandboxUrl = `${baseUrl}-api-create-sandbox.modal.run`;
-    this.snapshotSandboxUrl = `${baseUrl}-api-snapshot-sandbox.modal.run`;
-    this.snapshotBuildSandboxUrl = `${baseUrl}-api-snapshot-build-sandbox.modal.run`;
-    this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
-    this.createImageBuildSandboxUrl = `${baseUrl}-api-create-build-sandbox.modal.run`;
-    this.startImageBuildSandboxUrl = `${baseUrl}-api-start-build-sandbox.modal.run`;
-    this.terminateImageBuildSandboxUrl = `${baseUrl}-api-terminate-build-sandbox.modal.run`;
-    this.deleteProviderImageUrl = `${baseUrl}-api-delete-provider-image.modal.run`;
+    const url = (functionName: string) =>
+      modalEndpointUrl(functionName, workspace, environmentWebSuffix, apiUrl);
+    this.createSandboxUrl = url("api-create-sandbox");
+    this.snapshotSandboxUrl = url("api-snapshot-sandbox");
+    this.snapshotBuildSandboxUrl = url("api-snapshot-build-sandbox");
+    this.restoreSandboxUrl = url("api-restore-sandbox");
+    this.createImageBuildSandboxUrl = url("api-create-build-sandbox");
+    this.startImageBuildSandboxUrl = url("api-start-build-sandbox");
+    this.terminateImageBuildSandboxUrl = url("api-terminate-build-sandbox");
   }
 
   /**
@@ -364,18 +397,19 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.createSandboxUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+      const result = await this.postJson(
+        this.createSandboxUrl,
+        endpoint,
+        MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+        {
           session_id: request.sessionId,
           sandbox_id: request.sandboxId || null, // Use control-plane-generated ID
           repo_owner: request.repoOwner,
           repo_name: request.repoName,
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
-          opencode_session_id: request.opencodeSessionId || null,
+          agent_session_id: request.agentSessionId || null,
+          harness: request.harness,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
@@ -394,17 +428,12 @@ export class ModalClient {
           repositories: request.repositories?.length
             ? request.repositories.map(toRepositoryConfigPayload)
             : null,
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(createSandboxModalResponseSchema, await response.json());
+        },
+        createSandboxModalResponseSchema,
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
+      );
 
       if (!result.success) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
@@ -414,7 +443,6 @@ export class ModalClient {
       return {
         sandboxId: result.data.sandbox_id,
         modalObjectId: result.data.modal_object_id ?? undefined,
-        status: result.data.status,
         createdAt: result.data.created_at,
         codeServerUrl: result.data.code_server_url ?? undefined,
         codeServerPassword: result.data.code_server_password ?? undefined,
@@ -451,11 +479,11 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.restoreSandboxUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+      const result = await this.postJson(
+        this.restoreSandboxUrl,
+        endpoint,
+        MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+        {
           snapshot_image_id: request.snapshotImageId,
           session_config: buildSessionConfig(request),
           sandbox_id: request.sandboxId,
@@ -467,19 +495,11 @@ export class ModalClient {
           vnc_enabled: request.vncEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           sandbox_settings: request.sandboxSettings ?? null,
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(
+        },
         restoreSandboxModalResponseSchema,
-        await response.json()
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
       );
 
       if (!result.success) {
@@ -526,28 +546,17 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.snapshotSandboxUrl, {
-        method: "POST",
-        headers,
-        signal: request.signal,
-        body: JSON.stringify({
+      const result = await this.postJson(
+        this.snapshotSandboxUrl,
+        endpoint,
+        MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
+        {
           sandbox_id: request.providerObjectId,
-          session_id: request.sessionId,
-          reason: request.reason,
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(
+        },
         snapshotSandboxModalResponseSchema,
-        await response.json()
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
       );
       if (!result.success) {
         return { success: false, error: result.error || "Unknown snapshot error" };
@@ -587,26 +596,18 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.snapshotBuildSandboxUrl, {
-        method: "POST",
-        headers,
-        signal: request.signal,
-        body: JSON.stringify({
+      const result = await this.postJson(
+        this.snapshotBuildSandboxUrl,
+        endpoint,
+        MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
+        {
           build_id: request.buildId,
           provider_session_id: request.providerSessionId,
-        }),
-      });
-
-      httpStatus = response.status;
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(
+        },
         snapshotSandboxModalResponseSchema,
-        await response.json()
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
       );
       if (!result.success) {
         return { success: false, error: result.error || "Unknown snapshot error" };
@@ -642,11 +643,11 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.createImageBuildSandboxUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+      const result = await this.postJson(
+        this.createImageBuildSandboxUrl,
+        endpoint,
+        MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+        {
           scope_kind: request.scopeKind,
           scope_id: request.scopeId,
           build_id: request.buildId,
@@ -659,19 +660,11 @@ export class ModalClient {
           user_env_vars: request.userEnvVars,
           build_execution_timeout_seconds: request.buildExecutionTimeoutSeconds,
           provider_session_timeout_seconds: request.providerSessionTimeoutSeconds,
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(
+        },
         createImageBuildSandboxModalResponseSchema,
-        await response.json()
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
       );
 
       if (result.success === false) {
@@ -705,6 +698,7 @@ export class ModalClient {
     await this.postImageBuildOperation(
       this.startImageBuildSandboxUrl,
       "startImageBuildSandbox",
+      MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
       request,
       {
         build_id: request.buildId,
@@ -722,6 +716,7 @@ export class ModalClient {
     await this.postImageBuildOperation(
       this.terminateImageBuildSandboxUrl,
       "terminateImageBuildSandbox",
+      MODAL_CLEANUP_REQUEST_DEADLINE_MS,
       request,
       {
         build_id: request.buildId,
@@ -735,6 +730,7 @@ export class ModalClient {
   private async postImageBuildOperation(
     url: string,
     endpoint: string,
+    deadlineMs: number,
     request: { buildId: string; providerSessionId: string; signal?: AbortSignal },
     body: Record<string, unknown>,
     correlation?: CorrelationContext
@@ -743,22 +739,15 @@ export class ModalClient {
     let httpStatus: number | undefined;
     let outcome: "success" | "error" = "error";
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: await this.getPostHeaders(correlation),
-        signal: request.signal,
-        body: JSON.stringify(body),
-      });
-      httpStatus = response.status;
-      if (!response.ok) {
-        throw new ModalApiError(
-          `Modal API error: ${response.status} ${await response.text()}`,
-          response.status
-        );
-      }
-      const result = parseModalApiResponse(
+      const result = await this.postJson(
+        url,
+        endpoint,
+        deadlineMs,
+        body,
         imageBuildOperationModalResponseSchema,
-        await response.json()
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
       );
       if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
@@ -778,64 +767,6 @@ export class ModalClient {
       });
     }
   }
-
-  /**
-   * Delete a provider image (best-effort).
-   */
-  async deleteProviderImage(
-    request: DeleteProviderImageRequest,
-    correlation?: CorrelationContext
-  ): Promise<DeleteProviderImageResponse> {
-    const startTime = Date.now();
-    const endpoint = "deleteProviderImage";
-    let httpStatus: number | undefined;
-    let outcome: "success" | "error" = "error";
-
-    try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.deleteProviderImageUrl, {
-        method: "POST",
-        headers,
-        signal: request.signal,
-        body: JSON.stringify({
-          provider_image_id: request.providerImageId,
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(
-        deleteProviderImageModalResponseSchema,
-        await response.json()
-      );
-
-      if (result.success === false) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-      }
-
-      outcome = "success";
-      return {
-        providerImageId: result.data.provider_image_id,
-        deleted: result.data.deleted,
-      };
-    } finally {
-      log.info("modal.request", {
-        event: "modal.request",
-        endpoint,
-        provider_image_id: request.providerImageId,
-        trace_id: correlation?.trace_id,
-        request_id: correlation?.request_id,
-        http_status: httpStatus,
-        duration_ms: Date.now() - startTime,
-        outcome,
-      });
-    }
-  }
 }
 
 /**
@@ -847,13 +778,15 @@ export class ModalClient {
  * @param secret - The MODAL_API_SECRET for authentication
  * @param workspace - The Modal workspace name
  * @param environmentWebSuffix - The Modal environment web suffix used in endpoint URLs
+ * @param apiUrl - Origin serving the Modal functions by path, in place of their derived hosts
  * @returns A new ModalClient instance
  * @throws Error if secret or workspace is not provided
  */
 export function createModalClient(
   secret: string,
   workspace: string,
-  environmentWebSuffix?: string
+  environmentWebSuffix?: string,
+  apiUrl?: string
 ): ModalClient {
   if (!secret) {
     throw new Error("MODAL_API_SECRET is required to create ModalClient");
@@ -861,5 +794,5 @@ export function createModalClient(
   if (!workspace) {
     throw new Error("MODAL_WORKSPACE is required to create ModalClient");
   }
-  return new ModalClient(secret, workspace, environmentWebSuffix);
+  return new ModalClient(secret, workspace, environmentWebSuffix, apiUrl);
 }

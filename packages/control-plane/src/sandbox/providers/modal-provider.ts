@@ -108,7 +108,8 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           repoName: config.repoName,
           controlPlaneUrl: config.controlPlaneUrl,
           sandboxAuthToken: config.sandboxAuthToken,
-          opencodeSessionId: config.opencodeSessionId,
+          agentSessionId: config.agentSessionId,
+          harness: config.harness,
           provider: config.provider,
           model: config.model,
           userEnvVars: config.userEnvVars,
@@ -129,7 +130,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       return {
         sandboxId: result.sandboxId,
         providerObjectId: result.modalObjectId,
-        status: result.status,
         createdAt: result.createdAt,
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
@@ -156,6 +156,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           controlPlaneUrl: config.controlPlaneUrl,
           repoOwner: config.repoOwner,
           repoName: config.repoName,
+          harness: config.harness,
           provider: config.provider,
           model: config.model,
           userEnvVars: config.userEnvVars,
@@ -211,7 +212,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         {
           providerObjectId: config.providerObjectId,
           sessionId: config.sessionId,
-          reason: config.reason,
           signal: config.signal,
         },
         config.correlation
@@ -231,8 +231,9 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     } catch (error) {
       if (error instanceof ModalApiError) {
         throw this.classifyErrorWithStatus(
-          `Snapshot failed with HTTP ${error.status}`,
-          error.status
+          `Snapshot failed with HTTP ${error.status}: ${error.message}`,
+          error.status,
+          error
         );
       }
       if (error instanceof SandboxProviderError) {
@@ -326,29 +327,13 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   }
 
   /**
-   * Delete a Modal provider image.
+   * Deletion is a local no-op for now: Modal's only deletion surface is the
+   * experimental `image_delete` API, whose adoption is deferred until
+   * validated (#1658). The HTTP endpoint this replaced deleted nothing
+   * either, so reaped images were already retained provider-side. Callers
+   * (the image reaper and finalizer) log each attempt and outcome.
    */
-  async deleteProviderImage(
-    providerImageId: string,
-    correlation?: CorrelationContext,
-    signal?: AbortSignal
-  ): Promise<void> {
-    try {
-      await this.client.deleteProviderImage({ providerImageId, signal }, correlation);
-    } catch (error) {
-      if (error instanceof ModalApiError) {
-        throw this.classifyErrorWithStatus(
-          `Provider image deletion failed with HTTP ${error.status}: ${error.message}`,
-          error.status,
-          error
-        );
-      }
-      if (error instanceof SandboxProviderError) {
-        throw error;
-      }
-      throw this.classifyError("Failed to delete Modal provider image", error);
-    }
-  }
+  async deleteProviderImage(): Promise<void> {}
 
   private classifyImageBuildError(message: string, error: unknown): SandboxProviderError {
     if (error instanceof SandboxProviderError) return error;
@@ -384,18 +369,20 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    * Classify an error as transient or permanent for circuit breaker handling.
    */
   private classifyError(message: string, error: unknown): SandboxProviderError {
+    if (SandboxProviderError.isTransientNetworkError(error)) {
+      return new SandboxProviderError(
+        `${message}: ${error instanceof Error ? error.message : String(error)}`,
+        "transient",
+        error instanceof Error ? error : undefined
+      );
+    }
+
     // Check for fetch/network errors
     if (error instanceof Error) {
       const errorMessage = error.message.toLowerCase();
 
       // Transient network errors
       if (
-        errorMessage.includes("fetch failed") ||
-        errorMessage.includes("etimedout") ||
-        errorMessage.includes("econnreset") ||
-        errorMessage.includes("econnrefused") ||
-        errorMessage.includes("network") ||
-        errorMessage.includes("timeout") ||
         errorMessage.includes("502") ||
         errorMessage.includes("503") ||
         errorMessage.includes("504") ||

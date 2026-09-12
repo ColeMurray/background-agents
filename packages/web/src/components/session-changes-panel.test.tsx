@@ -4,6 +4,14 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionDiffState } from "@open-inspect/shared/types/session-diffs";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
+
+const FULL_CAPABILITIES = {
+  read: true,
+  collaborate: true,
+  lifecycle: true,
+  sandboxAccess: true,
+} satisfies SessionCapabilities;
 
 vi.mock("next/dynamic", () => ({
   default: () => () => <div data-testid="diff-renderer" />,
@@ -69,6 +77,7 @@ describe("SessionChangesPanel", () => {
     render(
       <SessionChangesPanel
         sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
         state={state}
         resolved={{
           status: "ready",
@@ -94,6 +103,7 @@ describe("SessionChangesPanel", () => {
     render(
       <SessionChangesPanel
         sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
         state={state}
         resolved={{
           status: "ready",
@@ -130,6 +140,7 @@ describe("SessionChangesPanel", () => {
     render(
       <SessionChangesPanel
         sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
         state={state}
         resolved={{
           status: "ready",
@@ -156,6 +167,7 @@ describe("SessionChangesPanel", () => {
     render(
       <SessionChangesPanel
         sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
         state={state}
         resolved={{ status: "missing", revisionId: "revision-1" }}
         onClose={vi.fn()}
@@ -173,6 +185,7 @@ describe("SessionChangesPanel", () => {
       <SessionChangesPanel
         mobile
         sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
         state={state}
         resolved={{
           status: "ready",
@@ -205,6 +218,7 @@ describe("SessionChangesPanel", () => {
     render(
       <SessionChangesPanel
         sessionId="session-1"
+        capabilities={FULL_CAPABILITIES}
         state={{
           ...state,
           lastError: { message: "timed out", occurredAt: 200 },

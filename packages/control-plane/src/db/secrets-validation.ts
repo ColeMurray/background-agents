@@ -45,7 +45,7 @@ export function validateKey(key: string): void {
     throw new SecretsValidationError(`Key '${key}' is reserved`);
 }
 
-export function validateValue(value: string): void {
+export function validateValue(value: unknown): asserts value is string {
   if (typeof value !== "string") throw new SecretsValidationError("Value must be a string");
   const bytes = new TextEncoder().encode(value).length;
   if (bytes > MAX_VALUE_SIZE)

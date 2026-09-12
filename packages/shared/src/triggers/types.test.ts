@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { automationEventSchema, githubAutomationEventSchema } from "./types";
+import { automationEventSchema, githubAutomationEventSchema, triggerConfigSchema } from "./types";
 
 describe("automationEventSchema", () => {
   it("parses a valid Slack automation event", () => {
@@ -66,6 +66,26 @@ describe("automationEventSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts both GitHub conclusion fields during rolling deployments", () => {
+    const baseEvent = {
+      source: "github" as const,
+      eventType: "check_suite.completed",
+      triggerKey: "check_suite:1",
+      concurrencyKey: "check_suite:1",
+      contextBlock: "A check suite completed.",
+      meta: {},
+      repoOwner: "acme",
+      repoName: "web-app",
+    };
+
+    expect(
+      githubAutomationEventSchema.safeParse({ ...baseEvent, conclusion: "failure" }).success
+    ).toBe(true);
+    expect(
+      githubAutomationEventSchema.safeParse({ ...baseEvent, checkConclusion: "failure" }).success
+    ).toBe(true);
+  });
+
   it("rejects optional arrays with non-string values", () => {
     const result = automationEventSchema.safeParse({
       source: "linear",
@@ -80,5 +100,39 @@ describe("automationEventSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe("persisted webhook filters", () => {
+  it("preserves scalar values accepted by existing editors and API clients", () => {
+    const config = {
+      conditions: [
+        {
+          type: "jsonpath",
+          operator: "all_match",
+          value: [
+            { path: "$.count", comparison: "gt", value: "3" },
+            { path: "$.count", comparison: "gte", value: true },
+            { path: "$.name", comparison: "contains", value: 3 },
+            { path: "$.name", comparison: "exists" },
+          ],
+        },
+      ],
+    };
+    expect(triggerConfigSchema.parse(config)).toEqual(config);
+  });
+
+  it.each([null, [], {}])("rejects non-scalar filter values: %j", (value) => {
+    expect(
+      triggerConfigSchema.safeParse({
+        conditions: [
+          {
+            type: "jsonpath",
+            operator: "all_match",
+            value: [{ path: "$.count", comparison: "gt", value }],
+          },
+        ],
+      }).success
+    ).toBe(false);
   });
 });

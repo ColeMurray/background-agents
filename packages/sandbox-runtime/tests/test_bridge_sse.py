@@ -20,13 +20,19 @@ import httpx
 import pytest
 
 from sandbox_runtime.bridge import AgentBridge
-from sandbox_runtime.opencode_client import SSEConnectionError
-from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
-from sandbox_runtime.prompt_stream import (
+from sandbox_runtime.harness.opencode_client import SSEConnectionError
+from sandbox_runtime.harness.opencode_stream import (
     OpenCodePromptStream,
     _PromptState,
 )
-from tests.conftest import MockResponse, oc_message_id, wire_opencode_transport
+from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
+from tests.conftest import (
+    MockResponse,
+    oc_message_id,
+    set_prompt_limits,
+    stream_opencode_events,
+    wire_opencode_transport,
+)
 
 MOCK_HTTP_TIMEOUT_SECONDS = 30.0
 PROMPT_TIMEOUT_TEST_BUDGET_SECONDS = 0.8
@@ -139,7 +145,7 @@ def bridge() -> AgentBridge:
         control_plane_url="http://localhost:8787",
         auth_token="test-token",
     )
-    bridge.opencode_session_id = "oc-session-123"
+    bridge.harness.session_id = "oc-session-123"
     wire_opencode_transport(bridge, MockHttpClient())
     return bridge
 
@@ -165,7 +171,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge.opencode_client._decoded_events(response):
+        async for event in bridge.harness.client._decoded_events(response):
             events.append(event)
 
         assert len(events) == 1
@@ -193,7 +199,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge.opencode_client._decoded_events(response):
+        async for event in bridge.harness.client._decoded_events(response):
             events.append(event)
 
         assert len(events) == 3
@@ -211,7 +217,7 @@ class TestSSEParser:
         response = MockSSEResponse(events_text)
 
         events = []
-        async for event in bridge.opencode_client._decoded_events(response):
+        async for event in bridge.harness.client._decoded_events(response):
             events.append(event)
 
         assert len(events) == 2
@@ -273,7 +279,7 @@ class TestSSEStreaming:
 
         events = []
         with pytest.raises(SSEConnectionError, match="OpenCode event stream disconnected"):
-            async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
                 events.append(event)
 
         token_events = [event for event in events if event["type"] == "token"]
@@ -328,7 +334,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         # Should have 2 token events with cumulative text
@@ -373,7 +379,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -416,7 +422,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -470,7 +476,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -535,7 +541,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         tool_events = [e for e in events if e["type"] == "tool_call"]
@@ -591,7 +597,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -637,7 +643,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         assert len(events) == 1
@@ -676,7 +682,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         assert {"type": "session_title", "title": "Generated title"} in events
@@ -714,7 +720,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         assert [event for event in events if event["type"] == "session_title"] == []
@@ -752,7 +758,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         assert [event for event in events if event["type"] == "session_title"] == []
@@ -801,7 +807,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         assert [event["type"] for event in events] == ["token"]
@@ -825,7 +831,7 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         assert len(events) == 1
@@ -868,8 +874,8 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse(
-            "cp-message-from-control-plane", "Test prompt"
+        async for event in stream_opencode_events(
+            bridge, "cp-message-from-control-plane", "Test prompt"
         ):
             events.append(event)
 
@@ -902,7 +908,7 @@ class TestSSEStreaming:
         assert complete["type"] == "execution_complete"
         assert complete["messageId"] == "cp-msg-1"
         assert complete["success"] is False
-        assert complete["error"] == "OpenCode completed without emitting assistant output."
+        assert complete["error"] == "The agent completed without emitting assistant output."
 
 
 class TestFetchFinalMessageState:
@@ -926,7 +932,7 @@ class TestFetchFinalMessageState:
             control_plane_url="http://localhost:8787",
             auth_token="test-token",
         )
-        bridge.opencode_session_id = "oc-session-123"
+        bridge.harness.session_id = "oc-session-123"
         wire_opencode_transport(bridge, AsyncMock())
         return bridge
 
@@ -955,7 +961,7 @@ class TestFetchFinalMessageState:
         events = []
         # Pass both control plane ID and OpenCode ID
         state = make_prompt_state("cp-msg-2", "msg_0002bbbbbb", cumulative_text=cumulative_text)
-        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+        async for event in bridge.harness.prompt_stream._fetch_final_message_state(state):
             events.append(event)
 
         # Should only have the second message's text (parentID matches msg_0002bbbbbb)
@@ -983,7 +989,7 @@ class TestFetchFinalMessageState:
         events = []
         # Pass both control plane ID and OpenCode ID (new ID doesn't match old parentID)
         state = make_prompt_state("cp-msg-new", "msg_0002newnew", cumulative_text=cumulative_text)
-        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+        async for event in bridge.harness.prompt_stream._fetch_final_message_state(state):
             events.append(event)
 
         # Should have no events since parentID doesn't match
@@ -1008,7 +1014,7 @@ class TestFetchFinalMessageState:
 
         events = []
         state = make_prompt_state("cp-msg-1", "msg_0001aaaaaa", cumulative_text=cumulative_text)
-        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+        async for event in bridge.harness.prompt_stream._fetch_final_message_state(state):
             events.append(event)
 
         # Should have no events since text is not longer
@@ -1033,7 +1039,7 @@ class TestFetchFinalMessageState:
 
         events = []
         state = make_prompt_state("cp-msg-1", "msg_0001aaaaaa", cumulative_text=cumulative_text)
-        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+        async for event in bridge.harness.prompt_stream._fetch_final_message_state(state):
             events.append(event)
 
         # Should have one event with full text
@@ -1066,7 +1072,7 @@ class TestFetchFinalMessageState:
 
         events = []
         state = make_prompt_state("cp-msg-1", "msg_0001aaaaaa", cumulative_text=cumulative_text)
-        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+        async for event in bridge.harness.prompt_stream._fetch_final_message_state(state):
             events.append(event)
 
         # Should only have assistant message
@@ -1143,7 +1149,7 @@ class TestFetchFinalMessageState:
             compaction_occurred=True,
             start_time=prompt_ts_ms / 1000,
         )
-        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+        async for event in bridge.harness.prompt_stream._fetch_final_message_state(state):
             events.append(event)
 
         assert len(events) == 1
@@ -1260,9 +1266,7 @@ class TestSSEFollowUpMessageBug:
 
         # Process first prompt
         events1 = []
-        async for event in bridge._stream_opencode_response_sse(
-            "cp-msg-1", "what was last commit?"
-        ):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "what was last commit?"):
             events1.append(event)
 
         # Verify first prompt response
@@ -1340,7 +1344,7 @@ class TestSSEFollowUpMessageBug:
 
         # Process second prompt
         events2 = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-2", "who was it by?"):
+        async for event in stream_opencode_events(bridge, "cp-msg-2", "who was it by?"):
             events2.append(event)
 
         # Verify second prompt response
@@ -1474,8 +1478,8 @@ class TestInactivityTimeout:
             control_plane_url="http://localhost:8787",
             auth_token="test-token",
         )
-        bridge.opencode_session_id = "oc-session-123"
-        bridge.sse_inactivity_timeout = 0.2
+        bridge.harness.session_id = "oc-session-123"
+        set_prompt_limits(bridge, inactivity_timeout_seconds=0.2)
 
         # SSE connects but then hangs after server.connected
         sse_response = HangingMockSSEResponse(
@@ -1484,7 +1488,7 @@ class TestInactivityTimeout:
         wire_opencode_transport(bridge, DelayedMockHttpClient(sse_response))
 
         with pytest.raises(RuntimeError, match="SSE stream inactive"):
-            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+            async for _event in stream_opencode_events(bridge, "msg-1", "test"):
                 pass
 
     @pytest.mark.asyncio
@@ -1496,8 +1500,8 @@ class TestInactivityTimeout:
             control_plane_url="http://localhost:8787",
             auth_token="test-token",
         )
-        bridge.opencode_session_id = "oc-session-123"
-        bridge.sse_inactivity_timeout = 0.5
+        bridge.harness.session_id = "oc-session-123"
+        set_prompt_limits(bridge, inactivity_timeout_seconds=0.5)
 
         # Events arrive every 0.1s — well under the 0.5s inactivity limit
         # Total wall-clock time (~0.3s) would NOT matter; only gaps between chunks
@@ -1554,7 +1558,7 @@ class TestInactivityTimeout:
         wire_opencode_transport(bridge, DelayedMockHttpClient(sse_response))
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("msg-1", "test"):
+        async for event in stream_opencode_events(bridge, "msg-1", "test"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -1570,8 +1574,8 @@ class TestInactivityTimeout:
             control_plane_url="http://localhost:8787",
             auth_token="test-token",
         )
-        bridge.opencode_session_id = "oc-session-123"
-        bridge.sse_inactivity_timeout = 0.3
+        bridge.harness.session_id = "oc-session-123"
+        set_prompt_limits(bridge, inactivity_timeout_seconds=0.3)
 
         # Heartbeats arrive every 0.2s — under the 0.3s inactivity limit
         # Without heartbeats, the 0.2s gaps would eventually accumulate beyond
@@ -1616,7 +1620,7 @@ class TestInactivityTimeout:
         wire_opencode_transport(bridge, DelayedMockHttpClient(sse_response))
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("msg-1", "test"):
+        async for event in stream_opencode_events(bridge, "msg-1", "test"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -1637,7 +1641,7 @@ class TestPromptMaxDuration:
             auth_token="test-token",
         )
 
-        assert bridge.prompt_max_duration_seconds == 6300
+        assert bridge.prompt_limits.prompt_max_duration_seconds == 6300
 
     def test_uses_configured_sandbox_timeout_with_snapshot_reserve(self, monkeypatch):
         monkeypatch.setenv("SANDBOX_TIMEOUT_SECONDS", "14400")
@@ -1649,7 +1653,7 @@ class TestPromptMaxDuration:
             auth_token="test-token",
         )
 
-        assert bridge.prompt_max_duration_seconds == 13500
+        assert bridge.prompt_limits.prompt_max_duration_seconds == 13500
 
     def test_uses_proportional_snapshot_reserve_for_short_sandboxes(self, monkeypatch):
         monkeypatch.setenv("SANDBOX_TIMEOUT_SECONDS", "600")
@@ -1661,7 +1665,7 @@ class TestPromptMaxDuration:
             auth_token="test-token",
         )
 
-        assert bridge.prompt_max_duration_seconds == 450
+        assert bridge.prompt_limits.prompt_max_duration_seconds == 450
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("hang_stage", ["sse_handshake", "prompt_post"])
@@ -1672,8 +1676,8 @@ class TestPromptMaxDuration:
             control_plane_url="http://localhost:8787",
             auth_token="test-token",
         )
-        bridge.opencode_session_id = "oc-session-123"
-        bridge.prompt_max_duration_seconds = 0.1
+        bridge.harness.session_id = "oc-session-123"
+        set_prompt_limits(bridge, prompt_max_duration_seconds=0.1)
 
         if hang_stage == "sse_handshake":
             http_client = DelayedMockHttpClient(HangingHandshakeSSEResponse([]))
@@ -1684,7 +1688,7 @@ class TestPromptMaxDuration:
 
         started_at = time.monotonic()
         with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
-            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+            async for _event in stream_opencode_events(bridge, "msg-1", "test"):
                 pass
 
         assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
@@ -1698,9 +1702,9 @@ class TestPromptMaxDuration:
             control_plane_url="http://localhost:8787",
             auth_token="test-token",
         )
-        bridge.opencode_session_id = "oc-session-123"
-        bridge.sse_inactivity_timeout = 2.0
-        bridge.prompt_max_duration_seconds = 0.1
+        bridge.harness.session_id = "oc-session-123"
+        set_prompt_limits(bridge, inactivity_timeout_seconds=2.0)
+        set_prompt_limits(bridge, prompt_max_duration_seconds=0.1)
 
         sse_response = DelayedMockSSEResponse([(create_sse_event("server.heartbeat", {}), 1.0)])
         http_client = DelayedMockHttpClient(sse_response)
@@ -1709,7 +1713,7 @@ class TestPromptMaxDuration:
 
         started_at = time.monotonic()
         with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
-            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+            async for _event in stream_opencode_events(bridge, "msg-1", "test"):
                 pass
 
         assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
@@ -1722,9 +1726,9 @@ class TestPromptMaxDuration:
             control_plane_url="http://localhost:8787",
             auth_token="test-token",
         )
-        bridge.opencode_session_id = "oc-session-123"
-        bridge.prompt_max_duration_seconds = 0.1
-        bridge.prompt_cleanup_timeout_seconds = 0.1
+        bridge.harness.session_id = "oc-session-123"
+        set_prompt_limits(bridge, prompt_max_duration_seconds=0.1)
+        set_prompt_limits(bridge, prompt_cleanup_timeout_seconds=0.1)
 
         http_client = HangingAbortHttpClient(
             DelayedMockSSEResponse([(create_sse_event("server.heartbeat", {}), 1.0)])
@@ -1733,7 +1737,7 @@ class TestPromptMaxDuration:
 
         started_at = time.monotonic()
         with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
-            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+            async for _event in stream_opencode_events(bridge, "msg-1", "test"):
                 pass
 
         assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
@@ -1749,8 +1753,8 @@ class TestPromptMaxDuration:
             control_plane_url="http://localhost:8787",
             auth_token="test-token",
         )
-        bridge.opencode_session_id = "oc-session-123"
-        bridge.prompt_max_duration_seconds = 0.1
+        bridge.harness.session_id = "oc-session-123"
+        set_prompt_limits(bridge, prompt_max_duration_seconds=0.1)
 
         sse_response = DelayedMockSSEResponse(
             [
@@ -1788,7 +1792,7 @@ class TestPromptMaxDuration:
         http_client = DelayedMockHttpClient(sse_response)
         http_client.get_responses = [MockResponse(200, [])]
         wire_opencode_transport(bridge, http_client)
-        stream = bridge._stream_opencode_response_sse("msg-1", "test")
+        stream = stream_opencode_events(bridge, "msg-1", "test")
 
         assert (await anext(stream))["type"] == "token"
         await asyncio.sleep(0.2)
@@ -1806,9 +1810,9 @@ class TestPromptMaxDuration:
             control_plane_url="http://localhost:8787",
             auth_token="test-token",
         )
-        bridge.opencode_session_id = "oc-session-123"
-        bridge.sse_inactivity_timeout = 2.0
-        bridge.prompt_max_duration_seconds = 0.25
+        bridge.harness.session_id = "oc-session-123"
+        set_prompt_limits(bridge, inactivity_timeout_seconds=2.0)
+        set_prompt_limits(bridge, prompt_max_duration_seconds=0.25)
 
         sse_response = DelayedMockSSEResponse(
             [
@@ -1822,7 +1826,7 @@ class TestPromptMaxDuration:
         wire_opencode_transport(bridge, http_client)
 
         with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
-            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+            async for _event in stream_opencode_events(bridge, "msg-1", "test"):
                 pass
 
         assert any(url.endswith("/abort") for url in http_client.post_urls)
@@ -1937,7 +1941,7 @@ class TestSubtaskStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         tool_events = [e for e in events if e["type"] == "tool_call"]
@@ -2010,7 +2014,7 @@ class TestSubtaskStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -2065,7 +2069,7 @@ class TestSubtaskStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -2123,7 +2127,7 @@ class TestSubtaskStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -2184,7 +2188,7 @@ class TestSubtaskStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         error_events = [e for e in events if e["type"] == "error"]
@@ -2260,7 +2264,7 @@ class TestSubtaskStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         tool_events = [e for e in events if e["type"] == "tool_call"]
@@ -2342,7 +2346,7 @@ class TestSubtaskStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         tool_events = [e for e in events if e["type"] == "tool_call"]
@@ -2439,7 +2443,7 @@ class TestSubtaskStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         tool_events = [e for e in events if e["type"] == "tool_call"]
@@ -2523,7 +2527,7 @@ class TestSubtaskStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         tool_events = [e for e in events if e["type"] == "tool_call"]
@@ -2625,7 +2629,7 @@ class TestCompactionHandling:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -2917,7 +2921,7 @@ class TestCompactionHandling:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         # Summary text should not appear
@@ -2962,7 +2966,7 @@ class TestCompactionHandling:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -3024,7 +3028,7 @@ class TestCompactionHandling:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]
@@ -3040,7 +3044,7 @@ class TestCompactionHandling:
             control_plane_url="http://localhost:8787",
             auth_token="test-token",
         )
-        bridge.opencode_session_id = "oc-session-123"
+        bridge.harness.session_id = "oc-session-123"
         wire_opencode_transport(bridge, AsyncMock())
 
         prompt_ts_ms = 1_754_000_000_000
@@ -3081,7 +3085,7 @@ class TestCompactionHandling:
             compaction_occurred=True,
             start_time=prompt_ts_ms / 1000,
         )
-        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+        async for event in bridge.harness.prompt_stream._fetch_final_message_state(state):
             events.append(event)
 
         # Should find the post-compaction response but NOT the summary
@@ -3098,7 +3102,7 @@ class TestCompactionHandling:
             control_plane_url="http://localhost:8787",
             auth_token="test-token",
         )
-        bridge.opencode_session_id = "oc-session-123"
+        bridge.harness.session_id = "oc-session-123"
         wire_opencode_transport(bridge, AsyncMock())
 
         messages = [
@@ -3118,7 +3122,7 @@ class TestCompactionHandling:
 
         events = []
         state = make_prompt_state("cp-msg-1", "msg_original_id", compaction_occurred=False)
-        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+        async for event in bridge.harness.prompt_stream._fetch_final_message_state(state):
             events.append(event)
 
         assert len(events) == 0
@@ -3186,7 +3190,7 @@ class TestCompactionHandling:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+        async for event in stream_opencode_events(bridge, "cp-msg-1", "Test prompt"):
             events.append(event)
 
         token_events = [e for e in events if e["type"] == "token"]

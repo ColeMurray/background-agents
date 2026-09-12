@@ -16,16 +16,20 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     branch_name: null,
     base_sha: null,
     current_sha: null,
-    opencode_session_id: null,
+    agent_session_id: null,
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-5",
     reasoning_effort: null,
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user" as const,
     spawn_depth: 0,
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1,
@@ -289,21 +293,6 @@ describe("refreshSessionPullRequests", () => {
 
     expect(result).toEqual({ updated: [], failures: [] });
     expect(harness.artifactRepository.updateArtifact).not.toHaveBeenCalled();
-  });
-
-  it("updates the DO mirror without a D1 store", async () => {
-    const harness = createHarness([createPrArtifact()]);
-
-    const result = await refreshSessionPullRequests(
-      harness.repository,
-      harness.artifactRepository,
-      { getPullRequest: harness.getPullRequest },
-      null
-    );
-
-    expect(result.updated).toHaveLength(1);
-    expect(result.failures).toEqual([]);
-    expect(harness.artifactRepository.updateArtifact).toHaveBeenCalledTimes(1);
   });
 
   it("no-ops without a session row", async () => {

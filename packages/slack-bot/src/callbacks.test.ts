@@ -312,6 +312,126 @@ async function postCallback(path: string, payload: unknown, env = makeEnv(), ctx
   return { response, env, ctx };
 }
 
+describe("POST /callbacks/activity", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function activityData(overrides: Record<string, unknown> = {}) {
+    return {
+      kind: "slack.activity_refresh",
+      sessionId: "session-1",
+      messageId: "msg-1",
+      timestamp: Date.now(),
+      context: {
+        source: "slack",
+        channel: "C123",
+        threadTs: "111.222",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+      },
+      ...overrides,
+    };
+  }
+
+  it("re-asserts the working indicator on the thread", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(activityData());
+
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+    expect(response.status).toBe(200);
+
+    await flushWaitUntil(ctx);
+    expect(slackCall(fetchMock, "assistant.threads.setStatus")?.body).toEqual({
+      channel_id: "C123",
+      thread_ts: "111.222",
+      status: "Working...",
+      loading_messages: ["Working..."],
+    });
+  });
+
+  it("rejects a payload signed with the wrong secret", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(activityData(), "wrong-secret");
+
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale refresh", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(activityData({ timestamp: Date.now() - 5 * 60 * 1000 }));
+
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a future-dated refresh", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(activityData({ timestamp: Date.now() + 5 * 60 * 1000 }));
+
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a validly signed completion payload replayed onto this route", async () => {
+    const fetchMock = okFetchMock();
+    // A real /callbacks/complete body: same signing key, same context, and its
+    // signature verifies. Only the domain separator keeps it off this route.
+    const payload = await signPayload({
+      sessionId: "session-1",
+      messageId: "msg-1",
+      success: true,
+      timestamp: Date.now(),
+      context: {
+        source: "slack",
+        channel: "C123",
+        threadTs: "111.222",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+      },
+    });
+
+    const { response } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a refresh carrying the wrong domain separator", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(activityData({ kind: "slack.completion" }));
+
+    const { response } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a payload missing the thread context", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload({
+      sessionId: "session-1",
+      messageId: "msg-1",
+      timestamp: Date.now(),
+    });
+
+    const { response } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /callbacks/complete", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -524,6 +644,24 @@ describe("POST /callbacks/automation-skip", () => {
     const { response, ctx } = await postCallback("/callbacks/automation-skip", { channel: "C123" });
     expect(response.status).toBe(400);
     expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("rejects a signed automation-skip payload with malformed fields", async () => {
+    const payload = await signPayload(skipData({ channel: 123 }));
+    const { response, ctx } = await postCallback("/callbacks/automation-skip", payload);
+
+    expect(response.status).toBe(400);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("accepts a correctly signed automation-skip payload with reordered fields", async () => {
+    okFetchMock();
+    const payload = await signPayload({ threadTs: "111.222", user: "U9", channel: "C123" });
+    const { response, ctx } = await postCallback("/callbacks/automation-skip", payload);
+
+    expect(response.status).toBe(200);
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    await expect(flushWaitUntil(ctx)).resolves.toBeUndefined();
   });
 
   it("rejects a bad signature", async () => {

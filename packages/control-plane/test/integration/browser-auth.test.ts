@@ -29,6 +29,7 @@ const EXPECTED_COLUMNS: Record<string, [string, string, number, number][]> = {
     ["created_at", "INTEGER", 1, 0],
     ["updated_at", "INTEGER", 1, 0],
     ["email_verified", "INTEGER", 1, 0],
+    ["suspended_at", "INTEGER", 0, 0],
   ],
   user_identities: [
     ["id", "TEXT", 0, 1],
@@ -424,7 +425,7 @@ describe("browser authentication", () => {
     if (typeof generateId !== "function") {
       throw new Error("Better Auth canonical ID generator is not configured");
     }
-    expect(generateId({ model: "user" })).toMatch(/^[a-f0-9]{32}$/);
+    expect(generateId()).toMatch(/^[a-f0-9]{32}$/);
     expect(auth.options.session?.expiresIn).toBe(SESSION_EXPIRES_IN_MS / MS_PER_SECOND);
     expect(auth.options.session?.updateAge).toBe(SESSION_UPDATE_AGE_MS / MS_PER_SECOND);
   });

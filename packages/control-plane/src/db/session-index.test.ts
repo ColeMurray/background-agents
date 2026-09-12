@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "./session-index";
 import type { SessionEntry } from "./session-index";
@@ -8,6 +9,7 @@ type SessionRow = {
   title: string | null;
   repo_owner: string | null;
   repo_name: string | null;
+  harness: HarnessId;
   model: string;
   reasoning_effort: string | null;
   base_branch: string | null;
@@ -39,7 +41,7 @@ type SessionRepositoryRow = {
 };
 
 const QUERY_PATTERNS = {
-  INSERT_SESSION: /^INSERT OR IGNORE INTO sessions/,
+  INSERT_SESSION: /^INSERT INTO sessions/,
   INSERT_SESSION_REPO: /^INSERT INTO session_repositories/,
   SELECT_SESSION_REPOS: /^SELECT \* FROM session_repositories WHERE session_id IN/,
   SELECT_PR_SUMMARIES: /FROM session_pull_requests WHERE session_id IN/,
@@ -50,7 +52,6 @@ const QUERY_PATTERNS = {
   SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC LIMIT/,
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
   UPDATE_UPDATED_AT: /^UPDATE sessions SET updated_at = \?/,
-  UPDATE_TITLE: /^UPDATE sessions SET title = \?/,
   UPDATE_TITLE_IF_NEWER:
     /^UPDATE sessions SET title = \?, updated_at = \? WHERE id = \? AND updated_at <= \?$/,
   UPDATE_METRICS: /^UPDATE sessions SET total_cost = \?/,
@@ -188,11 +189,14 @@ class FakeD1Database {
     const normalized = normalizeQuery(query);
 
     if (QUERY_PATTERNS.INSERT_SESSION.test(normalized)) {
+      if (this.rows.has(args[0] as string))
+        throw new Error("UNIQUE constraint failed: sessions.id");
       const [
         id,
         title,
         repoOwner,
         repoName,
+        harness,
         model,
         reasoningEffort,
         baseBranch,
@@ -215,6 +219,7 @@ class FakeD1Database {
         string | null,
         string | null,
         string | null,
+        HarnessId,
         string,
         string | null,
         string | null,
@@ -233,7 +238,7 @@ class FakeD1Database {
         number,
         number,
       ];
-      // INSERT OR IGNORE — skip if exists
+      // ON CONFLICT DO NOTHING — skip if exists
       const inserted = !this.rows.has(id);
       if (inserted) {
         const rootSessionId = rootParentId
@@ -244,6 +249,7 @@ class FakeD1Database {
           title,
           repo_owner: repoOwner,
           repo_name: repoName,
+          harness,
           model,
           reasoning_effort: reasoningEffort,
           base_branch: baseBranch,
@@ -283,17 +289,6 @@ class FakeD1Database {
       const [title, updatedAt, id, maxUpdatedAt] = args as [string, number, string, number];
       const row = this.rows.get(id);
       if (row && row.updated_at <= maxUpdatedAt) {
-        row.title = title;
-        row.updated_at = updatedAt;
-        return { meta: { changes: 1 } };
-      }
-      return { meta: { changes: 0 } };
-    }
-
-    if (QUERY_PATTERNS.UPDATE_TITLE.test(normalized)) {
-      const [title, updatedAt, id] = args as [string, number, string];
-      const row = this.rows.get(id);
-      if (row) {
         row.title = title;
         row.updated_at = updatedAt;
         return { meta: { changes: 1 } };
@@ -502,6 +497,7 @@ describe("SessionIndexStore", () => {
       expect(result).toEqual({
         ...session,
         // Defaults applied for missing optional fields
+        harness: "opencode",
         parentSessionId: null,
         spawnSource: "user",
         spawnDepth: 0,
@@ -542,12 +538,48 @@ describe("SessionIndexStore", () => {
       );
     });
 
+    it("rejects invalid or duplicate provider auth before writing the session batch", async () => {
+      await expect(
+        store.create(
+          makeSession({
+            providerAuth: [
+              {
+                provider: "other" as never,
+                authMode: "api_key",
+                selectionSource: "explicit",
+              },
+            ],
+          })
+        )
+      ).rejects.toThrow("Unsupported model provider");
+      await expect(
+        store.create(
+          makeSession({
+            providerAuth: [
+              { provider: "openai", authMode: "api_key", selectionSource: "explicit" },
+              { provider: "openai", authMode: "api_key", selectionSource: "explicit" },
+            ],
+          })
+        )
+      ).rejects.toThrow("Duplicate provider auth: openai");
+      await expect(
+        store.create(
+          makeSession({
+            providerAuth: [
+              { provider: "openai", authMode: "api_key", selectionSource: "explicit" },
+            ],
+          })
+        )
+      ).rejects.toThrow("must include every subscription provider");
+      expect(await store.exists("test-id")).toBe(false);
+    });
+
     it("throws instead of silently skipping a duplicate insert", async () => {
       const session = makeSession();
       await store.create(session);
 
       await expect(store.create(makeSession({ title: "Different Title" }))).rejects.toThrow(
-        "Session index insert was skipped"
+        "UNIQUE constraint failed"
       );
 
       const result = await store.get("test-id");
@@ -712,43 +744,6 @@ describe("SessionIndexStore", () => {
       ]);
     });
 
-    it("trims and lowercases repo filters", async () => {
-      await store.create(makeSession({ id: "match", repoOwner: "Owner", repoName: "Repo" }));
-      await store.create(makeSession({ id: "other", repoOwner: "Other", repoName: "Repo" }));
-
-      const result = await store.list({ repoOwner: "  OWNER  ", repoName: "  REPO  " });
-
-      expect(result.sessions).toHaveLength(1);
-      expect(result.sessions[0].id).toBe("match");
-    });
-
-    it("matches sessions through secondary members, not just the scalar primary", async () => {
-      await store.create(
-        makeSession({
-          id: "multi",
-          repoOwner: "acme",
-          repoName: "frontend",
-          repositories: [
-            { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
-            { repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "main" },
-          ],
-        })
-      );
-      await store.create(makeSession({ id: "other", repoOwner: "acme", repoName: "unrelated" }));
-
-      const result = await store.list({ repoOwner: "acme", repoName: "backend" });
-
-      expect(result.sessions.map((s) => s.id)).toEqual(["multi"]);
-    });
-
-    it("falls back to the scalar columns for pre-feature sessions without member rows", async () => {
-      await store.create(makeSession({ id: "legacy", repoOwner: "acme", repoName: "app" }));
-
-      const result = await store.list({ repoOwner: "acme", repoName: "app" });
-
-      expect(result.sessions.map((s) => s.id)).toEqual(["legacy"]);
-    });
-
     it("supports multiple creator user ids", async () => {
       await store.create(makeSession({ id: "alice", userId: "alice", updatedAt: 1000 }));
       await store.create(makeSession({ id: "bob", userId: "bob", updatedAt: 3000 }));
@@ -820,22 +815,6 @@ describe("SessionIndexStore", () => {
       const session = await store.get("test-id");
       expect(session?.status).toBe("completed");
       expect(session?.updatedAt).toBe(2000);
-    });
-  });
-
-  describe("updateTitle", () => {
-    it("updates the title of an existing session", async () => {
-      await store.create(makeSession());
-      const updated = await store.updateTitle("test-id", "New Title");
-      expect(updated).toBe(true);
-
-      const session = await store.get("test-id");
-      expect(session?.title).toBe("New Title");
-    });
-
-    it("returns false when session not found", async () => {
-      const updated = await store.updateTitle("nonexistent", "New Title");
-      expect(updated).toBe(false);
     });
   });
 

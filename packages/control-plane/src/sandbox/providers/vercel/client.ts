@@ -9,11 +9,20 @@
 import { createLogger } from "../../../logger";
 import type { CorrelationContext } from "../../../logger";
 import { z } from "zod";
+import { withRequestDeadline } from "../../request-deadline";
 
 const log = createLogger("vercel-sandbox-client");
 
 const DEFAULT_VERCEL_API_BASE_URL = "https://vercel.com/api";
 const USER_AGENT = "open-inspect/vercel-sandbox";
+
+export const VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS = 60_000;
+export const VERCEL_COMMAND_REQUEST_DEADLINE_MS = 60_000;
+// Exceeds the lifecycle's snapshot budget so caller cancellation retains precedence.
+export const VERCEL_SNAPSHOT_REQUEST_DEADLINE_MS = 310_000;
+export const VERCEL_API_REQUEST_DEADLINE_MS = 60_000;
+export const VERCEL_CLEANUP_REQUEST_DEADLINE_MS = 60_000;
+export const VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS = 10_000;
 
 export interface VercelSandboxClientConfig {
   token: string;
@@ -71,6 +80,7 @@ export interface VercelCreateSandboxRequest {
   env?: Record<string, string>;
   tags?: Record<string, string>;
   sourceSnapshotId?: string;
+  signal?: AbortSignal;
 }
 
 const vercelCreateSandboxResponseSchema = z.object({
@@ -89,18 +99,21 @@ export interface VercelRunCommandRequest {
   env?: Record<string, string>;
   sudo?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface VercelWriteFileArchiveRequest {
   sessionId: string;
   archive: Uint8Array;
   extractDir: string;
+  signal?: AbortSignal;
 }
 
 export interface VercelListSnapshotsRequest {
   name?: string;
   limit?: number;
   sortOrder?: "asc" | "desc";
+  signal?: AbortSignal;
 }
 
 export interface VercelCommandResult {
@@ -176,6 +189,7 @@ export class VercelSandboxClient {
       "/v2/sandboxes",
       {
         method: "POST",
+        signal: request.signal,
         body: JSON.stringify({
           projectId: this.config.projectId,
           name: request.name,
@@ -192,7 +206,8 @@ export class VercelSandboxClient {
       },
       vercelCreateSandboxResponseSchema,
       correlation,
-      "createSandbox"
+      "createSandbox",
+      VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS
     );
 
     return response;
@@ -206,6 +221,7 @@ export class VercelSandboxClient {
       `/v2/sandboxes/sessions/${encodeURIComponent(request.sessionId)}/cmd`,
       {
         method: "POST",
+        signal: request.signal,
         body: JSON.stringify({
           command: request.command,
           args: request.args ?? [],
@@ -217,7 +233,8 @@ export class VercelSandboxClient {
       },
       vercelStartCommandResponseSchema,
       correlation,
-      "startCommand"
+      "startCommand",
+      VERCEL_COMMAND_REQUEST_DEADLINE_MS
     );
 
     return { commandId: response.command.id, exitCode: response.command.exitCode };
@@ -231,6 +248,7 @@ export class VercelSandboxClient {
       `/v2/sandboxes/sessions/${encodeURIComponent(request.sessionId)}/cmd`,
       {
         method: "POST",
+        signal: request.signal,
         body: JSON.stringify({
           command: request.command,
           args: request.args ?? [],
@@ -242,7 +260,10 @@ export class VercelSandboxClient {
         }),
       },
       correlation,
-      "runCommandAndWait"
+      "runCommandAndWait",
+      request.timeoutMs === undefined
+        ? VERCEL_COMMAND_REQUEST_DEADLINE_MS
+        : request.timeoutMs + VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS
     );
   }
 
@@ -258,10 +279,12 @@ export class VercelSandboxClient {
           "content-type": "application/gzip",
           "x-cwd": request.extractDir,
         },
+        signal: request.signal,
         body: request.archive,
       },
       correlation,
-      "writeFileArchive"
+      "writeFileArchive",
+      VERCEL_API_REQUEST_DEADLINE_MS
     );
   }
 
@@ -279,7 +302,8 @@ export class VercelSandboxClient {
       { method: "POST", body, signal: opts.signal },
       vercelSnapshotResponseSchema,
       correlation,
-      "snapshotSession"
+      "snapshotSession",
+      VERCEL_SNAPSHOT_REQUEST_DEADLINE_MS
     );
   }
 
@@ -294,10 +318,11 @@ export class VercelSandboxClient {
         limit: request.limit,
         sortOrder: request.sortOrder,
       }),
-      { method: "GET" },
+      { method: "GET", signal: request.signal },
       vercelListSnapshotsResponseSchema,
       correlation,
-      "listSnapshots"
+      "listSnapshots",
+      VERCEL_API_REQUEST_DEADLINE_MS
     );
     return response.snapshots;
   }
@@ -311,7 +336,8 @@ export class VercelSandboxClient {
       `/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/stop`,
       { method: "POST", signal },
       correlation,
-      "stopSession"
+      "stopSession",
+      VERCEL_CLEANUP_REQUEST_DEADLINE_MS
     );
   }
 
@@ -324,7 +350,8 @@ export class VercelSandboxClient {
       `/v2/sandboxes/snapshots/${encodeURIComponent(snapshotId)}`,
       { method: "DELETE", signal },
       correlation,
-      "deleteSnapshot"
+      "deleteSnapshot",
+      VERCEL_CLEANUP_REQUEST_DEADLINE_MS
     );
   }
 
@@ -333,10 +360,16 @@ export class VercelSandboxClient {
     init: RequestInit,
     schema: z.ZodType<T>,
     correlation: CorrelationContext | undefined,
-    endpoint: string
+    endpoint: string,
+    deadlineMs: number
   ): Promise<T> {
-    return this.send(path, init, correlation, endpoint, async (response) =>
-      this.parseJson(schema, await response.text(), response.status, endpoint)
+    return this.send(
+      path,
+      init,
+      correlation,
+      endpoint,
+      async (response) => this.parseJson(schema, await response.text(), response.status, endpoint),
+      deadlineMs
     );
   }
 
@@ -344,9 +377,19 @@ export class VercelSandboxClient {
     path: string,
     init: RequestInit,
     correlation: CorrelationContext | undefined,
-    endpoint: string
+    endpoint: string,
+    deadlineMs: number
   ): Promise<void> {
-    return this.send(path, init, correlation, endpoint, () => {});
+    return this.send(
+      path,
+      init,
+      correlation,
+      endpoint,
+      async (response) => {
+        await response.arrayBuffer();
+      },
+      deadlineMs
+    );
   }
 
   private parseJson<T>(schema: z.ZodType<T>, text: string, status: number, endpoint: string): T {
@@ -376,9 +419,10 @@ export class VercelSandboxClient {
     path: string,
     init: RequestInit,
     correlation: CorrelationContext | undefined,
-    endpoint: string
+    endpoint: string,
+    deadlineMs: number
   ): Promise<VercelCommandResult> {
-    return this.send(path, init, correlation, endpoint, parseCommandNdjsonStream);
+    return this.send(path, init, correlation, endpoint, parseCommandNdjsonStream, deadlineMs);
   }
 
   private async send<T>(
@@ -386,7 +430,8 @@ export class VercelSandboxClient {
     init: RequestInit,
     correlation: CorrelationContext | undefined,
     endpoint: string,
-    consume: (response: Response) => T | Promise<T>
+    consume: (response: Response) => T | Promise<T>,
+    deadlineMs: number
   ): Promise<T> {
     const startTime = Date.now();
     let httpStatus: number | undefined;
@@ -395,19 +440,27 @@ export class VercelSandboxClient {
     try {
       const url = this.buildUrl(path);
       const headers = this.buildHeaders(init, correlation);
-      const response = await fetch(url.toString(), { ...init, headers });
-      httpStatus = response.status;
+      const result = await withRequestDeadline(
+        "Vercel Sandbox",
+        endpoint,
+        deadlineMs,
+        init.signal,
+        async (signal) => {
+          const response = await fetch(url.toString(), { ...init, headers, signal });
+          httpStatus = response.status;
 
-      if (!response.ok) {
-        const text = await readResponseText(response);
-        throw new VercelSandboxApiError(
-          `Vercel Sandbox API error: ${response.status} ${text}`,
-          response.status,
-          text
-        );
-      }
+          if (!response.ok) {
+            const text = await readResponseText(response);
+            throw new VercelSandboxApiError(
+              `Vercel Sandbox API error: ${response.status} ${text}`,
+              response.status,
+              text
+            );
+          }
 
-      const result = await consume(response);
+          return await consume(response);
+        }
+      );
       outcome = "success";
       return result;
     } finally {

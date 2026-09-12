@@ -29,10 +29,19 @@ export interface SessionSocketState {
   participants: ParticipantPresence[];
   artifacts: Artifact[];
   currentParticipantId: string | null;
+  canManageBudget: boolean;
   hasMoreHistory: boolean;
   loadingHistory: boolean;
   cursor: HistoryCursor | null;
   promptQueue: PromptQueueItem[];
+  /**
+   * Why the sandbox last failed, as reported by the control plane — the
+   * provider's own message (quota, rate limit, bad config), not a status label.
+   * Set from `sandbox_error` and from the spawn error carried by the snapshot /
+   * `subscribed`, and cleared as soon as a fresh attempt starts or succeeds, so
+   * it never outlives the failure it explains.
+   */
+  sandboxError: string | null;
 }
 
 export const initialSessionSocketState: SessionSocketState = {
@@ -43,10 +52,12 @@ export const initialSessionSocketState: SessionSocketState = {
   participants: [],
   artifacts: [],
   currentParticipantId: null,
+  canManageBudget: false,
   hasMoreHistory: false,
   loadingHistory: false,
   cursor: null,
   promptQueue: [],
+  sandboxError: null,
 };
 
 export type SessionSocketAction =
@@ -93,6 +104,7 @@ export function createSessionSocketState(snapshot: SessionSnapshot): SessionSock
     hasMoreHistory: snapshot.timeline.hasMore,
     cursor: snapshot.timeline.cursor,
     promptQueue: snapshot.promptQueue,
+    sandboxError: snapshot.spawnError ?? null,
   };
 }
 
@@ -180,6 +192,7 @@ function reduceServerMessage(
         },
         artifacts: message.artifacts.map(toUiArtifact),
         currentParticipantId: message.participantId || state.currentParticipantId,
+        canManageBudget: message.canManageBudget ?? false,
         events: renderTimelineEvents(timelineEvents),
         hasMoreHistory: message.timeline.hasMore,
         cursor: message.timeline.cursor,
@@ -187,6 +200,7 @@ function reduceServerMessage(
         // stuck true and block loadOlderEvents after the reconnect.
         loadingHistory: false,
         promptQueue: message.promptQueue,
+        sandboxError: message.spawnError ?? null,
       };
     }
 
@@ -213,10 +227,14 @@ function reduceServerMessage(
       };
 
     case "sandbox_warming":
-      return updateSessionState(state, (prev) => ({ ...prev, sandboxStatus: "warming" }));
+      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
+        ...prev,
+        sandboxStatus: "warming",
+      }));
 
     case "sandbox_spawning":
-      return updateSessionState(state, (prev) => ({
+      // A new attempt supersedes whatever the last one failed with.
+      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
         ...prev,
         sandboxStatus: "spawning",
         ...CLEARED_SANDBOX_RUNTIME_STATE,
@@ -229,19 +247,25 @@ function reduceServerMessage(
         message.status === "stale" ||
         message.status === "stopped" ||
         message.status === "failed";
-      return updateSessionState(state, (prev) => ({
-        ...prev,
-        sandboxStatus: message.status,
-        ...(shouldClearAccessState && CLEARED_SANDBOX_RUNTIME_STATE),
-        ...(isReplacementStart && { sandboxDashboardUrl: undefined }),
-      }));
+      return updateSessionState(
+        message.status === "failed" ? state : { ...state, sandboxError: null },
+        (prev) => ({
+          ...prev,
+          sandboxStatus: message.status,
+          ...(shouldClearAccessState && CLEARED_SANDBOX_RUNTIME_STATE),
+          ...(isReplacementStart && { sandboxDashboardUrl: undefined }),
+        })
+      );
     }
 
     case "sandbox_ready":
-      return updateSessionState(state, (prev) => ({ ...prev, sandboxStatus: "ready" }));
+      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
+        ...prev,
+        sandboxStatus: "ready",
+      }));
 
     case "sandbox_error":
-      return updateSessionState(state, (prev) => ({
+      return updateSessionState({ ...state, sandboxError: message.error }, (prev) => ({
         ...prev,
         sandboxStatus: "failed",
         ...CLEARED_SANDBOX_RUNTIME_STATE,
@@ -281,6 +305,14 @@ function reduceServerMessage(
         isProcessing: message.isProcessing,
       }));
 
+    case "budget_status":
+      return updateSessionState(state, (prev) => ({
+        ...prev,
+        totalCost: message.totalCost,
+        maxSessionCostUsd: message.maxSessionCostUsd,
+        budgetExhausted: message.budgetExhausted,
+      }));
+
     case "prompt_queue_updated":
       return { ...state, promptQueue: message.promptQueue };
 
@@ -303,24 +335,8 @@ export function sessionSocketReducer(
     case "server_message":
       return reduceServerMessage(state, action.message);
 
-    case "events_appended": {
-      let next: SessionSocketState = { ...state, events: [...state.events, ...action.events] };
-      for (const event of action.events) {
-        if (
-          event.type === "step_finish" &&
-          typeof event.cost === "number" &&
-          Number.isFinite(event.cost) &&
-          event.cost > 0
-        ) {
-          const stepCost = event.cost;
-          next = updateSessionState(next, (prev) => ({
-            ...prev,
-            totalCost: (prev.totalCost ?? 0) + stepCost,
-          }));
-        }
-      }
-      return next;
-    }
+    case "events_appended":
+      return { ...state, events: [...state.events, ...action.events] };
 
     case "history_requested":
       return { ...state, loadingHistory: true };

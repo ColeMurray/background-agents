@@ -10,15 +10,16 @@ import { SkillsCatalog } from "./skills-catalog";
 
 expect.extend(matchers);
 
-const { useSkillCatalogPageMock } = vi.hoisted(() => ({
+const { useSkillCatalogPageMock, useSkillMock } = vi.hoisted(() => ({
   useSkillCatalogPageMock: vi.fn(),
+  useSkillMock: vi.fn(),
 }));
 
 vi.mock("@/hooks/use-managed-skills", () => ({
   deleteSkill: vi.fn(),
   revalidateSkillCatalogPage: vi.fn(),
   setSkillEnabled: vi.fn(),
-  useSkill: () => ({ skill: undefined, loading: false, error: undefined, mutate: vi.fn() }),
+  useSkill: useSkillMock,
   useSkillCatalogPage: useSkillCatalogPageMock,
 }));
 
@@ -36,6 +37,7 @@ function skill(id: string, name: string): SkillSummary {
     lastEditorDisplayName: "User One",
     revisionAuthorDisplayName: "User One",
     assignments: [],
+    source: null,
     createdBy: "user-1",
     updatedBy: "user-1",
     createdAt: 1,
@@ -62,6 +64,12 @@ beforeEach(() => {
           error: undefined,
         }
   );
+  useSkillMock.mockReturnValue({
+    skill: undefined,
+    loading: false,
+    error: undefined,
+    mutate: vi.fn(),
+  });
 });
 
 afterEach(cleanup);
@@ -69,7 +77,7 @@ afterEach(cleanup);
 describe("SkillsCatalog", () => {
   it("loads catalog pages on demand and navigates back with cursor history", async () => {
     const user = userEvent.setup();
-    render(<SkillsCatalog />);
+    render(<SkillsCatalog canManage />);
 
     expect(screen.getByText("first-skill")).toBeInTheDocument();
     expect(screen.getByText("Page 1")).toBeInTheDocument();
@@ -87,6 +95,72 @@ describe("SkillsCatalog", () => {
 
     expect(screen.getByText("first-skill")).toBeInTheDocument();
     expect(useSkillCatalogPageMock).toHaveBeenLastCalledWith(null);
+  });
+
+  it("shows the skill creator with an ID fallback", () => {
+    const withDisplayName = skill("1", "first-skill");
+    const withIdFallback = {
+      ...skill("2", "second-skill"),
+      creatorDisplayName: "",
+      createdBy: "user-2",
+    };
+    useSkillCatalogPageMock.mockReturnValue({
+      skills: [withDisplayName, withIdFallback],
+      hasMore: false,
+      nextCursor: null,
+      loading: false,
+      error: undefined,
+    });
+
+    render(<SkillsCatalog canManage />);
+
+    expect(screen.getByText("· Created by User One")).toBeInTheDocument();
+    expect(screen.getByText("· Created by user-2")).toBeInTheDocument();
+  });
+
+  it("opens a complete read-only detail surface for users without manage permission", async () => {
+    const summary = skill("1", "first-skill");
+    useSkillMock.mockReturnValue({
+      skill: {
+        ...summary,
+        body: "## Workflow\nRun the checks.",
+        license: "MIT",
+        compatibility: "Open Inspect",
+        metadata: { owner: "platform" },
+        assignments: [
+          { id: "assignment-1", type: "repository", repoOwner: "acme", repoName: "api" },
+        ],
+        files: [
+          {
+            path: "SKILL.md",
+            content: "generated",
+            sha256: "b".repeat(64),
+            executable: false,
+            sizeBytes: 9,
+          },
+          {
+            path: "scripts/check.sh",
+            content: "npm test",
+            sha256: "c".repeat(64),
+            executable: true,
+            sizeBytes: 8,
+          },
+        ],
+      },
+      loading: false,
+      error: undefined,
+      mutate: vi.fn(),
+    });
+    const user = userEvent.setup();
+    render(<SkillsCatalog canManage={false} />);
+
+    await user.click(screen.getByRole("button", { name: /first-skill/i }));
+
+    expect(screen.getByText("Run the checks.", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Repository: acme/api")).toBeInTheDocument();
+    expect(screen.getByText("scripts/check.sh (executable)")).toBeInTheDocument();
+    expect(screen.getByText(/Revision 1 by User One/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Save new revision/i })).not.toBeInTheDocument();
   });
 
   it.each([
@@ -125,7 +199,7 @@ describe("SkillsCatalog", () => {
           }
     );
     const user = userEvent.setup();
-    render(<SkillsCatalog />);
+    render(<SkillsCatalog canManage />);
 
     await user.click(screen.getByRole("button", { name: "Next" }));
 

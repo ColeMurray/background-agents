@@ -2,6 +2,7 @@ import {
   findSandboxPortConflict,
   isValidSandboxTimeoutMs,
   MAX_TUNNEL_PORTS,
+  validateSandboxChildSessionLimits,
   type ConfiguredSandboxPort,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
@@ -88,12 +89,12 @@ export function normalizeSandboxSettings(
     reject
   );
 
-  if (
-    maxConcurrentChildSessions !== undefined &&
-    maxTotalChildSessions !== undefined &&
-    maxConcurrentChildSessions > maxTotalChildSessions
-  ) {
-    reject("maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions");
+  const childSessionLimitsError = validateSandboxChildSessionLimits({
+    maxConcurrentChildSessions,
+    maxTotalChildSessions,
+  });
+  if (childSessionLimitsError !== undefined) {
+    reject(childSessionLimitsError);
     maxConcurrentChildSessions = undefined;
   }
 
@@ -148,6 +149,15 @@ export function normalizeSandboxSettings(
   if (buildTimeoutSeconds !== undefined) {
     // Stored as-is; the build trigger caps it at MAX via resolveBuildTimeoutSeconds.
     result.buildTimeoutSeconds = buildTimeoutSeconds;
+  }
+
+  const maxSessionCostUsd = normalizePositiveNumberSetting(
+    settings.maxSessionCostUsd,
+    "maxSessionCostUsd",
+    reject
+  );
+  if (maxSessionCostUsd !== undefined) {
+    result.maxSessionCostUsd = maxSessionCostUsd;
   }
 
   checkPortCollisions(result, reject);
@@ -267,6 +277,19 @@ function normalizePositiveIntegerSetting(
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
     reject(`${name} must be a positive integer`);
+    return undefined;
+  }
+  return value;
+}
+
+function normalizePositiveNumberSetting(
+  value: unknown,
+  name: string,
+  reject: (message: string) => false
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    reject(`${name} must be a positive finite number`);
     return undefined;
   }
   return value;

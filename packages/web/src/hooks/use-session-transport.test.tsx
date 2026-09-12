@@ -3,6 +3,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import {
+  WS_CLOSE_GOING_AWAY,
+  WS_CLOSE_SERVICE_RESTART,
+  WS_CLOSE_TRY_AGAIN_LATER,
+} from "@open-inspect/shared/types/websocket";
 import { useSessionTransport } from "./use-session-transport";
 
 class FakeWebSocket {
@@ -110,6 +115,49 @@ describe("useSessionTransport", () => {
     expect(result.current.isOpen()).toBe(true);
   });
 
+  it("does not fetch a token or open a socket when transport is disabled", async () => {
+    const { result } = renderHook(() =>
+      useSessionTransport("session-1", { onMessage, onClose }, false)
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(result.current.connected).toBe(false);
+    expect(result.current.connecting).toBe(false);
+
+    act(() => result.current.reconnect());
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("resets transport state across enabled to disabled to enabled", async () => {
+    const rendered = renderHook(
+      ({ enabled }) => useSessionTransport("session-1", { onMessage, onClose }, enabled),
+      { initialProps: { enabled: true } }
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.instances[0].open());
+    await waitFor(() => expect(rendered.result.current.connected).toBe(true));
+
+    rendered.rerender({ enabled: false });
+
+    await waitFor(() => {
+      expect(rendered.result.current.connected).toBe(false);
+      expect(rendered.result.current.connecting).toBe(false);
+    });
+    expect(rendered.result.current.isOpen()).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    rendered.rerender({ enabled: true });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    act(() => FakeWebSocket.instances[1].open());
+    await waitFor(() => expect(rendered.result.current.connected).toBe(true));
+  });
+
   it("forwards schema-valid messages to onMessage", async () => {
     const { socket } = await openSocket();
 
@@ -156,30 +204,104 @@ describe("useSessionTransport", () => {
     expect(result.current.connecting).toBe(false);
   });
 
-  it("sets an auth error on close code 4001 and fetches a fresh token on reconnect", async () => {
-    const { result, socket } = await openSocket();
-
-    act(() => {
-      socket.serverClose(4001);
+  it("refreshes a rejected credential once, then reports an auth error", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
     });
 
-    await waitFor(() => {
-      expect(result.current.authError).toBe("Authentication failed. Please sign in again.");
-      expect(result.current.connected).toBe(false);
+    // One automatic refresh: the credential may simply be stale.
+    act(() => FakeWebSocket.instances[0].serverClose(4001, true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
     });
-    expect(onClose).toHaveBeenCalledTimes(1);
-    // No automatic reconnect on auth failure.
-    expect(FakeWebSocket.instances).toHaveLength(1);
-
-    act(() => {
-      result.current.reconnect();
-    });
-
-    await waitFor(() => {
-      expect(FakeWebSocket.instances).toHaveLength(2);
-    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(result.current.authError).toBeNull();
+    expect(rendered.result.current.authError).toBeNull();
+
+    // A freshly issued credential rejected too is a real auth failure.
+    act(() => FakeWebSocket.instances[1].serverClose(4001, true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(rendered.result.current.authError).toBe("Authentication failed. Please sign in again.");
+    expect(rendered.result.current.connected).toBe(false);
+
+    act(() => rendered.result.current.reconnect());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    expect(rendered.result.current.authError).toBeNull();
+    rendered.unmount();
+  });
+
+  it("refreshes a credential another tab invalidated while the host was restarting", async () => {
+    // Only one WebSocket credential is stored per participant, so a second tab
+    // opening the session invalidates this tab's cached token. The restart is
+    // when that is discovered: the retry presents the stale token and is closed
+    // 4001, which has to recover on its own rather than sit behind a banner.
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    fetchMock
+      .mockResolvedValueOnce(Response.json({ token: "stale-token" }))
+      .mockResolvedValueOnce(Response.json({ token: "reissued-token" }));
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(WS_CLOSE_SERVICE_RESTART, true);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(FakeWebSocket.instances[1].sentMessages).toEqual([]);
+
+    act(() => FakeWebSocket.instances[1].serverClose(4001, true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    act(() => FakeWebSocket.instances[2].open());
+    expect(FakeWebSocket.instances[2].sentMessages).toEqual([
+      expect.objectContaining({ token: "reissued-token" }),
+    ]);
+    expect(rendered.result.current.connected).toBe(true);
+    expect(rendered.result.current.authError).toBeNull();
+    rendered.unmount();
+  });
+
+  it("restores the credential-refresh budget once a connection synchronizes", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => FakeWebSocket.instances[0].serverClose(4001, true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    act(() => {
+      FakeWebSocket.instances[1].open();
+      rendered.result.current.markHealthy();
+      FakeWebSocket.instances[1].serverClose(4001, true);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // The budget is spent per healthy connection, not once per page load.
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    expect(rendered.result.current.authError).toBeNull();
+    rendered.unmount();
   });
 
   it("reports session expiry on close code 4002 without reconnecting", async () => {
@@ -193,6 +315,225 @@ describe("useSessionTransport", () => {
       expect(result.current.connectionError).toBe("Session expired. Please reconnect.");
     });
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("fetches a fresh credential and reconnects after authorization revocation", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(Response.json({ token: "original-token" }))
+      .mockResolvedValueOnce(Response.json({ token: "refreshed-token" }));
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const original = FakeWebSocket.instances[0];
+    act(() => {
+      original.open();
+      original.serverClose(4010, true);
+    });
+    // Every scheduled reconnect reports the wait, not just the backoff ones.
+    expect(rendered.result.current.reconnecting).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const replacement = FakeWebSocket.instances[1];
+    act(() => replacement.open());
+    expect(replacement.sentMessages).toEqual([
+      expect.objectContaining({ token: "refreshed-token" }),
+    ]);
+    rendered.unmount();
+  });
+
+  it("retries a clean transient server failure with the cached credential", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(1011, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    act(() => FakeWebSocket.instances[1].open());
+    expect(FakeWebSocket.instances[1].sentMessages).toEqual([
+      expect.objectContaining({ token: "ws-token" }),
+    ]);
+    rendered.unmount();
+  });
+
+  it("reconnects after a service restart on a randomized RFC delay", async () => {
+    // The host closes every adopted socket with WS_CLOSE_SERVICE_RESTART on
+    // shutdown, and a proper close frame makes it a *clean* close in the
+    // browser. RFC 6455 registers 1012 with a randomized 5-30s reconnect: the
+    // restart hits every tab at once, and the host is not listening again a
+    // second later anyway.
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(WS_CLOSE_SERVICE_RESTART, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_999);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    // The credential outlives the host restart, so no second token fetch.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(rendered.result.current.connectionError).toBeNull();
+
+    act(() => FakeWebSocket.instances[1].open());
+    expect(rendered.result.current.connected).toBe(true);
+    rendered.unmount();
+  });
+
+  it("spreads service-restart reconnects across the whole randomized window", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => FakeWebSocket.instances[0].serverClose(WS_CLOSE_SERVICE_RESTART, true));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29_999);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    rendered.unmount();
+  });
+
+  it("leaves an overloaded server alone and offers the user a reconnect", async () => {
+    // 1013 is registered as overload, and this codebase's only sender closes a
+    // peer for exhausting its own delivery backlog. Reconnecting on a timer
+    // would repeat exactly what the host just refused, so the registry asks for
+    // a reconnect on user action - which is what the banner's button is.
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(WS_CLOSE_TRY_AGAIN_LATER, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(rendered.result.current.reconnecting).toBe(false);
+    expect(rendered.result.current.connectionError).toBe(
+      "The server is too busy to accept the connection. Try reconnecting in a moment."
+    );
+
+    act(() => rendered.result.current.reconnect());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(rendered.result.current.connectionError).toBeNull();
+    rendered.unmount();
+  });
+
+  it("reconnects on the transient backoff when the host goes away", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(WS_CLOSE_GOING_AWAY, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    rendered.unmount();
+  });
+
+  it("reports reconnecting while a scheduled retry is pending", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => FakeWebSocket.instances[0].open());
+    expect(rendered.result.current.reconnecting).toBe(false);
+
+    act(() => FakeWebSocket.instances[0].serverClose(WS_CLOSE_GOING_AWAY, true));
+    expect(rendered.result.current.reconnecting).toBe(true);
+    expect(rendered.result.current.connected).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(rendered.result.current.reconnecting).toBe(false);
+    rendered.unmount();
+  });
+
+  it("retries a transient close on a backoff schedule that outlasts an outage", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const expectedDelaysMs = [
+      1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000, 30_000, 30_000,
+    ];
+    // A restart of the Node host takes seconds to a minute; the budget has to
+    // outlast it, not the ~31s five attempts bought.
+    expect(expectedDelaysMs.reduce((total, delay) => total + delay, 0)).toBeGreaterThanOrEqual(
+      150_000
+    );
+
+    for (const [attempt, delayMs] of expectedDelaysMs.entries()) {
+      act(() => FakeWebSocket.instances[attempt].serverClose(WS_CLOSE_GOING_AWAY, true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(delayMs - 1);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(attempt + 1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(attempt + 2);
+    }
+    expect(rendered.result.current.connectionError).toBeNull();
+
+    act(() =>
+      FakeWebSocket.instances[expectedDelaysMs.length].serverClose(WS_CLOSE_GOING_AWAY, true)
+    );
+    expect(rendered.result.current.connectionError).toBe(
+      "Connection lost. Please check your network and try reconnecting."
+    );
+    expect(rendered.result.current.reconnecting).toBe(false);
+    rendered.unmount();
   });
 
   it("reconnects with backoff after an unclean close and reuses the cached token", async () => {
@@ -231,7 +572,7 @@ describe("useSessionTransport", () => {
     });
 
     // Never mark the sockets healthy, so repeated failures exhaust the budget.
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; attempt < 11; attempt++) {
       const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
       act(() => {
         socket.serverClose(1006);
@@ -241,7 +582,7 @@ describe("useSessionTransport", () => {
       });
     }
 
-    expect(FakeWebSocket.instances).toHaveLength(6);
+    expect(FakeWebSocket.instances).toHaveLength(11);
     expect(rendered.result.current.connectionError).toBe(
       "Connection lost. Please check your network and try reconnecting."
     );

@@ -7,6 +7,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
 import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
+import { DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
 import { AutomationForm, type AutomationFormValues } from "./automation-form";
 import { CronPicker } from "./cron-picker";
 
@@ -90,6 +91,10 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   }),
 }));
 
+vi.mock("@/hooks/use-provider-accounts", () => ({
+  useProviderAccounts: () => ({ accounts: [], defaults: [], providers: [], loading: false }),
+}));
+
 // The SlackChannelPicker (rendered for slack_channel conditions) lists channels via
 // useSession-backed SWR. The form tests don't exercise channel listing, so stub it out
 // to avoid needing a SessionProvider.
@@ -109,6 +114,51 @@ const openRepositoryPicker = () =>
   fireEvent.click(screen.getByRole("button", { name: "Repository Configuration" }));
 
 describe("automation cron submission", () => {
+  it("locks provider authentication while submitting", () => {
+    const props = {
+      mode: "create" as const,
+      onSubmit: vi.fn(),
+      initialValues: {
+        name: "Provider pins",
+        repositories: singleRepository,
+        model: "openai/gpt-5.4",
+        instructions: "Run with pins.",
+      },
+    };
+    const { rerender } = render(<AutomationForm {...props} submitting={false} />);
+    expect(screen.getByLabelText("OpenAI authentication")).toBeEnabled();
+
+    rerender(<AutomationForm {...props} submitting />);
+    expect(screen.getByLabelText("OpenAI authentication")).toBeDisabled();
+    expect(screen.getByLabelText("xAI authentication")).toBeDisabled();
+  });
+
+  it("retains and submits pins for all providers", () => {
+    const onSubmit = vi.fn();
+    const providerSelections = {
+      openai: { mode: "provider_account" as const, accountId: "a".repeat(32) },
+      xai: { mode: "api_key" as const },
+    };
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Provider pins",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Run with pins.",
+          providerSelections,
+        }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].providerSelections).toEqual(providerSelections);
+  });
+
   it("groups conditions under an accessible name", () => {
     render(
       <AutomationForm
@@ -234,11 +284,163 @@ describe("automation cron submission", () => {
     );
 
     expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+    expect(screen.getByText("Event type is required.")).toBeInTheDocument();
 
     fireEvent.submit(container.querySelector("form")!);
 
-    expect(screen.getByText("Event type is required.")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("drops conditions the newly picked event type cannot answer, and says which", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "CI watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Look at the failing workflow.",
+          triggerType: "github_event",
+          eventType: "workflow_run.completed",
+          triggerConfig: {
+            conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByPlaceholderText(/Exact workflow name/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /PR Opened/ }));
+
+    expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Removed Workflow Name — not available for this event type."
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      eventType: "pull_request.opened",
+      triggerConfig: { conditions: [] },
+    });
+  });
+
+  it("restores conditions when switching back to a compatible GitHub event", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "CI watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Look at the failing workflow.",
+          triggerType: "github_event",
+          eventType: "workflow_run.completed",
+          triggerConfig: {
+            conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+          },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /PR Opened/ }));
+    expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /Workflow Run Completed/ }));
+
+    expect(screen.getByPlaceholderText(/Exact workflow name/)).toHaveValue("CI");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("drops and restores conclusions based on event-specific values", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Check suite watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Inspect failed check suites.",
+          triggerType: "github_event",
+          eventType: "check_suite.completed",
+          triggerConfig: {
+            conditions: [{ type: "conclusion", operator: "eq", value: "startup_failure" }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getAllByText("startup_failure").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /Workflow Run Completed/ }));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Removed Conclusion — not available for this event type."
+    );
+
+    fireEvent.click(screen.getByText("Add condition..."));
+    fireEvent.click(screen.getByRole("option", { name: "Conclusion" }));
+    const conclusionSelect = screen
+      .getAllByRole("combobox")
+      .find((element) => element.textContent?.includes("success"));
+    expect(conclusionSelect).toBeDefined();
+    fireEvent.click(conclusionSelect!);
+    fireEvent.click(screen.getByRole("option", { name: "failure" }));
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
+    fireEvent.click(screen.getByRole("option", { name: /Check Suite Completed/ }));
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      eventType: "check_suite.completed",
+      triggerConfig: {
+        conditions: [{ type: "conclusion", operator: "eq", value: "failure" }],
+      },
+    });
+  });
+
+  it("clears active and dropped conditions when changing trigger source", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "CI watcher",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Look at the failing workflow.",
+          triggerType: "github_event",
+          eventType: "workflow_run.completed",
+          triggerConfig: {
+            conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByPlaceholderText(/Exact workflow name/)).toHaveValue("CI");
+
+    fireEvent.click(screen.getByRole("radio", { name: /^Sentry / }));
+
+    expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("submits triggerConfig with empty conditions for non-schedule automations", () => {
@@ -266,6 +468,30 @@ describe("automation cron submission", () => {
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       triggerConfig: { conditions: [] },
     });
+  });
+
+  it("renders condition validation errors beside the condition builder", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Review PRs",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          triggerConfig: {
+            conditions: [{ type: "branch", operator: "glob_match", value: [] }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("At least one branch pattern required")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
   });
 });
 
@@ -786,6 +1012,44 @@ describe("slack_event automation", () => {
     expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
   });
 
+  it("shows the Slack channel message only when it is the policy failure", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          ...slackBase,
+          name: "",
+          triggerConfig: { conditions: [] },
+        }}
+      />
+    );
+
+    expect(screen.queryByText(/require at least one Slack Channel/)).not.toBeInTheDocument();
+  });
+
+  it("explains why an empty slack_channel condition cannot be submitted", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          ...slackBase,
+          triggerConfig: {
+            conditions: [{ type: "slack_channel", operator: "any_of", value: [] }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    expect(
+      screen.getByText("Slack Channel requires at least one nonblank channel ID")
+    ).toBeInTheDocument();
+  });
+
   it("submits a valid slack_event", () => {
     const onSubmit = vi.fn();
     const { container } = render(
@@ -946,5 +1210,102 @@ describe("model normalization", () => {
       />
     );
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+  });
+});
+
+describe("agent harness", () => {
+  const baseInitialValues = {
+    name: "Daily review",
+    repositories: singleRepository,
+    model: "openai/gpt-5.4",
+    scheduleCron: "0 9 * * *",
+    scheduleTz: "UTC",
+    instructions: "Review the repo.",
+    triggerType: "schedule" as const,
+  };
+
+  const renderForm = (initialValues: Partial<AutomationFormValues>, mode: "create" | "edit") => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode={mode}
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...baseInitialValues, ...initialValues }}
+      />
+    );
+    return { onSubmit, submit: () => fireEvent.submit(container.querySelector("form")!) };
+  };
+
+  it("submits the built-in harness when none was chosen", () => {
+    const { onSubmit, submit } = renderForm({}, "create");
+    expect(screen.getByRole("combobox", { name: "Agent harness" })).toHaveTextContent("OpenCode");
+
+    submit();
+
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      harness: DEFAULT_HARNESS,
+      model: "openai/gpt-5.4",
+    });
+  });
+
+  it("loads an existing automation's harness and keeps the model inside it", () => {
+    enabledModelsValue = ["openai/gpt-5.4", DEFAULT_MODEL];
+    const { onSubmit, submit } = renderForm({ harness: "claude" }, "edit");
+    expect(screen.getByRole("combobox", { name: "Agent harness" })).toHaveTextContent(
+      "Claude Agent"
+    );
+
+    submit();
+
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ harness: "claude", model: DEFAULT_MODEL });
+  });
+
+  it("submits a newly selected harness and coerces the model to one it can run", () => {
+    enabledModelsValue = ["openai/gpt-5.4", DEFAULT_MODEL];
+    const { onSubmit, submit } = renderForm({}, "create");
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Agent harness" }));
+    fireEvent.click(screen.getByRole("option", { name: "Claude Agent" }));
+    submit();
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ harness: "claude", model: DEFAULT_MODEL });
+  });
+
+  it("drops a connected Anthropic account pin when the harness switches to OpenCode", () => {
+    enabledModelsValue = ["openai/gpt-5.4", DEFAULT_MODEL];
+    const accountId = "b".repeat(32);
+    const { onSubmit, submit } = renderForm(
+      {
+        harness: "claude",
+        model: DEFAULT_MODEL,
+        providerSelections: { anthropic: { mode: "provider_account", accountId } },
+      },
+      "edit"
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Agent harness" }));
+    fireEvent.click(screen.getByRole("option", { name: "OpenCode" }));
+    submit();
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      harness: "opencode",
+      model: DEFAULT_MODEL,
+      providerSelections: {},
+    });
+  });
+
+  it("blocks submission and says so when the harness can run none of the enabled models", () => {
+    enabledModelsValue = ["openai/gpt-5.4"];
+    const { onSubmit, submit } = renderForm({ harness: "claude" }, "edit");
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "No enabled models can run on Claude Agent."
+    );
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    submit();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

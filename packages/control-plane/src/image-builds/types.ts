@@ -22,12 +22,16 @@ export type TriggerImageBuildResult =
   | { type: "already_building"; buildId: string }
   | { type: "up_to_date" };
 
-export type ImageBuildWorkflowResult =
-  | { type: "completion_accepted" }
-  | { type: "failure_accepted" };
+/** Clone auth handed to provider-session build sandboxes (provider-policy.ts). */
+export type ImageBuildCloneAuth =
+  | { type: "credential_helper"; host: string; username: string; token: string }
+  | { type: "unavailable" };
 
-/** Provider-neutral build request fields resolved before adapter-specific execution. */
-interface BaseImageBuildPlan {
+/**
+ * Provider-neutral build request resolved before adapter-specific execution.
+ * Every supported provider uses the same create-bind-launch session contract.
+ */
+export interface ImageBuildPlan {
   buildId: string;
   scope: ImageBuildScope;
   repositories: ImageBuildRepository[];
@@ -43,15 +47,6 @@ interface BaseImageBuildPlan {
   buildTimeoutMs: number;
   userEnvVars?: Record<string, string>;
   correlation: CorrelationContext;
-}
-
-/** Clone auth handed to provider-session build sandboxes (provider-policy.ts). */
-export type ImageBuildCloneAuth =
-  | { type: "credential_helper"; host: string; username: string; token: string }
-  | { type: "unavailable" };
-
-/** Every supported provider uses the same create-bind-launch session contract. */
-export interface ImageBuildPlan extends BaseImageBuildPlan {
   callbackToken: string;
   cloneAuth: ImageBuildCloneAuth;
 }

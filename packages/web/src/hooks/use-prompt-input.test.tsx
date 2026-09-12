@@ -4,6 +4,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import {
+  DEFAULT_KEYBOARD_SHORTCUTS,
+  type KeyboardShortcutBinding,
+} from "@open-inspect/shared/types/keyboard-shortcuts";
 import { usePromptInput } from "./use-prompt-input";
 
 expect.extend(matchers);
@@ -29,7 +33,13 @@ vi.mock("@/hooks/use-session-attachments", () => ({
   }),
 }));
 
-function PromptHarness({ canSubmit }: { canSubmit: boolean }) {
+function PromptHarness({
+  canSubmit,
+  sendShortcut = DEFAULT_KEYBOARD_SHORTCUTS["send-prompt"],
+}: {
+  canSubmit: boolean;
+  sendShortcut?: KeyboardShortcutBinding;
+}) {
   const prompt = usePromptInput(
     "session-1",
     mocks.sendPrompt,
@@ -38,7 +48,8 @@ function PromptHarness({ canSubmit }: { canSubmit: boolean }) {
     undefined,
     false,
     "active",
-    canSubmit
+    canSubmit,
+    sendShortcut
   );
 
   return (
@@ -72,5 +83,41 @@ describe("usePromptInput", () => {
 
     expect(mocks.sendPrompt).not.toHaveBeenCalled();
     expect(input).toHaveValue("Draft while connecting");
+  });
+
+  it("submits with the configured send shortcut instead of the default", () => {
+    mocks.sendPrompt.mockResolvedValue({ ok: true });
+    render(
+      <PromptHarness
+        canSubmit
+        sendShortcut={{ code: "KeyJ", primary: false, alt: true, shift: false }}
+      />
+    );
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(input, { target: { value: "Ship it" } });
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    expect(mocks.sendPrompt).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "j", code: "KeyJ", altKey: true });
+    expect(mocks.sendPrompt).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["Enter", false],
+    ["Shift+Enter", true],
+  ])("submits with %s when configured", (_label, shiftKey) => {
+    mocks.sendPrompt.mockResolvedValue({ ok: true });
+    render(
+      <PromptHarness
+        canSubmit
+        sendShortcut={{ code: "Enter", primary: false, alt: false, shift: shiftKey }}
+      />
+    );
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(input, { target: { value: "Ship it" } });
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", shiftKey });
+
+    expect(mocks.sendPrompt).toHaveBeenCalledOnce();
   });
 });

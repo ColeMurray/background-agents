@@ -37,6 +37,12 @@ const validBody = {
   scheduleCron: "0 9 * * *",
   scheduleTz: "UTC",
   instructions: "Run tests",
+  harness: "claude",
+};
+
+const providerSelections = {
+  openai: { mode: "provider_account", accountId: "a".repeat(32) },
+  xai: { mode: "api_key" },
 };
 
 describe("automations API route (GET)", () => {
@@ -136,5 +142,18 @@ describe("automations API route (POST)", () => {
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
     expect(sent).toEqual(validBody);
+  });
+
+  it("allowlists provider selections while dropping hydrated provider auth", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ automation: { id: "auto-provider" } }, { status: 201 })
+    );
+
+    await POST(
+      postRequest({ ...validBody, providerSelections, providerAuth: [{ refreshToken: "secret" }] })
+    );
+
+    expect(controlPlaneBody()).toEqual({ ...validBody, providerSelections });
   });
 });

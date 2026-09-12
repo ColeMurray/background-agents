@@ -1,6 +1,7 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
 import type { MessageSource, MessageStatus } from "@open-inspect/shared/types/sessions";
+import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
@@ -10,12 +11,33 @@ type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete"
 
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
 
-interface RecordedMessageCompletion {
+export interface RecordedMessageCompletion {
   messageId: string;
   messageCreatedAt: number;
   messageStartedAt: number | null;
   completedAt: number;
   status: "completed" | "failed";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readRequiredNumberColumn(result: SqlResult, column: string): number {
+  const row = result.one();
+  if (!isRecord(row) || typeof row[column] !== "number") {
+    throw new Error(`Malformed numeric SQL result for ${column}`);
+  }
+  return row[column];
+}
+
+function parseMessageStatus(value: unknown): MessageStatus | null {
+  return value === "pending" ||
+    value === "processing" ||
+    value === "completed" ||
+    value === "failed"
+    ? value
+    : null;
 }
 
 /** Data for creating a message. */
@@ -30,9 +52,30 @@ export interface CreateMessageData {
   callbackContext?: string | null;
   clientRequestId?: string | null;
   requestFingerprint?: string | null;
+  autofixFeedbackKey?: string | null;
+  autofixPrKey?: string | null;
+  originContext?: string | null;
   status: MessageStatus;
   createdAt: number;
 }
+
+export interface AdmitAutofixMessageData {
+  message: Omit<CreateMessageData, "authorId"> & { authorId: string | (() => string) };
+  feedbackKey: string;
+  pullRequestKey: string;
+  originContext: string;
+  attemptLimit: number | null;
+  windowStart: number;
+  sessionClosed: boolean;
+}
+
+export type AutofixMessageAdmission =
+  | { kind: "enqueued"; messageId: string }
+  | { kind: "duplicate"; messageId: string }
+  | {
+      kind: "rejected";
+      reason: "session_closed" | "budget_exhausted" | "queue_full" | "attempt_limit";
+    };
 
 /** Options for listing messages. */
 export interface ListMessagesOptions {
@@ -72,7 +115,7 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT COUNT(*) as count FROM messages WHERE status IN ('pending', 'processing')`
     );
-    return (result.one() as { count: number }).count;
+    return readRequiredNumberColumn(result, "count");
   }
 
   getProcessingMessage(): { id: string } | null {
@@ -96,6 +139,29 @@ export class MessageRepository {
       deadline,
       messageId
     );
+  }
+
+  /**
+   * Record the runtime's cumulative cost report for a turn and return how much
+   * it exceeds the highest report already stored. Resends, out-of-order
+   * reports, and unknown messages return 0.
+   */
+  raiseReportedCost(messageId: string, reportedCostUsd: number): number {
+    if (!Number.isFinite(reportedCostUsd) || reportedCostUsd <= 0) return 0;
+    // Read-then-write: callers hold the storage transaction, and RETURNING
+    // would only expose the post-update value.
+    const rows = this.sql
+      .exec(`SELECT reported_cost_usd FROM messages WHERE id = ?`, messageId)
+      .toArray() as Array<{ reported_cost_usd: number }>;
+    if (rows.length !== 1) return 0;
+    const previous = rows[0].reported_cost_usd;
+    if (reportedCostUsd <= previous) return 0;
+    this.sql.exec(
+      `UPDATE messages SET reported_cost_usd = ? WHERE id = ?`,
+      reportedCostUsd,
+      messageId
+    );
+    return reportedCostUsd - previous;
   }
 
   clearMessageAwaitingStopConfirmation(messageId: string): void {
@@ -134,6 +200,71 @@ export class MessageRepository {
     return this.rows<MessageRow>(result)[0] ?? null;
   }
 
+  getAutofixMessageId(feedbackKey: string): string | null {
+    const result = this.sql.exec(
+      `SELECT id FROM messages WHERE autofix_feedback_key = ? LIMIT 1`,
+      feedbackKey
+    );
+    return (result.toArray() as Array<{ id: string }>)[0]?.id ?? null;
+  }
+
+  getMessageContent(messageId: string): string | null {
+    const result = this.sql.exec(`SELECT content FROM messages WHERE id = ? LIMIT 1`, messageId);
+    return (result.toArray() as Array<{ content: string }>)[0]?.content ?? null;
+  }
+
+  getMessageStatus(messageId: string): MessageStatus | null {
+    const result = this.sql.exec(`SELECT status FROM messages WHERE id = ? LIMIT 1`, messageId);
+    return parseMessageStatus((result.toArray() as Array<{ status?: unknown }>)[0]?.status);
+  }
+
+  admitAutofixMessage(data: AdmitAutofixMessageData): AutofixMessageAdmission {
+    return this.transactionSync(() => {
+      const existingMessageId = this.getAutofixMessageId(data.feedbackKey);
+      if (existingMessageId) {
+        return { kind: "duplicate", messageId: existingMessageId };
+      }
+      const budget = (
+        this.sql.exec(`SELECT budget_exhausted FROM session LIMIT 1`).toArray() as Array<{
+          budget_exhausted: number;
+        }>
+      )[0];
+      if (budget?.budget_exhausted === 1) {
+        return { kind: "rejected", reason: "budget_exhausted" };
+      }
+      if (data.sessionClosed) {
+        return { kind: "rejected", reason: "session_closed" };
+      }
+      if (this.getPendingOrProcessingCount() >= MAX_UNFINISHED_PROMPTS) {
+        return { kind: "rejected", reason: "queue_full" };
+      }
+
+      if (data.attemptLimit !== null) {
+        const countResult = this.sql.exec(
+          `SELECT COUNT(*) AS count FROM messages
+           WHERE autofix_pr_key = ? AND created_at >= ?`,
+          data.pullRequestKey,
+          data.windowStart
+        );
+        if (readRequiredNumberColumn(countResult, "count") >= data.attemptLimit) {
+          return { kind: "rejected", reason: "attempt_limit" };
+        }
+      }
+
+      this.createMessage({
+        ...data.message,
+        authorId:
+          typeof data.message.authorId === "function"
+            ? data.message.authorId()
+            : data.message.authorId,
+        autofixFeedbackKey: data.feedbackKey,
+        autofixPrKey: data.pullRequestKey,
+        originContext: data.originContext,
+      });
+      return { kind: "enqueued", messageId: data.message.id };
+    });
+  }
+
   getUnfinishedMessagePosition(messageId: string): number | null {
     const result = this.sql.exec(
       `SELECT id FROM messages WHERE status IN ('pending', 'processing')
@@ -154,11 +285,12 @@ export class MessageRepository {
   }
 
   listPromptQueue(): PromptQueueItem[] {
-    return this.listUnfinishedMessages().map((message) => ({
-      messageId: message.id,
-      content: message.content,
-      status: message.status as "pending" | "processing",
-    }));
+    return this.listUnfinishedMessages().flatMap((message) => {
+      const status = parseMessageStatus(message.status);
+      return status === "pending" || status === "processing"
+        ? [{ messageId: message.id, content: message.content, status }]
+        : [];
+    });
   }
 
   cancelPendingMessage(messageId: string): boolean {
@@ -169,13 +301,15 @@ export class MessageRepository {
       );
       const message = (
         result.toArray() as Array<{
-          status: MessageStatus;
+          status?: unknown;
           source: string;
           callback_context: string | null;
         }>
       )[0];
+      const status = parseMessageStatus(message?.status);
       if (
-        message?.status !== "pending" ||
+        !message ||
+        status !== "pending" ||
         message.source !== "web" ||
         message.callback_context !== null
       ) {
@@ -208,8 +342,11 @@ export class MessageRepository {
 
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
-      `INSERT INTO messages (id, author_id, content, source, model, reasoning_effort, attachments, callback_context, client_request_id, request_fingerprint, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (
+         id, author_id, content, source, model, reasoning_effort, attachments,
+         callback_context, client_request_id, request_fingerprint, autofix_feedback_key,
+         autofix_pr_key, origin_context, status, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.content,
@@ -220,6 +357,9 @@ export class MessageRepository {
       data.callbackContext ?? null,
       data.clientRequestId ?? null,
       data.requestFingerprint ?? null,
+      data.autofixFeedbackKey ?? null,
+      data.autofixPrKey ?? null,
+      data.originContext ?? null,
       data.status,
       data.createdAt
     );
@@ -291,12 +431,13 @@ export class MessageRepository {
       );
       const message = (
         result.toArray() as Array<{
-          status: MessageStatus;
+          status?: unknown;
           created_at: number;
           started_at: number | null;
         }>
       )[0];
-      if (!message || message.status !== expectedStatus) return null;
+      const messageStatus = parseMessageStatus(message?.status);
+      if (!message || messageStatus !== expectedStatus) return null;
 
       const status = event.success ? "completed" : "failed";
       this.sql.exec(

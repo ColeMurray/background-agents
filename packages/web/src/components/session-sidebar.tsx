@@ -4,41 +4,34 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useCallback } from "react";
 import { useAuthSession } from "@/lib/auth-session";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useSidebarSessions } from "@/hooks/use-sidebar-sessions";
 import type { SessionItem } from "@/hooks/use-sidebar-sessions";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import {
-  SidebarIcon,
-  PlusIcon,
-  SearchIcon,
-  SettingsIcon,
-  AutomationsIcon,
-  DataControlsIcon,
-  ChevronRightIcon,
-} from "@/components/ui/icons";
+import { SidebarIcon, PlusIcon, SearchIcon, ChevronRightIcon } from "@/components/ui/icons";
+import { PRIMARY_APP_DESTINATIONS, SETTINGS_DESTINATION } from "@/components/app-destinations";
 import { Button } from "@/components/ui/button";
 import { useEnvironments } from "@/hooks/use-environments";
 import { SessionWithChildren } from "@/components/session-with-children";
 import { UserMenu } from "@/components/sidebar-user-menu";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 export type { SessionItem } from "@/hooks/use-sidebar-sessions";
-
-export { MOBILE_LONG_PRESS_MS } from "@/components/session-list-item";
 
 interface SidebarActionButtonProps {
   onClick?: () => void;
 }
 
 export function SearchSessionsButton({ onClick }: SidebarActionButtonProps) {
+  const { labels } = useKeyboardShortcuts();
   return (
     <Button
       variant="ghost"
       size="icon"
       onClick={onClick}
-      title={`Search sessions (${SHORTCUT_LABELS.COMMAND_MENU})`}
-      aria-label={`Search sessions (${SHORTCUT_LABELS.COMMAND_MENU})`}
+      title={`Search sessions (${labels["open-command-menu"]})`}
+      aria-label={`Search sessions (${labels["open-command-menu"]})`}
     >
       <SearchIcon className="w-4 h-4" />
     </Button>
@@ -46,13 +39,14 @@ export function SearchSessionsButton({ onClick }: SidebarActionButtonProps) {
 }
 
 export function NewSessionButton({ onClick }: SidebarActionButtonProps) {
+  const { labels } = useKeyboardShortcuts();
   return (
     <Button
       variant="ghost"
       size="icon"
       onClick={onClick}
-      title={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
-      aria-label={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
+      title={`New session (${labels["new-session"]})`}
+      aria-label={`New session (${labels["new-session"]})`}
     >
       <PlusIcon className="w-4 h-4" />
     </Button>
@@ -72,7 +66,9 @@ export function SessionSidebar({
   onToggle,
   onSessionSelect,
 }: SessionSidebarProps) {
+  const { labels } = useKeyboardShortcuts();
   const { data: authSession } = useAuthSession();
+  const { hasPermission } = useCurrentUserAuthorization();
   const pathname = usePathname();
   const router = useRouter();
   const isMobile = useIsMobile();
@@ -81,8 +77,8 @@ export function SessionSidebar({
 
   const {
     needsAttention,
-    running,
-    recent,
+    inProgress,
+    finished,
     childrenMap,
     loading,
     sessionsError,
@@ -123,6 +119,7 @@ export function SessionSidebar({
       onSessionSelect?.();
     }
   }, [isMobile, onSessionSelect]);
+  const SettingsDestinationIcon = SETTINGS_DESTINATION.icon;
 
   const renderSessionGroup = (
     title: string,
@@ -197,56 +194,49 @@ export function SessionSidebar({
             variant="ghost"
             size="icon"
             onClick={onToggle}
-            title={`Toggle sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            aria-label={`Toggle sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+            title={`Toggle sidebar (${labels["toggle-sidebar"]})`}
+            aria-label={`Toggle sidebar (${labels["toggle-sidebar"]})`}
           >
             <SidebarIcon className="w-4 h-4" />
           </Button>
           <SearchSessionsButton onClick={onSearchSessions} />
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <NewSessionButton onClick={onNewSession} />
+          {hasPermission("sessions.create") && <NewSessionButton onClick={onNewSession} />}
           <Link
-            href="/settings"
+            href={SETTINGS_DESTINATION.href}
             onClick={handleNavigationSelect}
             className={`p-1.5 transition ${
-              pathname === "/settings"
+              pathname === SETTINGS_DESTINATION.href
                 ? "text-foreground bg-muted"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
             }`}
-            title="Settings"
+            title={SETTINGS_DESTINATION.label}
           >
-            <SettingsIcon className="w-4 h-4" />
+            <SettingsDestinationIcon className="w-4 h-4" />
           </Link>
         </div>
       </div>
 
       {/* Nav links */}
       <div className="px-3 pt-2 pb-1 flex flex-col gap-0.5">
-        <Link
-          href="/automations"
-          onClick={handleNavigationSelect}
-          className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition ${
-            pathname?.startsWith("/automations")
-              ? "text-foreground bg-muted"
-              : "text-muted-foreground hover:text-foreground hover:bg-muted"
-          }`}
-        >
-          <AutomationsIcon className="w-4 h-4" />
-          Automations
-        </Link>
-        <Link
-          href="/analytics"
-          onClick={handleNavigationSelect}
-          className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition ${
-            pathname?.startsWith("/analytics")
-              ? "text-foreground bg-muted"
-              : "text-muted-foreground hover:text-foreground hover:bg-muted"
-          }`}
-        >
-          <DataControlsIcon className="w-4 h-4" />
-          Analytics
-        </Link>
+        {PRIMARY_APP_DESTINATIONS.filter((destination) =>
+          hasPermission(destination.requiredPermission)
+        ).map(({ href, label, icon: Icon }) => (
+          <Link
+            key={href}
+            href={href}
+            onClick={handleNavigationSelect}
+            className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition ${
+              pathname?.startsWith(href)
+                ? "text-foreground bg-muted"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            }`}
+          >
+            <Icon className="w-4 h-4" />
+            {label}
+          </Link>
+        ))}
       </div>
 
       <div className="px-3 py-2">
@@ -284,7 +274,7 @@ export function SessionSidebar({
           </div>
         ) : (
           <>
-            {needsAttention.length === 0 && running.length === 0 && recent.length === 0 ? (
+            {needsAttention.length === 0 && inProgress.length === 0 && finished.length === 0 ? (
               hasSessionListError ? (
                 <div className="flex items-center justify-between gap-2 px-4 py-8 text-sm text-destructive">
                   <span>Unable to load sessions</span>
@@ -305,8 +295,8 @@ export function SessionSidebar({
                   sectionPagination.needsAttention,
                   true
                 )}
-                {renderSessionGroup("Running", running, sectionPagination.running)}
-                {renderSessionGroup("Recent", recent, sectionPagination.recent)}
+                {renderSessionGroup("In progress", inProgress, sectionPagination.inProgress)}
+                {renderSessionGroup("Recent", finished, sectionPagination.finished)}
               </>
             )}
 

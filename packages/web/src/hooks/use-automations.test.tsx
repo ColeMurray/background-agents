@@ -4,18 +4,19 @@ import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Automation, ListAutomationsResponse } from "@open-inspect/shared";
+import type { AutomationListItem, ListAutomationsResponse } from "@open-inspect/shared";
 import { useAutomations } from "./use-automations";
 
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
 }));
 
-function automation(id: string, name: string): Automation {
+function automation(id: string, name: string): AutomationListItem {
   return {
     id,
     name,
     instructions: "Run maintenance",
+    harness: "opencode",
     triggerType: "schedule",
     scheduleCron: "0 9 * * *",
     scheduleTz: "UTC",
@@ -25,6 +26,7 @@ function automation(id: string, name: string): Automation {
     nextRunAt: null,
     consecutiveFailures: 0,
     createdBy: "user-1",
+    userId: "11111111111111111111111111111111",
     createdAt: 1,
     updatedAt: 1,
     deletedAt: null,
@@ -32,6 +34,8 @@ function automation(id: string, name: string): Automation {
     triggerConfig: { conditions: [] },
     repositories: [],
     environmentIds: [],
+    providerSelections: {},
+    recentExecutions: [],
   };
 }
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { SessionStatusProjectionStore } from "../../src/db/session-status-projection-store";
 import { SessionPullRequestStore } from "../../src/db/session-pull-request-store";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { cleanD1Tables } from "./cleanup";
@@ -33,6 +34,90 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.repoName).toBe("web-app");
     expect(session!.reasoningEffort).toBe("max");
     expect(session!.status).toBe("created");
+  });
+
+  it("atomically snapshots provider auth with the session", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    const providerAuth = [
+      {
+        provider: "anthropic" as const,
+        authMode: "api_key" as const,
+        selectionSource: "api_key_fallback",
+      },
+      {
+        provider: "openai" as const,
+        authMode: "api_key" as const,
+        selectionSource: "fallback_api_key",
+      },
+      {
+        provider: "xai" as const,
+        authMode: "api_key" as const,
+        selectionSource: "unattended_policy",
+      },
+    ];
+
+    await store.create({
+      id: "session-provider-auth",
+      title: null,
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      providerAuth,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const authRows = await env.DB.prepare(
+      "SELECT * FROM session_model_provider_auth WHERE session_id = ? ORDER BY provider"
+    )
+      .bind("session-provider-auth")
+      .all();
+    expect(authRows.results).toEqual([
+      {
+        session_id: "session-provider-auth",
+        provider: "anthropic",
+        auth_mode: "api_key",
+        provider_account_id: null,
+        selection_source: "api_key_fallback",
+        inherited_from_session_id: null,
+        created_at: now,
+      },
+      {
+        session_id: "session-provider-auth",
+        provider: "openai",
+        auth_mode: "api_key",
+        provider_account_id: null,
+        selection_source: "fallback_api_key",
+        inherited_from_session_id: null,
+        created_at: now,
+      },
+      {
+        session_id: "session-provider-auth",
+        provider: "xai",
+        auth_mode: "api_key",
+        provider_account_id: null,
+        selection_source: "unattended_policy",
+        inherited_from_session_id: null,
+        created_at: now,
+      },
+    ]);
+    await expect(store.getCompleteProviderAuth("session-provider-auth")).resolves.toEqual(
+      providerAuth
+    );
+    await expect(store.getProviderAuthForProvider("session-provider-auth", "xai")).resolves.toEqual(
+      providerAuth[2]
+    );
+    await expect(
+      store.getProviderAuthForProvider("session-provider-auth", "openai")
+    ).resolves.toEqual(providerAuth[1]);
+    await expect(
+      store.getProviderAuthForProvider("session-provider-auth", "anthropic")
+    ).resolves.toEqual(providerAuth[0]);
+    await expect(store.getCompleteProviderAuth("missing-session")).rejects.toThrow(/incomplete/);
   });
 
   it("atomically admits only one concurrent terminal-child resume for one remaining slot", async () => {
@@ -879,7 +964,7 @@ describe("D1 SessionIndexStore", () => {
     });
   });
 
-  describe("repairStatus", () => {
+  describe("revision-fenced status repair", () => {
     const HOUR_MS = 60 * 60 * 1000;
 
     async function seedDraft(store: SessionIndexStore, id: string, updatedAt: number) {
@@ -902,7 +987,14 @@ describe("D1 SessionIndexStore", () => {
       const updatedAt = Date.now() - 48 * HOUR_MS;
       await seedDraft(store, "diverged", updatedAt);
 
-      expect(await store.repairStatus("diverged", "completed")).toBe(true);
+      expect(
+        await new SessionStatusProjectionStore(env.DB).project(
+          "diverged",
+          "completed",
+          1,
+          updatedAt
+        )
+      ).toBe(true);
 
       const session = await store.get("diverged");
       expect(session!.status).toBe("completed");
@@ -926,23 +1018,32 @@ describe("D1 SessionIndexStore", () => {
         false
       );
 
-      expect(await store.repairStatus("index-ahead", "completed")).toBe(true);
+      expect(
+        await new SessionStatusProjectionStore(env.DB).project(
+          "index-ahead",
+          "completed",
+          1,
+          durableObjectUpdatedAt
+        )
+      ).toBe(true);
       expect((await store.get("index-ahead"))!.status).toBe("completed");
     });
 
-    it("reports no change when the index already agrees", async () => {
+    it("idempotently confirms the revision when the index already agrees", async () => {
       const store = new SessionIndexStore(env.DB);
       await seedDraft(store, "agreed", Date.now() - 48 * HOUR_MS);
 
-      expect(await store.repairStatus("agreed", "created")).toBe(false);
+      const projection = new SessionStatusProjectionStore(env.DB);
+      expect(await projection.project("agreed", "created", 1, 0)).toBe(true);
+      expect(await projection.project("agreed", "created", 1, 0)).toBe(true);
     });
 
     it("does not overwrite a newer non-draft projection", async () => {
       const store = new SessionIndexStore(env.DB);
       await seedDraft(store, "advanced", Date.now() - 48 * HOUR_MS);
-      expect(await store.updateStatus("advanced", "active", Date.now())).toBe(true);
-
-      expect(await store.repairStatus("advanced", "completed")).toBe(false);
+      const projection = new SessionStatusProjectionStore(env.DB);
+      expect(await projection.project("advanced", "active", 2, Date.now())).toBe(true);
+      expect(await projection.project("advanced", "completed", 1, Date.now())).toBe(false);
       expect((await store.get("advanced"))!.status).toBe("active");
     });
   });

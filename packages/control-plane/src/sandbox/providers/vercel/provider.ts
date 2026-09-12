@@ -145,7 +145,6 @@ export class VercelSandboxProvider implements SandboxProvider {
       return {
         sandboxId: config.sandboxId,
         providerObjectId: created.session.id,
-        status: "warming",
         createdAt: created.session.createdAt || Date.now(),
         codeServerUrl: access.codeServerUrl,
         codeServerPassword: access.codeServerPassword,
@@ -269,10 +268,11 @@ export class VercelSandboxProvider implements SandboxProvider {
       }
 
       const identity = imageBuildSandboxIdentity(config, Date.now());
+      const sandboxName = identity.sandboxName.replace(/[^a-zA-Z0-9_-]+/g, "-");
       const env = this.buildBuildEnvVars(config, identity.sandboxId);
       const created = await this.client.createSandbox(
         {
-          name: identity.sandboxName,
+          name: sandboxName,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
           timeoutMs: resolveVercelTimeoutMs(config.providerSessionTimeoutSeconds),
           env,
@@ -299,7 +299,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         scope_id: config.scopeId,
         session_id: created.session.id,
         command_id: command.commandId,
-        sandbox_name: identity.sandboxName,
+        sandbox_name: sandboxName,
       });
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
@@ -376,15 +376,17 @@ export class VercelSandboxProvider implements SandboxProvider {
       cloneToken: config.cloneToken,
       baseEnvVars: config.userEnvVars,
     });
-    Object.assign(envVars, this.buildPlatformEnvVars(), {
-      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
-    });
+    // SANDBOX_VERSION comes from buildPlatformEnvVars now.
+    Object.assign(envVars, this.buildPlatformEnvVars());
     return envVars;
   }
 
   /** Vercel base-image paths layered on top of the canonical sandbox env. */
   private buildPlatformEnvVars(): Record<string, string> {
     return {
+      // The base snapshot bakes no SANDBOX_VERSION, so without this every
+      // sandbox reports an unknown runtime and its snapshots are unrestorable.
+      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
       HOME: "/root",
       NODE_ENV: "development",
       PATH: buildVercelRuntimePath(this.providerConfig.runtime),

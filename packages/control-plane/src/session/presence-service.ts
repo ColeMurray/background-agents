@@ -14,8 +14,30 @@ import type {
   ServerMessage,
 } from "@open-inspect/shared/types/server-messages";
 import type { ClientInfo } from "../types";
-import { projectConnectedParticipants } from "./connections";
 import type { SessionMessenger } from "./messenger";
+import type { SessionWebSocket } from "../platform-ports";
+
+/** Project one participant per identity from one or more client connections. */
+function projectConnectedParticipants(connections: Iterable<ClientInfo>): ParticipantPresence[] {
+  const participants = new Map<string, ParticipantPresence>();
+  for (const connection of connections) {
+    const existing = participants.get(connection.participantId);
+    if (!existing) {
+      participants.set(connection.participantId, {
+        participantId: connection.participantId,
+        userId: connection.userId,
+        name: connection.name,
+        avatar: connection.avatar,
+        status: connection.status,
+        lastSeen: connection.lastSeen,
+      });
+      continue;
+    }
+    if (connection.status === "active") existing.status = "active";
+    if (connection.lastSeen > existing.lastSeen) existing.lastSeen = connection.lastSeen;
+  }
+  return Array.from(participants.values());
+}
 
 /**
  * Dependencies injected into PresenceService.
@@ -24,8 +46,8 @@ import type { SessionMessenger } from "./messenger";
 export interface PresenceServiceDeps {
   getAuthenticatedClients: () => IterableIterator<ClientInfo>;
   messenger: SessionMessenger;
-  send: (ws: WebSocket, message: ServerMessage) => boolean;
-  getSandboxSocket: () => WebSocket | null;
+  send: (ws: SessionWebSocket, message: ServerMessage) => boolean;
+  getSandboxSocket: () => SessionWebSocket | null;
   isSpawning: () => boolean;
   spawnSandbox: () => Promise<void>;
   log: Logger;
@@ -52,7 +74,7 @@ export class PresenceService {
   /**
    * Send presence info to a specific client.
    */
-  sendPresence(ws: WebSocket): void {
+  sendPresence(ws: SessionWebSocket): void {
     const participants = this.getPresenceList();
     this.deps.send(ws, { type: "presence_sync", participants });
   }

@@ -1,53 +1,93 @@
 import { describe, expect, it, vi } from "vitest";
-import { SessionMessengerImpl } from "./messenger";
-import type { SessionConnections } from "./connections";
+import { SandboxDeliveryUnavailableError, SessionMessengerImpl } from "./messenger";
 
-function harness() {
-  const connections = {
-    registerBrowser: vi.fn(async () => {}),
-    registerSandbox: vi.fn(async () => {}),
-    sendToSandbox: vi.fn(async () => {}),
-    broadcastToBrowsers: vi.fn(async () => {}),
-    disconnectSandbox: vi.fn(async () => {}),
-    listParticipants: vi.fn(async () => []),
-  } satisfies SessionConnections;
-  return { messenger: new SessionMessengerImpl(connections), connections };
+function harness(overrides: { sandboxSocket?: WebSocket | null; sendResult?: boolean } = {}) {
+  const clientA = { readyState: WebSocket.OPEN, url: "ws://client-a" } as WebSocket;
+  const clientB = { readyState: WebSocket.OPEN, url: "ws://client-b" } as WebSocket;
+  const sandbox =
+    overrides.sandboxSocket === undefined
+      ? ({ readyState: WebSocket.OPEN } as WebSocket)
+      : overrides.sandboxSocket;
+  const wsManager = {
+    forEachClientSocket: vi.fn(
+      (_mode: "all_clients" | "authenticated_only", fn: (ws: WebSocket) => void) => {
+        fn(clientA);
+        fn(clientB);
+      }
+    ),
+    getSandboxSocket: vi.fn(() => sandbox),
+    send: vi.fn(() => overrides.sendResult ?? true),
+  };
+  return { messenger: new SessionMessengerImpl(wsManager), wsManager, clientA, clientB, sandbox };
 }
 
 describe("SessionMessengerImpl", () => {
   it("broadcasts to every authenticated client socket", () => {
-    const { messenger, connections } = harness();
+    const { messenger, wsManager, clientA, clientB } = harness();
     const message = { type: "diff_state_changed", revisionId: "r1", updatedAt: 1 } as const;
 
     messenger.broadcast(message);
 
-    expect(connections.broadcastToBrowsers).toHaveBeenCalledWith(message);
+    expect(wsManager.forEachClientSocket).toHaveBeenCalledWith(
+      "authenticated_only",
+      expect.any(Function)
+    );
+    expect(wsManager.send).toHaveBeenCalledWith(clientA, message);
+    expect(wsManager.send).toHaveBeenCalledWith(clientB, message);
   });
 
-  it("sends a command to the connected sandbox socket", async () => {
-    const { messenger, connections } = harness();
-
-    await messenger.sendToSandbox({ type: "refresh_diff" });
-    expect(connections.sendToSandbox).toHaveBeenCalledWith({ type: "refresh_diff" });
-  });
-
-  it("emits prompt queue updates to every authenticated client", () => {
-    const { messenger, connections } = harness();
-    const message = { type: "prompt_queue_updated", promptQueue: [] } satisfies Parameters<
-      typeof messenger.broadcast
-    >[0];
+  it("broadcasts budget status to every authenticated client without negotiation", () => {
+    const { messenger, wsManager, clientA, clientB } = harness();
+    const message = {
+      type: "budget_status",
+      totalCost: 5,
+      maxSessionCostUsd: 10,
+      budgetExhausted: false,
+    } as const;
 
     messenger.broadcast(message);
 
-    expect(connections.broadcastToBrowsers).toHaveBeenCalledWith(message);
+    expect(wsManager.send).toHaveBeenCalledWith(clientA, message);
+    expect(wsManager.send).toHaveBeenCalledWith(clientB, message);
   });
 
-  it("reports failure when no sandbox is connected", async () => {
-    const { messenger, connections } = harness();
-    connections.sendToSandbox.mockRejectedValue(new Error("No sandbox connected"));
+  it("broadcasts budget warnings to every authenticated client without negotiation", () => {
+    const { messenger, wsManager, clientA, clientB } = harness();
+    const message = {
+      type: "sandbox_event",
+      event: { type: "warning", scope: "budget", message: "Work paused.", timestamp: 1 },
+    } as const;
+
+    messenger.broadcast(message);
+
+    expect(wsManager.send).toHaveBeenCalledWith(clientA, message);
+    expect(wsManager.send).toHaveBeenCalledWith(clientB, message);
+  });
+
+  it("sends a command to the connected sandbox socket", async () => {
+    const { messenger, wsManager, sandbox } = harness();
+
+    await messenger.sendToSandbox({ type: "refresh_diff" });
+
+    expect(wsManager.send).toHaveBeenCalledWith(sandbox, { type: "refresh_diff" });
+  });
+
+  it("rejects with SandboxDeliveryUnavailableError when no sandbox is connected", async () => {
+    const { messenger } = harness({ sandboxSocket: null });
 
     await expect(messenger.sendToSandbox({ type: "refresh_diff" })).rejects.toThrow(
+      SandboxDeliveryUnavailableError
+    );
+    await expect(messenger.sendToSandbox({ type: "refresh_diff" })).rejects.toThrow(
       "No sandbox connected"
+    );
+  });
+
+  it("rejects when the registry cannot deliver to the sandbox socket", async () => {
+    const { messenger } = harness({ sendResult: false });
+
+    await expect(messenger.sendToSandbox({ type: "refresh_diff" })).rejects.toThrow(
+      "Failed to send message to sandbox"
     );
   });
 });

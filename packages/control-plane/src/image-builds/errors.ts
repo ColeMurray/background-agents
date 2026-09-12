@@ -71,3 +71,8 @@ export class ImageBuildCompletionNotAcceptedError extends ImageBuildError {
 export class ImageBuildFailureNotAcceptedError extends ImageBuildError {
   readonly code = "failure_not_accepted";
 }
+
+/** The message of an unknown thrown value. */
+export function errorMessage(errorValue: unknown): string {
+  return errorValue instanceof Error ? errorValue.message : String(errorValue);
+}

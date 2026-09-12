@@ -5,6 +5,7 @@ import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";
 import type { EnvironmentStore } from "../db/environments";
 import { createRouteSourceControlProvider, HttpError, type RequestContext } from "../routes/shared";
+import { DEFAULT_BASE_BRANCH } from "./default-branch";
 
 /**
  * One requested member of a session's repository list, exactly as normalized
@@ -92,7 +93,7 @@ export async function resolveSessionRepositories(
             repoOwner: access.repoOwner,
             repoName: access.repoName,
             repoId: access.repoId,
-            baseBranch: input.baseBranch?.trim() || access.defaultBranch || "main",
+            baseBranch: input.baseBranch?.trim() || access.defaultBranch || DEFAULT_BASE_BRANCH,
           },
           reason: null,
           errored: false,

@@ -14,6 +14,7 @@ import type {
   VercelSnapshotResponse,
 } from "./client";
 import { VercelSandboxApiError } from "./client";
+import { RequestDeadlineError } from "../../request-deadline";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
@@ -106,6 +107,7 @@ const baseCreateConfig: CreateSandboxConfig = {
   repoName: "testrepo",
   controlPlaneUrl: "https://control-plane.test",
   sandboxAuthToken: "auth-token",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "anthropic/claude-sonnet-4-5",
 };
@@ -118,6 +120,7 @@ const baseRestoreConfig: RestoreConfig = {
   repoName: "testrepo",
   controlPlaneUrl: "https://control-plane.test",
   sandboxAuthToken: "auth-token",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "anthropic/claude-sonnet-4-5",
 };
@@ -142,6 +145,19 @@ function environmentBuildConfig() {
 }
 
 describe("VercelSandboxProvider", () => {
+  it("classifies request deadline failures as transient", async () => {
+    const client = createMockClient({
+      createSandbox: vi.fn(async () => {
+        throw new RequestDeadlineError("Vercel Sandbox", "createSandbox", 60_000);
+      }),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await expect(provider.createSandbox(baseCreateConfig)).rejects.toMatchObject({
+      errorType: "transient",
+    });
+  });
+
   it("reports Vercel capabilities", () => {
     const provider = new VercelSandboxProvider(createMockClient(), providerConfig);
 
@@ -188,6 +204,10 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         USER_SECRET: "value",
         SANDBOX_ID: "sandbox-456",
+        // The base snapshot bakes none, so the sandbox can only report a
+        // runtime version — and so keep its snapshots restorable — if the
+        // provider exports it here.
+        SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
         PATH: expect.stringContaining("/vercel/runtimes/node24/bin"),
         CONTROL_PLANE_URL: "https://control-plane.test",
         SANDBOX_AUTH_TOKEN: "auth-token",
@@ -202,6 +222,7 @@ describe("VercelSandboxProvider", () => {
     );
     expect(JSON.parse(createCall.env?.SESSION_CONFIG as string)).toEqual({
       session_id: "session-123",
+      harness: "opencode",
       repo_owner: "testowner",
       repo_name: "testrepo",
       provider: "anthropic",
@@ -214,7 +235,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "sudo",
-        args: ["-E", "/usr/bin/python3.12", "-m", "sandbox_runtime.entrypoint"],
+        args: ["-E", "/opt/openinspect/python/bin/python", "-m", "sandbox_runtime.entrypoint"],
         cwd: "/workspace",
       }),
       undefined
@@ -223,7 +244,6 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sandboxId: "sandbox-456",
         providerObjectId: "vercel-session-1",
-        status: "warming",
         createdAt: 123,
         codeServerUrl: "https://code.test",
         codeServerPassword: expect.any(String),
@@ -454,7 +474,7 @@ describe("VercelSandboxProvider", () => {
         sessionId: "vercel-session-1",
         command: "sudo",
         args: expect.arrayContaining([
-          "/usr/bin/python3.12",
+          "/opt/openinspect/python/bin/python",
           "-c",
           // Tagged with the logical sandbox ID (first line) so the supervisor's
           // stale-file cleanup keeps this write, then the port URLs.
@@ -672,7 +692,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "sudo",
-        args: ["-E", "/usr/bin/python3.12", "-m", "sandbox_runtime.entrypoint"],
+        args: ["-E", "/opt/openinspect/python/bin/python", "-m", "sandbox_runtime.entrypoint"],
         cwd: "/workspace",
         env: {
           OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS: "1800",
@@ -750,6 +770,29 @@ describe("VercelSandboxProvider", () => {
         },
       }),
       { trace_id: "trace-1", request_id: "request-1" }
+    );
+  });
+
+  it("sanitizes repo scope ids for Vercel sandbox names", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.triggerImageBuild({
+      ...environmentBuildConfig(),
+      scopeKind: "repo",
+      scopeId: "acme/web.app",
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.name).toMatch(/^build-env-acme-web-app-\d+$/);
+    expect(createCall.env).toEqual(
+      expect.objectContaining({ SANDBOX_ID: "build-env-acme/web.app" })
+    );
+    expect(createCall.tags).toEqual(
+      expect.objectContaining({
+        openinspect_scope_kind: "repo",
+        openinspect_scope_id: "acme/web.app",
+      })
     );
   });
 

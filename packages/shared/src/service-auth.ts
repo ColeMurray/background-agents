@@ -18,6 +18,13 @@ export const SERVICE_SIGNATURE_HEADER = "X-OpenInspect-Service-Signature";
 export const ACTOR_HEADER = "X-OpenInspect-Actor";
 export const SIG1_PREFIX = "sig1";
 
+/**
+ * Hard cap on a service-signed request body. The signature covers the body
+ * hash, so every signing and verification edge must buffer no more than this.
+ * The largest legitimate signed body is a session attachment upload.
+ */
+export const SERVICE_REQUEST_MAX_BODY_BYTES = 16 * 1024 * 1024;
+
 export const SERVICE_NAMES = ["web", "slack-bot", "github-bot", "linear-bot"] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
 

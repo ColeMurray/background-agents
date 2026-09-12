@@ -25,6 +25,8 @@ import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
+import { BudgetSection } from "./sidebar/budget-section";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 interface SessionRightSidebarProps {
   isOpen?: boolean;
@@ -41,9 +43,13 @@ interface SessionRightSidebarProps {
   diffLoading?: boolean;
   selectedDiff?: DiffSelection | null;
   onOpenDiff?: (repository: SessionDiffRepository, file: SessionDiffFile) => void;
+  capabilities: SessionCapabilities;
+  canManageBudget?: boolean;
 }
 
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
+
+const DEFAULT_CAN_MANAGE_BUDGET = false;
 
 export function SessionRightSidebarContent({
   sessionId,
@@ -59,6 +65,8 @@ export function SessionRightSidebarContent({
   diffLoading,
   selectedDiff,
   onOpenDiff,
+  canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
+  capabilities,
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const warnings = useMemo(
@@ -107,7 +115,7 @@ export function SessionRightSidebarContent({
       </div>
 
       {/* Metadata */}
-      <div className="px-4 py-4 border-b border-border-muted">
+      <div className="space-y-4 px-4 py-4 border-b border-border-muted">
         <MetadataSection
           sessionId={sessionId}
           createdAt={sessionState.createdAt}
@@ -123,12 +131,18 @@ export function SessionRightSidebarContent({
           environmentName={sessionState.environmentName}
           warnings={warnings}
           parentSessionId={sessionState.parentSessionId}
-          totalCost={sessionState.totalCost}
+          canManageLifecycle={capabilities.lifecycle}
+        />
+        <BudgetSection
+          sessionId={sessionId}
+          totalCost={sessionState.totalCost ?? 0}
+          maxSessionCostUsd={sessionState.maxSessionCostUsd}
+          canManageBudget={canManageBudget}
         />
       </div>
 
       {/* Code Server */}
-      {sessionState.codeServerUrl && (
+      {capabilities.sandboxAccess && sessionState.codeServerUrl && (
         <div className="px-4 py-4 border-b border-border-muted">
           <CodeServerSection
             url={sessionState.codeServerUrl}
@@ -139,7 +153,7 @@ export function SessionRightSidebarContent({
       )}
 
       {/* VNC Desktop */}
-      {sessionState.vncUrl && (
+      {capabilities.sandboxAccess && sessionState.vncUrl && (
         <div className="px-4 py-4 border-b border-border-muted">
           <VncSection
             url={sessionState.vncUrl}
@@ -150,7 +164,7 @@ export function SessionRightSidebarContent({
       )}
 
       {/* Terminal */}
-      {sessionState.ttydUrl && terminalUrl && (
+      {capabilities.sandboxAccess && sessionState.ttydUrl && terminalUrl && (
         <div className="px-4 py-4 border-b border-border-muted">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -182,14 +196,16 @@ export function SessionRightSidebarContent({
       )}
 
       {/* Tunnel URLs */}
-      {sessionState.tunnelUrls && Object.keys(sessionState.tunnelUrls).length > 0 && (
-        <div className="px-4 py-4 border-b border-border-muted">
-          <TunnelUrlsSection
-            urls={sessionState.tunnelUrls}
-            sandboxStatus={sessionState.sandboxStatus}
-          />
-        </div>
-      )}
+      {capabilities.sandboxAccess &&
+        sessionState.tunnelUrls &&
+        Object.keys(sessionState.tunnelUrls).length > 0 && (
+          <div className="px-4 py-4 border-b border-border-muted">
+            <TunnelUrlsSection
+              urls={sessionState.tunnelUrls}
+              sandboxStatus={sessionState.sandboxStatus}
+            />
+          </div>
+        )}
 
       {/* Tasks */}
       {tasks.length > 0 && (
@@ -243,6 +259,7 @@ export function SessionRightSidebarContent({
                 sessionId={sessionId}
                 message={diffView.message ?? ""}
                 variant="inline"
+                capabilities={capabilities}
               />
             )}
           </div>
@@ -287,6 +304,8 @@ export function SessionRightSidebar({
   diffLoading,
   selectedDiff,
   onOpenDiff,
+  canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
+  capabilities,
 }: SessionRightSidebarProps) {
   return (
     <aside
@@ -312,6 +331,8 @@ export function SessionRightSidebar({
         diffLoading={diffLoading}
         selectedDiff={selectedDiff}
         onOpenDiff={onOpenDiff}
+        canManageBudget={canManageBudget}
+        capabilities={capabilities}
       />
     </aside>
   );

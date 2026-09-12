@@ -13,16 +13,22 @@ import type {
 import type {
   Automation,
   AutomationRepositoryInput,
+  CreateAutomationRequest,
   CreateEnvironmentInput,
   ListAutomationsResponse,
+  ModelProviderSelections,
   RepositoryInput,
   ServerMessage,
+  UpdateAutomationRequest,
   UpdateEnvironmentInput,
   createEnvironmentInputSchema,
+  createAutomationRequestSchema,
   repositoryInputSchema,
   serverMessageSchema,
   updateEnvironmentInputSchema,
+  updateAutomationRequestSchema,
   listAutomationsResponseSchema,
+  modelProviderSelectionsSchema,
 } from ".";
 import type { SandboxEvent, sandboxEventSchema } from "./sandbox-events";
 import type {
@@ -45,6 +51,15 @@ it("preserves public Zod input and output relationships", () => {
   expectTypeOf<SandboxEvent>().toEqualTypeOf<z.output<typeof sandboxEventSchema>>();
   expectTypeOf<ServerMessage>().toEqualTypeOf<z.output<typeof serverMessageSchema>>();
   expectTypeOf<AutomationRepositoryInput>().toEqualTypeOf<RepositoryInput>();
+  expectTypeOf<ModelProviderSelections>().toEqualTypeOf<
+    z.output<typeof modelProviderSelectionsSchema>
+  >();
+  expectTypeOf<CreateAutomationRequest>().toEqualTypeOf<
+    z.input<typeof createAutomationRequestSchema>
+  >();
+  expectTypeOf<UpdateAutomationRequest>().toEqualTypeOf<
+    z.input<typeof updateAutomationRequestSchema>
+  >();
   expectTypeOf<TriggerConfig>().toEqualTypeOf<z.output<typeof triggerConfigSchema>>();
   expectTypeOf<ListAutomationsResponse>().toEqualTypeOf<
     z.output<typeof listAutomationsResponseSchema>

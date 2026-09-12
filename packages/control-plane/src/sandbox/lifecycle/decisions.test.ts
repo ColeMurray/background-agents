@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { MIN_COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/model";
 import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
@@ -14,7 +15,9 @@ import {
   evaluateWarmDecision,
   evaluateExecutionTimeout,
   isSandboxReconnectBlockedStatus,
+  isSnapshotRuntimeCompatible,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+  DEFAULT_SPAWN_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   type CircuitBreakerState,
   type CircuitBreakerConfig,
@@ -33,7 +36,7 @@ describe("isSandboxReconnectBlockedStatus", () => {
     expect(isSandboxReconnectBlockedStatus(status)).toBe(true);
   });
 
-  it.each(["pending", "spawning", "connecting", "ready", "running", "failed"] as const)(
+  it.each(["pending", "spawning", "connecting", "ready", "failed"] as const)(
     "allows reconnects for %s sandboxes",
     (status) => {
       expect(isSandboxReconnectBlockedStatus(status)).toBe(false);
@@ -147,6 +150,7 @@ describe("evaluateSpawnDecision", () => {
       status: "stopped",
       createdAt: now - 120000,
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -164,6 +168,7 @@ describe("evaluateSpawnDecision", () => {
       status: "stale",
       createdAt: now - 120000,
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -178,6 +183,7 @@ describe("evaluateSpawnDecision", () => {
       status: "failed",
       createdAt: now - 120000,
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -186,12 +192,77 @@ describe("evaluateSpawnDecision", () => {
     expect(decision.action).toBe("restore");
   });
 
+  it("spawns fresh instead of restoring a snapshot below the runtime floor", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: `v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-retired`,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, false);
+
+    expect(decision.action).toBe("spawn");
+    if (decision.action === "spawn") {
+      expect(decision.reason).toContain(`v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-retired`);
+    }
+  });
+
+  it("spawns fresh when the snapshot predates runtime-version recording", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, false);
+
+    expect(decision.action).toBe("spawn");
+    if (decision.action === "spawn") {
+      expect(decision.reason).toContain("unknown");
+    }
+  });
+
+  it("restores a snapshot taken exactly at the runtime floor", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: `v${MIN_COMPATIBLE_RUNTIME_VERSION}-at-floor`,
+      hasActiveWebSocket: false,
+    };
+
+    expect(evaluateSpawnDecision(state, config, now, false).action).toBe("restore");
+  });
+
+  it("keeps the in-memory spawn guard ahead of the runtime floor check", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    // A rejected snapshot must not let a concurrent evaluation start a second
+    // spawn while the first is still in flight.
+    expect(evaluateSpawnDecision(state, config, now, true).action).toBe("skip");
+  });
+
   it('returns "skip" when already spawning', () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "spawning",
       createdAt: now - 5000,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -209,6 +280,7 @@ describe("evaluateSpawnDecision", () => {
       status: "connecting",
       createdAt: now - 5000,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -223,6 +295,7 @@ describe("evaluateSpawnDecision", () => {
       status: "spawning",
       createdAt: now - (config.spawningTimeoutMs + 1000),
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -237,6 +310,7 @@ describe("evaluateSpawnDecision", () => {
       status: "connecting",
       createdAt: now - (config.spawningTimeoutMs + 1000),
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -251,6 +325,7 @@ describe("evaluateSpawnDecision", () => {
       status: "spawning",
       createdAt: now - (config.spawningTimeoutMs + 1000),
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -265,6 +340,7 @@ describe("evaluateSpawnDecision", () => {
       status: "ready",
       createdAt: now - 120000,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: true,
     };
 
@@ -282,6 +358,7 @@ describe("evaluateSpawnDecision", () => {
       status: "ready",
       createdAt: now - 30000, // 30 seconds ago, less than readyWaitMs
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -299,6 +376,7 @@ describe("evaluateSpawnDecision", () => {
       status: "pending",
       createdAt: now - 10000, // 10 seconds ago, less than cooldownMs
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -316,6 +394,7 @@ describe("evaluateSpawnDecision", () => {
       status: "pending",
       createdAt: now - 60000,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -336,6 +415,7 @@ describe("evaluateSpawnDecision", () => {
       status: "stopped",
       createdAt: now - 120000,
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -353,6 +433,7 @@ describe("evaluateSpawnDecision", () => {
       status: "stopped",
       createdAt: now - 120000,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       providerObjectId: "sb-123",
       hasActiveWebSocket: false,
     };
@@ -371,6 +452,7 @@ describe("evaluateSpawnDecision", () => {
       status: "pending",
       createdAt: now - 60000, // Past cooldown
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -385,6 +467,7 @@ describe("evaluateSpawnDecision", () => {
       status: "failed",
       createdAt: now - 5000, // Within cooldown, but status is failed
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -399,6 +482,7 @@ describe("evaluateSpawnDecision", () => {
       status: "stopped",
       createdAt: now - 5000, // Within cooldown, but status is stopped
       snapshotImageId: null, // No snapshot, so fresh spawn
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -416,6 +500,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -434,6 +519,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -449,6 +535,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -464,6 +551,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: null,
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -479,6 +567,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: null,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -494,6 +583,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -509,6 +599,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -655,11 +746,11 @@ describe("evaluateInactivityTimeout", () => {
     }
   });
 
-  it("only applies to ready/running status", () => {
+  it("only applies to ready status", () => {
     const now = Date.now();
     const state: InactivityState = {
       lastActivity: now - config.timeoutMs - 60000,
-      status: "spawning", // Not ready or running
+      status: "spawning", // Not ready
       connectedClientCount: 0,
     };
 
@@ -668,11 +759,11 @@ describe("evaluateInactivityTimeout", () => {
     expect(decision.action).toBe("schedule");
   });
 
-  it('returns "timeout" for running status', () => {
+  it('returns "timeout" for ready status', () => {
     const now = Date.now();
     const state: InactivityState = {
       lastActivity: now - config.timeoutMs - 1000,
-      status: "running",
+      status: "ready",
       connectedClientCount: 0,
     };
 
@@ -765,22 +856,24 @@ describe("evaluateConnectingTimeout", () => {
 
   it("returns not timed out when within timeout window", () => {
     const now = Date.now();
-    const createdAt = now - 60_000; // 60s ago, well within 120s timeout
+    const elapsed = config.timeoutMs / 2; // comfortably inside the window
+    const createdAt = now - elapsed;
 
     const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
 
     expect(result.isTimedOut).toBe(false);
-    expect(result.elapsedMs).toBe(60_000);
+    expect(result.elapsedMs).toBe(elapsed);
   });
 
   it("returns timed out when past timeout", () => {
     const now = Date.now();
-    const createdAt = now - 130_000; // 130s ago, past 120s timeout
+    const elapsed = config.timeoutMs + 10_000; // past the window
+    const createdAt = now - elapsed;
 
     const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
 
     expect(result.isTimedOut).toBe(true);
-    expect(result.elapsedMs).toBe(130_000);
+    expect(result.elapsedMs).toBe(elapsed);
   });
 
   it("returns timed out at exact boundary (>=)", () => {
@@ -795,12 +888,13 @@ describe("evaluateConnectingTimeout", () => {
 
   it("returns timed out when stuck in spawning past timeout (interrupted spawn)", () => {
     const now = Date.now();
-    const createdAt = now - 130_000; // 130s ago, past 120s timeout
+    const elapsed = config.timeoutMs + 10_000; // past the window
+    const createdAt = now - elapsed;
 
     const result = evaluateConnectingTimeout("spawning", createdAt, config, now);
 
     expect(result.isTimedOut).toBe(true);
-    expect(result.elapsedMs).toBe(130_000);
+    expect(result.elapsedMs).toBe(elapsed);
   });
 
   it("returns not timed out for spawning within timeout window", () => {
@@ -814,10 +908,48 @@ describe("evaluateConnectingTimeout", () => {
     const now = Date.now();
     const old = now - 999_999;
 
-    for (const status of ["pending", "ready", "running", "stopped", "failed", "stale"] as const) {
+    for (const status of ["pending", "ready", "stopped", "failed", "stale"] as const) {
       const result = evaluateConnectingTimeout(status, old, config, now);
       expect(result.isTimedOut).toBe(false);
     }
+  });
+});
+
+describe("connect watchdog and spawn staleness defaults", () => {
+  it("does not spawn a replacement while a sandbox is still inside the connect watchdog window", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "connecting",
+      createdAt: now - (DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs - 1),
+      snapshotImageId: null,
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, DEFAULT_SPAWN_CONFIG, now, false);
+
+    expect(decision.action).toBe("skip");
+  });
+
+  it("spawns a replacement once the connect watchdog has failed the sandbox", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "connecting",
+      createdAt: now - DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs,
+      snapshotImageId: null,
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    expect(
+      evaluateConnectingTimeout(
+        "connecting",
+        state.createdAt,
+        DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+        now
+      ).isTimedOut
+    ).toBe(true);
+    expect(evaluateSpawnDecision(state, DEFAULT_SPAWN_CONFIG, now, false).action).toBe("spawn");
   });
 });
 
@@ -955,5 +1087,24 @@ describe("evaluateExecutionTimeout", () => {
 
     expect(result.isTimedOut).toBe(true);
     expect(result.elapsedMs).toBe(6000);
+  });
+});
+
+// ==================== Snapshot Runtime Floor ====================
+
+describe("isSnapshotRuntimeCompatible", () => {
+  it("accepts a snapshot at or above the floor", () => {
+    expect(isSnapshotRuntimeCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION}-x`)).toBe(true);
+    expect(isSnapshotRuntimeCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION + 1}-x`)).toBe(true);
+  });
+
+  it("rejects a snapshot below the floor", () => {
+    expect(isSnapshotRuntimeCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-x`)).toBe(false);
+  });
+
+  it("fails closed on missing or unparseable versions", () => {
+    expect(isSnapshotRuntimeCompatible(null)).toBe(false);
+    expect(isSnapshotRuntimeCompatible("")).toBe(false);
+    expect(isSnapshotRuntimeCompatible("daytona-v6-vnc")).toBe(false);
   });
 });

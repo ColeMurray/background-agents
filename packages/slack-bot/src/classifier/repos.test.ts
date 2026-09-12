@@ -112,6 +112,47 @@ describe("getRoutingRules", () => {
       { keyword: "frontend", target: "acme/web" },
     ]);
   });
+
+  it("parses nullable-free environment routing rules read from the KV cache", async () => {
+    const env = {
+      SLACK_KV: {
+        get: vi
+          .fn()
+          .mockResolvedValue([
+            { keyword: " Dev Env ", target: " env_123 ", targetType: "environment" },
+          ]),
+        put: vi.fn().mockResolvedValue(undefined),
+      },
+      CONTROL_PLANE: {
+        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 500 })),
+      },
+      SERVICE_AUTH_SECRET: "test-secret",
+    } as unknown as Env;
+
+    expect(await getRoutingRules(env, "trace")).toEqual([
+      { keyword: "dev env", target: "env_123", targetType: "environment" },
+    ]);
+  });
+
+  it("skips malformed routing rules read from the KV cache", async () => {
+    const env = {
+      SLACK_KV: {
+        get: vi.fn().mockResolvedValue([
+          { keyword: "frontend", target: "acme/web" },
+          { keyword: "backend", target: null },
+        ]),
+        put: vi.fn().mockResolvedValue(undefined),
+      },
+      CONTROL_PLANE: {
+        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 500 })),
+      },
+      SERVICE_AUTH_SECRET: "test-secret",
+    } as unknown as Env;
+
+    expect(await getRoutingRules(env, "trace")).toEqual([
+      { keyword: "frontend", target: "acme/web" },
+    ]);
+  });
 });
 
 describe("getAvailableRepos", () => {

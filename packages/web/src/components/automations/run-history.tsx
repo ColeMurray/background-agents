@@ -8,6 +8,18 @@ import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, ChevronRightIcon } from "@/components/ui/icons";
 import { formatRepoLabel } from "@/lib/repo-label";
 import { useEnvironments } from "@/hooks/use-environments";
+import {
+  AUTOMATION_INVOCATION_STATUS,
+  type AutomationInvocationTone,
+} from "@/lib/automation-invocation-status";
+
+const BADGE_TONE_CLASSES: Record<AutomationInvocationTone, string> = {
+  neutral: "bg-muted text-muted-foreground",
+  info: "bg-info-muted text-info",
+  success: "bg-success-muted text-success",
+  danger: "bg-destructive-muted text-destructive",
+  warning: "bg-warning-muted text-warning",
+};
 
 // The UI keeps "run" vocabulary while the API speaks invocations: each history
 // row is one invocation (a single firing). A firing with one repository renders
@@ -15,20 +27,8 @@ import { useEnvironments } from "@/hooks/use-environments";
 // repository row per child run.
 
 function statusBadge(status: AutomationInvocation["status"] | AutomationRun["status"]) {
-  switch (status) {
-    case "starting":
-      return <Badge className="bg-muted text-muted-foreground">Starting</Badge>;
-    case "running":
-      return <Badge variant="info">Running</Badge>;
-    case "completed":
-      return <Badge className="bg-success-muted text-success">Completed</Badge>;
-    case "failed":
-      return <Badge className="bg-destructive-muted text-destructive">Failed</Badge>;
-    case "partial_failed":
-      return <Badge className="bg-warning-muted text-warning">Partial failure</Badge>;
-    case "skipped":
-      return <Badge className="bg-warning-muted text-warning">Skipped</Badge>;
-  }
+  const presentation = AUTOMATION_INVOCATION_STATUS[status];
+  return <Badge className={BADGE_TONE_CLASSES[presentation.tone]}>{presentation.label}</Badge>;
 }
 
 function formatDuration(startedAt: number | null, completedAt: number | null): string | null {

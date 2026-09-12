@@ -22,6 +22,14 @@
       "import": "./dist/models.js",
       "types": "./dist/models.d.ts"
     },
+    "./harnesses": {
+      "import": "./dist/harnesses.js",
+      "types": "./dist/harnesses.d.ts"
+    },
+    "./classification": {
+      "import": "./dist/classification.js",
+      "types": "./dist/classification.d.ts"
+    },
     "./logger": {
       "import": "./dist/logger.js",
       "types": "./dist/logger.d.ts"
@@ -46,6 +54,10 @@
       "import": "./dist/user-id.js",
       "types": "./dist/user-id.d.ts"
     },
+    "./rbac": {
+      "import": "./dist/rbac.js",
+      "types": "./dist/rbac.d.ts"
+    },
     "./browser-auth-routes": {
       "import": "./dist/browser-auth-routes.js",
       "types": "./dist/browser-auth-routes.d.ts"
@@ -65,6 +77,10 @@
     "./types/github-identity": {
       "import": "./dist/types/github-identity.js",
       "types": "./dist/types/github-identity.d.ts"
+    },
+    "./types/github-autofix": {
+      "import": "./dist/types/github-autofix.js",
+      "types": "./dist/types/github-autofix.d.ts"
     },
     "./types/image-builds": {
       "import": "./dist/types/image-builds.js",
@@ -94,6 +110,10 @@
       "import": "./dist/slack/index.js",
       "types": "./dist/slack/index.d.ts"
     },
+    "./pull-request-tool": {
+      "import": "./dist/pull-request-tool.js",
+      "types": "./dist/pull-request-tool.d.ts"
+    },
     "./completion/extractor": {
       "import": "./dist/completion/extractor.js",
       "types": "./dist/completion/extractor.d.ts"
@@ -109,6 +129,10 @@
     "./types/automations": {
       "import": "./dist/types/automations.js",
       "types": "./dist/types/automations.d.ts"
+    },
+    "./types/provider-accounts": {
+      "import": "./dist/types/provider-accounts.js",
+      "types": "./dist/types/provider-accounts.d.ts"
     },
     "./types/websocket": {
       "import": "./dist/types/websocket.js",
@@ -130,9 +154,17 @@
       "import": "./dist/types/session-inbox.js",
       "types": "./dist/types/session-inbox.d.ts"
     },
+    "./types/session-activity": {
+      "import": "./dist/types/session-activity.js",
+      "types": "./dist/types/session-activity.d.ts"
+    },
     "./types/artifacts": {
       "import": "./dist/types/artifacts.js",
       "types": "./dist/types/artifacts.d.ts"
+    },
+    "./types/session-archive": {
+      "import": "./dist/types/session-archive.js",
+      "types": "./dist/types/session-archive.d.ts"
     },
     "./types/session-api": {
       "import": "./dist/types/session-api.js",
@@ -150,6 +182,10 @@
       "import": "./dist/types/skills.js",
       "types": "./dist/types/skills.d.ts"
     },
+    "./types/keyboard-shortcuts": {
+      "import": "./dist/types/keyboard-shortcuts.js",
+      "types": "./dist/types/keyboard-shortcuts.d.ts"
+    },
     "./types/prompts": {
       "import": "./dist/types/prompts.js",
       "types": "./dist/types/prompts.d.ts"
@@ -157,6 +193,10 @@
     "./types/analytics": {
       "import": "./dist/types/analytics.js",
       "types": "./dist/types/analytics.d.ts"
+    },
+    "./types/audit-events": {
+      "import": "./dist/types/audit-events.js",
+      "types": "./dist/types/audit-events.d.ts"
     }
   },
   "scripts": {

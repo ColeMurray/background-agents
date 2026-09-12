@@ -29,7 +29,7 @@ import {
   type RepositoryAccessResult,
 } from "../source-control";
 import type { Env } from "../types";
-import { ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
+import { errorMessage, ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
 import { computeRepositoriesFingerprint } from "./fingerprint";
 import { parseRepoScopeId, repoImageBuildScope, type ImageBuildScope } from "./model";
 import type { ImageBuildRepository } from "./types";
@@ -379,8 +379,4 @@ async function loadScopeSecretSources(
       };
     }
   }
-}
-
-function errorMessage(errorValue: unknown): string {
-  return errorValue instanceof Error ? errorValue.message : String(errorValue);
 }

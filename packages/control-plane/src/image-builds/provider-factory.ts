@@ -1,5 +1,6 @@
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import type { Env } from "../types";
+import { E2BImageBuildAdapter } from "./e2b-adapter";
 import { ModalImageBuildAdapter } from "./modal-adapter";
 import type { ImageBuildProvider } from "./model";
 import { OpenComputerImageBuildAdapter } from "./opencomputer-adapter";
@@ -39,6 +40,8 @@ class EnvImageBuildAdapterFactory implements ImageBuildAdapterFactory {
             requireOpenComputerTemplate: operation === "start",
           })
         );
+      case "e2b":
+        return new E2BImageBuildAdapter(createSandboxProviderFromEnv(this.env, "e2b"));
     }
   }
 }

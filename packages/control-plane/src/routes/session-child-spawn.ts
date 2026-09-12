@@ -1,3 +1,8 @@
+import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
+import { parseBody } from "./body";
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { spawnChildSessionRequestSchema } from "@open-inspect/shared/types/session-api";
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
@@ -28,32 +33,37 @@ import {
 import { spawnContextSchema } from "../session/spawn-context";
 import type { Env } from "../types";
 import {
-  defineRoutes,
   error,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
-  parsePattern,
-  type Route,
+  permissionRequirement,
+  requireAll,
 } from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
+import { authorizeSessionTarget } from "./session-target-authorization";
 
 const logger = createLogger("router:session-child-spawn");
 const MAX_SPAWN_DEPTH = 2;
 
-async function handleSpawnChild(
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export async function handleSpawnChild(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const parentId = match.groups?.id;
-  if (!parentId) return error("Parent session ID required");
+  const parentId = params.id;
 
-  const parsedBody = spawnChildSessionRequestSchema.safeParse(await request.json());
-  if (!parsedBody.success) {
-    return error("title and prompt are required");
-  }
-  const body = parsedBody.data;
+  const body = await parseBody(
+    request,
+    spawnChildSessionRequestSchema,
+    "title and prompt are required"
+  );
+  if (body instanceof Response) return body;
 
   if (!body.title || !body.prompt) {
     return error("title and prompt are required");
@@ -97,8 +107,8 @@ async function handleSpawnChild(
   if (!spawnContextRes.ok) {
     let message = "Failed to get parent session context";
     try {
-      const body = (await spawnContextRes.json()) as { error?: unknown };
-      if (typeof body.error === "string" && body.error.length > 0) {
+      const body = await spawnContextRes.json();
+      if (isJsonRecord(body) && typeof body.error === "string" && body.error.length > 0) {
         message = body.error;
       }
     } catch {
@@ -138,6 +148,12 @@ async function handleSpawnChild(
     }
   }
 
+  const targetAuthorizationError = authorizeSessionTarget(ctx, {
+    environmentId: parentEnvironmentId,
+    hasRepository: Boolean(parentRepoOwner && parentRepoName),
+  });
+  if (targetAuthorizationError) return targetAuthorizationError;
+
   let enabledModels: ValidModel[];
   try {
     enabledModels = await getEffectiveEnabledModels(ctx.db);
@@ -159,6 +175,12 @@ async function handleSpawnChild(
     return error(`Model "${body.model}" is not enabled`, 400);
   }
   const model = resolveEnabledModel({ model: requestedModel, enabledModels });
+  // The child runs on the parent's harness; the requested model must run there.
+  const harness = spawnContext.harness;
+  const harnessIncompatibility = checkHarnessCompatibility(harness, model);
+  if (harnessIncompatibility) {
+    return error(harnessIncompatibility.message, 400);
+  }
   if (body.reasoningEffort !== undefined && !isValidReasoningEffort(model, body.reasoningEffort)) {
     const validEfforts = getReasoningConfig(model)?.efforts;
     const suffix = validEfforts?.length
@@ -174,6 +196,28 @@ async function handleSpawnChild(
     requestedReasoningEffort && isValidReasoningEffort(model, requestedReasoningEffort)
       ? requestedReasoningEffort
       : null;
+
+  let providerAuth;
+  try {
+    providerAuth = await sessionStore.getCompleteProviderAuth(parentId);
+  } catch (cause) {
+    logger.error("Failed to load parent provider auth", {
+      event: "session.spawn_child_provider_auth_failed",
+      parent_id: parentId,
+      error: cause instanceof Error ? cause.message : String(cause),
+      trace_id: ctx.trace_id,
+      request_id: ctx.request_id,
+    });
+    return error("Parent provider auth unavailable", 503);
+  }
+  // The child inherits the parent's auth modes but may run a different model,
+  // so the auth half of the harness rule is checked against the child's model.
+  const harnessAuthIncompatibility = checkHarnessCompatibility(
+    harness,
+    model,
+    Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
+  );
+  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
 
   const childDepth = parentDepth + 1;
   const childId = generateId();
@@ -206,8 +250,11 @@ async function handleSpawnChild(
     repoId: spawnContext.repoId,
     environmentId: parentEnvironmentId,
     branch:
-      spawnContext.repoOwner && spawnContext.repoName ? (spawnContext.baseBranch ?? "main") : null,
+      spawnContext.repoOwner && spawnContext.repoName
+        ? (spawnContext.baseBranch ?? DEFAULT_BASE_BRANCH)
+        : null,
     title: body.title,
+    harness,
     model,
     reasoningEffort,
     participantUserId: spawnContext.promptAuthor.userId,
@@ -228,6 +275,10 @@ async function handleSpawnChild(
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
     managedSkillsSourceSessionId: parentId,
+    providerAuth: providerAuth.map((auth) => ({
+      ...auth,
+      inheritedFromSessionId: parentId,
+    })),
   };
 
   const admissionLease = await sessionStore.acquireChildAdmissionLease(
@@ -294,19 +345,20 @@ async function handleSpawnChild(
   }
 
   ctx.executionCtx.submit(
-    ctx.sessionRuntime
-      .fetch(parentId, SessionInternalPaths.childSessionUpdate, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          childSessionId: childId,
-          status: "created",
-          title: body.title,
+    () =>
+      ctx.sessionRuntime
+        .fetch(parentId, SessionInternalPaths.childSessionUpdate, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            childSessionId: childId,
+            status: "created",
+            title: body.title,
+          }),
+        })
+        .catch((err: unknown) => {
+          logger.error("session.notify_parent_spawn.failed", { error: err });
         }),
-      })
-      .catch((err: unknown) => {
-        logger.error("session.notify_parent_spawn.failed", { error: err });
-      }),
     {
       name: "session.notify_parent_spawn",
       context: { parent_id: parentId, child_id: childId, trace_id: ctx.trace_id },
@@ -316,10 +368,16 @@ async function handleSpawnChild(
   return json({ sessionId: childId, status: "created" }, 201);
 }
 
-export const sessionChildSpawnRoutes: Route[] = defineRoutes(GITHUB_SANDBOX_FALLBACK_ROUTE, [
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/children"),
-    handler: handleSpawnChild,
+export const sessionChildSpawnRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionChildSpawnRoutes.post(
+  "/sessions/:id/children",
+  admit({
+    ...GITHUB_SANDBOX_FALLBACK_ROUTE,
+    authorization: requireAll(
+      permissionRequirement("sessions.create"),
+      permissionRequirement("sessions.collaborate")
+    ),
   }),
-]);
+  (c) => dispatchSession(c, handleSpawnChild)
+);

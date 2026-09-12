@@ -2,10 +2,14 @@
  * Environment bindings for the GitHub Bot Cloudflare Worker.
  */
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
+import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 
 export interface Env {
   /** KV namespace for deduplicating webhook deliveries. */
   GITHUB_KV: KVNamespace;
+
+  /** Durable handoff for pull request feedback that may trigger Autofix. */
+  AUTOFIX_QUEUE: Queue<GitHubAutofixEnvelope>;
 
   /** Service binding to the control plane worker. */
   CONTROL_PLANE: ControlPlaneFetcher;

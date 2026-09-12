@@ -1,0 +1,9 @@
+{
+  "runtimeVersion": "v66-claude-privacy-policy",
+  "generation": 66,
+  "minimumCompatibleGeneration": 62,
+  "minimumRebuildGeneration": 66,
+  "harnessMinimumGeneration": {
+    "claude": 64
+  }
+}

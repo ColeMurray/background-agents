@@ -7,7 +7,7 @@ import {
   imageBuildsEnabledResponseSchema,
   imageBuildsStatusResponseSchema,
 } from "@/lib/image-builds";
-import { supportsRepoImages } from "@/lib/sandbox-provider";
+import { REPO_IMAGES_UNSUPPORTED_MESSAGE, supportsRepoImages } from "@/lib/sandbox-provider";
 
 /**
  * Unified image-build feed: every prebuild-enabled scope plus the cross-scope
@@ -21,13 +21,7 @@ export async function GET() {
   }
 
   if (!supportsRepoImages()) {
-    return NextResponse.json(
-      {
-        error:
-          "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer",
-      },
-      { status: 501 }
-    );
+    return NextResponse.json({ error: REPO_IMAGES_UNSUPPORTED_MESSAGE }, { status: 501 });
   }
 
   try {

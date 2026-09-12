@@ -4,7 +4,7 @@ import textwrap
 import httpx
 import pytest
 
-from sandbox_runtime.git_signing import GitSigningRuntime
+from sandbox_runtime.git_signing import GitSigningError, GitSigningRuntime
 from sandbox_runtime.repo_config import RepoEntry, dump_repo_manifest
 from sandbox_runtime.types import GitUser
 
@@ -414,6 +414,71 @@ async def test_refresh_blocks_on_non_success_or_malformed_broker_results(
 
     with pytest.raises(RuntimeError, match=r"commit signing configuration|Commit signing"):
         await runtime.refresh(GitUser(name="OpenInspect", email="open-inspect@example.com"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [
+        (400, False),
+        (401, False),
+        (403, False),
+        (404, False),
+        (408, True),
+        (410, False),
+        (429, True),
+        (503, True),
+    ],
+)
+async def test_refresh_preserves_broker_http_status_without_response_details(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, status: int, retryable: bool
+):
+    manifest = create_manifest(tmp_path)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, text="secret upstream details")
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "sandbox_runtime.git_signing.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    runtime = create_runtime(tmp_path, manifest)
+
+    with pytest.raises(GitSigningError) as exc_info:
+        await runtime.refresh(None)
+
+    assert exc_info.value.status_code == status
+    assert exc_info.value.retryable is retryable
+    assert str(exc_info.value) == "Commit signing configuration unavailable"
+    assert "secret upstream details" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_refresh_network_failure_has_no_http_status_or_secret_details(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    manifest = create_manifest(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("sandbox-token", request=request)
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "sandbox_runtime.git_signing.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    runtime = create_runtime(tmp_path, manifest)
+
+    with pytest.raises(GitSigningError) as exc_info:
+        await runtime.refresh(None)
+
+    assert exc_info.value.status_code is None
+    assert exc_info.value.retryable is True
+    assert str(exc_info.value) == "Commit signing configuration unavailable"
+    assert "sandbox-token" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

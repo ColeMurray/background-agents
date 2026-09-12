@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { buildSkillRevision, hashSessionSkillManifest } from "./content-addressing";
 import {
-  MAX_MANAGED_SKILLS_PER_SESSION,
   MAX_MANAGED_SKILL_MANIFEST_BYTES,
   MAX_SKILL_FILES,
   MAX_SKILL_FILE_BYTES,
@@ -35,7 +34,6 @@ describe("managed skill content addressing", () => {
       maxSkillRevisionBytes: MAX_SKILL_REVISION_BYTES,
       maxSkillPathBytes: MAX_SKILL_PATH_BYTES,
       maxSkillPathDepth: MAX_SKILL_PATH_DEPTH,
-      maxManagedSkillsPerSession: MAX_MANAGED_SKILLS_PER_SESSION,
       maxManagedSkillManifestBytes: MAX_MANAGED_SKILL_MANIFEST_BYTES,
     });
   });

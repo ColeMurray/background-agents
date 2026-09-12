@@ -149,10 +149,23 @@ def _format_success(tmp_path: Path, result_json: str) -> str:
 def test_formats_pull_request_state(tmp_path: Path, state: str, message: str) -> None:
     output = _format_success(
         tmp_path,
-        json.dumps({"prNumber": 42, "prUrl": "https://example.test/pull/42", "state": state}),
+        json.dumps(
+            {
+                "prNumber": 42,
+                "prUrl": "https://example.test/pull/42",
+                "state": state,
+                "headBranch": "feature-x",
+                "baseBranch": "main",
+                "updated": False,
+            }
+        ),
     )
 
     assert message in output
+    envelope = json.loads(output)
+    assert envelope["kind"] == "created"
+    assert envelope["prNumber"] == 42
+    assert envelope["headBranch"] == "feature-x"
 
 
 def test_formats_updated_pull_request(tmp_path: Path) -> None:
@@ -195,3 +208,22 @@ def test_formats_branches_on_creation(tmp_path: Path) -> None:
     assert "created successfully" in output
     assert "feature-x" in output
     assert "release-1.0" in output
+
+
+def test_formats_schema_valid_success_without_optional_metadata(tmp_path: Path) -> None:
+    output = _format_success(
+        tmp_path,
+        json.dumps(
+            {
+                "prNumber": 42,
+                "prUrl": "https://example.test/pull/42",
+                "updated": False,
+            }
+        ),
+    )
+
+    envelope = json.loads(output)
+    assert envelope["kind"] == "created"
+    assert envelope["state"] == "open"
+    assert "headBranch" not in envelope
+    assert "baseBranch" not in envelope

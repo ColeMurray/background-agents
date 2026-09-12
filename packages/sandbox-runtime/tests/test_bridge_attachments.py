@@ -21,7 +21,7 @@ def bridge() -> AgentBridge:
 
 
 def test_prompt_request_body_appends_image_parts_after_text(bridge: AgentBridge) -> None:
-    body = bridge._ensure_prompt_stream()._build_prompt_request_body(
+    body = bridge.harness.prompt_stream._build_prompt_request_body(
         "hello",
         model=None,
         attachments=[{"name": "a.png", "mimeType": "image/png", "content": "QQ=="}],
@@ -38,5 +38,5 @@ def test_prompt_request_body_appends_image_parts_after_text(bridge: AgentBridge)
 
 
 def test_prompt_request_body_text_only_when_no_attachments(bridge: AgentBridge) -> None:
-    body = bridge._ensure_prompt_stream()._build_prompt_request_body("hi", model=None)
+    body = bridge.harness.prompt_stream._build_prompt_request_body("hi", model=None)
     assert body["parts"] == [{"type": "text", "text": "hi"}]

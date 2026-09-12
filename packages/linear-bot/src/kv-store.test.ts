@@ -134,6 +134,14 @@ describe("getUserPreferences", () => {
     expect(await getUserPreferences(makeLinearBotEnv(kv), "user-1")).toEqual(prefs);
   });
 
+  it("returns null for malformed stored preferences", async () => {
+    const { kv } = createFakeKV({
+      "user_prefs:user-1": JSON.stringify({ userId: "user-1", updatedAt: "yesterday" }),
+    });
+
+    expect(await getUserPreferences(makeLinearBotEnv(kv), "user-1")).toBeNull();
+  });
+
   it("returns null when KV throws", async () => {
     expect(await getUserPreferences(makeLinearBotEnv(errorKv), "user-1")).toBeNull();
   });

@@ -2,6 +2,7 @@
 
 import { useSessionDiffRetry } from "@/hooks/use-session-diffs";
 import { cn } from "@/lib/utils";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 /**
  * Diff refresh failure notice with a retry action. One render tree for both
@@ -13,10 +14,12 @@ export function DiffRetryNotice({
   sessionId,
   message,
   variant,
+  capabilities,
 }: {
   sessionId: string;
   message: string;
   variant: "banner" | "inline";
+  capabilities: SessionCapabilities;
 }) {
   const { retry, isRetrying, retryError } = useSessionDiffRetry(sessionId);
   const banner = variant === "banner";
@@ -33,17 +36,19 @@ export function DiffRetryNotice({
         <p className={cn("text-xs text-destructive", banner && "min-w-0 flex-1 truncate")}>
           {message}
         </p>
-        <button
-          type="button"
-          onClick={() => void retry()}
-          disabled={isRetrying}
-          className={cn(
-            "text-xs font-medium underline underline-offset-2 disabled:opacity-50",
-            !banner && "text-accent"
-          )}
-        >
-          {isRetrying ? "Retrying…" : "Retry"}
-        </button>
+        {capabilities.lifecycle && (
+          <button
+            type="button"
+            onClick={() => void retry()}
+            disabled={isRetrying}
+            className={cn(
+              "text-xs font-medium underline underline-offset-2 disabled:opacity-50",
+              !banner && "text-accent"
+            )}
+          >
+            {isRetrying ? "Retrying…" : "Retry"}
+          </button>
+        )}
       </div>
       {retryError && (
         <p

@@ -16,7 +16,7 @@ export function formatSessionEventTime(timestampSeconds: number): string {
 
 /**
  * Format a timestamp as a relative time string (e.g., "2d", "3h", "5m").
- * Returns "just now" for very recent timestamps.
+ * Returns "now" for very recent timestamps.
  */
 export function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -36,7 +36,7 @@ export function formatRelativeTime(timestamp: number): string {
   if (minutes > 0) {
     return `${minutes}m`;
   }
-  return "just now";
+  return "now";
 }
 
 /**

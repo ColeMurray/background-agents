@@ -131,7 +131,6 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       return {
         sandboxId: config.sandboxId,
         providerObjectId,
-        status: sandbox.state ?? sandbox.status ?? "created",
         createdAt: Date.now(),
         codeServerUrl: tunnels.codeServerUrl,
         codeServerPassword: tunnels.codeServerPassword,

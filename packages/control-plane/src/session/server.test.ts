@@ -25,8 +25,7 @@ function createHarness() {
   let currentClient: TestClient | null = client;
   let connectionKind: "client" | "sandbox" = "client";
   let now = 1000;
-  const monotonicTimes = [0, 2, 5, 8, 10];
-  const ensureInitialized = vi.fn();
+  const monotonicTimes = [0, 5, 8, 10];
   const clock: Clock = {
     nowMs: () => now,
     monotonicNowMs: vi.fn(() => {
@@ -45,6 +44,7 @@ function createHarness() {
     send: vi.fn(() => true),
     getClient: vi.fn(() => currentClient),
     close: vi.fn(),
+    isActiveSandbox: vi.fn(() => true),
     clearSandboxIfMatch: vi.fn(() => true),
     removeClient: vi.fn(() => client),
     hasParticipant: vi.fn(() => false),
@@ -57,6 +57,7 @@ function createHarness() {
     notifyTyping: vi.fn(async () => undefined),
     updatePresence: vi.fn(),
     getHistoryPage: vi.fn(() => ({ items: [], hasMore: false, cursor: null })),
+    authorize: vi.fn(async () => "allowed" as const),
   };
   const sandbox: SandboxDisconnectMonitor = {
     getStatus: vi.fn((): "ready" => "ready"),
@@ -68,8 +69,7 @@ function createHarness() {
   };
 
   const httpDeps: SessionHttpDispatcherDeps = {
-    ensureInitialized,
-    getLogger: () => log,
+    log,
     routes: [
       {
         method: "GET",
@@ -77,18 +77,17 @@ function createHarness() {
         handler: vi.fn(async () => new Response("state", { status: 200 })),
       },
     ],
-    handleWebSocketUpgrade: vi.fn(async () => new Response(null, { status: 200 })),
     clock,
   };
   const messageDeps: SessionMessageRouterDeps<string, TestClient> = {
-    getLogger: () => log,
+    log,
     sockets,
     clientCommands,
     processSandboxEvent: vi.fn(async () => undefined),
     clock,
   };
   const disconnectDeps = {
-    getLogger: () => log,
+    log,
     sockets,
     sandbox,
     broadcaster,
@@ -96,7 +95,6 @@ function createHarness() {
   const handleScheduledDeadline = vi.fn(async () => undefined);
 
   const server = new SessionServer({
-    ensureInitialized,
     http: new SessionHttpDispatcher(httpDeps),
     messages: new SessionMessageRouter(messageDeps),
     disconnects: new SessionDisconnectHandler(disconnectDeps),
@@ -105,7 +103,6 @@ function createHarness() {
 
   return {
     server,
-    ensureInitialized,
     httpDeps,
     messageDeps,
     sockets,
@@ -145,8 +142,8 @@ function createLogger() {
 }
 
 describe("SessionServer", () => {
-  it("initializes, dispatches HTTP routes, and preserves request correlation metrics", async () => {
-    const { server, ensureInitialized, httpDeps, log, requestLog } = createHarness();
+  it("dispatches HTTP routes and preserves request correlation metrics", async () => {
+    const { server, httpDeps, log, requestLog } = createHarness();
     const response = await server.onRequest(
       new Request(`https://session${SessionInternalPaths.state}`, {
         headers: { "x-trace-id": "trace-1", "x-request-id": "request-1" },
@@ -154,7 +151,6 @@ describe("SessionServer", () => {
     );
 
     expect(await response.text()).toBe("state");
-    expect(ensureInitialized).toHaveBeenCalledOnce();
     expect(log.child).toHaveBeenCalledWith({
       trace_id: "trace-1",
       request_id: "request-1",
@@ -170,20 +166,18 @@ describe("SessionServer", () => {
       http_path: SessionInternalPaths.state,
       http_status: 200,
       duration_ms: 10,
-      init_ms: 2,
       handler_ms: 3,
       outcome: "success",
     });
   });
 
   it("returns 404 for an unmatched HTTP route", async () => {
-    const { server, ensureInitialized, httpDeps } = createHarness();
+    const { server, httpDeps } = createHarness();
 
     const response = await server.onRequest(new Request("https://session/not-a-session-route"));
 
     expect(response.status).toBe(404);
     expect(await response.text()).toBe("Not Found");
-    expect(ensureInitialized).toHaveBeenCalledOnce();
     expect(httpDeps.routes[0].handler).not.toHaveBeenCalled();
   });
 
@@ -258,6 +252,30 @@ describe("SessionServer", () => {
     expect(clientCommands.stopExecution).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [{ type: "prompt", content: "work", clientRequestId: "request-1" }, "sessions.collaborate"],
+    [
+      { type: "cancel_prompt", messageId: "message-1", clientRequestId: "request-1" },
+      "sessions.lifecycle",
+    ],
+    [{ type: "stop" }, "sessions.lifecycle"],
+  ] as const)("rejects %s without its command permission", async (message, permission) => {
+    const { server, sockets, clientCommands, client } = createHarness();
+    vi.mocked(clientCommands.authorize).mockResolvedValue("denied");
+
+    await server.onMessage("client", JSON.stringify(message));
+
+    expect(clientCommands.authorize).toHaveBeenCalledWith(client, permission);
+    expect(sockets.send).toHaveBeenCalledWith("client", {
+      type: "error",
+      code: "PERMISSION_REQUIRED",
+      message: `Permission required: ${permission}`,
+    });
+    expect(clientCommands.submitPrompt).not.toHaveBeenCalled();
+    expect(clientCommands.cancelPrompt).not.toHaveBeenCalled();
+    expect(clientCommands.stopExecution).not.toHaveBeenCalled();
+  });
+
   it("routes fetch_history and enforces throttling with the injected clock", async () => {
     const { server, sockets, clientCommands, setNow } = createHarness();
     const cursor = { timestamp: 10, id: "event-1", sequence: 2 };
@@ -301,6 +319,29 @@ describe("SessionServer", () => {
       timestamp: 1000,
       status: "ready",
     });
+  });
+
+  it("refuses frames from a replaced sandbox socket and closes it again", async () => {
+    const { server, messageDeps, sockets, log, setConnectionKind } = createHarness();
+    setConnectionKind("sandbox");
+    vi.mocked(sockets.isActiveSandbox).mockReturnValue(false);
+
+    await server.onMessage(
+      "sandbox",
+      JSON.stringify({
+        type: "heartbeat",
+        sandboxId: "sandbox-1",
+        timestamp: 1000,
+        status: "ready",
+      })
+    );
+
+    expect(messageDeps.processSandboxEvent).not.toHaveBeenCalled();
+    expect(sockets.close).toHaveBeenCalledWith("sandbox", 1000, "Sandbox socket replaced");
+    expect(log.debug).toHaveBeenCalledWith(
+      "Ignoring frame from a replaced sandbox socket",
+      expect.objectContaining({ sandbox_id: "sandbox-1" })
+    );
   });
 
   it("schedules sandbox reconnect checks and always reciprocates close", async () => {
@@ -349,12 +390,10 @@ describe("SessionServer", () => {
   });
 
   it("delegates alarms after initialization", async () => {
-    const { server, ensureInitialized, handleScheduledDeadline } = createHarness();
+    const { server, handleScheduledDeadline } = createHarness();
 
     await server.onScheduledDeadline();
 
-    expect(ensureInitialized).toHaveBeenCalledOnce();
-    expect(ensureInitialized).toHaveBeenCalledWith(false);
     expect(handleScheduledDeadline).toHaveBeenCalledOnce();
   });
 });

@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { buildTimelineItems } from "@/lib/timeline-items";
@@ -15,17 +15,11 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView;
-  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
 
-function mockScrollIntoView() {
-  Object.defineProperty(Element.prototype, "scrollIntoView", {
-    configurable: true,
-    value: vi.fn(),
-  });
-}
 beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(800);
   vi.stubGlobal(
     "IntersectionObserver",
     class {
@@ -67,6 +61,32 @@ function toolCall(callId: string, tool: string, filePath: string): SandboxEvent 
 }
 
 describe("user message authors", () => {
+  it("presents Autofix provenance and links to the originating review", () => {
+    render(
+      <EventItem
+        event={{
+          ...event("user-2"),
+          origin: {
+            kind: "review",
+            authorType: "bot",
+            feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+          },
+        }}
+        sessionId="session-1"
+        currentParticipantId="participant-1"
+        participantProfiles={{}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    expect(screen.getByText("Resumed by PR feedback")).toBeInTheDocument();
+    expect(screen.getByText("Review · Bot")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open feedback" })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/widgets/pull/42#pullrequestreview-5678"
+    );
+  });
+
   it("uses the canonical profile name and avatar when available", () => {
     render(
       <EventItem
@@ -425,289 +445,6 @@ describe("tool call groups", () => {
 
     expect(screen.getByRole("button", { name: /Read one\.ts/i })).toBeInTheDocument();
     expect(screen.getByText("Arguments:")).toBeInTheDocument();
-  });
-});
-
-describe("terminal message visibility", () => {
-  it("marks read only after the latest completion is visible in the active tab", async () => {
-    mockScrollIntoView();
-    const observations: Array<{
-      callback: IntersectionObserverCallback;
-      target?: Element;
-    }> = [];
-    class TestIntersectionObserver {
-      readonly root = null;
-      readonly rootMargin = "0px";
-      readonly thresholds = [0];
-      constructor(callback: IntersectionObserverCallback) {
-        observations.push({ callback });
-      }
-      observe(target: Element) {
-        observations.at(-1)!.target = target;
-      }
-      disconnect() {}
-      unobserve() {}
-      takeRecords() {
-        return [];
-      }
-    }
-    vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
-    const onMarkMessageRead = vi.fn(async () => "complete" as const);
-    const events: SandboxEvent[] = [
-      {
-        type: "execution_complete",
-        messageId: "message-1",
-        success: true,
-        sandboxId: "sandbox-1",
-        timestamp: 1,
-      },
-      {
-        type: "execution_complete",
-        messageId: "message-2",
-        success: true,
-        sandboxId: "sandbox-1",
-        timestamp: 2,
-      },
-    ];
-
-    render(
-      <SessionTimeline
-        events={events}
-        sessionId="session-1"
-        currentParticipantId={null}
-        participantProfiles={{}}
-        isProcessing={false}
-        loadingHistory={false}
-        showSkeleton={false}
-        onLoadOlder={() => {}}
-        onOpenMedia={() => {}}
-        terminalMessageReadObservationEnabled
-        onMarkMessageRead={onMarkMessageRead}
-      />
-    );
-
-    const observation = observations.find(
-      ({ target }) => target?.getAttribute("data-terminal-message-id") === "message-2"
-    );
-    expect(observation).toBeDefined();
-    await act(async () => {
-      observation!.callback(
-        [{ isIntersecting: true, target: observation!.target } as IntersectionObserverEntry],
-        {} as IntersectionObserver
-      );
-    });
-    expect(onMarkMessageRead).not.toHaveBeenCalled();
-
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
-    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-    expect(onMarkMessageRead).toHaveBeenCalledOnce();
-    expect(onMarkMessageRead).toHaveBeenCalledWith("message-2");
-  });
-
-  it("retries an incomplete read attempt while the same outcome remains visible", async () => {
-    vi.useFakeTimers();
-    mockScrollIntoView();
-    const observations: Array<{
-      callback: IntersectionObserverCallback;
-      target?: Element;
-    }> = [];
-    class TestIntersectionObserver {
-      readonly root = null;
-      readonly rootMargin = "0px";
-      readonly thresholds = [0];
-      constructor(nextCallback: IntersectionObserverCallback) {
-        observations.push({ callback: nextCallback });
-      }
-      observe(target: Element) {
-        observations.at(-1)!.target = target;
-      }
-      disconnect() {}
-      unobserve() {}
-      takeRecords() {
-        return [];
-      }
-    }
-    vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
-    const onMarkMessageRead = vi
-      .fn()
-      .mockResolvedValueOnce("retry")
-      .mockResolvedValueOnce("retry")
-      .mockResolvedValueOnce("complete");
-
-    const { container } = render(
-      <SessionTimeline
-        events={[
-          {
-            type: "execution_complete",
-            messageId: "message-1",
-            success: true,
-            sandboxId: "sandbox-1",
-            timestamp: 1,
-          },
-        ]}
-        sessionId="session-1"
-        currentParticipantId={null}
-        participantProfiles={{}}
-        isProcessing={false}
-        loadingHistory={false}
-        showSkeleton={false}
-        onLoadOlder={() => {}}
-        onOpenMedia={() => {}}
-        terminalMessageReadObservationEnabled
-        onMarkMessageRead={onMarkMessageRead}
-      />
-    );
-    const target = container.querySelector('[data-terminal-message-id="message-1"]')!;
-    const observation = observations.find(({ target: observed }) => observed === target);
-
-    await act(async () => {
-      observation?.callback(
-        [{ isIntersecting: true, target } as IntersectionObserverEntry],
-        {} as IntersectionObserver
-      );
-    });
-    expect(onMarkMessageRead).toHaveBeenCalledTimes(1);
-
-    await act(async () => window.dispatchEvent(new Event("focus")));
-    expect(onMarkMessageRead).toHaveBeenCalledTimes(2);
-
-    await act(async () => vi.advanceTimersByTimeAsync(2_000));
-    expect(onMarkMessageRead).toHaveBeenCalledTimes(2);
-
-    await act(async () => vi.advanceTimersByTimeAsync(2_000));
-    expect(onMarkMessageRead).toHaveBeenCalledTimes(3);
-  });
-
-  it("observes the assistant output instead of the completion badge", () => {
-    mockScrollIntoView();
-    const observedTargets: Element[] = [];
-    class TestIntersectionObserver {
-      readonly root = null;
-      readonly rootMargin = "0px";
-      readonly thresholds = [0];
-      constructor(_callback: IntersectionObserverCallback) {}
-      observe(target: Element) {
-        observedTargets.push(target);
-      }
-      disconnect() {}
-      unobserve() {}
-      takeRecords() {
-        return [];
-      }
-    }
-    vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
-
-    render(
-      <SessionTimeline
-        events={[
-          {
-            type: "token",
-            messageId: "message-1",
-            content: "The complete agent result",
-            sandboxId: "sandbox-1",
-            timestamp: 1,
-          },
-          {
-            type: "execution_complete",
-            messageId: "message-1",
-            success: true,
-            sandboxId: "sandbox-1",
-            timestamp: 2,
-          },
-        ]}
-        sessionId="session-1"
-        currentParticipantId={null}
-        participantProfiles={{}}
-        isProcessing={false}
-        loadingHistory={false}
-        showSkeleton={false}
-        onLoadOlder={() => {}}
-        onOpenMedia={() => {}}
-        terminalMessageReadObservationEnabled
-        onMarkMessageRead={async () => "complete"}
-      />
-    );
-
-    const outcomeTarget = observedTargets.find(
-      (target) => target.getAttribute("data-terminal-message-id") === "message-1"
-    );
-    expect(outcomeTarget).toHaveClass("space-y-2");
-    expect(outcomeTarget).toHaveTextContent("The complete agent result");
-    expect(outcomeTarget).toHaveTextContent("Execution complete");
-  });
-
-  it("does not retry after the visible outcome unmounts during a read attempt", async () => {
-    vi.useFakeTimers();
-    mockScrollIntoView();
-    let resolveReadAttempt!: (value: "retry") => void;
-    const readAttempt = new Promise<"retry">((resolve) => {
-      resolveReadAttempt = resolve;
-    });
-    const observations: Array<{ callback: IntersectionObserverCallback; target?: Element }> = [];
-    class TestIntersectionObserver {
-      readonly root = null;
-      readonly rootMargin = "0px";
-      readonly thresholds = [0];
-      constructor(callback: IntersectionObserverCallback) {
-        observations.push({ callback });
-      }
-      observe(target: Element) {
-        observations.at(-1)!.target = target;
-      }
-      disconnect() {}
-      unobserve() {}
-      takeRecords() {
-        return [];
-      }
-    }
-    vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
-    const onMarkMessageRead = vi.fn(() => readAttempt);
-    const { container, unmount } = render(
-      <SessionTimeline
-        events={[
-          {
-            type: "execution_complete",
-            messageId: "message-1",
-            success: true,
-            sandboxId: "sandbox-1",
-            timestamp: 1,
-          },
-        ]}
-        sessionId="session-1"
-        currentParticipantId={null}
-        participantProfiles={{}}
-        isProcessing={false}
-        loadingHistory={false}
-        showSkeleton={false}
-        onLoadOlder={() => {}}
-        onOpenMedia={() => {}}
-        terminalMessageReadObservationEnabled
-        onMarkMessageRead={onMarkMessageRead}
-      />
-    );
-    const target = container.querySelector('[data-terminal-message-id="message-1"]')!;
-    const observation = observations.find(({ target: observed }) => observed === target)!;
-    await act(async () => {
-      observation.callback(
-        [{ isIntersecting: true, target } as IntersectionObserverEntry],
-        {} as IntersectionObserver
-      );
-    });
-    expect(onMarkMessageRead).toHaveBeenCalledOnce();
-
-    unmount();
-    resolveReadAttempt("retry");
-    await act(async () => {
-      await readAttempt;
-      await vi.advanceTimersByTimeAsync(60_000);
-    });
-    expect(onMarkMessageRead).toHaveBeenCalledOnce();
   });
 });
 
@@ -1152,5 +889,70 @@ describe("task activity grouping", () => {
       false
     );
     consoleError.mockRestore();
+  });
+});
+
+describe("timeline virtualization", () => {
+  it("mounts only a bounded window for large histories", () => {
+    const events: SandboxEvent[] = Array.from({ length: 500 }, (_, index) => ({
+      type: "user_message",
+      content: `Message ${index}`,
+      messageId: `message-${index}`,
+      timestamp: index + 1,
+    }));
+
+    const { container } = render(<SessionTimeline {...baseTimelineProps} events={events} />);
+
+    expect(container.querySelectorAll("[data-index]").length).toBeLessThanOrEqual(20);
+    expect(container).not.toHaveTextContent("Message 250");
+  });
+
+  it("preserves task expansion after its row leaves the virtual window", async () => {
+    const task: SandboxEvent = {
+      type: "tool_call",
+      sandboxId: "sandbox-1",
+      messageId: "task-message",
+      callId: "task-call",
+      tool: "Task",
+      args: { description: "Inspect the timeline" },
+      timestamp: 1,
+    };
+    const events: SandboxEvent[] = [
+      task,
+      ...Array.from(
+        { length: 500 },
+        (_, index): SandboxEvent => ({
+          type: "user_message",
+          content: `Message ${index}`,
+          messageId: `message-${index}`,
+          timestamp: index + 2,
+        })
+      ),
+    ];
+    const { container } = render(<SessionTimeline {...baseTimelineProps} events={events} />);
+    const taskButton = screen.getByRole("button", { name: /Task Inspect the timeline/ });
+    await userEvent.click(taskButton);
+    expect(taskButton).toHaveAttribute("aria-expanded", "true");
+
+    const timeline = container.firstElementChild as HTMLDivElement;
+    Object.defineProperties(timeline, {
+      clientHeight: { configurable: true, value: 800 },
+      scrollHeight: { configurable: true, value: 500_000 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+    await act(async () => {
+      timeline.scrollTop = 400_000;
+      fireEvent.scroll(timeline);
+    });
+    expect(screen.queryByRole("button", { name: /Task Inspect the timeline/ })).toBeNull();
+
+    await act(async () => {
+      timeline.scrollTop = 0;
+      fireEvent.scroll(timeline);
+    });
+    expect(screen.getByRole("button", { name: /Task Inspect the timeline/ })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
   });
 });

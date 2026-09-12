@@ -1,9 +1,10 @@
 import { createExecutionContext, env } from "cloudflare:test";
+import { getSetCookies } from "./helpers";
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { UserStore } from "../../src/db/user-store";
-import { handleRequest as routeRequest } from "../../src/router";
+import { routeRequest } from "./helpers";
 import { cleanD1Tables } from "./cleanup";
 import { createSignedGoogleIdToken } from "./google-id-token";
 import {
@@ -73,9 +74,9 @@ async function signedWebRequest(
 }
 
 function cookiePair(response: Response, cookieName: string): string | null {
-  const cookie = response.headers
-    .getSetCookie()
-    .find((value) => value.startsWith(`${cookieName}=`) && !value.startsWith(`${cookieName}=;`));
+  const cookie = getSetCookies(response.headers).find(
+    (value) => value.startsWith(`${cookieName}=`) && !value.startsWith(`${cookieName}=;`)
+  );
   return cookie ? cookie.split(";", 1)[0] : null;
 }
 

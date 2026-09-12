@@ -1,9 +1,8 @@
 import type { PullRequestSummary } from "@open-inspect/shared/types/sessions";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import { SessionPullRequestStore } from "./session-pull-request-store";
 import type { SqlDatabase } from "./sql-database";
-
-const MAX_D1_QUERY_PARAMETERS = 100;
 
 interface SessionRepositoryRow {
   session_id: string;

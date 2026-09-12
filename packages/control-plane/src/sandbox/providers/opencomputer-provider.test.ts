@@ -78,6 +78,7 @@ const baseConfig: CreateSandboxConfig = {
   repoName: "repo",
   controlPlaneUrl: "https://control.example",
   sandboxAuthToken: "sandbox-token",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "claude-sonnet-4-6",
   branch: "main",
@@ -117,7 +118,6 @@ describe("OpenComputerSandboxProvider", () => {
     expect(result).toMatchObject({
       sandboxId: "sandbox-acme-repo-1",
       providerObjectId: "oc-sandbox-1",
-      status: "running",
       codeServerUrl: "https://sandbox-acme-repo-1-3000.opencomputer.test",
       tunnelUrls: { "5173": "https://oc-sandbox-1-5173.opencomputer.test" },
     });
@@ -504,7 +504,6 @@ describe("OpenComputerSandboxProvider", () => {
 
     expect(result).toMatchObject({
       providerObjectId: "oc-fork-1",
-      status: "running",
     });
     expect(client.createSandbox).not.toHaveBeenCalled();
     expect(client.forkFromCheckpoint).toHaveBeenCalledWith(

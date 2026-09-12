@@ -156,7 +156,9 @@ describe("sessions API route (POST)", () => {
       Response.json({ id: "sess1" }, { status: 201 })
     );
 
-    const response = await POST(postRequest({ repoOwner: "o", repoName: "r", model: "m" }));
+    const response = await POST(
+      postRequest({ repoOwner: "o", repoName: "r", model: "m", harness: "claude" })
+    );
 
     expect(response.status).toBe(201);
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
@@ -164,7 +166,7 @@ describe("sessions API route (POST)", () => {
       expect.objectContaining({ method: "POST" })
     );
     const sent = controlPlaneBody();
-    expect(sent).toEqual({ repoOwner: "o", repoName: "r", model: "m" });
+    expect(sent).toEqual({ repoOwner: "o", repoName: "r", model: "m", harness: "claude" });
   });
 
   it("forwards environmentId for environment launches", async () => {
@@ -226,6 +228,36 @@ describe("sessions API route (POST)", () => {
       repoOwner: "acme",
       repoName: "web",
       skillSelection: { mode: "profile", profileId: "profile-1" },
+    });
+  });
+
+  it("forwards bounded provider selections without forwarding adjacent hostile fields", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({
+      user: { id: "0123456789abcdef0123456789abcdef" },
+    } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ id: "sess-provider" }, { status: 201 })
+    );
+
+    await POST(
+      postRequest({
+        repoOwner: "acme",
+        repoName: "web",
+        providerSelections: {
+          openai: { mode: "provider_account", accountId: "a".repeat(32) },
+          xai: { mode: "api_key" },
+        },
+        providerAuth: [{ credential: "must-not-forward" }],
+      })
+    );
+
+    expect(controlPlaneBody()).toEqual({
+      repoOwner: "acme",
+      repoName: "web",
+      providerSelections: {
+        openai: { mode: "provider_account", accountId: "a".repeat(32) },
+        xai: { mode: "api_key" },
+      },
     });
   });
 

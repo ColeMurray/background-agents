@@ -3,10 +3,11 @@ import { NextResponse } from "next/server";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 const RELAYED_RESPONSE_HEADERS = ["etag", "retry-after", "x-request-id"] as const;
+export const PRIVATE_NO_STORE_HEADERS = { "Cache-Control": "private, no-store" } as const;
 
 export async function relayJsonResponse(response: Response): Promise<NextResponse> {
   const text = await response.text();
-  const headers = new Headers({ "Cache-Control": "private, no-store" });
+  const headers = new Headers(PRIVATE_NO_STORE_HEADERS);
   for (const name of RELAYED_RESPONSE_HEADERS) {
     const value = response.headers.get(name);
     if (value) headers.set(name, value);

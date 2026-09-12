@@ -10,9 +10,12 @@ export const imageBuildFinalizationJobSchema = z.object({
 
 export type ImageBuildFinalizationJob = z.infer<typeof imageBuildFinalizationJobSchema>;
 
-/** Minimal producer boundary used by callback workflows. */
-export interface ImageBuildFinalizationQueue {
-  send(job: ImageBuildFinalizationJob): Promise<void>;
+/** The one constructor of the versioned Queue command shape. */
+export function imageBuildFinalizationJob(
+  buildId: string,
+  completionHash: string
+): ImageBuildFinalizationJob {
+  return { version: 1, buildId, completionHash };
 }
 
 type FinalizationOutcome =
@@ -68,5 +71,5 @@ export async function createImageBuildFinalizationJob(
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 
-  return { version: 1, buildId, completionHash };
+  return imageBuildFinalizationJob(buildId, completionHash);
 }

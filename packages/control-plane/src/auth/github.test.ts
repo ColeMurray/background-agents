@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { refreshAccessToken } from "./github";
+import { GITHUB_OAUTH_REQUEST_TIMEOUT_MS, refreshAccessToken } from "./github";
 import type { GitHubOAuthConfig, GitHubTokenResponse } from "./github";
 
 describe("github auth", () => {
@@ -11,6 +11,7 @@ describe("github auth", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
   });
 
   describe("refreshAccessToken", () => {
@@ -65,6 +66,30 @@ describe("github auth", () => {
 
       await expect(refreshAccessToken("old-refresh", config)).rejects.toThrow(
         "The code passed is incorrect or expired."
+      );
+    });
+
+    it("aborts a stalled token refresh at the request deadline", async () => {
+      const timeout = new AbortController();
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+      globalThis.fetch = vi.fn().mockImplementation(
+        (_url, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+              once: true,
+            });
+          })
+      );
+
+      const refreshPromise = refreshAccessToken("old-refresh", config);
+      const timeoutError = new DOMException("deadline exceeded", "TimeoutError");
+      timeout.abort(timeoutError);
+
+      await expect(refreshPromise).rejects.toBe(timeoutError);
+      expect(timeoutSpy).toHaveBeenCalledWith(GITHUB_OAUTH_REQUEST_TIMEOUT_MS);
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "https://github.com/login/oauth/access_token",
+        expect.objectContaining({ signal: timeout.signal })
       );
     });
   });

@@ -8,6 +8,7 @@ describe("spawnContextSchema", () => {
       repoName: "background-agents",
       repoId: null,
       model: "anthropic/claude-sonnet-4-6",
+      harness: "opencode",
       reasoningEffort: null,
       baseBranch: null,
       sandboxTimeoutMs: 14_400_000,
@@ -35,6 +36,7 @@ describe("spawnContextSchema", () => {
       repoName: null,
       repoId: null,
       model: "anthropic/claude-sonnet-4-6",
+      harness: "opencode",
       reasoningEffort: null,
       baseBranch: null,
       promptAuthor: {
@@ -60,6 +62,7 @@ describe("spawnContextSchema", () => {
         repoName: null,
         repoId: null,
         model: "anthropic/claude-sonnet-4-6",
+        harness: "opencode",
         reasoningEffort: null,
         baseBranch: null,
         sandboxTimeoutMs,

@@ -9,6 +9,9 @@ from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import urlsplit
+
+from .harness.base import HarnessId, parse_harness_id
 
 
 class BootMode(StrEnum):
@@ -34,6 +37,17 @@ def _freeze_json(value: Any) -> Any:
     if isinstance(value, list):
         return tuple(_freeze_json(item) for item in value)
     return value
+
+
+def _validate_control_plane_url(url: str) -> None:
+    if not url:
+        return
+    parsed = urlsplit(url)
+    if parsed.scheme == "https" and parsed.hostname:
+        return
+    if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+        return
+    raise ValueError("CONTROL_PLANE_URL must use HTTPS except for loopback development URLs")
 
 
 @dataclass(frozen=True)
@@ -64,6 +78,12 @@ class OpenCodeConfig:
 
 
 @dataclass(frozen=True)
+class ClaudeStagerConfig:
+    has_repository: bool
+    mcp_servers: tuple[Mapping[str, Any], ...]
+
+
+@dataclass(frozen=True)
 class ManagedSkillsConfig:
     control_plane_url: str
     sandbox_token: str
@@ -76,6 +96,7 @@ class BridgeProcessConfig:
     control_plane_url: str
     sandbox_token: str
     session_id: str
+    harness: HarnessId
 
 
 @dataclass(frozen=True)
@@ -104,9 +125,11 @@ class RuntimeConfig:
             raise ValueError("SESSION_CONFIG must contain a JSON object")
         session_config = _freeze_json(parsed_session_config)
         repo_path = workspace_path / repo_name if repo_owner and repo_name else workspace_path
+        control_plane_url = environment.get("CONTROL_PLANE_URL", "")
+        _validate_control_plane_url(control_plane_url)
         return cls(
             sandbox_id=environment.get("SANDBOX_ID", "unknown"),
-            control_plane_url=environment.get("CONTROL_PLANE_URL", ""),
+            control_plane_url=control_plane_url,
             sandbox_token=environment.get("SANDBOX_AUTH_TOKEN", ""),
             repo_owner=repo_owner,
             repo_name=repo_name,
@@ -123,6 +146,15 @@ class RuntimeConfig:
     @property
     def base_branch(self) -> str:
         return str(self.session_config.get("branch") or "main")
+
+    @property
+    def session_id(self) -> str:
+        return str(self.session_config.get("session_id") or "")
+
+    @property
+    def harness(self) -> HarnessId:
+        """Which agent runs this session; absent means the built-in OpenCode harness."""
+        return parse_harness_id(self.session_config.get("harness"))
 
     def repository_config(self) -> RepositoryConfig:
         raw_repositories = self.session_config.get("repositories")
@@ -159,17 +191,27 @@ class RuntimeConfig:
             workspace_path=self.workspace_path,
         )
 
+    def claude_stager_config(self) -> ClaudeStagerConfig:
+        raw_mcp_servers = self.session_config.get("mcp_servers")
+        mcp_servers = (
+            tuple(item for item in raw_mcp_servers if isinstance(item, Mapping))
+            if isinstance(raw_mcp_servers, tuple)
+            else ()
+        )
+        return ClaudeStagerConfig(has_repository=self.has_repository, mcp_servers=mcp_servers)
+
     def bridge_process_config(self) -> BridgeProcessConfig:
         return BridgeProcessConfig(
             sandbox_id=self.sandbox_id,
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
-            session_id=str(self.session_config.get("session_id") or ""),
+            session_id=self.session_id,
+            harness=self.harness,
         )
 
     def managed_skills_config(self) -> ManagedSkillsConfig:
         return ManagedSkillsConfig(
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
-            session_id=str(self.session_config.get("session_id") or ""),
+            session_id=self.session_id,
         )

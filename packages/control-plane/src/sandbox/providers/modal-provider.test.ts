@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from "vitest";
 import { ModalSandboxProvider } from "./modal-provider";
 import { SandboxProviderError } from "../provider";
 import { ModalApiError } from "../client";
+import { RequestDeadlineError } from "../request-deadline";
 import type {
   ModalClient,
   CreateSandboxRequest,
@@ -21,8 +22,6 @@ import type {
   CreateImageBuildSandboxResponse,
   StartImageBuildSandboxRequest,
   TerminateImageBuildSandboxRequest,
-  DeleteProviderImageRequest,
-  DeleteProviderImageResponse,
 } from "../client";
 
 // ==================== Mock Factories ====================
@@ -38,7 +37,6 @@ function createMockModalClient(
     ) => Promise<CreateImageBuildSandboxResponse>;
     startImageBuildSandbox: (req: StartImageBuildSandboxRequest) => Promise<void>;
     terminateImageBuildSandbox: (req: TerminateImageBuildSandboxRequest) => Promise<void>;
-    deleteProviderImage: (req: DeleteProviderImageRequest) => Promise<DeleteProviderImageResponse>;
   }> = {}
 ): ModalClient {
   return {
@@ -46,7 +44,6 @@ function createMockModalClient(
       async (): Promise<CreateSandboxResponse> => ({
         sandboxId: "sandbox-123",
         modalObjectId: "modal-obj-123",
-        status: "created",
         createdAt: Date.now(),
       })
     ),
@@ -76,12 +73,6 @@ function createMockModalClient(
     ),
     startImageBuildSandbox: vi.fn(async () => undefined),
     terminateImageBuildSandbox: vi.fn(async () => undefined),
-    deleteProviderImage: vi.fn(
-      async (req: DeleteProviderImageRequest): Promise<DeleteProviderImageResponse> => ({
-        providerImageId: req.providerImageId,
-        deleted: true,
-      })
-    ),
     ...overrides,
   } as unknown as ModalClient;
 }
@@ -93,6 +84,7 @@ const testConfig = {
   repoName: "testrepo",
   controlPlaneUrl: "https://control-plane.test",
   sandboxAuthToken: "auth-token",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "anthropic/claude-sonnet-4-5",
 };
@@ -194,10 +186,10 @@ describe("ModalSandboxProvider", () => {
         }
       });
 
-      it("classifies 'timeout' errors as transient", async () => {
+      it("classifies typed request deadline errors as transient", async () => {
         const client = createMockModalClient({
           createSandbox: vi.fn(async () => {
-            throw new Error("Request timeout after 30000ms");
+            throw new RequestDeadlineError("Modal", "createSandbox", 30_000);
           }),
         });
         const provider = new ModalSandboxProvider(client);
@@ -480,7 +472,6 @@ describe("ModalSandboxProvider", () => {
       const expectedResult = {
         sandboxId: "sandbox-abc",
         modalObjectId: "modal-obj-xyz",
-        status: "created",
         createdAt: 1234567890,
         vncUrl: "https://vnc.test",
         vncPassword: "vnc-pw",
@@ -495,7 +486,6 @@ describe("ModalSandboxProvider", () => {
 
       expect(result.sandboxId).toBe("sandbox-abc");
       expect(result.providerObjectId).toBe("modal-obj-xyz");
-      expect(result.status).toBe("created");
       expect(result.createdAt).toBe(1234567890);
       expect(result).toMatchObject({
         vncAccess: { url: "https://vnc.test", password: "vnc-pw" },
@@ -562,19 +552,6 @@ describe("ModalSandboxProvider", () => {
         vi.mocked(client.startImageBuildSandbox).mock.invocationCallOrder[0]
       );
     });
-
-    it("deletes provider images through the Modal client", async () => {
-      const client = createMockModalClient();
-      const provider = new ModalSandboxProvider(client);
-      const correlation = { request_id: "request-1", trace_id: "trace-1" };
-
-      await provider.deleteProviderImage("modal-image-1", correlation);
-
-      expect(client.deleteProviderImage).toHaveBeenCalledWith(
-        { providerImageId: "modal-image-1" },
-        correlation
-      );
-    });
   });
 
   describe("HTTP status handling", () => {
@@ -592,6 +569,7 @@ describe("ModalSandboxProvider", () => {
           sessionId: "session-123",
           sandboxId: "sandbox-123",
           sandboxAuthToken: "token",
+          harness: "opencode" as const,
           controlPlaneUrl: "https://test.com",
           repoOwner: "owner",
           repoName: "repo",
@@ -619,6 +597,7 @@ describe("ModalSandboxProvider", () => {
           sessionId: "session-123",
           sandboxId: "sandbox-123",
           sandboxAuthToken: "token",
+          harness: "opencode" as const,
           controlPlaneUrl: "https://test.com",
           repoOwner: "owner",
           repoName: "repo",
@@ -633,9 +612,10 @@ describe("ModalSandboxProvider", () => {
     });
 
     it("classifies HTTP 503 from takeSnapshot as transient", async () => {
+      const modalError = new ModalApiError("Modal API error: 503 Service Unavailable", 503);
       const client = createMockModalClient({
         snapshotSandbox: vi.fn(async () => {
-          throw new ModalApiError("Modal API error: 503 Service Unavailable", 503);
+          throw modalError;
         }),
       });
       const provider = new ModalSandboxProvider(client);
@@ -650,6 +630,10 @@ describe("ModalSandboxProvider", () => {
       } catch (e) {
         expect(e).toBeInstanceOf(SandboxProviderError);
         expect((e as SandboxProviderError).errorType).toBe("transient");
+        expect(e).toMatchObject({
+          message: "Snapshot failed with HTTP 503: Modal API error: 503 Service Unavailable",
+          cause: modalError,
+        });
       }
     });
 
@@ -734,6 +718,7 @@ describe("ModalSandboxProvider", () => {
         sessionId: "session-123",
         sandboxId: "sandbox-123",
         sandboxAuthToken: "token",
+        harness: "opencode" as const,
         controlPlaneUrl: "https://test.com",
         repoOwner: "owner",
         repoName: "repo",

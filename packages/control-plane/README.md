@@ -1,6 +1,7 @@
 # Open-Inspect Control Plane
 
-Cloudflare Workers + Durable Objects control plane for session management and real-time streaming.
+Cloudflare Workers + Hono + Durable Objects control plane for session management and real-time
+streaming.
 
 ## Overview
 
@@ -21,8 +22,11 @@ The control plane provides:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Cloudflare Workers                            │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │                   API Gateway (router.ts)                 │   │
-│  │   POST /sessions  │  GET /sessions/:id  │  WebSocket      │   │
+│  │                  Worker fetch entrypoint                 │   │
+│  │  ┌──────────────────────────────────┐  ┌───────────────┐ │   │
+│  │  │ Hono HTTP API + Route Admission  │  │  WebSocket    │ │   │
+│  │  │ POST /sessions  GET /sessions/:id│  │  upgrade*     │ │   │
+│  │  └──────────────────────────────────┘  └───────────────┘ │   │
 │  └─────────────────────────────┬────────────────────────────┘   │
 │                                │                                 │
 │  ┌─────────────────────────────┴────────────────────────────┐   │
@@ -45,6 +49,12 @@ The control plane provides:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+Hono selects ordinary HTTP routes from the framework-neutral catalog. Authentication, service
+principal admission, canonical actor resolution, RBAC, sandbox capabilities, and route-specific
+authorization remain in the shared admission layer. WebSocket upgrades (`*` above), scheduled
+events, Queues, and Durable Object lifecycle callbacks stay at the Cloudflare Worker boundary and do
+not pass through Hono.
+
 ## API Endpoints
 
 ### Health
@@ -55,25 +65,26 @@ The control plane provides:
 
 ### Sessions
 
-| Endpoint                        | Method    | Description                    |
-| ------------------------------- | --------- | ------------------------------ |
-| `/sessions`                     | GET       | List user's sessions           |
-| `/sessions`                     | POST      | Create new session             |
-| `/sessions/:id`                 | GET       | Get canonical session snapshot |
-| `/sessions/:id`                 | DELETE    | Delete session                 |
-| `/sessions/:id/sandbox-access`  | GET       | Get sandbox connection details |
-| `/sessions/:id/prompt`          | POST      | Enqueue prompt                 |
-| `/sessions/:id/stop`            | POST      | Stop execution                 |
-| `/sessions/:id/ws`              | WebSocket | Real-time connection           |
-| `/sessions/:id/events`          | GET       | Paginated events               |
-| `/sessions/:id/artifacts`       | GET       | List artifacts                 |
-| `/sessions/:id/participants`    | GET/POST  | Manage participants            |
-| `/sessions/:id/messages`        | GET       | List messages                  |
-| `/sessions/:id/pr`              | POST      | Create pull request            |
-| `/sessions/:id/scm-credentials` | POST      | Broker sandbox git credentials |
-| `/sessions/:id/ws-token`        | POST      | Generate WebSocket token       |
-| `/sessions/:id/archive`         | POST      | Archive session                |
-| `/sessions/:id/unarchive`       | POST      | Unarchive session              |
+| Endpoint                        | Method    | Description                          |
+| ------------------------------- | --------- | ------------------------------------ |
+| `/sessions`                     | GET       | List workspace sessions              |
+| `/sessions`                     | POST      | Create new session                   |
+| `/sessions/:id`                 | GET       | Get canonical session snapshot       |
+| `/sessions/:id`                 | DELETE    | Delete session                       |
+| `/sessions/:id/sandbox-access`  | GET       | Get sandbox connection details       |
+| `/sessions/:id/prompt`          | POST      | Enqueue prompt                       |
+| `/sessions/:id/stop`            | POST      | Stop execution                       |
+| `/sessions/:id/ws`              | WebSocket | Real-time connection                 |
+| `/sessions/:id/events`          | GET       | Paginated events                     |
+| `/sessions/:id/artifacts`       | GET       | List artifacts                       |
+| `/sessions/:id/participants`    | GET       | List runtime participants            |
+| `/sessions/:id/messages`        | GET       | List messages                        |
+| `/sessions/:id/pr`              | POST      | Create pull request                  |
+| `/sessions/:id/scm-credentials` | POST      | Broker sandbox git credentials       |
+| `/sessions/:id/ws-token`        | POST      | Generate WebSocket token             |
+| `/sessions/:id/archive`         | POST      | Archive session                      |
+| `/sessions/:id/unarchive`       | POST      | Unarchive session                    |
+| `/sessions/batch-archive`       | POST      | Archive explicitly selected sessions |
 
 ### Create PR Payload
 
@@ -263,8 +274,15 @@ npm install
 
 ```bash
 npm run build
-# Outputs to dist/index.js
+# Outputs the Worker bundle to dist/index.js and the Node host to dist/node/main.js
 ```
+
+### Run as a container
+
+The control plane also runs as a Node process on a container, with SQLite on a volume and an
+S3-compatible bucket for media. See
+[docs/CONTROL_PLANE_CONTAINER.md](../../docs/CONTROL_PLANE_CONTAINER.md) for `docker compose up` and
+the image build.
 
 ### Deploy
 
@@ -351,10 +369,10 @@ runtime constructs Better Auth and the immutable provider list from the same con
 `GET /internal/auth/sign-in-providers` exposes only those identifiers to signed `service:web`
 requests so the React `/login` route can render them server-side.
 
-## Token Encryption
+## Credential Encryption
 
-Two independent key domains protect stored credentials. Rotation guidance differs — never treat them
-as interchangeable during an incident:
+Three independent key domains protect stored credentials. Rotation guidance differs — never treat
+them as interchangeable during an incident:
 
 - **`TOKEN_ENCRYPTION_KEY`** — AES-256-GCM for the SCM enrichment tokens in `user_scm_tokens`:
 
@@ -376,10 +394,71 @@ as interchangeable during an incident:
   Rotating it signs every browser session out and orphans those stored credentials — they
   re-populate at each user's next sign-in. It does not affect `user_scm_tokens`.
 
+- **`PROVIDER_ACCOUNTS_ENCRYPTION_KEY`** — dedicated AES-256-GCM key for subscription-provider
+  account credentials. Provider account mode stores only account references on sessions and brokers
+  short-lived access through `POST /sessions/:id/provider-auth/:provider/access-token`. Rotation
+  requires an explicit migration that can decrypt every credential with the old key and re-encrypt
+  it with the new key while both are available, then verifies the migrated data before changing the
+  Worker binding. Reconnecting accounts does not migrate already encrypted rows. If the old key is
+  lost, remove affected defaults and archive/recreate the accounts; sessions bound to the lost
+  credentials are unrecoverable and must be recreated.
+
+Legacy scoped OpenAI/xAI OAuth and provider accounts can coexist. Explicit choices and provider
+defaults apply to newly created sessions; sessions without either retain legacy scoped behavior.
+Existing sessions remain pinned to their stored authentication mode.
+
 ## Security Model
 
 > **Single-Tenant Only**: This control plane is designed for single-tenant deployment where all
 > users are trusted members of the same organization.
+
+Bulk archiving uses `POST /sessions/batch-archive` with an explicit selection:
+
+```json
+{ "sessionIds": ["session-one", "session-two"] }
+```
+
+The request requires 1–25 unique, non-empty session IDs. Unknown fields and the old operator cursor
+format are rejected. The caller must be an authenticated human holding `sessions.bulk_archive`,
+granted to Owner and Administrator by default and available to custom roles. Admission and
+authorization auditing use the ordinary RBAC pipeline. Single-session `/sessions/:id/archive`
+continues to use workspace `sessions.lifecycle`; it is not participant-scoped.
+
+A valid batch returns HTTP 200 with one result per ID, in request order:
+
+```json
+{
+  "results": [
+    { "sessionId": "session-one", "outcome": "archived" },
+    { "sessionId": "session-two", "outcome": "failed" }
+  ]
+}
+```
+
+Outcomes are `archived`, `already_archived`, `skipped_cancelled`, `skipped_queued_work`,
+`not_found`, or `failed`. The batch is not atomic: successful targets remain archived even if
+another target fails. Retry only failed IDs; the endpoint does not scan or replay earlier targets.
+Use the existing session-list API to choose targets. A missing runtime is reported as `not_found`,
+without rewriting its index row. Runtime calls have bounded concurrency and share one batch deadline
+below the web proxy timeout. Unstarted or unfinished targets return `failed`; a timed-out mutation
+may still complete, and retrying it is safe.
+
+Both single and batch requests use the same runtime archive operation. The runtime checks current
+state before changing it, refuses cancelled sessions or queued work, and confirms index agreement
+before returning success. All lifecycle projections use the session's persisted monotonic status
+revision, independent of activity timestamps. Older deliveries cannot overwrite a newer status;
+identical retries are idempotent and preserve newer activity. A superseding transition, missing
+index row, or unavailable projection returns a retryable failure. Single-session callers receive
+HTTP 503 in that case; batch callers receive `failed` for that ID. Single-session success/error
+bodies retain their existing fields and include an additive `outcome` for successful or ineligible
+archive decisions.
+
+Deploy D1 migration `0077_session_status_revision.sql` before the worker update. Runtime schema
+migration 51 upgrades existing sessions lazily; their first projection claims the legacy index row.
+The web proxy bounds raw request bytes before parsing and preserves upstream retry/correlation
+headers.
+
+The former `/operator/sessions/archive` and `/internal/operator-archive` proposal is not exposed.
 
 ### GitHub App Token Flow
 
@@ -421,8 +500,13 @@ All secrets are configured via Terraform. Required secrets include:
 - `GITHUB_APP_PRIVATE_KEY` - GitHub App private key (PKCS#8 format)
 - `GITHUB_APP_INSTALLATION_ID` - Single installation for all users
 - `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
+- `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` - Dedicated key for provider account credentials in D1
 
 Optional variables:
+
+- `provider_accounts_encryption_key` - Existing Base64 AES-256-GCM key override for provider account
+  credentials. When blank, Terraform generates a key and persists it in state. In both cases,
+  Terraform supplies the required `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` Worker secret binding.
 
 - `SCM_PROVIDER` - Source control provider for this deployment (`github`, `bitbucket`, or `gitlab`,
   default: `github`). `bitbucket` returns explicit `501 Not Implemented` responses until

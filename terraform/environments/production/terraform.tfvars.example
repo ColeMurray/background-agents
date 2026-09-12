@@ -169,6 +169,11 @@ github_webhook_secret = ""
 # The webhook handler uses this to detect @mentions of the bot in PRs/issues.
 github_bot_username = ""
 
+# Model the GitHub bot uses for a repository that does not pin one in its own
+# integration config. Accepts a canonical "provider/model" id or a bare
+# "claude-"/"gpt-" id. Commented out means the default below.
+# github_bot_default_model = "anthropic/claude-haiku-4-5"
+
 # =============================================================================
 # Google OAuth Credentials (Optional)
 # =============================================================================
@@ -194,6 +199,10 @@ enable_slack_bot = false
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
 
+# Model the Slack bot uses for a user who has not picked one from the model
+# menu. Accepts a canonical "provider/model" id or a bare "claude-"/"gpt-" id.
+# slack_bot_default_model = "claude-haiku-4-5"
+
 # Linear Agent (Optional)
 # Create an OAuth Application at: https://linear.app/settings/api/applications/new
 # - Enable webhooks, select "Agent session events" + "Issues" + "Comments"
@@ -214,13 +223,36 @@ linear_client_id = ""        # OAuth Application Client ID
 linear_client_secret = ""    # OAuth Application Client Secret
 linear_webhook_secret = ""   # Webhook Signing Secret from the application config
 
+# Model the Linear bot uses when no repository config, user preference, or
+# "model:" issue label selects one. Accepts a canonical "provider/model" id or a
+# bare "claude-"/"gpt-" id.
+# linear_bot_default_model = "claude-sonnet-4-6"
+
 # =============================================================================
 # API Keys
 # =============================================================================
 
-# Anthropic API key for Claude
+# Anthropic API key for Claude. Injected into Modal session sandboxes and
+# OpenComputer sandboxes; Daytona, E2B and Vercel read model keys only from the
+# secret store in the web app, which overrides this value everywhere. Optional:
+# leave it blank to supply model credentials as secrets instead. Required only
+# when classification_model names an Anthropic model AND at least one of the
+# Slack or Linear bots is enabled. Both of those are the defaults, so a stock
+# configuration does need this key.
 # From: https://console.anthropic.com/
 anthropic_api_key = ""
+
+# OpenAI credential for the Slack/Linear bot classifiers. Required when
+# classification_model names an OpenAI model AND at least one of the Slack or
+# Linear bots is enabled; an Anthropic classifier model is served by
+# anthropic_api_key above.
+# From: https://platform.openai.com/api-keys
+classification_openai_api_key = ""
+
+# Model backing the Slack/Linear bot classifiers. A "claude-"/"anthropic/" id is
+# served by anthropic_api_key; a "gpt-"/"openai/" id by
+# classification_openai_api_key.
+# classification_model = "claude-haiku-4-5"
 
 # =============================================================================
 # Security Secrets
@@ -232,6 +264,11 @@ token_encryption_key = ""
 
 # Repo secrets encryption key (for encrypting repo secrets in D1)
 repo_secrets_encryption_key = ""
+
+# Optional existing provider account credential encryption key. Leave blank for
+# Terraform to generate and persist a dedicated key. Never change this after
+# storing provider account credentials.
+provider_accounts_encryption_key = ""
 
 # Modal API secret (for control plane -> Modal authentication)
 # Only required when sandbox_provider = "modal"
@@ -326,11 +363,12 @@ project_root = "../../../"
 enable_durable_object_bindings = false
 enable_service_bindings = false
 
-# Optional: override these only when an existing deployment needs to re-enter
-# Phase 1 for a later Durable Object migration. Fresh deployments can omit them.
+# Override these only for an explicit Durable Object migration. The production
+# workflow stages the SchedulerDO v2-to-v3 deletion only when state is still v2.
 # control_plane_migration_tag = "v1"
 # control_plane_migration_old_tag = null
 # control_plane_new_sqlite_classes = []
+# control_plane_deleted_classes = []
 
 # =============================================================================
 # Access Control

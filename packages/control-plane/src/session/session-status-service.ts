@@ -8,9 +8,11 @@
  * a transition on that one noun.
  */
 
-import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
+import { SessionInternalPaths } from "./contracts";
+import type { SessionRuntimeClient } from "./runtime-client";
 import type { Logger } from "../logger";
 import type { SessionIndexStore } from "../db/session-index";
+import type { SessionStatusProjectionStore } from "../db/session-status-projection-store";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
@@ -18,9 +20,10 @@ import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
 import type { BackgroundTasks } from "../platform-ports";
+import { isSessionPromptable, isTurnSettled } from "@open-inspect/shared/types/session-activity";
 
-/** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
-const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
+/** The index projections this service keeps consistent with the session row. */
+type SessionIndexProjections = Pick<SessionIndexStore, "finalizeChildAdmission" | "updateMetrics">;
 
 export class SessionStatusService {
   constructor(
@@ -30,8 +33,10 @@ export class SessionStatusService {
     private readonly messageRepository: MessageRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly messenger: SessionMessenger,
-    private readonly sessionIndex: SessionIndexStore | null,
-    private readonly parentSessions: DurableObjectNamespace | null
+    private readonly sessionIndex: SessionIndexProjections,
+    private readonly statusProjection: Pick<SessionStatusProjectionStore, "project">,
+    /** Reaches the parent session's runtime for the child rollup. */
+    private readonly sessions: SessionRuntimeClient
   ) {}
 
   /**
@@ -49,11 +54,12 @@ export class SessionStatusService {
       await this.syncSessionIndexStatusAndAdmission(
         publicSessionId,
         status,
-        session.updated_at
+        session.updated_at,
+        session.status_revision
       ).catch((error) =>
         this.logSessionIndexStatusSyncError(publicSessionId, status, session.updated_at, error)
       );
-      if (TERMINAL_STATUSES.includes(status)) {
+      if (isTurnSettled(status)) {
         this.syncSessionMetrics(publicSessionId);
       }
       return false;
@@ -61,7 +67,13 @@ export class SessionStatusService {
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     this.repository.updateSessionStatus(session.id, status, updatedAt);
-    await this.projectTransition(session, publicSessionId, status, updatedAt);
+    await this.projectTransition(
+      session,
+      publicSessionId,
+      status,
+      updatedAt,
+      session.status_revision + 1
+    );
 
     return true;
   }
@@ -77,11 +89,11 @@ export class SessionStatusService {
    */
   async repairIndexStatus(): Promise<void> {
     const session = this.repository.getSession();
-    if (!session || !this.sessionIndex) return;
+    if (!session) return;
 
     const publicSessionId = this.getPublicSessionId(session);
-    const repaired = await this.sessionIndex
-      .repairStatus(publicSessionId, session.status)
+    const repaired = await this.statusProjection
+      .project(publicSessionId, session.status, session.status_revision, session.updated_at)
       .catch((error) => {
         this.logSessionIndexStatusSyncError(
           publicSessionId,
@@ -98,6 +110,41 @@ export class SessionStatusService {
   }
 
   /**
+   * Confirm the current lifecycle generation reached the index. The same
+   * revision-fenced write handles transitions, repair, and idempotent retries.
+   */
+  async confirmIndexStatus(expectedStatus: SessionStatus): Promise<void> {
+    const session = this.repository.getSession();
+    if (!session || session.status !== expectedStatus) throw new Error("Status superseded");
+    const publicSessionId = this.getPublicSessionId(session);
+    try {
+      const projected = await this.statusProjection.project(
+        publicSessionId,
+        session.status,
+        session.status_revision,
+        session.updated_at
+      );
+      const current = this.repository.getSession();
+      if (
+        !current ||
+        current.status !== expectedStatus ||
+        current.status_revision !== session.status_revision
+      ) {
+        throw new Error("Status superseded");
+      }
+      if (!projected) throw new Error("Session index missing or superseded");
+    } catch (error) {
+      this.logSessionIndexStatusSyncError(
+        publicSessionId,
+        expectedStatus,
+        session.updated_at,
+        error
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Atomically close the local aggregate before publishing cancellation.
    * The callback must be synchronous: no request may observe cancelled status
    * with unfinished messages, or accept work between those two mutations.
@@ -110,7 +157,13 @@ export class SessionStatusService {
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     this.repository.updateSessionStatus(session.id, "cancelled", updatedAt);
     terminalizeUnfinishedMessages();
-    await this.projectTransition(session, publicSessionId, "cancelled", updatedAt);
+    await this.projectTransition(
+      session,
+      publicSessionId,
+      "cancelled",
+      updatedAt,
+      session.status_revision + 1
+    );
 
     return true;
   }
@@ -119,15 +172,21 @@ export class SessionStatusService {
     session: SessionRow,
     publicSessionId: string,
     status: SessionStatus,
-    updatedAt: number
+    updatedAt: number,
+    revision: number
   ): Promise<void> {
-    await this.syncSessionIndexStatusAndAdmission(publicSessionId, status, updatedAt).catch(
-      (error) => this.logSessionIndexStatusSyncError(publicSessionId, status, updatedAt, error)
+    await this.syncSessionIndexStatusAndAdmission(
+      publicSessionId,
+      status,
+      updatedAt,
+      revision
+    ).catch((error) =>
+      this.logSessionIndexStatusSyncError(publicSessionId, status, updatedAt, error)
     );
 
     this.messenger.broadcast({ type: "session_status", status });
 
-    if (TERMINAL_STATUSES.includes(status)) {
+    if (isTurnSettled(status)) {
       this.syncSessionMetrics(publicSessionId);
     }
 
@@ -138,18 +197,35 @@ export class SessionStatusService {
   /**
    * After an execution finishes, settle the session status: back to active
    * when more prompts are queued, otherwise completed/failed by outcome.
+   * Leaves a session that was cancelled or archived meanwhile as it is.
    */
   async reconcileAfterExecution(success: boolean): Promise<void> {
+    if (this.isSessionClosed()) return;
     const pendingOrProcessing = this.messageRepository.getPendingOrProcessingCount();
     const nextStatus: SessionStatus =
       pendingOrProcessing > 0 ? "active" : success ? "completed" : "failed";
     await this.transition(nextStatus);
   }
 
+  /** Leaves a session that was cancelled or archived meanwhile as it is. */
   async reconcileAfterQueueRemoval(): Promise<void> {
+    if (this.isSessionClosed()) return;
     if (this.messageRepository.getPendingOrProcessingCount() > 0) return;
     const nextStatus = this.getIdleStatusFromTerminalMessages();
     await this.transition(nextStatus);
+  }
+
+  /**
+   * Whether the session has been cancelled or archived. A reconcile derives
+   * the next status from message state, and message state says nothing about
+   * a status the user chose; a reconcile that runs after an await (the
+   * terminal projection, the stop alarm) must not move such a session, and
+   * `transition` writes whatever it is given. Read in the same turn as the
+   * transition it guards.
+   */
+  private isSessionClosed(): boolean {
+    const session = this.repository.getSession();
+    return session !== null && !isSessionPromptable(session.status);
   }
 
   async settleFromMessageState(): Promise<SessionStatus> {
@@ -161,6 +237,16 @@ export class SessionStatusService {
     return nextStatus;
   }
 
+  /**
+   * The status an idle session should hold, read off its finished messages.
+   *
+   * Falling back to `created` sends a session *backwards* into draft, which
+   * looks like a bug and is not. It is reachable only when the session has no
+   * messages at all -- cancelling the only pending prompt deletes its row --
+   * and returning an empty session to draft is what lets the 8-hour
+   * abandoned-draft sweep reclaim it. That behaviour was added deliberately
+   * after dead sessions accumulated. Do not "fix" it to `completed`.
+   */
   private getIdleStatusFromTerminalMessages(): SessionStatus {
     const latestMessage = this.messageRepository.getLatestTerminalMessage();
     return latestMessage ? (latestMessage.status === "failed" ? "failed" : "completed") : "created";
@@ -176,14 +262,11 @@ export class SessionStatusService {
     update: { status: SessionStatus; title: string | null }
   ): void {
     const parentId = session.parent_session_id;
-    if (!parentId || !this.parentSessions) return;
-
-    const parentDoId = this.parentSessions.idFromName(parentId);
-    const parentStub = this.parentSessions.get(parentDoId);
+    if (!parentId) return;
 
     this.backgroundTasks.submit(
-      parentStub.fetch(
-        new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
+      () =>
+        this.sessions.fetch(parentId, SessionInternalPaths.childSessionUpdate, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -191,8 +274,7 @@ export class SessionStatusService {
             status: update.status,
             title: update.title,
           }),
-        })
-      ),
+        }),
       {
         name: "session.notify_parent",
         context: {
@@ -222,10 +304,10 @@ export class SessionStatusService {
   private async syncSessionIndexStatusAndAdmission(
     sessionId: string,
     status: SessionStatus,
-    updatedAt: number
+    updatedAt: number,
+    revision: number
   ): Promise<void> {
-    if (!this.sessionIndex) return;
-    const projected = await this.sessionIndex.updateStatus(sessionId, status, updatedAt);
+    const projected = await this.statusProjection.project(sessionId, status, revision, updatedAt);
     if (projected && status === "active") {
       await this.sessionIndex.finalizeChildAdmission(sessionId);
     }
@@ -246,8 +328,6 @@ export class SessionStatusService {
   }
 
   private syncSessionMetrics(sessionId: string): void {
-    if (!this.sessionIndex) return;
-
     const session = this.repository.getSession();
     if (!session) return;
 
@@ -257,12 +337,13 @@ export class SessionStatusService {
     const prCount = artifacts.filter((a) => a.type === "pr").length;
 
     this.backgroundTasks.submit(
-      this.sessionIndex.updateMetrics(sessionId, {
-        totalCost: session.total_cost ?? 0,
-        activeDurationMs,
-        messageCount,
-        prCount,
-      }),
+      () =>
+        this.sessionIndex.updateMetrics(sessionId, {
+          totalCost: session.total_cost ?? 0,
+          activeDurationMs,
+          messageCount,
+          prCount,
+        }),
       {
         name: "session_index.update_metrics",
         context: { session_id: sessionId },

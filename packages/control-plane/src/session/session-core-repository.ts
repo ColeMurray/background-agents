@@ -1,7 +1,9 @@
+import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import type { SessionRepositoryRow, SessionRow } from "./types";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 /** Data for upserting a session. */
 export interface UpsertSessionData {
@@ -12,6 +14,8 @@ export interface UpsertSessionData {
   repoName: string | null;
   repoId?: number | null;
   baseBranch?: string | null;
+  /** Agent harness; fixed at create. Absent means the built-in harness. */
+  harness?: HarnessId;
   model: string;
   reasoningEffort?: string | null;
   status: SessionStatus;
@@ -21,6 +25,7 @@ export interface UpsertSessionData {
   codeServerEnabled?: boolean;
   vncEnabled?: boolean;
   sandboxSettings?: string | null;
+  maxCostUsd?: number | null;
   /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
   environmentId?: string | null;
   createdAt: number;
@@ -50,12 +55,22 @@ export class SessionCoreRepository {
     return result.toArray() as T[];
   }
 
+  transaction<T>(callback: () => T): T {
+    return this.transactionSync(callback);
+  }
+
   getSession(): SessionRow | null {
     const result = this.sql.exec(`SELECT * FROM session LIMIT 1`);
     const rows = this.rows<SessionRow>(result);
     return rows[0] ?? null;
   }
 
+  /**
+   * Writes the session row. On a repeat for the same id every named column
+   * takes the new value; working state the aggregate accumulates elsewhere
+   * (branch_name, base_sha, current_sha, agent_session_id, total_cost) is
+   * left as it stands.
+   */
   upsertSession(data: UpsertSessionData): void {
     const hasRepoOwner = data.repoOwner !== null;
     const hasRepoName = data.repoName !== null;
@@ -67,15 +82,39 @@ export class SessionCoreRepository {
     }
 
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      // max_cost_usd is seeded on insert but absent from the update clause: once
+      // setSessionBudget has written a live limit, it is working state like
+      // branch_name and total_cost, and a repeated init must not reset it.
+      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, harness, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, max_cost_usd, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET
+         session_name = excluded.session_name,
+         title = excluded.title,
+         repo_owner = excluded.repo_owner,
+         repo_name = excluded.repo_name,
+         repo_id = excluded.repo_id,
+         base_branch = excluded.base_branch,
+         harness = excluded.harness,
+         model = excluded.model,
+         reasoning_effort = excluded.reasoning_effort,
+         status = excluded.status,
+         parent_session_id = excluded.parent_session_id,
+         spawn_source = excluded.spawn_source,
+         spawn_depth = excluded.spawn_depth,
+         code_server_enabled = excluded.code_server_enabled,
+         vnc_enabled = excluded.vnc_enabled,
+         sandbox_settings = excluded.sandbox_settings,
+         environment_id = excluded.environment_id,
+         created_at = excluded.created_at,
+         updated_at = excluded.updated_at`,
       data.id,
       data.sessionName,
       data.title,
       data.repoOwner,
       data.repoName,
       data.repoId ?? null,
-      data.baseBranch ?? (hasRepoOwner ? "main" : null),
+      data.baseBranch ?? (hasRepoOwner ? DEFAULT_BASE_BRANCH : null),
+      data.harness ?? DEFAULT_HARNESS,
       data.model,
       data.reasoningEffort ?? null,
       data.status,
@@ -86,6 +125,7 @@ export class SessionCoreRepository {
       data.vncEnabled ? 1 : 0,
       data.sandboxSettings ?? null,
       data.environmentId ?? null,
+      data.maxCostUsd ?? null,
       data.createdAt,
       data.updatedAt
     );
@@ -135,19 +175,42 @@ export class SessionCoreRepository {
 
   updateSessionStatus(sessionId: string, status: SessionStatus, updatedAt: number): void {
     this.sql.exec(
-      `UPDATE session SET status = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE session SET status = ?, updated_at = ?, status_revision = status_revision + 1 WHERE id = ?`,
       status,
       updatedAt,
       sessionId
     );
   }
 
-  addSessionCost(cost: number, updatedAt: number): void {
+  addSessionCost(cost: number, updatedAt: number): number {
+    const row = this.sql
+      .exec(
+        `UPDATE session
+       SET total_cost = total_cost + ?, updated_at = ?
+       WHERE id = (SELECT id FROM session LIMIT 1)
+       RETURNING total_cost`,
+        cost,
+        updatedAt
+      )
+      .one() as { total_cost: number };
+    return row.total_cost;
+  }
+
+  setSessionBudget(maxCostUsd: number | null, exhausted: boolean, updatedAt: number): void {
     this.sql.exec(
       `UPDATE session
-       SET total_cost = total_cost + ?, updated_at = ?
+       SET max_cost_usd = ?, budget_exhausted = ?, updated_at = ?
        WHERE id = (SELECT id FROM session LIMIT 1)`,
-      cost,
+      maxCostUsd,
+      exhausted ? 1 : 0,
+      updatedAt
+    );
+  }
+
+  markBudgetExhausted(updatedAt: number): void {
+    this.sql.exec(
+      `UPDATE session SET budget_exhausted = 1, updated_at = ?
+       WHERE id = (SELECT id FROM session LIMIT 1)`,
       updatedAt
     );
   }

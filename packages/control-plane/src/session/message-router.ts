@@ -1,17 +1,18 @@
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
 import { clientMessageSchema, type ClientMessage } from "@open-inspect/shared/types/websocket";
+import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { Logger } from "../logger";
 import type { SessionHistoryPage } from "./event-stream";
 import type { Clock, ConnectedClient, SocketRegistry } from "./ports";
 
 const FETCH_HISTORY_MIN_INTERVAL_MS = 200;
 
-type ClientCancelPrompt = Extract<ClientMessage, { type: "cancel_prompt" }>;
-type ClientPresence = Extract<ClientMessage, { type: "presence" }>;
-type ClientPrompt = Extract<ClientMessage, { type: "prompt" }>;
-type ClientSubscribe = Extract<ClientMessage, { type: "subscribe" }>;
-type FetchHistory = Extract<ClientMessage, { type: "fetch_history" }>;
+export type ClientCancelPrompt = Extract<ClientMessage, { type: "cancel_prompt" }>;
+export type ClientPresence = Extract<ClientMessage, { type: "presence" }>;
+export type ClientPrompt = Extract<ClientMessage, { type: "prompt" }>;
+export type ClientSubscribe = Extract<ClientMessage, { type: "subscribe" }>;
+export type FetchHistory = Extract<ClientMessage, { type: "fetch_history" }>;
 
 type BoundarySchema<T> = {
   safeParse(
@@ -33,10 +34,14 @@ export interface SessionClientCommands<Connection, Client extends ConnectedClien
     cursor: NonNullable<FetchHistory["cursor"]>;
     limit?: number;
   }) => SessionHistoryPage;
+  authorize: (
+    client: Client,
+    permission: PermissionId
+  ) => Promise<"allowed" | "denied" | "unavailable">;
 }
 
 export interface SessionMessageRouterDeps<Connection, Client extends ConnectedClient> {
-  getLogger: () => Logger;
+  log: Logger;
   sockets: SocketRegistry<Connection, Client>;
   clientCommands: SessionClientCommands<Connection, Client>;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
@@ -51,11 +56,23 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
     // The wire protocol is JSON text; binary frames have always been ignored.
     if (typeof message !== "string") return;
 
-    if (this.deps.sockets.classify(connection).kind === "sandbox") {
-      await this.handleSandboxMessage(message);
-    } else {
+    const classified = this.deps.sockets.classify(connection);
+    if (classified.kind !== "sandbox") {
       await this.handleClientMessage(connection, message);
+      return;
     }
+    if (!this.deps.sockets.isActiveSandbox(connection)) {
+      // A replaced bridge keeps its tags until its close completes. A frame
+      // from it proves it is still open, so close it again instead of
+      // letting it mutate the session.
+      this.deps.log.debug("Ignoring frame from a replaced sandbox socket", {
+        sandbox_id: classified.sandboxId,
+        socket_id: classified.socketId,
+      });
+      this.deps.sockets.close(connection, 1000, "Sandbox socket replaced");
+      return;
+    }
+    await this.handleSandboxMessage(message);
   }
 
   private async handleSandboxMessage(message: string): Promise<void> {
@@ -65,7 +82,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
     try {
       await this.deps.processSandboxEvent(parsed.data);
     } catch (error) {
-      this.deps.getLogger().error("Error processing sandbox message", {
+      this.deps.log.error("Error processing sandbox message", {
         error: error instanceof Error ? error : String(error),
       });
     }
@@ -104,15 +121,19 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
 
       switch (data.type) {
         case "prompt":
+          if (!(await this.authorizeCommand(connection, client, "sessions.collaborate"))) break;
           await this.deps.clientCommands.submitPrompt(connection, client, data);
           break;
         case "cancel_prompt":
+          if (!(await this.authorizeCommand(connection, client, "sessions.lifecycle"))) break;
           await this.deps.clientCommands.cancelPrompt(connection, data);
           break;
         case "stop":
+          if (!(await this.authorizeCommand(connection, client, "sessions.lifecycle"))) break;
           await this.deps.clientCommands.stopExecution();
           break;
         case "typing":
+          if (!(await this.authorizeCommand(connection, client, "sessions.collaborate"))) break;
           await this.deps.clientCommands.notifyTyping();
           break;
         case "fetch_history":
@@ -126,7 +147,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
           data satisfies never;
       }
     } catch (error) {
-      this.deps.getLogger().error("Error processing client message", {
+      this.deps.log.error("Error processing client message", {
         error: error instanceof Error ? error : String(error),
       });
       this.deps.sockets.send(connection, {
@@ -135,6 +156,24 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
         message: "Failed to process message",
       });
     }
+  }
+
+  private async authorizeCommand(
+    connection: Connection,
+    client: Client,
+    permission: PermissionId
+  ): Promise<boolean> {
+    const result = await this.deps.clientCommands.authorize(client, permission);
+    if (result === "allowed") return true;
+    this.deps.sockets.send(connection, {
+      type: "error",
+      code: result === "unavailable" ? "AUTHORIZATION_UNAVAILABLE" : "PERMISSION_REQUIRED",
+      message:
+        result === "unavailable"
+          ? "Authorization is temporarily unavailable"
+          : `Permission required: ${permission}`,
+    });
+    return false;
   }
 
   private handleFetchHistory(connection: Connection, client: Client, data: FetchHistory): void {
@@ -183,7 +222,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
     try {
       raw = JSON.parse(message);
     } catch (error) {
-      this.deps.getLogger().error("Invalid WebSocket JSON", {
+      this.deps.log.error("Invalid WebSocket JSON", {
         boundary,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -192,7 +231,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
 
     const result = schema.safeParse(raw);
     if (!result.success) {
-      this.deps.getLogger().warn("Invalid WebSocket message", {
+      this.deps.log.warn("Invalid WebSocket message", {
         boundary,
         issues: result.error.issues,
       });

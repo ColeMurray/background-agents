@@ -1,5 +1,7 @@
 import type { SkillProfile } from "@open-inspect/shared/types/skills";
 import { generateId } from "../auth/crypto";
+import { bulkInsertStatements } from "./bulk-insert";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 interface ProfileRow {
@@ -24,19 +26,40 @@ export class SkillProfileValidationError extends Error {}
 export class SkillProfileStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  /**
+   * Read every profile this user owns, with its membership.
+   *
+   * Two statements rather than one `json_group_array` aggregate. The aggregate
+   * builds a profile's whole membership into a single value, which the engine
+   * caps at 2 MB — roughly fifty thousand ids. Nothing bounds profile width, so
+   * that ceiling is only out of reach because the write path gives out first,
+   * at about 33,000 members. Anything that makes profile writes cheaper moves
+   * the write cliff past the read one and turns this into a profile that can be
+   * saved and then never loaded, so the read should not depend on the write
+   * staying expensive. Grouping in memory has no such ceiling, matches what
+   * `getOwned` already does, and drops a SQLite-only aggregate.
+   */
   async list(userId: string): Promise<SkillProfile[]> {
-    const result = await this.db
+    const profiles = await this.db
+      .prepare("SELECT * FROM skill_profiles WHERE user_id = ? ORDER BY lower(name), id")
+      .bind(userId)
+      .all<ProfileRow>();
+    const rows = profiles.results ?? [];
+    if (rows.length === 0) return [];
+
+    // Keyed by a subquery rather than by the ids just read, so this costs one
+    // parameter however many profiles or members the user has.
+    const items = await this.db
       .prepare(
-        `SELECT p.*, COALESCE(json_group_array(i.skill_id) FILTER (WHERE i.skill_id IS NOT NULL), '[]') AS skill_ids
-         FROM skill_profiles p
-         LEFT JOIN skill_profile_items i ON i.profile_id = p.id
-         WHERE p.user_id = ?
-         GROUP BY p.id
-         ORDER BY lower(p.name), p.id`
+        `SELECT profile_id, skill_id FROM skill_profile_items
+         WHERE profile_id IN (SELECT id FROM skill_profiles WHERE user_id = ?)`
       )
       .bind(userId)
-      .all<ProfileRow & { skill_ids: string }>();
-    return (result.results ?? []).map((row) => this.toProfile(row, JSON.parse(row.skill_ids)));
+      .all<{ profile_id: string; skill_id: string }>();
+
+    const membership = new Map<string, string[]>(rows.map((row) => [row.id, []]));
+    for (const item of items.results ?? []) membership.get(item.profile_id)?.push(item.skill_id);
+    return rows.map((row) => this.toProfile(row, membership.get(row.id) ?? []));
   }
 
   /** Return a profile only when it belongs to the canonical user. */
@@ -143,23 +166,33 @@ export class SkillProfileStore {
       throw new SkillProfileValidationError("skillIds must be unique");
     }
     if (unique.length === 0) return;
-    const placeholders = unique.map(() => "?").join(", ");
-    const result = await this.db
-      .prepare(
-        `SELECT COUNT(*) AS count FROM skills WHERE id IN (${placeholders}) AND deleted_at IS NULL`
-      )
-      .bind(...unique)
-      .first<{ count: number }>();
-    if ((result?.count ?? 0) !== unique.length) {
+    let found = 0;
+    for (let start = 0; start < unique.length; start += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = unique.slice(start, start + MAX_D1_QUERY_PARAMETERS);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const result = await this.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM skills WHERE id IN (${placeholders}) AND deleted_at IS NULL`
+        )
+        .bind(...chunk)
+        .first<{ count: number }>();
+      found += result?.count ?? 0;
+    }
+    if (found !== unique.length) {
       throw new SkillProfileValidationError("One or more skills do not exist");
     }
   }
 
+  /**
+   * Pack membership rows into multi-row INSERTs. Profile size is caller-chosen,
+   * so a statement per member would let one profile write exhaust the
+   * invocation's query budget; the statements stay batchable either way.
+   */
   private itemStatements(profileId: string, skillIds: string[]): SqlStatement[] {
-    return [...new Set(skillIds)].map((skillId) =>
-      this.db
-        .prepare("INSERT INTO skill_profile_items (profile_id, skill_id) VALUES (?, ?)")
-        .bind(profileId, skillId)
+    return bulkInsertStatements(
+      this.db,
+      "skill_profile_items",
+      [...new Set(skillIds)].map((skillId) => ({ profile_id: profileId, skill_id: skillId }))
     );
   }
 

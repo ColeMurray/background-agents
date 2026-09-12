@@ -8,6 +8,7 @@ import {
   type AutomationRow,
   type AutomationRunRow,
 } from "../../src/db/automation-store";
+import { isAutomationExecutionAuthorized } from "../../src/automation/authorization-guard";
 import { cleanD1Tables } from "./cleanup";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -21,13 +22,14 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
     schedule_tz: "UTC",
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
     next_run_at: now + 86_400_000,
     consecutive_failures: 0,
     created_by: "user-1",
-    user_id: null,
+    user_id: "user-1",
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -90,7 +92,73 @@ async function countRows(table: string, where = "1=1"): Promise<number> {
 }
 
 describe("automation invocations (D1 integration)", () => {
-  beforeEach(cleanD1Tables);
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users
+          (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+         VALUES ('user-1', 'Execution Owner', NULL, 0, NULL, 1, 1)`
+      ),
+      env.DB.prepare(
+        "UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = 'user-1'"
+      ),
+    ]);
+  });
+
+  it("checks owner and target-use permissions for unattended execution", async () => {
+    const ownerId = "11111111111111111111111111111111";
+    const roleId = "role_execution_test";
+    const store = new AutomationStore(env.DB);
+    const automation = makeAutomation({ user_id: ownerId, created_by: ownerId });
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users
+          (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+         VALUES (?, 'Execution Owner', NULL, 0, NULL, 1, 1)`
+      ).bind(ownerId),
+      env.DB.prepare(
+        `INSERT INTO roles
+          (id, key, name, normalized_name, description, is_system)
+         VALUES (?, NULL, 'Execution Test', 'execution test', NULL, 0)`
+      ).bind(roleId),
+      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+        roleId,
+        ownerId
+      ),
+    ]);
+    await store.create(automation);
+    await Promise.all(
+      [
+        ...store.bindRepositoryInserts(
+          automation.id,
+          [{ repo_owner: "acme", repo_name: "app", repo_id: 1, base_branch: "main" }],
+          Date.now()
+        ),
+        ...store.bindEnvironmentInserts(automation.id, ["env_1"], Date.now()),
+      ].map((statement) => statement.run())
+    );
+
+    const authorized = () =>
+      isAutomationExecutionAuthorized(env.DB, {
+        automationId: automation.id,
+        requiresRepositoryUse: true,
+        requiresEnvironmentUse: true,
+      });
+    const grant = (permission: string) =>
+      env.DB.prepare("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)")
+        .bind(roleId, permission)
+        .run();
+
+    await expect(authorized()).resolves.toBe(false);
+    await grant("sessions.create");
+    await expect(authorized()).resolves.toBe(false);
+    await grant("repositories.use");
+    await expect(authorized()).resolves.toBe(false);
+    await grant("environments.use");
+    await expect(authorized()).resolves.toBe(true);
+  });
 
   // ─── Derived status ────────────────────────────────────────────────────────
 
@@ -259,7 +327,7 @@ describe("automation invocations (D1 integration)", () => {
           makeChild("auto-g1", { repo_owner: "acme", repo_name: "web" }),
         ],
         overlapScope: { kind: "automation" },
-        advanceSchedule: { nextRunAt: 2_000 },
+        advanceSchedule: { fromSlot: 1_000, nextRunAt: 2_000 },
       });
 
       expect(inserted).toBe(true);
@@ -289,13 +357,15 @@ describe("automation invocations (D1 integration)", () => {
           makeChild("auto-g2", { repo_owner: "acme", repo_name: "web" }),
         ],
         overlapScope: { kind: "automation" },
-        advanceSchedule: { nextRunAt: 3_000 },
+        // This firing observed slot 1_000, so it is the one entitled to move it.
+        advanceSchedule: { fromSlot: 1_000, nextRunAt: 3_000 },
       });
 
       // The 0-row guarded INSERT is a success, not an error: D1 batch() does
-      // NOT roll back, children are 0-row no-ops, and the unconditional
-      // advance still applies. This is the real-D1 verification of the
-      // meta.changes-per-statement semantics the scheduler depends on.
+      // NOT roll back, children are 0-row no-ops, and the advance still
+      // applies because this firing still owns the slot. This is the real-D1
+      // verification of the meta.changes-per-statement semantics the scheduler
+      // depends on.
       expect(result.inserted).toBe(false);
       expect(await store.getInvocationById(second.id)).toBeNull();
       expect(await countRows("automation_runs", `invocation_id = '${second.id}'`)).toBe(0);
@@ -360,7 +430,7 @@ describe("automation invocations (D1 integration)", () => {
           }),
         ],
         overlapScope: { kind: "automation" },
-        advanceSchedule: { nextRunAt: 2_000 },
+        advanceSchedule: { fromSlot: 1_000, nextRunAt: 2_000 },
       });
 
       const duplicateSlot = makeInvocation("auto-g4", { source: "schedule", scheduled_at: 1_000 });
@@ -370,7 +440,7 @@ describe("automation invocations (D1 integration)", () => {
           invocation: duplicateSlot,
           children: [makeChild("auto-g4", { repo_owner: "acme", repo_name: "api" })],
           overlapScope: { kind: "automation" },
-          advanceSchedule: { nextRunAt: 9_999 },
+          advanceSchedule: { fromSlot: 1_000, nextRunAt: 9_999 },
         });
       } catch (e) {
         caught = e;
@@ -459,7 +529,7 @@ describe("automation invocations (D1 integration)", () => {
           scheduled_at: 1_000,
           skip_reason: "concurrent_run_active",
         }),
-        { nextRunAt: 2_000 }
+        { fromSlot: 1_000, nextRunAt: 2_000 }
       );
 
       expect(inserted).toBe(true);
@@ -467,7 +537,7 @@ describe("automation invocations (D1 integration)", () => {
       expect(await countRows("automation_invocations", "skip_reason IS NOT NULL")).toBe(1);
     });
 
-    it("still advances when the skip collides with an existing slot (INSERT OR IGNORE)", async () => {
+    it("hands the slot over exactly once when two skips collide (ON CONFLICT DO NOTHING)", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-s2", next_run_at: 1_000 }));
 
@@ -477,7 +547,7 @@ describe("automation invocations (D1 integration)", () => {
           scheduled_at: 1_000,
           skip_reason: "concurrent_run_active",
         }),
-        { nextRunAt: 2_000 }
+        { fromSlot: 1_000, nextRunAt: 2_000 }
       );
       const second = await store.insertSkippedInvocation(
         makeInvocation("auto-s2", {
@@ -485,13 +555,16 @@ describe("automation invocations (D1 integration)", () => {
           scheduled_at: 1_000,
           skip_reason: "concurrent_run_active",
         }),
-        { nextRunAt: 3_000 }
+        { fromSlot: 1_000, nextRunAt: 3_000 }
       );
 
-      // The duplicate skip is ignored, but the advance MUST apply — a lost
-      // advance re-collides on (automation_id, scheduled_at) every tick.
+      // The duplicate skip is ignored AND its advance is a no-op: it claimed
+      // slot 1_000, which the first skip already handed to 2_000. Letting it
+      // advance anyway would move 2_000 -> 3_000 and slot 2_000 would never
+      // fire. The re-collision this guards against is already impossible —
+      // the winning skip moved next_run_at off 1_000.
       expect(second.inserted).toBe(false);
-      expect((await store.getById("auto-s2"))!.next_run_at).toBe(3_000);
+      expect((await store.getById("auto-s2"))!.next_run_at).toBe(2_000);
     });
   });
 
@@ -544,7 +617,7 @@ describe("automation invocations (D1 integration)", () => {
       expect(row!.status).toBe("completed");
     });
 
-    it("bulkFailRuns only fails active runs", async () => {
+    it("bulkFailRunningRuns only fails running rows", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-bulkfail" }));
       const invocation = makeInvocation("auto-bulkfail");
@@ -565,7 +638,7 @@ describe("automation invocations (D1 integration)", () => {
         overlapScope: { kind: "automation" },
       });
 
-      await store.bulkFailRuns([done.id, stuck.id], "timeout", 999);
+      await store.bulkFailRunningRuns([done.id, stuck.id], "timeout", 999);
 
       const statuses = await env.DB.prepare(
         `SELECT id, status FROM automation_runs WHERE invocation_id = ?`
@@ -575,6 +648,35 @@ describe("automation invocations (D1 integration)", () => {
       const byId = new Map(statuses.results!.map((row) => [row.id, row.status]));
       expect(byId.get(done.id)).toBe("completed");
       expect(byId.get(stuck.id)).toBe("failed");
+    });
+
+    it("does not fail a run claimed after the orphan sweep reads it", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-claim-race" }));
+      const invocation = makeInvocation("auto-claim-race");
+      const child = makeChild("auto-claim-race", {
+        status: "starting",
+        created_at: 1,
+        repo_owner: "acme",
+        repo_name: "web",
+      });
+      await store.insertInvocationGuarded({
+        invocation,
+        children: [child],
+        overlapScope: { kind: "automation" },
+      });
+
+      const [staleOrphan] = await store.getOrphanedStartingRuns(0, 10);
+      expect(staleOrphan?.id).toBe(child.id);
+      await expect(store.claimRunSession(child.id, "session-1", 500)).resolves.toBe(true);
+      await store.bulkFailStartingRuns([staleOrphan!.id], "session_creation_timeout", 999);
+
+      const row = await env.DB.prepare(
+        `SELECT status, session_id FROM automation_runs WHERE id = ?`
+      )
+        .bind(child.id)
+        .first<{ status: string; session_id: string | null }>();
+      expect(row).toEqual({ status: "running", session_id: "session-1" });
     });
 
     it("getUncountedFailedInvocations finds exactly the crash-window invocations", async () => {
@@ -803,6 +905,40 @@ describe("automation invocations (D1 integration)", () => {
       const single = invocations[2];
       expect(single.status).toBe("completed");
       expect(single.runs.map((run) => run.id)).toEqual(["run-legacy"]);
+    });
+
+    it("batches bounded recent execution summaries across automations", async () => {
+      const store = await seedMixedHistory("auto-recent-a");
+      await store.create(makeAutomation({ id: "auto-recent-b" }));
+      await store.insertInvocationGuarded({
+        invocation: makeInvocation("auto-recent-b", {
+          id: "inv-failed",
+          created_at: 4_000,
+          updated_at: 4_000,
+        }),
+        children: [
+          makeChild("auto-recent-b", {
+            status: "failed",
+            completed_at: 4_500,
+            created_at: 4_000,
+          }),
+        ],
+        overlapScope: { kind: "automation" },
+      });
+
+      const summaries = await store.listRecentExecutionsForAutomationIds(
+        ["auto-recent-a", "auto-recent-b", "auto-empty"],
+        2
+      );
+
+      expect(summaries.get("auto-recent-a")).toEqual([
+        { id: "inv-multi", status: "completed", createdAt: 3_000 },
+        { id: "inv-skip", status: "skipped", createdAt: 2_000 },
+      ]);
+      expect(summaries.get("auto-recent-b")).toEqual([
+        { id: "inv-failed", status: "failed", createdAt: 4_000 },
+      ]);
+      expect(summaries.get("auto-empty")).toEqual([]);
     });
   });
 });

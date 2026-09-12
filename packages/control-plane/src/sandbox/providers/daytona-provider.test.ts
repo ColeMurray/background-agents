@@ -86,6 +86,7 @@ const baseCreateConfig: CreateSandboxConfig = {
   repoName: "testrepo",
   controlPlaneUrl: "https://control-plane.test",
   sandboxAuthToken: "auth-token-abc",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "anthropic/claude-sonnet-4-5",
 };
@@ -132,7 +133,6 @@ describe("DaytonaSandboxProvider", () => {
 
       expect(result.sandboxId).toBe("sandbox-456");
       expect(result.providerObjectId).toBe("daytona-sandbox-id");
-      expect(result.status).toBe("started");
       expect(result.createdAt).toBeGreaterThan(0);
 
       // Verify create was called with correct params
@@ -169,6 +169,7 @@ describe("DaytonaSandboxProvider", () => {
       const sessionConfig = JSON.parse(envVars.SESSION_CONFIG);
       expect(sessionConfig).toEqual({
         session_id: "session-123",
+        harness: "opencode",
         repo_owner: "testowner",
         repo_name: "testrepo",
         provider: "anthropic",

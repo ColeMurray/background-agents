@@ -32,32 +32,34 @@ export function scheduleImageBuildOnSave(
 ): void {
   if (!resolveImageBuildProvider(env.SANDBOX_PROVIDER)) return;
 
-  const task = createImageBuildWorkflowFromEnv(env, ctx.db)
-    .triggerBuildIfStale(scope, { request_id: ctx.request_id, trace_id: ctx.trace_id })
-    .then((result) => {
-      logger.info("image_build.save_hook_trigger", {
-        scope_kind: scope.kind,
-        scope_id: scope.id,
-        result: result.type,
-        build_id: result.type === "up_to_date" ? null : result.buildId,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-    })
-    .catch((e) => {
-      logger.warn("image_build.save_hook_trigger_failed", {
-        scope_kind: scope.kind,
-        scope_id: scope.id,
-        error: e instanceof Error ? e.message : String(e),
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-    });
-
-  ctx.executionCtx.submit(task, {
-    name: "image_build.save_hook",
-    context: { scope_kind: scope.kind, scope_id: scope.id },
-  });
+  ctx.executionCtx.submit(
+    () =>
+      createImageBuildWorkflowFromEnv(env, ctx.db)
+        .triggerBuildIfStale(scope, { request_id: ctx.request_id, trace_id: ctx.trace_id })
+        .then((result) => {
+          logger.info("image_build.save_hook_trigger", {
+            scope_kind: scope.kind,
+            scope_id: scope.id,
+            result: result.type,
+            build_id: result.type === "up_to_date" ? null : result.buildId,
+            request_id: ctx.request_id,
+            trace_id: ctx.trace_id,
+          });
+        })
+        .catch((e) => {
+          logger.warn("image_build.save_hook_trigger_failed", {
+            scope_kind: scope.kind,
+            scope_id: scope.id,
+            error: e instanceof Error ? e.message : String(e),
+            request_id: ctx.request_id,
+            trace_id: ctx.trace_id,
+          });
+        }),
+    {
+      name: "image_build.save_hook",
+      context: { scope_kind: scope.kind, scope_id: scope.id },
+    }
+  );
 }
 
 /**

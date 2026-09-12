@@ -10,6 +10,7 @@ import {
 const encoder = new TextEncoder();
 const REVISION_DOMAIN = encoder.encode("OPEN_INSPECT_SKILL_REVISION_V1\0");
 const MANIFEST_DOMAIN = encoder.encode("OPEN_INSPECT_SKILL_MANIFEST_V1\0");
+const IMPORT_DOMAIN = encoder.encode("OPEN_INSPECT_SKILL_IMPORT_V1\0");
 
 /**
  * Domain strings, field ordering, and resolver version define persisted IDs.
@@ -132,6 +133,30 @@ export async function buildSkillRevision(
     revisionSha256: await sha256Hex(concat(parts)),
     totalBytes: files.reduce((total, file) => total + file.sizeBytes, 0),
   };
+}
+
+/**
+ * Hash the bytes read from a repository, including the upstream `SKILL.md`.
+ *
+ * Separate from {@link buildSkillRevision}: a revision hashes the regenerated
+ * `SKILL.md`, so an import's stored digest never equals the digest of what was
+ * read. This one answers "is upstream still what the importer reviewed?".
+ */
+export async function hashImportedSourceTree(
+  files: readonly { path: string; content: string; executable: boolean }[]
+): Promise<string> {
+  const sorted = [...files].sort((left, right) => compareUtf8(left.path, right.path));
+  const parts = [IMPORT_DOMAIN, u32(sorted.length)];
+  for (const file of sorted) {
+    const bytes = encoder.encode(file.content);
+    parts.push(
+      ...stringBytes(file.path),
+      Uint8Array.of(file.executable ? 1 : 0),
+      u64(bytes.length),
+      bytes
+    );
+  }
+  return sha256Hex(concat(parts));
 }
 
 function sourceValues(source: SkillAssignment): [string, string, string, string, string, string] {

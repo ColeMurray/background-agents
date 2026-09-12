@@ -10,7 +10,7 @@ import {
 import { generateId } from "../../auth/crypto";
 import type { Logger } from "../../logger";
 import type { SessionMessenger } from "../messenger";
-import { SandboxDeliveryUnavailableError } from "../connections";
+import { SandboxDeliveryUnavailableError } from "../messenger";
 import type { SessionCoreRepository } from "../session-core-repository";
 import { repoIdentityEquals, type SessionRepositoryEntry } from "../repository-target";
 import {

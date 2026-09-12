@@ -1,8 +1,8 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import { describe, expect, it } from "vitest";
-import { handleRequest as routeRequest } from "../../src/router";
-import type { Env } from "../../src/types";
+import { routeRequest } from "./helpers";
+import type { WorkerBindings } from "../../src/cloudflare/platform";
 
 const CONTROL_PLANE_ORIGIN = "https://control-plane.test.local";
 const PUBLIC_WEB_ORIGIN = "https://app.test.local";
@@ -74,7 +74,7 @@ describe("browser auth router", () => {
     const response = await handleRequest(request, {
       ...env,
       SCM_PROVIDER: "gitlab",
-    } as Env);
+    } as WorkerBindings);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -87,8 +87,10 @@ describe("browser auth router", () => {
     const url = `${CONTROL_PLANE_ORIGIN}${path}`;
     const wrongService = new Request(url, {
       headers: await buildServiceAuthHeaders({
-        service: "modal",
-        secret: "test-service-secret-modal",
+        // A real, correctly-signed non-web service: the 401 below comes from
+        // the route's web-only principal policy, not unknown-service auth.
+        service: "slack-bot",
+        secret: "test-service-secret-slack-bot",
         method: "GET",
         url,
       }),
@@ -135,7 +137,7 @@ describe("browser auth router", () => {
       GITHUB_CLIENT_SECRET: undefined,
       GOOGLE_CLIENT_ID: undefined,
       GOOGLE_CLIENT_SECRET: undefined,
-    } as Env);
+    } as WorkerBindings);
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
@@ -171,7 +173,7 @@ describe("browser auth router", () => {
     const response = await handleRequest(request, {
       ...env,
       SCM_PROVIDER: "gitlab",
-    } as Env);
+    } as WorkerBindings);
 
     expect(response.status).toBe(200);
   });
@@ -204,8 +206,8 @@ describe("browser auth router", () => {
         callbackURL: "/",
         disableRedirect: true,
       },
-      "modal",
-      "test-service-secret-modal"
+      "slack-bot",
+      "test-service-secret-slack-bot"
     );
 
     const response = await handleRequest(request, env);

@@ -17,7 +17,6 @@
     "maxSkillRevisionBytes": 1048576,
     "maxSkillPathBytes": 240,
     "maxSkillPathDepth": 10,
-    "maxManagedSkillsPerSession": 20,
     "maxManagedSkillManifestBytes": 5242880
   },
   "files": [

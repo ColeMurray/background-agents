@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const sessionPagePath = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  "../app/(app)/session/[id]/page.tsx"
+  "../app/(app)/(sidebar)/session/[id]/page.tsx"
 );
 
 describe("session workspace layout", () => {

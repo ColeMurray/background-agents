@@ -12,7 +12,7 @@ const migrationsPath = path.resolve(__dirname, "../../terraform/d1/migrations");
 // `require("luxon").DateTime`. Under @cloudflare/vitest-pool-workers that
 // CJS->ESM interop yields `undefined`, so the scheduler tick throws "Cannot read
 // properties of undefined (reading 'DateTime')" and silently skips every overdue
-// automation (see scheduler.test.ts /internal/tick). vite 7 used the CJS build,
+// automation (see Scheduler.tick tests). vite 7 used the CJS build,
 // which interops correctly. Test-only — production bundles via esbuild/wrangler.
 const luxonCjsEntry = createRequire(__filename).resolve("luxon");
 
@@ -49,10 +49,113 @@ export default defineConfig({
           // otherwise defaults its runner to today's compatibility date.
           compatibilityDate: "2024-09-23",
           compatibilityFlags: ["nodejs_compat"],
-          outboundService(request) {
+          async outboundService(request: Request) {
             const url = new URL(request.url);
             if (url.hostname.endsWith(".modal.run")) {
               return new Response("Modal is unavailable in integration tests", { status: 404 });
+            }
+            if (url.href === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
+              return Response.json({
+                device_auth_id: "integration-device",
+                user_code: "TEST-CODE",
+                interval: 1,
+              });
+            }
+            if (url.href === "https://auth.openai.com/api/accounts/deviceauth/token") {
+              return Response.json({
+                authorization_code: "integration-authorization",
+                code_verifier: "integration-verifier",
+              });
+            }
+            if (url.href === "https://auth.openai.com/oauth/token") {
+              const body = await request.text();
+              if (
+                !body.includes("integration-openai") &&
+                !body.includes("integration-authorization")
+              ) {
+                throw new Error("Unexpected OpenAI integration-test credential");
+              }
+              return Response.json({
+                id_token:
+                  "eyJhbGciOiJub25lIn0.eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LWludGVncmF0aW9uIn0.",
+                access_token: "integration-openai-access-token",
+                refresh_token: "integration-openai-rotated-refresh",
+                expires_in: 3600,
+              });
+            }
+            if (url.href === "https://platform.claude.com/v1/oauth/token") {
+              const body = JSON.parse(await request.text()) as {
+                code?: string;
+                state?: string;
+                code_verifier?: string;
+                grant_type?: string;
+              };
+              if (body.code === "integration-anthropic-outage") {
+                throw new Error("Anthropic is unreachable in this integration test");
+              }
+              if (body.code === "integration-anthropic-throttled") {
+                return Response.json(
+                  { error: "rate_limit_error", error_description: "Slow down" },
+                  { status: 429 }
+                );
+              }
+              if (
+                body.grant_type !== "authorization_code" ||
+                body.code !== "integration-anthropic-code" ||
+                !body.state ||
+                !body.code_verifier
+              ) {
+                return Response.json(
+                  { error: "invalid_grant", error_description: "Unknown integration code" },
+                  { status: 400 }
+                );
+              }
+              return Response.json({
+                token_type: "Bearer",
+                access_token: "sk-ant-oat01-integration",
+                refresh_token: "integration-anthropic-refresh-must-not-persist",
+                refresh_token_expires_in: 2_511_418,
+                expires_in: 31_536_000,
+                scope: "user:inference",
+                token_uuid: "integration-anthropic-token-uuid",
+                organization: { uuid: "integration-anthropic-org", name: "Integration Org" },
+                account: {
+                  uuid: "integration-anthropic-account",
+                  email_address: "owner@example.com",
+                },
+              });
+            }
+            if (url.href === "https://auth.x.ai/oauth2/device/code") {
+              return Response.json({
+                device_code: "integration-xai-device",
+                user_code: "XAI-CODE",
+                verification_uri: "https://accounts.x.ai/oauth2/device",
+                verification_uri_complete: "https://accounts.x.ai/oauth2/device?user_code=XAI-CODE",
+                expires_in: 300,
+                interval: 1,
+              });
+            }
+            if (url.href === "https://auth.x.ai/oauth2/userinfo") {
+              return Response.json({ sub: "xai-integration" });
+            }
+            if (url.href === "https://auth.x.ai/oauth2/token") {
+              const body = await request.text();
+              if (body.includes("integration-xai-device")) {
+                return Response.json({
+                  id_token: "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4YWktaW50ZWdyYXRpb24ifQ.",
+                  access_token: "integration-xai-access-token",
+                  refresh_token: "integration-xai-refresh-token",
+                  expires_in: 3600,
+                });
+              }
+              if (body.includes("integration-xai")) {
+                return Response.json({
+                  access_token: "integration-xai-access-token",
+                  refresh_token: "integration-xai-rotated-refresh",
+                  expires_in: 3600,
+                });
+              }
+              throw new Error("Unexpected xAI integration-test credential");
             }
             throw new Error(`Unexpected outbound request: ${request.url}`);
           },
@@ -74,6 +177,7 @@ export default defineConfig({
             // inside a swallowed waitUntil.
             TOKEN_ENCRYPTION_KEY: generateTestEncryptionKey(),
             REPO_SECRETS_ENCRYPTION_KEY: generateTestEncryptionKey(),
+            PROVIDER_ACCOUNTS_ENCRYPTION_KEY: generateTestEncryptionKey(),
             DEPLOYMENT_NAME: "integration-test",
             MODAL_API_SECRET: "test-modal-api-secret",
             MODAL_WORKSPACE: "test-workspace",

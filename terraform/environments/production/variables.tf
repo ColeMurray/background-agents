@@ -206,6 +206,28 @@ variable "github_bot_username" {
   default     = ""
 }
 
+variable "github_bot_default_model" {
+  description = "Model the GitHub bot starts a session with when the repository's integration config does not pin one. A canonical \"provider/model\" id, or a bare \"claude-\"/\"gpt-\" id the bots normalize into that provider's namespace."
+  type        = string
+  default     = "anthropic/claude-haiku-4-5"
+  nullable    = false
+
+  # Each side of the id must name something, and name it without whitespace:
+  # "anthropic/", "claude-" and "/x" all pass a naive prefix or slash check
+  # while naming no model, and "anthropic/ claude-haiku-4-5" survives a
+  # trimspace check with the space still in the value. Either shape reaches the
+  # model provider verbatim. The same rule rejects a blank value, so an unset
+  # CI variable fails at plan time instead of deploying a bot that cannot start
+  # a session.
+  validation {
+    condition = can(regex(
+      "^(?:[^/[:space:]]+/[^/[:space:]]+|(?:claude-|gpt-)[^/[:space:]]+)$",
+      var.github_bot_default_model
+    ))
+    error_message = "github_bot_default_model must be a canonical \"provider/model\" id such as \"anthropic/claude-haiku-4-5\", or a bare \"claude-\"/\"gpt-\" id, naming a model with no whitespace on each side of any slash."
+  }
+}
+
 # =============================================================================
 # Slack App Credentials
 # =============================================================================
@@ -221,12 +243,6 @@ variable "enable_slack_bot" {
   }
 }
 
-variable "slack_triggers_enabled" {
-  description = "Kill switch for Slack channel-message automation triggers. When false (default), the slack-bot ignores channel messages and forwards nothing — the feature ships dark. Flip to true only after completing the rollout verification."
-  type        = bool
-  default     = false
-}
-
 variable "slack_bot_token" {
   description = "Slack Bot OAuth token (xoxb-...)"
   type        = string
@@ -239,6 +255,24 @@ variable "slack_signing_secret" {
   type        = string
   sensitive   = true
   default     = ""
+}
+
+variable "slack_bot_default_model" {
+  description = "Model the Slack bot starts a session with when the requesting user has no saved model preference. A canonical \"provider/model\" id, or a bare \"claude-\"/\"gpt-\" id the bots normalize into that provider's namespace."
+  type        = string
+  default     = "claude-haiku-4-5"
+  nullable    = false
+
+  # See github_bot_default_model: a prefix or slash with nothing after it names
+  # no model, whitespace anywhere in the id reaches the provider verbatim, and a
+  # blank value must fail at plan time rather than deploy.
+  validation {
+    condition = can(regex(
+      "^(?:[^/[:space:]]+/[^/[:space:]]+|(?:claude-|gpt-)[^/[:space:]]+)$",
+      var.slack_bot_default_model
+    ))
+    error_message = "slack_bot_default_model must be a canonical \"provider/model\" id such as \"anthropic/claude-haiku-4-5\", or a bare \"claude-\"/\"gpt-\" id, naming a model with no whitespace on each side of any slash."
+  }
 }
 
 # =============================================================================
@@ -287,19 +321,86 @@ variable "linear_api_key" {
   sensitive   = true
 }
 
+variable "linear_bot_default_model" {
+  description = "Model the Linear bot starts a session with when neither the repository's integration config, the requesting user's preference, nor a model label selects one. A canonical \"provider/model\" id, or a bare \"claude-\"/\"gpt-\" id the bots normalize into that provider's namespace."
+  type        = string
+  default     = "claude-sonnet-4-6"
+  nullable    = false
+
+  # See github_bot_default_model: a prefix or slash with nothing after it names
+  # no model, whitespace anywhere in the id reaches the provider verbatim, and a
+  # blank value must fail at plan time rather than deploy.
+  validation {
+    condition = can(regex(
+      "^(?:[^/[:space:]]+/[^/[:space:]]+|(?:claude-|gpt-)[^/[:space:]]+)$",
+      var.linear_bot_default_model
+    ))
+    error_message = "linear_bot_default_model must be a canonical \"provider/model\" id such as \"anthropic/claude-haiku-4-5\", or a bare \"claude-\"/\"gpt-\" id, naming a model with no whitespace on each side of any slash."
+  }
+}
+
 # =============================================================================
 # API Keys
 # =============================================================================
 
 variable "anthropic_api_key" {
-  description = "Anthropic API key for Claude"
+  description = "Anthropic API key for the Slack and Linear bot classifiers, also injected into Modal session sandboxes and OpenComputer sandboxes. Daytona, E2B and Vercel read model keys only from the scoped secret store, as do Modal image builds. Optional: leave blank to supply model credentials as scoped secrets, which override this value on every provider. Required only when a classifier bot is enabled and classification_model is an Anthropic model."
   type        = string
   sensitive   = true
+  default     = ""
   nullable    = false
 
+  # Sandboxes tolerate a blank key — they fall back to the secret store — but a
+  # deployed Anthropic classifier has no such fallback. CI renders an unset
+  # secret as an empty string, which would otherwise deploy a credential-less
+  # classifier that rejects every message.
   validation {
-    condition     = trimspace(var.anthropic_api_key) != ""
-    error_message = "anthropic_api_key must be non-blank."
+    condition = (
+      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
+      startswith(var.classification_model, "openai/") ||
+      startswith(var.classification_model, "gpt-") ||
+      trimspace(var.anthropic_api_key) != ""
+    )
+    error_message = "anthropic_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an Anthropic model."
+  }
+}
+
+variable "classification_model" {
+  description = "Model backing the Slack and Linear bots' target classifiers. An \"anthropic/\"-prefixed or bare \"claude-\" id is served by anthropic_api_key; an \"openai/\"-prefixed or bare \"gpt-\" id is served by classification_openai_api_key."
+  type        = string
+  default     = "claude-haiku-4-5"
+  nullable    = false
+
+  # Each prefix must be followed by an actual model id: a bare "claude-" or
+  # "openai/" satisfies startswith but names no model, and would reach the bots
+  # as a value their resolver accepts and then sends to the provider verbatim.
+  validation {
+    condition = anytrue([
+      for prefix in ["anthropic/", "claude-", "openai/", "gpt-"] :
+      startswith(var.classification_model, prefix) &&
+      trimspace(substr(var.classification_model, length(prefix), -1)) != ""
+    ])
+    error_message = "classification_model must be an Anthropic id (\"anthropic/...\" or \"claude-...\") or an OpenAI id (\"openai/...\" or \"gpt-...\"), naming a model after the prefix."
+  }
+}
+
+variable "classification_openai_api_key" {
+  description = "OpenAI API key used specifically by the Slack and Linear bot classifiers. Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled."
+  type        = string
+  sensitive   = true
+  default     = ""
+  nullable    = false
+
+  # Fail closed once a deployed classifier is pointed at OpenAI: CI renders an
+  # unset secret as an empty string, which would otherwise deploy a
+  # credential-less classifier that rejects every message.
+  validation {
+    condition = (
+      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
+      !(startswith(var.classification_model, "openai/") || startswith(var.classification_model, "gpt-")) ||
+      trimspace(var.classification_openai_api_key) != ""
+    )
+    error_message = "classification_openai_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an OpenAI model."
   }
 }
 
@@ -317,6 +418,22 @@ variable "repo_secrets_encryption_key" {
   description = "Key for encrypting repo secrets in D1 (generate with: openssl rand -base64 32)"
   type        = string
   sensitive   = true
+}
+
+variable "provider_accounts_encryption_key" {
+  description = "Optional existing key for provider account credentials; when blank, Terraform generates and persists a dedicated key"
+  type        = string
+  sensitive   = true
+  nullable    = false
+  default     = ""
+
+  validation {
+    condition = (
+      trimspace(var.provider_accounts_encryption_key) == "" ||
+      can(regex("^[A-Za-z0-9+/]{43}=$", trimspace(var.provider_accounts_encryption_key)))
+    )
+    error_message = "provider_accounts_encryption_key must be blank or a Base64-encoded 32-byte key."
+  }
 }
 
 variable "modal_api_secret" {
@@ -498,6 +615,18 @@ variable "e2b_auto_pause" {
   default     = true
 }
 
+variable "e2b_template_cpu" {
+  description = "vCPU count for the E2B sandbox template (and every sandbox created from it)."
+  type        = number
+  default     = 2
+}
+
+variable "e2b_template_memory_mb" {
+  description = "Memory (MB, even number) for the E2B sandbox template. Default sized for the agent toolchain (OpenCode + code-server + builds); lower it on plans that cap sandbox memory. The full invariant (positive, even, integral) is validated at the e2b-infra module boundary."
+  type        = number
+  default     = 4096
+}
+
 variable "nextauth_secret" {
   description = "Browser authentication secret used by the control plane (legacy Terraform input name; generate with: openssl rand -base64 32)"
   type        = string
@@ -578,6 +707,12 @@ variable "control_plane_migration_old_tag" {
 
 variable "control_plane_new_sqlite_classes" {
   description = "DO classes new in this control plane migration step (empty means treat all configured classes as new)"
+  type        = list(string)
+  default     = []
+}
+
+variable "control_plane_deleted_classes" {
+  description = "DO classes deleted in this control plane migration step"
   type        = list(string)
   default     = []
 }

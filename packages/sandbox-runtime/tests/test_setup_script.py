@@ -1,6 +1,7 @@
 """Tests for RepositoryHooks.run_setup() and its integration in RepositoryBoot.boot()."""
 
 import asyncio
+import signal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sandbox_runtime.repository_boot import RepositoryBoot
@@ -169,21 +170,25 @@ class TestSetupScriptFailure:
 class TestSetupScriptTimeout:
     """Timeout handling for the setup script."""
 
-    async def test_timeout_kills_process(self, tmp_path):
+    async def test_timeout_kills_process_group(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=None)
+        fake_proc.pid = 123
         fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
+        fake_proc.wait.side_effect = lambda: setattr(fake_proc, "returncode", -9)
         fake_proc.stdout = MagicMock()
         fake_proc.stdout.read = AsyncMock(return_value=b"partial output\n")
 
-        with patch(
-            "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
+        with (
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
+            patch("sandbox_runtime.repository_hooks.os.killpg") as kill_process_group,
         ):
             result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         assert result is False
-        fake_proc.kill.assert_called_once()
+        kill_process_group.assert_called_once_with(fake_proc.pid, signal.SIGKILL)
+        fake_proc.kill.assert_not_called()
         fake_proc.wait.assert_awaited_once()
 
     async def test_build_timeout_log_omits_hook_output(self, tmp_path):

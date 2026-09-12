@@ -25,6 +25,7 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
     branchName: "feature/original",
     status: "active",
     sandboxStatus: "ready",
+    harness: "opencode",
     messageCount: 0,
     createdAt: 1,
     ...overrides,
@@ -86,6 +87,43 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
+  it("uses authoritative totals for duplicate steps and final cost repairs", () => {
+    const event = {
+      type: "step_finish" as const,
+      messageId: "message-1",
+      cost: 0.5,
+      messageCostUsd: 0.5,
+      sandboxId: "sb",
+      timestamp: 1,
+    };
+    let state = subscribedState({
+      session: createSessionState({ totalCost: 0, maxSessionCostUsd: null }),
+    });
+    state = reduce(
+      state,
+      { type: "events_appended", events: [event] },
+      serverMessage({
+        type: "budget_status",
+        totalCost: 0.5,
+        maxSessionCostUsd: null,
+        budgetExhausted: false,
+      })
+    );
+    state = reduce(state, { type: "events_appended", events: [event] });
+    expect(state.sessionState?.totalCost).toBe(0.5);
+    // A final cumulative report repairs steps the browser never received.
+    state = reduce(
+      state,
+      serverMessage({
+        type: "budget_status",
+        totalCost: 2,
+        maxSessionCostUsd: null,
+        budgetExhausted: false,
+      })
+    );
+    expect(state.sessionState?.totalCost).toBe(2);
+  });
+
   describe("snapshot", () => {
     it("hydrates the authoritative prompt queue", () => {
       const promptQueue = [
@@ -190,7 +228,76 @@ describe("sessionSocketReducer", () => {
     expect(state.promptQueue).toEqual(initial.promptQueue);
   });
 
+  describe("sandboxError", () => {
+    it("hydrates the spawn error from the snapshot and from subscribed", () => {
+      const reason =
+        'Failed to create E2B sandbox: {"code":400,"message":"Timeout cannot be greater than 1 hours"}';
+
+      expect(createSessionSocketState(createSnapshot({ spawnError: reason })).sandboxError).toBe(
+        reason
+      );
+      expect(subscribedState({ spawnError: reason }).sandboxError).toBe(reason);
+      expect(subscribedState().sandboxError).toBeNull();
+    });
+
+    it("records the reason a live sandbox_error carries", () => {
+      const state = reduce(
+        subscribedState(),
+        serverMessage({ type: "sandbox_error", error: "E2B quota exceeded" })
+      );
+
+      expect(state.sessionState?.sandboxStatus).toBe("failed");
+      expect(state.sandboxError).toBe("E2B quota exceeded");
+    });
+
+    it("clears the reason once a fresh attempt starts or succeeds", () => {
+      const failed = reduce(
+        subscribedState(),
+        serverMessage({ type: "sandbox_error", error: "E2B quota exceeded" })
+      );
+
+      // A retry supersedes the previous failure, so the stale reason must not
+      // linger next to a spawning or ready sandbox.
+      expect(reduce(failed, serverMessage({ type: "sandbox_spawning" })).sandboxError).toBeNull();
+      expect(reduce(failed, serverMessage({ type: "sandbox_warming" })).sandboxError).toBeNull();
+      expect(reduce(failed, serverMessage({ type: "sandbox_ready" })).sandboxError).toBeNull();
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "ready" })).sandboxError
+      ).toBeNull();
+    });
+
+    it("keeps the reason when sandbox_status merely re-asserts failed", () => {
+      const failed = reduce(
+        subscribedState(),
+        serverMessage({ type: "sandbox_error", error: "E2B quota exceeded" }),
+        serverMessage({ type: "sandbox_status", status: "failed" })
+      );
+
+      expect(failed.sandboxError).toBe("E2B quota exceeded");
+    });
+  });
+
   describe("subscribed", () => {
+    it("hydrates budget management capability and applies authoritative budget updates", () => {
+      const subscribed = subscribedState({ canManageBudget: true });
+      const state = reduce(
+        subscribed,
+        serverMessage({
+          type: "budget_status",
+          totalCost: 10.5,
+          maxSessionCostUsd: 10,
+          budgetExhausted: true,
+        })
+      );
+
+      expect(state.canManageBudget).toBe(true);
+      expect(state.sessionState).toMatchObject({
+        totalCost: 10.5,
+        maxSessionCostUsd: 10,
+        budgetExhausted: true,
+      });
+    });
+
     it("hydrates the authoritative projection", () => {
       const state = subscribedState({
         session: createSessionState({
@@ -313,7 +420,7 @@ describe("sessionSocketReducer", () => {
       expect(state.events).toEqual(events);
     });
 
-    it("accumulates step_finish cost onto the session total", () => {
+    it("leaves totals to server updates even when budget fields are absent", () => {
       const base = subscribedState({ session: createSessionState({ totalCost: 1 }) });
       const state = reduce(base, {
         type: "events_appended",
@@ -321,7 +428,7 @@ describe("sessionSocketReducer", () => {
           { type: "step_finish", cost: 0.5, messageId: "msg-1", sandboxId: "sb-1", timestamp: 1 },
         ],
       });
-      expect(state.sessionState?.totalCost).toBe(1.5);
+      expect(state.sessionState?.totalCost).toBe(1);
     });
 
     it("ignores missing, non-finite, and non-positive costs", () => {

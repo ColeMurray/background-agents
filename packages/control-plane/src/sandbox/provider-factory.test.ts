@@ -1,16 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { createTestEnv } from "../router.test-support";
 import type { Env } from "../types";
 import { createSandboxProviderFromEnv } from "./provider-factory";
 
 function createEnv(overrides: Partial<Env>): Env {
-  return {
-    DB: {} as D1Database,
-    SESSION: {} as DurableObjectNamespace,
-    MEDIA_BUCKET: {} as R2Bucket,
-    TOKEN_ENCRYPTION_KEY: "test-token-key",
-    DEPLOYMENT_NAME: "test",
-    ...overrides,
-  } as Env;
+  return createTestEnv({ TOKEN_ENCRYPTION_KEY: "test-token-key", ...overrides });
 }
 
 describe("createSandboxProviderFromEnv", () => {
