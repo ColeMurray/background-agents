@@ -5,14 +5,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig, useSWRConfig } from "swr";
 import { DEFAULT_ENABLED_MODELS } from "@open-inspect/shared/models";
+import { useAuthSession } from "@/lib/auth-session";
 import {
+  AuthenticatedModelPreferencesProvider,
   MODEL_PREFERENCES_KEY,
   ModelPreferencesProvider,
   useEnabledModels,
 } from "./use-enabled-models";
 
+vi.mock("@/lib/auth-session", () => ({ useAuthSession: vi.fn() }));
+
 afterEach(() => {
   cleanup();
+  vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -26,7 +31,7 @@ function wrapper(enabledModels: unknown) {
           revalidateIfStale: false,
         }}
       >
-        <ModelPreferencesProvider>{children}</ModelPreferencesProvider>
+        <ModelPreferencesProvider identity="test-user">{children}</ModelPreferencesProvider>
       </SWRConfig>
     );
   };
@@ -116,6 +121,102 @@ describe("useEnabledModels", () => {
     expect(result.current.saving).toBe(false);
   });
 
+  it("cancels queued and in-flight work when the authenticated identity changes", async () => {
+    let resolveFirst!: (response: Response) => void;
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(new Promise<Response>((resolve) => (resolveFirst = resolve)))
+      .mockResolvedValueOnce(
+        Response.json({
+          enabledModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(useAuthSession).mockReturnValue({
+      status: "authenticated",
+      data: { user: { id: "11111111111111111111111111111111" } },
+    });
+    const { result, rerender } = renderHook(() => useEnabledModels(), {
+      wrapper: ({ children }) => (
+        <SWRConfig
+          value={{
+            provider: () => new Map(),
+            fallback: { [MODEL_PREFERENCES_KEY]: { enabledModels: ["openai/gpt-5.4"] } },
+            revalidateIfStale: false,
+          }}
+        >
+          <AuthenticatedModelPreferencesProvider>{children}</AuthenticatedModelPreferencesProvider>
+        </SWRConfig>
+      ),
+    });
+
+    let first!: Promise<void>;
+    let staleQueued!: Promise<void>;
+    act(() => {
+      first = result.current.updateModels([
+        { modelId: "anthropic/claude-haiku-4-5", enabled: true },
+      ]);
+      staleQueued = result.current.updateModels([
+        { modelId: "anthropic/claude-opus-4-6", enabled: true },
+      ]);
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    vi.mocked(useAuthSession).mockReturnValue({
+      status: "authenticated",
+      data: { user: { id: "22222222222222222222222222222222" } },
+    });
+    rerender();
+    expect(fetchMock.mock.calls[0][1].signal).toHaveProperty("aborted", true);
+    await act(async () => {
+      resolveFirst(
+        Response.json({
+          enabledModels: ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"],
+        })
+      );
+      await Promise.all([first, staleQueued]);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.enabledModels).toEqual(["openai/gpt-5.4"]);
+    await act(async () => {
+      await result.current.updateModels([
+        { modelId: "anthropic/claude-sonnet-4-6", enabled: true },
+      ]);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels queued work when the provider unmounts", async () => {
+    let resolveFirst!: (response: Response) => void;
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(new Promise<Response>((resolve) => (resolveFirst = resolve)));
+    vi.stubGlobal("fetch", fetchMock);
+    const { result, unmount } = renderHook(() => useEnabledModels(), {
+      wrapper: wrapper(["openai/gpt-5.4"]),
+    });
+
+    let first!: Promise<void>;
+    let queued!: Promise<void>;
+    act(() => {
+      first = result.current.updateModels([
+        { modelId: "anthropic/claude-haiku-4-5", enabled: true },
+      ]);
+      queued = result.current.updateModels([
+        { modelId: "anthropic/claude-sonnet-4-6", enabled: true },
+      ]);
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    unmount();
+    expect(fetchMock.mock.calls[0][1].signal).toHaveProperty("aborted", true);
+    await act(async () => {
+      resolveFirst(Response.json({ enabledModels: ["anthropic/claude-haiku-4-5"] }));
+      await Promise.all([first, queued]);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reapplies pending changes over an external cache refresh", async () => {
     let resolve!: (response: Response) => void;
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise((done) => (resolve = done))));
@@ -173,7 +274,7 @@ describe("useEnabledModels", () => {
             revalidateIfStale: false,
           }}
         >
-          <ModelPreferencesProvider>{children}</ModelPreferencesProvider>
+          <ModelPreferencesProvider identity="test-user">{children}</ModelPreferencesProvider>
         </SWRConfig>
       ),
     });
@@ -233,7 +334,7 @@ describe("useEnabledModels", () => {
     const { result } = renderHook(() => useEnabledModels(), {
       wrapper: ({ children }) => (
         <SWRConfig value={{ provider: () => new Map(), fetcher }}>
-          <ModelPreferencesProvider>{children}</ModelPreferencesProvider>
+          <ModelPreferencesProvider identity="test-user">{children}</ModelPreferencesProvider>
         </SWRConfig>
       ),
     });
@@ -258,7 +359,7 @@ describe("useEnabledModels", () => {
             shouldRetryOnError: false,
           }}
         >
-          <ModelPreferencesProvider>{children}</ModelPreferencesProvider>
+          <ModelPreferencesProvider identity="test-user">{children}</ModelPreferencesProvider>
         </SWRConfig>
       ),
     });

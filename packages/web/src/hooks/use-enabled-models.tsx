@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -23,6 +24,7 @@ import {
   type ValidModel,
 } from "@open-inspect/shared/models";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useAuthSession } from "@/lib/auth-session";
 
 export const MODEL_PREFERENCES_KEY = "/api/model-preferences";
 
@@ -35,6 +37,11 @@ const modelPreferencesSchema = z.object({
 type ModelPreferencesResponse = z.infer<typeof modelPreferencesSchema>;
 
 type PendingChange = readonly ModelPreferenceChange[];
+
+interface ProviderLifetime {
+  identity: string;
+  abortController: AbortController;
+}
 
 interface EnabledModelsContextValue {
   enabledModels: string[];
@@ -52,11 +59,40 @@ function responseError(body: unknown): string | null {
   return typeof body.error === "string" ? body.error : null;
 }
 
-export function ModelPreferencesProvider({ children }: { children: ReactNode }) {
+export function AuthenticatedModelPreferencesProvider({ children }: { children: ReactNode }) {
+  const session = useAuthSession();
+  if (session.status !== "authenticated") return null;
+  return (
+    <ModelPreferencesProvider key={session.data.user.id} identity={session.data.user.id}>
+      {children}
+    </ModelPreferencesProvider>
+  );
+}
+
+export function ModelPreferencesProvider({
+  children,
+  identity,
+}: {
+  children: ReactNode;
+  identity: string;
+}) {
   const { data, error, isLoading, mutate } =
     useSWR<ModelPreferencesResponse>(MODEL_PREFERENCES_KEY);
   const [pending, setPending] = useState<PendingChange[]>([]);
   const queue = useRef<Promise<void>>(Promise.resolve());
+  const lifetime = useRef<ProviderLifetime | null>(null);
+
+  useLayoutEffect(() => {
+    const current: ProviderLifetime = {
+      identity,
+      abortController: new AbortController(),
+    };
+    lifetime.current = current;
+    return () => {
+      if (lifetime.current === current) lifetime.current = null;
+      current.abortController.abort();
+    };
+  }, [identity]);
 
   const confirmedModels = useMemo<ValidModel[]>(() => {
     if (isLoading) return [];
@@ -89,33 +125,43 @@ export function ModelPreferencesProvider({ children }: { children: ReactNode }) 
         return Promise.reject(new Error("Model preferences must load before saving"));
       }
 
+      const owner = lifetime.current;
+      if (!owner || owner.identity !== identity) return Promise.resolve();
+      const isCurrent = () => lifetime.current === owner;
       const operation: PendingChange = [...changes];
       setPending((current) => [...current, operation]);
 
       const request = queue.current.then(async () => {
+        if (!isCurrent()) return;
         try {
           const res = await browserApiFetch(MODEL_PREFERENCES_KEY, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ changes: operation }),
+            signal: owner.abortController.signal,
           });
+          if (!isCurrent()) return;
           const body: unknown = await res.json().catch(() => null);
           if (!res.ok) throw new Error(responseError(body) ?? "Failed to save preferences");
           const parsed = modelPreferencesSchema.safeParse(body);
           if (!parsed.success) throw new Error("Invalid model preferences response");
+          if (!isCurrent()) return;
           await mutate(parsed.data, { revalidate: false });
         } catch (requestError) {
+          if (!isCurrent()) return;
           setPending((current) => current.filter((candidate) => candidate !== operation));
           await mutate().catch(() => undefined);
           throw requestError;
         }
-        setPending((current) => current.filter((candidate) => candidate !== operation));
+        if (isCurrent()) {
+          setPending((current) => current.filter((candidate) => candidate !== operation));
+        }
       });
 
       queue.current = request.catch(() => undefined);
       return request;
     },
-    [error, isLoading, mutate]
+    [error, identity, isLoading, mutate]
   );
 
   const value = useMemo<EnabledModelsContextValue>(

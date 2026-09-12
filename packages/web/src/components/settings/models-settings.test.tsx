@@ -74,7 +74,7 @@ function renderSettings(
         revalidateIfStale: false,
       }}
     >
-      <ModelPreferencesProvider>
+      <ModelPreferencesProvider identity="test-user">
         {children}
         <CachedModels />
       </ModelPreferencesProvider>
@@ -280,7 +280,7 @@ describe("ModelsSettings", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(
       <SWRConfig value={{ provider: () => new Map(), fetcher, shouldRetryOnError: false }}>
-        <ModelPreferencesProvider>
+        <ModelPreferencesProvider identity="test-user">
           <ModelsSettings />
         </ModelPreferencesProvider>
       </SWRConfig>
