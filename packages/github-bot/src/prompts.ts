@@ -48,6 +48,8 @@ export function buildCodeReviewPrompt(params: {
   isPublic: boolean;
   codeReviewInstructions?: string | null;
   isSelfReview?: boolean;
+  /** A separate reviewer App submits the review, so its token must be fetched. */
+  hasReviewerApp?: boolean;
 }): string {
   const {
     owner,
@@ -61,12 +63,26 @@ export function buildCodeReviewPrompt(params: {
     isPublic,
     codeReviewInstructions,
     isSelfReview = false,
+    hasReviewerApp = false,
   } = params;
   const reviewEvent = isSelfReview ? "COMMENT" : "<APPROVE, REQUEST_CHANGES, or COMMENT>";
   const reviewEventGuidance = isSelfReview
     ? "Use COMMENT because GitHub does not allow pull request authors to approve their own PRs."
     : "Use APPROVE if the code looks good, REQUEST_CHANGES if changes are needed,\n   or COMMENT for general feedback.";
   const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName: repo });
+  // Chained with `&&` into the review POST so a failed fetch stops before it:
+  // a review must never be submitted under the wrong identity.
+  const reviewTokenFetch = hasReviewerApp
+    ? `session_id="$(printf '%s' "$SESSION_CONFIG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')" && \\
+   review_token="$(curl -fsS -H "Authorization: Bearer $SANDBOX_AUTH_TOKEN" \\
+     "$CONTROL_PLANE_URL/sessions/$session_id/review-token" \\
+     | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')" && \\
+   `
+    : "";
+  const reviewTokenPrefix = hasReviewerApp ? 'GH_TOKEN="$review_token" ' : "";
+  const reviewTokenGuidance = hasReviewerApp
+    ? "\n\n   The review token is the reviewer App's installation token: it authenticates the review\n   POST alone, so every other GitHub call keeps the default credential."
+    : "";
 
   const prTitleBlock = buildUntrustedUserContentBlock({
     source: "github_pr_title",
@@ -114,7 +130,7 @@ ${prDescriptionBlock}
    exactly one pull request review. Include every inline comment in the review's \`comments\` array;
    do not create standalone pull request comments. If there are no inline comments, use an empty array.
 
-   gh api repos/${repositoryPath}/pulls/${number}/reviews \\
+   ${reviewTokenFetch}${reviewTokenPrefix}gh api repos/${repositoryPath}/pulls/${number}/reviews \\
      --method POST \\
      --input - <<'JSON'
 {
@@ -131,7 +147,7 @@ ${prDescriptionBlock}
 }
 JSON
 
-   ${reviewEventGuidance}
+   ${reviewEventGuidance}${reviewTokenGuidance}
 
 ${buildCustomInstructionsSection(codeReviewInstructions)}
 ${buildCommentGuidelines(isPublic)}`;
