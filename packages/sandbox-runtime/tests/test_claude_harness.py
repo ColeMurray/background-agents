@@ -9,6 +9,7 @@ execution_complete).
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
@@ -324,6 +325,11 @@ class TestOptions:
         assert options["effort"] == "high"
         assert options["permission_mode"] == "dontAsk"
         assert options["disallowed_tools"] == ["AskUserQuestion"]
+        assert json.loads(options["settings"]) == {
+            "attribution": {"commit": "", "pr": "", "sessionUrl": False},
+            "feedbackDrafts": "off",
+            "feedbackSurveyRate": 0,
+        }
         assert options["setting_sources"] == ["user", "project"]
         assert options["include_partial_messages"] is True
         assert options["forward_subagent_text"] is False
