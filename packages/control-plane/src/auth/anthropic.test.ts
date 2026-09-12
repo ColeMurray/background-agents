@@ -106,7 +106,10 @@ describe("anthropicTokenResponseSchema", () => {
       token_uuid: null,
     });
 
-    expect(parsed.success).toBe(true);
+    expect(parsed).toMatchObject({
+      success: true,
+      data: { account: null, organization: null, token_uuid: null },
+    });
   });
 });
 
@@ -247,11 +250,25 @@ describe("exchangeAnthropicAuthorizationCode", () => {
     expect(error.reason).toBe("malformed_response");
   });
 
-  it("classifies a non-object token response as malformed", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json("not an object"));
+  it.each([null, "not an object", 123, true, []])(
+    "classifies the non-object token response %j as malformed",
+    async (body) => {
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json(body));
+      const error = await failure(fetchImpl);
+
+      expect(error.reason).toBe("malformed_response");
+    }
+  );
+
+  it.each([
+    [400, "invalid_request"],
+    [429, "rate_limited"],
+    [503, "server_error"],
+  ])("preserves HTTP %s classification for a non-object response", async (status, reason) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json(null, { status }));
     const error = await failure(fetchImpl);
 
-    expect(error.reason).toBe("malformed_response");
+    expect(error).toMatchObject({ reason, message: `HTTP ${status}` });
   });
 
   it("classifies a token without the inference scope as a scope mismatch", async () => {
