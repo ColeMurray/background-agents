@@ -14,8 +14,8 @@ import {
   normalizeValidModels,
 } from "@open-inspect/shared/models";
 import {
-  MODEL_PREFERENCES_KEY,
   ModelPreferencesProvider,
+  getModelPreferencesKey,
   useEnabledModels,
 } from "@/hooks/use-enabled-models";
 import { ModelsSettings } from "./models-settings";
@@ -69,7 +69,7 @@ function renderSettings(
       value={{
         provider: () => new Map(),
         fallback: {
-          [MODEL_PREFERENCES_KEY]: {
+          [getModelPreferencesKey("test-user")]: {
             enabledModels,
             revision: 1,
           },
@@ -264,7 +264,7 @@ describe("ModelsSettings", () => {
     renderSettings(undefined, <CacheAccess />);
     await act(async () => {
       await updateCache(
-        MODEL_PREFERENCES_KEY,
+        getModelPreferencesKey("test-user"),
         {
           enabledModels: ["anthropic/claude-sonnet-4-6"],
           revision: 2,

@@ -28,6 +28,12 @@ import { useAuthSession } from "@/lib/auth-session";
 
 export const MODEL_PREFERENCES_KEY = "/api/model-preferences";
 
+export function getModelPreferencesKey(
+  identity: string
+): `/api/model-preferences?identity=${string}` {
+  return `${MODEL_PREFERENCES_KEY}?identity=${encodeURIComponent(identity)}`;
+}
+
 const canonicalModelSchema = z.custom<ValidModel>(
   (value) => typeof value === "string" && isValidModel(value) && normalizeModelId(value) === value
 );
@@ -103,8 +109,8 @@ export function ModelPreferencesProvider({
   children: ReactNode;
   identity: string;
 }) {
-  const { data, error, isLoading, mutate } =
-    useSWR<ModelPreferencesResponse>(MODEL_PREFERENCES_KEY);
+  const cacheKey = getModelPreferencesKey(identity);
+  const { data, error, isLoading, mutate } = useSWR<ModelPreferencesResponse>(cacheKey);
   const [pending, setPending] = useState<PendingChange[]>([]);
   const queue = useRef<Promise<void>>(Promise.resolve());
   const lifetime = useRef<ProviderLifetime | null>(null);

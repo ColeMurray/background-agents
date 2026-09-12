@@ -10,6 +10,7 @@ import {
   AuthenticatedModelPreferencesProvider,
   MODEL_PREFERENCES_KEY,
   ModelPreferencesProvider,
+  getModelPreferencesKey,
   useEnabledModels,
 } from "./use-enabled-models";
 
@@ -27,7 +28,9 @@ function wrapper(enabledModels: unknown) {
       <SWRConfig
         value={{
           provider: () => new Map(),
-          fallback: { [MODEL_PREFERENCES_KEY]: { enabledModels, revision: 1 } },
+          fallback: {
+            [getModelPreferencesKey("test-user")]: { enabledModels, revision: 1 },
+          },
           revalidateIfStale: false,
         }}
       >
@@ -144,7 +147,14 @@ describe("useEnabledModels", () => {
           value={{
             provider: () => new Map(),
             fallback: {
-              [MODEL_PREFERENCES_KEY]: { enabledModels: ["openai/gpt-5.4"], revision: 1 },
+              [getModelPreferencesKey("11111111111111111111111111111111")]: {
+                enabledModels: ["openai/gpt-5.4"],
+                revision: 1,
+              },
+              [getModelPreferencesKey("22222222222222222222222222222222")]: {
+                enabledModels: ["openai/gpt-5.4"],
+                revision: 1,
+              },
             },
             revalidateIfStale: false,
           }}
@@ -190,6 +200,63 @@ describe("useEnabledModels", () => {
       ]);
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not expose cached preferences from the previous identity", async () => {
+    type Snapshot = { enabledModels: string[]; revision: number };
+    let resolveFirst!: (snapshot: Snapshot) => void;
+    let resolveSecond!: (snapshot: Snapshot) => void;
+    const fetcher = vi
+      .fn()
+      .mockReturnValueOnce(new Promise<Snapshot>((resolve) => (resolveFirst = resolve)))
+      .mockReturnValueOnce(new Promise<Snapshot>((resolve) => (resolveSecond = resolve)));
+    const cache = new Map();
+    vi.mocked(useAuthSession).mockReturnValue({
+      status: "authenticated",
+      data: { user: { id: "11111111111111111111111111111111" } },
+    });
+    const { result, rerender } = renderHook(() => useEnabledModels(), {
+      wrapper: ({ children }) => (
+        <SWRConfig
+          value={{ provider: () => cache, fetcher, dedupingInterval: 0, revalidateIfStale: false }}
+        >
+          <AuthenticatedModelPreferencesProvider>{children}</AuthenticatedModelPreferencesProvider>
+        </SWRConfig>
+      ),
+    });
+
+    await waitFor(() =>
+      expect(fetcher).toHaveBeenCalledWith(
+        getModelPreferencesKey("11111111111111111111111111111111")
+      )
+    );
+    await act(async () => {
+      resolveFirst({ enabledModels: ["openai/gpt-5.4"], revision: 1 });
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    vi.mocked(useAuthSession).mockReturnValue({
+      status: "authenticated",
+      data: { user: { id: "22222222222222222222222222222222" } },
+    });
+    rerender();
+
+    expect(result.current.loading).toBe(true);
+    expect(result.current.enabledModels).toEqual([]);
+    await expect(
+      result.current.updateModels([{ modelId: "anthropic/claude-haiku-4-5", enabled: true }])
+    ).rejects.toThrow("Model preferences must load before saving");
+    await waitFor(() =>
+      expect(fetcher).toHaveBeenCalledWith(
+        getModelPreferencesKey("22222222222222222222222222222222")
+      )
+    );
+    await act(async () => {
+      resolveSecond({ enabledModels: ["anthropic/claude-sonnet-4-6"], revision: 1 });
+    });
+    await waitFor(() =>
+      expect(result.current.enabledModels).toEqual(["anthropic/claude-sonnet-4-6"])
+    );
   });
 
   it("cancels queued work when the provider unmounts", async () => {
@@ -238,7 +305,7 @@ describe("useEnabledModels", () => {
     });
     await act(async () => {
       await result.current.mutate(
-        MODEL_PREFERENCES_KEY,
+        getModelPreferencesKey("test-user"),
         {
           enabledModels: [
             "openai/gpt-5.4",
@@ -290,7 +357,10 @@ describe("useEnabledModels", () => {
           value={{
             provider: () => new Map(),
             fallback: {
-              [MODEL_PREFERENCES_KEY]: { enabledModels: ["openai/gpt-5.4"], revision: 1 },
+              [getModelPreferencesKey("test-user")]: {
+                enabledModels: ["openai/gpt-5.4"],
+                revision: 1,
+              },
             },
             fetcher,
             revalidateIfStale: false,
@@ -322,7 +392,7 @@ describe("useEnabledModels", () => {
       await expect(failed).rejects.toThrow("Save denied");
       await queued;
     });
-    expect(fetcher).toHaveBeenCalledWith(MODEL_PREFERENCES_KEY);
+    expect(fetcher).toHaveBeenCalledWith(getModelPreferencesKey("test-user"));
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.current.enabledModels).toEqual(["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"]);
   });
@@ -346,7 +416,10 @@ describe("useEnabledModels", () => {
             value={{
               provider: () => new Map(),
               fallback: {
-                [MODEL_PREFERENCES_KEY]: { enabledModels: ["openai/gpt-5.4"], revision: 1 },
+                [getModelPreferencesKey("test-user")]: {
+                  enabledModels: ["openai/gpt-5.4"],
+                  revision: 1,
+                },
               },
               fetcher,
               revalidateIfStale: false,
@@ -423,7 +496,7 @@ describe("useEnabledModels", () => {
     await act(async () => {
       await result.current.updateModels([{ modelId: "anthropic/claude-haiku-4-5", enabled: true }]);
     });
-    expect(fetcher.mock.calls.map(([key]) => key)).toEqual([MODEL_PREFERENCES_KEY]);
+    expect(fetcher.mock.calls.map(([key]) => key)).toEqual([getModelPreferencesKey("test-user")]);
   });
 
   it("exposes read errors and rejects writes before preferences have loaded", async () => {
