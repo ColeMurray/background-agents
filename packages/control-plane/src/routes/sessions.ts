@@ -8,7 +8,7 @@ import { sessionMediaRoutes } from "./session-media";
 import { sessionPromptRoutes } from "./session-prompt";
 import { sessionPullRequestRoutes } from "./session-pull-requests";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
-import { sessionOperatorArchiveRoutes } from "./session-operator-archive";
+import { sessionBatchArchiveRoutes } from "./session-batch-archive";
 import { sessionAttachmentRoutes } from "./session-attachments";
 import { sessionWsTokenRoutes } from "./session-ws-token";
 import { sessionDiffRoutes } from "./session-diffs";
@@ -20,7 +20,7 @@ for (const module of [
   sessionCreateRoutes,
   sessionIndexRoutes,
   sessionRuntimeProxyRoutes,
-  sessionOperatorArchiveRoutes,
+  sessionBatchArchiveRoutes,
   sessionWsTokenRoutes,
   sessionPromptRoutes,
   sessionPullRequestRoutes,

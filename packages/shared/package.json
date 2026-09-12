@@ -162,6 +162,10 @@
       "import": "./dist/types/artifacts.js",
       "types": "./dist/types/artifacts.d.ts"
     },
+    "./types/session-archive": {
+      "import": "./dist/types/session-archive.js",
+      "types": "./dist/types/session-archive.d.ts"
+    },
     "./types/session-api": {
       "import": "./dist/types/session-api.js",
       "types": "./dist/types/session-api.d.ts"

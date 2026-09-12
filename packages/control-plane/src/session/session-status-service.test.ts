@@ -82,6 +82,10 @@ function harness(options: { session?: SessionRow | null } = {}) {
   };
   const backgroundTasks = createTestBackgroundTasks();
 
+  const archiveProjection = {
+    read: vi.fn(async () => ({ status: "archived" as SessionRow["status"], updatedAt: 2000 })),
+    archiveIfUnchanged: vi.fn(async () => true),
+  };
   const service = new SessionStatusService(
     backgroundTasks,
     log as unknown as Logger,
@@ -90,11 +94,13 @@ function harness(options: { session?: SessionRow | null } = {}) {
     artifactRepository,
     messenger,
     sessionIndex,
+    archiveProjection,
     parentSessions
   );
 
   return {
     service,
+    archiveProjection,
     repository,
     artifactRepository,
     broadcast,
@@ -452,5 +458,63 @@ describe("SessionStatusService.notifyParentOfChildUpdate", () => {
 
     expect(h.parentFetch).not.toHaveBeenCalled();
     expect(h.backgroundTasks.submissions).toHaveLength(0);
+  });
+});
+
+describe("SessionStatusService.confirmArchivedIndexStatus", () => {
+  const archived = () => harness({ session: createSession({ status: "archived" }) });
+  it("does not write an index that already agrees", async () => {
+    const h = archived();
+    await h.service.confirmArchivedIndexStatus();
+    expect(h.archiveProjection.archiveIfUnchanged).not.toHaveBeenCalled();
+  });
+  it("repairs the observed non-draft projection", async () => {
+    const h = archived();
+    h.archiveProjection.read.mockResolvedValue({ status: "completed", updatedAt: 5000 });
+    await h.service.confirmArchivedIndexStatus();
+    expect(h.archiveProjection.archiveIfUnchanged).toHaveBeenCalledWith("public-session-1", {
+      status: "completed",
+      updatedAt: 5000,
+    });
+  });
+  it("fails when another index mutation wins the compare-and-set", async () => {
+    const h = archived();
+    h.archiveProjection.read.mockResolvedValue({ status: "active", updatedAt: 5000 });
+    h.archiveProjection.archiveIfUnchanged.mockResolvedValue(false);
+    await expect(h.service.confirmArchivedIndexStatus()).rejects.toThrow("index changed");
+  });
+  it.each(["cancelled", "active"] as const)(
+    "does not repair after a concurrent %s transition",
+    async (status) => {
+      const h = archived();
+      h.archiveProjection.read.mockImplementation(async () => {
+        h.repository.getSession.mockReturnValue(createSession({ status, updated_at: 2001 }));
+        return { status: "completed", updatedAt: 5000 };
+      });
+      await expect(h.service.confirmArchivedIndexStatus()).rejects.toThrow("superseded");
+      expect(h.archiveProjection.archiveIfUnchanged).not.toHaveBeenCalled();
+    }
+  );
+  it("rejects a newer archived generation after the projection read", async () => {
+    const h = archived();
+    h.archiveProjection.read.mockImplementation(async () => {
+      h.repository.getSession.mockReturnValue(
+        createSession({ status: "archived", updated_at: 2001 })
+      );
+      return { status: "completed", updatedAt: 5000 };
+    });
+    await expect(h.service.confirmArchivedIndexStatus()).rejects.toThrow("superseded");
+    expect(h.archiveProjection.archiveIfUnchanged).not.toHaveBeenCalled();
+  });
+  it("reports supersession while a repair is pending", async () => {
+    const h = archived();
+    h.archiveProjection.read.mockResolvedValue({ status: "completed", updatedAt: 5000 });
+    h.archiveProjection.archiveIfUnchanged.mockImplementation(async () => {
+      h.repository.getSession.mockReturnValue(
+        createSession({ status: "active", updated_at: 2001 })
+      );
+      return true;
+    });
+    await expect(h.service.confirmArchivedIndexStatus()).rejects.toThrow("superseded");
   });
 });

@@ -65,26 +65,26 @@ not pass through Hono.
 
 ### Sessions
 
-| Endpoint                        | Method    | Description                    |
-| ------------------------------- | --------- | ------------------------------ |
-| `/sessions`                     | GET       | List workspace sessions        |
-| `/sessions`                     | POST      | Create new session             |
-| `/sessions/:id`                 | GET       | Get canonical session snapshot |
-| `/sessions/:id`                 | DELETE    | Delete session                 |
-| `/sessions/:id/sandbox-access`  | GET       | Get sandbox connection details |
-| `/sessions/:id/prompt`          | POST      | Enqueue prompt                 |
-| `/sessions/:id/stop`            | POST      | Stop execution                 |
-| `/sessions/:id/ws`              | WebSocket | Real-time connection           |
-| `/sessions/:id/events`          | GET       | Paginated events               |
-| `/sessions/:id/artifacts`       | GET       | List artifacts                 |
-| `/sessions/:id/participants`    | GET       | List runtime participants      |
-| `/sessions/:id/messages`        | GET       | List messages                  |
-| `/sessions/:id/pr`              | POST      | Create pull request            |
-| `/sessions/:id/scm-credentials` | POST      | Broker sandbox git credentials |
-| `/sessions/:id/ws-token`        | POST      | Generate WebSocket token       |
-| `/sessions/:id/archive`         | POST      | Archive session                |
-| `/sessions/:id/unarchive`       | POST      | Unarchive session              |
-| `/operator/sessions/archive`    | POST      | Archive one operator batch     |
+| Endpoint                        | Method    | Description                          |
+| ------------------------------- | --------- | ------------------------------------ |
+| `/sessions`                     | GET       | List workspace sessions              |
+| `/sessions`                     | POST      | Create new session                   |
+| `/sessions/:id`                 | GET       | Get canonical session snapshot       |
+| `/sessions/:id`                 | DELETE    | Delete session                       |
+| `/sessions/:id/sandbox-access`  | GET       | Get sandbox connection details       |
+| `/sessions/:id/prompt`          | POST      | Enqueue prompt                       |
+| `/sessions/:id/stop`            | POST      | Stop execution                       |
+| `/sessions/:id/ws`              | WebSocket | Real-time connection                 |
+| `/sessions/:id/events`          | GET       | Paginated events                     |
+| `/sessions/:id/artifacts`       | GET       | List artifacts                       |
+| `/sessions/:id/participants`    | GET       | List runtime participants            |
+| `/sessions/:id/messages`        | GET       | List messages                        |
+| `/sessions/:id/pr`              | POST      | Create pull request                  |
+| `/sessions/:id/scm-credentials` | POST      | Broker sandbox git credentials       |
+| `/sessions/:id/ws-token`        | POST      | Generate WebSocket token             |
+| `/sessions/:id/archive`         | POST      | Archive session                      |
+| `/sessions/:id/unarchive`       | POST      | Unarchive session                    |
+| `/sessions/batch-archive`       | POST      | Archive explicitly selected sessions |
 
 ### Create PR Payload
 
@@ -412,13 +412,44 @@ Existing sessions remain pinned to their stored authentication mode.
 > **Single-Tenant Only**: This control plane is designed for single-tenant deployment where all
 > users are trusted members of the same organization.
 
-`POST /operator/sessions/archive` is maintenance-only. The caller must be an authenticated human
-holding `sessions.archive_any`, which Owner and Administrator carry by default and a custom role
-can be granted; the router enforces it, so the authorization audit records the same decision the
-caller observes. The endpoint scans a bounded, cursor-paged snapshot and asks each Session Durable
-Object to archive itself; cancelled sessions and sessions with queued work are reported as skipped,
-and index rows whose Durable Object no longer exists are reported as orphaned rather than retried.
-Ordinary `/sessions/:id/archive` authorization remains participant-scoped on `sessions.lifecycle`.
+Bulk archiving uses `POST /sessions/batch-archive` with an explicit selection:
+
+```json
+{ "sessionIds": ["session-one", "session-two"] }
+```
+
+The request requires 1–25 unique, non-empty session IDs. Unknown fields and the old operator cursor
+format are rejected. The caller must be an authenticated human holding `sessions.bulk_archive`,
+granted to Owner and Administrator by default and available to custom roles. Admission and
+authorization auditing use the ordinary RBAC pipeline. Single-session `/sessions/:id/archive`
+continues to use workspace `sessions.lifecycle`; it is not participant-scoped.
+
+A valid batch returns HTTP 200 with one result per ID, in request order:
+
+```json
+{
+  "results": [
+    { "sessionId": "session-one", "outcome": "archived" },
+    { "sessionId": "session-two", "outcome": "failed" }
+  ]
+}
+```
+
+Outcomes are `archived`, `already_archived`, `skipped_cancelled`, `skipped_queued_work`,
+`not_found`, or `failed`. The batch is not atomic: successful targets remain archived even if
+another target fails. Retry only failed IDs; the endpoint does not scan or replay earlier targets.
+Use the existing session-list API to choose targets. A missing runtime is reported as `not_found`,
+without rewriting its index row. Runtime calls have bounded concurrency and individual timeouts.
+
+Both single and batch requests use the same runtime archive operation. The runtime checks current
+state before changing it, refuses cancelled sessions or queued work, and confirms index agreement
+before returning success. Stale projections are repaired with a compare-and-set against the observed
+status and activity timestamp; a conflicting write, missing index row, or unavailable projection
+returns a retryable failure. Single-session callers receive HTTP 503 in that case; batch callers
+receive `failed` for that ID. Single-session success/error bodies retain their existing fields and
+include an additive `outcome` for successful or ineligible archive decisions.
+
+The former `/operator/sessions/archive` and `/internal/operator-archive` proposal is not exposed.
 
 ### GitHub App Token Flow
 

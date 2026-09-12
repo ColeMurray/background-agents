@@ -59,7 +59,7 @@ export const PERMISSION_IDS = [
   "repositories.settings.manage",
   "repositories.use",
   "scm_settings.manage",
-  "sessions.archive_any",
+  "sessions.bulk_archive",
   "sessions.collaborate",
   "sessions.create",
   "sessions.delete",

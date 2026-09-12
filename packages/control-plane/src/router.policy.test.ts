@@ -205,11 +205,11 @@ describe("route policy table", () => {
       },
       cacheControl: "private, no-store",
     });
-    expect(routeFor("POST", "/operator/sessions/archive")).toMatchObject({
+    expect(routeFor("POST", "/sessions/batch-archive")).toMatchObject({
       authentication: { kind: "user" },
       authorization: {
         kind: "active-user",
-        allOf: [{ kind: "permission", permission: "sessions.archive_any" }],
+        allOf: [{ kind: "permission", permission: "sessions.bulk_archive" }],
         service: { kind: "deny" },
         auditAllowed: true,
       },
@@ -356,7 +356,7 @@ describe("route policy table", () => {
   it.each([
     ["GET", "/sessions/session-1"],
     ["GET", "/sessions/inbox"],
-    ["POST", "/operator/sessions/archive"],
+    ["POST", "/sessions/batch-archive"],
     ["GET", "/sessions/session-1/sandbox-access"],
     ["PATCH", "/sessions/session-1/read-state"],
     ["GET", "/sessions/session-1/skills"],

@@ -127,11 +127,11 @@ describe("RBAC registry", () => {
     expect(permissionsForBuiltInRole("viewer")).not.toContain("workspace.audit.read");
   });
 
-  it("reserves archiving other people's sessions for Owner and Administrator", () => {
-    expect(permissionsForBuiltInRole("owner")).toContain("sessions.archive_any");
-    expect(permissionsForBuiltInRole("administrator")).toContain("sessions.archive_any");
-    expect(permissionsForBuiltInRole("member")).not.toContain("sessions.archive_any");
-    expect(permissionsForBuiltInRole("viewer")).not.toContain("sessions.archive_any");
+  it("reserves bulk archiving for Owner and Administrator", () => {
+    expect(permissionsForBuiltInRole("owner")).toContain("sessions.bulk_archive");
+    expect(permissionsForBuiltInRole("administrator")).toContain("sessions.bulk_archive");
+    expect(permissionsForBuiltInRole("member")).not.toContain("sessions.bulk_archive");
+    expect(permissionsForBuiltInRole("viewer")).not.toContain("sessions.bulk_archive");
   });
 
   it("makes Member a superset of Viewer", () => {

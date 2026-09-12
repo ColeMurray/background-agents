@@ -125,7 +125,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "repositories.secrets.manage",
   "repositories.settings.manage",
   "scm_settings.manage",
-  "sessions.archive_any",
+  "sessions.bulk_archive",
   "sessions.collaborate",
   "sessions.create",
   "sessions.delete",

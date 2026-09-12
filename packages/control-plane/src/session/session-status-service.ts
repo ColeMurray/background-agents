@@ -12,6 +12,7 @@ import { SessionInternalPaths } from "./contracts";
 import type { SessionRuntimeClient } from "./runtime-client";
 import type { Logger } from "../logger";
 import type { SessionIndexStore } from "../db/session-index";
+import type { SessionArchiveProjectionStore } from "../db/session-archive-projection-store";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
@@ -36,6 +37,10 @@ export class SessionStatusService {
     private readonly artifactRepository: ArtifactRepository,
     private readonly messenger: SessionMessenger,
     private readonly sessionIndex: SessionIndexProjections,
+    private readonly archiveProjection: Pick<
+      SessionArchiveProjectionStore,
+      "read" | "archiveIfUnchanged"
+    >,
     /** Reaches the parent session's runtime for the child rollup. */
     private readonly sessions: SessionRuntimeClient
   ) {}
@@ -100,6 +105,37 @@ export class SessionStatusService {
 
     if (repaired && session.status === "active") {
       await this.sessionIndex.finalizeChildAdmission(publicSessionId);
+    }
+  }
+
+  /**
+   * Confirm an archive reached the index, repairing a stale activity timestamp
+   * with a compare-and-set. Re-read local state after each I/O: an unarchive or
+   * cancellation may have superseded this request while the index was pending.
+   */
+  async confirmArchivedIndexStatus(): Promise<void> {
+    const session = this.repository.getSession();
+    if (!session || session.status !== "archived") throw new Error("Archive superseded");
+    const publicSessionId = this.getPublicSessionId(session);
+    try {
+      const projection = await this.archiveProjection.read(publicSessionId);
+      const current = this.repository.getSession();
+      if (!current || current.status !== "archived" || current.updated_at !== session.updated_at) {
+        throw new Error("Archive superseded");
+      }
+      if (!projection) throw new Error("Session index row missing");
+      if (projection.status !== "archived") {
+        if (!(await this.archiveProjection.archiveIfUnchanged(publicSessionId, projection))) {
+          throw new Error("Session index changed during archive");
+        }
+        const latest = this.repository.getSession();
+        if (!latest || latest.status !== "archived" || latest.updated_at !== session.updated_at) {
+          throw new Error("Archive superseded");
+        }
+      }
+    } catch (error) {
+      this.logSessionIndexStatusSyncError(publicSessionId, "archived", session.updated_at, error);
+      throw error;
     }
   }
 
