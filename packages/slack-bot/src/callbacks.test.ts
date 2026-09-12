@@ -312,6 +312,91 @@ async function postCallback(path: string, payload: unknown, env = makeEnv(), ctx
   return { response, env, ctx };
 }
 
+describe("POST /callbacks/activity", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function activityData(overrides: Record<string, unknown> = {}) {
+    return {
+      sessionId: "session-1",
+      messageId: "msg-1",
+      timestamp: Date.now(),
+      context: {
+        source: "slack",
+        channel: "C123",
+        threadTs: "111.222",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+      },
+      ...overrides,
+    };
+  }
+
+  it("re-asserts the working indicator on the thread", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(activityData());
+
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+    expect(response.status).toBe(200);
+
+    await flushWaitUntil(ctx);
+    expect(slackCall(fetchMock, "assistant.threads.setStatus")?.body).toEqual({
+      channel_id: "C123",
+      thread_ts: "111.222",
+      status: "Working...",
+      loading_messages: ["Working..."],
+    });
+  });
+
+  it("rejects a payload signed with the wrong secret", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(activityData(), "wrong-secret");
+
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale refresh", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(activityData({ timestamp: Date.now() - 5 * 60 * 1000 }));
+
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a future-dated refresh", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(activityData({ timestamp: Date.now() + 5 * 60 * 1000 }));
+
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a payload missing the thread context", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload({
+      sessionId: "session-1",
+      messageId: "msg-1",
+      timestamp: Date.now(),
+    });
+
+    const { response } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /callbacks/complete", () => {
   afterEach(() => {
     vi.restoreAllMocks();

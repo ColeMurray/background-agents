@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Logger } from "../logger";
 import {
   CallbackNotificationService,
+  SLACK_ACTIVITY_REFRESH_INTERVAL_MS,
   type CallbackRepository,
   type CallbackServiceEnv,
   type CallbackServiceDeps,
@@ -501,6 +502,129 @@ describe("CallbackNotificationService", () => {
         expect(harness.linearBot.fetch).not.toHaveBeenCalled();
       }
     );
+  });
+
+  describe("refreshSlackActivity", () => {
+    const SLACK_CONTEXT = { source: "slack", channel: "C123", threadTs: "111.222" };
+    // `now` is a wall-clock reading taken by the sandbox-event router.
+    const NOW = 1_700_000_000_000;
+
+    function withSlackMessage() {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(SLACK_CONTEXT),
+        source: "slack",
+      });
+      const fetchMock = vi.mocked(harness.slackBot.fetch);
+      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+      return fetchMock;
+    }
+
+    it("posts a signed refresh for a slack message", async () => {
+      const fetchMock = withSlackMessage();
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://internal/callbacks/activity",
+        expect.objectContaining({ method: "POST" })
+      );
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+      expect(body).toMatchObject({
+        sessionId: "session-123",
+        messageId: "msg-1",
+        timestamp: NOW,
+        context: expect.objectContaining({ channel: "C123", threadTs: "111.222" }),
+      });
+      expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+    });
+
+    it("holds the next refresh until the interval has passed", async () => {
+      const fetchMock = withSlackMessage();
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await harness.service.refreshSlackActivity(
+        "msg-1",
+        NOW + SLACK_ACTIVITY_REFRESH_INTERVAL_MS - 1
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await harness.service.refreshSlackActivity("msg-1", NOW + SLACK_ACTIVITY_REFRESH_INTERVAL_MS);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not read the message while the window is still open", async () => {
+      withSlackMessage();
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+      harness.repository.getMessageCallbackContext.mockClear();
+
+      await harness.service.refreshSlackActivity("msg-1", NOW + 30_000);
+      expect(harness.repository.getMessageCallbackContext).not.toHaveBeenCalled();
+    });
+
+    it("leaves the window open when delivery fails so the next heartbeat retries", async () => {
+      const fetchMock = withSlackMessage();
+      fetchMock.mockResolvedValue(new Response("nope", { status: 500 }));
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+      const afterFirstRefresh = fetchMock.mock.calls.length;
+      expect(afterFirstRefresh).toBeGreaterThan(0);
+
+      // A heartbeat well inside the interval still retries: nothing was
+      // delivered, so nothing moved the window.
+      await harness.service.refreshSlackActivity("msg-1", NOW + 30_000);
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(afterFirstRefresh);
+    });
+
+    it("skips a non-slack message without calling any bot", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(LINEAR_CALLBACK_CONTEXT),
+        source: "linear",
+      });
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+      expect(harness.linearBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it("skips a slack message that carries no callback context", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: null,
+        source: "slack",
+      });
+
+      await harness.service.refreshSlackActivity("msg-1", NOW);
+
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it("skips when the slack binding is absent", async () => {
+      harness = createTestHarness({ env: { SLACK_BOT: undefined } });
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(SLACK_CONTEXT),
+        source: "slack",
+      });
+
+      await expect(harness.service.refreshSlackActivity("msg-1", NOW)).resolves.toBeUndefined();
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it("is renewed by a delivered tool-call callback, so a busy turn pays nothing", async () => {
+      const fetchMock = withSlackMessage();
+      const toolCallAt = Date.now();
+
+      await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // That callback set the Slack indicator, so a heartbeat arriving inside
+      // the interval has nothing left to do.
+      await harness.service.refreshSlackActivity("msg-1", toolCallAt + 30_000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("notifyToolCall", () => {
