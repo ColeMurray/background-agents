@@ -6,10 +6,21 @@ import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import type { MessageRow } from "./types";
+import type { ExecutionBudget } from "./execution-deadline";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
+
+export interface MessageExecutionMetadata {
+  execution_deadline_ms: number | null;
+  cleanup_deadline_ms: number | null;
+  cleanup_reserve_ms?: number | null;
+  execution_sandbox_id: string | null;
+  requires_stop_evidence: number;
+  stop_containment_attempts?: number;
+  stop_escalated_at?: number | null;
+}
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -133,12 +144,215 @@ export class MessageRepository {
     return row ? { id: row.id, deadline: row.stop_confirmation_deadline } : null;
   }
 
+  getMessageExecutionMetadata(messageId: string): MessageExecutionMetadata | null {
+    return (
+      (
+        this.sql
+          .exec(
+            `SELECT execution_deadline_ms, cleanup_deadline_ms, cleanup_reserve_ms, execution_sandbox_id,
+              requires_stop_evidence, stop_containment_attempts, stop_escalated_at FROM messages WHERE id = ?`,
+            messageId
+          )
+          .toArray() as MessageExecutionMetadata[]
+      )[0] ?? null
+    );
+  }
+
+  /** Early completion/Stop starts the one cleanup interval, never renews it. */
+  beginMessageCleanup(messageId: string, now: number, observedDeadlineMs?: number): number | null {
+    let observedBound: number | null = null;
+    if (observedDeadlineMs !== undefined) {
+      const observed = this.sql
+        .exec(
+          `UPDATE messages SET cleanup_deadline_ms = MIN(COALESCE(cleanup_deadline_ms, ?), ?)
+         WHERE id = ? RETURNING cleanup_deadline_ms`,
+          observedDeadlineMs,
+          observedDeadlineMs,
+          messageId
+        )
+        .toArray() as Array<{ cleanup_deadline_ms: number }>;
+      observedBound = observed[0]?.cleanup_deadline_ms ?? null;
+    }
+    const row = (
+      this.sql
+        .exec(
+          `UPDATE messages SET cleanup_deadline_ms = MIN(cleanup_deadline_ms, ? + cleanup_reserve_ms)
+       WHERE id = ? AND cleanup_reserve_ms IS NOT NULL
+       RETURNING cleanup_deadline_ms`,
+          now,
+          messageId
+        )
+        .toArray() as Array<{ cleanup_deadline_ms: number }>
+    )[0];
+    return row?.cleanup_deadline_ms ?? observedBound;
+  }
+
+  getAutomationMessage(runId: string): Pick<MessageRow, "id" | "status" | "error_message"> | null {
+    return (
+      (
+        this.sql
+          .exec(
+            `SELECT id, status, error_message FROM messages
+       WHERE json_valid(callback_context)
+         AND json_extract(callback_context, '$.source') = 'automation'
+         AND json_extract(callback_context, '$.runId') = ?
+       ORDER BY created_at, rowid LIMIT 1`,
+            runId
+          )
+          .toArray() as Array<Pick<MessageRow, "id" | "status" | "error_message">>
+      )[0] ?? null
+    );
+  }
+
+  getExecutionLaunch(
+    runId: string,
+    launchId: string
+  ): { messageId: string; status: MessageStatus; error: string | null } | null {
+    return (
+      (
+        this.sql
+          .exec(
+            `SELECT id AS messageId, status, error_message AS error FROM messages WHERE json_valid(callback_context)
+         AND json_extract(callback_context, '$.source') IN ('automation', 'slack')
+         AND json_extract(callback_context, '$.runId') = ?
+         AND json_extract(callback_context, '$.executionLaunchId') = ? LIMIT 1`,
+            runId,
+            launchId
+          )
+          .toArray() as Array<{ messageId: string; status: MessageStatus; error: string | null }>
+      )[0] ?? null
+    );
+  }
+
+  listPendingAdmissionDeadlines(): Array<{ id: string; deadline: number }> {
+    return this.sql
+      .exec(
+        `SELECT id, json_extract(callback_context, '$.admissionDeadlineMs') AS deadline
+       FROM messages WHERE status = 'pending' AND execution_deadline_ms IS NULL
+         AND stop_confirmation_deadline IS NULL AND json_valid(callback_context)
+         AND json_extract(callback_context, '$.source') IN ('automation', 'slack')
+         AND json_type(callback_context, '$.runId') = 'text'
+         AND json_type(callback_context, '$.executionLaunchId') = 'text'
+         AND json_type(callback_context, '$.admissionDeadlineMs') = 'integer'
+         AND json_extract(callback_context, '$.admissionDeadlineMs') > 0`
+      )
+      .toArray() as Array<{ id: string; deadline: number }>;
+  }
+
+  /** A delayed ready frame must upgrade the already-dispatched turn as well. */
+  requireStopEvidenceForSandbox(sandboxId: string): void {
+    this.sql.exec(
+      `UPDATE messages SET requires_stop_evidence = 1
+       WHERE execution_sandbox_id = ?
+         AND (status = 'processing' OR stop_confirmation_deadline IS NOT NULL)`,
+      sandboxId
+    );
+  }
+
+  requireStopEvidenceForMessage(messageId: string, sandboxId: string): void {
+    this.sql.exec(
+      `UPDATE messages SET requires_stop_evidence = 1,
+         execution_sandbox_id = COALESCE(execution_sandbox_id, ?)
+       WHERE id = ? AND (execution_sandbox_id IS NULL OR execution_sandbox_id = ?)
+         AND (status = 'processing' OR stop_confirmation_deadline IS NOT NULL)`,
+      sandboxId,
+      messageId,
+      sandboxId
+    );
+  }
+
   markMessageAwaitingStopConfirmation(messageId: string, deadline: number): void {
     this.sql.exec(
       `UPDATE messages SET stop_confirmation_deadline = ? WHERE id = ?`,
       deadline,
       messageId
     );
+  }
+
+  /** Persist ambiguous-delivery recovery and its wake-up as one crash boundary. */
+  prepareDispatchRecovery(
+    messageId: string,
+    deadline: number,
+    persistAlarmIntent: () => void
+  ): boolean {
+    return this.transactionSync(() => {
+      const updated = this.sql.exec(
+        `UPDATE messages SET status = 'pending', stop_confirmation_deadline = ?
+         WHERE id = ? AND status = 'processing' RETURNING id`,
+        deadline,
+        messageId
+      );
+      if (updated.toArray().length !== 1) return false;
+      this.sql.exec(`DELETE FROM events WHERE id = ?`, `user_message:${messageId}`);
+      persistAlarmIntent();
+      return true;
+    });
+  }
+
+  /** Reserve an attempt before any provider await, including recovery after a crash. */
+  claimStopContainmentAttempt(
+    messageId: string,
+    nextAttemptAt: number,
+    maxAttempts: number,
+    persistAlarmIntent: () => void
+  ): number | null {
+    return this.transactionSync(() => {
+      const row = (
+        this.sql
+          .exec(
+            `UPDATE messages SET stop_containment_attempts = stop_containment_attempts + 1,
+           stop_confirmation_deadline = ? WHERE id = ? AND stop_confirmation_deadline IS NOT NULL
+           AND stop_escalated_at IS NULL AND stop_containment_attempts < ?
+         RETURNING stop_containment_attempts`,
+            nextAttemptAt,
+            messageId,
+            maxAttempts
+          )
+          .toArray() as Array<{ stop_containment_attempts: number }>
+      )[0];
+      if (!row) return null;
+      persistAlarmIntent();
+      return row.stop_containment_attempts;
+    });
+  }
+
+  /** Escalation is terminal for automatic recovery, not evidence of cessation. */
+  recordStopContainmentEscalation(
+    messageId: string,
+    now: number
+  ): Extract<SandboxEvent, { type: "warning" }> | null {
+    return this.transactionSync(() => {
+      const row = (
+        this.sql
+          .exec(
+            `UPDATE messages SET stop_escalated_at = ? WHERE id = ?
+           AND stop_confirmation_deadline IS NOT NULL AND stop_escalated_at IS NULL
+         RETURNING execution_sandbox_id, stop_containment_attempts`,
+            now,
+            messageId
+          )
+          .toArray() as Array<{
+          execution_sandbox_id: string | null;
+          stop_containment_attempts: number;
+        }>
+      )[0];
+      if (!row) return null;
+      const event: Extract<SandboxEvent, { type: "warning" }> = {
+        type: "warning",
+        scope: "provider",
+        sandboxId: row.execution_sandbox_id ?? undefined,
+        timestamp: now / 1000,
+        message: `Execution could not be confirmed stopped after ${row.stop_containment_attempts} containment attempts. Automatic recovery has stopped; this runtime remains blocked and requires operator recovery.`,
+      };
+      this.eventRepository.createEvent({
+        id: `stop_containment_escalated:${messageId}:${now}`,
+        type: "warning",
+        data: JSON.stringify(event),
+        messageId,
+        createdAt: now,
+      });
+      return event;
+    });
   }
 
   /**
@@ -165,7 +379,11 @@ export class MessageRepository {
   }
 
   clearMessageAwaitingStopConfirmation(messageId: string): void {
-    this.sql.exec(`UPDATE messages SET stop_confirmation_deadline = NULL WHERE id = ?`, messageId);
+    this.sql.exec(
+      `UPDATE messages SET stop_confirmation_deadline = NULL,
+      stop_containment_attempts = 0, stop_escalated_at = NULL WHERE id = ?`,
+      messageId
+    );
   }
 
   getProcessingMessageWithCreatedAt(): { id: string; created_at: number } | null {
@@ -296,7 +514,7 @@ export class MessageRepository {
   cancelPendingMessage(messageId: string): boolean {
     return this.transactionSync(() => {
       const result = this.sql.exec(
-        `SELECT status, source, callback_context FROM messages WHERE id = ?`,
+        `SELECT status, source, callback_context, stop_confirmation_deadline FROM messages WHERE id = ?`,
         messageId
       );
       const message = (
@@ -304,12 +522,14 @@ export class MessageRepository {
           status?: unknown;
           source: string;
           callback_context: string | null;
+          stop_confirmation_deadline?: number | null;
         }>
       )[0];
       const status = parseMessageStatus(message?.status);
       if (
         !message ||
         status !== "pending" ||
+        message.stop_confirmation_deadline != null ||
         message.source !== "web" ||
         message.callback_context !== null
       ) {
@@ -318,7 +538,7 @@ export class MessageRepository {
 
       this.attachments.releaseForMessage(messageId);
       const deleted = this.sql.exec(
-        `DELETE FROM messages WHERE id = ? AND status = 'pending'`,
+        `DELETE FROM messages WHERE id = ? AND status = 'pending' AND stop_confirmation_deadline IS NULL`,
         messageId
       );
       deleted.toArray();
@@ -381,18 +601,37 @@ export class MessageRepository {
   startMessageProcessing(
     messageId: string,
     startedAt: number,
-    userMessageEvent: Extract<SandboxEvent, { type: "user_message" }>
+    userMessageEvent: Extract<SandboxEvent, { type: "user_message" }>,
+    budget?: ExecutionBudget
   ): boolean {
     return this.transactionSync(() => {
       const claimed = this.sql.exec(
-        `UPDATE messages SET status = 'processing', started_at = ?
+        `UPDATE messages SET status = 'processing', started_at = COALESCE(started_at, ?)
          WHERE id = ? AND status = 'pending'
            AND NOT EXISTS (SELECT 1 FROM messages WHERE status = 'processing')
+           AND NOT EXISTS (SELECT 1 FROM messages WHERE stop_confirmation_deadline IS NOT NULL)
          RETURNING id`,
         startedAt,
         messageId
       );
       if (claimed.toArray().length !== 1) return false;
+
+      if (budget) {
+        this.sql.exec(
+          `UPDATE messages SET execution_deadline_ms = MIN(COALESCE(execution_deadline_ms, ?), ?),
+             cleanup_deadline_ms = MIN(COALESCE(cleanup_deadline_ms, ?), ?),
+             cleanup_reserve_ms = COALESCE(cleanup_reserve_ms, ?),
+             execution_sandbox_id = ?, requires_stop_evidence = ? WHERE id = ?`,
+          budget.executionDeadlineMs,
+          budget.executionDeadlineMs,
+          budget.cleanupDeadlineMs,
+          budget.cleanupDeadlineMs,
+          budget.cleanupReserveMs,
+          budget.sandboxId,
+          budget.requiresStopEvidence ? 1 : 0,
+          messageId
+        );
+      }
 
       this.eventRepository.createEvent({
         id: `user_message:${messageId}`,
@@ -408,7 +647,7 @@ export class MessageRepository {
   updateMessageToPending(messageId: string): void {
     this.transactionSync(() => {
       const updated = this.sql.exec(
-        `UPDATE messages SET status = 'pending', started_at = NULL
+        `UPDATE messages SET status = 'pending'
          WHERE id = ? AND status = 'processing'
          RETURNING id`,
         messageId

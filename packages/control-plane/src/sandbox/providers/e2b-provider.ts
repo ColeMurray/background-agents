@@ -55,6 +55,7 @@ import {
   type ResumeResult,
   type SandboxProvider,
   type SandboxProviderCapabilities,
+  type SandboxExecutionExpiry,
   type SnapshotConfig,
   type SnapshotResult,
   type StopConfig,
@@ -167,12 +168,6 @@ export class E2BSandboxProvider implements SandboxProvider {
   readonly name = "e2b";
 
   /**
-   * Stop reasons after which the provider object cannot be resumed, including
-   * replacement by a newly-created sandbox.
-   */
-  private static readonly TERMINAL_STOP_REASONS = new Set(["connecting_timeout", "respawn"]);
-
-  /**
    * Session continuity on E2B is provider-managed: stop pauses the sandbox and
    * resume reconnects to it, so there is no session snapshot/restore pair here.
    *
@@ -218,6 +213,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         extraEnv
       );
 
+      const requestStartedAtMs = Date.now();
       const sandbox = await this.client.createSandbox({
         templateID: config.prebuiltImageId || this.client.config.templateId,
         envVars,
@@ -234,11 +230,17 @@ export class E2BSandboxProvider implements SandboxProvider {
         autoResume: false,
       });
 
+      let executionExpiry: SandboxExecutionExpiry;
       try {
         await this.startEntrypoint(sandbox);
+        executionExpiry = await this.readExecutionExpiry(
+          sandbox.sandboxID,
+          requestStartedAtMs,
+          timeoutSeconds
+        );
       } catch (error) {
-        // The sandbox exists but can never boot — kill it rather than leak it
-        // until its TTL, then let the create fail loudly.
+        // Boot failed or expiry discovery proved the sandbox is gone. Optional
+        // expiry observation failures are handled by readExecutionExpiry.
         await this.cleanupSandbox(sandbox.sandboxID, "e2b.cleanup_kill_failed");
         throw error;
       }
@@ -255,6 +257,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.sandboxID,
         createdAt: Date.now(),
+        executionExpiry,
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
@@ -382,7 +385,9 @@ export class E2BSandboxProvider implements SandboxProvider {
       }
 
       const timeoutSeconds = config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
+      let executionExpiry: SandboxExecutionExpiry;
       try {
+        const requestStartedAtMs = Date.now();
         if (sandbox.state === "paused") {
           await this.client.connectSandbox(config.providerObjectId, timeoutSeconds);
         } else if (sandbox.state === "running") {
@@ -394,6 +399,12 @@ export class E2BSandboxProvider implements SandboxProvider {
             shouldSpawnFresh: true,
           };
         }
+        // The old GET precedes renewal and cannot describe the new expiry.
+        executionExpiry = await this.readExecutionExpiry(
+          config.providerObjectId,
+          requestStartedAtMs,
+          timeoutSeconds
+        );
       } catch (error) {
         // The sandbox can disappear between the GET above and this call — treat a
         // late 404 the same as an initial one so the manager spawns fresh.
@@ -427,6 +438,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       return {
         success: true,
         providerObjectId: sandbox.sandboxID,
+        executionExpiry,
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
@@ -438,14 +450,11 @@ export class E2BSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Idle/heartbeat stops are a resumable PAUSE (the manager routes them here via
-   * supportsPersistentResume, and resumeSandbox brings the sandbox back).
-   * Terminal stops (a sandbox that never connected) instead KILL: the manager
-   * marks that session `failed` and won't resume it, so pausing would orphan a
-   * sandbox E2B retains indefinitely.
+   * Execute the lifecycle owner's decision: suspend preserves a resumable VM,
+   * while terminate removes it. Diagnostic reasons never select destruction.
    */
   async stopSandbox(config: StopConfig): Promise<StopResult> {
-    const terminal = E2BSandboxProvider.TERMINAL_STOP_REASONS.has(config.reason);
+    const terminal = config.mode === "terminate";
     try {
       try {
         if (terminal) {
@@ -454,16 +463,24 @@ export class E2BSandboxProvider implements SandboxProvider {
             ...(config.signal ? [config.signal] : [])
           );
         } else {
-          await this.client.pauseSandbox(config.providerObjectId);
+          await this.client.pauseSandbox(config.providerObjectId, undefined, config.signal);
         }
       } catch (error) {
-        // Already gone or already paused — nothing to do.
-        if (error instanceof E2BNotFoundError || error instanceof E2BConflictError) {
-          return { success: true };
-        }
+        if (error instanceof E2BNotFoundError) return { success: true };
+        // A conflict can mean an operation is in progress, not that it stopped.
+        if (!(error instanceof E2BConflictError)) throw error;
+      }
+      try {
+        const sandbox = await this.client.getSandbox(config.providerObjectId, config.signal);
+        if (!terminal && sandbox.state === "paused") return { success: true };
+        return {
+          success: false,
+          error: `E2B ${terminal ? "deletion" : "pause"} is not confirmed (state: ${sandbox.state})`,
+        };
+      } catch (error) {
+        if (error instanceof E2BNotFoundError) return { success: true };
         throw error;
       }
-      return { success: true };
     } catch (error) {
       throw this.classifyError(
         `Failed to stop (${terminal ? "kill" : "pause"}) E2B sandbox`,
@@ -473,11 +490,37 @@ export class E2BSandboxProvider implements SandboxProvider {
     }
   }
 
+  private async readExecutionExpiry(
+    providerObjectId: string,
+    requestStartedAtMs: number,
+    timeoutSeconds: number
+  ): Promise<SandboxExecutionExpiry> {
+    try {
+      const sandbox = await this.client.getSandbox(providerObjectId);
+      const expiresAtMs = sandbox.endAt ? Date.parse(sandbox.endAt) : NaN;
+      if (Number.isFinite(expiresAtMs)) return { kind: "hard", expiresAtMs };
+    } catch (error) {
+      if (error instanceof E2BNotFoundError) throw error;
+      // Renewal/create already succeeded. Optional observation must not turn
+      // that success into a failed lifecycle operation or destroy its sandbox.
+      log.warn("e2b.execution_expiry_observation_failed", {
+        sandbox_id: providerObjectId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    // E2B's acknowledged timeout runs from create/connect/setTimeout, not from
+    // this response or entrypoint completion. Include all request/setup latency.
+    // https://github.com/e2b-dev/E2B/blob/main/spec/openapi.yml
+    return Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
+      ? { kind: "conservative", expiresAtMs: requestStartedAtMs + timeoutSeconds * 1000 }
+      : { kind: "unknown" };
+  }
+
   /**
    * Permanently kill a sandbox. Used to tear down the ephemeral image-build
-   * sandbox once its filesystem has been snapshotted: stopSandbox only pauses
-   * (correct for idle sessions) and would leak the single-use build sandbox
-   * until its TTL. Idempotent — a missing sandbox is treated as already gone.
+   * sandbox once its filesystem has been snapshotted. Unlike idle suspension,
+   * this releases the single-use build sandbox. Idempotent — a missing sandbox
+   * is treated as already gone.
    */
   async deleteSandbox(providerObjectId: string, signal?: AbortSignal): Promise<void> {
     try {
@@ -604,7 +647,11 @@ export class E2BSandboxProvider implements SandboxProvider {
         vncPassword,
       }
     );
-    Object.assign(envVars, extraEnv, E2B_SANDBOX_ENV);
+    Object.assign(envVars, extraEnv, E2B_SANDBOX_ENV, {
+      // Auto-pause preserves memory and inherited descriptors. Discard runtime
+      // hook output until capture can exclude it; image builds still use files.
+      HOOK_LOG_MODE: "discard",
+    });
     return { envVars, codeServerPassword, vncPassword };
   }
 

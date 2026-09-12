@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { ModalSandboxProvider } from "./modal-provider";
-import { SandboxProviderError } from "../provider";
+import { SandboxProviderError, type StopConfig, type StopResult } from "../provider";
 import { ModalApiError } from "../client";
 import { RequestDeadlineError } from "../request-deadline";
 import type {
@@ -37,6 +37,7 @@ function createMockModalClient(
     ) => Promise<CreateImageBuildSandboxResponse>;
     startImageBuildSandbox: (req: StartImageBuildSandboxRequest) => Promise<void>;
     terminateImageBuildSandbox: (req: TerminateImageBuildSandboxRequest) => Promise<void>;
+    terminateSandbox: (req: StopConfig) => Promise<StopResult>;
   }> = {}
 ): ModalClient {
   return {
@@ -73,6 +74,7 @@ function createMockModalClient(
     ),
     startImageBuildSandbox: vi.fn(async () => undefined),
     terminateImageBuildSandbox: vi.fn(async () => undefined),
+    terminateSandbox: vi.fn(async () => ({ success: true })),
     ...overrides,
   } as unknown as ModalClient;
 }
@@ -92,6 +94,86 @@ const testConfig = {
 // ==================== Tests ====================
 
 describe("ModalSandboxProvider", () => {
+  describe("stop mode", () => {
+    it.each(["inactivity_timeout", "inactivty_timeout", "new_diagnostic_reason"])(
+      "rejects suspension without terminating Modal for diagnostic reason %s",
+      async (reason) => {
+        const client = createMockModalClient();
+        const provider = new ModalSandboxProvider(client);
+
+        expect(
+          await provider.stopSandbox({
+            providerObjectId: "modal-obj-123",
+            sessionId: "test-session",
+            mode: "suspend",
+            reason,
+          })
+        ).toEqual({
+          success: false,
+          error: expect.stringContaining("does not support resumable suspension"),
+        });
+        expect(client.terminateSandbox).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(["inactivity_timeout", "new_diagnostic_reason"])(
+      "terminates Modal with explicit mode regardless of diagnostic reason %s",
+      async (reason) => {
+        const client = createMockModalClient();
+        const provider = new ModalSandboxProvider(client);
+        const config: StopConfig = {
+          providerObjectId: "modal-obj-123",
+          sessionId: "test-session",
+          mode: "terminate",
+          reason,
+          signal: new AbortController().signal,
+        };
+
+        await expect(provider.stopSandbox(config)).resolves.toEqual({ success: true });
+        expect(client.terminateSandbox).toHaveBeenCalledWith(config);
+      }
+    );
+
+    it("preserves unsuccessful termination confirmation", async () => {
+      const client = createMockModalClient({
+        terminateSandbox: vi.fn(async () => ({ success: false, error: "still running" })),
+      });
+      const provider = new ModalSandboxProvider(client);
+
+      await expect(
+        provider.stopSandbox({
+          providerObjectId: "modal-obj-123",
+          sessionId: "test-session",
+          mode: "terminate",
+          reason: "execution_timeout",
+        })
+      ).resolves.toEqual({ success: false, error: "still running" });
+    });
+  });
+
+  it("does not infer expiry from a legacy creation timestamp", async () => {
+    const provider = new ModalSandboxProvider(createMockModalClient());
+    expect(
+      (await provider.createSandbox({ ...testConfig, timeoutSeconds: 100 })).executionExpiry
+    ).toEqual({ kind: "unknown" });
+  });
+
+  it("preserves provider lifetime evidence without adding API latency", async () => {
+    const provider = new ModalSandboxProvider(
+      createMockModalClient({
+        createSandbox: vi.fn(async () => ({
+          sandboxId: "sb-1",
+          createdAt: Date.now(),
+          executionExpiry: { kind: "conservative" as const, expiresAtMs: 123456 },
+        })),
+      })
+    );
+    expect((await provider.createSandbox(testConfig)).executionExpiry).toEqual({
+      kind: "conservative",
+      expiresAtMs: 123456,
+    });
+  });
+
   describe("capabilities", () => {
     it("reports correct capabilities", () => {
       const client = createMockModalClient();

@@ -226,6 +226,29 @@ const baseTimelineProps = {
   onOpenMedia: () => {},
 } as const;
 
+it("uses one transient processing status for quiet turns and removes it on completion", () => {
+  const notice = "No new output for 5 minutes; the turn remains active.";
+  const { rerender } = render(
+    <SessionTimeline
+      {...baseTimelineProps}
+      events={[]}
+      isProcessing
+      quietTurnMessageId="message-1"
+    />
+  );
+  expect(screen.getAllByText(notice)).toHaveLength(1);
+  expect(screen.getByRole("status")).toHaveTextContent(notice);
+  expect(screen.queryByText("Thinking...")).not.toBeInTheDocument();
+
+  rerender(<SessionTimeline {...baseTimelineProps} events={[]} isProcessing />);
+  expect(screen.queryByText(notice)).not.toBeInTheDocument();
+  expect(screen.getByText("Thinking...")).toBeInTheDocument();
+
+  rerender(<SessionTimeline {...baseTimelineProps} events={[]} quietTurnMessageId="message-1" />);
+  expect(screen.queryByText(notice)).not.toBeInTheDocument();
+  expect(screen.queryByText("Thinking...")).not.toBeInTheDocument();
+});
+
 describe("prompt queue status", () => {
   it("hides pending messages and leaves the running message undecorated", () => {
     const events: SandboxEvent[] = [

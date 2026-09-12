@@ -113,6 +113,12 @@ export interface AutomationRunRow {
   base_branch: string | null;
   /** Environment snapshot taken at firing time (null for repository/repo-less runs). */
   environment_id: string | null;
+  /** Kept separately from reporting status until the session confirms cessation. */
+  execution_unresolved?: number;
+  execution_recovery_reason?: string | null;
+  execution_checked_at?: number | null;
+  execution_launch_id?: string | null;
+  execution_admission_deadline_ms?: number | null;
 }
 
 export interface EnrichedRunRow extends AutomationRunRow {
@@ -871,20 +877,93 @@ export class AutomationStore {
   }
 
   /** Atomically assign a session only while a run still awaits launch. */
-  async claimRunSession(id: string, sessionId: string, startedAt: number): Promise<boolean> {
+  async claimRunSession(
+    id: string,
+    sessionId: string,
+    startedAt: number,
+    launch?: { id: string; admissionDeadlineMs: number }
+  ): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE automation_runs
-         SET status = 'running', session_id = ?, started_at = ?
+         SET status = 'running', session_id = ?, started_at = ?, execution_unresolved = 1,
+             execution_launch_id = ?, execution_admission_deadline_ms = ?
          WHERE id = ? AND status = 'starting'`
       )
-      .bind(sessionId, startedAt, id)
+      .bind(sessionId, startedAt, launch?.id ?? null, launch?.admissionDeadlineMs ?? null, id)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
   async bulkFailStartingRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
     await this.bulkFailRunsInStatus(runIds, "starting", reason, completedAt);
+  }
+
+  /** Fence a session before enqueue, including follow-ups on terminal run reports. */
+  async markRunExecutionUnresolved(
+    id: string,
+    sessionId: string,
+    launchId: string,
+    admissionDeadlineMs?: number,
+    expectedLaunchId: string | null = null
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE automation_runs SET execution_unresolved = 1, execution_checked_at = ?,
+         execution_launch_id = ?, execution_admission_deadline_ms = ?
+         WHERE id = ? AND session_id = ? AND execution_launch_id IS ?`
+      )
+      .bind(Date.now(), launchId, admissionDeadlineMs ?? null, id, sessionId, expectedLaunchId)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /** The enqueue owner proved rejection; a later launch must never be released by this reply. */
+  async releaseRejectedExecutionLaunch(
+    id: string,
+    sessionId: string,
+    launchId: string,
+    previouslyUnresolved: boolean
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE automation_runs SET execution_unresolved = ?, execution_launch_id = NULL,
+       execution_admission_deadline_ms = NULL, execution_recovery_reason = NULL,
+       execution_checked_at = ? WHERE id = ? AND session_id = ? AND execution_launch_id = ?`
+      )
+      .bind(previouslyUnresolved ? 1 : 0, Date.now(), id, sessionId, launchId)
+      .run();
+  }
+
+  /** Older reads cannot release a fence renewed by a concurrent enqueue or reconciliation. */
+  async recordRunExecutionState(
+    id: string,
+    sessionId: string,
+    unresolved: boolean,
+    reason: string | null,
+    checkedAt: number,
+    launchId: string | null = null
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE automation_runs SET execution_unresolved = ?, execution_recovery_reason = ?,
+         execution_checked_at = ?, execution_launch_id = CASE WHEN ? = 0 THEN NULL ELSE execution_launch_id END,
+         execution_admission_deadline_ms = CASE WHEN ? = 0 THEN NULL ELSE execution_admission_deadline_ms END
+         WHERE id = ? AND session_id = ? AND execution_launch_id IS ?
+         AND (execution_checked_at IS NULL OR execution_checked_at < ?)`
+      )
+      .bind(
+        unresolved ? 1 : 0,
+        reason,
+        checkedAt,
+        unresolved ? 1 : 0,
+        unresolved ? 1 : 0,
+        id,
+        sessionId,
+        launchId,
+        checkedAt
+      )
+      .run();
   }
 
   async bulkFailRunningRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
@@ -913,7 +992,7 @@ export class AutomationStore {
     return this.db
       .prepare(
         `SELECT * FROM automation_runs
-         WHERE automation_id = ? AND status IN ('starting', 'running')
+         WHERE automation_id = ? AND (status IN ('starting', 'running') OR execution_unresolved = 1)
          ORDER BY created_at DESC LIMIT 1`
       )
       .bind(automationId)
@@ -954,13 +1033,14 @@ export class AutomationStore {
               JOIN automation_invocations ai ON ai.id = ar.invocation_id
               WHERE ar.automation_id = ?
                 AND ai.concurrency_key = ?
-                AND ar.status IN ('starting', 'running')`,
+                AND (ar.status IN ('starting', 'running') OR ar.execution_unresolved = 1)`,
         params: [automationId, scope.concurrencyKey],
       };
     }
     return {
       sql: `SELECT 1 FROM automation_runs ar
-            WHERE ar.automation_id = ? AND ar.status IN ('starting', 'running')`,
+            WHERE ar.automation_id = ?
+              AND (ar.status IN ('starting', 'running') OR ar.execution_unresolved = 1)`,
       params: [automationId],
     };
   }
@@ -1377,7 +1457,7 @@ export class AutomationStore {
          JOIN automation_invocations i ON i.id = r.invocation_id
          WHERE r.automation_id = ?
            AND i.concurrency_key = ?
-           AND r.status IN ('starting', 'running')
+           AND (r.status IN ('starting', 'running') OR r.execution_unresolved = 1)
          ORDER BY r.created_at DESC LIMIT 1`
       )
       .bind(automationId, concurrencyKey)
@@ -1416,8 +1496,8 @@ export class AutomationStore {
   // a bound param, or the planner skips the index and full-scans automation_runs.
   static readonly ORPHANED_STARTING_RUNS_SQL =
     "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
-  static readonly TIMED_OUT_RUNNING_RUNS_SQL =
-    "SELECT * FROM automation_runs WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?";
+  static readonly EXECUTION_RECOVERY_RUNS_SQL =
+    "SELECT * FROM automation_runs WHERE status = 'running' OR execution_unresolved = 1";
 
   async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
@@ -1428,14 +1508,13 @@ export class AutomationStore {
     return result.results || [];
   }
 
-  async getTimedOutRunningRuns(
-    executionTimeoutMs: number,
-    limit: number
-  ): Promise<AutomationRunRow[]> {
-    const cutoff = Date.now() - executionTimeoutMs;
+  async getRunsNeedingExecutionRecovery(limit: number): Promise<AutomationRunRow[]> {
     const result = await this.db
-      .prepare(`${AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL} ORDER BY started_at ASC LIMIT ?`)
-      .bind(cutoff, limit)
+      .prepare(
+        `${AutomationStore.EXECUTION_RECOVERY_RUNS_SQL}
+         ORDER BY execution_checked_at ASC, created_at ASC LIMIT ?`
+      )
+      .bind(limit)
       .all<AutomationRunRow>();
     return result.results || [];
   }

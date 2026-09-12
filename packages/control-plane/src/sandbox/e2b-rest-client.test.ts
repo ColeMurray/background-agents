@@ -204,6 +204,30 @@ describe("E2BRestClient", () => {
     expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
   });
 
+  it.each(["get", "pause"])(
+    "caller cancellation interrupts an in-flight %s request",
+    async (operation) => {
+      const client = new E2BRestClient(defaultConfig);
+      const caller = new AbortController();
+      const cancellation = new Error(`cancel ${operation}`);
+      fetchSpy.mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError"))
+            );
+          })
+      );
+      const promise =
+        operation === "get"
+          ? client.getSandbox("sb-1", caller.signal)
+          : client.pauseSandbox("sb-1", undefined, caller.signal);
+      caller.abort(cancellation);
+      await expect(promise).rejects.toBe(cancellation);
+      expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
+    }
+  );
+
   it("rejects malformed E2B success responses", async () => {
     const client = new E2BRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-1" }));
@@ -299,15 +323,16 @@ describe("E2BRestClient", () => {
   it("createSnapshot aborts when the caller's deadline fires", async () => {
     const client = new E2BRestClient(defaultConfig);
     const caller = new AbortController();
+    const deadlineError = new Error("snapshot deadline exceeded");
     fetchSpy.mockImplementation((_url: string, init: RequestInit) => {
-      caller.abort();
+      caller.abort(deadlineError);
       const error = new Error("aborted");
       error.name = "AbortError";
       expect(init.signal?.aborted).toBe(true);
       return Promise.reject(error);
     });
-    await expect(client.createSnapshot("sb-1", { signal: caller.signal })).rejects.toThrow(
-      /timeout/
+    await expect(client.createSnapshot("sb-1", { signal: caller.signal })).rejects.toBe(
+      deadlineError
     );
   });
 

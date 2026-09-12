@@ -473,6 +473,41 @@ describe("VercelSandboxClient", () => {
     expect(headers.get("x-sandbox-id")).toBe("sandbox-logical");
   });
 
+  it("reads the exact provider session for stop confirmation", async () => {
+    const session = {
+      id: "session-1",
+      status: "stopped",
+      createdAt: 123,
+      cwd: "/workspace",
+      timeout: 60_000,
+    };
+    fetchSpy.mockResolvedValue(jsonResponse({ session, routes: [] }));
+
+    await expect(createClient().getSession("session-1")).resolves.toEqual(session);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://vercel.test/api/v2/sandboxes/sessions/session-1?teamId=team-456",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  it.each(["getSession", "stopSession"] as const)(
+    "aborts %s under the caller's shared cleanup deadline",
+    async (operation) => {
+      const controller = new AbortController();
+      fetchSpy.mockImplementation((_url, init) =>
+        rejectWhenAborted((init as RequestInit).signal as AbortSignal)
+      );
+      const request = createClient()[operation]("session-1", undefined, controller.signal);
+      const reason = new Error("cleanup allowance exhausted");
+      const rejection = expect(request).rejects.toBe(reason);
+      controller.abort(reason);
+
+      await rejection;
+      expect((lastFetchInit().signal as AbortSignal).aborted).toBe(true);
+    }
+  );
+
   it("wraps non-OK responses in VercelSandboxApiError", async () => {
     fetchSpy.mockResolvedValue(new Response("unauthorized", { status: 401 }));
 

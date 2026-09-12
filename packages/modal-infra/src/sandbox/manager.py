@@ -43,6 +43,7 @@ from .vcs_env import inject_vcs_env_vars
 log = get_logger("manager")
 
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
+SANDBOX_TERMINATION_TIMEOUT_SECONDS = 30
 MAX_TUNNEL_PORTS = 10
 DEFAULT_VNC_ENABLED = False
 _RESERVED_LAUNCH_ENV_VARS = {
@@ -121,6 +122,8 @@ class SandboxHandle:
     modal_sandbox: modal.Sandbox
     status: SandboxStatus
     created_at: float
+    # Lower bound from the launch request, not a provider-reported hard expiry.
+    execution_expires_at_ms: int | None = None
     snapshot_id: str | None = None
     modal_object_id: str | None = None  # Modal's internal sandbox ID for API calls
     code_server_url: str | None = None
@@ -458,6 +461,9 @@ class SandboxManager:
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
+        # Start before the provider await: creation and tunnel discovery must not
+        # grant extra lifetime to a later turn. Modal applies timeout in seconds.
+        execution_expires_at_ms = int(time.time() * 1000) + config.timeout_seconds * 1000
         sandbox = await modal.Sandbox.create.aio(
             "python",
             "-m",
@@ -487,6 +493,7 @@ class SandboxManager:
             modal_sandbox=sandbox,
             status=SandboxStatus.WARMING,
             created_at=time.time(),
+            execution_expires_at_ms=execution_expires_at_ms,
             snapshot_id=snapshot_id,
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
@@ -584,6 +591,26 @@ class SandboxManager:
         )
 
         return image_id
+
+    async def terminate_sandbox(self, sandbox_id: str) -> None:
+        """Confirm provider cessation or absence, within one bounded operation."""
+        try:
+            async with asyncio.timeout(SANDBOX_TERMINATION_TIMEOUT_SECONDS):
+                # Do not use get_sandbox_by_id: it maps arbitrary lookup failures
+                # to absence, which is not sufficient evidence of cessation.
+                sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
+                exit_code = await sandbox.terminate.aio(wait=True)
+                if exit_code is None:
+                    raise RuntimeError("Modal did not confirm sandbox termination")
+        except modal.exception.NotFoundError:
+            log.info("sandbox.terminate_not_found", modal_object_id=sandbox_id)
+            return
+        except modal.exception.SandboxTimeoutError:
+            # SDK wait() raises this only after a terminal provider-timeout result,
+            # including when terminate(wait=True) targets an already-expired sandbox.
+            log.info("sandbox.terminate_already_expired", modal_object_id=sandbox_id)
+            return
+        log.info("sandbox.terminate", modal_object_id=sandbox_id, exit_code=exit_code)
 
     async def get_sandbox_by_id(self, sandbox_id: str) -> SandboxHandle | None:
         """

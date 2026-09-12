@@ -62,7 +62,7 @@ it("upgrades existing sessions with a persisted status revision and preserves it
     db.exec(
       "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
     );
-    for (const migration of MIGRATIONS.filter(({ id }) => id < 51)) {
+    for (const migration of MIGRATIONS.filter(({ id }) => id !== 51)) {
       db.prepare("INSERT INTO _schema_migrations VALUES (?, 0)").run(migration.id);
     }
     applyMigrations(createDatabaseSql(db));
@@ -466,6 +466,13 @@ describe("applyMigrations", () => {
           expect.objectContaining({ name: "client_request_id", type: "TEXT" }),
           expect.objectContaining({ name: "request_fingerprint", type: "TEXT" }),
           expect.objectContaining({ name: "stop_confirmation_deadline", type: "INTEGER" }),
+          expect.objectContaining({
+            name: "stop_containment_attempts",
+            type: "INTEGER",
+            notnull: 1,
+            dflt_value: "0",
+          }),
+          expect.objectContaining({ name: "stop_escalated_at", type: "INTEGER" }),
         ])
       );
       expect(
@@ -505,7 +512,7 @@ describe("applyMigrations", () => {
     expect(sessionTable).not.toContain("cost_tracking_unavailable");
 
     expect(SCHEMA_SQL).toContain("reported_cost_usd REAL NOT NULL DEFAULT 0");
-    expect(SCHEMA_SQL).not.toContain("capabilities TEXT");
+    expect(SCHEMA_SQL).not.toMatch(/\n\s+capabilities TEXT/);
 
     const migration = MIGRATIONS.find((entry) => entry.id === 49);
     expect(typeof migration?.run).toBe("function");

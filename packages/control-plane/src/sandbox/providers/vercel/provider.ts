@@ -27,6 +27,7 @@ import {
   type RestoreResult,
   type SandboxProvider,
   type SandboxProviderCapabilities,
+  type SandboxExecutionExpiry,
   type SnapshotConfig,
   type SnapshotResult,
   type StopConfig,
@@ -52,6 +53,7 @@ const TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env";
 const TUNNEL_ENV_SANDBOX_ID_KEY = "TUNNEL_SANDBOX_ID";
 const EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS";
 const DEFAULT_SNAPSHOT_EXPIRATION_MS = 0;
+// Keep the Hobby-compatible cap even where a higher plan permits longer sessions.
 // Exported for the stale-threshold ceiling assertion in image-builds/maintenance.test.ts.
 export const VERCEL_MAX_SANDBOX_TIMEOUT_MS = 45 * 60 * 1000;
 const VERCEL_MEMORY_MIB_PER_VCPU = 2048;
@@ -62,6 +64,29 @@ const VERCEL_TUNNEL_ENV_WRITE_TIMEOUT_MS = 30_000;
 function resolveVercelTimeoutMs(timeoutSeconds?: number): number {
   const requestedMs = (timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS) * 1000;
   return Math.min(requestedMs, VERCEL_MAX_SANDBOX_TIMEOUT_MS);
+}
+
+function executionExpiry(
+  requestStartedAtMs: number,
+  requestedTimeoutMs: number,
+  acknowledgedTimeoutMs: number
+): SandboxExecutionExpiry {
+  // The v2 session timeout is a maximum runtime duration, not an absolute expiry.
+  // Starting our bound before the API request accounts for creation and access setup
+  // without relying on provider clock alignment or interpreting createdAt as VM start.
+  // Contract: https://github.com/vercel/sdk/blob/main/src/models/session.ts
+  if (
+    !Number.isFinite(acknowledgedTimeoutMs) ||
+    acknowledgedTimeoutMs <= 0 ||
+    !Number.isFinite(requestedTimeoutMs) ||
+    requestedTimeoutMs <= 0
+  ) {
+    return { kind: "unknown" };
+  }
+  return {
+    kind: "conservative",
+    expiresAtMs: requestStartedAtMs + Math.min(requestedTimeoutMs, acknowledgedTimeoutMs),
+  };
 }
 
 export interface VercelProviderConfig {
@@ -117,6 +142,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         );
       }
 
+      const requestStartedAtMs = Date.now();
       const created = await this.client.createSandbox(
         {
           name: config.sandboxId,
@@ -146,6 +172,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         sandboxId: config.sandboxId,
         providerObjectId: created.session.id,
         createdAt: created.session.createdAt || Date.now(),
+        executionExpiry: executionExpiry(requestStartedAtMs, timeoutMs, created.session.timeout),
         codeServerUrl: access.codeServerUrl,
         codeServerPassword: access.codeServerPassword,
         ttydUrl: access.ttydUrl,
@@ -170,6 +197,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         config.sandboxSettings
       ).allExposedPorts;
 
+      const requestStartedAtMs = Date.now();
       const created = await this.client.createSandbox(
         {
           name: config.sandboxId,
@@ -199,6 +227,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         success: true,
         sandboxId: config.sandboxId,
         providerObjectId: created.session.id,
+        executionExpiry: executionExpiry(requestStartedAtMs, timeoutMs, created.session.timeout),
         codeServerUrl: access.codeServerUrl,
         codeServerPassword: access.codeServerPassword,
         ttydUrl: access.ttydUrl,
@@ -237,13 +266,40 @@ export class VercelSandboxProvider implements SandboxProvider {
   }
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
+    if (config.mode !== "terminate") {
+      return {
+        success: false,
+        error: "Vercel does not support resumable suspension; stop mode must be terminate",
+      };
+    }
     try {
-      await this.client.stopSession(
+      try {
+        await this.client.stopSession(
+          config.providerObjectId,
+          config.correlation,
+          ...(config.signal ? [config.signal] : [])
+        );
+      } catch (error) {
+        // A concurrent stop may conflict or report an already-stopping session.
+        // Neither establishes cessation; read the exact session before succeeding.
+        if (
+          !(error instanceof VercelSandboxApiError) ||
+          (error.status !== 409 && error.status !== 422)
+        ) {
+          throw error;
+        }
+      }
+      const session = await this.client.getSession(
         config.providerObjectId,
         config.correlation,
         ...(config.signal ? [config.signal] : [])
       );
-      return { success: true };
+      return session.id === config.providerObjectId && session.status === "stopped"
+        ? { success: true }
+        : {
+            success: false,
+            error: `Vercel session cessation not confirmed (status=${session.status})`,
+          };
     } catch (error) {
       if (error instanceof VercelSandboxApiError && error.status === 404) {
         return { success: true };

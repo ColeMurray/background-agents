@@ -1,7 +1,7 @@
 """The turn's final cumulative cost rides on execution_complete."""
 
 import asyncio
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, Mock
 
 import pytest
 
@@ -51,7 +51,7 @@ class TestExecutionCompleteCostReport:
         bridge.diff_refresh = Mock()
         await bridge._handle_command({"type": "prompt", **_prompt_command()})
         await asyncio.wait_for(reported.wait(), timeout=1)
-        task = bridge._current_prompt_task
+        task = bridge.execution.prompt_task
         assert task is not None
         await bridge._handle_stop()
         await task
@@ -63,7 +63,10 @@ class TestExecutionCompleteCostReport:
             {
                 "type": "execution_complete",
                 "messageId": "msg-1",
+                "sandboxId": "test-sandbox",
                 "success": False,
+                "executionStopped": True,
+                "cleanupDeadlineMs": ANY,
                 "error": "Task was cancelled",
                 "messageCostUsd": 0.5,
             }

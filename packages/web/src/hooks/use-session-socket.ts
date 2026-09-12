@@ -4,6 +4,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { mutate } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
 import { useSandboxAccess } from "@/hooks/use-sandbox-access";
+import { useQuietTurnNotice } from "@/hooks/use-quiet-turn-notice";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 import {
   ingestLiveSandboxEvent,
@@ -58,6 +59,7 @@ interface UseSessionSocketReturn {
   currentParticipantId: string | null;
   canManageBudget: boolean;
   isProcessing: boolean;
+  quietTurnMessageId: string | null;
   promptQueue: PromptQueueItem[];
   hasMoreHistory: boolean;
   loadingHistory: boolean;
@@ -111,6 +113,7 @@ export function useSessionSocket(
     initialSnapshot,
     createSessionSocketState
   );
+  const { quietTurnMessageId, observeMessage, dismissForStop } = useQuietTurnNotice(state);
   const subscribedRef = useRef(false);
   // Buffers streamed assistant text in a ref so token events (which arrive at
   // high frequency) don't re-render; the text is appended on completion.
@@ -182,6 +185,7 @@ export function useSessionSocket(
 
   const handleMessage = useCallback(
     (message: ServerMessage) => {
+      observeMessage(message);
       if (message.type === "sandbox_event") {
         const { pending, append } = ingestLiveSandboxEvent(
           pendingTextRef.current,
@@ -227,7 +231,7 @@ export function useSessionSocket(
         mutate(key);
       }
     },
-    [clearSandboxAccess, refreshSandboxAccess, sessionId]
+    [clearSandboxAccess, observeMessage, refreshSandboxAccess, sessionId]
   );
 
   const handleClose = useCallback(() => {
@@ -356,6 +360,7 @@ export function useSessionSocket(
     if (!isOpen() || !subscribedRef.current) {
       return;
     }
+    dismissForStop();
     // Preserve partial content when stopping
     const pending = pendingTextRef.current;
     pendingTextRef.current = null;
@@ -363,7 +368,7 @@ export function useSessionSocket(
       dispatch({ type: "events_appended", events: [pendingToTokenEvent(pending)] });
     }
     send({ type: "stop" });
-  }, [isOpen, send]);
+  }, [dismissForStop, isOpen, send]);
 
   const cancelPrompt = useCallback(
     async (messageId: string): Promise<CancelPromptResult> => {
@@ -431,6 +436,7 @@ export function useSessionSocket(
     currentParticipantId: state.currentParticipantId,
     canManageBudget: state.canManageBudget,
     isProcessing,
+    quietTurnMessageId,
     promptQueue: state.promptQueue,
     hasMoreHistory,
     loadingHistory,

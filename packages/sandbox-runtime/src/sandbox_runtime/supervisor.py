@@ -40,8 +40,8 @@ FATAL_ERROR_REPORT_TIMEOUT_SECONDS = 5.0
 FATAL_ERROR_REPORT_MAX_CHARS = 1000
 
 
-class ImageBuildExecutionCancelled(Exception):
-    """A handled process signal interrupted image-build work."""
+class BootExecutionCancelled(Exception):
+    """A handled process signal interrupted boot work."""
 
 
 class SandboxSupervisor:
@@ -350,7 +350,7 @@ class SandboxSupervisor:
         self, operation_factory: Callable[[], Awaitable[_ResultT]]
     ) -> _ResultT:
         if self.shutdown_event.is_set():
-            raise ImageBuildExecutionCancelled
+            raise BootExecutionCancelled
         operation_task = asyncio.ensure_future(operation_factory())
         shutdown_task = asyncio.create_task(self.shutdown_event.wait())
         tasks = {operation_task, shutdown_task}
@@ -358,7 +358,7 @@ class SandboxSupervisor:
             done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if operation_task in done:
                 return operation_task.result()
-            raise ImageBuildExecutionCancelled
+            raise BootExecutionCancelled
         finally:
             for task in tasks:
                 if not task.done():
@@ -412,7 +412,10 @@ class SandboxSupervisor:
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
                 if self.shutdown_event.is_set():
-                    raise ImageBuildExecutionCancelled
+                    raise BootExecutionCancelled
+                # Build callbacks may immediately trigger image capture. Raw
+                # shell output must already be absent before publishing success.
+                await self.repository_boot.hooks.discard_logs()
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
                 self.log.info(
                     "image_build.complete",
@@ -438,7 +441,9 @@ class SandboxSupervisor:
                 self.log.warn("vnc.start_failed", exc=error)
                 await self.browser_desktop.stop()
 
-            boot_result = await self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
+            boot_result = await self._run_until_shutdown(
+                lambda: self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
+            )
             self._repository_boot_result = boot_result
 
             # Materialization is sandbox-boot work; OpenCode process restarts
@@ -476,8 +481,8 @@ class SandboxSupervisor:
                 outcome="success",
             )
             await self.monitor_processes()
-        except ImageBuildExecutionCancelled:
-            self.log.info("image_build.cancelled", reason="shutdown_requested")
+        except BootExecutionCancelled:
+            self.log.info("supervisor.boot_cancelled", reason="shutdown_requested")
             return True
         except Exception as error:
             self.log.error("supervisor.error", exc=error)
@@ -486,11 +491,15 @@ class SandboxSupervisor:
                 return True
             if self.boot_mode is BootMode.BUILD and repo_image_callback:
                 try:
+                    try:
+                        await self.repository_boot.hooks.discard_logs()
+                    except Exception as cleanup_error:
+                        self.log.error("image_build.log_cleanup_failed", exc=cleanup_error)
                     error_message = str(error)
                     await self._run_until_shutdown(
                         lambda: repo_image_callback.report_failure(error_message)
                     )
-                except ImageBuildExecutionCancelled:
+                except BootExecutionCancelled:
                     self.log.info("image_build.cancelled", reason="shutdown_requested")
                     return True
             await self._report_fatal_error(str(error))
@@ -505,13 +514,43 @@ class SandboxSupervisor:
 
     async def shutdown(self) -> None:
         self.log.info("supervisor.shutdown_start")
-        if self._desktop_restart_task and not self._desktop_restart_task.done():
-            self._desktop_restart_task.cancel()
-            await asyncio.gather(self._desktop_restart_task, return_exceptions=True)
-        self._desktop_restart_task = None
-        await self.agent_bridge.stop()
-        await self.web_terminal.stop()
-        await self.code_server.stop()
-        await self.browser_desktop.stop()
-        await self.harness_process.stop()
+        errors: list[BaseException] = []
+        try:
+            if self._desktop_restart_task and not self._desktop_restart_task.done():
+                self._desktop_restart_task.cancel()
+                try:
+                    outcomes = await asyncio.gather(
+                        self._desktop_restart_task, return_exceptions=True
+                    )
+                    errors.extend(
+                        outcome
+                        for outcome in outcomes
+                        if isinstance(outcome, BaseException)
+                        and not isinstance(outcome, asyncio.CancelledError)
+                    )
+                except BaseException as error:
+                    errors.append(error)
+            self._desktop_restart_task = None
+            # The bridge must stop before its harness, but no failed service
+            # may prevent the remaining owners from attempting their cleanup.
+            for service in (
+                self.agent_bridge,
+                self.web_terminal,
+                self.code_server,
+                self.browser_desktop,
+                self.harness_process,
+            ):
+                try:
+                    await service.stop()
+                except BaseException as error:
+                    errors.append(error)
+        finally:
+            try:
+                await self.repository_boot.hooks.shutdown()
+            except BaseException as error:
+                errors.append(error)
+        if errors:
+            failure = BaseExceptionGroup("sandbox shutdown cleanup failed", errors)
+            self.log.error("supervisor.shutdown_failed", exc=failure)
+            raise failure
         self.log.info("supervisor.shutdown_complete")

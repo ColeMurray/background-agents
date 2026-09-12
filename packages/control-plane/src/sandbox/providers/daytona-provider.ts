@@ -107,6 +107,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.id,
         createdAt: Date.now(),
+        // Auto-stop and preview URL expiry are not wall-clock execution limits.
+        executionExpiry: { kind: "unknown" },
         codeServerUrl,
         codeServerPassword,
         vncAccess,
@@ -171,6 +173,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       return {
         success: true,
         providerObjectId: sandbox.id,
+        executionExpiry: { kind: "unknown" },
         codeServerUrl,
         codeServerPassword,
         vncAccess,
@@ -183,29 +186,40 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   }
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
+    const resumable = config.mode === "suspend";
     try {
+      let commandError: unknown;
       try {
-        if (config.reason === "respawn") {
-          await this.client.deleteSandbox(
-            config.providerObjectId,
-            ...(config.signal ? [config.signal] : [])
-          );
+        if (resumable) {
+          await this.client.stopSandbox(config.providerObjectId, config.signal);
         } else {
-          await this.client.stopSandbox(config.providerObjectId);
+          // Cancellation/replacement must not preserve execution that can resume.
+          await this.client.deleteSandbox(config.providerObjectId, config.signal);
         }
       } catch (error) {
-        if (error instanceof DaytonaNotFoundError) {
-          return { success: true };
-        }
-        throw error;
+        if (error instanceof DaytonaNotFoundError) return { success: true };
+        // A retry may reject because the previous command already stopped it.
+        commandError = error;
       }
-      return { success: true };
+
+      // Daytona commands acknowledge acceptance before the transition completes.
+      // One bounded read confirms cessation; the lifecycle owner retries if needed.
+      const sandbox = await this.client.getSandbox(config.providerObjectId, config.signal);
+      if (
+        sandbox.state === "destroyed" ||
+        (resumable && (sandbox.state === "stopped" || sandbox.state === "archived"))
+      ) {
+        return { success: true };
+      }
+      if (commandError) throw commandError;
+      return {
+        success: false,
+        error: `Daytona sandbox ${resumable ? "stop" : "deletion"} not confirmed: ${sandbox.state}`,
+      };
     } catch (error) {
+      if (error instanceof DaytonaNotFoundError) return { success: true };
       if (error instanceof SandboxProviderError) throw error;
-      throw this.classifyError(
-        `Failed to ${config.reason === "respawn" ? "delete" : "stop"} Daytona sandbox`,
-        error
-      );
+      throw this.classifyError(`Failed to ${resumable ? "stop" : "delete"} Daytona sandbox`, error);
     }
   }
 

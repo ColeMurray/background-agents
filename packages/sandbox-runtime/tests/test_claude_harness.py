@@ -23,6 +23,9 @@ from claude_agent_sdk import (
     ResultMessage,
     StreamEvent,
     SystemMessage,
+    TaskNotificationMessage,
+    TaskStartedMessage,
+    TaskUpdatedMessage,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
@@ -33,7 +36,7 @@ from sandbox_runtime.credentials.provider_credential_client import (
     RuntimeCredentialDenied,
     RuntimeCredentialUnavailable,
 )
-from sandbox_runtime.harness import AgentHarness, HarnessPrompt, HarnessStartError, PromptLimits
+from sandbox_runtime.harness import AgentHarness, HarnessPrompt, HarnessStartError
 from sandbox_runtime.harness.claude import (
     AUTHENTICATION_FAILED_MESSAGE,
     ClaudeHarness,
@@ -47,12 +50,6 @@ from sandbox_runtime.harness.claude_env import ClaudeAuthMode
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
-
-LIMITS = PromptLimits(
-    inactivity_timeout_seconds=5.0,
-    prompt_max_duration_seconds=30.0,
-    prompt_cleanup_timeout_seconds=1.0,
-)
 
 
 def _result(
@@ -83,6 +80,43 @@ def _text_delta(text: str) -> StreamEvent:
     return _stream("content_block_delta", delta={"type": "text_delta", "text": text})
 
 
+def _task_message(subtype: str, **fields: Any) -> SystemMessage:
+    """Construct pinned SDK task messages through its public classes."""
+    common = {
+        "subtype": subtype,
+        "task_id": "background",
+        "uuid": "uuid",
+        "session_id": "sess",
+    }
+    if subtype == "task_started":
+        values = {
+            **common,
+            "tool_use_id": "launcher",
+            "task_type": "local_agent",
+            "description": "Delegated work",
+            **fields,
+        }
+        return TaskStartedMessage(data={"type": "system", **values}, **values)
+    if subtype == "task_notification":
+        values = {
+            **common,
+            "tool_use_id": "launcher",
+            "status": "completed",
+            "output_file": "/tmp/output",
+            "summary": "Finished",
+            **fields,
+        }
+        return TaskNotificationMessage(data={"type": "system", **values}, **values)
+    if subtype == "task_updated":
+        values = {**common, "patch": {}, **fields}
+        return TaskUpdatedMessage(
+            data={"type": "system", **values},
+            status=values["patch"].get("status"),
+            **values,
+        )
+    raise ValueError(f"Unsupported task message subtype: {subtype}")
+
+
 @dataclass
 class FakeSdkClient:
     """Replays scripted turns; records what the harness asked of it."""
@@ -96,7 +130,13 @@ class FakeSdkClient:
     hang: bool = False
     hang_connect: bool = False
     hang_interrupt: bool = False
+    hang_disconnect: bool = False
     fail_connect: bool = False
+    fail_disconnect: bool = False
+    fail_interrupt: bool = False
+    fail_read: Exception | None = None
+    message_delay_seconds: float = 0.0
+    interrupt_delay_seconds: float = 0.0
 
     async def connect(self) -> None:
         if self.fail_connect:
@@ -106,6 +146,10 @@ class FakeSdkClient:
         self.connected = True
 
     async def disconnect(self) -> None:
+        if self.fail_disconnect:
+            raise RuntimeError("disconnect failed")
+        if self.hang_disconnect:
+            await asyncio.Event().wait()
         self.disconnected = True
 
     async def query(self, prompt: Any, session_id: str = "default") -> None:
@@ -114,6 +158,9 @@ class FakeSdkClient:
 
     async def interrupt(self) -> None:
         self.interrupts += 1
+        await asyncio.sleep(self.interrupt_delay_seconds)
+        if self.fail_interrupt:
+            raise RuntimeError("interrupt rejected")
         if self.hang_interrupt:
             await asyncio.Event().wait()
 
@@ -122,7 +169,10 @@ class FakeSdkClient:
             await asyncio.Event().wait()
         turn = self.turns.pop(0) if self.turns else []
         for message in turn:
+            await asyncio.sleep(self.message_delay_seconds)
             yield message
+        if self.fail_read is not None:
+            raise self.fail_read
 
 
 class FakeCredentialClient:
@@ -173,7 +223,6 @@ class Harness:
         self.harness = ClaudeHarness(
             config=self.config,
             log=MagicMock(),
-            limits=overrides.pop("limits", LIMITS),
             credential_client=credential_client,
             environ=environ,
             client_factory=client_factory,
@@ -347,6 +396,29 @@ class TestOptions:
         assert "mcp__linear__*" in options["allowed_tools"]
         assert "mcp__local__*" in options["allowed_tools"]
         assert "Bash" in options["allowed_tools"]
+
+    @pytest.mark.asyncio
+    async def test_hook_log_context_is_available_without_modifying_repository_guidance(
+        self, tmp_path: Path
+    ) -> None:
+        log_root = tmp_path / "private-logs" / "boot"
+        h = Harness(
+            tmp_path,
+            system_prompt_append="Workspace guidance",
+            environ={
+                "ANTHROPIC_API_KEY": "key",
+                "OPENINSPECT_HOOK_LOG_DIR": str(log_root),
+            },
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        options = h.harness.build_options("claude-sonnet-4-6", None)
+        notes = options["system_prompt"]["append"]
+        assert notes.startswith("Workspace guidance\n\n")
+        assert f"{log_root}/<percent-encoded-owner>/<repo-name>/" in notes
+        assert "setup.log and start.log" in notes
+        assert "discarded before snapshots" in notes
+        assert not h.config.workdir.exists()
 
     def test_reasoning_controls_are_per_model(self) -> None:
         assert reasoning_options("claude-sonnet-4-5", "max") == {
@@ -718,6 +790,74 @@ class TestCostBaseline:
 
 class TestReconnectPolicy:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("model_change", [False, True])
+    async def test_disconnect_failure_cannot_start_a_replacement_client(
+        self, tmp_path: Path, model_change: bool
+    ) -> None:
+        h = Harness(tmp_path, turns=[[_result(0.1)], [_result(0.2)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        original_client = h.client
+        original_client.fail_disconnect = True
+        if not model_change:
+            h.harness._needs_reconnect = True
+        _, outcome = await _run(
+            h.harness,
+            HarnessPrompt(
+                message_id="m2",
+                text="next turn",
+                model="claude-opus-4-6" if model_change else None,
+            ),
+        )
+        assert outcome.success is False
+        assert outcome.execution_stopped is False
+        assert "disconnect failed" in outcome.error
+        assert h.harness._client is original_client
+        assert h.clients == [original_client]
+        assert len(original_client.queries) == 1
+        # A later prompt selecting the old model must not bypass the failed
+        # teardown through _ensure_client's same-shape fast path either.
+        _, repeated = await _run(h.harness)
+        assert repeated.success is False
+        assert h.clients == [original_client]
+        assert len(original_client.queries) == 1
+
+    @pytest.mark.asyncio
+    async def test_stop_retains_client_and_reports_disconnect_failure(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path, turns=[[]], client_kwargs={"fail_disconnect": True})
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        deadline_monotonic = asyncio.get_running_loop().time() + 1
+        assert await h.harness.stop(deadline_monotonic) is False
+        assert h.harness._client is h.client
+        assert h.client.disconnected is False
+        assert h.harness._needs_reconnect is True
+        h.harness.log.warn.assert_called_once()
+        assert h.harness.log.warn.call_args.args == ("claude.stop_error",)
+        assert str(h.harness.log.warn.call_args.kwargs["exc"]) == "disconnect failed"
+
+    @pytest.mark.asyncio
+    async def test_close_retains_failed_client_for_bounded_supervisor_shutdown(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(tmp_path, turns=[[_result(0.1)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        h.client.fail_disconnect = True
+        with pytest.raises(RuntimeError, match="disconnect failed"):
+            await h.harness.close()
+        assert h.harness._client is h.client
+        assert h.harness._execution_stopped is False
+        # Retaining ownership allows a later cleanup attempt to finish.
+        h.client.fail_disconnect = False
+        await h.harness.close()
+        assert h.client.disconnected is True
+        assert h.harness._client is None
+
+    @pytest.mark.asyncio
     async def test_model_or_effort_change_reconnects_with_resume(self, tmp_path: Path) -> None:
         h = Harness(tmp_path, turns=[[_result(0.1)], [_result(0.1)]])
         await h.harness.open()
@@ -770,20 +910,16 @@ class TestReconnectPolicy:
         assert len(h.clients) == 2
 
     @pytest.mark.asyncio
-    async def test_abort_is_bounded_when_interrupt_hangs(self, tmp_path: Path) -> None:
-        # The bridge awaits abort() inline on its command loop.
-        limits = PromptLimits(
-            inactivity_timeout_seconds=5.0,
-            prompt_max_duration_seconds=5.0,
-            prompt_cleanup_timeout_seconds=0.05,
-        )
-        h = Harness(tmp_path, turns=[[]], limits=limits, client_kwargs={"hang_interrupt": True})
+    async def test_stop_is_bounded_when_interrupt_hangs(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path, turns=[[]], client_kwargs={"hang_interrupt": True})
         await h.harness.open()
         await h.harness.create_session()
-        await h.harness._ensure_client("claude-sonnet-4-6", None)
-        assert await asyncio.wait_for(h.harness.abort(), timeout=2.0) is False
+        _, outcome = await _run(h.harness)
+        assert outcome.execution_stopped is False
+        deadline_monotonic = asyncio.get_running_loop().time() + 0.05
+        assert await h.harness.stop(deadline_monotonic) is False
         assert h.client.interrupts == 1
-        assert h.client.disconnected is True
+        assert h.client.disconnected is False
 
     @pytest.mark.asyncio
     async def test_cancellation_propagates_to_the_bridge(self, tmp_path: Path) -> None:
@@ -810,53 +946,134 @@ class TestReconnectPolicy:
             await task
 
     @pytest.mark.asyncio
-    async def test_inactivity_timeout_fails_the_turn_and_interrupts(self, tmp_path: Path) -> None:
-        limits = PromptLimits(
-            inactivity_timeout_seconds=0.05,
-            prompt_max_duration_seconds=5.0,
-            prompt_cleanup_timeout_seconds=1.0,
+    @pytest.mark.parametrize("quiet_work", ["thinking", "Bash", "Agent"])
+    async def test_quiet_work_outlives_the_old_silence_threshold(
+        self, tmp_path: Path, quiet_work: str
+    ) -> None:
+        messages = []
+        if quiet_work != "thinking":
+            messages.extend(
+                [
+                    AssistantMessage(
+                        content=[ToolUseBlock(id="tool", name=quiet_work, input={})],
+                        model="claude-sonnet-4-6",
+                    ),
+                    UserMessage(content=[ToolResultBlock(tool_use_id="tool", content="done")]),
+                ]
+            )
+        messages.extend([_text_delta("Finished quiet work"), _result(0.25)])
+        h = Harness(
+            tmp_path,
+            turns=[messages],
+            environ={
+                "ANTHROPIC_API_KEY": "key",
+                "BRIDGE_SSE_INACTIVITY_TIMEOUT": "0.01",
+            },
+            client_kwargs={"message_delay_seconds": 0.03},
         )
-        h = Harness(tmp_path, turns=[[]], limits=limits)
         await h.harness.open()
         await h.harness.create_session()
-        await h.harness._ensure_client("claude-sonnet-4-6", None)
-        h.client.hang = True
-        _, outcome = await _run(h.harness)
-        assert outcome.success is False and "no output" in (outcome.error or "")
-        assert h.client.interrupts == 1
+        events, outcome = await _run(h.harness)
+        assert outcome.success is True
+        assert outcome.message_cost_usd == 0.25
+        assert outcome.execution_stopped is True
+        assert any(event.get("content") == "Finished quiet work" for event in events)
+        assert h.client.interrupts == 0
 
     @pytest.mark.asyncio
-    async def test_a_hung_connect_is_cut_by_the_prompt_budget(self, tmp_path: Path) -> None:
-        limits = PromptLimits(
-            inactivity_timeout_seconds=5.0,
-            prompt_max_duration_seconds=0.05,
-            prompt_cleanup_timeout_seconds=0.05,
-        )
-        h = Harness(tmp_path, turns=[], limits=limits, client_kwargs={"hang_connect": True})
-        await h.harness.open()
-        await h.harness.create_session()
-        _, outcome = await asyncio.wait_for(_run(h.harness), timeout=2.0)
-        assert outcome.success is False and "did not start" in (outcome.error or "")
-
-    @pytest.mark.asyncio
-    async def test_cleanup_after_a_timeout_is_bounded_even_when_interrupt_hangs(
+    async def test_a_hung_connect_is_cancelled_by_the_callers_deadline(
         self, tmp_path: Path
     ) -> None:
-        limits = PromptLimits(
-            inactivity_timeout_seconds=0.05,
-            prompt_max_duration_seconds=5.0,
-            prompt_cleanup_timeout_seconds=0.05,
-        )
-        h = Harness(tmp_path, turns=[[]], limits=limits, client_kwargs={"hang_interrupt": True})
+        h = Harness(tmp_path, turns=[], client_kwargs={"hang_connect": True})
         await h.harness.open()
         await h.harness.create_session()
-        await h.harness._ensure_client("claude-sonnet-4-6", None)
-        h.client.hang = True
-        _, outcome = await asyncio.wait_for(_run(h.harness), timeout=2.0)
-        assert outcome.success is False and "no output" in (outcome.error or "")
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.05):
+                await _run(h.harness)
+        assert h.harness._needs_reconnect is True
+        assert h.client.interrupts == 0
+
+    @pytest.mark.asyncio
+    async def test_interrupt_and_disconnect_share_one_absolute_deadline(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[[]],
+            client_kwargs={"interrupt_delay_seconds": 0.04, "hang_disconnect": True},
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        loop = asyncio.get_running_loop()
+        start_monotonic = loop.time()
+        assert await h.harness.stop(start_monotonic + 0.06) is False
+        # Generous upper bound: the claim is that both steps share one
+        # deadline, not that they finish within a precise wall-clock budget.
+        assert loop.time() - start_monotonic < 1.0
         assert h.client.interrupts == 1
-        # Interrupt never settled, so the child was dropped instead.
+        # Keep the client so final shutdown can retry a cancelled disconnect.
+        assert h.harness._client is h.client
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("fail_interrupt", [False, True])
+    async def test_interrupt_acknowledgment_or_rejection_never_confirms_stop(
+        self, tmp_path: Path, fail_interrupt: bool
+    ) -> None:
+        h = Harness(tmp_path, turns=[[]], client_kwargs={"fail_interrupt": fail_interrupt})
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        deadline_monotonic = asyncio.get_running_loop().time() + 1
+        assert await h.harness.stop(deadline_monotonic) is False
         assert h.client.disconnected is True
+        # Dropping the transport must not manufacture proof on repeated Stop.
+        assert await h.harness.stop(deadline_monotonic) is False
+
+    @pytest.mark.asyncio
+    async def test_observed_completed_error_needs_no_termination(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path, turns=[[_result(0.25, is_error=True, result="tool failed")]])
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+        assert outcome.success is False
+        assert outcome.execution_stopped is True
+        assert await h.harness.stop(asyncio.get_running_loop().time() + 1) is True
+        assert h.client.interrupts == 0
+        assert h.client.disconnected is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", [None, RuntimeError("SDK connection lost")])
+    async def test_eof_and_sdk_error_retain_output_and_require_containment(
+        self, tmp_path: Path, failure: Exception | None
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[[_text_delta("Partial answer")]],
+            client_kwargs={"fail_read": failure},
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        events, outcome = await _run(h.harness)
+        assert outcome.success is False
+        assert outcome.execution_stopped is False
+        assert outcome.message_cost_usd is None
+        assert events[-1]["content"] == "Partial answer"
+        assert all(event["type"] != "execution_complete" for event in events)
+
+    @pytest.mark.asyncio
+    async def test_available_cost_survives_result_delivery_failure(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path, turns=[[_result(0.25)]])
+        await h.harness.open()
+        await h.harness.create_session()
+
+        async def emit(_event: dict[str, Any]) -> None:
+            raise RuntimeError("delivery failed")
+
+        outcome = await h.harness.run_prompt(HarnessPrompt(message_id="m1", text="hi"), emit)
+        assert outcome.success is False
+        assert outcome.execution_stopped is True
+        assert outcome.message_cost_usd == 0.25
 
     @pytest.mark.asyncio
     async def test_close_disconnects_the_child(self, tmp_path: Path) -> None:
@@ -866,6 +1083,212 @@ class TestReconnectPolicy:
         await _run(h.harness)
         await h.harness.close()
         assert h.client.disconnected is True
+
+
+class TestOutstandingExecution:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["Agent", "Bash", "mcp__tools__write"])
+    @pytest.mark.parametrize("result_error", [False, True])
+    async def test_parent_result_does_not_settle_unfinished_tools(
+        self, tmp_path: Path, tool_name: str, result_error: bool
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [
+                    AssistantMessage(
+                        content=[ToolUseBlock(id="launcher", name=tool_name, input={})], model="m"
+                    ),
+                    _result(0.25, is_error=result_error),
+                ]
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+        assert outcome.success is not result_error
+        assert outcome.execution_stopped is False
+        assert outcome.message_cost_usd == 0.25
+        assert await h.harness.stop(asyncio.get_running_loop().time() + 1) is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["Agent", "Bash"])
+    @pytest.mark.parametrize("has_task_started", [False, True])
+    async def test_background_tool_launch_ack_is_not_completion(
+        self, tmp_path: Path, tool_name: str, has_task_started: bool
+    ) -> None:
+        turn = [
+            AssistantMessage(
+                content=[
+                    ToolUseBlock(
+                        id="launcher",
+                        name=tool_name,
+                        input={"run_in_background": True, "command": "sleep 600"},
+                    )
+                ],
+                model="m",
+            ),
+        ]
+        if has_task_started:
+            turn.append(
+                _task_message(
+                    "task_started", task_type="local_bash" if tool_name == "Bash" else "local_agent"
+                )
+            )
+        turn.extend(
+            [
+                UserMessage(
+                    content=[ToolResultBlock(tool_use_id="launcher", content="task launched")]
+                ),
+                _result(0.25),
+            ]
+        )
+        h = Harness(tmp_path, turns=[turn])
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+        assert outcome.success is True
+        assert outcome.execution_stopped is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("task_type", ["local_agent", "local_workflow", "remote_agent", None])
+    async def test_started_task_blocks_reuse_even_without_an_observed_tool_call(
+        self, tmp_path: Path, task_type: str | None
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[[_task_message("task_started", task_type=task_type), _result(0.25)]],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+        assert outcome.execution_stopped is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["Agent", "Bash"])
+    @pytest.mark.parametrize(
+        ("subtype", "status"),
+        [
+            ("task_notification", "completed"),
+            ("task_notification", "failed"),
+            ("task_notification", "stopped"),
+            ("task_updated", "completed"),
+            ("task_updated", "failed"),
+            ("task_updated", "killed"),
+        ],
+    )
+    async def test_terminal_task_evidence_settles_background_tool(
+        self, tmp_path: Path, tool_name: str, subtype: str, status: str
+    ) -> None:
+        terminal = _task_message(
+            subtype,
+            **({"patch": {"status": status}} if subtype == "task_updated" else {"status": status}),
+        )
+        h = Harness(
+            tmp_path,
+            turns=[
+                [
+                    AssistantMessage(
+                        content=[
+                            ToolUseBlock(
+                                id="launcher", name=tool_name, input={"run_in_background": True}
+                            )
+                        ],
+                        model="m",
+                    ),
+                    _task_message(
+                        "task_started",
+                        task_type="local_bash" if tool_name == "Bash" else "local_agent",
+                    ),
+                    UserMessage(
+                        content=[ToolResultBlock(tool_use_id="launcher", content="launched")]
+                    ),
+                    UserMessage(content="Task notification", origin={"kind": "task-notification"}),
+                    terminal,
+                    # Repeated terminal frames are idempotent and still hidden
+                    # from the main turn's visible event translation.
+                    terminal,
+                    _result(0.2, origin={"kind": "task-notification"}),
+                    _result(0.25),
+                ]
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+        assert outcome.execution_stopped is True
+        assert outcome.message_cost_usd == 0.25
+
+    @pytest.mark.asyncio
+    async def test_nonterminal_task_update_is_not_cessation(self, tmp_path: Path) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [
+                    _task_message("task_started"),
+                    _task_message("task_updated", patch={"status": "paused"}),
+                    _result(0.25),
+                ]
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+        assert outcome.execution_stopped is False
+
+    @pytest.mark.asyncio
+    async def test_hidden_injected_work_still_blocks_runtime_reuse(self, tmp_path: Path) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [
+                    UserMessage(content="Task notification", origin={"kind": "task-notification"}),
+                    AssistantMessage(
+                        content=[ToolUseBlock(id="injected-tool", name="Bash", input={})], model="m"
+                    ),
+                    _result(0.1, origin={"kind": "task-notification"}),
+                    _result(0.25),
+                ]
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        events, outcome = await _run(h.harness)
+        assert all(event["type"] != "tool_call" for event in events)
+        assert outcome.execution_stopped is False
+
+    @pytest.mark.asyncio
+    async def test_completed_background_shell_launcher_preserves_its_service(
+        self, tmp_path: Path
+    ) -> None:
+        turn = [
+            AssistantMessage(
+                content=[
+                    ToolUseBlock(
+                        id="launcher",
+                        name="Bash",
+                        input={"command": "dev-server &"},
+                    )
+                ],
+                model="m",
+            ),
+        ]
+        turn.extend(
+            [
+                UserMessage(
+                    content=[ToolResultBlock(tool_use_id="launcher", content="service started")]
+                ),
+                _result(0.25),
+            ]
+        )
+        h = Harness(tmp_path, turns=[turn])
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+        assert outcome.execution_stopped is True
+        assert await h.harness.stop(asyncio.get_running_loop().time() + 1) is True
+        assert h.client.interrupts == 0
+        assert h.client.disconnected is False
 
 
 class TestDefaultTranscriptLookup:

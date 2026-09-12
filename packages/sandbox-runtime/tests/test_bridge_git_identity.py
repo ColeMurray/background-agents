@@ -104,6 +104,8 @@ class TestGitIdentityConfiguration:
                 "messageId": "msg-1",
                 "success": False,
                 "error": "Invalid prompt Git identity",
+                "sandboxId": "test-sandbox",
+                "executionStopped": True,
             }
         )
 
@@ -132,6 +134,8 @@ class TestGitIdentityConfiguration:
                 "messageId": "msg-1",
                 "success": False,
                 "error": "Invalid prompt Git identity",
+                "sandboxId": "test-sandbox",
+                "executionStopped": True,
             }
         )
 
@@ -157,6 +161,8 @@ class TestGitIdentityConfiguration:
                 "messageId": "msg-1",
                 "success": False,
                 "error": "Invalid prompt Git identity",
+                "sandboxId": "test-sandbox",
+                "executionStopped": True,
             }
         )
 
@@ -212,5 +218,7 @@ class TestConfigureGitIdentity:
                 "messageId": "msg-1",
                 "success": False,
                 "error": "Commit signing configuration unavailable",
+                "sandboxId": "test-sandbox",
+                "executionStopped": True,
             }
         )

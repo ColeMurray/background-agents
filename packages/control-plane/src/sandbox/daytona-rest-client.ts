@@ -140,16 +140,18 @@ export class DaytonaRestClient {
     }
   }
 
-  async getSandbox(id: string): Promise<DaytonaSandboxResponse> {
-    return this.requestJson("GET", `/sandbox/${id}`, TIMEOUT_GET_MS, daytonaSandboxResponseSchema);
+  async getSandbox(id: string, signal?: AbortSignal): Promise<DaytonaSandboxResponse> {
+    return this.requestJson("GET", `/sandbox/${id}`, TIMEOUT_GET_MS, daytonaSandboxResponseSchema, {
+      signal,
+    });
   }
 
   async startSandbox(id: string): Promise<void> {
     await this.requestVoid("POST", `/sandbox/${id}/start`, TIMEOUT_START_MS);
   }
 
-  async stopSandbox(id: string): Promise<void> {
-    await this.requestVoid("POST", `/sandbox/${id}/stop`, TIMEOUT_STOP_MS);
+  async stopSandbox(id: string, signal?: AbortSignal): Promise<void> {
+    await this.requestVoid("POST", `/sandbox/${id}/stop`, TIMEOUT_STOP_MS, { signal });
   }
 
   async deleteSandbox(id: string, signal?: AbortSignal): Promise<void> {

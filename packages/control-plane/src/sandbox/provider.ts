@@ -15,6 +15,11 @@ import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 /** Default sandbox lifetime in seconds (2 hours). */
 export const DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200;
 
+/** Provider-specific lifetime evidence, never inferred from a generic creation timestamp. */
+export type SandboxExecutionExpiry =
+  | { kind: "hard" | "conservative"; expiresAtMs: number }
+  | { kind: "unknown" };
+
 /**
  * Provider-neutral configuration for triggering an image build inside a
  * provider session. Every supported provider follows the same
@@ -162,6 +167,8 @@ export function createVncAccess(
  * Result of creating a sandbox.
  */
 export interface CreateSandboxResult {
+  /** Known execution lifetime of this exact provider instance; omission is unknown. */
+  executionExpiry?: SandboxExecutionExpiry;
   /** The sandbox ID (should match expected ID from config) */
   sandboxId: string;
   /** Provider's internal object ID (e.g., Modal's object ID for snapshot API) */
@@ -230,6 +237,7 @@ export interface RestoreConfig {
  * Result of restoring a sandbox from a snapshot.
  */
 export interface RestoreResult {
+  executionExpiry?: SandboxExecutionExpiry;
   /** Whether the restore succeeded */
   success: boolean;
   /** Sandbox ID if successful */
@@ -304,6 +312,8 @@ export interface ResumeConfig {
  * Result of resuming a previously stopped sandbox.
  */
 export interface ResumeResult {
+  /** Replacement lifetime evidence following this instance's acknowledged renewal. */
+  executionExpiry?: SandboxExecutionExpiry;
   /** Whether the resume succeeded */
   success: boolean;
   /** Provider's internal object ID, if it changed during recovery */
@@ -326,6 +336,8 @@ export interface ResumeResult {
  * Configuration for explicitly stopping a sandbox.
  */
 export interface StopConfig {
+  /** Lifecycle-owned policy; reason is diagnostic and must never select destructive behavior. */
+  mode: "suspend" | "terminate";
   /** Provider's internal object ID (e.g., Daytona sandbox ID) */
   providerObjectId: string;
   /** Session ID for context */
@@ -342,7 +354,7 @@ export interface StopConfig {
  * Result of explicitly stopping a sandbox.
  */
 export interface StopResult {
-  /** Whether the stop succeeded */
+  /** True only after provider-confirmed cessation, never merely request acceptance. */
   success: boolean;
   /** Error message if stop failed */
   error?: string;

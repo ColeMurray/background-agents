@@ -45,6 +45,7 @@ import {
   type RestoreResult,
   type SandboxProvider,
   type SandboxProviderCapabilities,
+  type SandboxExecutionExpiry,
   type SnapshotConfig,
   type SnapshotResult,
   type StopConfig,
@@ -115,9 +116,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
             secretStore: secretStore?.name,
           });
       providerObjectId = sandbox.id;
-      if (timeoutSeconds !== undefined) {
-        await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
-      }
+      const executionExpiry = await this.renewExecutionExpiry(providerObjectId, timeoutSeconds);
       await this.client.startRuntime(providerObjectId);
       const tunnels = await this.buildTunnelUrls(
         providerObjectId,
@@ -132,6 +131,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         sandboxId: config.sandboxId,
         providerObjectId,
         createdAt: Date.now(),
+        executionExpiry,
         codeServerUrl: tunnels.codeServerUrl,
         codeServerPassword: tunnels.codeServerPassword,
         vncAccess: tunnels.vncAccess,
@@ -174,9 +174,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         secretStore: secretStore?.name,
       });
       providerObjectId = sandbox.id;
-      if (timeoutSeconds !== undefined) {
-        await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
-      }
+      const executionExpiry = await this.renewExecutionExpiry(providerObjectId, timeoutSeconds);
       await this.client.startRuntime(providerObjectId);
       const tunnels = await this.buildTunnelUrls(
         providerObjectId,
@@ -191,6 +189,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         success: true,
         sandboxId: config.sandboxId,
         providerObjectId,
+        executionExpiry,
         codeServerUrl: tunnels.codeServerUrl,
         codeServerPassword: tunnels.codeServerPassword,
         vncAccess: tunnels.vncAccess,
@@ -269,9 +268,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       }
 
       const timeoutSeconds = config.timeoutSeconds;
-      if (timeoutSeconds !== undefined) {
-        await this.client.setSandboxTimeout(config.providerObjectId, timeoutSeconds);
-      }
+      const executionExpiry = await this.renewExecutionExpiry(
+        config.providerObjectId,
+        timeoutSeconds
+      );
       if (wokeSandbox) {
         await this.client.startRuntime(config.providerObjectId);
       }
@@ -303,6 +303,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       return {
         success: true,
         providerObjectId: sandbox.id || config.providerObjectId,
+        executionExpiry,
         codeServerUrl,
         codeServerPassword,
         vncAccess,
@@ -315,29 +316,58 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   }
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
+    const terminal = config.mode === "terminate";
     try {
       try {
-        if (config.reason === "respawn") {
+        if (terminal) {
           await this.client.deleteSandbox(
             config.providerObjectId,
             { deleteSecretStore: true },
             ...(config.signal ? [config.signal] : [])
           );
         } else {
-          await this.client.hibernateSandbox(config.providerObjectId);
+          await this.client.hibernateSandbox(config.providerObjectId, config.signal);
         }
+      } catch (error) {
+        if (error instanceof OpenComputerNotFoundError) return { success: true };
+        if (!(error instanceof OpenComputerApiError && error.status === 409)) throw error;
+      }
+      try {
+        const sandbox = await this.client.getSandbox(config.providerObjectId, config.signal);
+        const state = (sandbox.state ?? sandbox.status ?? "unknown").toLowerCase();
+        if (!terminal && (state === "hibernated" || state === "stopped")) {
+          return { success: true };
+        }
+        return {
+          success: false,
+          error: `OpenComputer ${terminal ? "deletion" : "hibernation"} is not confirmed (state: ${state})`,
+        };
       } catch (error) {
         if (error instanceof OpenComputerNotFoundError) return { success: true };
         throw error;
       }
-      return { success: true };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError(
-        `Failed to ${config.reason === "respawn" ? "delete" : "hibernate"} OpenComputer sandbox`,
+        `Failed to ${terminal ? "delete" : "hibernate"} OpenComputer sandbox`,
         error
       );
     }
+  }
+
+  private async renewExecutionExpiry(
+    providerObjectId: string,
+    timeoutSeconds: number | undefined
+  ): Promise<SandboxExecutionExpiry> {
+    if (timeoutSeconds === undefined) return { kind: "unknown" };
+    const requestStartedAtMs = Date.now();
+    await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
+    // OpenComputer's rolling idle timeout may be extended by activity. This is
+    // only an earliest conservative bound, not an authoritative hard lifetime.
+    // https://docs.opencomputer.dev/sandboxes/overview
+    return Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
+      ? { kind: "conservative", expiresAtMs: requestStartedAtMs + timeoutSeconds * 1000 }
+      : { kind: "unknown" };
   }
 
   /**
@@ -485,6 +515,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     // checked as === "true" in entrypoint.py, so "false" disables it.
     envVars[IMAGE_BUILD_MODE_ENV_VAR] = "false";
     for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) envVars[key] = "";
+    // Hibernation/checkpoints preserve memory and inherited descriptors; raw
+    // runtime hook logs cannot be safely excluded from those capture paths.
+    envVars.HOOK_LOG_MODE = "discard";
+    if (secretEnvVars) delete secretEnvVars.HOOK_LOG_MODE;
 
     return { envVars, secretEnvVars };
   }

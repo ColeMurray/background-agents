@@ -15,7 +15,7 @@ from sandbox_runtime.repository_sync import (
     RepositorySyncStatus,
 )
 from sandbox_runtime.runtime_config import BootMode
-from sandbox_runtime.supervisor import ImageBuildExecutionCancelled
+from sandbox_runtime.supervisor import BootExecutionCancelled
 
 
 @pytest.fixture(autouse=True)
@@ -140,7 +140,7 @@ class TestImageBuildMode:
         supervisor.shutdown_event.set()
         operation_factory = MagicMock()
 
-        with pytest.raises(ImageBuildExecutionCancelled):
+        with pytest.raises(BootExecutionCancelled):
             await supervisor._run_until_shutdown(operation_factory)
 
         operation_factory.assert_not_called()
@@ -462,6 +462,27 @@ class TestImageBuildMode:
         from_env.assert_not_called()
         callback.report_success.assert_awaited_once()
         callback.report_failure.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hook_log_discard_failure_prevents_image_success(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor._run_image_build_execution = AsyncMock(
+            return_value=MagicMock(head_sha="abc123", repository_shas=[])
+        )
+        supervisor.repository_boot.hooks.discard_logs = AsyncMock(
+            side_effect=PermissionError("hook logs could not be discarded")
+        )
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+        callback = _completion_callback(supervisor)
+
+        with patch.dict(os.environ, build_env, clear=False):
+            assert await supervisor.run(callback) is False
+
+        callback.report_success.assert_not_awaited()
+        callback.report_failure.assert_awaited_once_with("hook logs could not be discarded")
+        supervisor._report_fatal_error.assert_awaited_once_with("hook logs could not be discarded")
+        supervisor.shutdown.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_partial_callback_configuration_aborts_build(self, build_env, monkeypatch):

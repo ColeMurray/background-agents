@@ -8,6 +8,7 @@ import type { SessionStatusService } from "../session-status-service";
 import type { SandboxEventContext } from "./context";
 import type { SessionBudgetService } from "../budget-service";
 import { deriveFallbackSessionTitle } from "../title";
+import type { ExecutionStopCoordinator } from "../execution-stop-coordinator";
 
 /**
  * Execution-lifecycle family: settle a finished turn. `execution_complete`
@@ -32,7 +33,7 @@ export class SandboxExecutionEventHandler {
       completedAt: number
     ) => Promise<void>,
     private readonly statusService: SessionStatusService,
-    private readonly triggerSnapshot: (reason: string) => Promise<void>,
+    private readonly triggerSnapshot: (reason: string, cleanupDeadlineMs?: number) => Promise<void>,
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
     private readonly processMessageQueue: () => Promise<void>,
@@ -42,7 +43,8 @@ export class SandboxExecutionEventHandler {
       "observeExecutionCost" | "deliverTransition"
     >,
     private readonly transaction: <T>(closure: () => T) => T,
-    private readonly offerFallbackTitle: (title: string) => void
+    private readonly offerFallbackTitle: (title: string) => void,
+    private readonly executionStop: Pick<ExecutionStopCoordinator, "stop"> | undefined = undefined
   ) {}
 
   /**
@@ -62,9 +64,45 @@ export class SandboxExecutionEventHandler {
     event: Extract<SandboxEvent, { type: "execution_complete" }>,
     context: SandboxEventContext
   ): Promise<void> {
+    const metadata = this.messageRepository.getMessageExecutionMetadata(event.messageId);
+    if (metadata?.execution_sandbox_id && metadata.execution_sandbox_id !== event.sandboxId) {
+      this.log.warn("Ignoring completion from a different sandbox instance", {
+        message_id: event.messageId,
+      });
+      return;
+    }
+    if (event.executionStopped !== undefined && metadata?.requires_stop_evidence !== 1) {
+      // The explicit new field is itself capability evidence, including when
+      // ready and a terminal result race during a control-plane rollout.
+      this.messageRepository.requireStopEvidenceForMessage(event.messageId, event.sandboxId);
+    }
+    const observedCleanupDeadlineMs =
+      event.cleanupDeadlineMs !== undefined
+        ? this.messageRepository.beginMessageCleanup(
+            event.messageId,
+            context.now,
+            event.cleanupDeadlineMs
+          )
+        : null;
+    if (
+      event.executionStopped === false ||
+      (metadata?.requires_stop_evidence === 1 && event.executionStopped !== true)
+    ) {
+      // An outcome is not cessation. Settle through the existing stop owner,
+      // retain the fence, and do not snapshot or dispatch uncertain execution.
+      if (context.processingMessage?.id === event.messageId) {
+        await this.executionStop?.stop(
+          event.error ?? "Execution ended without confirmed cessation"
+        );
+      }
+      await this.budget.deliverTransition(
+        this.transaction(() => this.budget.observeExecutionCost(event, context.now))
+      );
+      return;
+    }
     // Release the processing/stop fence and settle final cost in one commit.
     // No queue invocation may see a finished turn with its budget still stale.
-    const { completion, budgetTransition } = this.transaction(() => {
+    const { completion, budgetTransition, cleanupDeadlineMs } = this.transaction(() => {
       const completion =
         context.processingMessage?.id === event.messageId
           ? this.messageRepository.recordMessageCompletion(event, context.now, "processing")
@@ -72,6 +110,11 @@ export class SandboxExecutionEventHandler {
       if (!completion) this.messageRepository.clearMessageAwaitingStopConfirmation(event.messageId);
       return {
         completion,
+        cleanupDeadlineMs:
+          this.messageRepository.beginMessageCleanup(event.messageId, context.now) ??
+          observedCleanupDeadlineMs ??
+          metadata?.cleanup_deadline_ms ??
+          undefined,
         budgetTransition: this.budget.observeExecutionCost(event, context.now),
       };
     });
@@ -121,10 +164,13 @@ export class SandboxExecutionEventHandler {
       });
     }
 
-    this.backgroundTasks.submit(() => this.triggerSnapshot("execution_complete"), {
-      name: "snapshot.trigger",
-      context: { reason: "execution_complete", message_id: event.messageId },
-    });
+    this.backgroundTasks.submit(
+      () => this.triggerSnapshot("execution_complete", cleanupDeadlineMs),
+      {
+        name: "snapshot.trigger",
+        context: { reason: "execution_complete", message_id: event.messageId },
+      }
+    );
     this.updateLastActivity(context.now);
     await this.scheduleInactivityCheck();
     await this.processMessageQueue();

@@ -6,6 +6,7 @@ import filecmp
 import json
 import os
 import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -14,6 +15,7 @@ import httpx
 
 from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
+from .hook_logs import log_path_for_repository
 from .mcp_packages import McpPackageInstaller
 from .process_output import iter_process_lines
 from .sandbox_bin import install_bin_scripts
@@ -453,6 +455,38 @@ class OpenCodeServer:
                 install_runtime_git_excludes(workdir, installed_runtime_paths)
             except Exception as error:
                 self.log.warn("opencode.git_excludes_failed", exc=error)
+
+        if hook_log_dir := os.environ.get("OPENINSPECT_HOOK_LOG_DIR"):
+            hook_log_paths = [
+                path
+                for repo in repositories
+                for hook in ("setup", "start")
+                if (
+                    path := log_path_for_repository(Path(hook_log_dir), repo.owner, repo.name, hook)
+                ).is_file()
+            ]
+            if hook_log_paths:
+                # OpenCode 1.18.29 concatenates config.instructions across config
+                # sources and reads absolute paths. This adds boot context without
+                # replacing repository agent prompts or modifying AGENTS.md.
+                # Keep the private instruction file inside the managed log tree
+                # so snapshot preparation removes it along with the diagnostics.
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    prefix="opencode-boot-context-",
+                    suffix=".md",
+                    dir=hook_log_dir,
+                    delete=False,
+                ) as context:
+                    context.write(
+                        "Repository boot hook logs are available at:\n"
+                        + "\n".join(f"- {path}" for path in hook_log_paths)
+                        + "\nThese are private, bounded, best-effort diagnostics and are "
+                        "discarded before snapshots. Do not copy raw log contents into "
+                        "shared artifacts because they may contain secrets.\n"
+                    )
+                    opencode_config["instructions"] = [context.name]
 
         env = {
             **os.environ,

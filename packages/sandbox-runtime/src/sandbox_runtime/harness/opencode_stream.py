@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import re
 import time
 from contextlib import AsyncExitStack
@@ -26,6 +25,8 @@ from .opencode_client import (
     SSEInactivityTimeoutError,
     SSEStreamDisconnectedError,
 )
+from .opencode_execution import OpenCodeExecutionLedger
+from .opencode_execution import message_created_epoch_ms as _message_created_epoch_ms
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -76,6 +77,7 @@ class _PromptState:
     # session.compacted. If still set at idle with no error emitted, the
     # promised compaction never happened and the prompt must fail.
     pending_overflow_error: str | None = None
+    execution: OpenCodeExecutionLedger = field(init=False)
 
     def __post_init__(self) -> None:
         self.attribution = MessageAttribution(
@@ -83,6 +85,9 @@ class _PromptState:
             # start_time is captured before the prompt is posted, so nothing
             # OpenCode creates for this prompt can predate it.
             int(self.start_time * 1000),
+        )
+        self.execution = OpenCodeExecutionLedger(
+            self.opencode_session_id, self.opencode_message_id, int(self.start_time * 1000)
         )
 
     def message_cost_usd(self) -> float:
@@ -110,24 +115,6 @@ class _StreamStep:
 
     events: list[dict[str, Any]]
     disposition: _Disposition
-
-
-def _message_created_epoch_ms(info: dict[str, Any]) -> int | None:
-    """Read `time.created` off an OpenCode message, or None when it is absent.
-
-    Non-finite values are treated as absent rather than converted: `int()`
-    raises on NaN and infinity, which would tear down the SSE loop over a
-    malformed payload.
-    """
-    time_info = info.get("time")
-    if not isinstance(time_info, dict):
-        return None
-    created = time_info.get("created")
-    if isinstance(created, bool) or not isinstance(created, (int, float)):
-        return None
-    if not math.isfinite(created):
-        return None
-    return int(created)
 
 
 class OpenCodePromptStream:
@@ -164,6 +151,11 @@ class OpenCodePromptStream:
         # Session title dedupe survives across prompts so an unchanged title
         # is forwarded to the control plane at most once.
         self._last_forwarded_session_title: str | None = None
+        self._execution: OpenCodeExecutionLedger | None = None
+
+    @property
+    def execution_stopped(self) -> bool:
+        return self._execution is not None and self._execution.execution_stopped
 
     async def stream_prompt(
         self,
@@ -174,6 +166,7 @@ class OpenCodePromptStream:
         model: str | None = None,
         reasoning_effort: str | None = None,
         attachments: list[HydratedSessionAttachment] | None = None,
+        bridge_managed: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 
@@ -193,12 +186,17 @@ class OpenCodePromptStream:
             opencode_message_id=opencode_message_id,
             start_time=time.time(),
         )
+        self._execution = state.execution
         loop = asyncio.get_running_loop()
-        prompt_deadline = loop.time() + self._prompt_max_duration_seconds
+        # The production bridge owns one deadline including preparation and one
+        # containment budget. Local budgets remain only for the raw stream seam.
+        prompt_deadline = (
+            None if bridge_managed else loop.time() + self._prompt_max_duration_seconds
+        )
         try:
             async with AsyncExitStack() as stack:
                 try:
-                    async with asyncio.timeout(prompt_deadline - loop.time()):
+                    async with asyncio.timeout_at(prompt_deadline):
                         sse_events = await stack.enter_async_context(
                             self._client.events(
                                 inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
@@ -210,11 +208,10 @@ class OpenCodePromptStream:
                 event_iterator = aiter(sse_events)
 
                 while True:
-                    remaining_seconds = prompt_deadline - loop.time()
-                    if remaining_seconds <= 0:
+                    if prompt_deadline is not None and prompt_deadline <= loop.time():
                         raise _PromptMaxDurationTimeout
                     try:
-                        async with asyncio.timeout(remaining_seconds):
+                        async with asyncio.timeout_at(prompt_deadline):
                             sse_event = await anext(event_iterator)
                     except StopAsyncIteration:
                         break
@@ -237,6 +234,9 @@ class OpenCodePromptStream:
 
                 for event in self._flush_unassociated_child_activity(state):
                     yield event
+                raise SSEStreamDisconnectedError(
+                    "OpenCode event stream ended before confirmed turn completion."
+                )
 
         except _PromptMaxDurationTimeout:
             elapsed = time.time() - state.start_time
@@ -269,32 +269,35 @@ class OpenCodePromptStream:
                 f"Prompt exceeded max duration of {self._prompt_max_duration_seconds:.0f}s."
             )
 
-        except SSEInactivityTimeoutError:
+        except SSEInactivityTimeoutError as error:
             elapsed = time.time() - state.start_time
             self._log.error(
-                "bridge.sse_inactivity_timeout",
-                timeout_name="sse_inactivity",
+                "bridge.opencode_stream_consumption_timeout",
+                timeout_name="opencode_stream_responsiveness",
                 timeout_ms=int(self._sse_inactivity_timeout_seconds * 1000),
                 elapsed_ms=int(elapsed * 1000),
-                operation="bridge.sse",
+                operation="bridge.opencode_stream_consumption",
                 message_id=message_id,
             )
             pending_child_events = self._flush_unassociated_child_activity(state)
             for event in pending_child_events:
                 yield event
-            await self._client.request_stop(opencode_session_id, reason="inactivity_timeout")
-            async for final_event in self._fetch_final_message_state(state):
-                yield final_event
-            raise RuntimeError(
-                f"SSE stream inactive for {self._sse_inactivity_timeout_seconds:.0f}s "
-                f"(no data received). Total elapsed: {elapsed:.0f}s"
-            )
+            if not bridge_managed:
+                async with asyncio.timeout(self._prompt_cleanup_timeout_seconds):
+                    await self._client.request_stop(
+                        opencode_session_id, reason="opencode_stream_consumption_timeout"
+                    )
+                    async for final_event in self._fetch_final_message_state(state):
+                        yield final_event
+            raise RuntimeError(str(error)) from error
 
         except SSEStreamDisconnectedError as e:
             for event in self._flush_unassociated_child_activity(state):
                 yield event
-            async for final_event in self._fetch_final_message_state(state):
-                yield final_event
+            if not bridge_managed:
+                async with asyncio.timeout(self._prompt_cleanup_timeout_seconds):
+                    async for final_event in self._fetch_final_message_state(state):
+                        yield final_event
             raise SSEConnectionError(
                 "OpenCode event stream disconnected before completion; "
                 "partial output was preserved when available."
@@ -302,6 +305,7 @@ class OpenCodePromptStream:
 
     def _apply_sse_event(self, state: _PromptState, sse_event: dict[str, Any]) -> _StreamStep:
         """Translate one OpenCode SSE event into bridge events, mutating state."""
+        state.execution.observe(sse_event)
         event_type = sse_event.get("type")
         props = sse_event.get("properties", {})
         if not isinstance(props, dict):
@@ -335,7 +339,6 @@ class OpenCodePromptStream:
             events.extend(self._on_part_updated(state, props))
 
         elif event_type == "session.idle":
-            # Only parent idle terminates the stream
             if props.get("sessionID") == state.opencode_session_id:
                 self._log_parent_idle(state, "bridge.session_idle")
                 events.extend(self._unrecovered_overflow_events(state))
@@ -343,7 +346,6 @@ class OpenCodePromptStream:
 
         elif event_type == "session.status":
             status = props.get("status", {})
-            # Only parent status=idle terminates the stream
             if props.get("sessionID") == state.opencode_session_id and status.get("type") == "idle":
                 self._log_parent_idle(state, "bridge.session_status_idle")
                 events.extend(self._unrecovered_overflow_events(state))

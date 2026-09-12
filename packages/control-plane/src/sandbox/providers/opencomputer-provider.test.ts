@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenComputerSandboxProvider } from "./opencomputer-provider";
 import type {
   OpenComputerCreateSandboxParams,
@@ -10,6 +10,7 @@ import {
   OPENCOMPUTER_CHECKPOINT_KIND,
   OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
   OpenComputerNotFoundError,
+  OpenComputerApiError,
 } from "../opencomputer-rest-client";
 import type { CreateSandboxConfig } from "../provider";
 
@@ -85,6 +86,7 @@ const baseConfig: CreateSandboxConfig = {
 };
 
 describe("OpenComputerSandboxProvider", () => {
+  afterEach(() => vi.restoreAllMocks());
   it("reports checkpoint/fork capabilities", () => {
     const provider = new OpenComputerSandboxProvider(createMockClient(), {
       scmProvider: "github",
@@ -956,14 +958,19 @@ describe("OpenComputerSandboxProvider", () => {
         providerObjectId: "oc-sandbox-1",
         sessionId: "session-1",
         reason: "inactivity_timeout",
+        mode: "suspend",
       })
     ).resolves.toEqual({ success: true });
 
-    expect(client.hibernateSandbox).toHaveBeenCalledWith("oc-sandbox-1");
+    expect(client.hibernateSandbox).toHaveBeenCalledWith("oc-sandbox-1", undefined);
   });
 
   it("deletes sandboxes on replacement", async () => {
-    const client = createMockClient();
+    const client = createMockClient({
+      getSandbox: vi.fn(async () => {
+        throw new OpenComputerNotFoundError("gone");
+      }),
+    });
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
       sandboxAccessPasswordSecret: "secret",
@@ -975,6 +982,7 @@ describe("OpenComputerSandboxProvider", () => {
         providerObjectId: "oc-sandbox-1",
         sessionId: "session-1",
         reason: "respawn",
+        mode: "terminate",
         signal,
       })
     ).resolves.toEqual({ success: true });
@@ -986,4 +994,159 @@ describe("OpenComputerSandboxProvider", () => {
     );
     expect(client.hibernateSandbox).not.toHaveBeenCalled();
   });
+
+  it.each(["execution_timeout", "inactivity_timeout", "heartbeat_timeout"])(
+    "terminate mode deletes for %s without accepting hibernation as cessation",
+    async (reason) => {
+      const client = createMockClient();
+      const provider = new OpenComputerSandboxProvider(client, {
+        scmProvider: "github",
+        sandboxAccessPasswordSecret: "secret",
+      });
+      const result = await provider.stopSandbox({
+        providerObjectId: "oc-sandbox-1",
+        sessionId: "s",
+        reason,
+        mode: "terminate",
+      });
+      expect(client.deleteSandbox).toHaveBeenCalled();
+      expect(client.hibernateSandbox).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+    }
+  );
+
+  it.each(["inactivty_timeout", "new_stop_reason", "execution_timeout"])(
+    "suspend mode never deletes for diagnostic reason %s",
+    async (reason) => {
+      const client = createMockClient();
+      const provider = new OpenComputerSandboxProvider(client, {
+        scmProvider: "github",
+        sandboxAccessPasswordSecret: "secret",
+      });
+      const result = await provider.stopSandbox({
+        providerObjectId: "oc-sandbox-1",
+        sessionId: "s",
+        mode: "suspend",
+        reason,
+      });
+      expect(result.success).toBe(true);
+      expect(client.hibernateSandbox).toHaveBeenCalled();
+      expect(client.deleteSandbox).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not confirm hibernation from acceptance or conflict while still running", async () => {
+    for (const conflict of [false, true]) {
+      const client = createMockClient({
+        hibernateSandbox: vi.fn(async () => {
+          if (conflict) throw new OpenComputerApiError("busy", 409);
+        }),
+        getSandbox: vi.fn(async () => ({ id: "oc-sandbox-1", state: "running" })),
+      });
+      const provider = new OpenComputerSandboxProvider(client, {
+        scmProvider: "github",
+        sandboxAccessPasswordSecret: "secret",
+      });
+      expect(
+        (
+          await provider.stopSandbox({
+            providerObjectId: "oc-sandbox-1",
+            sessionId: "s",
+            reason: "heartbeat_timeout",
+            mode: "suspend",
+          })
+        ).success
+      ).toBe(false);
+    }
+  });
+
+  it("passes one cancellation signal through hibernation and confirmation", async () => {
+    const client = createMockClient();
+    const signal = new AbortController().signal;
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+    await provider.stopSandbox({
+      providerObjectId: "oc-sandbox-1",
+      sessionId: "s",
+      reason: "inactivity_timeout",
+      mode: "suspend",
+      signal,
+    });
+    expect(client.hibernateSandbox).toHaveBeenCalledWith("oc-sandbox-1", signal);
+    expect(client.getSandbox).toHaveBeenCalledWith("oc-sandbox-1", signal);
+  });
+
+  it("keeps expiry unknown without an explicitly acknowledged timeout", async () => {
+    const provider = new OpenComputerSandboxProvider(createMockClient(), {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+    expect((await provider.createSandbox(baseConfig)).executionExpiry).toEqual({ kind: "unknown" });
+  });
+
+  it.each(["create", "restore"])(
+    "discards runtime hook logs and rejects a secret-store override on %s",
+    async (operation) => {
+      const client = createMockClient();
+      const provider = new OpenComputerSandboxProvider(client, {
+        scmProvider: "github",
+        sandboxAccessPasswordSecret: "secret",
+      });
+      const config = {
+        ...baseConfig,
+        userEnvVars: { HOOK_LOG_MODE: "file", OTHER_SECRET: "value" },
+      };
+      if (operation === "create") {
+        await provider.createSandbox(config);
+        expect(vi.mocked(client.createSandbox).mock.calls[0][0].env?.HOOK_LOG_MODE).toBe("discard");
+      } else {
+        await provider.restoreFromSnapshot({ ...config, snapshotImageId: "cp-1" });
+        expect(vi.mocked(client.forkFromCheckpoint).mock.calls[0][0].env?.HOOK_LOG_MODE).toBe(
+          "discard"
+        );
+      }
+      expect(client.setSecret).not.toHaveBeenCalledWith(
+        expect.objectContaining({ name: "HOOK_LOG_MODE" })
+      );
+    }
+  );
+
+  it.each(["create", "restore", "resume"])(
+    "accounts for renewal and runtime delay on %s",
+    async (operation) => {
+      let nowMs = 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+      const client = createMockClient({
+        setSandboxTimeout: vi.fn(async () => {
+          nowMs += 20_000;
+        }),
+        startRuntime: vi.fn(async () => {
+          nowMs += 30_000;
+        }),
+      });
+      const provider = new OpenComputerSandboxProvider(client, {
+        scmProvider: "github",
+        sandboxAccessPasswordSecret: "secret",
+      });
+      const result =
+        operation === "create"
+          ? await provider.createSandbox({ ...baseConfig, timeoutSeconds: 120 })
+          : operation === "restore"
+            ? await provider.restoreFromSnapshot({
+                ...baseConfig,
+                timeoutSeconds: 120,
+                snapshotImageId: "cp-1",
+              })
+            : await provider.resumeSandbox({
+                providerObjectId: "oc-sandbox-1",
+                sessionId: "s",
+                sandboxId: "logical",
+                timeoutSeconds: 120,
+              });
+      expect(nowMs).toBe(60_000);
+      expect(result.executionExpiry).toEqual({ kind: "conservative", expiresAtMs: 130_000 });
+    }
+  );
 });

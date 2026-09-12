@@ -908,7 +908,10 @@ class TestSSEStreaming:
         assert complete["type"] == "execution_complete"
         assert complete["messageId"] == "cp-msg-1"
         assert complete["success"] is False
-        assert complete["error"] == "The agent completed without emitting assistant output."
+        assert complete["error"] == (
+            "OpenCode turn outcome did not confirm that all turn-owned execution stopped."
+        )
+        assert complete["executionStopped"] is False
 
 
 class TestFetchFinalMessageState:
@@ -1487,7 +1490,7 @@ class TestInactivityTimeout:
         )
         wire_opencode_transport(bridge, DelayedMockHttpClient(sse_response))
 
-        with pytest.raises(RuntimeError, match="SSE stream inactive"):
+        with pytest.raises(RuntimeError, match="receive or downstream processing"):
             async for _event in stream_opencode_events(bridge, "msg-1", "test"):
                 pass
 
@@ -2768,6 +2771,8 @@ class TestCompactionHandling:
             "type": "execution_complete",
             "messageId": "cp-msg-1",
             "success": True,
+            "executionStopped": True,
+            "sandboxId": "test-sandbox",
         }
 
     @pytest.mark.asyncio
@@ -2850,6 +2855,8 @@ class TestCompactionHandling:
             "messageId": "cp-msg-1",
             "success": False,
             "error": "Session too large to compact",
+            "executionStopped": True,
+            "sandboxId": "test-sandbox",
         }
 
     @pytest.mark.asyncio

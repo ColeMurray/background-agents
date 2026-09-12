@@ -7,8 +7,10 @@ import {
 import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
+import { executionStateRequestSchema } from "../../contracts";
 import {
   BudgetExhaustedError,
+  AutomationAdmissionExpiredError,
   PromptQueueFullError,
   HarnessModelIncompatibleError,
   PromptRequestConflictError,
@@ -39,6 +41,12 @@ export class MessagesHandler {
       const body: EnqueuePromptRequest = result.data;
       return Response.json(await this.messageService.enqueuePrompt(body));
     } catch (error) {
+      if (error instanceof AutomationAdmissionExpiredError) {
+        return Response.json(
+          { error: error.message, code: "AUTOMATION_ADMISSION_EXPIRED" },
+          { status: 409 }
+        );
+      }
       if (error instanceof SessionAttachmentError) {
         return Response.json({ error: error.message }, { status: 400 });
       }
@@ -72,6 +80,20 @@ export class MessagesHandler {
 
   async stop(): Promise<Response> {
     return Response.json(await this.messageService.stop());
+  }
+
+  async reconcileExecutionState(request: Request): Promise<Response> {
+    const parsed = executionStateRequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return Response.json({ error: "Invalid execution state request" }, { status: 400 });
+    }
+    return Response.json(
+      await this.messageService.reconcileExecutionState(
+        parsed.data.automationRunId,
+        parsed.data.executionLaunchId,
+        parsed.data.admissionDeadlineMs
+      )
+    );
   }
 
   listEvents(url: URL): Response {

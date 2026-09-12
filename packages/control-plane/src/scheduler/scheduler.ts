@@ -69,7 +69,11 @@ import type { SqlDatabase } from "../db/sql-database";
 import type { BackgroundTasks } from "../platform-ports";
 import { initializeSession } from "../session/initialize";
 import { createSessionRuntimeClient } from "../session/runtime-client";
-import { SessionInternalPaths } from "../session/contracts";
+import {
+  SessionInternalPaths,
+  sessionExecutionStateSchema,
+  type SessionExecutionState,
+} from "../session/contracts";
 import type { SessionInitInput } from "../session/initialize";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
@@ -106,8 +110,8 @@ const AUTOMATION_LAUNCH_CONCURRENCY = 4;
 /** Threshold for detecting orphaned "starting" runs (5 minutes). */
 const ORPHAN_THRESHOLD_MS = 5 * 60 * 1000;
 
-/** Default execution timeout for detecting timed-out runs (90 minutes). */
-const DEFAULT_EXECUTION_TIMEOUT_MS = 90 * 60 * 1000;
+/** Bounds one recovery observation, not the session's execution. */
+const EXECUTION_STATE_REQUEST_TIMEOUT_MS = 10_000;
 
 /** Consecutive failure threshold for auto-pause. */
 const AUTO_PAUSE_THRESHOLD = 3;
@@ -261,8 +265,15 @@ type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
   "content" | "authorId" | "canonicalUserId" | "source"
 > & {
-  callbackContext: AutomationCallbackContext | SlackCallbackContext;
+  callbackContext: (AutomationCallbackContext | SlackCallbackContext) & {
+    executionLaunchId: string;
+    admissionDeadlineMs: number;
+  };
 };
+
+class PromptEnqueueRejectedError extends Error {}
+
+type SteerOutcome = "steered" | "recovery_pending" | "rejected";
 
 export async function resolveAutomationProviderAuth(
   db: SqlDatabase,
@@ -550,15 +561,19 @@ export class Scheduler {
     }
 
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
+      let claimedSessionId: string | null = null;
+      let promptAttempted = false;
+      const launch = { id: generateId(), admissionDeadlineMs: Date.now() + ORPHAN_THRESHOLD_MS };
       try {
         if ("error" in providerAuthSnapshot) throw providerAuthSnapshot.error;
         const sessionId = generateId();
         // Claim the generated session before initialization. Otherwise the orphan sweep can
         // terminalize an old `starting` row while initialization is still creating its session.
-        const claimed = await store.claimRunSession(child.id, sessionId, Date.now());
+        const claimed = await store.claimRunSession(child.id, sessionId, Date.now(), launch);
         if (!claimed) {
           throw new Error("Automation run was recovered before launch claimed its session");
         }
+        claimedSessionId = sessionId;
         await this.createSessionForAutomationRun(
           automation,
           child,
@@ -566,10 +581,12 @@ export class Scheduler {
           sessionId,
           executionPrincipal
         );
+        promptAttempted = true;
         await this.sendPromptToSession(
           sessionId,
           automation,
           child.id,
+          launch,
           executionPrincipal,
           instructionsOverride
         );
@@ -584,12 +601,35 @@ export class Scheduler {
           run_id: child.id,
           error: message,
         });
+        const deliveryUncertain =
+          claimedSessionId !== null &&
+          promptAttempted &&
+          !(e instanceof PromptEnqueueRejectedError);
         try {
-          await store.updateRun(child.id, {
-            status: "failed",
-            failure_reason: message,
-            completed_at: Date.now(),
-          });
+          if (deliveryUncertain) {
+            await this.reconcileRunExecution(store, {
+              ...child,
+              session_id: claimedSessionId,
+              execution_launch_id: launch.id,
+              execution_admission_deadline_ms: launch.admissionDeadlineMs,
+            });
+          } else {
+            // Only the launch owner knows initialization failed before enqueue
+            // or the enqueue response proved rejection before insertion.
+            if (claimedSessionId) {
+              await store.releaseRejectedExecutionLaunch(
+                child.id,
+                claimedSessionId,
+                launch.id,
+                false
+              );
+            }
+            await store.updateRun(child.id, {
+              status: "failed",
+              failure_reason: message,
+              completed_at: Date.now(),
+            });
+          }
         } catch (updateError) {
           this.log.error("Failed to record launch failure", {
             event: "scheduler.fail_track_error",
@@ -599,8 +639,16 @@ export class Scheduler {
             error: updateError instanceof Error ? updateError.message : String(updateError),
           });
         }
-        child.status = "failed";
-        child.failure_reason = message;
+        // Claiming already persisted running + unresolved. A lost response must
+        // not turn that uncertainty into an irreversible failure or a strike,
+        // even when reconciliation itself fails. The callback/sweep owns the result.
+        if (deliveryUncertain) {
+          child.status = "running";
+          child.session_id = claimedSessionId;
+        } else {
+          child.status = "failed";
+          child.failure_reason = message;
+        }
       }
     };
 
@@ -798,18 +846,13 @@ export class Scheduler {
   // ─── Recovery sweep ──────────────────────────────────────────────────────
 
   private async recoverySweep(store: AutomationStore): Promise<void> {
-    const executionTimeoutMs = parseInt(
-      this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS),
-      10
-    );
-
-    const [orphanedResult, timedOutResult] = await Promise.allSettled([
+    const [orphanedResult, runningResult] = await Promise.allSettled([
       store.getOrphanedStartingRuns(ORPHAN_THRESHOLD_MS, RECOVERY_SWEEP_LIMIT),
-      store.getTimedOutRunningRuns(executionTimeoutMs, RECOVERY_SWEEP_LIMIT),
+      store.getRunsNeedingExecutionRecovery(RECOVERY_SWEEP_LIMIT),
     ]);
 
     const orphaned = orphanedResult.status === "fulfilled" ? orphanedResult.value : [];
-    const timedOut = timedOutResult.status === "fulfilled" ? timedOutResult.value : [];
+    const running = runningResult.status === "fulfilled" ? runningResult.value : [];
 
     if (orphanedResult.status === "rejected") {
       this.log.error("Recovery sweep failed to query orphaned runs", {
@@ -822,18 +865,18 @@ export class Scheduler {
       });
     }
 
-    if (timedOutResult.status === "rejected") {
-      this.log.error("Recovery sweep failed to query timed-out runs", {
+    if (runningResult.status === "rejected") {
+      this.log.error("Recovery sweep failed to query unresolved execution", {
         event: "scheduler.recovery.query_error",
-        category: "timed_out",
+        category: "execution",
         error:
-          timedOutResult.reason instanceof Error
-            ? timedOutResult.reason.message
-            : String(timedOutResult.reason),
+          runningResult.reason instanceof Error
+            ? runningResult.reason.message
+            : String(runningResult.reason),
       });
     }
 
-    if (orphaned.length === 0 && timedOut.length === 0) {
+    if (orphaned.length === 0 && running.length === 0) {
       await this.finalizationSweep(store);
       return;
     }
@@ -845,14 +888,6 @@ export class Scheduler {
         automation_id: run.automation_id,
       });
     }
-    for (const run of timedOut) {
-      this.log.warn("Recovering timed-out running run", {
-        event: "scheduler.recovery.timed_out",
-        run_id: run.id,
-        automation_id: run.automation_id,
-      });
-    }
-
     const now = Date.now();
     const recoveredRuns: AutomationRunRow[] = [];
 
@@ -874,23 +909,40 @@ export class Scheduler {
       }
     }
 
-    if (timedOut.length > 0) {
-      try {
-        await store.bulkFailRunningRuns(
-          timedOut.map((r) => r.id),
-          "execution_timeout",
-          now
-        );
-        recoveredRuns.push(...timedOut);
-      } catch (e) {
-        this.log.error("Recovery sweep failed to mark timed-out runs as failed", {
-          event: "scheduler.recovery.bulk_fail_error",
-          category: "timed_out",
-          count: timedOut.length,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
+    await Promise.all(
+      running.map(async (run) => {
+        try {
+          const state = await this.reconcileRunExecution(store, run);
+          if (!state || (run.status !== "running" && run.status !== "starting")) return;
+
+          // Only the session owns turn expiry and cancellation. Its reconciliation
+          // endpoint enforces the persisted deadline before returning these facts.
+          const terminal = state.messageStatus === "completed" || state.messageStatus === "failed";
+          const startupExpired =
+            state.messageStatus === null &&
+            now - (run.started_at ?? run.created_at) >= ORPHAN_THRESHOLD_MS;
+          if (!terminal && !startupExpired) return;
+
+          const transitioned = await store.updateRun(run.id, {
+            status: state.messageStatus === "completed" ? "completed" : "failed",
+            failure_reason:
+              state.messageStatus === "completed"
+                ? null
+                : startupExpired
+                  ? "session_creation_timeout"
+                  : (state.error ?? "Session execution failed"),
+            completed_at: now,
+          });
+          if (transitioned) recoveredRuns.push(run);
+        } catch (error) {
+          this.log.error("Recovery sweep failed to reconcile run", {
+            event: "scheduler.recovery.execution_error",
+            run_id: run.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })
+    );
 
     if (recoveredRuns.length === 0) {
       await this.finalizationSweep(store);
@@ -918,6 +970,75 @@ export class Scheduler {
     }
 
     await this.finalizationSweep(store);
+  }
+
+  /** Preserve uncertain execution even if its user-facing run is already terminal. */
+  private async reconcileRunExecution(
+    store: AutomationStore,
+    run: AutomationRunRow
+  ): Promise<SessionExecutionState | null> {
+    if (!run.session_id) return null;
+    const checkedAt = Date.now();
+    let state: SessionExecutionState;
+    try {
+      const response = await createSessionRuntimeClient(this.env, {
+        trace_id: `automation:${run.automation_id}`,
+        request_id: run.id,
+      }).fetch(run.session_id, SessionInternalPaths.executionState, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          automationRunId: run.id,
+          executionLaunchId: run.execution_launch_id ?? undefined,
+          admissionDeadlineMs: run.execution_admission_deadline_ms ?? undefined,
+        }),
+        signal: AbortSignal.timeout(EXECUTION_STATE_REQUEST_TIMEOUT_MS),
+      });
+      if (!response.ok) throw new Error(`Session execution state returned ${response.status}`);
+      state = sessionExecutionStateSchema.parse(await response.json());
+    } catch (error) {
+      await store.recordRunExecutionState(
+        run.id,
+        run.session_id,
+        true,
+        "session_state_unreachable",
+        checkedAt,
+        run.execution_launch_id ?? null
+      );
+      this.log.warn("Session execution remains uncertain", {
+        event: "scheduler.recovery.execution_uncertain",
+        run_id: run.id,
+        session_id: run.session_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+
+    const terminal = state.messageStatus === "completed" || state.messageStatus === "failed";
+    // No message is not proof that launch stopped: a late initializer may still
+    // enqueue. Keep that startup recovery fenced until execution is observed.
+    const launchAbsentExpired =
+      !!run.execution_launch_id && state.launch === null && state.launchAdmissionExpired === true;
+    const launchPending = !!run.execution_launch_id && !state.launch && !launchAbsentExpired;
+    const unresolved =
+      state.executionState !== "idle" || (!terminal && !launchAbsentExpired) || launchPending;
+    await store.recordRunExecutionState(
+      run.id,
+      run.session_id,
+      unresolved,
+      !unresolved
+        ? null
+        : state.executionState === "stopping"
+          ? "execution_stopping"
+          : launchPending
+            ? "execution_launch_unresolved"
+            : state.messageStatus === null
+              ? "session_startup_unresolved"
+              : null,
+      checkedAt,
+      run.execution_launch_id ?? null
+    );
+    return state;
   }
 
   /**
@@ -1067,8 +1188,13 @@ export class Scheduler {
             });
             continue;
           }
-          if (await this.steerSession(steerable, automation, event, actorUserId)) {
+          const outcome = await this.steerSession(steerable, automation, event, actorUserId);
+          if (outcome === "steered") {
             steered++;
+            continue;
+          }
+          if (outcome === "recovery_pending") {
+            skipped++;
             continue;
           }
         }
@@ -1243,6 +1369,30 @@ export class Scheduler {
         current_status: "not_found",
       });
       return;
+    }
+
+    if (run.session_id !== body.sessionId) {
+      this.log.warn("Ignoring completion from a different run session", {
+        event: "scheduler.run_complete_ignored",
+        run_id: body.runId,
+        session_id: body.sessionId,
+      });
+      return;
+    }
+
+    // Completion callbacks settle reporting; only session-owned execution state
+    // can release overlap admission. Reconcile even for duplicate late callbacks.
+    const state = await this.reconcileRunExecution(store, run);
+    if (state?.messageId && state.messageId !== body.messageId) {
+      this.log.warn("Ignoring completion from a different automation message", {
+        event: "scheduler.run_complete_ignored",
+        run_id: body.runId,
+        message_id: body.messageId,
+      });
+      return;
+    }
+    if (state?.messageStatus === "failed") {
+      body = { ...body, success: false, error: state.error ?? body.error };
     }
 
     // SQL-guarded transition: only an active run may go terminal. When the
@@ -1541,14 +1691,17 @@ export class Scheduler {
     sessionId: string,
     automation: AutomationRow,
     runId: string,
+    launch: { id: string; admissionDeadlineMs: number },
     executionPrincipal: ExecutionPrincipal,
     instructionsOverride?: string
   ): Promise<void> {
-    const callbackContext: AutomationCallbackContext = {
+    const callbackContext: SchedulerPromptRequest["callbackContext"] = {
       source: "automation",
       automationId: automation.id,
       runId,
       automationName: automation.name,
+      executionLaunchId: launch.id,
+      admissionDeadlineMs: launch.admissionDeadlineMs,
     };
 
     await this.enqueueSessionPrompt(
@@ -1570,18 +1723,35 @@ export class Scheduler {
    * so every reply in the thread continues the same session, like the interactive
    * @mention path. If the session has gone idle the prompt re-spawns/restores it
    * in the background; its reply posts back in-thread via the slack completion
-   * callback (source "slack"), exactly like an interactive follow-up. Returns
-   * false when the enqueue fails, so the caller can fall through to the trigger
-   * path (stale-session recovery).
+   * callback (source "slack"), exactly like an interactive follow-up. Definite
+   * rejection permits trigger fallback; uncertain delivery stays in recovery.
    */
   private async steerSession(
     run: AutomationRunRow,
     automation: AutomationRow,
     event: SlackAutomationEvent,
     actorUserId: string
-  ): Promise<boolean> {
+  ): Promise<SteerOutcome> {
     const sessionId = run.session_id!;
-    const callbackContext: SlackCallbackContext = {
+    const executionLaunchId = `${event.channelId}:${event.ts}`;
+    const admissionDeadlineMs = Date.now() + ORPHAN_THRESHOLD_MS;
+    const store = new AutomationStore(this.db);
+    // Do not overwrite an earlier in-flight request. Only a session-observed
+    // message can hand this launch slot to a subsequent steering request.
+    if (run.execution_launch_id) {
+      const prior = await this.reconcileRunExecution(store, run);
+      if (!prior?.launch) return "recovery_pending";
+      if (run.execution_launch_id === executionLaunchId) return "steered";
+      const current = await store.getRunById(run.automation_id, run.id);
+      if (
+        !current ||
+        (current.execution_launch_id && current.execution_launch_id !== run.execution_launch_id)
+      ) {
+        return "recovery_pending";
+      }
+      run = current;
+    }
+    const callbackContext: SchedulerPromptRequest["callbackContext"] = {
       source: "slack",
       channel: event.channelId,
       // Post in the existing thread; for a reply, threadTs is the thread root.
@@ -1594,9 +1764,20 @@ export class Scheduler {
       // Marks the turn as automation-owned: a follow-up completes through the
       // interactive callback, which would otherwise treat it as a user request.
       automationId: automation.id,
+      runId: run.id,
+      executionLaunchId,
+      admissionDeadlineMs,
     };
 
     try {
+      const marked = await store.markRunExecutionUnresolved(
+        run.id,
+        sessionId,
+        executionLaunchId,
+        admissionDeadlineMs,
+        run.execution_launch_id ?? null
+      );
+      if (!marked) return "recovery_pending";
       await this.enqueueSessionPrompt(
         sessionId,
         {
@@ -1619,15 +1800,33 @@ export class Scheduler {
         session_id: sessionId,
         channel: event.channelId,
       });
-      return true;
+      return "steered";
     } catch (e) {
+      if (e instanceof PromptEnqueueRejectedError) {
+        await store.releaseRejectedExecutionLaunch(
+          run.id,
+          sessionId,
+          executionLaunchId,
+          run.execution_unresolved === 1
+        );
+      } else {
+        const state = await this.reconcileRunExecution(store, {
+          ...run,
+          execution_launch_id: executionLaunchId,
+          execution_admission_deadline_ms: admissionDeadlineMs,
+        });
+        // A 5xx/transport failure can follow insertion. Never create a second
+        // run while the original request may still be admitted.
+        if (state?.launch) return "steered";
+        return "recovery_pending";
+      }
       this.log.warn("Failed to steer thread session; falling through to trigger path", {
         event: "scheduler.slack_steer_failed",
         automation_id: automation.id,
         session_id: sessionId,
         error: e instanceof Error ? e : new Error(String(e)),
       });
-      return false;
+      return "rejected";
     }
   }
 
@@ -1644,10 +1843,16 @@ export class Scheduler {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(EXECUTION_STATE_REQUEST_TIMEOUT_MS),
       }
     );
 
     if (!promptResponse.ok) {
+      if ([400, 401, 403, 404, 409, 413, 422, 429].includes(promptResponse.status)) {
+        throw new PromptEnqueueRejectedError(
+          `Prompt enqueue failed with status ${promptResponse.status}`
+        );
+      }
       throw new Error(`Prompt enqueue failed with status ${promptResponse.status}`);
     }
   }

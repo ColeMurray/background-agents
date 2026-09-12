@@ -101,7 +101,6 @@ def build_agent_harness(
             return ClaudeHarness(
                 config=config,
                 log=log,
-                limits=limits,
                 credential_client=credential_client,
             )
     raise ValueError(f"Unsupported harness: {harness_id}")

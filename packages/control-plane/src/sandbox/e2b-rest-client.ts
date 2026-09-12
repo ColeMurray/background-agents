@@ -310,8 +310,10 @@ export class E2BRestClient {
     }
   }
 
-  async getSandbox(id: string): Promise<E2BSandboxDetail> {
-    return this.requestJson("GET", `/sandboxes/${id}`, TIMEOUT_GET_MS, e2bSandboxDetailSchema);
+  async getSandbox(id: string, signal?: AbortSignal): Promise<E2BSandboxDetail> {
+    return this.requestJson("GET", `/sandboxes/${id}`, TIMEOUT_GET_MS, e2bSandboxDetailSchema, {
+      signal,
+    });
   }
 
   /**
@@ -559,6 +561,7 @@ export class E2BRestClient {
 
       return await consume(response);
     } catch (error) {
+      if (options?.signal?.aborted) throw options.signal.reason;
       // A timeout fires controller.abort(); the resulting AbortError — from
       // fetch OR a body read — must surface as a transient timeout so it isn't
       // classified permanent and trip the circuit breaker. Our typed API errors

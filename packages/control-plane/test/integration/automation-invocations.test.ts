@@ -7,6 +7,7 @@ import {
   type AutomationInvocationRow,
   type AutomationRow,
   type AutomationRunRow,
+  type InvocationOverlapScope,
 } from "../../src/db/automation-store";
 import { isAutomationExecutionAuthorized } from "../../src/automation/authorization-guard";
 import { cleanD1Tables } from "./cleanup";
@@ -312,6 +313,74 @@ describe("automation invocations (D1 integration)", () => {
   // ─── Guarded insert batch semantics (real D1 — meta.changes inside batch) ──
 
   describe("insertInvocationGuarded", () => {
+    it.each<InvocationOverlapScope>([
+      { kind: "automation" },
+      { kind: "concurrencyKey", concurrencyKey: "pr:42" },
+    ])(
+      "preserves the $kind overlap guard after reporting failure until execution stops",
+      async (overlapScope) => {
+        const store = new AutomationStore(env.DB);
+        const automationId = "auto-unresolved";
+        await store.create(makeAutomation({ id: automationId }));
+        const first = makeInvocation(automationId, { concurrency_key: "pr:42" });
+        const child = makeChild(automationId);
+        expect(
+          (
+            await store.insertInvocationGuarded({
+              invocation: first,
+              children: [child],
+              overlapScope,
+            })
+          ).inserted
+        ).toBe(true);
+        expect(await store.claimRunSession(child.id, "session-unresolved", 100)).toBe(true);
+        await store.bulkFailRunningRuns([child.id], "session_unreachable", 200);
+
+        const next = makeInvocation(automationId, { concurrency_key: "pr:42" });
+        const insertNext = () =>
+          store.insertInvocationGuarded({
+            invocation: next,
+            children: [makeChild(automationId)],
+            overlapScope,
+          });
+
+        // Exercise the atomic INSERT guard directly, without relying on a pre-check.
+        expect((await insertNext()).inserted).toBe(false);
+        expect(await store.getInvocationById(next.id)).toBeNull();
+        expect(await countRows("automation_runs", `invocation_id = '${next.id}'`)).toBe(0);
+
+        if (overlapScope.kind === "concurrencyKey") {
+          const other = makeInvocation(automationId, { concurrency_key: "pr:43" });
+          expect(
+            (
+              await store.insertInvocationGuarded({
+                invocation: other,
+                children: [makeChild(automationId)],
+                overlapScope: { kind: "concurrencyKey", concurrencyKey: "pr:43" },
+              })
+            ).inserted
+          ).toBe(true);
+        }
+
+        await store.recordRunExecutionState(
+          child.id,
+          "session-unresolved",
+          true,
+          "session_unreachable",
+          300
+        );
+        expect((await insertNext()).inserted).toBe(false);
+        await store.recordRunExecutionState(child.id, "session-unresolved", false, null, 400);
+        expect((await insertNext()).inserted).toBe(true);
+        expect(await countRows("automation_runs", `invocation_id = '${next.id}'`)).toBe(1);
+        expect(await store.getRunById(automationId, child.id)).toMatchObject({
+          status: "failed",
+          failure_reason: "session_unreachable",
+          execution_unresolved: 0,
+        });
+      }
+    );
+
     it("inserts invocation + children + advances the schedule in one batch", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-g1", next_run_at: 1_000 }));

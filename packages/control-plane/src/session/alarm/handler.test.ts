@@ -7,12 +7,17 @@ import type { SandboxAlarmResult } from "../../sandbox/lifecycle/manager";
 
 function createHandler() {
   const repository = {
+    getMessageAwaitingStopConfirmation: vi.fn(() => null),
+    getProcessingMessage: vi.fn(() => null),
     getProcessingMessageWithStartedAt: vi.fn(),
+    getMessageExecutionMetadata: vi.fn(() => null),
   };
   const messageQueue = {
+    expirePendingAdmissions: vi.fn<() => Promise<void>>().mockResolvedValue(),
     failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
   const executionStop = {
+    stop: vi.fn<() => Promise<void>>().mockResolvedValue(),
     recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
     resumeAfterSandboxTermination: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
@@ -43,7 +48,7 @@ function createHandler() {
     lifecycleManager,
     terminalMessageProjection,
     alarmScheduler,
-    getExecutionTimeoutMs: () => 1000,
+    getExecutionTurnAllowanceMs: () => 750,
     now,
     log,
   });
@@ -107,7 +112,7 @@ describe("createAlarmHandler", () => {
 
     expect(log.warn).not.toHaveBeenCalled();
     expect(messageQueue.failStuckProcessingMessage).not.toHaveBeenCalled();
-    expect(alarmScheduler.schedule).toHaveBeenCalledWith(2500);
+    expect(alarmScheduler.schedule).toHaveBeenCalledWith(2250);
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
   });
 
@@ -131,7 +136,8 @@ describe("createAlarmHandler", () => {
     await expect(handler.handle()).rejects.toBe(error);
 
     expect(executionStop.recoverStopConfirmationTimeout).toHaveBeenCalledOnce();
-    expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledTimes(2);
+    expect(executionStop.stop).toHaveBeenCalledOnce();
+    expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledOnce();
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledOnce();
     expect(executionStop.resumeAfterSandboxTermination).toHaveBeenCalledOnce();
   });
@@ -165,15 +171,20 @@ describe("createAlarmHandler", () => {
       }),
     };
     const repository = {
+      getMessageAwaitingStopConfirmation: vi.fn(() => null),
+      getProcessingMessage: vi.fn(() => null),
+      getMessageExecutionMetadata: vi.fn(() => null),
       getProcessingMessageWithStartedAt: vi.fn(() => ({
         id: "message-1",
         started_at: 1500,
       })),
     };
     const messageQueue = {
+      expirePendingAdmissions: vi.fn<() => Promise<void>>().mockResolvedValue(),
       failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
     };
     const executionStop = {
+      stop: vi.fn<() => Promise<void>>().mockResolvedValue(),
       recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
       resumeAfterSandboxTermination: vi.fn<() => Promise<void>>().mockResolvedValue(),
     };
@@ -185,21 +196,28 @@ describe("createAlarmHandler", () => {
       lifecycleManager,
       terminalMessageProjection: { flushPending: vi.fn(async () => {}) },
       alarmScheduler,
-      getExecutionTimeoutMs: () => 1000,
+      getExecutionTurnAllowanceMs: () => 750,
       now: () => 2000,
       log: createHandler().log,
     });
 
     await handler.handle();
 
-    expect(currentAlarm).toBe(2500);
+    expect(currentAlarm).toBe(2250);
     expect(storage.setAlarm).toHaveBeenCalledTimes(1);
-    expect(storage.setAlarm).toHaveBeenCalledWith(2500);
+    expect(storage.setAlarm).toHaveBeenCalledWith(2250);
   });
 
-  it("fails stuck processing message when execution timeout is reached", async () => {
-    const { handler, repository, messageQueue, lifecycleManager, alarmScheduler, log } =
-      createHandler();
+  it("initiates cancellation when execution timeout is reached", async () => {
+    const {
+      handler,
+      repository,
+      messageQueue,
+      executionStop,
+      lifecycleManager,
+      alarmScheduler,
+      log,
+    } = createHandler();
     repository.getProcessingMessageWithStartedAt.mockReturnValue({
       id: "message-1",
       started_at: 500,
@@ -207,13 +225,14 @@ describe("createAlarmHandler", () => {
 
     await handler.handle();
 
-    expect(log.warn).toHaveBeenCalledWith("Execution timeout: message stuck in processing", {
+    expect(log.warn).toHaveBeenCalledWith("Execution deadline exceeded", {
       event: "execution.timeout",
       message_id: "message-1",
       elapsed_ms: 1500,
-      timeout_ms: 1000,
+      timeout_ms: 750,
     });
-    expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledTimes(1);
+    expect(executionStop.stop).toHaveBeenCalledWith("Execution deadline exceeded");
+    expect(messageQueue.failStuckProcessingMessage).not.toHaveBeenCalled();
     expect(alarmScheduler.schedule).not.toHaveBeenCalled();
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
   });

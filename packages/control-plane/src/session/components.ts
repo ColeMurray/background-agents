@@ -26,7 +26,7 @@ import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken } from "../auth/crypto";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
-import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "../sandbox/provider";
+import { resolveExecutionPolicy } from "./execution-deadline";
 import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildProvider } from "../image-builds/provider-policy";
 import { createLogger, parseLogLevel } from "../logger";
@@ -197,22 +197,21 @@ export interface SessionComponents {
  * per use (not at construction) so a deadline armed after `init` persists the
  * session row honors that row's `sandbox_settings` override.
  */
-function resolveExecutionTimeoutMs(
+function resolveSessionExecutionPolicy(
   sessionCoreRepository: SessionCoreRepository,
   env: Env,
   log: Logger
-): number {
+): ReturnType<typeof resolveExecutionPolicy> {
   try {
     const sandboxTimeoutMs = parsePersistedSandboxSettings(
       sessionCoreRepository.getSession()?.sandbox_settings ?? null
     ).sandboxTimeoutMs;
-    // This watchdog starts before bridge setup, so it must not race the
-    // bridge's earlier snapshot-reserved prompt deadline.
-    if (sandboxTimeoutMs !== undefined) return sandboxTimeoutMs;
+    // The shared resolver subtracts the historical runtime cleanup reserve.
+    return resolveExecutionPolicy(sandboxTimeoutMs, env.EXECUTION_TIMEOUT_MS);
   } catch {
     log.warn("Failed to parse sandbox_settings for execution timeout, using fallback");
   }
-  return parseInt(env.EXECUTION_TIMEOUT_MS || String(DEFAULT_SANDBOX_TIMEOUT_SECONDS * 1000), 10);
+  return resolveExecutionPolicy(undefined, env.EXECUTION_TIMEOUT_MS);
 }
 
 /** Build the session runtime, including authorization verification and lease expiry handling. */
@@ -402,16 +401,23 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     db,
     getSessionId: getPublicSessionId,
     storage: sandboxRepository,
-    sessionContext: new LifecycleSessionContext(sessionCoreRepository, userEnvResolver),
+    sessionContext: new LifecycleSessionContext(
+      sessionCoreRepository,
+      userEnvResolver,
+      messageRepository
+    ),
     repoSecretsEncryptionKey,
     messenger,
     wsManager,
     alarmScheduler,
     sandboxDashboardSettings,
+    onProviderStartupComplete: () => messageQueue.processMessageQueue(),
+    requestExecutionStop: (reason) => executionStop.stop(reason),
   });
 
   // Tier 6 — the message queue.
-  const getExecutionTimeoutMs = () => resolveExecutionTimeoutMs(sessionCoreRepository, env, log);
+  const getExecutionPolicy = () => resolveSessionExecutionPolicy(sessionCoreRepository, env, log);
+  const getExecutionTimeoutMs = () => getExecutionPolicy().sandboxDurationMs;
   const messageFailures = new MessageFailureService(
     backgroundTasks,
     log,
@@ -453,7 +459,28 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     scmProviderName,
     alarmScheduler,
     executionStop,
-    getExecutionTimeoutMs
+    getExecutionTimeoutMs,
+    alarmDeadlines,
+    () => {
+      const sandbox = sandboxRepository.getSandbox();
+      const capabilities: string[] = sandbox?.runtime_capabilities
+        ? JSON.parse(sandbox.runtime_capabilities)
+        : [];
+      const policy = getExecutionPolicy();
+      return {
+        sandboxId: sandbox?.modal_sandbox_id ?? null,
+        providerExpiresAtMs:
+          sandbox?.provider_execution_expiry_kind === "hard" ||
+          sandbox?.provider_execution_expiry_kind === "conservative"
+            ? sandbox.provider_execution_expires_at_ms
+            : null,
+        requiresStopEvidence: capabilities.includes("stop-confirmation-v1"),
+        providerStartupPending: sandbox?.provider_execution_expiry_kind === null,
+        turnAllowanceMs: policy.turnAllowanceMs,
+        policySource: policy.source,
+        runtimeUnavailable: lifecycleManager.isRetiring() || sandbox?.status === "snapshotting",
+      };
+    }
   );
 
   // Tier 7 — services over the queue and lifecycle.
@@ -509,7 +536,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     recordTerminalMessage,
     statusService,
-    (reason) => lifecycleManager.triggerSnapshot(reason),
+    (reason, cleanupDeadlineMs) => lifecycleManager.triggerSnapshot(reason, cleanupDeadlineMs),
     updateLastActivity,
     () => lifecycleManager.scheduleInactivityCheck(),
     () => messageQueue.processMessageQueue(),
@@ -518,7 +545,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     transaction,
     (title) => {
       titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
-    }
+    },
+    executionStop
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,
@@ -533,7 +561,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         name: "callback.refresh_slack_activity",
         context: { message_id: messageId },
       }),
-    log
+    log,
+    messageRepository
   );
   const pushService = new SandboxPushService(log, wsManager);
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
@@ -544,7 +573,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     artifactEventHandler,
     executionEventHandler,
     runtimeEventHandler,
-    pushService
+    pushService,
+    (requestId, sandboxId) => lifecycleManager.onSnapshotReady(requestId, sandboxId)
   );
 
   const alarmHandler = createAlarmHandler({
@@ -554,8 +584,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     lifecycleManager,
     terminalMessageProjection,
     alarmScheduler,
-    getExecutionTimeoutMs,
     now: () => Date.now(),
+    getExecutionTurnAllowanceMs: () => getExecutionPolicy().turnAllowanceMs,
     log,
   });
 
@@ -780,6 +810,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     prompt: (request, _url, requestLog) => messagesHandler.enqueuePrompt(request, requestLog),
     autofix: (request, _url, requestLog) => autofixHandler.handle(request, requestLog),
     stop: () => messagesHandler.stop(),
+    executionState: (request) => messagesHandler.reconcileExecutionState(request),
     sandboxEvent: (request) => sandboxHandler.sandboxEvent(request),
     sandboxError: (request) => sandboxHandler.sandboxError(request),
     createMediaArtifact: (request) => sandboxHandler.createMediaArtifact(request),
@@ -937,6 +968,8 @@ interface LifecycleManagerDeps {
   wsManager: SessionWebSocketManager;
   alarmScheduler: RehydratableAlarmScheduler;
   sandboxDashboardSettings: SandboxDashboardSettings;
+  onProviderStartupComplete: () => Promise<void>;
+  requestExecutionStop: (reason: string) => Promise<void>;
 }
 
 /** Create the lifecycle manager with all required adapters. */
@@ -1001,6 +1034,8 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
 
   const config = {
     ...DEFAULT_LIFECYCLE_CONFIG,
+    onProviderStartupComplete: deps.onProviderStartupComplete,
+    requestExecutionStop: deps.requestExecutionStop,
     controlPlaneUrl,
     model: DEFAULT_MODEL,
     // Re-derived per use until the session row exists: on the first-ever

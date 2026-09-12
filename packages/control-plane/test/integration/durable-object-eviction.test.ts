@@ -141,7 +141,12 @@ describe("SessionDO eviction and hibernation restore", () => {
     });
     const { participantId } = await tokenResponse.json<{ participantId: string }>();
 
-    const startedAt = Date.now() - 24 * 60 * 60 * 1000;
+    await waitForSandboxStatus(stub, "failed");
+    // A freshly recomputed default budget would still permit this turn. Only
+    // its original persisted deadline makes it expired after reconstruction.
+    const startedAt = Date.now() - 60_000;
+    const executionDeadlineMs = Date.now() - 1;
+    const cleanupDeadlineMs = Date.now() + 60_000;
     await seedMessage(stub, {
       id: "stuck-across-eviction",
       authorId: participantId,
@@ -151,20 +156,46 @@ describe("SessionDO eviction and hibernation restore", () => {
       createdAt: startedAt,
       startedAt,
     });
+    await queryDO(
+      stub,
+      `UPDATE messages SET execution_deadline_ms = ?, cleanup_deadline_ms = ?,
+       cleanup_reserve_ms = ?, requires_stop_evidence = 1 WHERE id = ?`,
+      executionDeadlineMs,
+      cleanupDeadlineMs,
+      60_000,
+      "stuck-across-eviction"
+    );
 
     const restored = await evictSessionDO(sessionName);
+    expect(
+      await queryDO<{ status: string; execution_deadline_ms: number }>(
+        restored,
+        "SELECT status, execution_deadline_ms FROM messages"
+      )
+    ).toEqual([{ status: "processing", execution_deadline_ms: executionDeadlineMs }]);
     await runInSessionDO(restored, (instance: SessionDO, state) =>
       state.storage.setAlarm(Date.now() + 60_000)
     );
 
     await expect(runDurableObjectAlarm(restored)).resolves.toBe(true);
-    const messages = await queryDO<{ status: string; error_message: string | null }>(
+    const messages = await queryDO<{
+      status: string;
+      error_message: string | null;
+      execution_deadline_ms: number;
+      stop_confirmation_deadline: number | null;
+    }>(
       restored,
-      "SELECT status, error_message FROM messages"
+      "SELECT status, error_message, execution_deadline_ms, stop_confirmation_deadline FROM messages"
     );
     expect(messages).toEqual([
-      { status: "failed", error_message: "Execution timed out (stuck processing)" },
+      {
+        status: "failed",
+        error_message: "Execution deadline exceeded",
+        execution_deadline_ms: executionDeadlineMs,
+        stop_confirmation_deadline: expect.any(Number),
+      },
     ]);
+    expect(messages[0].stop_confirmation_deadline).toBeLessThanOrEqual(cleanupDeadlineMs);
   });
 
   it("dispatches sandbox frames by the persisted socket identity after a restore", async () => {

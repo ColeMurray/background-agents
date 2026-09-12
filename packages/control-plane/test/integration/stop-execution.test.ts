@@ -50,6 +50,7 @@ describe("POST /internal/stop", () => {
     expect(messages[0].status).toBe("failed");
     expect(messages[0].completed_at).toEqual(expect.any(Number));
     expect(messages[0].error_message).toBe("Execution was stopped");
+    // Legacy runtimes keep the explicitly best-effort compatibility path.
     expect(messages[0].stop_confirmation_deadline).toBeNull();
   });
 

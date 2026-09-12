@@ -17,7 +17,8 @@ import pytest
 from websockets import State
 
 from sandbox_runtime.bridge import AgentBridge
-from tests.conftest import MockResponse, wire_opencode_transport
+from sandbox_runtime.harness import HarnessPrompt
+from tests.conftest import MockResponse, ScriptedHarness, wire_opencode_transport
 
 
 class MockHttpClient:
@@ -130,12 +131,14 @@ class TestPromptTaskDecoupling:
         async def slow_prompt(cmd):
             prompt_started.set()
             await prompt_can_finish.wait()
+            return HarnessPrompt(message_id="msg-1", text="test")
 
-        bridge._handle_prompt = slow_prompt
+        bridge.execution._prepare = slow_prompt
+        bridge.harness = ScriptedHarness()
 
         # Start a prompt
         await bridge._handle_command({"type": "prompt", "messageId": "msg-1", "content": "test"})
-        task = bridge._current_prompt_task
+        task = bridge.execution.prompt_task
         assert task is not None
 
         await prompt_started.wait()
@@ -163,11 +166,12 @@ class TestPromptTaskDecoupling:
             prompt_started.set()
             await asyncio.sleep(3600)
 
-        bridge._handle_prompt = slow_prompt
+        bridge.execution._prepare = slow_prompt
+        bridge.harness = ScriptedHarness()
         bridge.git_signing.initialize = AsyncMock()
 
         await bridge._handle_command({"type": "prompt", "messageId": "msg-1", "content": "test"})
-        task = bridge._current_prompt_task
+        task = bridge.execution.prompt_task
         assert task is not None
 
         await prompt_started.wait()

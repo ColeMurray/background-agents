@@ -32,6 +32,7 @@ from .attachment_processor import (
     AttachmentProcessor,
     parse_session_image_attachments,
 )
+from .bridge_signals import run_bridge_with_signals
 from .constants import (
     BOOT_WARNINGS_FILE_PATH,
     BRIDGE_FATAL_ERROR_FILE_PATH,
@@ -43,6 +44,7 @@ from .constants import (
 )
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
+from .execution_coordinator import ExecutionCoordinator, PreparationFailed
 from .git_signing import GitSigningError, GitSigningRuntime
 from .harness import (
     DEFAULT_HARNESS_ID,
@@ -53,10 +55,10 @@ from .harness import (
     HarnessPrompt,
     HarnessStartError,
     PromptLimits,
-    TurnOutcome,
     build_agent_harness,
     parse_harness_id,
 )
+from .hook_logs import prepare_hook_logs_for_snapshot
 from .log_config import configure_logging, get_logger
 from .push_operation import PushOperation
 from .repo_config import load_repo_manifest
@@ -115,13 +117,13 @@ class AgentBridge:
     HEARTBEAT_INTERVAL = 30.0
     RECONNECT_BACKOFF_BASE = 2.0
     RECONNECT_MAX_DELAY = 60.0
-    # Liveness check for a harness that stopped talking, not a budget for how
-    # long the model may think. Stays under the control plane's own inactivity
-    # watchdog (SANDBOX_INACTIVITY_TIMEOUT_MS) so the bridge owns the outcome.
+    # OpenCode stream consumption responsiveness, including downstream delays.
+    # Does not apply to Claude or establish useful model/tool progress.
     SSE_INACTIVITY_TIMEOUT = 300.0
     SSE_INACTIVITY_TIMEOUT_MIN = 5.0
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+    WEBSOCKET_CLOSE_TIMEOUT_SECONDS = 1.0
 
     def __init__(
         self,
@@ -154,11 +156,15 @@ class AgentBridge:
             warn_user=self._send_media_warning,
         )
 
-        inactivity_timeout_seconds = self._resolve_timeout_seconds(
-            name="BRIDGE_SSE_INACTIVITY_TIMEOUT",
-            default=self.SSE_INACTIVITY_TIMEOUT,
-            min_value=self.SSE_INACTIVITY_TIMEOUT_MIN,
-            max_value=self.SSE_INACTIVITY_TIMEOUT_MAX,
+        inactivity_timeout_seconds = (
+            self._resolve_timeout_seconds(
+                name="BRIDGE_SSE_INACTIVITY_TIMEOUT",
+                default=self.SSE_INACTIVITY_TIMEOUT,
+                min_value=self.SSE_INACTIVITY_TIMEOUT_MIN,
+                max_value=self.SSE_INACTIVITY_TIMEOUT_MAX,
+            )
+            if (harness.id if harness is not None else harness_id) == HarnessId.OPENCODE
+            else self.SSE_INACTIVITY_TIMEOUT
         )
         sandbox_timeout_seconds = self._resolve_positive_timeout_seconds(
             name=SANDBOX_TIMEOUT_ENV_VAR,
@@ -218,8 +224,6 @@ class AgentBridge:
             opencode_port=opencode_port,
         )
 
-        # Track the current prompt task so _handle_stop can cancel it
-        self._current_prompt_task: asyncio.Task[None] | None = None
         self.diff_refresh = SessionDiffRefreshWorker(
             client=ControlPlaneDiffClient(
                 control_plane_url=self.control_plane_url,
@@ -233,6 +237,18 @@ class AgentBridge:
         # Reconnect-safe event delivery: buffers while the WS is down and
         # re-sends unacknowledged critical events (see event_forwarder.py).
         self.event_forwarder = BufferedEventForwarder(sandbox_id=sandbox_id, log=self.log)
+        self.execution = ExecutionCoordinator(
+            sandbox_id=sandbox_id,
+            harness=lambda: self.harness,
+            limits=lambda: self.prompt_limits,
+            prepare=self._prepare_prompt,
+            persist_session=self._persist_rotated_session_id,
+            send_event=lambda event: self._send_event(event),
+            on_started=lambda: self.diff_refresh.prompt_started(),
+            on_reusable=self._execution_reusable,
+            log=self.log,
+        )
+        self._shutdown_deadline_monotonic: float | None = None
 
         self._connected_at_monotonic: float | None = None
         self._connection_count = 0
@@ -261,6 +277,11 @@ class AgentBridge:
             "sandboxId": self.sandbox_id,
             "opencodeSessionId": self.agent_session_id,
             "harness": self.harness.id.value,
+            "capabilities": [
+                "execution-deadline-v1",
+                "stop-confirmation-v1",
+                "hook_logs_snapshot_v1",
+            ],
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
@@ -348,23 +369,24 @@ class AgentBridge:
                 await asyncio.sleep(delay)
 
         finally:
-            # Cancel any in-flight prompt task before closing resources
-            if self._current_prompt_task and not self._current_prompt_task.done():
-                self._current_prompt_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await self._current_prompt_task
+            close_deadline = await self.execution.shutdown(self._shutdown_deadline_monotonic)
             # Cleanup failures are logged, never raised: an exception here
             # would replace the one that ended the run, and a HarnessStartError
             # has to reach main() as itself so the supervisor sees the
             # deterministic exit code.
             try:
-                await self.diff_refresh.close(
-                    timeout_seconds=self.DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS
-                )
+                async with asyncio.timeout_at(close_deadline):
+                    await self.diff_refresh.close(
+                        timeout_seconds=min(
+                            self.DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS,
+                            max(0.0, close_deadline - asyncio.get_running_loop().time()),
+                        )
+                    )
             except Exception as close_error:
                 self.log.error("bridge.diff_refresh_close_failed", exc=close_error)
             try:
-                await self.harness.close()
+                async with asyncio.timeout_at(close_deadline):
+                    await self.harness.close()
             except Exception as close_error:
                 self.log.error("bridge.harness_close_failed", exc=close_error)
             self.log.info(
@@ -451,6 +473,7 @@ class AgentBridge:
                 additional_headers=additional_headers,
                 ping_interval=20,
                 ping_timeout=10,
+                close_timeout=self.WEBSOCKET_CLOSE_TIMEOUT_SECONDS,
             ) as ws:
                 self.ws = ws
                 self._mark_connected()
@@ -585,51 +608,14 @@ class AgentBridge:
         self.log.debug("bridge.command_received", cmd_type=cmd_type)
 
         if cmd_type == "prompt":
-            message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
-            self.diff_refresh.prompt_started()
-            task = asyncio.create_task(self._handle_prompt(cmd))
-            self._current_prompt_task = task
-
-            def handle_task_exception(t: asyncio.Task[None], mid: str = message_id) -> None:
-                # Release the diff worker's idle gate before any refresh request
-                # below so the refresh can start immediately.
-                self.diff_refresh.prompt_finished()
-                if self._current_prompt_task is t:
-                    self._current_prompt_task = None
-                if t.cancelled():
-                    asyncio.create_task(
-                        self._send_terminal_event_and_refresh(
-                            {
-                                "type": "execution_complete",
-                                "messageId": mid,
-                                "success": False,
-                                "error": "Task was cancelled",
-                            }
-                        )
-                    )
-                elif exc := t.exception():
-                    asyncio.create_task(
-                        self._send_terminal_event_and_refresh(
-                            {
-                                "type": "execution_complete",
-                                "messageId": mid,
-                                "success": False,
-                                "error": str(exc),
-                            }
-                        )
-                    )
-                else:
-                    self.diff_refresh.request(mid)
-
-            task.add_done_callback(handle_task_exception)
-            # Don't return the task — prompt tasks must survive WS disconnects.
-            # Returning it would add it to background_tasks, which gets cancelled
-            # in the _connect_and_run finally block on WS close.
-            return None
+            if self.shutdown_event.is_set():
+                return None
+            return self.execution.dispatch(cmd)
         elif cmd_type == "stop":
-            await self._handle_stop()
+            await self._handle_stop(cmd)
         elif cmd_type == "snapshot":
-            await self._handle_snapshot()
+            # Cleanup may take time; shutdown/health commands remain responsive.
+            return asyncio.create_task(self._handle_snapshot(cmd))
         elif cmd_type == "shutdown":
             await self._handle_shutdown()
         elif cmd_type == "git_sync_complete":
@@ -646,132 +632,41 @@ class AgentBridge:
             self.log.debug("bridge.unknown_command", cmd_type=cmd_type)
         return None
 
-    async def _send_terminal_event_and_refresh(self, event: dict[str, Any]) -> None:
-        await self._send_event(event)
-        self.diff_refresh.request(str(event.get("messageId") or "") or None)
+    def _execution_reusable(self, message_id: str) -> None:
+        """Release presentation work only after the coordinator confirms reuse."""
+        self.diff_refresh.prompt_finished()
+        self.diff_refresh.request(message_id)
 
     async def _handle_prompt(self, cmd: dict[str, Any]) -> None:
-        """Handle prompt command - run the turn through the harness and terminalise it."""
+        """Await a coordinated prompt for callers outside the command receiver."""
+        await self.execution.execute(cmd)
+
+    async def _prepare_prompt(self, cmd: dict[str, Any]) -> HarnessPrompt:
+        """Prepare repository identity, vendor session and attachments before dispatch."""
         message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
-        content = cmd.get("content", "")
-        model = cmd.get("model")
-        reasoning_effort = cmd.get("reasoningEffort")
-        raw_attachments = cmd.get("attachments")
         author_data = cmd.get("author", {})
-        start_time = time.time()
-        outcome = "success"
-        message_cost_usd: float | None = None
-        had_error = False
-        error_message = None
-
-        self.log.info(
-            "prompt.start",
-            message_id=message_id,
-            model=model,
-            reasoning_effort=reasoning_effort,
-        )
-
         try:
-            prompt_author = parse_prompt_git_author(author_data)
-            await self._configure_git_identity(prompt_author)
-
-            await self._ensure_agent_session()
-
-            session_attachments, rejected_attachments = parse_session_image_attachments(
-                raw_attachments
+            author = parse_prompt_git_author(author_data)
+            await self._configure_git_identity(author)
+        except GitSigningError as error:
+            # Typed configuration failures reject work or report an already
+            # reaped git-config process. Cancellation has no such guarantee.
+            raise PreparationFailed(str(error)) from error
+        await self._ensure_agent_session()
+        attachments, rejected = parse_session_image_attachments(cmd.get("attachments"))
+        if rejected:
+            self.log.warn(
+                "prompt.invalid_attachments", message_id=message_id, rejected_count=rejected
             )
-            if rejected_attachments:
-                self.log.warn(
-                    "prompt.invalid_attachments",
-                    message_id=message_id,
-                    rejected_count=rejected_attachments,
-                )
-                await self._send_media_warning(
-                    f"{rejected_attachments} invalid attachment(s) were skipped."
-                )
-            attachments = await self.attachment_processor.process(session_attachments)
-
-            emitted_output = False
-
-            async def emit(event: dict[str, Any]) -> None:
-                nonlocal emitted_output, message_cost_usd
-                if event.get("type") == "execution_complete":
-                    raise RuntimeError("harness must not emit execution_complete")
-                if event.get("type") in ("token", "tool_call", "step_finish"):
-                    emitted_output = True
-                # A cancelled turn never returns an outcome, so the last cost
-                # report is the only figure execution_complete can carry then.
-                # When an outcome does arrive it is authoritative (below).
-                if event.get("type") == "step_finish" and "messageCostUsd" in event:
-                    message_cost_usd = event["messageCostUsd"]
-                await self._send_event(event)
-
-            turn: TurnOutcome = await self.harness.run_prompt(
-                HarnessPrompt(
-                    message_id=message_id,
-                    text=content,
-                    model=model,
-                    reasoning_effort=reasoning_effort,
-                    attachments=tuple(attachments or ()),
-                    author=author_data if isinstance(author_data, dict) else {},
-                ),
-                emit,
-            )
-            await self._persist_rotated_session_id()
-            # The outcome is authoritative for cost and success once it
-            # exists; the bridge adds only the no-output guard below.
-            if turn.message_cost_usd is not None:
-                message_cost_usd = turn.message_cost_usd
-            if not turn.success:
-                had_error = True
-                error_message = turn.error or "Unknown error"
-            if turn.cancelled:
-                raise asyncio.CancelledError
-
-            if not had_error and not emitted_output:
-                had_error = True
-                error_message = "The agent completed without emitting assistant output."
-                self.log.error(
-                    "prompt.no_output",
-                    message_id=message_id,
-                    model=model,
-                    reasoning_effort=reasoning_effort,
-                )
-
-            if had_error:
-                outcome = "error"
-
-        except asyncio.CancelledError:
-            # This top-level command boundary settles cancellation just like
-            # other prompt failures, while the turn's cost is still available.
-            # The done callback remains a fallback for cancellation before start.
-            outcome = "cancelled"
-            had_error = True
-            error_message = "Task was cancelled"
-        except Exception as e:
-            outcome = "error"
-            had_error = True
-            error_message = str(e)
-            self.log.error("prompt.error", exc=e, message_id=message_id)
-        finally:
-            duration_ms = int((time.time() - start_time) * 1000)
-            self.log.info(
-                "prompt.run",
-                message_id=message_id,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                outcome=outcome,
-                duration_ms=duration_ms,
-            )
-
-        await self._send_event(
-            {
-                "type": "execution_complete",
-                "messageId": message_id,
-                "success": not had_error,
-                **({"error": error_message} if error_message else {}),
-                **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
-            }
+            await self._send_media_warning(f"{rejected} invalid attachment(s) were skipped.")
+        hydrated = await self.attachment_processor.process(attachments)
+        return HarnessPrompt(
+            message_id=message_id,
+            text=cmd.get("content", ""),
+            model=cmd.get("model"),
+            reasoning_effort=cmd.get("reasoningEffort"),
+            attachments=tuple(hydrated or ()),
+            author=author_data if isinstance(author_data, dict) else {},
         )
 
     async def _ensure_agent_session(self) -> None:
@@ -781,30 +676,48 @@ class AgentBridge:
         await self.harness.create_session()
         await self._save_session_id()
 
-    async def _handle_stop(self) -> None:
-        """Handle stop command - cancel prompt task and ask the harness to abort."""
-        self.log.info("bridge.stop")
-        task = self._current_prompt_task
-        if task and not task.done():
-            task.cancel()
-        # Best-effort: also tell the agent to stop (saves LLM compute cost)
-        await self.harness.abort()
+    async def _handle_stop(self, cmd: dict[str, Any] | None = None) -> None:
+        """Route Stop without blocking the receiver on execution cleanup."""
+        self.execution.request_stop(cmd)
 
-    async def _handle_snapshot(self) -> None:
+    async def _handle_snapshot(self, cmd: dict[str, Any] | None = None) -> None:
         """Handle snapshot command - prepare for snapshot."""
         self.log.info("bridge.snapshot_prepare")
-        await self._send_event(
-            {
-                "type": "snapshot_ready",
-                "opencodeSessionId": self.agent_session_id,
-            }
-        )
+        deadline = self.execution.snapshot_deadline()
+        if deadline is None:
+            self.log.warn("bridge.snapshot_execution_not_quiescent")
+            return
+        try:
+            # Managed diagnostics can contain secrets. A failed exclusion must
+            # never be acknowledged as snapshot-ready.
+            async with asyncio.timeout_at(deadline):
+                await prepare_hook_logs_for_snapshot(Path("/workspace"))
+                await self._send_event(
+                    {
+                        "type": "snapshot_ready",
+                        "opencodeSessionId": self.agent_session_id,
+                        **({"requestId": cmd["requestId"]} if cmd and "requestId" in cmd else {}),
+                    }
+                )
+        except Exception as error:
+            self.log.error("bridge.snapshot_preparation_failed", exc=error)
 
     async def _handle_shutdown(self) -> None:
         """Handle shutdown command - graceful shutdown."""
+        self.request_shutdown()
+
+    def request_shutdown(self, *, cleanup_seconds: float | None = None) -> None:
+        """Wake transport shutdown while the coordinator contains active work."""
         self.log.info("bridge.shutdown_requested")
-        if self._current_prompt_task and not self._current_prompt_task.done():
-            self._current_prompt_task.cancel()
+        if cleanup_seconds is not None:
+            deadline = asyncio.get_running_loop().time() + cleanup_seconds
+            self._shutdown_deadline_monotonic = min(
+                self._shutdown_deadline_monotonic or deadline, deadline
+            )
+        self.execution.request_stop(
+            {"reason": "Sandbox shutdown requested"},
+            deadline_monotonic=self._shutdown_deadline_monotonic,
+        )
         self.shutdown_event.set()
 
     async def _handle_push(self, cmd: dict[str, Any]) -> None:
@@ -982,7 +895,7 @@ async def main() -> None:
     )
 
     try:
-        await bridge.run()
+        await run_bridge_with_signals(bridge)
     except HarnessStartError:
         # The cause is already recorded for the supervisor; this exit code
         # tells it not to spend its restart budget.

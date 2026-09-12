@@ -172,6 +172,12 @@ fix instead.
 
 ## Operational notes
 
+- **Quiet turns and cancellation.** Claude has no parsed-message silence timeout. Whole-turn
+  deadlines still apply; interrupt acknowledgment alone does not prove execution stopped.
+  `BRIDGE_SSE_INACTIVITY_TIMEOUT` now applies only to OpenCode. See
+  [timeouts and runtime compatibility](TIMEOUTS.md) before rolling out new images or restoring old
+  snapshots.
+
 - **Cost.** The Claude harness reports the SDK's client-side cost estimate per turn (running total
   at turn end minus the total at turn start, reset when the agent process restarts). Under a
   subscription it is informational, but the session spend limit still applies to it as configured.

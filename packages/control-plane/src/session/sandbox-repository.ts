@@ -5,6 +5,7 @@ import type { SandboxAccessKind, SandboxRow } from "./types";
 import type { Logger } from "../logger";
 import { coerceSandboxStatus } from "../sandbox/sandbox-status";
 import { encryptToken } from "../auth/crypto";
+import type { SandboxGeneration, SandboxStartupPublication } from "../sandbox/lifecycle/manager";
 
 /** A sandbox row exactly as SQLite returns it, before the status is validated. */
 type RawSandboxRow = Omit<SandboxRow, "status"> & { status: string };
@@ -168,6 +169,9 @@ export class SandboxRepository {
          ttyd_url = NULL,
          ttyd_token = NULL,
          runtime_version = NULL,
+         runtime_capabilities = NULL,
+         provider_execution_expiry_kind = NULL,
+         provider_execution_expires_at_ms = NULL,
          active_socket_id = ''
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
@@ -220,7 +224,9 @@ export class SandboxRepository {
       `UPDATE sandbox SET
          status = ?,
          created_at = ?,
-         last_heartbeat = NULL
+         last_heartbeat = NULL,
+         provider_execution_expiry_kind = NULL,
+         provider_execution_expires_at_ms = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt
@@ -231,6 +237,73 @@ export class SandboxRepository {
     this.sql.exec(
       `UPDATE sandbox SET modal_object_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       modalObjectId
+    );
+  }
+
+  /** Prepare secrets first, then publish all launch state in a single generation/status CAS. */
+  async publishSandboxStartup(
+    generation: SandboxGeneration,
+    data: SandboxStartupPublication
+  ): Promise<boolean> {
+    const entries = await Promise.all(
+      (
+        Object.entries(data.access) as Array<[SandboxAccessKind, { url: string; secret: string }]>
+      ).map(async ([kind, access]) => ({
+        kind,
+        url: access.url,
+        secret: await this.encrypt(access.secret),
+      }))
+    );
+    const assignments = [
+      "provider_execution_expiry_kind = ?",
+      "provider_execution_expires_at_ms = ?",
+      "spawn_failure_count = 0",
+    ];
+    const values: Array<string | number | null> = [
+      data.executionExpiry.kind,
+      data.executionExpiry.kind === "unknown" ? null : data.executionExpiry.expiresAtMs,
+    ];
+    if (data.providerObjectId !== undefined) {
+      assignments.push("modal_object_id = ?");
+      values.push(data.providerObjectId);
+    }
+    for (const entry of entries) {
+      const { urlColumn, secretColumn } = ACCESS_ARTIFACT_COLUMNS[entry.kind];
+      assignments.push(`${urlColumn} = ?`, `${secretColumn} = ?`);
+      values.push(entry.url, entry.secret);
+    }
+    if (data.tunnelUrls !== undefined) {
+      assignments.push("tunnel_urls = ?");
+      values.push(JSON.stringify(data.tunnelUrls));
+    }
+    const result = this.sql.exec(
+      `UPDATE sandbox SET ${assignments.join(", ")}
+       WHERE modal_sandbox_id IS ? AND created_at = ?
+         AND status IN ('spawning', 'connecting', 'ready')
+         AND provider_execution_expiry_kind IS NULL`,
+      ...values,
+      generation.sandboxId,
+      generation.createdAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  closeSandboxStartup(generation: SandboxGeneration): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET provider_execution_expiry_kind = 'unknown', provider_execution_expires_at_ms = NULL
+       WHERE modal_sandbox_id IS ? AND created_at = ? AND provider_execution_expiry_kind IS NULL`,
+      generation.sandboxId,
+      generation.createdAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  recordReportedRuntimeCapabilities(capabilities: string[]): void {
+    this.sql.exec(
+      `UPDATE sandbox SET runtime_capabilities = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      JSON.stringify(capabilities)
     );
   }
 

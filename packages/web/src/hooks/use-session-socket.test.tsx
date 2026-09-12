@@ -145,7 +145,63 @@ describe("useSessionSocket", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("clears the quiet notice for buffered live output and Stop without persisting warnings", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    vi.useFakeTimers();
+    const socket = FakeWebSocket.instances[0];
+    const subscribed = createSubscribedMessage();
+    subscribed.session.isProcessing = true;
+    subscribed.promptQueue = [{ messageId: "message-1", content: "Work", status: "processing" }];
+    subscribed.timeline.events = [
+      {
+        eventId: "event-1",
+        timelineSequence: 1,
+        event: {
+          type: "user_message",
+          messageId: "message-1",
+          content: "Work",
+          timestamp: Date.now() / 1000 - 301,
+        },
+      },
+    ];
+    act(() => {
+      socket.open();
+      socket.receive(subscribed);
+    });
+    expect(result.current.quietTurnMessageId).toBe("message-1");
+    act(() => {
+      socket.receive({
+        type: "sandbox_event",
+        event: {
+          type: "token",
+          messageId: "message-1",
+          sandboxId: "sandbox-1",
+          content: "Still working",
+          timestamp: Date.now() / 1000,
+        },
+      });
+    });
+    expect(result.current.quietTurnMessageId).toBeNull();
+    expect(result.current.events).toHaveLength(1);
+    for (let minute = 0; minute < 10; minute += 1) {
+      act(() => {
+        socket.receive({ type: "pong", timestamp: Date.now() });
+        vi.advanceTimersByTime(30_000);
+      });
+    }
+    expect(result.current.quietTurnMessageId).toBe("message-1");
+    act(() => result.current.stopExecution());
+    expect(result.current.quietTurnMessageId).toBeNull();
+    expect(result.current.isProcessing).toBe(true);
+    expect(result.current.events.map((event) => event.type)).toEqual(["user_message", "token"]);
+    expect(socket.sentMessages).toContainEqual({ type: "stop" });
   });
 
   it("keeps read synchronization available without collaboration or sandbox access", async () => {

@@ -12,6 +12,7 @@ import type { SessionContextReader, WebSocketManager } from "../sandbox/lifecycl
 import type { SessionRepositoryInfo } from "../sandbox/provider";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { UserEnvResolver } from "./user-env-resolver";
+import type { MessageRepository } from "./message-repository";
 import type { SessionRow } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
@@ -21,8 +22,17 @@ import type { SessionWebSocket } from "../platform-ports";
 export class LifecycleSessionContext implements SessionContextReader {
   constructor(
     private readonly sessions: SessionCoreRepository,
-    private readonly userEnv: UserEnvResolver
+    private readonly userEnv: UserEnvResolver,
+    private readonly messages?: MessageRepository
   ) {}
+
+  hasUnresolvedExecution(): boolean {
+    return (
+      this.messages != null &&
+      (this.messages.getProcessingMessage() !== null ||
+        this.messages.getMessageAwaitingStopConfirmation() !== null)
+    );
+  }
 
   getSession(): SessionRow | null {
     return this.sessions.getSession();

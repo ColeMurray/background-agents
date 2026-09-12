@@ -1,5 +1,4 @@
 import type { Logger } from "../../logger";
-import { evaluateExecutionTimeout } from "../../sandbox/lifecycle/decisions";
 import type { SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
 import type { AlarmScheduler } from "../../platform-ports";
 import type { SessionMessageQueue } from "../message-queue";
@@ -9,16 +8,16 @@ import type { SessionTerminalMessageProjection } from "../terminal-message-proje
 
 export interface AlarmHandlerDeps {
   repository: MessageRepository;
-  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage">;
+  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage" | "expirePendingAdmissions">;
   executionStop: Pick<
     ExecutionStopCoordinator,
-    "recoverStopConfirmationTimeout" | "resumeAfterSandboxTermination"
+    "recoverStopConfirmationTimeout" | "resumeAfterSandboxTermination" | "stop"
   >;
   lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
   /** Resolved per use so it honors settings persisted after construction. */
-  getExecutionTimeoutMs: () => number;
+  getExecutionTurnAllowanceMs: () => number;
   now: () => number;
   /** Session-scoped logger — alarms run outside any request, so there is no request correlation. */
   log: Logger;
@@ -46,6 +45,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         // Rethrow after recovery so transient storage failures still retry.
         projectionFailure = { error };
       }
+      await deps.messageQueue.expirePendingAdmissions();
       await deps.executionStop.recoverStopConfirmationTimeout();
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was
@@ -54,34 +54,42 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       const processing = deps.repository.getProcessingMessageWithStartedAt();
       if (processing?.started_at) {
         const now = deps.now();
-        const executionTimeoutMs = deps.getExecutionTimeoutMs();
-        const result = evaluateExecutionTimeout(
-          processing.started_at,
-          { timeoutMs: executionTimeoutMs },
-          now
-        );
-        if (result.isTimedOut) {
-          deps.log.warn("Execution timeout: message stuck in processing", {
+        const executionTimeoutMs = deps.getExecutionTurnAllowanceMs();
+        const metadata = deps.repository.getMessageExecutionMetadata(processing.id);
+        const deadline =
+          metadata?.execution_deadline_ms ?? processing.started_at + executionTimeoutMs;
+        if (deadline <= now) {
+          deps.log.warn("Execution deadline exceeded", {
             event: "execution.timeout",
             message_id: processing.id,
-            elapsed_ms: result.elapsedMs,
+            elapsed_ms: now - processing.started_at,
             timeout_ms: executionTimeoutMs,
           });
-          await deps.messageQueue.failStuckProcessingMessage();
+          await deps.executionStop.stop("Execution deadline exceeded");
         } else {
           // An earlier lifecycle alarm has consumed the Durable Object's single
           // alarm slot. Reassert this message's deadline before lifecycle handling
           // schedules its next check so stuck-message recovery cannot be delayed.
-          await deps.alarmScheduler.schedule(processing.started_at + executionTimeoutMs);
+          await deps.alarmScheduler.schedule(deadline);
         }
       }
 
+      const lifecycleMessageId =
+        deps.repository.getMessageAwaitingStopConfirmation()?.id ??
+        deps.repository.getProcessingMessage()?.id ??
+        null;
+      const lifecycleMetadata = lifecycleMessageId
+        ? deps.repository.getMessageExecutionMetadata(lifecycleMessageId)
+        : null;
       const lifecycleResult = await deps.lifecycleManager.handleAlarm();
       if (lifecycleResult !== "no_action") {
-        await deps.messageQueue.failStuckProcessingMessage();
+        await deps.messageQueue.failStuckProcessingMessage(undefined, lifecycleMessageId);
       }
       if (lifecycleResult === "sandbox_terminated") {
-        await deps.executionStop.resumeAfterSandboxTermination();
+        await deps.executionStop.resumeAfterSandboxTermination(
+          lifecycleMessageId,
+          lifecycleMetadata?.execution_sandbox_id
+        );
       }
       if (projectionFailure) throw projectionFailure.error;
     },

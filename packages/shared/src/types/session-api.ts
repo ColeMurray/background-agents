@@ -28,7 +28,33 @@ const nonEmptyStringSchema = z.string().trim().min(1);
 
 export const MAX_CHILD_FOLLOW_UP_PROMPT_CHARS = MAX_WEB_PROMPT_CHARS;
 
-export const slackCallbackContextSchema = z.object({
+// Correlation identifiers must survive parsing unchanged because raw queue callers
+// and persisted callback contexts use the same exact values to identify a launch.
+const executionCorrelationIdSchema = z.string().refine((value) => value.trim().length > 0, {
+  message: "Execution correlation identifiers must not be blank",
+});
+
+/** Shared admission validation for callback schemas and the raw message queue boundary. */
+export const executionCorrelationSchema = z
+  .object({
+    source: z.enum(["automation", "slack"]),
+    runId: executionCorrelationIdSchema.optional(),
+    executionLaunchId: executionCorrelationIdSchema.optional(),
+    admissionDeadlineMs: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  })
+  .refine(
+    (context) => {
+      const hasRun = context.runId !== undefined;
+      const hasLaunch = context.executionLaunchId !== undefined;
+      const hasDeadline = context.admissionDeadlineMs !== undefined;
+      return context.source === "automation"
+        ? hasRun && hasLaunch === hasDeadline
+        : hasRun === hasLaunch && hasLaunch === hasDeadline;
+    },
+    { message: "Execution correlation fields must form a complete launch bundle" }
+  );
+
+export const slackCallbackContextSchema = executionCorrelationSchema.safeExtend({
   source: z.literal("slack"),
   channel: z.string(),
   threadTs: z.string(),
@@ -125,10 +151,10 @@ export const linearToolCallCallbackSchema = linearToolCallCallbackPayloadSchema.
 
 export type LinearToolCallCallback = z.infer<typeof linearToolCallCallbackSchema>;
 
-export const automationCallbackContextSchema = z.object({
+export const automationCallbackContextSchema = executionCorrelationSchema.safeExtend({
   source: z.literal("automation"),
   automationId: z.string(),
-  runId: z.string(),
+  runId: executionCorrelationIdSchema,
   automationName: z.string(),
 });
 

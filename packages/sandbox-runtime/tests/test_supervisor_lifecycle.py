@@ -1,8 +1,13 @@
 import asyncio
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from sandbox_runtime.hook_logs import HookLogs
 from sandbox_runtime.repository_boot import RepositoryBootResult
+from sandbox_runtime.repository_hooks import RepositoryHooks
 from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
 from sandbox_runtime.supervisor import SandboxSupervisor
 
@@ -15,6 +20,8 @@ def _supervisor(tmp_path, events):
     result = RepositoryBootResult(True, [], True, True, (), Path(tmp_path))
     repository = MagicMock()
     repository.prepare_tunnel_environment.return_value = []
+    repository.hooks.discard_logs = AsyncMock()
+    repository.hooks.shutdown = AsyncMock()
     repository.boot = AsyncMock(
         side_effect=lambda mode, _ports: events.append(f"repository:{mode.value}") or result
     )
@@ -69,6 +76,7 @@ async def test_regular_boot_phase_order(tmp_path, monkeypatch):
 
     assert await supervisor.run() is True
     supervisor.repository_boot.prepare_tunnel_environment.assert_called_once_with(BootMode.FRESH)
+    supervisor.repository_boot.hooks.shutdown.assert_awaited_once()
     assert events == [
         "desktop",
         "repository:fresh",
@@ -108,6 +116,7 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
     callback = MagicMock()
 
     async def report_success(**_kwargs):
+        repository.hooks.discard_logs.assert_awaited_once()
         supervisor.shutdown_event.set()
         return True
 
@@ -116,6 +125,7 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
 
     assert await supervisor.run(callback) is True
     repository.boot.assert_awaited_once_with(BootMode.BUILD, [])
+    repository.hooks.shutdown.assert_awaited_once()
     desktop.start.assert_not_awaited()
     supervisor.managed_skills.materialize.assert_not_awaited()
     opencode_server.start.assert_not_awaited()
@@ -150,7 +160,7 @@ async def test_opencode_restarts_do_not_rematerialize_managed_skills(tmp_path, m
     supervisor._repository_boot_result = RepositoryBootResult(True, [], True, True, (), tmp_path)
     opencode_server.exit_code.return_value = 1
     supervisor._report_fatal_error = AsyncMock()
-    monkeypatch.setattr("sandbox_runtime.supervisor.asyncio.sleep", AsyncMock())
+    monkeypatch.setattr(supervisor, "_wait_for_shutdown", AsyncMock(return_value=False))
 
     await SandboxSupervisor.monitor_processes(supervisor)
 
@@ -173,3 +183,136 @@ async def test_code_server_restart_exhaustion_is_nonfatal(tmp_path, monkeypatch)
     await SandboxSupervisor.monitor_processes(supervisor)
 
     supervisor._report_fatal_error.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "failing_services",
+    [
+        ("bridge",),
+        ("terminal",),
+        ("code_server",),
+        ("desktop",),
+        ("harness",),
+        ("bridge", "terminal", "harness", "hooks"),
+    ],
+)
+async def test_shutdown_attempts_all_cleanup_before_reporting_errors(tmp_path, failing_services):
+    supervisor, repository, harness, bridge, code_server, terminal, desktop = _supervisor(
+        tmp_path, []
+    )
+    events = []
+    failures = {name: RuntimeError(f"{name} cleanup failed") for name in failing_services}
+
+    def stop_operation(name):
+        async def stop():
+            events.append(name)
+            supervisor.log.error.assert_not_called()
+            if name in failures:
+                raise failures[name]
+
+        return AsyncMock(side_effect=stop)
+
+    for name, service in (
+        ("bridge", bridge),
+        ("terminal", terminal),
+        ("code_server", code_server),
+        ("desktop", desktop),
+        ("harness", harness),
+    ):
+        service.stop = stop_operation(name)
+    repository.hooks.shutdown = stop_operation("hooks")
+
+    with pytest.raises(ExceptionGroup, match="sandbox shutdown cleanup failed") as raised:
+        await supervisor.shutdown()
+
+    assert events == ["bridge", "terminal", "code_server", "desktop", "harness", "hooks"]
+    assert raised.value.exceptions == tuple(failures.values())
+    supervisor.log.error.assert_called_once_with("supervisor.shutdown_failed", exc=raised.value)
+    assert not any(
+        call.args == ("supervisor.shutdown_complete",)
+        for call in supervisor.log.info.call_args_list
+    )
+
+
+async def test_bridge_stop_failure_still_discards_private_hook_logs(tmp_path):
+    supervisor, repository, harness, bridge, code_server, terminal, desktop = _supervisor(
+        tmp_path, []
+    )
+    hooks = RepositoryHooks(MagicMock())
+    hooks.logs = HookLogs(tmp_path, hooks.log)
+    repository.hooks = hooks
+    log_path, fd = hooks.logs.open("acme", "repo", "setup")
+    os.write(fd, b"private repository output")
+    bridge.stop.side_effect = RuntimeError("bridge stop failed")
+
+    try:
+        with pytest.raises(ExceptionGroup, match="sandbox shutdown cleanup failed"):
+            await supervisor.shutdown()
+
+        assert not log_path.exists()
+        assert not hooks.logs.path.exists()
+        with pytest.raises(OSError):
+            os.fstat(fd)
+        bridge.stop.assert_awaited_once()
+        terminal.stop.assert_awaited_once()
+        code_server.stop.assert_awaited_once()
+        desktop.stop.assert_awaited_once()
+        harness.stop.assert_awaited_once()
+    finally:
+        await hooks.shutdown()
+
+
+async def test_cancelled_service_stop_still_attempts_other_owners(tmp_path):
+    supervisor, repository, harness, bridge, code_server, terminal, desktop = _supervisor(
+        tmp_path, []
+    )
+    bridge.stop.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(BaseExceptionGroup, match="sandbox shutdown cleanup failed") as raised:
+        await supervisor.shutdown()
+
+    assert isinstance(raised.value.exceptions[0], asyncio.CancelledError)
+    terminal.stop.assert_awaited_once()
+    code_server.stop.assert_awaited_once()
+    desktop.stop.assert_awaited_once()
+    harness.stop.assert_awaited_once()
+    repository.hooks.shutdown.assert_awaited_once()
+
+
+@pytest.mark.parametrize("raises_during_cancel", [False, True])
+async def test_shutdown_collects_desktop_task_cleanup_failure(tmp_path, raises_during_cancel):
+    supervisor, repository, harness, bridge, code_server, terminal, desktop = _supervisor(
+        tmp_path, []
+    )
+    started = asyncio.Event()
+    failure = RuntimeError("desktop restart cleanup failed")
+
+    async def restart_desktop():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            if raises_during_cancel:
+                raise failure
+
+    restart_task = asyncio.create_task(restart_desktop())
+    supervisor._desktop_restart_task = restart_task
+    await started.wait()
+
+    if raises_during_cancel:
+        with pytest.raises(ExceptionGroup, match="sandbox shutdown cleanup failed") as raised:
+            await supervisor.shutdown()
+        assert raised.value.exceptions == (failure,)
+        supervisor.log.error.assert_called_once_with("supervisor.shutdown_failed", exc=raised.value)
+    else:
+        await supervisor.shutdown()
+        assert restart_task.cancelled()
+        supervisor.log.error.assert_not_called()
+
+    assert supervisor._desktop_restart_task is None
+    bridge.stop.assert_awaited_once()
+    terminal.stop.assert_awaited_once()
+    code_server.stop.assert_awaited_once()
+    desktop.stop.assert_awaited_once()
+    harness.stop.assert_awaited_once()
+    repository.hooks.shutdown.assert_awaited_once()

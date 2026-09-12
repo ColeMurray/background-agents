@@ -18,6 +18,7 @@ import {
   childFollowUpPromptRequestSchema,
   createSessionRequestSchema,
   createSessionResponseSchema,
+  executionCorrelationSchema,
   MAX_CHILD_FOLLOW_UP_PROMPT_CHARS,
   linearCompletionCallbackSchema,
   linearToolCallCallbackSchema,
@@ -403,6 +404,131 @@ describe("boundary schemas", () => {
   });
 
   describe("callbackContextSchema", () => {
+    const slackContext = {
+      source: "slack",
+      channel: "C123",
+      threadTs: "1710000000.000100",
+      repoFullName: "open-inspect/background-agents",
+      model: "anthropic/claude-sonnet-4-6",
+    };
+    const automationContext = {
+      source: "automation",
+      automationId: "automation-1",
+      runId: "run-1",
+      automationName: "Nightly sweep",
+    };
+    const correlation = {
+      runId: "run-1",
+      executionLaunchId: "launch-1",
+      admissionDeadlineMs: 1_800_000_000_000,
+    };
+
+    it.each([slackContext, { ...slackContext, automationId: "automation-1" }, automationContext])(
+      "preserves legacy callback context %j without adding launch fields",
+      (context) => {
+        expect(callbackContextSchema.parse(context)).toEqual(context);
+        expect(executionCorrelationSchema.safeParse(context).success).toBe(true);
+      }
+    );
+
+    it.each([slackContext, automationContext])(
+      "accepts complete launch bundles for $source without rewriting correlation IDs",
+      (context) => {
+        const bundled = {
+          ...context,
+          ...correlation,
+          runId: " run-1 ",
+          executionLaunchId: " launch-1 ",
+        };
+        expect(callbackContextSchema.parse(bundled)).toEqual(bundled);
+        expect(executionCorrelationSchema.parse(bundled)).toEqual({
+          source: context.source,
+          ...correlation,
+          runId: " run-1 ",
+          executionLaunchId: " launch-1 ",
+        });
+      }
+    );
+
+    it.each([
+      { runId: correlation.runId },
+      { executionLaunchId: correlation.executionLaunchId },
+      { admissionDeadlineMs: correlation.admissionDeadlineMs },
+      { runId: correlation.runId, executionLaunchId: correlation.executionLaunchId },
+      { runId: correlation.runId, admissionDeadlineMs: correlation.admissionDeadlineMs },
+      {
+        executionLaunchId: correlation.executionLaunchId,
+        admissionDeadlineMs: correlation.admissionDeadlineMs,
+      },
+    ])("rejects every partial Slack launch bundle: %j", (partial) => {
+      const context = { ...slackContext, automationId: "automation-1", ...partial };
+      expect(callbackContextSchema.safeParse(context).success).toBe(false);
+      expect(executionCorrelationSchema.safeParse(context).success).toBe(false);
+    });
+
+    it.each([
+      { executionLaunchId: correlation.executionLaunchId },
+      { admissionDeadlineMs: correlation.admissionDeadlineMs },
+    ])("rejects every partial automation launch bundle: %j", (partial) => {
+      const context = { ...automationContext, ...partial };
+      expect(callbackContextSchema.safeParse(context).success).toBe(false);
+      expect(executionCorrelationSchema.safeParse(context).success).toBe(false);
+    });
+
+    it("requires runId for raw automation correlation even on the legacy path", () => {
+      expect(executionCorrelationSchema.parse({ source: "automation", runId: "run-1" })).toEqual({
+        source: "automation",
+        runId: "run-1",
+      });
+      expect(executionCorrelationSchema.safeParse({ source: "automation" }).success).toBe(false);
+      expect(
+        executionCorrelationSchema.safeParse({
+          source: "automation",
+          executionLaunchId: correlation.executionLaunchId,
+          admissionDeadlineMs: correlation.admissionDeadlineMs,
+        }).success
+      ).toBe(false);
+    });
+
+    describe.each([slackContext, automationContext])("$source launch field validation", (base) => {
+      it.each(["", " \t ", null, 123, {}])(
+        "rejects invalid correlation identifier %j",
+        (invalid) => {
+          for (const field of ["runId", "executionLaunchId"] as const) {
+            const context = { ...base, ...correlation, [field]: invalid };
+            expect(callbackContextSchema.safeParse(context).success).toBe(false);
+            expect(executionCorrelationSchema.safeParse(context).success).toBe(false);
+          }
+        }
+      );
+
+      it.each([
+        0,
+        -1,
+        1.5,
+        Number.POSITIVE_INFINITY,
+        Number.NEGATIVE_INFINITY,
+        Number.NaN,
+        Number.MAX_SAFE_INTEGER + 1,
+        "1800000000000",
+        null,
+        undefined,
+      ])("rejects invalid admission deadline %j", (admissionDeadlineMs) => {
+        const context = { ...base, ...correlation, admissionDeadlineMs };
+        expect(callbackContextSchema.safeParse(context).success).toBe(false);
+        expect(executionCorrelationSchema.safeParse(context).success).toBe(false);
+      });
+
+      it.each([1, Number.MAX_SAFE_INTEGER])(
+        "accepts safe positive integer deadline %j",
+        (admissionDeadlineMs) => {
+          const context = { ...base, ...correlation, admissionDeadlineMs };
+          expect(callbackContextSchema.parse(context)).toEqual(context);
+          expect(executionCorrelationSchema.safeParse(context).success).toBe(true);
+        }
+      );
+    });
+
     it("parses valid callback contexts", () => {
       expect(
         callbackContextSchema.safeParse({

@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { seedActiveUser, sqlDatabase } from "./helpers";
+import {
+  initNamedSession,
+  queryDO,
+  seedActiveUser,
+  seedMessage,
+  sqlDatabase,
+  waitForSandboxStatus,
+} from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import type { AutomationRunStatus } from "@open-inspect/shared/types/automations";
 import { cleanD1Tables } from "./cleanup";
@@ -17,6 +24,55 @@ import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
 function createScheduler(schedulerEnv = createCloudflareEnv(env)) {
   return new Scheduler(env.DB, schedulerEnv, { submit() {} });
+}
+
+/** Place recovery evidence in the real session owner, not the D1 reporting projection. */
+async function seedAutomationSessionMessage(input: {
+  automationId: string;
+  runId: string;
+  sessionId: string;
+  messageId: string;
+  status: "pending" | "processing" | "completed" | "failed";
+  startedAt?: number;
+  executionDeadlineMs?: number;
+  executionLaunchId?: string;
+  admissionDeadlineMs?: number;
+}) {
+  const { stub } = await initNamedSession(input.sessionId);
+  // The integration provider cannot launch runtimes. Let warm-up settle before
+  // installing a historical execution state so it cannot race the fixture.
+  await waitForSandboxStatus(stub, "failed");
+  const [participant] = await queryDO<{ id: string }>(stub, "SELECT id FROM participants LIMIT 1");
+  if (!participant) throw new Error("Session fixture did not create its participant");
+  const now = Date.now();
+  await seedMessage(stub, {
+    id: input.messageId,
+    authorId: participant.id,
+    content: "Run tests",
+    source: "automation",
+    status: input.status,
+    createdAt: input.startedAt ?? now,
+    startedAt: input.status === "pending" ? undefined : (input.startedAt ?? now),
+  });
+  await queryDO(
+    stub,
+    `UPDATE messages SET callback_context = ?, error_message = ?, completed_at = ?,
+     execution_deadline_ms = ?, cleanup_deadline_ms = ?, requires_stop_evidence = 1 WHERE id = ?`,
+    JSON.stringify({
+      source: "automation",
+      automationId: input.automationId,
+      runId: input.runId,
+      automationName: "Test Automation",
+      executionLaunchId: input.executionLaunchId,
+      admissionDeadlineMs: input.admissionDeadlineMs,
+    }),
+    input.status === "failed" ? "boom" : null,
+    input.status === "processing" || input.status === "pending" ? null : now,
+    input.executionDeadlineMs ?? null,
+    input.executionDeadlineMs == null ? null : now + 60_000,
+    input.messageId
+  );
+  return stub;
 }
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -332,14 +388,13 @@ describe("Scheduler (integration)", () => {
       expect(automation!.consecutive_failures).toBe(1);
     });
 
-    it("recovers timed-out running runs during sweep", async () => {
+    it("reconciles the session's expired execution deadline and retains its stop fence", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(
         makeAutomation({ id: "auto-t2", next_run_at: now + 86400000, enabled: 1 })
       );
 
-      // Default EXECUTION_TIMEOUT_MS is 90 minutes
       const twoHoursAgo = now - 2 * 60 * 60 * 1000;
       await seedRun(
         makeRunRow("auto-t2", {
@@ -351,13 +406,77 @@ describe("Scheduler (integration)", () => {
           created_at: twoHoursAgo,
         })
       );
+      await seedAutomationSessionMessage({
+        automationId: "auto-t2",
+        runId: "run-timeout-t2",
+        sessionId: "sess-timeout",
+        messageId: "msg-timeout-t2",
+        status: "processing",
+        startedAt: twoHoursAgo,
+        executionDeadlineMs: now - 1,
+      });
 
       const result = await createScheduler().tick();
       expect(result).toEqual({ processed: 0, skipped: 0, failed: 0 });
 
       const run = await store.getRunById("auto-t2", "run-timeout-t2");
       expect(run!.status).toBe("failed");
-      expect(run!.failure_reason).toBe("execution_timeout");
+      expect(run!.failure_reason).toBe("Execution deadline exceeded");
+      expect(run!.execution_unresolved).toBe(1);
+      expect(run!.execution_recovery_reason).toBe("execution_stopping");
+      expect(await store.getActiveRunForAutomation("auto-t2")).toMatchObject({
+        id: "run-timeout-t2",
+        status: "failed",
+        execution_unresolved: 1,
+      });
+    });
+
+    it("expires a never-dispatched automation admission and releases overlap without a stop", async () => {
+      const store = new AutomationStore(env.DB);
+      const automationId = "auto-admission-timeout";
+      const runId = "run-admission-timeout";
+      const sessionId = "session-admission-timeout";
+      const launchId = "launch-admission-timeout";
+      const admissionDeadlineMs = Date.now() - 1;
+      await store.create(makeAutomation({ id: automationId }));
+      await seedRun(makeRunRow(automationId, { id: runId }));
+      await store.claimRunSession(runId, sessionId, Date.now() - 10 * 60_000, {
+        id: launchId,
+        admissionDeadlineMs,
+      });
+      const stub = await seedAutomationSessionMessage({
+        automationId,
+        runId,
+        sessionId,
+        messageId: "message-admission-timeout",
+        status: "pending",
+        executionLaunchId: launchId,
+        admissionDeadlineMs,
+      });
+
+      await createScheduler().tick();
+
+      expect(await store.getRunById(automationId, runId)).toMatchObject({
+        status: "failed",
+        failure_reason: "Automation startup deadline expired before execution was dispatched",
+        execution_unresolved: 0,
+        execution_launch_id: null,
+        execution_admission_deadline_ms: null,
+      });
+      expect(await store.getActiveRunForAutomation(automationId)).toBeNull();
+      expect(
+        await queryDO(
+          stub,
+          "SELECT status, started_at, execution_deadline_ms, stop_confirmation_deadline FROM messages"
+        )
+      ).toEqual([
+        {
+          status: "failed",
+          started_at: null,
+          execution_deadline_ms: null,
+          stop_confirmation_deadline: null,
+        },
+      ]);
     });
 
     it("skips overdue automations with active runs (concurrency guard)", async () => {
@@ -757,6 +876,93 @@ describe("Scheduler (integration)", () => {
       );
     });
 
+    it.each([
+      { failure: 500, settlement: "callback" },
+      { failure: "transport", settlement: "sweep" },
+    ] as const)(
+      "keeps an ambiguous $failure launch eligible for later $settlement success",
+      async ({ failure, settlement }) => {
+        const store = new AutomationStore(env.DB);
+        const automationId = "auto-ambiguous-launch";
+        await store.create(makeAutomation({ id: automationId, consecutive_failures: 2 }));
+        let completed = false;
+        const sessionFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = input instanceof Request ? input : new Request(input, init);
+          const path = new URL(request.url).pathname;
+          if (path === "/internal/init") return Response.json({ status: "ok" });
+          if (path === "/internal/prompt") {
+            // The session accepted the prompt before the response was lost.
+            if (failure === "transport") throw new Error("Enqueue response lost");
+            return new Response("Failure after insertion", { status: failure });
+          }
+          if (path === "/internal/execution-state") {
+            return Response.json({
+              executionState: completed ? "idle" : "running",
+              messageId: "msg-ambiguous",
+              messageStatus: completed ? "completed" : "processing",
+              deadlineAt: Date.now() + 60_000,
+              cleanupDeadlineAt: Date.now() + 120_000,
+              error: null,
+              launch: {
+                messageId: "msg-ambiguous",
+                status: completed ? "completed" : "processing",
+                error: null,
+              },
+              launchAdmissionExpired: false,
+            });
+          }
+          return new Response("Not Found", { status: 404 });
+        });
+        const scheduler = createScheduler(
+          createCloudflareEnv({
+            ...env,
+            SESSION: {
+              idFromName: vi.fn((name: string) => name),
+              get: vi.fn(() => ({ fetch: sessionFetch })),
+            } as unknown as DurableObjectNamespace,
+          })
+        );
+
+        const result = await scheduler.trigger(automationId, "user-1");
+        expect(result.runs).toEqual([expect.objectContaining({ status: "running" })]);
+        const run = (await fetchRuns(automationId))[0]!;
+        expect(run).toMatchObject({ status: "running", failure_reason: null });
+        expect(await store.getRunById(automationId, run.id)).toMatchObject({
+          execution_unresolved: 1,
+          execution_launch_id: expect.any(String),
+          execution_admission_deadline_ms: expect.any(Number),
+        });
+        expect(await store.getById(automationId)).toMatchObject({
+          consecutive_failures: 2,
+          enabled: 1,
+        });
+        expect(await store.getActiveRunForAutomation(automationId)).not.toBeNull();
+
+        completed = true;
+        if (settlement === "callback") {
+          await scheduler.runComplete({
+            automationId,
+            runId: run.id,
+            sessionId: run.session_id!,
+            messageId: "msg-ambiguous",
+            success: true,
+          });
+        } else {
+          await scheduler.tick();
+        }
+
+        expect(await store.getRunById(automationId, run.id)).toMatchObject({
+          status: "completed",
+          failure_reason: null,
+          execution_unresolved: 0,
+        });
+        expect(await store.getById(automationId)).toMatchObject({
+          consecutive_failures: 0,
+          enabled: 1,
+        });
+      }
+    );
+
     it("repairs a legacy owner before creating a triggered run", async () => {
       const store = new AutomationStore(env.DB);
       await env.DB.prepare(
@@ -849,6 +1055,13 @@ describe("Scheduler (integration)", () => {
     }
 
     async function completeRun(automationId: string, runId: string, success: boolean) {
+      await seedAutomationSessionMessage({
+        automationId,
+        runId,
+        sessionId: `sess-${runId}`,
+        messageId: `msg-${runId}`,
+        status: success ? "completed" : "failed",
+      });
       return createScheduler().runComplete({
         automationId,
         runId,

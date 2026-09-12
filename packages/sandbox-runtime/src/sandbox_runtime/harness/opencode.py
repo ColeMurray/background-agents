@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 from .base import (
@@ -93,7 +94,7 @@ class OpencodeHarness:
         self.session_id = created
         self.log.info("opencode.session.ensure", opencode_session_id=created, action="created")
 
-    def stream_events(self, prompt: HarnessPrompt) -> Any:
+    def stream_events(self, prompt: HarnessPrompt, *, bridge_managed: bool = False) -> Any:
         """The raw translated event stream for one prompt (test seam)."""
         if not self.session_id:
             raise RuntimeError("OpenCode session not initialized")
@@ -104,28 +105,60 @@ class OpencodeHarness:
             model=prompt.model,
             reasoning_effort=prompt.reasoning_effort,
             attachments=list(prompt.attachments),
+            bridge_managed=bridge_managed,
         )
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
         error_message: str | None = None
         message_cost_usd: float | None = None
         try:
-            async for event in self.stream_events(prompt):
-                if event.get("type") == "error":
-                    error_message = str(event.get("error") or "Unknown error")
-                if event.get("type") == "step_finish" and "messageCostUsd" in event:
-                    message_cost_usd = event["messageCostUsd"]
-                await emit(event)
+            async with aclosing(self.stream_events(prompt, bridge_managed=True)) as events:
+                async for event in events:
+                    if event.get("type") == "error":
+                        error_message = str(event.get("error") or "Unknown error")
+                    if event.get("type") == "step_finish" and "messageCostUsd" in event:
+                        message_cost_usd = event["messageCostUsd"]
+                    await emit(event)
         except asyncio.CancelledError:
             raise
         except Exception as error:
             self.log.error("harness.prompt_error", exc=error, message_id=prompt.message_id)
-            return TurnOutcome.failed(str(error), message_cost_usd=message_cost_usd)
+            return TurnOutcome.failed(
+                str(error), message_cost_usd=message_cost_usd, execution_stopped=False
+            )
         if error_message is not None:
-            return TurnOutcome.failed(error_message, message_cost_usd=message_cost_usd)
+            return TurnOutcome.failed(
+                error_message,
+                message_cost_usd=message_cost_usd,
+                execution_stopped=self.prompt_stream.execution_stopped,
+            )
+        if not self.prompt_stream.execution_stopped:
+            return TurnOutcome.failed(
+                "OpenCode turn outcome did not confirm that all turn-owned execution stopped.",
+                message_cost_usd=message_cost_usd,
+                execution_stopped=False,
+            )
         return TurnOutcome.ok(message_cost_usd=message_cost_usd)
 
     async def abort(self) -> bool:
         if not self.session_id:
             return False
         return await self.client.request_stop(self.session_id, reason="command")
+
+    async def stop(self, deadline_monotonic: float) -> bool:
+        """Request interruption without promoting its acknowledgment to proof.
+
+        The HTTP API has no cessation contract covering outstanding tools and
+        descendant sessions. Once observation is lost, only the supervisor or
+        provider can establish containment; the bridge must retain its fence.
+        """
+        if self._prompt_stream is not None and self._prompt_stream.execution_stopped:
+            return True
+        if asyncio.get_running_loop().time() >= deadline_monotonic:
+            return False
+        try:
+            async with asyncio.timeout_at(deadline_monotonic):
+                await self.abort()
+        except Exception as error:
+            self.log.warn("opencode.stop_unconfirmed", exc=error)
+        return False

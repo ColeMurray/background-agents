@@ -95,6 +95,23 @@ describe("OpenComputerRestClient request timeouts", () => {
     );
   }
 
+  it.each(["get", "hibernate"])(
+    "caller cancellation interrupts an in-flight %s request",
+    async (operation) => {
+      const client = new OpenComputerRestClient(config);
+      const caller = new AbortController();
+      const cancellation = new Error(`cancel ${operation}`);
+      stubHangingFetch();
+      const promise =
+        operation === "get"
+          ? client.getSandbox("sb-1", caller.signal)
+          : client.hibernateSandbox("sb-1", caller.signal);
+      caller.abort(cancellation);
+      await expect(promise).rejects.toBe(cancellation);
+      expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
+    }
+  );
+
   it("aborts a hung createSandbox call and rejects with an attributed timeout", async () => {
     const client = new OpenComputerRestClient(config);
     stubHangingFetch();

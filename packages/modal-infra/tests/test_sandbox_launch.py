@@ -196,3 +196,45 @@ async def test_repository_image_create_validates_repo_before_image_lookup(monkey
         )
 
     from_id.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
+async def test_execution_expiry_consumes_creation_and_tunnel_time(monkeypatch, image_source):
+    clock = {"now": 1_000.25}
+    monkeypatch.setattr("src.sandbox.manager.time.time", lambda: clock["now"])
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda _id: object())
+
+    async def create(*_args, **kwargs):
+        assert kwargs["timeout"] == 240
+        clock["now"] += 60
+        return SimpleNamespace(object_id="sb-new-instance")
+
+    async def resolve_tunnels(*_args):
+        clock["now"] += 30
+        return None, None, None, None
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", SimpleNamespace(aio=create))
+    monkeypatch.setattr(SandboxManager, "_resolve_and_setup_tunnels", resolve_tunnels)
+    manager = SandboxManager()
+    if image_source == "snapshot":
+        handle = await manager.restore_from_snapshot(
+            snapshot_image_id="im-old-instance",
+            session_config={"session_id": "session-1"},
+            sandbox_id="sandbox-1",
+            timeout_seconds=240,
+        )
+    else:
+        handle = await manager.create_sandbox(
+            SandboxConfig(
+                repo_owner=None,
+                repo_name=None,
+                sandbox_id="sandbox-1",
+                timeout_seconds=240,
+                repo_image_id="im-repo" if image_source == "repository" else None,
+            )
+        )
+
+    assert handle.execution_expires_at_ms == 1_240_250
+    assert handle.created_at == 1_090.25
+    assert handle.execution_expires_at_ms - int(clock["now"] * 1000) == 150_000

@@ -264,9 +264,17 @@ describe("MessageRepository", () => {
   });
 
   it("fails closed when cancel sees a malformed persisted status", () => {
-    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
-      { status: "queued", source: "web", callback_context: null },
-    ]);
+    mock.setData(
+      `SELECT status, source, callback_context, stop_confirmation_deadline FROM messages WHERE id = ?`,
+      [
+        {
+          status: "queued",
+          source: "web",
+          callback_context: null,
+          stop_confirmation_deadline: null,
+        },
+      ]
+    );
 
     expect(repository.cancelPendingMessage("msg-1")).toBe(false);
     expect(mock.calls).toHaveLength(1);
@@ -447,9 +455,17 @@ describe("MessageRepository", () => {
   });
 
   it("atomically releases attachments and cancels a pending web message", () => {
-    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
-      { status: "pending", source: "web", callback_context: null },
-    ]);
+    mock.setData(
+      `SELECT status, source, callback_context, stop_confirmation_deadline FROM messages WHERE id = ?`,
+      [
+        {
+          status: "pending",
+          source: "web",
+          callback_context: null,
+          stop_confirmation_deadline: null,
+        },
+      ]
+    );
     mock.setRowsWritten(1);
     expect(repository.cancelPendingMessage("msg-1")).toBe(true);
     expect(transactionSyncCalls).toBe(1);
@@ -458,9 +474,17 @@ describe("MessageRepository", () => {
   });
 
   it("rejects cancellation for messages that may need callbacks", () => {
-    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
-      { status: "pending", source: "linear", callback_context: null },
-    ]);
+    mock.setData(
+      `SELECT status, source, callback_context, stop_confirmation_deadline FROM messages WHERE id = ?`,
+      [
+        {
+          status: "pending",
+          source: "linear",
+          callback_context: null,
+          stop_confirmation_deadline: null,
+        },
+      ]
+    );
     expect(repository.cancelPendingMessage("msg-1")).toBe(false);
     expect(mock.calls).toHaveLength(1);
   });

@@ -33,6 +33,7 @@ def _patch_manager(
                 modal_object_id="obj-123",
                 status=SandboxStatus.WARMING,
                 created_at=123.0,
+                execution_expires_at_ms=456000,
                 code_server_url=None,
                 code_server_password=None,
                 vnc_url=vnc_url,
@@ -58,6 +59,7 @@ def _patch_restore_manager(
                 sandbox_id="sandbox-123",
                 modal_object_id="obj-123",
                 status=SandboxStatus.WARMING,
+                execution_expires_at_ms=789000,
                 code_server_url=None,
                 code_server_password=None,
                 vnc_url=vnc_url,
@@ -111,6 +113,26 @@ RESTORE_REQUEST = {
     "control_plane_url": "https://control-plane.example",
     "sandbox_auth_token": "sandbox-token",
 }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "payload", "patch_manager", "expected_expiry"),
+    [
+        (_call_create_sandbox, CREATE_REQUEST, _patch_manager, 456000),
+        (_call_restore_sandbox, RESTORE_REQUEST, _patch_restore_manager, 789000),
+    ],
+)
+async def test_launch_responses_include_provider_expiry(
+    monkeypatch, call, payload, patch_manager, expected_expiry
+):
+    _patch_auth(monkeypatch)
+    patch_manager(monkeypatch, {})
+
+    result = await call(payload)
+
+    assert result["data"]["execution_expires_at_ms"] == expected_expiry
+    assert result["data"]["execution_expiry_kind"] == "conservative"
 
 
 @pytest.mark.asyncio

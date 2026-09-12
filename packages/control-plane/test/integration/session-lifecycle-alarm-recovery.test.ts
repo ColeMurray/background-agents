@@ -62,6 +62,6 @@ describe("SessionDO lifecycle alarm recovery", () => {
       "msg-stuck"
     );
     expect(message?.status).toBe("failed");
-    expect(message?.error_message).toContain("stuck processing");
+    expect(message?.error_message).toBe("Sandbox became unavailable before execution completed");
   });
 });
