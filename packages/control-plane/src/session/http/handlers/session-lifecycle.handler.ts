@@ -1,5 +1,9 @@
 import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
+import {
+  SESSION_ARCHIVE_HTTP_STATUS,
+  type SessionArchiveOutcome,
+} from "@open-inspect/shared/types/session-archive";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { MessageRepository } from "../../message-repository";
@@ -21,6 +25,14 @@ import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
  */
 function isCancellable(status: SessionStatus): boolean {
   return !isSessionInactive(status);
+}
+
+/** Preserve the legacy response fields while deriving status from the shared decision. */
+function archiveResponse(
+  outcome: SessionArchiveOutcome,
+  fields: { error: string } | { status: "archived" }
+): Response {
+  return Response.json({ ...fields, outcome }, { status: SESSION_ARCHIVE_HTTP_STATUS[outcome] });
 }
 
 function sessionTitleUpdateStatus(
@@ -139,29 +151,26 @@ export class SessionLifecycleHandler {
     }
 
     if (session.status === "cancelled") {
-      return Response.json(
-        { error: "Cancelled sessions cannot be archived", outcome: "skipped_cancelled" },
-        { status: 409 }
-      );
+      return archiveResponse("skipped_cancelled", {
+        error: "Cancelled sessions cannot be archived",
+      });
     }
 
     if (this.messageRepository.getPendingOrProcessingCount() > 0) {
-      return Response.json(
-        { error: "Cannot archive a session with queued work", outcome: "skipped_queued_work" },
-        { status: 409 }
-      );
+      return archiveResponse("skipped_queued_work", {
+        error: "Cannot archive a session with queued work",
+      });
     }
 
     await this.statusService.transition("archived");
     try {
-      await this.statusService.confirmArchivedIndexStatus();
+      await this.statusService.confirmIndexStatus("archived");
     } catch {
       return Response.json({ error: "Session archive projection unavailable" }, { status: 503 });
     }
 
-    return Response.json({
+    return archiveResponse(session.status === "archived" ? "already_archived" : "archived", {
       status: "archived",
-      outcome: session.status === "archived" ? "already_archived" : "archived",
     });
   }
 

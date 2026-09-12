@@ -133,6 +133,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     model: "openai/gpt-5.1",
     reasoning_effort: null,
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user" as const,
     spawn_depth: 0,

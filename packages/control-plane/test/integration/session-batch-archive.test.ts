@@ -110,7 +110,10 @@ describe("session batch archive", () => {
         (await stub.fetch("http://internal/internal/archive", { method: "POST" })).status
       ).toBe(200);
       const touchedAt = Date.now() + 60_000;
-      await env.DB.prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?")
+      // A stale delivery carries an older lifecycle revision, independently of activity.
+      await env.DB.prepare(
+        "UPDATE sessions SET status = ?, updated_at = ?, status_revision = 0 WHERE id = ?"
+      )
         .bind(status, touchedAt, sessionName)
         .run();
       const response = await post([sessionName]);

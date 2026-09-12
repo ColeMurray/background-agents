@@ -35,6 +35,7 @@ function session(overrides: Partial<SessionRow> = {}): SessionRow {
     model: "xai/grok-build-0.1",
     reasoning_effort: null,
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user",
     spawn_depth: 0,

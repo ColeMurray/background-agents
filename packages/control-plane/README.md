@@ -439,15 +439,24 @@ Outcomes are `archived`, `already_archived`, `skipped_cancelled`, `skipped_queue
 `not_found`, or `failed`. The batch is not atomic: successful targets remain archived even if
 another target fails. Retry only failed IDs; the endpoint does not scan or replay earlier targets.
 Use the existing session-list API to choose targets. A missing runtime is reported as `not_found`,
-without rewriting its index row. Runtime calls have bounded concurrency and individual timeouts.
+without rewriting its index row. Runtime calls have bounded concurrency and share one batch deadline
+below the web proxy timeout. Unstarted or unfinished targets return `failed`; a timed-out mutation
+may still complete, and retrying it is safe.
 
 Both single and batch requests use the same runtime archive operation. The runtime checks current
 state before changing it, refuses cancelled sessions or queued work, and confirms index agreement
-before returning success. Stale projections are repaired with a compare-and-set against the observed
-status and activity timestamp; a conflicting write, missing index row, or unavailable projection
-returns a retryable failure. Single-session callers receive HTTP 503 in that case; batch callers
-receive `failed` for that ID. Single-session success/error bodies retain their existing fields and
-include an additive `outcome` for successful or ineligible archive decisions.
+before returning success. All lifecycle projections use the session's persisted monotonic status
+revision, independent of activity timestamps. Older deliveries cannot overwrite a newer status;
+identical retries are idempotent and preserve newer activity. A superseding transition, missing
+index row, or unavailable projection returns a retryable failure. Single-session callers receive
+HTTP 503 in that case; batch callers receive `failed` for that ID. Single-session success/error
+bodies retain their existing fields and include an additive `outcome` for successful or ineligible
+archive decisions.
+
+Deploy D1 migration `0077_session_status_revision.sql` before the worker update. Runtime schema
+migration 51 upgrades existing sessions lazily; their first projection claims the legacy index row.
+The web proxy bounds raw request bytes before parsing and preserves upstream retry/correlation
+headers.
 
 The former `/operator/sessions/archive` and `/internal/operator-archive` proposal is not exposed.
 

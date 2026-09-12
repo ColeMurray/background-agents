@@ -12,7 +12,7 @@ import { SessionInternalPaths } from "./contracts";
 import type { SessionRuntimeClient } from "./runtime-client";
 import type { Logger } from "../logger";
 import type { SessionIndexStore } from "../db/session-index";
-import type { SessionArchiveProjectionStore } from "../db/session-archive-projection-store";
+import type { SessionStatusProjectionStore } from "../db/session-status-projection-store";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
@@ -23,10 +23,7 @@ import type { BackgroundTasks } from "../platform-ports";
 import { isSessionPromptable, isTurnSettled } from "@open-inspect/shared/types/session-activity";
 
 /** The index projections this service keeps consistent with the session row. */
-type SessionIndexProjections = Pick<
-  SessionIndexStore,
-  "updateStatus" | "repairStatus" | "finalizeChildAdmission" | "updateMetrics"
->;
+type SessionIndexProjections = Pick<SessionIndexStore, "finalizeChildAdmission" | "updateMetrics">;
 
 export class SessionStatusService {
   constructor(
@@ -37,10 +34,7 @@ export class SessionStatusService {
     private readonly artifactRepository: ArtifactRepository,
     private readonly messenger: SessionMessenger,
     private readonly sessionIndex: SessionIndexProjections,
-    private readonly archiveProjection: Pick<
-      SessionArchiveProjectionStore,
-      "read" | "archiveIfUnchanged"
-    >,
+    private readonly statusProjection: Pick<SessionStatusProjectionStore, "project">,
     /** Reaches the parent session's runtime for the child rollup. */
     private readonly sessions: SessionRuntimeClient
   ) {}
@@ -60,7 +54,8 @@ export class SessionStatusService {
       await this.syncSessionIndexStatusAndAdmission(
         publicSessionId,
         status,
-        session.updated_at
+        session.updated_at,
+        session.status_revision
       ).catch((error) =>
         this.logSessionIndexStatusSyncError(publicSessionId, status, session.updated_at, error)
       );
@@ -72,7 +67,13 @@ export class SessionStatusService {
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     this.repository.updateSessionStatus(session.id, status, updatedAt);
-    await this.projectTransition(session, publicSessionId, status, updatedAt);
+    await this.projectTransition(
+      session,
+      publicSessionId,
+      status,
+      updatedAt,
+      session.status_revision + 1
+    );
 
     return true;
   }
@@ -91,8 +92,8 @@ export class SessionStatusService {
     if (!session) return;
 
     const publicSessionId = this.getPublicSessionId(session);
-    const repaired = await this.sessionIndex
-      .repairStatus(publicSessionId, session.status)
+    const repaired = await this.statusProjection
+      .project(publicSessionId, session.status, session.status_revision, session.updated_at)
       .catch((error) => {
         this.logSessionIndexStatusSyncError(
           publicSessionId,
@@ -109,32 +110,36 @@ export class SessionStatusService {
   }
 
   /**
-   * Confirm an archive reached the index, repairing a stale activity timestamp
-   * with a compare-and-set. Re-read local state after each I/O: an unarchive or
-   * cancellation may have superseded this request while the index was pending.
+   * Confirm the current lifecycle generation reached the index. The same
+   * revision-fenced write handles transitions, repair, and idempotent retries.
    */
-  async confirmArchivedIndexStatus(): Promise<void> {
+  async confirmIndexStatus(expectedStatus: SessionStatus): Promise<void> {
     const session = this.repository.getSession();
-    if (!session || session.status !== "archived") throw new Error("Archive superseded");
+    if (!session || session.status !== expectedStatus) throw new Error("Status superseded");
     const publicSessionId = this.getPublicSessionId(session);
     try {
-      const projection = await this.archiveProjection.read(publicSessionId);
+      const projected = await this.statusProjection.project(
+        publicSessionId,
+        session.status,
+        session.status_revision,
+        session.updated_at
+      );
       const current = this.repository.getSession();
-      if (!current || current.status !== "archived" || current.updated_at !== session.updated_at) {
-        throw new Error("Archive superseded");
+      if (
+        !current ||
+        current.status !== expectedStatus ||
+        current.status_revision !== session.status_revision
+      ) {
+        throw new Error("Status superseded");
       }
-      if (!projection) throw new Error("Session index row missing");
-      if (projection.status !== "archived") {
-        if (!(await this.archiveProjection.archiveIfUnchanged(publicSessionId, projection))) {
-          throw new Error("Session index changed during archive");
-        }
-        const latest = this.repository.getSession();
-        if (!latest || latest.status !== "archived" || latest.updated_at !== session.updated_at) {
-          throw new Error("Archive superseded");
-        }
-      }
+      if (!projected) throw new Error("Session index missing or superseded");
     } catch (error) {
-      this.logSessionIndexStatusSyncError(publicSessionId, "archived", session.updated_at, error);
+      this.logSessionIndexStatusSyncError(
+        publicSessionId,
+        expectedStatus,
+        session.updated_at,
+        error
+      );
       throw error;
     }
   }
@@ -152,7 +157,13 @@ export class SessionStatusService {
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     this.repository.updateSessionStatus(session.id, "cancelled", updatedAt);
     terminalizeUnfinishedMessages();
-    await this.projectTransition(session, publicSessionId, "cancelled", updatedAt);
+    await this.projectTransition(
+      session,
+      publicSessionId,
+      "cancelled",
+      updatedAt,
+      session.status_revision + 1
+    );
 
     return true;
   }
@@ -161,10 +172,16 @@ export class SessionStatusService {
     session: SessionRow,
     publicSessionId: string,
     status: SessionStatus,
-    updatedAt: number
+    updatedAt: number,
+    revision: number
   ): Promise<void> {
-    await this.syncSessionIndexStatusAndAdmission(publicSessionId, status, updatedAt).catch(
-      (error) => this.logSessionIndexStatusSyncError(publicSessionId, status, updatedAt, error)
+    await this.syncSessionIndexStatusAndAdmission(
+      publicSessionId,
+      status,
+      updatedAt,
+      revision
+    ).catch((error) =>
+      this.logSessionIndexStatusSyncError(publicSessionId, status, updatedAt, error)
     );
 
     this.messenger.broadcast({ type: "session_status", status });
@@ -287,9 +304,10 @@ export class SessionStatusService {
   private async syncSessionIndexStatusAndAdmission(
     sessionId: string,
     status: SessionStatus,
-    updatedAt: number
+    updatedAt: number,
+    revision: number
   ): Promise<void> {
-    const projected = await this.sessionIndex.updateStatus(sessionId, status, updatedAt);
+    const projected = await this.statusProjection.project(sessionId, status, revision, updatedAt);
     if (projected && status === "active") {
       await this.sessionIndex.finalizeChildAdmission(sessionId);
     }

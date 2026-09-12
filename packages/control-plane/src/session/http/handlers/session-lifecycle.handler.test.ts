@@ -25,6 +25,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: "high",
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user",
     spawn_depth: 0,
@@ -85,13 +86,13 @@ function createHandler() {
     updateSandboxStatus,
   } as unknown as SandboxRepository;
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
-  const confirmArchivedIndexStatus = vi.fn<() => Promise<void>>();
+  const confirmIndexStatus = vi.fn<() => Promise<void>>();
   const repairIndexStatus = vi.fn<() => Promise<void>>();
   const settleFromMessageState = vi.fn<() => Promise<SessionRow["status"]>>();
   const statusService = {
     transition,
     repairIndexStatus,
-    confirmArchivedIndexStatus,
+    confirmIndexStatus,
     settleFromMessageState,
   } as unknown as SessionStatusService;
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
@@ -132,7 +133,7 @@ function createHandler() {
     getSandbox,
     transition,
     repairIndexStatus,
-    confirmArchivedIndexStatus,
+    confirmIndexStatus,
     settleFromMessageState,
     applySessionTitleUpdate,
     cancelSession,
@@ -532,7 +533,7 @@ describe("canonical archive outcomes", () => {
   it("returns retryable failure when the projection cannot be confirmed", async () => {
     const h = createHandler();
     h.getSession.mockReturnValue(createSession());
-    h.confirmArchivedIndexStatus.mockRejectedValue(new Error("projection conflict"));
+    h.confirmIndexStatus.mockRejectedValue(new Error("projection conflict"));
     expect((await h.handler.archive()).status).toBe(503);
   });
   it("confirms index agreement even for an already archived session", async () => {
@@ -540,6 +541,6 @@ describe("canonical archive outcomes", () => {
     h.getSession.mockReturnValue(createSession({ status: "archived" }));
     const response = await h.handler.archive();
     expect(await response.json()).toEqual({ outcome: "already_archived", status: "archived" });
-    expect(h.confirmArchivedIndexStatus).toHaveBeenCalledOnce();
+    expect(h.confirmIndexStatus).toHaveBeenCalledOnce();
   });
 });

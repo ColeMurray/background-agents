@@ -6,6 +6,34 @@ import { archiveSessionBatch } from "./batch-archive";
 const log = createLogger("batch-archive-test", {}, "error");
 
 describe("archiveSessionBatch", () => {
+  it.each(["fetch", "body"])(
+    "bounds a stalled %s even when transport ignores cancellation",
+    async (stage) => {
+      vi.useFakeTimers();
+      const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+        return controller.signal;
+      });
+      try {
+        const fetch = vi.fn(async () =>
+          stage === "fetch"
+            ? new Promise<Response>(() => {})
+            : new Response(new ReadableStream<Uint8Array>({}))
+        );
+        const ids = Array.from({ length: 25 }, (_, i) => String(i));
+        const pending = archiveSessionBatch(ids, { fetch }, log);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(await pending).toEqual(ids.map((sessionId) => ({ sessionId, outcome: "failed" })));
+        expect(fetch).toHaveBeenCalledTimes(5);
+        expect(timeout).toHaveBeenCalledOnce();
+      } finally {
+        timeout.mockRestore();
+        vi.useRealTimers();
+      }
+    }
+  );
+
   it("continues past failures and preserves target order with typed outcomes", async () => {
     const fetch = vi.fn(async (id: string) => {
       if (id === "broken") throw new Error("private infrastructure detail");
@@ -94,6 +122,8 @@ describe("archiveSessionBatch", () => {
         return Response.json({ outcome: "archived" });
       });
       const pending = archiveSessionBatch(["slow", "fast"], { fetch }, log);
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+      await new Promise((resolve) => setTimeout(resolve, 0));
       controller.abort();
       expect(await pending).toEqual([
         { sessionId: "slow", outcome: "failed" },

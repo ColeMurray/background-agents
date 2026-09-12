@@ -83,6 +83,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     model: "anthropic/claude-sonnet-4-5",
     reasoning_effort: null,
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user" as const,
     spawn_depth: 0,

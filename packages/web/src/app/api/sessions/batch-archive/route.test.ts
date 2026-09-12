@@ -38,3 +38,41 @@ it.each([200, 400, 403, 503])("preserves upstream status %i and body", async (st
     body: '{"sessionIds":["one"]}',
   });
 });
+
+it("preserves retry and correlation headers on an empty upstream response", async () => {
+  vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+    new Response(null, {
+      status: 503,
+      headers: { "retry-after": "5", "x-request-id": "request-123" },
+    })
+  );
+  const response = await POST(request('{"sessionIds":["one"]}'));
+  expect(response.status).toBe(503);
+  expect(await response.text()).toBe("");
+  expect(response.headers.get("retry-after")).toBe("5");
+  expect(response.headers.get("x-request-id")).toBe("request-123");
+});
+
+it("rejects oversized bodies before parsing or forwarding", async () => {
+  expect((await POST(request(" ".repeat(48 * 1024 + 1)))).status).toBe(413);
+  expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+});
+
+it("caps and cancels chunked bodies without trusting content-length", async () => {
+  const cancel = vi.fn();
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(16 * 1024));
+    },
+    cancel,
+  });
+  const streamed = new Request("http://localhost/api/sessions/batch-archive", {
+    method: "POST",
+    body: stream,
+    duplex: "half",
+    headers: { "content-length": "1" },
+  } as RequestInit) as NextRequest;
+  expect((await POST(streamed)).status).toBe(413);
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+});
