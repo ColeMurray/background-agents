@@ -3,8 +3,20 @@ import type { Env } from "../src/types";
 
 vi.mock("../src/github-auth", () => ({
   generateInstallationToken: vi.fn().mockResolvedValue("installation-token"),
+  postCommitStatus: vi.fn().mockResolvedValue({ ok: true }),
   postReaction: vi.fn().mockResolvedValue(true),
   checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
+  getPullRequestSnapshot: vi.fn().mockResolvedValue({
+    ok: true,
+    headSha: "abc123",
+    state: "open",
+    draft: false,
+  }),
+  REVIEW_COMPLETED_DESCRIPTION: "Review completed",
+  REVIEW_STALE_DESCRIPTION: "Review skipped: PR changed before submission",
+  REVIEW_PENDING_DESCRIPTION: "Review in progress",
+  REVIEW_START_FAILED_DESCRIPTION: "Review failed to start",
+  REVIEW_STATUS_CONTEXT: "open-inspect",
 }));
 
 import app from "../src/index";
@@ -421,7 +433,7 @@ describe("POST /webhooks/github", () => {
         base: { ref: "main" },
       },
       requested_reviewer: { login: "test-bot[bot]" },
-      repository: { owner: { login: "test" }, name: "repo", private: false },
+      repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
       sender: {
         login: "alice",
         id: 1001,
@@ -439,6 +451,16 @@ describe("POST /webhooks/github", () => {
       }
       if (requestUrl.endsWith("/metadata")) {
         return new Response(JSON.stringify({ repo: "test/repo", metadata: null }));
+      }
+      if (requestUrl.endsWith("/internal/github-reviews/claim")) {
+        return Response.json({ generation: 1 });
+      }
+      if (requestUrl.endsWith("/internal/github-reviews/sweep")) {
+        return Response.json({
+          cancelledSessionIds: [],
+          deferredSessionIds: [],
+          failedSessionIds: [],
+        });
       }
       if (requestUrl === "https://internal/sessions") {
         return new Response(JSON.stringify({ sessionId: "session-123", status: "created" }));
@@ -523,7 +545,7 @@ describe("POST /webhooks/github", () => {
 
   it("allows redelivery after async processing failure clears the marker", async () => {
     const body = JSON.stringify({
-      action: "opened",
+      action: "synchronize",
       pull_request: {
         number: 42,
         title: "Broken payload",
@@ -568,7 +590,7 @@ describe("POST /webhooks/github", () => {
     for (const [url, init] of controlPlaneFetch.mock.calls) {
       expect(url).toBe("https://internal/internal/github-event");
       expect(JSON.parse(init.body as string)).toMatchObject({
-        eventType: "pull_request.opened",
+        eventType: "pull_request.synchronize",
         repoOwner: "test",
         repoName: "repo",
         pullRequest: { number: 42 },
@@ -608,8 +630,8 @@ describe("POST /webhooks/github", () => {
   it("forwards closed pull request lifecycle fields to the control plane", async () => {
     const body = JSON.stringify({
       action: "closed",
-      repository: { owner: { login: "test" }, name: "repo" },
-      sender: { login: "alice" },
+      repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
+      sender: { login: "alice", id: 1, avatar_url: "https://avatars.githubusercontent.com/u/1" },
       pull_request: {
         number: 42,
         title: "Ship lifecycle updates",
@@ -651,11 +673,17 @@ describe("POST /webhooks/github", () => {
 
     const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
       .fetch;
-    expect(controlPlaneFetch).toHaveBeenCalledOnce();
-    const [url, init] = controlPlaneFetch.mock.calls[0];
+    // closed is not a bot review action (unsupported_action skip); the only
+    // control-plane call is the normalized lifecycle-event forward.
+    expect(controlPlaneFetch).toHaveBeenCalledTimes(1);
+    const forwardCall = controlPlaneFetch.mock.calls.find(
+      ([callUrl]) => callUrl === "https://internal/internal/github-event"
+    );
+    if (!forwardCall) throw new Error("github-event forward call not found");
+    const [url, init] = forwardCall;
     expect(url).toBe("https://internal/internal/github-event");
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body as string)).toMatchObject({
+    expect(JSON.parse(init.body)).toMatchObject({
       eventType: "pull_request.closed",
       repoOwner: "test",
       repoName: "repo",

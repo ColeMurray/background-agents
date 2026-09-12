@@ -15,6 +15,7 @@ import { browserAuthRoutes } from "./browser-auth";
 import { commitSigningRoutes } from "./commit-signing";
 import { environmentSecretsRoutes } from "./environment-secrets";
 import { environmentRoutes } from "./environments";
+import { githubReviewRoutes } from "./github-reviews";
 import { healthRoutes } from "./health";
 import { imageBuildRoutes } from "./image-builds";
 import { integrationSettingsRoutes } from "./integration-settings";
@@ -99,4 +100,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Webhooks (public routes — auth handled per-route)
   webhookRoutes,
+
+  // GitHub review-generation supersession (github-bot service auth)
+  githubReviewRoutes,
 ];
