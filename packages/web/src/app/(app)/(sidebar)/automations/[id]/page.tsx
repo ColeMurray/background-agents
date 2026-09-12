@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, use } from "react";
+import { useEffect, useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
@@ -49,10 +49,15 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   } = useAutomationInvocations(id, historyLimit, 0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [nextRunAtLabel, setNextRunAtLabel] = useState("");
   const reasoningLabel = automation
     ? (automation.reasoningEffort ??
       (getReasoningConfig(automation.model) ? "Model default" : "Not supported"))
     : null;
+
+  useEffect(() => {
+    setNextRunAtLabel(automation?.nextRunAt ? new Date(automation.nextRunAt).toLocaleString() : "");
+  }, [automation?.nextRunAt]);
 
   const handleAction = async (action: "pause" | "resume" | "trigger") => {
     setActionError(null);
@@ -324,9 +329,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
               {automation.triggerType === "schedule" && (
                 <div>
                   <dt className="text-muted-foreground">Next Run</dt>
-                  <dd className="text-foreground">
-                    {automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleString() : "—"}
-                  </dd>
+                  <dd className="text-foreground">{nextRunAtLabel || "—"}</dd>
                 </div>
               )}
               <div className="sm:col-span-2">

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AutomationInvocation, AutomationRun } from "@open-inspect/shared/types/automations";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,8 +68,15 @@ function invocationStartedAt(invocation: AutomationInvocation): number | null {
   return startTimes.length > 0 ? Math.min(...startTimes) : null;
 }
 
-function firedAtLabel(invocation: AutomationInvocation): string {
-  return new Date(invocation.scheduledAt ?? invocation.createdAt).toLocaleString();
+function FiredAtLabel({ invocation }: { invocation: AutomationInvocation }) {
+  const timestamp = invocation.scheduledAt ?? invocation.createdAt;
+  const [label, setLabel] = useState("");
+
+  useEffect(() => {
+    setLabel(new Date(timestamp).toLocaleString());
+  }, [timestamp]);
+
+  return label;
 }
 
 /** A skipped firing: no child runs, only a reason. */
@@ -79,7 +86,7 @@ function SkippedInvocationRow({ invocation }: { invocation: AutomationInvocation
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2 min-w-0">{statusBadge(invocation.status)}</div>
         <span className="text-xs text-muted-foreground flex-shrink-0">
-          {firedAtLabel(invocation)}
+          <FiredAtLabel invocation={invocation} />
         </span>
       </div>
       {invocation.skipReason && (
@@ -107,7 +114,9 @@ function SingleRunRow({ invocation }: { invocation: AutomationInvocation }) {
           )}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-xs text-muted-foreground">{firedAtLabel(invocation)}</span>
+          <span className="text-xs text-muted-foreground">
+            <FiredAtLabel invocation={invocation} />
+          </span>
           {run.sessionId && (
             <Link
               href={`/session/${run.sessionId}`}
@@ -210,7 +219,7 @@ function FanOutInvocationRow({
           {duration && <span className="text-xs text-muted-foreground">{duration}</span>}
         </div>
         <span className="text-xs text-muted-foreground flex-shrink-0">
-          {firedAtLabel(invocation)}
+          <FiredAtLabel invocation={invocation} />
         </span>
       </button>
       {expanded && (
