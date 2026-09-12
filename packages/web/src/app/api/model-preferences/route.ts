@@ -1,3 +1,3 @@
 import { settingsProxy } from "@/lib/settings-proxy";
 
-export const { GET, PUT } = settingsProxy(() => "/model-preferences", "model preferences");
+export const { GET, PATCH, PUT } = settingsProxy(() => "/model-preferences", "model preferences");

@@ -18,6 +18,23 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
 }));
 
+vi.mock("@/hooks/use-enabled-models", () => ({
+  useEnabledModels: () => ({
+    enabledModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
+    enabledModelOptions: [
+      {
+        category: "Anthropic",
+        models: [{ id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+      },
+      {
+        category: "OpenAI",
+        models: [{ id: "openai/gpt-5.4", name: "GPT 5.4" }],
+      },
+    ],
+    loading: false,
+  }),
+}));
+
 expect.extend(matchers);
 
 interface RepoSettingsEntry {

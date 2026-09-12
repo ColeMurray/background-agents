@@ -360,6 +360,27 @@ export function normalizeValidModels(modelIds: readonly string[]): ValidModel[] 
   return [...validModels];
 }
 
+export interface ModelPreferenceChange {
+  modelId: ValidModel;
+  enabled: boolean;
+}
+
+/** Apply ordered set-membership changes while preserving the order of existing models. */
+export function applyModelPreferenceChanges(
+  enabledModels: readonly ValidModel[],
+  changes: readonly ModelPreferenceChange[]
+): ValidModel[] {
+  const next = new Set(enabledModels);
+  for (const { modelId, enabled } of changes) {
+    if (enabled) {
+      next.add(modelId);
+    } else {
+      next.delete(modelId);
+    }
+  }
+  return [...next];
+}
+
 /** Resolve a desired model against the enabled catalog using a canonical fallback policy. */
 export function resolveEnabledModel(options: {
   model?: string | null;

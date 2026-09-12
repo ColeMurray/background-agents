@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import { GET, PUT } from "./route";
+import { GET, PATCH, PUT } from "./route";
 
 vi.mock("@/lib/control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
@@ -39,5 +39,25 @@ describe("/api/model-preferences", () => {
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
+  it("forwards atomic preference changes", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ ok: true }));
+    const body = JSON.stringify({
+      changes: [{ modelId: "anthropic/claude-haiku-4-5", enabled: true }],
+    });
+    const request = new NextRequest("http://localhost/api/model-preferences", {
+      method: "PATCH",
+      headers: { Cookie: "__Secure-openinspect.session_token=session.signature" },
+      body,
+    });
+
+    const response = await PATCH(request, context);
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/model-preferences", {
+      method: "PATCH",
+      body,
+    });
+    expect(response.status).toBe(200);
   });
 });
