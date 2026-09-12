@@ -277,3 +277,42 @@ async def test_cancelled_service_stop_still_attempts_other_owners(tmp_path):
     desktop.stop.assert_awaited_once()
     harness.stop.assert_awaited_once()
     repository.hooks.shutdown.assert_awaited_once()
+
+
+@pytest.mark.parametrize("raises_during_cancel", [False, True])
+async def test_shutdown_collects_desktop_task_cleanup_failure(tmp_path, raises_during_cancel):
+    supervisor, repository, harness, bridge, code_server, terminal, desktop = _supervisor(
+        tmp_path, []
+    )
+    started = asyncio.Event()
+    failure = RuntimeError("desktop restart cleanup failed")
+
+    async def restart_desktop():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            if raises_during_cancel:
+                raise failure
+
+    restart_task = asyncio.create_task(restart_desktop())
+    supervisor._desktop_restart_task = restart_task
+    await started.wait()
+
+    if raises_during_cancel:
+        with pytest.raises(ExceptionGroup, match="sandbox shutdown cleanup failed") as raised:
+            await supervisor.shutdown()
+        assert raised.value.exceptions == (failure,)
+        supervisor.log.error.assert_called_once_with("supervisor.shutdown_failed", exc=raised.value)
+    else:
+        await supervisor.shutdown()
+        assert restart_task.cancelled()
+        supervisor.log.error.assert_not_called()
+
+    assert supervisor._desktop_restart_task is None
+    bridge.stop.assert_awaited_once()
+    terminal.stop.assert_awaited_once()
+    code_server.stop.assert_awaited_once()
+    desktop.stop.assert_awaited_once()
+    harness.stop.assert_awaited_once()
+    repository.hooks.shutdown.assert_awaited_once()

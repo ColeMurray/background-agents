@@ -20,6 +20,7 @@ import {
 } from "@open-inspect/shared/models";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
+import { executionCorrelationSchema } from "@open-inspect/shared/types/session-api";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
@@ -73,19 +74,14 @@ export class AutomationAdmissionExpiredError extends Error {
 function automationAdmissionDeadlineMs(
   context: Record<string, unknown> | undefined
 ): number | null {
-  if (
-    !context ||
-    !["automation", "slack"].includes(String(context.source)) ||
-    typeof context.runId !== "string" ||
-    typeof context.executionLaunchId !== "string" ||
-    context.admissionDeadlineMs === undefined
-  )
-    return null;
-  const deadline = context.admissionDeadlineMs;
-  if (typeof deadline !== "number" || !Number.isSafeInteger(deadline) || deadline <= 0) {
+  if (!context || (context.source !== "automation" && context.source !== "slack")) return null;
+  // Internal enqueue callers carry raw records, so apply the same complete
+  // correlation-bundle validation as the public callback boundary.
+  const correlation = executionCorrelationSchema.safeParse(context);
+  if (!correlation.success) {
     throw new AutomationAdmissionExpiredError();
   }
-  return deadline;
+  return correlation.data.admissionDeadlineMs ?? null;
 }
 
 type EnqueueAutofixResponse = Extract<

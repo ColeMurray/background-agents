@@ -277,6 +277,55 @@ async def test_expired_dispatch_does_not_start_preparation_or_harness():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("dependency", ["session", "attachments"])
+async def test_plain_preparation_failure_returns_idle_and_admits_next_turn(tmp_path, dependency):
+    harness = ScriptedHarness()
+    bridge = bridge_for(harness)
+    bridge.session_id_file = tmp_path / "agent-session-id"
+    if dependency == "session":
+        harness.session_id = None
+        harness.create_session = AsyncMock(side_effect=RuntimeError("session creation failed"))
+        failure_message = "session creation failed"
+    else:
+        bridge.attachment_processor.process = AsyncMock(
+            side_effect=ValueError("attachment download failed")
+        )
+        failure_message = "attachment download failed"
+
+    await bridge._handle_command(command("failed-preparation"))
+    await bridge.execution.prompt_task
+    await asyncio.sleep(0)
+
+    assert harness.prompts == []
+    assert harness.abort_calls == 0
+    assert bridge.execution.phase == ExecutionPhase.IDLE
+    assert terminal_events(bridge) == [
+        {
+            "type": "execution_complete",
+            "messageId": "failed-preparation",
+            "sandboxId": "sandbox-1",
+            "success": False,
+            "executionStopped": True,
+            "error": failure_message,
+        }
+    ]
+    bridge.diff_refresh.prompt_finished.assert_called_once()
+
+    async def successful_stream(message_id, _text):
+        yield {"type": "token", "messageId": message_id, "content": "recovered"}
+
+    harness.session_id = "recovered-session"
+    harness.stream = successful_stream
+    bridge.attachment_processor.process = AsyncMock(return_value=[])
+    await bridge._handle_command(command("next-turn"))
+    await bridge.execution.prompt_task
+
+    assert [prompt.message_id for prompt in harness.prompts] == ["next-turn"]
+    assert terminal_events(bridge)[-1]["success"] is True
+    assert bridge.execution.phase == ExecutionPhase.IDLE
+
+
+@pytest.mark.asyncio
 async def test_preparation_consumes_dispatched_deadline_and_cannot_claim_harness_stop_evidence():
     harness = ScriptedHarness()
     bridge = bridge_for(harness)

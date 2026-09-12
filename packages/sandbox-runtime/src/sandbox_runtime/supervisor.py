@@ -519,7 +519,15 @@ class SandboxSupervisor:
             if self._desktop_restart_task and not self._desktop_restart_task.done():
                 self._desktop_restart_task.cancel()
                 try:
-                    await asyncio.gather(self._desktop_restart_task, return_exceptions=True)
+                    outcomes = await asyncio.gather(
+                        self._desktop_restart_task, return_exceptions=True
+                    )
+                    errors.extend(
+                        outcome
+                        for outcome in outcomes
+                        if isinstance(outcome, BaseException)
+                        and not isinstance(outcome, asyncio.CancelledError)
+                    )
                 except BaseException as error:
                     errors.append(error)
             self._desktop_restart_task = None

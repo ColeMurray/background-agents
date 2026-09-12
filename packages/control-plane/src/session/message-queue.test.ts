@@ -2071,6 +2071,49 @@ describe("SessionMessageQueue", () => {
   });
 
   describe("enqueuePromptFromApi", () => {
+    it.each([
+      { source: "automation", runId: "run", admissionDeadlineMs: 1 },
+      { source: "automation", runId: "run", executionLaunchId: "launch" },
+      { source: "slack", runId: "run" },
+      { source: "slack", executionLaunchId: "launch" },
+      { source: "slack", admissionDeadlineMs: 1 },
+      { source: "slack", runId: "run", executionLaunchId: "launch" },
+      { source: "slack", runId: "run", admissionDeadlineMs: 1 },
+      { source: "slack", executionLaunchId: "launch", admissionDeadlineMs: 1 },
+      { source: "automation", runId: "", executionLaunchId: "launch", admissionDeadlineMs: 1 },
+      { source: "slack", runId: "run", executionLaunchId: "", admissionDeadlineMs: 1 },
+    ])("rejects an incomplete raw execution correlation bundle: %j", async (callbackContext) => {
+      const h = buildQueue();
+      await expect(
+        h.queue.enqueuePromptFromApi({
+          content: "Continue",
+          authorId: "automation",
+          source: "agent",
+          callbackContext,
+        })
+      ).rejects.toBeInstanceOf(AutomationAdmissionExpiredError);
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+      expect(h.repository.getExecutionLaunch).not.toHaveBeenCalled();
+      expect(h.alarmDeadlines.setPendingEarliest).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { source: "automation", runId: "run" },
+      { source: "slack", automationId: "automation" },
+    ])("preserves legacy admission without a new bundle: %j", async (callbackContext) => {
+      const h = buildQueue();
+      await h.queue.enqueuePromptFromApi({
+        content: "Continue",
+        authorId: "automation",
+        source: "agent",
+        callbackContext,
+      });
+      expect(h.repository.createMessageWithAttachments).toHaveBeenCalledOnce();
+      expect(h.repository.getExecutionLaunch).not.toHaveBeenCalled();
+      expect(h.alarmDeadlines.setPendingEarliest).not.toHaveBeenCalled();
+    });
+
     it("rejects expired automation admission without inserting a message", async () => {
       const h = buildQueue();
       await expect(

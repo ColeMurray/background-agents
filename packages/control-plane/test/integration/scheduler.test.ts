@@ -876,6 +876,93 @@ describe("Scheduler (integration)", () => {
       );
     });
 
+    it.each([
+      { failure: 500, settlement: "callback" },
+      { failure: "transport", settlement: "sweep" },
+    ] as const)(
+      "keeps an ambiguous $failure launch eligible for later $settlement success",
+      async ({ failure, settlement }) => {
+        const store = new AutomationStore(env.DB);
+        const automationId = "auto-ambiguous-launch";
+        await store.create(makeAutomation({ id: automationId, consecutive_failures: 2 }));
+        let completed = false;
+        const sessionFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = input instanceof Request ? input : new Request(input, init);
+          const path = new URL(request.url).pathname;
+          if (path === "/internal/init") return Response.json({ status: "ok" });
+          if (path === "/internal/prompt") {
+            // The session accepted the prompt before the response was lost.
+            if (failure === "transport") throw new Error("Enqueue response lost");
+            return new Response("Failure after insertion", { status: failure });
+          }
+          if (path === "/internal/execution-state") {
+            return Response.json({
+              executionState: completed ? "idle" : "running",
+              messageId: "msg-ambiguous",
+              messageStatus: completed ? "completed" : "processing",
+              deadlineAt: Date.now() + 60_000,
+              cleanupDeadlineAt: Date.now() + 120_000,
+              error: null,
+              launch: {
+                messageId: "msg-ambiguous",
+                status: completed ? "completed" : "processing",
+                error: null,
+              },
+              launchAdmissionExpired: false,
+            });
+          }
+          return new Response("Not Found", { status: 404 });
+        });
+        const scheduler = createScheduler(
+          createCloudflareEnv({
+            ...env,
+            SESSION: {
+              idFromName: vi.fn((name: string) => name),
+              get: vi.fn(() => ({ fetch: sessionFetch })),
+            } as unknown as DurableObjectNamespace,
+          })
+        );
+
+        const result = await scheduler.trigger(automationId, "user-1");
+        expect(result.runs).toEqual([expect.objectContaining({ status: "running" })]);
+        const run = (await fetchRuns(automationId))[0]!;
+        expect(run).toMatchObject({ status: "running", failure_reason: null });
+        expect(await store.getRunById(automationId, run.id)).toMatchObject({
+          execution_unresolved: 1,
+          execution_launch_id: expect.any(String),
+          execution_admission_deadline_ms: expect.any(Number),
+        });
+        expect(await store.getById(automationId)).toMatchObject({
+          consecutive_failures: 2,
+          enabled: 1,
+        });
+        expect(await store.getActiveRunForAutomation(automationId)).not.toBeNull();
+
+        completed = true;
+        if (settlement === "callback") {
+          await scheduler.runComplete({
+            automationId,
+            runId: run.id,
+            sessionId: run.session_id!,
+            messageId: "msg-ambiguous",
+            success: true,
+          });
+        } else {
+          await scheduler.tick();
+        }
+
+        expect(await store.getRunById(automationId, run.id)).toMatchObject({
+          status: "completed",
+          failure_reason: null,
+          execution_unresolved: 0,
+        });
+        expect(await store.getById(automationId)).toMatchObject({
+          consecutive_failures: 0,
+          enabled: 1,
+        });
+      }
+    );
+
     it("repairs a legacy owner before creating a triggered run", async () => {
       const store = new AutomationStore(env.DB);
       await env.DB.prepare(

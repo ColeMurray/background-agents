@@ -601,29 +601,35 @@ export class Scheduler {
           run_id: child.id,
           error: message,
         });
+        const deliveryUncertain =
+          claimedSessionId !== null &&
+          promptAttempted &&
+          !(e instanceof PromptEnqueueRejectedError);
         try {
-          // The launch owner knows it never attempted enqueue. A recovery sweep
-          // cannot infer this from an idle session while initialization is pending.
-          if (claimedSessionId && (!promptAttempted || e instanceof PromptEnqueueRejectedError)) {
-            await store.releaseRejectedExecutionLaunch(
-              child.id,
-              claimedSessionId,
-              launch.id,
-              false
-            );
-          } else if (claimedSessionId) {
+          if (deliveryUncertain) {
             await this.reconcileRunExecution(store, {
               ...child,
               session_id: claimedSessionId,
               execution_launch_id: launch.id,
               execution_admission_deadline_ms: launch.admissionDeadlineMs,
             });
+          } else {
+            // Only the launch owner knows initialization failed before enqueue
+            // or the enqueue response proved rejection before insertion.
+            if (claimedSessionId) {
+              await store.releaseRejectedExecutionLaunch(
+                child.id,
+                claimedSessionId,
+                launch.id,
+                false
+              );
+            }
+            await store.updateRun(child.id, {
+              status: "failed",
+              failure_reason: message,
+              completed_at: Date.now(),
+            });
           }
-          await store.updateRun(child.id, {
-            status: "failed",
-            failure_reason: message,
-            completed_at: Date.now(),
-          });
         } catch (updateError) {
           this.log.error("Failed to record launch failure", {
             event: "scheduler.fail_track_error",
@@ -633,8 +639,16 @@ export class Scheduler {
             error: updateError instanceof Error ? updateError.message : String(updateError),
           });
         }
-        child.status = "failed";
-        child.failure_reason = message;
+        // Claiming already persisted running + unresolved. A lost response must
+        // not turn that uncertainty into an irreversible failure or a strike,
+        // even when reconciliation itself fails. The callback/sweep owns the result.
+        if (deliveryUncertain) {
+          child.status = "running";
+          child.session_id = claimedSessionId;
+        } else {
+          child.status = "failed";
+          child.failure_reason = message;
+        }
       }
     };
 

@@ -330,6 +330,9 @@ class ExecutionCoordinator:
             self._begin_cleanup(turn, error)
         except Exception as failure:
             error = str(failure)
+            # A completed preparation failure dispatched no agent execution.
+            # Cancellation and deadline expiry remain inconclusive above.
+            turn.execution_stopped = turn.execution_stopped or not turn.harness_started
             self._log.error("prompt.error", message_id=turn.message_id, exc=failure)
         finally:
             await self._settle_observation(turn, error)

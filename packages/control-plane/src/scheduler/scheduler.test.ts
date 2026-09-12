@@ -1409,9 +1409,13 @@ describe("Scheduler", () => {
             });
           }),
         };
-        await createScheduler(createEnv(undefined, stub)).tick();
+        const result = await createScheduler(createEnv(undefined, stub)).tick();
 
         const [runId, sessionId, , launch] = mockStore.claimRunSession.mock.calls[0];
+        expect(result).toEqual({ processed: 1, skipped: 0, failed: 0 });
+        expect(mockStore.updateRun).not.toHaveBeenCalled();
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+        expect(mockStore.autoPause).not.toHaveBeenCalled();
         expect(mockStore.releaseRejectedExecutionLaunch).not.toHaveBeenCalled();
         expect(mockStore.recordRunExecutionState).toHaveBeenCalledWith(
           runId,
@@ -1431,6 +1435,29 @@ describe("Scheduler", () => {
         });
       }
     );
+
+    it("keeps an ambiguous launch running even when recovery persistence also fails", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockStore.recordRunExecutionState.mockRejectedValue(new Error("D1 unavailable"));
+      const stub = {
+        fetch: vi.fn(async (request: Request) => {
+          if (new URL(request.url).pathname === "/internal/init") {
+            return Response.json({ status: "ok" });
+          }
+          throw new Error("response lost");
+        }),
+      };
+
+      expect(await createScheduler(createEnv(undefined, stub)).tick()).toEqual({
+        processed: 1,
+        skipped: 0,
+        failed: 0,
+      });
+      expect(mockStore.updateRun).not.toHaveBeenCalled();
+      expect(mockStore.releaseRejectedExecutionLaunch).not.toHaveBeenCalled();
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+    });
 
     it("does not initialize a session after recovery wins the launch claim", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
