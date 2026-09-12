@@ -130,6 +130,18 @@ describe("MessageRepository", () => {
     expect(repository.getUnfinishedMessagePosition("finished")).toBeNull();
   });
 
+  it("decodes persisted message statuses", () => {
+    const query = `SELECT status FROM messages WHERE id = ? LIMIT 1`;
+    mock.setData(query, [{ status: "pending" }]);
+    expect(repository.getMessageStatus("msg-1")).toBe("pending");
+
+    mock.setData(query, [{ status: "queued" }]);
+    expect(repository.getMessageStatus("msg-1")).toBeNull();
+
+    mock.setData(query, [{}]);
+    expect(repository.getMessageStatus("msg-1")).toBeNull();
+  });
+
   it("projects unfinished messages into the prompt queue", () => {
     vi.spyOn(repository, "listUnfinishedMessages").mockReturnValue([
       { id: "msg-1", content: "Continue", status: "pending" } as never,
@@ -137,6 +149,13 @@ describe("MessageRepository", () => {
     expect(repository.listPromptQueue()).toEqual([
       { messageId: "msg-1", content: "Continue", status: "pending" },
     ]);
+  });
+
+  it("omits malformed persisted statuses from the prompt queue", () => {
+    vi.spyOn(repository, "listUnfinishedMessages").mockReturnValue([
+      { id: "msg-1", content: "Continue", status: "queued" } as never,
+    ]);
+    expect(repository.listPromptQueue()).toEqual([]);
   });
 
   it("creates a message with all fields", () => {
@@ -242,6 +261,15 @@ describe("MessageRepository", () => {
       })
     ).toEqual({ kind: "rejected", reason: "budget_exhausted" });
     expect(mock.calls).toHaveLength(2);
+  });
+
+  it("fails closed when cancel sees a malformed persisted status", () => {
+    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
+      { status: "queued", source: "web", callback_context: null },
+    ]);
+
+    expect(repository.cancelPendingMessage("msg-1")).toBe(false);
+    expect(mock.calls).toHaveLength(1);
   });
 
   it("rejects Autofix admission when the rolling PR cap is reached", () => {
