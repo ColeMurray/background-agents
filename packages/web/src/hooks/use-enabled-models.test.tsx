@@ -27,7 +27,7 @@ function wrapper(enabledModels: unknown) {
       <SWRConfig
         value={{
           provider: () => new Map(),
-          fallback: { [MODEL_PREFERENCES_KEY]: { enabledModels } },
+          fallback: { [MODEL_PREFERENCES_KEY]: { enabledModels, revision: 1 } },
           revalidateIfStale: false,
         }}
       >
@@ -55,7 +55,7 @@ describe("useEnabledModels", () => {
   it("stores the authoritative PATCH response", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ enabledModels: ["anthropic/claude-sonnet-4-6"] }),
+      json: async () => ({ enabledModels: ["anthropic/claude-sonnet-4-6"], revision: 2 }),
     });
     vi.stubGlobal("fetch", fetchMock);
     const { result } = renderHook(() => useEnabledModels(), {
@@ -107,6 +107,7 @@ describe("useEnabledModels", () => {
       resolveFirst(
         Response.json({
           enabledModels: ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"],
+          revision: 2,
         })
       );
       await first;
@@ -114,7 +115,7 @@ describe("useEnabledModels", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
     await act(async () => {
-      resolveSecond(Response.json({ enabledModels: ["anthropic/claude-haiku-4-5"] }));
+      resolveSecond(Response.json({ enabledModels: ["anthropic/claude-haiku-4-5"], revision: 3 }));
       await second;
     });
     expect(result.current.enabledModels).toEqual(["anthropic/claude-haiku-4-5"]);
@@ -129,6 +130,7 @@ describe("useEnabledModels", () => {
       .mockResolvedValueOnce(
         Response.json({
           enabledModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+          revision: 2,
         })
       );
     vi.stubGlobal("fetch", fetchMock);
@@ -141,7 +143,9 @@ describe("useEnabledModels", () => {
         <SWRConfig
           value={{
             provider: () => new Map(),
-            fallback: { [MODEL_PREFERENCES_KEY]: { enabledModels: ["openai/gpt-5.4"] } },
+            fallback: {
+              [MODEL_PREFERENCES_KEY]: { enabledModels: ["openai/gpt-5.4"], revision: 1 },
+            },
             revalidateIfStale: false,
           }}
         >
@@ -172,6 +176,7 @@ describe("useEnabledModels", () => {
       resolveFirst(
         Response.json({
           enabledModels: ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"],
+          revision: 2,
         })
       );
       await Promise.all([first, staleQueued]);
@@ -211,13 +216,13 @@ describe("useEnabledModels", () => {
     unmount();
     expect(fetchMock.mock.calls[0][1].signal).toHaveProperty("aborted", true);
     await act(async () => {
-      resolveFirst(Response.json({ enabledModels: ["anthropic/claude-haiku-4-5"] }));
+      resolveFirst(Response.json({ enabledModels: ["anthropic/claude-haiku-4-5"], revision: 2 }));
       await Promise.all([first, queued]);
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reapplies pending changes over an external cache refresh", async () => {
+  it("does not replace a newer GET snapshot with a delayed PATCH response", async () => {
     let resolve!: (response: Response) => void;
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise((done) => (resolve = done))));
     const { result } = renderHook(
@@ -234,33 +239,48 @@ describe("useEnabledModels", () => {
     await act(async () => {
       await result.current.mutate(
         MODEL_PREFERENCES_KEY,
-        { enabledModels: ["anthropic/claude-sonnet-4-6"] },
+        {
+          enabledModels: [
+            "openai/gpt-5.4",
+            "anthropic/claude-haiku-4-5",
+            "anthropic/claude-sonnet-4-6",
+          ],
+          revision: 3,
+        },
         { revalidate: false }
       );
     });
     expect(result.current.preferences.enabledModels).toEqual([
-      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-5.4",
       "anthropic/claude-haiku-4-5",
+      "anthropic/claude-sonnet-4-6",
     ]);
 
     await act(async () => {
       resolve(
         Response.json({
-          enabledModels: ["anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5"],
+          enabledModels: ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"],
+          revision: 2,
         })
       );
       await update;
     });
+    expect(result.current.preferences.enabledModels).toEqual([
+      "openai/gpt-5.4",
+      "anthropic/claude-haiku-4-5",
+      "anthropic/claude-sonnet-4-6",
+    ]);
   });
 
   it("reconciles a failed request before continuing queued changes", async () => {
-    const fetcher = vi.fn(async () => ({ enabledModels: ["openai/gpt-5.4"] }));
+    const fetcher = vi.fn(async () => ({ enabledModels: ["openai/gpt-5.4"], revision: 1 }));
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(Response.json({ error: "Save denied" }, { status: 500 }))
       .mockResolvedValueOnce(
         Response.json({
           enabledModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+          revision: 2,
         })
       );
     vi.stubGlobal("fetch", fetchMock);
@@ -269,7 +289,9 @@ describe("useEnabledModels", () => {
         <SWRConfig
           value={{
             provider: () => new Map(),
-            fallback: { [MODEL_PREFERENCES_KEY]: { enabledModels: ["openai/gpt-5.4"] } },
+            fallback: {
+              [MODEL_PREFERENCES_KEY]: { enabledModels: ["openai/gpt-5.4"], revision: 1 },
+            },
             fetcher,
             revalidateIfStale: false,
           }}
@@ -305,6 +327,57 @@ describe("useEnabledModels", () => {
     expect(result.current.enabledModels).toEqual(["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"]);
   });
 
+  it("rejects a queued change that becomes invalid after an earlier failure", async () => {
+    const fetcher = vi.fn(async () => ({ enabledModels: ["openai/gpt-5.4"], revision: 1 }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ error: "Save denied" }, { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const renderedModels: string[][] = [];
+    const { result } = renderHook(
+      () => {
+        const preferences = useEnabledModels();
+        renderedModels.push(preferences.enabledModels);
+        return preferences;
+      },
+      {
+        wrapper: ({ children }) => (
+          <SWRConfig
+            value={{
+              provider: () => new Map(),
+              fallback: {
+                [MODEL_PREFERENCES_KEY]: { enabledModels: ["openai/gpt-5.4"], revision: 1 },
+              },
+              fetcher,
+              revalidateIfStale: false,
+            }}
+          >
+            <ModelPreferencesProvider identity="test-user">{children}</ModelPreferencesProvider>
+          </SWRConfig>
+        ),
+      }
+    );
+
+    let failed!: Promise<void>;
+    let dependent!: Promise<void>;
+    act(() => {
+      failed = result.current.updateModels([
+        { modelId: "anthropic/claude-haiku-4-5", enabled: true },
+      ]);
+      void failed.catch(() => undefined);
+      dependent = result.current.updateModels([{ modelId: "openai/gpt-5.4", enabled: false }]);
+      void dependent.catch(() => undefined);
+    });
+
+    await act(async () => {
+      await expect(failed).rejects.toThrow("Save denied");
+      await expect(dependent).rejects.toThrow("At least one model must be enabled");
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.enabledModels).toEqual(["openai/gpt-5.4"]);
+    expect(renderedModels).not.toContainEqual([]);
+  });
+
   it.each([
     null,
     {},
@@ -326,10 +399,17 @@ describe("useEnabledModels", () => {
   });
 
   it("only dispatches the model preferences resource through the global fetcher", async () => {
-    const fetcher = vi.fn(async (_key: string) => ({ enabledModels: ["openai/gpt-5.4"] }));
+    const fetcher = vi.fn(async (_key: string) => ({
+      enabledModels: ["openai/gpt-5.4"],
+      revision: 1,
+    }));
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(Response.json({ enabledModels: ["anthropic/claude-haiku-4-5"] }))
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ enabledModels: ["anthropic/claude-haiku-4-5"], revision: 2 })
+        )
     );
     const { result } = renderHook(() => useEnabledModels(), {
       wrapper: ({ children }) => (

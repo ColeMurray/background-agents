@@ -32,12 +32,14 @@ afterEach(() => {
 
 function createSaveMock(initial: string[]) {
   let saved = normalizeValidModels(initial);
+  let revision = 1;
   return vi.fn(async (_url: unknown, init: RequestInit) => {
     const body = JSON.parse(init.body as string) as {
       changes: Parameters<typeof applyModelPreferenceChanges>[1];
     };
     saved = applyModelPreferenceChanges(saved, body.changes);
-    return Response.json({ enabledModels: saved });
+    revision += 1;
+    return Response.json({ enabledModels: saved, revision });
   });
 }
 
@@ -69,6 +71,7 @@ function renderSettings(
         fallback: {
           [MODEL_PREFERENCES_KEY]: {
             enabledModels,
+            revision: 1,
           },
         },
         revalidateIfStale: false,
@@ -163,6 +166,7 @@ describe("ModelsSettings", () => {
       resolve(
         Response.json({
           enabledModels: ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"],
+          revision: 2,
         })
       )
     );
@@ -231,6 +235,7 @@ describe("ModelsSettings", () => {
       resolve(
         Response.json({
           enabledModels: ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"],
+          revision: 2,
         })
       )
     );
@@ -262,6 +267,7 @@ describe("ModelsSettings", () => {
         MODEL_PREFERENCES_KEY,
         {
           enabledModels: ["anthropic/claude-sonnet-4-6"],
+          revision: 2,
         },
         { revalidate: false }
       );

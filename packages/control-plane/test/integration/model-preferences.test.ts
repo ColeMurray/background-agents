@@ -36,23 +36,26 @@ function patchPreferences(changes: Array<{ modelId: string; enabled: boolean }>)
 describe("Model preferences API", () => {
   beforeEach(cleanD1Tables);
 
-  it("rejects malformed JSON without replacing preferences", async () => {
+  it("rejects legacy PUT writes without replacing preferences", async () => {
     const stored = ["anthropic/claude-sonnet-4-6"];
     await seedPreferences(stored);
     const response = await serviceFetch("https://test.local/model-preferences", {
       method: "PUT",
-      body: "{",
+      body: JSON.stringify({ enabledModels: ["openai/gpt-5.4"] }),
     });
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Invalid JSON body" });
+    expect(response.status).toBe(405);
+    expect(await response.json()).toEqual({
+      error: "PUT model preferences updates are no longer supported; use PATCH",
+    });
     expect(await getStoredModels()).toEqual(stored);
+    expect(await getStoredRevision()).toBe(1);
   });
 
   it("returns defaults when no preferences are stored", async () => {
     const response = await serviceFetch("https://test.local/model-preferences");
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ enabledModels: DEFAULT_ENABLED_MODELS });
+    expect(await response.json()).toEqual({ enabledModels: DEFAULT_ENABLED_MODELS, revision: 0 });
   });
 
   it("filters removed models without changing the stored row", async () => {
@@ -64,6 +67,7 @@ describe("Model preferences API", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       enabledModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+      revision: 1,
     });
     expect(await getStoredModels()).toEqual(stored);
   });
@@ -75,6 +79,7 @@ describe("Model preferences API", () => {
 
     expect(await response.json()).toEqual({
       enabledModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+      revision: 1,
     });
   });
 
@@ -83,7 +88,7 @@ describe("Model preferences API", () => {
 
     const response = await serviceFetch("https://test.local/model-preferences");
 
-    expect(await response.json()).toEqual({ enabledModels: DEFAULT_ENABLED_MODELS });
+    expect(await response.json()).toEqual({ enabledModels: DEFAULT_ENABLED_MODELS, revision: 1 });
   });
 
   it("returns defaults for a malformed stored value", async () => {
@@ -92,23 +97,7 @@ describe("Model preferences API", () => {
     const response = await serviceFetch("https://test.local/model-preferences");
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ enabledModels: DEFAULT_ENABLED_MODELS });
-  });
-
-  it("normalizes, deduplicates, and replaces preferences on PUT", async () => {
-    await seedPreferences(["anthropic/claude-sonnet-4-6"]);
-    const response = await serviceFetch("https://test.local/model-preferences", {
-      method: "PUT",
-      body: JSON.stringify({
-        enabledModels: ["gpt-5.4", "openai/gpt-5.4", "claude-sonnet-4-6"],
-      }),
-    });
-
-    const expected = ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"];
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "updated", enabledModels: expected });
-    expect(await getStoredModels()).toEqual(expected);
-    expect(await getStoredRevision()).toBe(2);
+    expect(await response.json()).toEqual({ enabledModels: DEFAULT_ENABLED_MODELS, revision: 1 });
   });
 
   it("applies atomic model membership changes and increments the revision", async () => {
@@ -121,7 +110,7 @@ describe("Model preferences API", () => {
 
     const expected = ["anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5"];
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ enabledModels: expected });
+    expect(await response.json()).toEqual({ enabledModels: expected, revision: 2 });
     expect(await getStoredModels()).toEqual(expected);
     expect(await getStoredRevision()).toBe(2);
   });
@@ -216,49 +205,5 @@ describe("Model preferences API", () => {
       new Set(["openai/gpt-5.4", "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6"])
     );
     expect(await getStoredRevision()).toBe(3);
-  });
-
-  it("rejects invalid models atomically", async () => {
-    const stored = ["anthropic/claude-sonnet-4-6"];
-    await seedPreferences(stored);
-    const response = await serviceFetch("https://test.local/model-preferences", {
-      method: "PUT",
-      body: JSON.stringify({ enabledModels: ["openai/gpt-5.4", "openai/gpt-5.2"] }),
-    });
-
-    expect(response.status).toBe(400);
-    expect(await getStoredModels()).toEqual(stored);
-  });
-
-  it("rejects non-string model IDs", async () => {
-    const response = await serviceFetch("https://test.local/model-preferences", {
-      method: "PUT",
-      body: JSON.stringify({ enabledModels: ["openai/gpt-5.4", null] }),
-    });
-
-    expect(response.status).toBe(400);
-  });
-
-  it.each([
-    null,
-    ["openai/gpt-5.4"],
-    "invalid",
-    42,
-    {},
-    { enabledModels: null },
-    { enabledModels: {} },
-  ])("rejects invalid request body %j without replacing preferences", async (body) => {
-    const stored = ["anthropic/claude-sonnet-4-6"];
-    await seedPreferences(stored);
-    const response = await serviceFetch("https://test.local/model-preferences", {
-      method: "PUT",
-      body: JSON.stringify(body),
-    });
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      error: "Request body must include enabledModels array",
-    });
-    expect(await getStoredModels()).toEqual(stored);
   });
 });

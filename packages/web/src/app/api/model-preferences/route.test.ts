@@ -23,8 +23,10 @@ describe("/api/model-preferences", () => {
     await expect(response.json()).resolves.toEqual({ defaultModel: "anthropic/claude-sonnet-5" });
   });
 
-  it("forwards a preferences update with the browser session", async () => {
-    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ ok: true }));
+  it("relays the legacy PUT rejection", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Use PATCH" }, { status: 405 })
+    );
     const request = new NextRequest("http://localhost/api/model-preferences", {
       method: "PUT",
       headers: { Cookie: "__Secure-openinspect.session_token=session.signature" },
@@ -37,7 +39,7 @@ describe("/api/model-preferences", () => {
       method: "PUT",
       body: JSON.stringify({ defaultModel: "anthropic/claude-opus-5" }),
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(405);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
   });
 

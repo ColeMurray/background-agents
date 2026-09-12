@@ -30,12 +30,12 @@ Add `PATCH /model-preferences` with this request shape:
 ```
 
 The request must contain at least one change. Model IDs must be canonical and unique within the
-request. The response contains the authoritative resulting `enabledModels` list. Category actions
-are represented by one request containing all changes in that category.
+request. GET and PATCH responses contain the resulting `enabledModels` list and its monotonic
+`revision`. Category actions are represented by one request containing all changes in that category.
 
-The web BFF exposes PATCH through the existing settings proxy. The existing PUT remains temporarily
-available for previously loaded browser bundles and logs legacy use; it should be removed after
-PATCH clients have rolled out.
+The web BFF exposes PATCH through the existing settings proxy. Legacy PUT writes are rejected
+because their full-list body has no revision or operation intent and can overwrite a concurrent
+PATCH.
 
 ## Atomic Storage
 
@@ -57,15 +57,16 @@ Add a client `ModelPreferencesProvider` under the authenticated app layout. It o
 read, optimistic operations, a FIFO request queue, pending count, and reconciliation. Existing read
 consumers continue using `useEnabledModels` through context.
 
-Each action immediately enters the optimistic overlay and the queue. Requests run sequentially. Each
-authoritative PATCH response updates the confirmed SWR value, after which remaining queued
-operations are reapplied. Controls remain interactive while saving, and `saving` reflects whether
-the queue has pending work.
+Each action immediately enters the optimistic overlay and the queue. Requests run sequentially. A
+PATCH response updates the confirmed SWR value only when its revision is at least as new as the
+cached snapshot, after which remaining valid queued operations are reapplied. Controls remain
+interactive while saving, and `saving` reflects whether the queue has pending work.
 
 On a failed or ambiguous request, the provider removes that operation, revalidates from the server,
-reapplies remaining operations, and then continues the queue. The action promise rejects so the
-settings panel can show an error. The provider remains mounted across normal settings navigation;
-server-side operation semantics protect correctness across hard reloads and other clients.
+and reapplies remaining operations without exposing or dispatching a change that would disable every
+model. Rejected action promises let the settings panel show an error. The provider remains mounted
+across normal settings navigation; server-side operation semantics protect correctness across hard
+reloads and other clients.
 
 ## Shared Logic
 

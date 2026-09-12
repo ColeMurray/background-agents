@@ -8,7 +8,6 @@ import {
   DEFAULT_ENABLED_MODELS,
   isValidModel,
   normalizeModelId,
-  normalizeValidModels,
   type ModelPreferenceChange,
 } from "@open-inspect/shared/models";
 import {
@@ -42,88 +41,47 @@ async function getModelPreferences(
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
-    return json({ enabledModels: DEFAULT_ENABLED_MODELS });
+    return json({ enabledModels: DEFAULT_ENABLED_MODELS, revision: 0 });
   }
 
   const store = new ModelPreferencesStore(ctx.db);
 
   try {
-    const enabledModels = await store.getEnabledModels();
-    if (!enabledModels) return json({ enabledModels: DEFAULT_ENABLED_MODELS });
-
-    const normalized = normalizeValidModels(enabledModels);
-    const reconciled = normalized.length > 0 ? normalized : DEFAULT_ENABLED_MODELS;
-    if (JSON.stringify(reconciled) !== JSON.stringify(enabledModels)) {
+    const snapshot = await store.getSnapshot();
+    if (snapshot.reconciled) {
       logger.info("model_preferences.reconciled", {
         event: "model_preferences.reconciled",
-        stored_count: enabledModels.length,
-        valid_count: normalized.length,
-        fallback_applied: normalized.length === 0,
+        stored_count: snapshot.storedCount,
+        valid_count: snapshot.enabledModels.length,
+        fallback_applied: snapshot.fallbackApplied,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
     }
 
-    return json({ enabledModels: reconciled });
+    return json({ enabledModels: snapshot.enabledModels, revision: snapshot.revision });
   } catch (e) {
     logger.error("Failed to get model preferences", {
       error: e instanceof Error ? e.message : String(e),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    return json({ enabledModels: DEFAULT_ENABLED_MODELS });
+    return json({ enabledModels: DEFAULT_ENABLED_MODELS, revision: 0 });
   }
 }
 
 async function setModelPreferences(
-  request: Request,
+  _request: Request,
   _env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  if (!ctx.db) {
-    return error("Model preferences storage is not configured", 503);
-  }
-
-  const body = await parseJsonBody(request);
-  if (body instanceof Response) return body;
-
-  if (!isRecord(body) || !Array.isArray(body.enabledModels)) {
-    return error("Request body must include enabledModels array", 400);
-  }
-  if (!body.enabledModels.every((id): id is string => typeof id === "string")) {
-    return error("enabledModels must contain only strings", 400);
-  }
-
-  const store = new ModelPreferencesStore(ctx.db);
-
-  try {
-    logger.warn("model_preferences.legacy_put", {
-      event: "model_preferences.legacy_put",
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    const enabledModels = await store.setEnabledModels(body.enabledModels);
-
-    logger.info("model_preferences.updated", {
-      event: "model_preferences.updated",
-      enabled_count: enabledModels.length,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ status: "updated", enabledModels });
-  } catch (e) {
-    if (e instanceof ModelPreferencesValidationError) {
-      return error(e.message, 400);
-    }
-    logger.error("Failed to update model preferences", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Model preferences storage unavailable", 503);
-  }
+  logger.warn("model_preferences.legacy_put_rejected", {
+    event: "model_preferences.legacy_put_rejected",
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
+  return error("PUT model preferences updates are no longer supported; use PATCH", 405);
 }
 
 function parseModelPreferenceChanges(body: unknown): ModelPreferenceChange[] | Response {
@@ -167,15 +125,15 @@ async function patchModelPreferences(
   if (changes instanceof Response) return changes;
 
   try {
-    const enabledModels = await new ModelPreferencesStore(ctx.db).applyChanges(changes);
+    const snapshot = await new ModelPreferencesStore(ctx.db).applyChanges(changes);
     logger.info("model_preferences.updated", {
       event: "model_preferences.updated",
-      enabled_count: enabledModels.length,
+      enabled_count: snapshot.enabledModels.length,
       changed_count: changes.length,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    return json({ enabledModels });
+    return json({ enabledModels: snapshot.enabledModels, revision: snapshot.revision });
   } catch (e) {
     if (e instanceof ModelPreferencesValidationError) return error(e.message, 400);
     if (e instanceof ModelPreferencesConflictError) return error(e.message, 409);

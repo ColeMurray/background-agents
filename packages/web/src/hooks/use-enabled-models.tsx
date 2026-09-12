@@ -33,6 +33,7 @@ const canonicalModelSchema = z.custom<ValidModel>(
 );
 const modelPreferencesSchema = z.object({
   enabledModels: z.array(canonicalModelSchema).nonempty(),
+  revision: z.number().int().nonnegative(),
 });
 type ModelPreferencesResponse = z.infer<typeof modelPreferencesSchema>;
 
@@ -59,6 +60,32 @@ function responseError(body: unknown): string | null {
   return typeof body.error === "string" ? body.error : null;
 }
 
+function applyValidChanges(
+  models: readonly ValidModel[],
+  operations: readonly PendingChange[]
+): ValidModel[] {
+  return operations.reduce(
+    (current, changes) => {
+      const next = applyModelPreferenceChanges(current, changes);
+      return next.length > 0 ? next : current;
+    },
+    [...models]
+  );
+}
+
+function rebasePending(
+  models: readonly ValidModel[],
+  operations: PendingChange[]
+): PendingChange[] {
+  let current = [...models];
+  return operations.filter((changes) => {
+    const next = applyModelPreferenceChanges(current, changes);
+    if (next.length === 0) return false;
+    current = next;
+    return true;
+  });
+}
+
 export function AuthenticatedModelPreferencesProvider({ children }: { children: ReactNode }) {
   const session = useAuthSession();
   if (session.status !== "authenticated") return null;
@@ -81,6 +108,10 @@ export function ModelPreferencesProvider({
   const [pending, setPending] = useState<PendingChange[]>([]);
   const queue = useRef<Promise<void>>(Promise.resolve());
   const lifetime = useRef<ProviderLifetime | null>(null);
+  const confirmed = useRef<ModelPreferencesResponse>({
+    enabledModels: DEFAULT_ENABLED_MODELS,
+    revision: 0,
+  });
 
   useLayoutEffect(() => {
     const current: ProviderLifetime = {
@@ -102,12 +133,13 @@ export function ModelPreferencesProvider({
     return normalized.length > 0 ? normalized : DEFAULT_ENABLED_MODELS;
   }, [data?.enabledModels, isLoading]);
 
+  useLayoutEffect(() => {
+    if (!data || data.revision < confirmed.current.revision) return;
+    confirmed.current = { enabledModels: confirmedModels, revision: data.revision };
+  }, [confirmedModels, data]);
+
   const enabledModels = useMemo(
-    () =>
-      pending.reduce(
-        (models, changes) => applyModelPreferenceChanges(models, changes),
-        confirmedModels
-      ),
+    () => applyValidChanges(confirmedModels, pending),
     [confirmedModels, pending]
   );
 
@@ -133,6 +165,15 @@ export function ModelPreferencesProvider({
 
       const request = queue.current.then(async () => {
         if (!isCurrent()) return;
+        if (applyModelPreferenceChanges(confirmed.current.enabledModels, operation).length === 0) {
+          setPending((current) =>
+            rebasePending(
+              confirmed.current.enabledModels,
+              current.filter((candidate) => candidate !== operation)
+            )
+          );
+          throw new Error("At least one model must be enabled");
+        }
         try {
           const res = await browserApiFetch(MODEL_PREFERENCES_KEY, {
             method: "PATCH",
@@ -146,15 +187,35 @@ export function ModelPreferencesProvider({
           const parsed = modelPreferencesSchema.safeParse(body);
           if (!parsed.success) throw new Error("Invalid model preferences response");
           if (!isCurrent()) return;
-          await mutate(parsed.data, { revalidate: false });
+          const accepted = await mutate(
+            (current) =>
+              !current || parsed.data.revision >= current.revision ? parsed.data : current,
+            { revalidate: false }
+          );
+          if (accepted && accepted.revision >= confirmed.current.revision) {
+            confirmed.current = accepted;
+          }
         } catch (requestError) {
           if (!isCurrent()) return;
-          setPending((current) => current.filter((candidate) => candidate !== operation));
-          await mutate().catch(() => undefined);
+          const refreshed = await mutate().catch(() => undefined);
+          if (refreshed && refreshed.revision >= confirmed.current.revision) {
+            confirmed.current = refreshed;
+          }
+          setPending((current) =>
+            rebasePending(
+              confirmed.current.enabledModels,
+              current.filter((candidate) => candidate !== operation)
+            )
+          );
           throw requestError;
         }
         if (isCurrent()) {
-          setPending((current) => current.filter((candidate) => candidate !== operation));
+          setPending((current) =>
+            rebasePending(
+              confirmed.current.enabledModels,
+              current.filter((candidate) => candidate !== operation)
+            )
+          );
         }
       });
 
