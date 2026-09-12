@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { buildBootstrapSql, parseArgs, run } from "./bootstrap-workspace-owner.ts";
@@ -58,41 +57,29 @@ function preflight(database: DatabaseSync): Record<string, unknown> {
 }
 
 function execute(database: DatabaseSync, auditId: string, now: number): void {
-  database.exec(sql(auditId, now).mutation);
+  database.exec(sql(auditId, now).execution.join("\n"));
 }
 
-// Remote --file uses D1's atomic import, whose response contains statistics,
-// not SELECT rows. --command returns query results. Execute the real SQL here
-// so the orchestration tests cannot invent successful postconditions.
+// Model the result-bearing D1 query transaction with real SQLite statements.
+// SQLite identifies statement boundaries; do not split SQL on literal semicolons.
 function databaseRunner(database: DatabaseSync) {
   return (_database: string, operation: readonly string[]): string => {
-    if (operation[0] === "--command") {
-      return JSON.stringify([{ success: true, results: database.prepare(operation[1]).all() }]);
-    }
-    assert.equal(operation[0], "--file");
+    assert.equal(operation[0], "--command");
     database.exec("BEGIN");
     try {
-      database.exec(readFileSync(operation[1], "utf8"));
+      let remaining = operation[1];
+      const results = [];
+      while (remaining.trim()) {
+        const statement = database.prepare(remaining);
+        results.push({ success: true, results: statement.all() });
+        remaining = remaining.slice(statement.sourceSQL.length);
+      }
       database.exec("COMMIT");
+      return JSON.stringify(results);
     } catch (error) {
       database.exec("ROLLBACK");
       throw error;
     }
-    return JSON.stringify([
-      {
-        success: true,
-        results: [
-          {
-            "Total queries executed": 2,
-            "Rows read": 10,
-            "Rows written": 2,
-            "Database size (MB)": "0.01",
-          },
-        ],
-        finalBookmark: "test-bookmark",
-        meta: {},
-      },
-    ]);
   };
 }
 
@@ -256,7 +243,7 @@ describe("Owner bootstrap SQL", () => {
 
   it("cannot replay generated SQL after ownership conditions change", () => {
     const database = createDatabase();
-    const generated = sql("audit-replay", 100).mutation;
+    const generated = sql("audit-replay", 100).execution.join("\n");
     database.exec(generated);
     database.exec(`
       UPDATE user_role_assignments
@@ -343,7 +330,7 @@ describe("Owner bootstrap SQL", () => {
   });
 
   it("uses only current RBAC schema and the generated audit ID as execution provenance", () => {
-    const generated = sql("audit-exact", 100).mutation;
+    const generated = sql("audit-exact", 100).execution.join("\n");
 
     assert.doesNotMatch(
       generated,
@@ -356,75 +343,50 @@ describe("Owner bootstrap SQL", () => {
 });
 
 describe("Owner bootstrap orchestration", () => {
-  it("verifies an atomic remote import with a separate query bound to its audit", async () => {
+  it("returns the exact audit proof in one mutation batch after preflight", async () => {
     const database = createDatabase();
     const runner = databaseRunner(database);
-    const operations: string[] = [];
+    const results: unknown[] = [];
     await run(
       { database: "workspace", userId: USER_ID, execute: true },
       {
-        randomUUID: () => "audit-exact",
-        now: () => 123,
-        runWrangler: (name, operation) => {
-          operations.push(operation[0]);
-          return runner(name, operation);
-        },
-      }
-    );
-    assert.deepEqual(operations, ["--command", "--file", "--command"]);
-    assert.equal(
-      database.prepare("SELECT id FROM authorization_audit_events").get()!.id,
-      "audit-exact"
-    );
-  });
-
-  it("rejects malformed Wrangler JSON result shapes", async () => {
-    await assert.rejects(
-      run(
-        { database: "workspace", userId: USER_ID, execute: false },
-        {
-          runWrangler: () => JSON.stringify({ success: true, results: [] }),
-        }
-      ),
-      /malformed JSON result/
-    );
-
-    await assert.rejects(
-      run(
-        { database: "workspace", userId: USER_ID, execute: false },
-        {
-          runWrangler: () => JSON.stringify([{ success: true, results: [null] }]),
-        }
-      ),
-      /malformed JSON result/
-    );
-  });
-
-  it("ignores import progress and verifies the database instead", async () => {
-    const database = createDatabase();
-    const runner = databaseRunner(database);
-    let sqlPath = "";
-    await run(
-      { database: "workspace", userId: USER_ID, execute: true },
-      {
-        randomUUID: () => "audit-exact",
+        randomUUID: () => "audit-';exact",
         now: () => 123,
         runWrangler: (name, operation) => {
           const output = runner(name, operation);
-          if (operation[0] !== "--file") return output;
-          sqlPath = operation[1];
-          return `├ Checking if file needs uploading\n${output}`;
+          results.push(JSON.parse(output));
+          return output;
         },
       }
     );
-
-    assert.ok(sqlPath);
-    assert.equal(existsSync(sqlPath), false);
+    assert.equal(results.length, 2);
+    assert.deepEqual(results[1], [
+      { success: true, results: [] },
+      { success: true, results: [] },
+      {
+        success: true,
+        results: [
+          {
+            report: "postcondition",
+            status: "executed",
+            user_id: USER_ID,
+            suspended_at: null,
+            role_id: "role_builtin_owner",
+            audit_written: 1,
+          },
+        ],
+      },
+    ]);
+    assert.equal(
+      database.prepare("SELECT id FROM authorization_audit_events").get()!.id,
+      "audit-';exact"
+    );
   });
 
-  it("reports a concurrent winner instead of claiming this invocation completed", async () => {
+  it("rejects a concurrent winner between preflight and the mutation batch", async () => {
     const database = createDatabase();
     const runner = databaseRunner(database);
+    let calls = 0;
     await assert.rejects(
       run(
         { database: "workspace", userId: USER_ID, execute: true },
@@ -432,7 +394,7 @@ describe("Owner bootstrap orchestration", () => {
           randomUUID: () => "audit-loser",
           now: () => 123,
           runWrangler: (name, operation) => {
-            if (operation[0] === "--file") execute(database, "audit-winner", 122);
+            if (++calls === 2) execute(database, "audit-winner", 122);
             return runner(name, operation);
           },
         }
@@ -443,30 +405,175 @@ describe("Owner bootstrap orchestration", () => {
       database.prepare("SELECT id FROM authorization_audit_events").get()!.id,
       "audit-winner"
     );
+    assert.equal(calls, 2);
   });
 
-  it("does not accept an import's claimed postcondition without database evidence", async () => {
+  for (const failure of ["assignment", "postcondition"]) {
+    it(`rolls back the entire batch when ${failure} SQL fails`, async () => {
+      const database = createDatabase();
+      if (failure === "assignment") {
+        database.exec(`CREATE TRIGGER refuse_owner BEFORE UPDATE ON user_role_assignments
+          BEGIN SELECT RAISE(ABORT, 'assignment failed'); END`);
+      }
+      const runner = databaseRunner(database);
+      let calls = 0;
+      await assert.rejects(
+        run(
+          { database: "workspace", userId: USER_ID, execute: true },
+          {
+            runWrangler: (name, operation) => {
+              calls += 1;
+              // Fail the actual final SELECT after both writes have executed.
+              const command =
+                calls === 2 && failure === "postcondition"
+                  ? operation[1].replace(
+                      "SELECT 'postcondition' AS report",
+                      "SELECT missing_function() AS report"
+                    )
+                  : operation[1];
+              return runner(name, [operation[0], command]);
+            },
+          }
+        ),
+        /assignment failed|no such function/
+      );
+      assert.equal(calls, 2);
+      assert.equal(
+        database.prepare("SELECT COUNT(*) AS count FROM authorization_audit_events").get()!.count,
+        0
+      );
+      assert.equal(
+        database.prepare("SELECT role_id FROM user_role_assignments").get()!.role_id,
+        "role_builtin_member"
+      );
+    });
+  }
+
+  it("does not add a read that can fail after the batch has returned its proof", async () => {
     const database = createDatabase();
     const runner = databaseRunner(database);
+    let calls = 0;
+    await run(
+      { database: "workspace", userId: USER_ID, execute: true },
+      {
+        runWrangler: (name, operation) => {
+          if (++calls > 2) throw new Error("unexpected post-commit read");
+          const output = runner(name, operation);
+          if (calls === 2) database.exec("UPDATE users SET suspended_at = 1");
+          return output;
+        },
+      }
+    );
+    assert.equal(calls, 2);
+  });
+
+  it("does not automatically retry an uncertain batch response", async () => {
+    const database = createDatabase();
+    const runner = databaseRunner(database);
+    let calls = 0;
     await assert.rejects(
       run(
         { database: "workspace", userId: USER_ID, execute: true },
         {
-          runWrangler: (name, operation) =>
-            operation[0] === "--file"
-              ? JSON.stringify([
-                  {
-                    success: true,
-                    results: [{ report: "postcondition", status: "executed", audit_written: 1 }],
-                  },
-                ])
-              : runner(name, operation),
+          runWrangler: (name, operation) => {
+            const output = runner(name, operation);
+            if (++calls === 2) throw new Error("batch response lost");
+            return output;
+          },
         }
       ),
-      /did not prove its exact audit and assignment/
+      /batch response lost/
+    );
+    assert.equal(calls, 2);
+    assert.equal(
+      database.prepare("SELECT COUNT(*) AS count FROM authorization_audit_events").get()!.count,
+      1
     );
   });
 
+  const empty = { success: true, results: [] };
+  const proof = { report: "postcondition", status: "executed", audit_written: 1 };
+  for (const [label, response] of [
+    ["non-array", {}],
+    ["import aggregate", [{ success: true, results: [{ "Total queries executed": 3 }] }]],
+    ["missing statement result", [empty, empty]],
+    ["extra statement result", [empty, empty, empty, empty]],
+    [
+      "failed statement",
+      [{ success: false, results: [] }, empty, { success: true, results: [proof] }],
+    ],
+    ["malformed rows", [empty, empty, { success: true, results: [null] }]],
+    ["missing proof", [empty, empty, empty]],
+    ["misplaced proof", [{ success: true, results: [proof] }, empty, empty]],
+    ["ambiguous proof", [empty, empty, { success: true, results: [proof, proof] }]],
+    ["missing audit", [empty, empty, { success: true, results: [{ ...proof, audit_written: 0 }] }]],
+  ]) {
+    it(`rejects a batch response with ${label}`, async () => {
+      const database = createDatabase();
+      const runner = databaseRunner(database);
+      let calls = 0;
+      await assert.rejects(
+        run(
+          { database: "workspace", userId: USER_ID, execute: true },
+          {
+            runWrangler: (name, operation) =>
+              ++calls === 1 ? runner(name, operation) : JSON.stringify(response),
+          }
+        ),
+        /malformed|results for|no valid|did not prove/
+      );
+      assert.equal(calls, 2);
+    });
+  }
+
+  it("never executes after an unknown preflight status", async () => {
+    let calls = 0;
+    await assert.rejects(
+      run(
+        { database: "workspace", userId: USER_ID, execute: true },
+        {
+          runWrangler: () => {
+            calls += 1;
+            return JSON.stringify([
+              { success: true, results: [{ report: "preflight", status: "unknown" }] },
+            ]);
+          },
+        }
+      ),
+      /no valid Owner bootstrap preflight/
+    );
+    assert.equal(calls, 1);
+  });
+
+  for (const execute of [false, true]) {
+    it(
+      execute ? "does not mutate for a current Owner" : "does not mutate during a dry run",
+      async () => {
+        const database = createDatabase();
+        if (execute)
+          database.exec("UPDATE user_role_assignments SET role_id = 'role_builtin_owner'");
+        const runner = databaseRunner(database);
+        let calls = 0;
+        await run(
+          { database: "workspace", userId: USER_ID, execute },
+          {
+            runWrangler: (name, operation) => {
+              calls += 1;
+              return runner(name, operation);
+            },
+          }
+        );
+        assert.equal(calls, 1);
+        assert.equal(
+          database.prepare("SELECT COUNT(*) AS count FROM authorization_audit_events").get()!.count,
+          0
+        );
+      }
+    );
+  }
+});
+
+describe("Owner bootstrap verification evidence", () => {
   for (const [label, change] of [
     ["missing audit", "DELETE FROM authorization_audit_events"],
     ["wrong audit ID", "UPDATE authorization_audit_events SET id = 'other-audit'"],
@@ -488,153 +595,12 @@ describe("Owner bootstrap orchestration", () => {
       INSERT INTO user_role_assignments VALUES ('${OTHER_USER_ID}', 'role_builtin_owner')`,
     ],
   ]) {
-    it(`rejects verification with ${label}`, async () => {
+    it(`rejects verification with ${label}`, () => {
       const database = createDatabase();
-      const runner = databaseRunner(database);
-      await assert.rejects(
-        run(
-          { database: "workspace", userId: USER_ID, execute: true },
-          {
-            randomUUID: () => "audit-exact",
-            now: () => 123,
-            runWrangler: (name, operation) => {
-              const output = runner(name, operation);
-              if (operation[0] === "--file") database.exec(change);
-              return output;
-            },
-          }
-        ),
-        /ownership may have changed concurrently|did not prove its exact audit and assignment/
-      );
+      execute(database, "audit-exact", 123);
+      database.exec(change);
+      const report = database.prepare(sql("audit-exact", 123).execution[2]).get();
+      assert.notEqual(report?.status, "executed");
     });
-  }
-
-  it("rolls back the audit if assignment fails and cleans up the SQL file", async () => {
-    const database = createDatabase();
-    database.exec(`CREATE TRIGGER refuse_owner BEFORE UPDATE ON user_role_assignments
-      BEGIN SELECT RAISE(ABORT, 'assignment failed'); END`);
-    const runner = databaseRunner(database);
-    const operations: string[] = [];
-    let sqlPath = "";
-    await assert.rejects(
-      run(
-        { database: "workspace", userId: USER_ID, execute: true },
-        {
-          runWrangler: (name, operation) => {
-            operations.push(operation[0]);
-            if (operation[0] === "--file") sqlPath = operation[1];
-            return runner(name, operation);
-          },
-        }
-      ),
-      /assignment failed/
-    );
-    assert.deepEqual(operations, ["--command", "--file"]);
-    assert.equal(existsSync(sqlPath), false);
-    assert.equal(
-      database.prepare("SELECT COUNT(*) AS count FROM authorization_audit_events").get()!.count,
-      0
-    );
-    assert.equal(
-      database.prepare("SELECT role_id FROM user_role_assignments").get()!.role_id,
-      "role_builtin_member"
-    );
-  });
-
-  it("does not report success or retry the mutation when the verification query fails", async () => {
-    const database = createDatabase();
-    const runner = databaseRunner(database);
-    let imported = false;
-    await assert.rejects(
-      run(
-        { database: "workspace", userId: USER_ID, execute: true },
-        {
-          runWrangler: (name, operation) => {
-            if (imported) throw new Error("verification unavailable");
-            const output = runner(name, operation);
-            imported = operation[0] === "--file";
-            return output;
-          },
-        }
-      ),
-      /verification unavailable/
-    );
-    assert.equal(
-      database.prepare("SELECT COUNT(*) AS count FROM authorization_audit_events").get()!.count,
-      1
-    );
-  });
-
-  it("rejects a failed verification response even if it contains successful-looking rows", async () => {
-    const database = createDatabase();
-    const runner = databaseRunner(database);
-    let imported = false;
-    await assert.rejects(
-      run(
-        { database: "workspace", userId: USER_ID, execute: true },
-        {
-          runWrangler: (name, operation) => {
-            if (imported) {
-              return JSON.stringify([
-                {
-                  success: false,
-                  results: [{ report: "postcondition", status: "executed", audit_written: 1 }],
-                },
-              ]);
-            }
-            const output = runner(name, operation);
-            imported = operation[0] === "--file";
-            return output;
-          },
-        }
-      ),
-      /malformed JSON result/
-    );
-  });
-
-  it("never imports after an unknown preflight status", async () => {
-    let calls = 0;
-    await assert.rejects(
-      run(
-        { database: "workspace", userId: USER_ID, execute: true },
-        {
-          runWrangler: () => {
-            calls += 1;
-            return JSON.stringify([
-              { success: true, results: [{ report: "preflight", status: "unknown" }] },
-            ]);
-          },
-        }
-      ),
-      /no valid Owner bootstrap preflight/
-    );
-    assert.equal(calls, 1);
-  });
-
-  for (const execute of [false, true]) {
-    it(
-      execute ? "does not import for a current Owner" : "does not import during a dry run",
-      async () => {
-        const database = createDatabase();
-        if (execute)
-          database.exec("UPDATE user_role_assignments SET role_id = 'role_builtin_owner'");
-        const runner = databaseRunner(database);
-        const operations: string[] = [];
-        await run(
-          { database: "workspace", userId: USER_ID, execute },
-          {
-            runWrangler: (name, operation) => {
-              operations.push(operation[0]);
-              return runner(name, operation);
-            },
-          }
-        );
-        assert.deepEqual(operations, ["--command"]);
-        assert.equal(
-          database.prepare("SELECT COUNT(*) AS count FROM authorization_audit_events").get()!.count,
-          0
-        );
-      }
-    );
   }
 });
