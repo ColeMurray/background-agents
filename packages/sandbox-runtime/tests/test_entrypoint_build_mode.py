@@ -15,7 +15,7 @@ from sandbox_runtime.repository_sync import (
     RepositorySyncStatus,
 )
 from sandbox_runtime.runtime_config import BootMode
-from sandbox_runtime.supervisor import ImageBuildExecutionCancelled
+from sandbox_runtime.supervisor import BootExecutionCancelled
 
 
 @pytest.fixture(autouse=True)
@@ -140,7 +140,7 @@ class TestImageBuildMode:
         supervisor.shutdown_event.set()
         operation_factory = MagicMock()
 
-        with pytest.raises(ImageBuildExecutionCancelled):
+        with pytest.raises(BootExecutionCancelled):
             await supervisor._run_until_shutdown(operation_factory)
 
         operation_factory.assert_not_called()

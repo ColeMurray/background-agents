@@ -100,6 +100,40 @@ async def test_regular_boot_passes_repository_workspace_to_services(tmp_path, mo
     terminal.start.assert_awaited_once_with(workdir)
 
 
+async def test_shutdown_cancels_repository_boot_before_starting_services(tmp_path, monkeypatch):
+    supervisor, repository, opencode_server, agent_bridge, code_server, terminal, _desktop = (
+        _supervisor(tmp_path, [])
+    )
+    boot_started = asyncio.Event()
+    boot_cancelled = asyncio.Event()
+
+    async def blocked_boot(_mode, _ports):
+        boot_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            boot_cancelled.set()
+
+    repository.boot.side_effect = blocked_boot
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
+    monkeypatch.delenv("FROM_REPO_IMAGE", raising=False)
+
+    run_task = asyncio.create_task(supervisor.run())
+    await asyncio.wait_for(boot_started.wait(), timeout=1)
+    supervisor.shutdown_event.set()
+
+    assert await asyncio.wait_for(run_task, timeout=1) is True
+    assert boot_cancelled.is_set()
+    opencode_server.start.assert_not_awaited()
+    agent_bridge.start.assert_not_awaited()
+    code_server.start.assert_not_awaited()
+    terminal.start.assert_not_awaited()
+    assert any(
+        call.args == ("supervisor.boot_cancelled",) for call in supervisor.log.info.mock_calls
+    )
+
+
 async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
     supervisor, repository, opencode_server, agent_bridge, _code_server, _terminal, desktop = (
         _supervisor(tmp_path, [])
