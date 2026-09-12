@@ -80,6 +80,30 @@ describe("useEnabledModels", () => {
     }
   );
 
+  it("never dispatches the shared write lock key as a request", async () => {
+    const fetcher = vi.fn(async (_key: string) => ({ enabledModels: ["openai/gpt-5.4"] }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ enabledModels: ["anthropic/claude-haiku-4-5"] }),
+      })
+    );
+    const { result } = renderHook(() => useEnabledModels(), {
+      wrapper: ({ children }) => (
+        <SWRConfig value={{ provider: () => new Map(), fetcher }}>{children}</SWRConfig>
+      ),
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => {
+      await result.current.saveEnabledModels(["anthropic/claude-haiku-4-5"]);
+    });
+
+    expect(result.current.saving).toBe(false);
+    expect(fetcher.mock.calls.map(([key]) => key)).toEqual([MODEL_PREFERENCES_KEY]);
+  });
+
   it("exposes read errors and rejects writes before preferences have loaded", async () => {
     const readError = new Error("Read failed");
     const fetchMock = vi.fn();
