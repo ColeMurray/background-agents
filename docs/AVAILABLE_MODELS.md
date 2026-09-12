@@ -6,12 +6,28 @@ and DeepSeek models are available but must be enabled in **Settings > Models**. 
 subscriptions are configured in **Settings > Provider Accounts**; Z.AI Coding Plan requires
 `ZHIPU_API_KEY`; DeepSeek requires `DEEPSEEK_API_KEY`.
 
-OpenAI and xAI session selectors offer provider policy, any active connected account, and API-key
-mode. Automation editors can resolve defaults on each run or pin an account/API-key choice.
+OpenAI, xAI and Anthropic session selectors offer provider policy, any active connected account, and
+API-key mode. Automation editors can resolve defaults on each run or pin an account/API-key choice.
 Unattended Slack, GitHub, Linear, and unpinned automation launches follow the provider's configured
-unattended mode.
+unattended mode. For Anthropic that policy reaches only Claude Agent automations: Slack, GitHub and
+Linear launches run on OpenCode, which uses the API key.
+
+## Harnesses
+
+A session runs on one agent harness, fixed at create. Which models and which Anthropic
+authentication a session can use depends on it:
+
+| Harness      | Models            | Anthropic authentication                   |
+| ------------ | ----------------- | ------------------------------------------ |
+| OpenCode     | every model below | `ANTHROPIC_API_KEY`                        |
+| Claude Agent | Anthropic models  | `ANTHROPIC_API_KEY` or a connected account |
+
+See [Using the Claude Agent Harness](CLAUDE_AGENT.md).
 
 ## Anthropic
+
+Anthropic models run on both harnesses. A connected Claude subscription (Settings > Provider
+Accounts) applies only on the Claude Agent harness; OpenCode sessions use `ANTHROPIC_API_KEY`.
 
 | Model ID                      | Display name      | Description                                       | Reasoning efforts             | Default effort |
 | ----------------------------- | ----------------- | ------------------------------------------------- | ----------------------------- | -------------- |

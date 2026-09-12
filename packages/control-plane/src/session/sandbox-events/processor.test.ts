@@ -83,6 +83,7 @@ function createProcessor() {
   const processMessageQueue = vi.fn(async () => {});
   const broadcastPromptQueue = vi.fn();
   const updateLastActivity = vi.fn();
+  const refreshSlackActivity = vi.fn();
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const offerFallbackTitle = vi.fn((_title: string) => {});
   const log = {
@@ -149,6 +150,7 @@ function createProcessor() {
       diffService as unknown as SessionDiffService,
       applySessionTitleUpdate,
       updateLastActivity,
+      refreshSlackActivity,
       log
     ),
     pushService
@@ -172,6 +174,7 @@ function createProcessor() {
     processMessageQueue,
     broadcastPromptQueue,
     updateLastActivity,
+    refreshSlackActivity,
     applySessionTitleUpdate,
     backgroundTasks,
     log,
@@ -785,6 +788,33 @@ describe("SessionSandboxEventProcessor", () => {
       });
 
       expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
+    });
+
+    it("refreshes the slack activity indicator on heartbeat while a message is processing", async () => {
+      const h = createProcessor();
+      h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+
+      await h.processor.processSandboxEvent({
+        type: "heartbeat",
+        sandboxId: "sb-1",
+        status: "ready",
+        timestamp: 1000,
+      });
+
+      expect(h.refreshSlackActivity).toHaveBeenCalledWith("msg-1", expect.any(Number));
+    });
+
+    it("does not refresh the slack activity indicator on heartbeat while idle", async () => {
+      const h = createProcessor();
+
+      await h.processor.processSandboxEvent({
+        type: "heartbeat",
+        sandboxId: "sb-1",
+        status: "ready",
+        timestamp: 1000,
+      });
+
+      expect(h.refreshSlackActivity).not.toHaveBeenCalled();
     });
 
     it("does not reset activity timer on token", async () => {

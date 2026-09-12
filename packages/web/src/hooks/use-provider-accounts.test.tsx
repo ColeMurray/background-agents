@@ -6,12 +6,16 @@ import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
+  cancelProviderAuthorizationCode,
   cancelProviderDeviceAuthorization,
   archiveProviderAccount,
+  completeProviderAuthorizationCode,
   connectProviderAccount,
   pollProviderDeviceAuthorization,
+  readProviderAuthorizationCodeStatus,
   renameProviderAccount,
   setProviderAccountDefault,
+  startProviderAuthorizationCode,
   startProviderDeviceAuthorization,
   type ProviderResourceError,
   useLegacyProviderCredentials,
@@ -329,6 +333,101 @@ describe("provider device authorization requests", () => {
       startProviderDeviceAuthorization("unknown" as "openai", {
         operation: "create",
         displayName: "ChatGPT account",
+      })
+    ).rejects.toThrow();
+    expect(browserApiFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("provider authorization code requests", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("validates start, status, and complete responses with shared schemas", async () => {
+    const transactionId = "f".repeat(64);
+    const authorizationUrl = "https://claude.ai/oauth/authorize?state=abc";
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(
+        Response.json({
+          transactionId,
+          provider: "anthropic",
+          operation: "create",
+          authorizationUrl,
+          expiresAt: Date.now() + 60_000,
+          expiresInMs: 60_000,
+        })
+      )
+      .mockResolvedValueOnce(Response.json({ status: "pending", expiresAt: Date.now() + 60_000 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          status: "connected",
+          account: { ...account, provider: "anthropic", externalAccountId: null },
+          reconnectedExisting: false,
+          completedAt: Date.now(),
+        })
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await expect(
+      startProviderAuthorizationCode("anthropic", {
+        operation: "create",
+        displayName: "Claude account",
+      })
+    ).resolves.toMatchObject({ transactionId, authorizationUrl, expiresInMs: 60_000 });
+    await expect(
+      readProviderAuthorizationCodeStatus("anthropic", transactionId)
+    ).resolves.toMatchObject({ status: "pending" });
+    await expect(
+      completeProviderAuthorizationCode("anthropic", transactionId, "  code#state  ")
+    ).resolves.toMatchObject({ status: "connected" });
+    await expect(
+      cancelProviderAuthorizationCode("anthropic", transactionId)
+    ).resolves.toBeUndefined();
+
+    expect(browserApiFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/model-provider-accounts/authorization-codes/anthropic",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ operation: "create", displayName: "Claude account" }),
+      })
+    );
+    expect(browserApiFetch).toHaveBeenNthCalledWith(
+      2,
+      `/api/model-provider-accounts/authorization-codes/anthropic/${transactionId}`,
+      expect.objectContaining({ method: undefined, body: undefined })
+    );
+    expect(browserApiFetch).toHaveBeenNthCalledWith(
+      3,
+      `/api/model-provider-accounts/authorization-codes/anthropic/${transactionId}/complete`,
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ code: "code#state" }) })
+    );
+    expect(browserApiFetch).toHaveBeenNthCalledWith(
+      4,
+      `/api/model-provider-accounts/authorization-codes/anthropic/${transactionId}`,
+      expect.objectContaining({ method: "DELETE" })
+    );
+  });
+
+  it("rejects malformed authorization code responses", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ transactionId: "unsafe" }));
+
+    await expect(
+      startProviderAuthorizationCode("anthropic", {
+        operation: "create",
+        displayName: "Claude account",
+      })
+    ).rejects.toThrow("Invalid provider account response");
+  });
+
+  it("rejects an empty code and unsafe path parameters before fetching", async () => {
+    await expect(
+      completeProviderAuthorizationCode("anthropic", "f".repeat(64), "   ")
+    ).rejects.toThrow();
+    await expect(readProviderAuthorizationCodeStatus("anthropic", "../unsafe")).rejects.toThrow();
+    await expect(
+      startProviderAuthorizationCode("unknown" as "anthropic", {
+        operation: "create",
+        displayName: "Claude account",
       })
     ).rejects.toThrow();
     expect(browserApiFetch).not.toHaveBeenCalled();

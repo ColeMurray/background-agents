@@ -7,6 +7,7 @@ import {
   modelProviderAccountDefaultResponseSchema,
   modelProviderAccountResponseSchema,
   modelProviderAccountsResponseSchema,
+  providerAuthorizationCodeStatusResponseSchema,
   providerDeviceAuthorizationIdSchema,
   providerDeviceAuthorizationStatusResponseSchema,
   createModelProviderAccountResponseSchema,
@@ -14,12 +15,18 @@ import {
   SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
   SUBSCRIPTION_PROVIDER_IDS,
   subscriptionProviderIdSchema,
+  completeProviderAuthorizationCodeRequestSchema,
+  startProviderAuthorizationCodeRequestSchema,
+  startProviderAuthorizationCodeResponseSchema,
   startProviderDeviceAuthorizationRequestSchema,
   startProviderDeviceAuthorizationResponseSchema,
   type ConnectModelProviderAccountRequest,
   type ModelProviderAccount,
   type ModelProviderAccountDefault,
+  type ProviderAuthorizationCodeStatusResponse,
   type ReconnectModelProviderAccountRequest,
+  type StartProviderAuthorizationCodeRequest,
+  type StartProviderAuthorizationCodeResponse,
   type StartProviderDeviceAuthorizationRequest,
   type StartProviderDeviceAuthorizationResponse,
   type LegacyProviderCredentialsResponse,
@@ -173,6 +180,61 @@ export async function cancelProviderDeviceAuthorization(
   const id = providerDeviceAuthorizationIdSchema.parse(transactionId);
   await requestProviderResourceWithoutContent(
     `${ACCOUNTS_KEY}/device-authorizations/${parsedProvider}/${id}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function startProviderAuthorizationCode(
+  provider: SubscriptionProviderId,
+  input: StartProviderAuthorizationCodeRequest
+): Promise<StartProviderAuthorizationCodeResponse> {
+  const parsedProvider = subscriptionProviderIdSchema.parse(provider);
+  const request = startProviderAuthorizationCodeRequestSchema.parse(input);
+  return requestProviderResource(
+    `${ACCOUNTS_KEY}/authorization-codes/${parsedProvider}`,
+    startProviderAuthorizationCodeResponseSchema,
+    { method: "POST", body: request }
+  );
+}
+
+export async function readProviderAuthorizationCodeStatus(
+  provider: SubscriptionProviderId,
+  transactionId: string,
+  signal?: AbortSignal
+): Promise<ProviderAuthorizationCodeStatusResponse> {
+  const parsedProvider = subscriptionProviderIdSchema.parse(provider);
+  const id = providerDeviceAuthorizationIdSchema.parse(transactionId);
+  return requestProviderResource(
+    `${ACCOUNTS_KEY}/authorization-codes/${parsedProvider}/${id}`,
+    providerAuthorizationCodeStatusResponseSchema,
+    { signal }
+  );
+}
+
+export async function completeProviderAuthorizationCode(
+  provider: SubscriptionProviderId,
+  transactionId: string,
+  code: string,
+  signal?: AbortSignal
+): Promise<ProviderAuthorizationCodeStatusResponse> {
+  const parsedProvider = subscriptionProviderIdSchema.parse(provider);
+  const id = providerDeviceAuthorizationIdSchema.parse(transactionId);
+  const request = completeProviderAuthorizationCodeRequestSchema.parse({ code });
+  return requestProviderResource(
+    `${ACCOUNTS_KEY}/authorization-codes/${parsedProvider}/${id}/complete`,
+    providerAuthorizationCodeStatusResponseSchema,
+    { method: "POST", body: request, signal }
+  );
+}
+
+export async function cancelProviderAuthorizationCode(
+  provider: SubscriptionProviderId,
+  transactionId: string
+) {
+  const parsedProvider = subscriptionProviderIdSchema.parse(provider);
+  const id = providerDeviceAuthorizationIdSchema.parse(transactionId);
+  await requestProviderResourceWithoutContent(
+    `${ACCOUNTS_KEY}/authorization-codes/${parsedProvider}/${id}`,
     { method: "DELETE" }
   );
 }

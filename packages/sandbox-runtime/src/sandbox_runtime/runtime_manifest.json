@@ -1,8 +1,8 @@
 {
-  "runtimeVersion": "v64-claude-harness",
-  "generation": 64,
+  "runtimeVersion": "v65-turn-inactivity-timeout",
+  "generation": 65,
   "minimumCompatibleGeneration": 62,
-  "minimumRebuildGeneration": 64,
+  "minimumRebuildGeneration": 65,
   "harnessMinimumGeneration": {
     "claude": 64
   }

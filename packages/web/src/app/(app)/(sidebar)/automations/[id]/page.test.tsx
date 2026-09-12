@@ -20,6 +20,7 @@ const automation = {
   id: "auto-1",
   name: "Nightly review",
   instructions: "Review the code",
+  harness: "opencode",
   triggerType: "schedule" as const,
   scheduleCron: "0 9 * * *",
   scheduleTz: "UTC",

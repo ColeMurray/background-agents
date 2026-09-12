@@ -27,6 +27,7 @@ export class SandboxRuntimeEventHandler {
       options?: SessionTitleUpdateOptions
     ) => SessionTitleUpdateResult,
     private readonly updateLastActivity: (timestamp: number) => void,
+    private readonly refreshSlackActivity: (messageId: string, timestamp: number) => void,
     private readonly log: Logger
   ) {}
 
@@ -37,6 +38,10 @@ export class SandboxRuntimeEventHandler {
     // the sandbox is still occupied and should renew its activity timestamp.
     if (context.processingMessage !== null) {
       this.updateLastActivity(context.now);
+      // The same proof drives Slack's assistant-thread indicator, which Slack
+      // clears two minutes after the last update. Refreshing it from here, and
+      // not from a timer, is what keeps it from outliving the turn it claims.
+      this.refreshSlackActivity(context.processingMessage.id, context.now);
     }
   }
 

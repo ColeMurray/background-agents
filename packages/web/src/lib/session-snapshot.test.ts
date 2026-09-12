@@ -19,6 +19,7 @@ const snapshot = {
     sandboxStatus: "ready",
     messageCount: 1,
     createdAt: 1,
+    harness: "opencode",
   },
   artifacts: [],
   timeline: { events: [], hasMore: false, cursor: null },
