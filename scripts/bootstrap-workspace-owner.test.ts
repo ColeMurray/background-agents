@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { buildBootstrapSql, parseArgs, run } from "./bootstrap-workspace-owner.ts";
@@ -49,16 +49,51 @@ function createDatabase(): DatabaseSync {
   return database;
 }
 
-function sql(execute: boolean, auditId = "audit-id", now = 100): string {
-  return buildBootstrapSql({ userId: USER_ID, execute, auditId, now });
+function sql(auditId = "audit-id", now = 100) {
+  return buildBootstrapSql({ userId: USER_ID, auditId, now });
 }
 
 function preflight(database: DatabaseSync): Record<string, unknown> {
-  return { ...database.prepare(sql(false, "unused", 0)).get() };
+  return { ...database.prepare(sql().preflight).get() };
 }
 
 function execute(database: DatabaseSync, auditId: string, now: number): void {
-  database.exec(sql(true, auditId, now));
+  database.exec(sql(auditId, now).mutation);
+}
+
+// Remote --file uses D1's atomic import, whose response contains statistics,
+// not SELECT rows. --command returns query results. Execute the real SQL here
+// so the orchestration tests cannot invent successful postconditions.
+function databaseRunner(database: DatabaseSync) {
+  return (_database: string, operation: readonly string[]): string => {
+    if (operation[0] === "--command") {
+      return JSON.stringify([{ success: true, results: database.prepare(operation[1]).all() }]);
+    }
+    assert.equal(operation[0], "--file");
+    database.exec("BEGIN");
+    try {
+      database.exec(readFileSync(operation[1], "utf8"));
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+    return JSON.stringify([
+      {
+        success: true,
+        results: [
+          {
+            "Total queries executed": 2,
+            "Rows read": 10,
+            "Rows written": 2,
+            "Database size (MB)": "0.01",
+          },
+        ],
+        finalBookmark: "test-bookmark",
+        meta: {},
+      },
+    ]);
+  };
 }
 
 function insertPriorAudit(
@@ -221,7 +256,7 @@ describe("Owner bootstrap SQL", () => {
 
   it("cannot replay generated SQL after ownership conditions change", () => {
     const database = createDatabase();
-    const generated = sql(true, "audit-replay", 100);
+    const generated = sql("audit-replay", 100).mutation;
     database.exec(generated);
     database.exec(`
       UPDATE user_role_assignments
@@ -308,7 +343,7 @@ describe("Owner bootstrap SQL", () => {
   });
 
   it("uses only current RBAC schema and the generated audit ID as execution provenance", () => {
-    const generated = sql(true, "audit-exact", 100);
+    const generated = sql("audit-exact", 100).mutation;
 
     assert.doesNotMatch(
       generated,
@@ -316,11 +351,33 @@ describe("Owner bootstrap SQL", () => {
     );
     assert.match(generated, /operation_result/);
     assert.match(generated, /metadata_json/);
-    assert.match(generated, /SELECT 1 FROM authorization_audit_events WHERE id = 'audit-exact'/);
+    assert.match(generated, /WHERE id = 'audit-exact'/);
   });
 });
 
 describe("Owner bootstrap orchestration", () => {
+  it("verifies an atomic remote import with a separate query bound to its audit", async () => {
+    const database = createDatabase();
+    const runner = databaseRunner(database);
+    const operations: string[] = [];
+    await run(
+      { database: "workspace", userId: USER_ID, execute: true },
+      {
+        randomUUID: () => "audit-exact",
+        now: () => 123,
+        runWrangler: (name, operation) => {
+          operations.push(operation[0]);
+          return runner(name, operation);
+        },
+      }
+    );
+    assert.deepEqual(operations, ["--command", "--file", "--command"]);
+    assert.equal(
+      database.prepare("SELECT id FROM authorization_audit_events").get()!.id,
+      "audit-exact"
+    );
+  });
+
   it("rejects malformed Wrangler JSON result shapes", async () => {
     await assert.rejects(
       run(
@@ -343,66 +400,241 @@ describe("Owner bootstrap orchestration", () => {
     );
   });
 
-  it("accepts only the execution response bound to this invocation's audit", async () => {
-    let calls = 0;
+  it("ignores import progress and verifies the database instead", async () => {
+    const database = createDatabase();
+    const runner = databaseRunner(database);
+    let sqlPath = "";
     await run(
       { database: "workspace", userId: USER_ID, execute: true },
       {
         randomUUID: () => "audit-exact",
         now: () => 123,
-        runWrangler: (_database, operation) => {
-          calls += 1;
-          if (operation[0] === "--command") {
-            return JSON.stringify([
-              { success: true, results: [{ report: "preflight", status: "ready" }] },
-            ]);
-          }
-          assert.equal(operation[0], "--file");
-          const sqlPath = operation[1];
-          assert.ok(sqlPath);
-          const generated = readFileSync(sqlPath, "utf8");
-          assert.match(generated, /audit-exact/);
-          assert.match(generated, /123/);
-          return JSON.stringify([
-            {
-              success: true,
-              results: [
-                {
-                  report: "postcondition",
-                  status: "executed",
-                  audit_written: 1,
-                },
-              ],
-            },
-          ]);
+        runWrangler: (name, operation) => {
+          const output = runner(name, operation);
+          if (operation[0] !== "--file") return output;
+          sqlPath = operation[1];
+          return `├ Checking if file needs uploading\n${output}`;
         },
       }
     );
 
-    assert.equal(calls, 2);
+    assert.ok(sqlPath);
+    assert.equal(existsSync(sqlPath), false);
   });
 
   it("reports a concurrent winner instead of claiming this invocation completed", async () => {
+    const database = createDatabase();
+    const runner = databaseRunner(database);
     await assert.rejects(
       run(
         { database: "workspace", userId: USER_ID, execute: true },
         {
           randomUUID: () => "audit-loser",
           now: () => 123,
-          runWrangler: (_database, operation) =>
-            JSON.stringify([
-              {
-                success: true,
-                results: [
-                  operation[0] === "--command"
-                    ? { report: "preflight", status: "ready" }
-                    : { report: "postcondition", status: "no-op", audit_written: 0 },
-                ],
-              },
-            ]),
+          runWrangler: (name, operation) => {
+            if (operation[0] === "--file") execute(database, "audit-winner", 122);
+            return runner(name, operation);
+          },
         }
       ),
-      /ownership changed concurrently/
+      /ownership may have changed concurrently/
+    );
+    assert.equal(
+      database.prepare("SELECT id FROM authorization_audit_events").get()!.id,
+      "audit-winner"
     );
   });
+
+  it("does not accept an import's claimed postcondition without database evidence", async () => {
+    const database = createDatabase();
+    const runner = databaseRunner(database);
+    await assert.rejects(
+      run(
+        { database: "workspace", userId: USER_ID, execute: true },
+        {
+          runWrangler: (name, operation) =>
+            operation[0] === "--file"
+              ? JSON.stringify([
+                  {
+                    success: true,
+                    results: [{ report: "postcondition", status: "executed", audit_written: 1 }],
+                  },
+                ])
+              : runner(name, operation),
+        }
+      ),
+      /did not prove its exact audit and assignment/
+    );
+  });
+
+  for (const [label, change] of [
+    ["missing audit", "DELETE FROM authorization_audit_events"],
+    ["wrong audit ID", "UPDATE authorization_audit_events SET id = 'other-audit'"],
+    ["wrong audit time", "UPDATE authorization_audit_events SET occurred_at = 999"],
+    ["wrong request", "UPDATE authorization_audit_events SET request_id = 'other-request'"],
+    [
+      "wrong target",
+      `UPDATE authorization_audit_events SET target_user_id_snapshot = '${OTHER_USER_ID}'`,
+    ],
+    ["wrong action", "UPDATE authorization_audit_events SET action = 'other-action'"],
+    ["wrong result", "UPDATE authorization_audit_events SET operation_result = 'refused'"],
+    ["wrong role metadata", "UPDATE authorization_audit_events SET metadata_json = '{}'"],
+    ["demoted Owner", "UPDATE user_role_assignments SET role_id = 'role_builtin_member'"],
+    ["suspended Owner", "UPDATE users SET suspended_at = 1"],
+    ["missing assignment", "DELETE FROM user_role_assignments"],
+    [
+      "another Owner",
+      `INSERT INTO users VALUES ('${OTHER_USER_ID}', NULL);
+      INSERT INTO user_role_assignments VALUES ('${OTHER_USER_ID}', 'role_builtin_owner')`,
+    ],
+  ]) {
+    it(`rejects verification with ${label}`, async () => {
+      const database = createDatabase();
+      const runner = databaseRunner(database);
+      await assert.rejects(
+        run(
+          { database: "workspace", userId: USER_ID, execute: true },
+          {
+            randomUUID: () => "audit-exact",
+            now: () => 123,
+            runWrangler: (name, operation) => {
+              const output = runner(name, operation);
+              if (operation[0] === "--file") database.exec(change);
+              return output;
+            },
+          }
+        ),
+        /ownership may have changed concurrently|did not prove its exact audit and assignment/
+      );
+    });
+  }
+
+  it("rolls back the audit if assignment fails and cleans up the SQL file", async () => {
+    const database = createDatabase();
+    database.exec(`CREATE TRIGGER refuse_owner BEFORE UPDATE ON user_role_assignments
+      BEGIN SELECT RAISE(ABORT, 'assignment failed'); END`);
+    const runner = databaseRunner(database);
+    const operations: string[] = [];
+    let sqlPath = "";
+    await assert.rejects(
+      run(
+        { database: "workspace", userId: USER_ID, execute: true },
+        {
+          runWrangler: (name, operation) => {
+            operations.push(operation[0]);
+            if (operation[0] === "--file") sqlPath = operation[1];
+            return runner(name, operation);
+          },
+        }
+      ),
+      /assignment failed/
+    );
+    assert.deepEqual(operations, ["--command", "--file"]);
+    assert.equal(existsSync(sqlPath), false);
+    assert.equal(
+      database.prepare("SELECT COUNT(*) AS count FROM authorization_audit_events").get()!.count,
+      0
+    );
+    assert.equal(
+      database.prepare("SELECT role_id FROM user_role_assignments").get()!.role_id,
+      "role_builtin_member"
+    );
+  });
+
+  it("does not report success or retry the mutation when the verification query fails", async () => {
+    const database = createDatabase();
+    const runner = databaseRunner(database);
+    let imported = false;
+    await assert.rejects(
+      run(
+        { database: "workspace", userId: USER_ID, execute: true },
+        {
+          runWrangler: (name, operation) => {
+            if (imported) throw new Error("verification unavailable");
+            const output = runner(name, operation);
+            imported = operation[0] === "--file";
+            return output;
+          },
+        }
+      ),
+      /verification unavailable/
+    );
+    assert.equal(
+      database.prepare("SELECT COUNT(*) AS count FROM authorization_audit_events").get()!.count,
+      1
+    );
+  });
+
+  it("rejects a failed verification response even if it contains successful-looking rows", async () => {
+    const database = createDatabase();
+    const runner = databaseRunner(database);
+    let imported = false;
+    await assert.rejects(
+      run(
+        { database: "workspace", userId: USER_ID, execute: true },
+        {
+          runWrangler: (name, operation) => {
+            if (imported) {
+              return JSON.stringify([
+                {
+                  success: false,
+                  results: [{ report: "postcondition", status: "executed", audit_written: 1 }],
+                },
+              ]);
+            }
+            const output = runner(name, operation);
+            imported = operation[0] === "--file";
+            return output;
+          },
+        }
+      ),
+      /malformed JSON result/
+    );
+  });
+
+  it("never imports after an unknown preflight status", async () => {
+    let calls = 0;
+    await assert.rejects(
+      run(
+        { database: "workspace", userId: USER_ID, execute: true },
+        {
+          runWrangler: () => {
+            calls += 1;
+            return JSON.stringify([
+              { success: true, results: [{ report: "preflight", status: "unknown" }] },
+            ]);
+          },
+        }
+      ),
+      /no valid Owner bootstrap preflight/
+    );
+    assert.equal(calls, 1);
+  });
+
+  for (const execute of [false, true]) {
+    it(
+      execute ? "does not import for a current Owner" : "does not import during a dry run",
+      async () => {
+        const database = createDatabase();
+        if (execute)
+          database.exec("UPDATE user_role_assignments SET role_id = 'role_builtin_owner'");
+        const runner = databaseRunner(database);
+        const operations: string[] = [];
+        await run(
+          { database: "workspace", userId: USER_ID, execute },
+          {
+            runWrangler: (name, operation) => {
+              operations.push(operation[0]);
+              return runner(name, operation);
+            },
+          }
+        );
+        assert.deepEqual(operations, ["--command"]);
+        assert.equal(
+          database.prepare("SELECT COUNT(*) AS count FROM authorization_audit_events").get()!.count,
+          0
+        );
+      }
+    );
+  }
 });

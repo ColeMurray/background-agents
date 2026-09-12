@@ -762,7 +762,9 @@ The command uses Wrangler credentials (`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_AC
 `wrangler login`) and targets remote D1. It refuses a suspended/missing user, a missing or ambiguous
 assignment, or another unsuspended Owner. There is no force option. Execution is one atomic Wrangler
 SQL file: it writes one redacted `workspace.owner_bootstrapped` service audit event and replaces the
-target's assignment. A no-op writes nothing.
+target's assignment. After the import, a separate read verifies the current assignment and the exact
+audit event from this invocation before reporting completion; import statistics alone are not proof
+of ownership. A no-op writes nothing.
 
 6. Verify the control-plane health response contains `"rbac":{"ownerAssignment":"present"}`:
 
