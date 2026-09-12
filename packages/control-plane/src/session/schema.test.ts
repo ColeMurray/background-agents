@@ -54,6 +54,32 @@ function expectClientRequestIdIndex(db: DatabaseSync): void {
   ]);
 }
 
+it("upgrades existing sessions with a persisted status revision and preserves it on restart", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("CREATE TABLE session (id TEXT PRIMARY KEY, status TEXT, updated_at INTEGER)");
+    db.exec("INSERT INTO session VALUES ('legacy', 'archived', 5000)");
+    db.exec(
+      "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
+    );
+    for (const migration of MIGRATIONS.filter(({ id }) => id < 51)) {
+      db.prepare("INSERT INTO _schema_migrations VALUES (?, 0)").run(migration.id);
+    }
+    applyMigrations(createDatabaseSql(db));
+    expect(db.prepare("SELECT * FROM session").get()).toEqual({
+      id: "legacy",
+      status: "archived",
+      updated_at: 5000,
+      status_revision: 1,
+    });
+    db.exec("UPDATE session SET status_revision = 7");
+    applyMigrations(createDatabaseSql(db));
+    expect(db.prepare("SELECT status_revision FROM session").get()).toEqual({ status_revision: 7 });
+  } finally {
+    db.close();
+  }
+});
+
 describe("applyMigrations", () => {
   let mock: ReturnType<typeof createMockSql>;
 

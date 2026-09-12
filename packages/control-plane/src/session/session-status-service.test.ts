@@ -26,6 +26,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: "high",
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user",
     spawn_depth: 0,
@@ -61,8 +62,6 @@ function harness(options: { session?: SessionRow | null } = {}) {
   const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) } as SessionMessenger;
 
   const sessionIndex = {
-    updateStatus: vi.fn(async () => true),
-    repairStatus: vi.fn(async () => true),
     finalizeChildAdmission: vi.fn(async () => {}),
     updateMetrics: vi.fn(async () => true),
   };
@@ -82,6 +81,7 @@ function harness(options: { session?: SessionRow | null } = {}) {
   };
   const backgroundTasks = createTestBackgroundTasks();
 
+  const statusProjection = { project: vi.fn(async () => true) };
   const service = new SessionStatusService(
     backgroundTasks,
     log as unknown as Logger,
@@ -90,11 +90,13 @@ function harness(options: { session?: SessionRow | null } = {}) {
     artifactRepository,
     messenger,
     sessionIndex,
+    statusProjection,
     parentSessions
   );
 
   return {
     service,
+    statusProjection,
     repository,
     artifactRepository,
     broadcast,
@@ -106,6 +108,44 @@ function harness(options: { session?: SessionRow | null } = {}) {
   };
 }
 
+describe("SessionStatusService.confirmIndexStatus", () => {
+  it("confirms the current archive revision through the generic projection", async () => {
+    const h = harness({ session: createSession({ status: "archived" }) });
+    await h.service.confirmIndexStatus("archived");
+    expect(h.statusProjection.project).toHaveBeenCalledWith(
+      "public-session-1",
+      "archived",
+      1,
+      2000
+    );
+  });
+  it("rejects a missing or superseded projection", async () => {
+    const h = harness({ session: createSession({ status: "archived" }) });
+    h.statusProjection.project.mockResolvedValue(false);
+    await expect(h.service.confirmIndexStatus("archived")).rejects.toThrow("missing or superseded");
+  });
+  it("does not project when the local status has changed", async () => {
+    const h = harness();
+    await expect(h.service.confirmIndexStatus("archived")).rejects.toThrow("superseded");
+    expect(h.statusProjection.project).not.toHaveBeenCalled();
+  });
+  it("rejects a newer local generation even if it has the same status", async () => {
+    const h = harness({ session: createSession({ status: "archived" }) });
+    h.statusProjection.project.mockImplementation(async () => {
+      h.repository.getSession.mockReturnValue(
+        createSession({ status: "archived", status_revision: 3 })
+      );
+      return true;
+    });
+    await expect(h.service.confirmIndexStatus("archived")).rejects.toThrow("superseded");
+  });
+  it("propagates projection outages", async () => {
+    const h = harness({ session: createSession({ status: "archived" }) });
+    h.statusProjection.project.mockRejectedValue(new Error("D1 unavailable"));
+    await expect(h.service.confirmIndexStatus("archived")).rejects.toThrow("D1 unavailable");
+  });
+});
+
 describe("SessionStatusService.transition", () => {
   it("returns false without side effects when there is no session", async () => {
     const h = harness({ session: null });
@@ -113,7 +153,7 @@ describe("SessionStatusService.transition", () => {
     expect(await h.service.transition("active")).toBe(false);
 
     expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
-    expect(h.sessionIndex.updateStatus).not.toHaveBeenCalled();
+    expect(h.statusProjection.project).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
@@ -129,9 +169,10 @@ describe("SessionStatusService.transition", () => {
     );
     const updatedAt = h.repository.updateSessionStatus.mock.calls[0][2] as number;
     expect(updatedAt).toBeGreaterThan(2000);
-    expect(h.sessionIndex.updateStatus).toHaveBeenCalledWith(
+    expect(h.statusProjection.project).toHaveBeenCalledWith(
       "public-session-1",
       "active",
+      2,
       updatedAt
     );
     expect(h.sessionIndex.finalizeChildAdmission).toHaveBeenCalledWith("public-session-1");
@@ -143,7 +184,7 @@ describe("SessionStatusService.transition", () => {
 
     expect(await h.service.transition("active")).toBe(false);
 
-    expect(h.sessionIndex.updateStatus).toHaveBeenCalledWith("public-session-1", "active", 2000);
+    expect(h.statusProjection.project).toHaveBeenCalledWith("public-session-1", "active", 1, 2000);
     expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.parentFetch).not.toHaveBeenCalled();
@@ -184,7 +225,7 @@ describe("SessionStatusService.transition", () => {
 
   it("logs index sync failures without throwing", async () => {
     const h = harness({ session: createSession({ status: "created" }) });
-    h.sessionIndex.updateStatus.mockRejectedValue(new Error("d1 down"));
+    h.statusProjection.project.mockRejectedValue(new Error("d1 down"));
 
     expect(await h.service.transition("active")).toBe(true);
 
@@ -232,7 +273,7 @@ describe("SessionStatusService.cancel", () => {
   it("closes local status and unfinished messages before publishing projections", async () => {
     const h = harness({ session: createSession({ status: "active" }) });
     let releaseIndex!: () => void;
-    h.sessionIndex.updateStatus.mockImplementation(
+    h.statusProjection.project.mockImplementation(
       () => new Promise<boolean>((resolve) => (releaseIndex = () => resolve(true)))
     );
     const terminalize = vi.fn();
@@ -355,13 +396,18 @@ describe("SessionStatusService.repairIndexStatus", () => {
 
     await h.service.repairIndexStatus();
 
-    expect(h.sessionIndex.repairStatus).toHaveBeenCalledWith("public-session-1", "completed");
+    expect(h.statusProjection.project).toHaveBeenCalledWith(
+      "public-session-1",
+      "completed",
+      1,
+      2000
+    );
   });
 
   it("logs and propagates repair failures", async () => {
     const h = harness({ session: createSession({ status: "completed" }) });
     const error = new Error("d1 down");
-    h.sessionIndex.repairStatus.mockRejectedValue(error);
+    h.statusProjection.project.mockRejectedValue(error);
 
     await expect(h.service.repairIndexStatus()).rejects.toThrow(error);
 

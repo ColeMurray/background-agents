@@ -175,7 +175,7 @@ export class SessionCoreRepository {
 
   updateSessionStatus(sessionId: string, status: SessionStatus, updatedAt: number): void {
     this.sql.exec(
-      `UPDATE session SET status = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE session SET status = ?, updated_at = ?, status_revision = status_revision + 1 WHERE id = ?`,
       status,
       updatedAt,
       sessionId

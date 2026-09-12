@@ -24,6 +24,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: null,
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user",
     spawn_depth: 0,
