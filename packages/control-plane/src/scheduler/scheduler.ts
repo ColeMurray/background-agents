@@ -9,6 +9,11 @@
  */
 
 import {
+  DEFAULT_HARNESS,
+  getValidHarnessOrDefault,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
+import {
   matchesConditions,
   conditionRegistry,
   buildSlackContextBlock,
@@ -54,14 +59,16 @@ import {
   type SlackCompletionContext,
 } from "./slack-completion";
 import { UserStore } from "../db/user-store";
-import { createRequestMetrics } from "../db/instrumented-d1";
+import { createRequestMetrics } from "../db/instrumented-sql-database";
 import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
-import type { Logger } from "../logger";
+import type { CorrelationContext, Logger } from "../logger";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { BackgroundTasks } from "../platform-ports";
 import { initializeSession } from "../session/initialize";
+import { createSessionRuntimeClient } from "../session/runtime-client";
+import { SessionInternalPaths } from "../session/contracts";
 import type { SessionInitInput } from "../session/initialize";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
@@ -258,11 +265,12 @@ type SchedulerPromptRequest = Pick<
 
 export async function resolveAutomationProviderAuth(
   db: SqlDatabase,
-  automationId: string
+  automationId: string,
+  harness: HarnessId = DEFAULT_HARNESS
 ): Promise<SessionModelProviderAuthInput[]> {
   const pinRows = await new AutomationModelProviderAuthStore(db).list(automationId);
   const explicit = toProviderSelections(pinRows);
-  const resolved = await resolveSessionProviderAuth(db, { explicit, unattended: true });
+  const resolved = await resolveSessionProviderAuth(db, { explicit, unattended: true, harness });
   const pinnedProviders = new Set(pinRows.map((pin) => pin.provider));
   return resolved.map((auth) =>
     pinnedProviders.has(auth.provider) && auth.selectionSource === "explicit"
@@ -463,7 +471,11 @@ export class Scheduler {
     if (launchCandidates.length > 0) {
       try {
         providerAuthSnapshot = {
-          providerAuth: await resolveAutomationProviderAuth(this.db, automation.id),
+          providerAuth: await resolveAutomationProviderAuth(
+            this.db,
+            automation.id,
+            getValidHarnessOrDefault(automation.harness)
+          ),
         };
       } catch (error) {
         providerAuthSnapshot = { error };
@@ -1490,6 +1502,7 @@ export class Scheduler {
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,
+      harness: getValidHarnessOrDefault(automation.harness),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,
       participantUserId: executionPrincipal.participantUserId,
@@ -1529,13 +1542,17 @@ export class Scheduler {
       automationName: automation.name,
     };
 
-    await this.enqueueSessionPrompt(sessionId, {
-      content: instructionsOverride ?? automation.instructions,
-      authorId: executionPrincipal.participantUserId,
-      canonicalUserId: executionPrincipal.platformUserId,
-      source: "automation",
-      callbackContext,
-    });
+    await this.enqueueSessionPrompt(
+      sessionId,
+      {
+        content: instructionsOverride ?? automation.instructions,
+        authorId: executionPrincipal.participantUserId,
+        canonicalUserId: executionPrincipal.platformUserId,
+        source: "automation",
+        callbackContext,
+      },
+      { trace_id: `automation:${automation.id}`, request_id: runId }
+    );
   }
 
   /**
@@ -1571,13 +1588,22 @@ export class Scheduler {
     };
 
     try {
-      await this.enqueueSessionPrompt(sessionId, {
-        content: event.text,
-        authorId: `slack:${event.actorUserId}`,
-        canonicalUserId: actorUserId,
-        source: "slack",
-        callbackContext,
-      });
+      await this.enqueueSessionPrompt(
+        sessionId,
+        {
+          content: event.text,
+          authorId: `slack:${event.actorUserId}`,
+          canonicalUserId: actorUserId,
+          source: "slack",
+          callbackContext,
+        },
+        // A steerable run takes many follow-ups; each inbound message is its
+        // own hop, so the request id is the message's, not the run's.
+        {
+          trace_id: `automation:${automation.id}`,
+          request_id: `slack:${event.channelId}:${event.ts}`,
+        }
+      );
       this.log.info("Steered thread session with slack follow-up", {
         event: "scheduler.slack_steer",
         automation_id: automation.id,
@@ -1596,17 +1622,21 @@ export class Scheduler {
     }
   }
 
-  /** Enqueue a prompt onto a session's queue via its DO `/internal/prompt` route. */
+  /** Enqueue a prompt onto a session's queue through its runtime's prompt route. */
   private async enqueueSessionPrompt(
     sessionId: string,
-    body: SchedulerPromptRequest
+    body: SchedulerPromptRequest,
+    ctx: CorrelationContext
   ): Promise<void> {
-    const stub = this.env.SESSION.get(this.env.SESSION.idFromName(sessionId));
-    const promptResponse = await stub.fetch("http://internal/internal/prompt", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const promptResponse = await createSessionRuntimeClient(this.env, ctx).fetch(
+      sessionId,
+      SessionInternalPaths.prompt,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
 
     if (!promptResponse.ok) {
       throw new Error(`Prompt enqueue failed with status ${promptResponse.status}`);

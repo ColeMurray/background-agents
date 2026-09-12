@@ -6,40 +6,58 @@ and DeepSeek models are available but must be enabled in **Settings > Models**. 
 subscriptions are configured in **Settings > Provider Accounts**; Z.AI Coding Plan requires
 `ZHIPU_API_KEY`; DeepSeek requires `DEEPSEEK_API_KEY`.
 
-OpenAI and xAI session selectors offer provider policy, any active connected account, and API-key
-mode. Automation editors can resolve defaults on each run or pin an account/API-key choice.
+OpenAI, xAI and Anthropic session selectors offer provider policy, any active connected account, and
+API-key mode. Automation editors can resolve defaults on each run or pin an account/API-key choice.
 Unattended Slack, GitHub, Linear, and unpinned automation launches follow the provider's configured
-unattended mode.
+unattended mode. For Anthropic that policy reaches only Claude Agent automations: Slack, GitHub and
+Linear launches run on OpenCode, which uses the API key.
+
+## Harnesses
+
+A session runs on one agent harness, fixed at create. Which models and which Anthropic
+authentication a session can use depends on it:
+
+| Harness      | Models            | Anthropic authentication                   |
+| ------------ | ----------------- | ------------------------------------------ |
+| OpenCode     | every model below | `ANTHROPIC_API_KEY`                        |
+| Claude Agent | Anthropic models  | `ANTHROPIC_API_KEY` or a connected account |
+
+See [Using the Claude Agent Harness](CLAUDE_AGENT.md).
 
 ## Anthropic
 
-| Model ID                      | Display name      | Description                        | Reasoning efforts             | Default effort |
-| ----------------------------- | ----------------- | ---------------------------------- | ----------------------------- | -------------- |
-| `anthropic/claude-haiku-4-5`  | Claude Haiku 4.5  | Fast and efficient                 | high, max                     | max            |
-| `anthropic/claude-sonnet-4-5` | Claude Sonnet 4.5 | Balanced performance               | high, max                     | max            |
-| `anthropic/claude-sonnet-4-6` | Claude Sonnet 4.6 | Balanced, fast coding              | low, medium, high, max        | high           |
-| `anthropic/claude-sonnet-5`   | Claude Sonnet 5   | Latest Sonnet, adaptive thinking   | low, medium, high, xhigh, max | high           |
-| `anthropic/claude-opus-4-5`   | Claude Opus 4.5   | Most capable                       | high, max                     | max            |
-| `anthropic/claude-opus-4-6`   | Claude Opus 4.6   | Most capable, adaptive thinking    | low, medium, high, max        | high           |
-| `anthropic/claude-opus-4-7`   | Claude Opus 4.7   | Most capable, adaptive thinking    | low, medium, high, xhigh, max | high           |
-| `anthropic/claude-opus-4-8`   | Claude Opus 4.8   | Most capable, adaptive thinking    | low, medium, high, xhigh, max | high           |
-| `anthropic/claude-opus-5`     | Claude Opus 5     | Latest Opus, adaptive thinking     | low, medium, high, xhigh, max | high           |
-| `anthropic/claude-fable-5`    | Claude Fable 5    | Most powerful, new tier above Opus | low, medium, high, xhigh, max | high           |
+Anthropic models run on both harnesses. A connected Claude subscription (Settings > Provider
+Accounts) applies only on the Claude Agent harness; OpenCode sessions use `ANTHROPIC_API_KEY`.
+
+| Model ID                      | Display name      | Description                                       | Reasoning efforts             | Default effort |
+| ----------------------------- | ----------------- | ------------------------------------------------- | ----------------------------- | -------------- |
+| `anthropic/claude-haiku-4-5`  | Claude Haiku 4.5  | Fast and efficient                                | high, max                     | max            |
+| `anthropic/claude-sonnet-4-5` | Claude Sonnet 4.5 | Balanced performance                              | high, max                     | max            |
+| `anthropic/claude-sonnet-4-6` | Claude Sonnet 4.6 | Balanced, fast coding                             | low, medium, high, max        | high           |
+| `anthropic/claude-sonnet-5`   | Claude Sonnet 5   | Latest Sonnet, adaptive thinking                  | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-opus-4-5`   | Claude Opus 4.5   | Most capable                                      | high, max                     | max            |
+| `anthropic/claude-opus-4-6`   | Claude Opus 4.6   | Most capable, adaptive thinking                   | low, medium, high, max        | high           |
+| `anthropic/claude-opus-4-7`   | Claude Opus 4.7   | Most capable, adaptive thinking                   | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-opus-4-8`   | Claude Opus 4.8   | Most capable, adaptive thinking                   | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-opus-5`     | Claude Opus 5     | Latest Opus, adaptive thinking                    | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-fable-5`    | Claude Fable 5    | Most powerful, new tier above Opus                | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-fable-5-1`  | Claude Fable 5.1  | Demanding reasoning and long-horizon agentic work | low, medium, high, xhigh, max | high           |
 
 ## OpenAI
 
 OpenAI models support connected ChatGPT provider accounts or `OPENAI_API_KEY` mode. See
 [Using OpenAI Models](OPENAI_MODELS.md) for account setup and coexistence details.
 
-| Model ID                     | Display name        | Description                                  | Reasoning efforts              | Default effort |
-| ---------------------------- | ------------------- | -------------------------------------------- | ------------------------------ | -------------- |
-| `openai/gpt-5.4`             | GPT 5.4             | Flagship model                               | none, low, medium, high, xhigh | Not set        |
-| `openai/gpt-5.5`             | GPT 5.5             | Latest flagship model                        | none, low, medium, high, xhigh | Not set        |
-| `openai/gpt-5.6-sol`         | GPT 5.6 Sol         | Frontier model for complex professional work | none, low, medium, high, xhigh | Not set        |
-| `openai/gpt-5.6-terra`       | GPT 5.6 Terra       | Balanced, cost-efficient everyday work       | none, low, medium, high, xhigh | Not set        |
-| `openai/gpt-5.6-luna`        | GPT 5.6 Luna        | Fast, cost-efficient high-volume workloads   | none, low, medium, high, xhigh | Not set        |
-| `openai/gpt-5.3-codex`       | GPT 5.3 Codex       | Latest codex                                 | low, medium, high, xhigh       | high           |
-| `openai/gpt-5.3-codex-spark` | GPT 5.3 Codex Spark | Low-latency codex variant                    | low, medium, high, xhigh       | high           |
+| Model ID                     | Display name        | Description                                    | Reasoning efforts              | Default effort |
+| ---------------------------- | ------------------- | ---------------------------------------------- | ------------------------------ | -------------- |
+| `openai/gpt-5.4`             | GPT 5.4             | Flagship model                                 | none, low, medium, high, xhigh | Not set        |
+| `openai/gpt-5.5`             | GPT 5.5             | Latest flagship model                          | none, low, medium, high, xhigh | Not set        |
+| `openai/gpt-5.6-sol`         | GPT 5.6 Sol         | Frontier model for complex professional work   | none, low, medium, high, xhigh | Not set        |
+| `openai/gpt-5.6-terra`       | GPT 5.6 Terra       | Balanced, cost-efficient everyday work         | none, low, medium, high, xhigh | Not set        |
+| `openai/gpt-5.6-luna`        | GPT 5.6 Luna        | Fast, cost-efficient high-volume workloads     | none, low, medium, high, xhigh | Not set        |
+| `openai/gpt-6-astra`         | GPT-6 Astra         | Most capable model for complex, demanding work | low, medium, high, xhigh, max  | medium         |
+| `openai/gpt-5.3-codex`       | GPT 5.3 Codex       | Latest codex                                   | low, medium, high, xhigh       | high           |
+| `openai/gpt-5.3-codex-spark` | GPT 5.3 Codex Spark | Low-latency codex variant                      | low, medium, high, xhigh       | high           |
 
 ## xAI / SuperGrok
 

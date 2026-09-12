@@ -32,6 +32,7 @@ packages = ["src"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["../sandbox-images/src"]
 
 [tool.ruff]
 extend = "../../ruff.toml"

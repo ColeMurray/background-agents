@@ -13,9 +13,9 @@ import {
 import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
-function createScheduler(schedulerEnv = env as Env) {
+function createScheduler(schedulerEnv = createCloudflareEnv(env)) {
   return new Scheduler(env.DB, schedulerEnv, { submit() {} });
 }
 
@@ -28,6 +28,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
     schedule_tz: "UTC",
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
@@ -552,13 +553,13 @@ describe("Scheduler (integration)", () => {
         }
         return new Response("Not Found", { status: 404 });
       });
-      const schedulerEnv = {
-        ...(env as Env),
+      const schedulerEnv = createCloudflareEnv({
+        ...env,
         SESSION: {
           idFromName: vi.fn((name: string) => name),
           get: vi.fn(() => ({ fetch: sessionFetch })),
         } as unknown as DurableObjectNamespace,
-      };
+      });
 
       const schedulers = [
         createScheduler(schedulerEnv),
@@ -736,13 +737,13 @@ describe("Scheduler (integration)", () => {
         }
         return new Response("Not Found", { status: 404 });
       });
-      const schedulerEnv = {
-        ...(env as Env),
+      const schedulerEnv = createCloudflareEnv({
+        ...env,
         SESSION: {
           idFromName: vi.fn((name: string) => name),
           get: vi.fn(() => ({ fetch: sessionFetch })),
         } as unknown as DurableObjectNamespace,
-      };
+      });
 
       await createScheduler(schedulerEnv).trigger("auto-requester-principal", requesterId);
 
@@ -778,13 +779,13 @@ describe("Scheduler (integration)", () => {
         }
         return new Response("Not Found", { status: 404 });
       });
-      const schedulerEnv = {
-        ...(env as Env),
+      const schedulerEnv = createCloudflareEnv({
+        ...env,
         SESSION: {
           idFromName: vi.fn((name: string) => name),
           get: vi.fn(() => ({ fetch: sessionFetch })),
         } as unknown as DurableObjectNamespace,
-      };
+      });
 
       const result = await createScheduler(schedulerEnv).trigger("auto-trig2", "user-1");
       expect(result).toEqual({

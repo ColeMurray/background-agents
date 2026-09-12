@@ -254,6 +254,43 @@ export function GrokIcon({ className, ...props }: IconProps) {
   );
 }
 
+export function AnthropicIcon({ className, ...props }: IconProps) {
+  return (
+    <svg
+      role="img"
+      className={className}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="currentColor"
+      {...props}
+    >
+      <title>Anthropic</title>
+      <path d="M17.304 3.541h-3.672l6.696 16.918H24Zm-10.608 0L0 20.459h3.744l1.37-3.553h7.005l1.369 3.553h3.744L10.536 3.541Zm-.371 10.223L8.616 7.82l2.291 5.945Z" />
+    </svg>
+  );
+}
+
+export function OpenCodeIcon({ className, ...props }: IconProps) {
+  return (
+    <svg
+      role="img"
+      className={className}
+      viewBox="0 0 512 512"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="currentColor"
+      {...props}
+    >
+      <title>OpenCode</title>
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z"
+      />
+      <path d="M320 224V352H192V224H320Z" opacity="0.45" />
+    </svg>
+  );
+}
+
 export function SlackIcon({ className }: IconProps) {
   return (
     <svg

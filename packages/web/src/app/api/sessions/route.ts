@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
       repoName: body.repoName,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
+      harness: body.harness,
       branch: body.branch,
       title: body.title,
       // The picker's other two target modes (mutually exclusive with the

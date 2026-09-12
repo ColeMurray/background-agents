@@ -1,4 +1,5 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { Logger } from "../../logger";
 import type { SessionDiffService } from "../diffs/service";
 import type { EventRepository } from "../event-repository";
 import type { SessionMessenger } from "../messenger";
@@ -25,7 +26,9 @@ export class SandboxRuntimeEventHandler {
       title: string,
       options?: SessionTitleUpdateOptions
     ) => SessionTitleUpdateResult,
-    private readonly updateLastActivity: (timestamp: number) => void
+    private readonly updateLastActivity: (timestamp: number) => void,
+    private readonly refreshSlackActivity: (messageId: string, timestamp: number) => void,
+    private readonly log: Logger
   ) {}
 
   handleHeartbeat(context: SandboxEventContext): void {
@@ -35,6 +38,10 @@ export class SandboxRuntimeEventHandler {
     // the sandbox is still occupied and should renew its activity timestamp.
     if (context.processingMessage !== null) {
       this.updateLastActivity(context.now);
+      // The same proof drives Slack's assistant-thread indicator, which Slack
+      // clears two minutes after the last update. Refreshing it from here, and
+      // not from a timer, is what keeps it from outliving the turn it claims.
+      this.refreshSlackActivity(context.processingMessage.id, context.now);
     }
   }
 
@@ -43,6 +50,17 @@ export class SandboxRuntimeEventHandler {
   }
 
   handleReady(event: Extract<SandboxEvent, { type: "ready" }>, context: SandboxEventContext): void {
+    // The runtime reports which harness actually booted; the session's
+    // harness is fixed at create, so a mismatch is an image/config drift
+    // worth a log line, never something to reconcile silently.
+    const expectedHarness = this.repository.getSession()?.harness;
+    if (event.harness && expectedHarness && event.harness !== expectedHarness) {
+      this.log.warn("sandbox.harness_mismatch", {
+        event: "sandbox.harness_mismatch",
+        expected_harness: expectedHarness,
+        reported_harness: event.harness,
+      });
+    }
     this.diffService.pinBaselines(event);
     // Fills the column a fresh spawn cleared; a restore has already seeded
     // the snapshot's version, which outranks whatever this sandbox reports.

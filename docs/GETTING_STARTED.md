@@ -53,7 +53,7 @@ Create accounts on these services before continuing:
 ### Required Tools
 
 ```bash
-# Terraform (1.9.0+)
+# Terraform (1.14.0+; see terraform/environments/production/versions.tf)
 brew install terraform
 
 # Node.js (22+)
@@ -169,21 +169,17 @@ Create an R2 API Token:
    - **Sandboxes**: Read, Write (runtime sandbox management and preview URLs)
    - **Snapshots**: Read, Write, Delete (automated snapshot builds via Terraform)
 2. Note the **API URL** (e.g., `https://app.daytona.io/api`) and optional **target**
-3. Seed the named base snapshot before pointing traffic at Daytona:
-   ```bash
-   cd packages/daytona-infra
-   pip install daytona   # or: uv pip install daytona
-   python -m src.bootstrap --force
-   ```
-   After initial setup, Terraform automatically rebuilds the snapshot when source files change.
+3. Terraform builds and verifies a new base snapshot before switching the Worker to it. See the
+   [sandbox image workflow](../packages/sandbox-images/README.md) for dependency updates and manual
+   builds.
 4. Set `sandbox_provider = "daytona"` in `terraform.tfvars`
 5. Set `daytona_api_url`, `daytona_api_key`, and `daytona_base_snapshot` in `terraform.tfvars`
 
 The control plane calls the Daytona REST API directly — no shim service to deploy.
 
-> **Important**: Unlike Modal, the Daytona provider does not automatically inject LLM API keys into
-> sandboxes. If you plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in
-> Settings > Secrets after deploying. See [Secrets Management](SECRETS.md) for details.
+> **Important**: the Daytona provider has no fleet-wide key of its own. Add the key for the models
+> you plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets
+> after deploying. See [Secrets Management](SECRETS.md) for details.
 
 ### Vercel Sandboxes
 
@@ -210,9 +206,9 @@ the latest created Vercel snapshot at sandbox creation time. The `vercel_base_sn
 is still available as a manual override. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md)
 for the full runtime, snapshot, and resource configuration model.
 
-> **Important**: Unlike Modal, the Vercel provider does not automatically inject LLM API keys into
-> sandboxes. If you plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in
-> Settings > Secrets after deploying. See [Secrets Management](SECRETS.md) for details.
+> **Important**: the Vercel provider has no fleet-wide key of its own. Add the key for the models
+> you plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets
+> after deploying. See [Secrets Management](SECRETS.md) for details.
 
 ### OpenComputer
 
@@ -256,11 +252,17 @@ instead.
 For the full runtime, lifecycle, and configuration model, see
 [E2B Sandbox Provider](E2B_SANDBOX_PROVIDER.md).
 
-> **Important**: The E2B provider does not automatically inject LLM API keys into sandboxes. If you
-> plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in Settings > Secrets
-> after deploying. See [Secrets Management](SECRETS.md) for details.
+> **Important**: the E2B provider has no fleet-wide key of its own. Add the key for the models you
+> plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets after
+> deploying. See [Secrets Management](SECRETS.md) for details.
 
 ### Anthropic
+
+Required by the default configuration: the Slack bot is enabled by default and its classifier runs
+on Claude, so `terraform apply` fails without this key. You can skip it only if you set both
+`enable_slack_bot = false` and `enable_linear_bot = false`, or point `classification_model` at an
+OpenAI model. Coding sessions themselves need no key here — those model credentials can be added as
+secrets in the web app after deploying.
 
 1. Go to [Anthropic Console](https://console.anthropic.com)
 2. Create an API key
@@ -578,7 +580,8 @@ linear_client_id       = ""          # From Step 4b (required if enabled)
 linear_client_secret   = ""          # From Step 4b (required if enabled)
 linear_webhook_secret  = ""          # From Step 4b (required if enabled)
 
-# API Keys
+# API Keys. Optional: leave blank to add model credentials as secrets in the web
+# app instead. Required only when the Slack/Linear classifier runs on Anthropic.
 anthropic_api_key = "sk-ant-..."
 
 # Slack/Linear classifier provider, chosen by classification_model.
@@ -1001,11 +1004,90 @@ curl -I "$(terraform output -raw web_app_url)"
 
 ## Step 10: Set Up CI/CD (Optional)
 
-Enable automatic deployments when you push to main by adding GitHub Secrets.
+Enable automatic deployments when you push to main by configuring GitHub Actions secrets and
+variables under your fork's **Settings → Secrets and variables → Actions**.
 
-Go to your fork's Settings → Secrets and variables → Actions, and add:
+Use the **Variables** tab for the following non-secret settings (only configure the providers and
+features you use):
 
-| Secret Name                        | Value                                                                                       |
+```text
+# Deployment and Cloudflare
+DEPLOYMENT_NAME
+WEB_PLATFORM
+SANDBOX_PROVIDER
+CLOUDFLARE_ACCOUNT_ID
+CLOUDFLARE_WORKER_SUBDOMAIN
+ENABLE_DURABLE_OBJECT_BINDINGS
+
+# Vercel web app
+VERCEL_TEAM_ID
+VERCEL_PROJECT_ID
+
+# Modal
+MODAL_WORKSPACE
+MODAL_ENVIRONMENT
+MODAL_ENVIRONMENT_WEB_SUFFIX
+
+# Application IDs and bot configuration
+GH_OAUTH_CLIENT_ID
+GOOGLE_CLIENT_ID
+GH_APP_ID
+GH_APP_INSTALLATION_ID
+ENABLE_SLACK_BOT
+ENABLE_GITHUB_BOT
+GH_BOT_USERNAME
+ENABLE_LINEAR_BOT
+LINEAR_CLIENT_ID
+
+# Access control and branding
+ALLOWED_USERS
+ALLOWED_EMAIL_DOMAINS
+ALLOWED_EMAILS
+ALLOWED_GITHUB_ORGS
+APP_NAME
+APP_ICON_URL
+
+# Daytona
+DAYTONA_API_URL
+DAYTONA_BASE_SNAPSHOT
+DAYTONA_TARGET
+
+# Vercel Sandbox
+VERCEL_SANDBOX_PROJECT_ID
+VERCEL_SANDBOX_TEAM_ID
+VERCEL_SANDBOX_API_BASE_URL
+VERCEL_BASE_SNAPSHOT_ID
+VERCEL_SANDBOX_RUNTIME
+VERCEL_SNAPSHOT_EXPIRATION_MS
+
+# OpenComputer
+OPENCOMPUTER_API_URL
+OPENCOMPUTER_TEMPLATE
+OPENCOMPUTER_PROJECT_ID
+OPENCOMPUTER_TARGET
+
+# E2B
+E2B_TEMPLATE_ID
+E2B_API_URL
+E2B_SANDBOX_TIMEOUT_SECONDS
+E2B_AUTO_PAUSE
+E2B_TEMPLATE_CPU
+E2B_TEMPLATE_MEMORY_MB
+```
+
+These settings resolve as **non-empty variable → same-named secret → existing default**, where a
+workflow default exists. Existing secret-only deployments need no migration. If both are set, the
+variable wins; delete it to return to the secret. An empty variable does not clear an existing
+secret. Values such as `false` and `0` are strings in Actions variables and are preserved.
+
+Keep credentials in the **Secrets** tab: API tokens/keys, OAuth client secrets, signing secrets,
+private keys, encryption keys, and both `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`. Allowlist values
+may contain personal information; leave them in secrets if you prefer masking in workflow logs.
+
+The table below describes deployment settings and credentials; use Variables for the names above and
+Secrets for credentials:
+
+| Setting Name                       | Value                                                                                       |
 | ---------------------------------- | ------------------------------------------------------------------------------------------- |
 | `CLOUDFLARE_API_TOKEN`             | Your Cloudflare API token                                                                   |
 | `CLOUDFLARE_ACCOUNT_ID`            | Your Cloudflare account ID                                                                  |
@@ -1048,7 +1130,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `LINEAR_CLIENT_ID`                 | Linear OAuth application client ID (required if Linear enabled)                             |
 | `LINEAR_CLIENT_SECRET`             | Linear OAuth application client secret (required if Linear enabled)                         |
 | `LINEAR_WEBHOOK_SECRET`            | Linear webhook signing secret (required if Linear enabled)                                  |
-| `ANTHROPIC_API_KEY`                | Anthropic API key                                                                           |
+| `ANTHROPIC_API_KEY`                | Optional; reaches Modal and OpenComputer sandboxes; required by an Anthropic classifier     |
 | `CLASSIFICATION_OPENAI_API_KEY`    | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                |
 | `OPENAI_API_KEY`                   | Optional OpenAI API key used when a session selects API-key authentication                  |
 | `XAI_API_KEY`                      | Optional xAI API key used when a session selects API-key authentication                     |
@@ -1080,13 +1162,22 @@ application in **Linear Settings → API → Applications**. This provider-side 
 by Terraform. Existing eligible single-workspace installations transition on their next request
 without uninstalling or reinstalling the app.
 
-**Bulk upload secrets with `gh` CLI:**
+**Bulk upload with `gh` CLI:**
 
-Instead of adding secrets one by one, create a `.secrets` file (don't commit this!):
+For non-secret settings, create a `.variables` file:
+
+```dotenv
+CLOUDFLARE_ACCOUNT_ID=your-account-id
+DEPLOYMENT_NAME=my-deployment
+WEB_PLATFORM=cloudflare
+ENABLE_SLACK_BOT=false
+```
+
+Upload it with `gh variable set -f .variables`. For credentials, create a `.secrets` file (don't
+commit this!):
 
 ```
 CLOUDFLARE_API_TOKEN=your-token
-CLOUDFLARE_ACCOUNT_ID=your-account-id
 ANTHROPIC_API_KEY=sk-ant-...
 DEEPSEEK_API_KEY=sk-...
 # ... add all secrets
@@ -1274,11 +1365,10 @@ If the bot doesn't see the original message when tagged in a thread reply:
 5. For PR reviews, ensure auto-review is enabled for the repository and the PR is not a draft
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
 
-### "Model not found" errors (Daytona or Vercel provider)
+### "Model not found" errors
 
-If sessions fail with "Model not found" when using `sandbox_provider = "daytona"` or
-`sandbox_provider = "vercel"`, the required LLM API key is likely missing. Unlike Modal (which
-injects keys automatically), these providers require you to add them as global secrets:
+If sessions fail with "Model not found", the API key for the selected model is missing. Deployments
+that set no fleet-wide key in Terraform supply model credentials as secrets instead:
 
 1. Go to **Settings > Secrets** in the web app
 2. Select **All Repositories (Global)** from the scope dropdown

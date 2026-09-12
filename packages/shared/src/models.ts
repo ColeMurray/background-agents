@@ -124,6 +124,15 @@ export const MODEL_CATALOG = [
           default: "high",
         },
       },
+      {
+        id: "anthropic/claude-fable-5-1",
+        name: "Claude Fable 5.1",
+        description: "Demanding reasoning and long-horizon agentic work",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
     ],
   },
   {
@@ -173,6 +182,15 @@ export const MODEL_CATALOG = [
         reasoning: {
           efforts: ["none", "low", "medium", "high", "xhigh", "max"],
           default: GPT_5_6_DEFAULT_REASONING_EFFORT,
+        },
+      },
+      {
+        id: "openai/gpt-6-astra",
+        name: "GPT-6 Astra",
+        description: "Most capable model for complex, demanding work",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "medium",
         },
       },
       {

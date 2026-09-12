@@ -54,6 +54,7 @@ export {
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
   parseRepositoryFullName,
+  validateRepositoryPathSegments,
   normalizeOptionalRepositoryPair,
 } from "./repositories";
 export type {
@@ -187,10 +188,13 @@ export type {
 } from "./audit-events";
 
 export {
+  MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
   MAX_AUTOMATION_REPOSITORIES,
+  MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
+  validateAutomationTargetCounts,
   sentryClientSecretSchema,
   createAutomationRequestSchema,
   updateAutomationRequestSchema,
@@ -235,9 +239,18 @@ export {
   legacyProviderCredentialsResponseSchema,
   connectOpenAIModelProviderAccountRequestSchema,
   connectXaiModelProviderAccountRequestSchema,
+  connectAnthropicModelProviderAccountRequestSchema,
   connectModelProviderAccountRequestSchema,
   reconnectOpenAIModelProviderAccountRequestSchema,
   reconnectXaiModelProviderAccountRequestSchema,
+  reconnectAnthropicModelProviderAccountRequestSchema,
+  startProviderAuthorizationCodeRequestSchema,
+  startProviderAuthorizationCodeResponseSchema,
+  completeProviderAuthorizationCodeRequestSchema,
+  providerAuthorizationCodeStatusResponseSchema,
+  MODEL_PROVIDER_ACCOUNT_CONNECTION_METHOD,
+  STATIC_CREDENTIAL_PROVIDER_IDS,
+  modelProviderAccountConnectionMethod,
   reconnectModelProviderAccountRequestSchema,
 } from "./provider-accounts";
 export type {
@@ -245,6 +258,11 @@ export type {
   ProviderAuthSelection,
   ProviderAuthMode,
   SessionProviderAuthMode,
+  ModelProviderAccountConnectionMethod,
+  StartProviderAuthorizationCodeRequest,
+  StartProviderAuthorizationCodeResponse,
+  CompleteProviderAuthorizationCodeRequest,
+  ProviderAuthorizationCodeStatusResponse,
   ModelProviderSelections,
   ModelProviderAccountStatus,
   ModelProviderAccount,

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Logger } from "../../../logger";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
+import { getValidHarnessOrDefault, harnessIdSchema } from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { normalizeSandboxSettings } from "../../../sandbox/settings";
@@ -47,6 +48,7 @@ const initRequestSchema = z.object({
   /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
   environmentId: z.string().nullable().optional(),
   title: z.string().optional(),
+  harness: harnessIdSchema.optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().nullable().optional(),
   userId: z.string(),
@@ -128,6 +130,12 @@ export class SessionInitHandler {
         { status: 400 }
       );
     }
+    // A retried init must not rebuild sandbox/participant rows or reset live
+    // budget state. If the first attempt committed but never scheduled the
+    // spawn, the first prompt spawns through processMessageQueue.
+    if (this.sessionCoreRepository.getSession()) {
+      return Response.json({ sessionId, status: "created" });
+    }
 
     let encryptedToken = body.scmTokenEncrypted ?? null;
     if (body.scmToken) {
@@ -178,6 +186,10 @@ export class SessionInitHandler {
       );
     }
 
+    const normalizedSandboxSettings = body.sandboxSettings
+      ? normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" })
+      : null;
+
     this.sessionCoreRepository.transaction(() => {
       this.sessionCoreRepository.upsertSession({
         id: sessionId,
@@ -187,6 +199,7 @@ export class SessionInitHandler {
         repoName,
         repoId: hasRepoOwner ? body.repoId : null,
         baseBranch,
+        harness: getValidHarnessOrDefault(body.harness),
         model,
         reasoningEffort,
         status: "created",
@@ -195,9 +208,10 @@ export class SessionInitHandler {
         spawnDepth: body.spawnDepth ?? 0,
         codeServerEnabled: body.codeServerEnabled ?? false,
         vncEnabled: body.vncEnabled ?? false,
-        sandboxSettings: body.sandboxSettings
-          ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
+        sandboxSettings: normalizedSandboxSettings
+          ? JSON.stringify(normalizedSandboxSettings)
           : null,
+        maxCostUsd: normalizedSandboxSettings?.maxSessionCostUsd ?? null,
         environmentId: body.environmentId ?? null,
         createdAt: now,
         updatedAt: now,

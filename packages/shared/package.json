@@ -22,6 +22,10 @@
       "import": "./dist/models.js",
       "types": "./dist/models.d.ts"
     },
+    "./harnesses": {
+      "import": "./dist/harnesses.js",
+      "types": "./dist/harnesses.d.ts"
+    },
     "./classification": {
       "import": "./dist/classification.js",
       "types": "./dist/classification.d.ts"

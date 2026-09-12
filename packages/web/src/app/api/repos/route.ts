@@ -1,13 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
-
-interface ControlPlaneReposResponse {
-  repos: EnrichedRepository[];
-  cached: boolean;
-  cachedAt: string;
-}
+import { controlPlaneReposResponseSchema } from "@open-inspect/shared/types/repository-catalog";
 
 export async function GET() {
   const session = await getServerAuthSession();
@@ -29,10 +23,11 @@ export async function GET() {
       );
     }
 
-    const data: ControlPlaneReposResponse = await response.json();
+    const parsed = controlPlaneReposResponseSchema.safeParse(await response.json());
+    if (!parsed.success) throw new Error("Invalid control plane repositories response");
 
     // The control plane returns repos in the format we need
-    return NextResponse.json({ repos: data.repos });
+    return NextResponse.json({ repos: parsed.data.repos });
   } catch (error) {
     console.error("Error fetching repos:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

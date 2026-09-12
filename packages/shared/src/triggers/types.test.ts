@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { automationEventSchema, githubAutomationEventSchema } from "./types";
+import { automationEventSchema, githubAutomationEventSchema, triggerConfigSchema } from "./types";
 
 describe("automationEventSchema", () => {
   it("parses a valid Slack automation event", () => {
@@ -100,5 +100,39 @@ describe("automationEventSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe("persisted webhook filters", () => {
+  it("preserves scalar values accepted by existing editors and API clients", () => {
+    const config = {
+      conditions: [
+        {
+          type: "jsonpath",
+          operator: "all_match",
+          value: [
+            { path: "$.count", comparison: "gt", value: "3" },
+            { path: "$.count", comparison: "gte", value: true },
+            { path: "$.name", comparison: "contains", value: 3 },
+            { path: "$.name", comparison: "exists" },
+          ],
+        },
+      ],
+    };
+    expect(triggerConfigSchema.parse(config)).toEqual(config);
+  });
+
+  it.each([null, [], {}])("rejects non-scalar filter values: %j", (value) => {
+    expect(
+      triggerConfigSchema.safeParse({
+        conditions: [
+          {
+            type: "jsonpath",
+            operator: "all_match",
+            value: [{ path: "$.count", comparison: "gt", value }],
+          },
+        ],
+      }).success
+    ).toBe(false);
   });
 });

@@ -3,6 +3,7 @@
 import { useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
 import { describeCron } from "@open-inspect/shared/cron";
 import { getReasoningConfig } from "@open-inspect/shared/models";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
@@ -15,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon, PencilIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
+import { getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
@@ -31,15 +33,20 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { environments } = useEnvironments();
   // "Load more" grows the fetch limit rather than paging by offset: the
   // endpoint returns newest-first, so a larger limit re-fetches the head plus
-  // the next page in one request. Fine at automation-history scale; revisit
-  // with real offset pagination if histories grow large.
+  // the next page in one request. The endpoint refuses limits past its
+  // maximum, so the history stops there; revisit with real offset pagination
+  // if histories grow large.
   const [extraHistoryLimit, setExtraHistoryLimit] = useState(0);
+  const historyLimit = Math.min(
+    HISTORY_PAGE_SIZE + extraHistoryLimit,
+    MAX_AUTOMATION_INVOCATION_LIST_LIMIT
+  );
   const {
     invocations,
     total: totalInvocations,
     loading: loadingInvocations,
     mutate: mutateInvocations,
-  } = useAutomationInvocations(id, HISTORY_PAGE_SIZE + extraHistoryLimit, 0);
+  } = useAutomationInvocations(id, historyLimit, 0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const reasoningLabel = automation
@@ -303,6 +310,10 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 </div>
               )}
               <div>
+                <dt className="text-muted-foreground">Agent</dt>
+                <dd className="text-foreground">{getHarnessLabel(automation.harness)}</dd>
+              </div>
+              <div>
                 <dt className="text-muted-foreground">Model</dt>
                 <dd className="text-foreground">{formatModelNameLower(automation.model)}</dd>
               </div>
@@ -334,7 +345,10 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
               invocations={invocations}
               total={totalInvocations}
               loading={loadingInvocations}
-              hasMore={invocations.length < totalInvocations}
+              hasMore={
+                invocations.length < totalInvocations &&
+                historyLimit < MAX_AUTOMATION_INVOCATION_LIST_LIMIT
+              }
               onLoadMore={() => setExtraHistoryLimit((prev) => prev + HISTORY_PAGE_SIZE)}
             />
           </div>

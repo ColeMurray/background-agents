@@ -9,6 +9,7 @@ import type { SessionInboxCursor } from "./session-inbox-cursor";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
+/** Viewer, filtering, and pagination inputs for an inbox query. */
 export interface ListSessionInboxOptions {
   category: SessionInboxCategory;
   createdByUserIds?: readonly string[];
@@ -69,9 +70,11 @@ function toListItem(row: InboxSessionRow): SessionListItem {
   };
 }
 
+/** Builds viewer-specific session inbox pages from the D1 session index. */
 export class SessionInboxStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  /** List one inbox category with viewer-specific read state. */
   async list(options: ListSessionInboxOptions): Promise<ListSessionInboxResult> {
     const result = await this.bindInboxQuery(options).all<InboxSessionRow>();
     const page = this.buildPageData(options.limit, result.results ?? []);
@@ -85,6 +88,7 @@ export class SessionInboxStore {
     );
   }
 
+  /** List every inbox category with viewer-specific read state. */
   async snapshot(
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): Promise<ListSessionInboxSnapshotResult> {
@@ -127,8 +131,10 @@ export class SessionInboxStore {
            LIMIT ?
          )
          SELECT effective_sessions.*, selected_roots.latest_updated_at, selected_roots.category
-         FROM selected_roots
-         JOIN effective_sessions USING (effective_root_session_id)
+         -- CROSS JOIN pins the join order: walk the viewer's sessions once and
+         -- probe the selected roots, instead of rescanning every session per root.
+         FROM effective_sessions
+         CROSS JOIN selected_roots USING (effective_root_session_id)
          ORDER BY selected_roots.latest_updated_at DESC,
                   selected_roots.effective_root_session_id DESC,
                   effective_sessions.updated_at DESC,
@@ -171,8 +177,10 @@ export class SessionInboxStore {
            WHERE category_rank <= ?
          )
          SELECT effective_sessions.*, selected_roots.latest_updated_at, selected_roots.category
-         FROM selected_roots
-         JOIN effective_sessions USING (effective_root_session_id)
+         -- CROSS JOIN pins the join order: walk the viewer's sessions once and
+         -- probe the selected roots, instead of rescanning every session per root.
+         FROM effective_sessions
+         CROSS JOIN selected_roots USING (effective_root_session_id)
          ORDER BY selected_roots.category,
                   selected_roots.latest_updated_at DESC,
                   selected_roots.effective_root_session_id DESC,

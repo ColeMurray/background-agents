@@ -2,6 +2,16 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 9, 2026
+
+**Claude Fable 5.1.** Adds `claude-fable-5-1` to the model picker and integrations, with adaptive
+thinking controls from low through max.
+
+**Claude Agent harness.** Sessions can run on the Claude Agent SDK as a second harness beside
+OpenCode, chosen in the composer and inherited by child sessions and automations. Claude Agent
+sessions can use a **connected Claude subscription** from Settings > Provider Accounts instead of an
+API key. See [Using the Claude Agent Harness](docs/CLAUDE_AGENT.md).
+
 ## September 2, 2026
 
 **Opening a session marks it read.** A session's latest reply is read as soon as its page is

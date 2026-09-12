@@ -7,7 +7,7 @@ const secretsRecordSchema = z.custom<Record<string, string>>(
     typeof value === "object" &&
     !Array.isArray(value) &&
     Object.values(value).every((entry) => typeof entry === "string"),
-  { message: "Secrets must be an object with string values" }
+  { error: "Secrets must be an object with string values" }
 );
 
 export const secretsRequestBodySchema = z.object({

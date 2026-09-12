@@ -1,18 +1,20 @@
+import { z } from "zod";
 import type { SqlStorage } from "./sql-storage";
 
 /** WS client mapping result for hibernation recovery. */
-export interface WsClientMappingResult {
-  participant_id: string;
-  client_id: string;
-  user_id: string;
-  canonical_user_id?: string | null;
-  scm_name: string | null;
-  scm_login: string | null;
-  /** Dormant legacy column may still be present on older mapping fixtures. */
-  auth_name?: string | null;
+const wsClientMappingResultSchema = z.object({
+  participant_id: z.string(),
+  client_id: z.string(),
+  user_id: z.string(),
+  canonical_user_id: z.string().nullable().optional(),
+  scm_name: z.string().nullable(),
+  scm_login: z.string().nullable(),
+  auth_name: z.string().nullable().optional(),
   /** Wall-clock time when the persisted authorization lease expires. */
-  authorization_expires_at: number;
-}
+  authorization_expires_at: z.number().finite(),
+});
+
+export type WsClientMappingResult = z.infer<typeof wsClientMappingResultSchema>;
 
 /** Data for a WS client mapping. */
 export interface WsClientMappingData {
@@ -31,9 +33,14 @@ export class WsClientMappingRepository {
   /** Persist a client mapping and its authorization expiration. */
   upsertWsClientMapping(data: WsClientMappingData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO ws_client_mapping
+      `INSERT INTO ws_client_mapping
          (ws_id, participant_id, client_id, created_at, authorization_expires_at)
-       VALUES (?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (ws_id) DO UPDATE SET
+         participant_id = excluded.participant_id,
+         client_id = excluded.client_id,
+         created_at = excluded.created_at,
+         authorization_expires_at = excluded.authorization_expires_at`,
       data.wsId,
       data.participantId,
       data.clientId,
@@ -54,7 +61,8 @@ export class WsClientMappingRepository {
        WHERE m.ws_id = ?`,
       wsId
     );
-    return (result.toArray() as WsClientMappingResult[])[0] ?? null;
+    const parsed = wsClientMappingResultSchema.safeParse(result.toArray()[0]);
+    return parsed.success ? parsed.data : null;
   }
 
   hasWsClientMapping(wsId: string): boolean {

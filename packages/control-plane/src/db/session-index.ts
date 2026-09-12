@@ -1,3 +1,8 @@
+import {
+  DEFAULT_HARNESS,
+  getValidHarnessOrDefault,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import type {
   PullRequestSummary,
   SessionReadAction,
@@ -62,6 +67,8 @@ export interface SessionEntry {
   title: string | null;
   repoOwner: string | null;
   repoName: string | null;
+  /** Agent harness; absent on reads of pre-harness rows is impossible (column default). */
+  harness?: HarnessId;
   model: string;
   reasoningEffort: string | null;
   baseBranch: string | null;
@@ -108,6 +115,7 @@ interface SessionRow {
   title: string | null;
   repo_owner: string | null;
   repo_name: string | null;
+  harness: HarnessId;
   model: string;
   reasoning_effort: string | null;
   base_branch: string | null;
@@ -162,6 +170,7 @@ function toEntry(row: SessionRow): SessionEntry {
     title: row.title,
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
+    harness: getValidHarnessOrDefault(row.harness),
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     baseBranch: row.base_branch,
@@ -267,14 +276,15 @@ export class SessionIndexStore {
 
     const sessionStmt = this.db
       .prepare(
-        `INSERT INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
         session.title,
         repository.repoOwner,
         repository.repoName,
+        session.harness ?? DEFAULT_HARNESS,
         session.model,
         session.reasoningEffort,
         repository.baseBranch,
@@ -318,10 +328,16 @@ export class SessionIndexStore {
     const providerAuthStmts = (session.providerAuth ?? []).map((auth) =>
       this.db
         .prepare(
-          `INSERT OR REPLACE INTO session_model_provider_auth (
+          `INSERT INTO session_model_provider_auth (
              session_id, provider, auth_mode, provider_account_id, selection_source,
              inherited_from_session_id, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (session_id, provider) DO UPDATE SET
+             auth_mode = excluded.auth_mode,
+             provider_account_id = excluded.provider_account_id,
+             selection_source = excluded.selection_source,
+             inherited_from_session_id = excluded.inherited_from_session_id,
+             created_at = excluded.created_at`
         )
         .bind(
           session.id,
@@ -486,18 +502,18 @@ export class SessionIndexStore {
     const row = await this.db
       .prepare(
         `SELECT 1 AS ok FROM sessions
-         WHERE id = ?1
+         WHERE id = ?
            AND (
-             (LOWER(repo_owner) = LOWER(?2) AND LOWER(repo_name) = LOWER(?3))
+             (LOWER(repo_owner) = LOWER(?) AND LOWER(repo_name) = LOWER(?))
              OR EXISTS (
                SELECT 1 FROM session_repositories sr
                WHERE sr.session_id = sessions.id
-                 AND LOWER(sr.repo_owner) = LOWER(?2)
-                 AND LOWER(sr.repo_name) = LOWER(?3)
+                 AND LOWER(sr.repo_owner) = LOWER(?)
+                 AND LOWER(sr.repo_name) = LOWER(?)
              )
            )`
       )
-      .bind(sessionId, repoOwner, repoName)
+      .bind(sessionId, repoOwner, repoName, repoOwner, repoName)
       .first<{ ok: number }>();
 
     return row !== null;
@@ -717,15 +733,6 @@ export class SessionIndexStore {
       .bind(userId, sessionId)
       .first<ViewerReadStateRow>();
     return row ? readStateFromRow(row) : null;
-  }
-
-  async updateTitle(id: string, title: string): Promise<boolean> {
-    const result = await this.db
-      .prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
-      .bind(title, Date.now(), id)
-      .run();
-
-    return (result.meta.changes ?? 0) > 0;
   }
 
   async updateTitleIfNewer(id: string, title: string, updatedAt: number): Promise<boolean> {

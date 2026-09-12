@@ -7,32 +7,23 @@ import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
-import type {
-  ConfiguredSandboxPort,
-  SandboxSettings,
-} from "@open-inspect/shared/types/integrations";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
   DEFAULT_CODE_SERVER_PORT,
-  DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
-  DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   DEFAULT_TERMINAL_PORT,
   DEFAULT_VNC_PORT,
-  findSandboxPortConflict,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared/types/integrations";
 import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
-import {
-  MIN_SANDBOX_TIMEOUT_MINUTES,
-  sandboxTimeoutMinutesFromMs,
-  sandboxTimeoutMsFromMinutes,
-} from "./sandbox-timeout";
+import { MIN_SANDBOX_TIMEOUT_MINUTES } from "./sandbox-timeout";
+import { resolveSandboxSettingsDraft, type SandboxSettingsDraft } from "./sandbox-settings-draft";
+import { SessionCostSettingsFields } from "./session-cost-settings-fields";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const GLOBAL_SCOPE = "__global__";
-type ResourceField = "cpuCores" | "memoryMib";
 
 interface GlobalSettingsResponse {
   integrationId: string;
@@ -52,96 +43,6 @@ interface EnvironmentSettingsResponse {
 }
 
 const fetcher = (url: BrowserApiPath) => browserApiFetch(url).then((r) => r.json());
-
-function isValidPort(value: string): boolean {
-  return /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 65535;
-}
-
-function isPositiveInteger(value: string): boolean {
-  return /^\d+$/.test(value) && Number(value) >= 1;
-}
-
-function isValidCpuCores(value: string): boolean {
-  if (!/^\d*\.?\d+$/.test(value)) return false;
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0;
-}
-
-function isValidMemoryMib(value: string): boolean {
-  if (!/^\d+$/.test(value)) return false;
-  return Number(value) >= 1;
-}
-
-function isValidBuildTimeout(value: string): boolean {
-  if (!/^\d+$/.test(value)) return false;
-  const n = Number(value);
-  return n >= 1 && n <= MAX_BUILD_TIMEOUT_SECONDS;
-}
-
-/** Trim, filter empty, validate, parse to number, dedupe. */
-function normalizePorts(input: string[]): { ports: number[]; invalid: string[] } {
-  const ports = new Set<number>();
-  const invalid: string[] = [];
-
-  for (const value of input) {
-    const trimmed = value.trim();
-    if (trimmed === "") continue;
-
-    if (isValidPort(trimmed)) {
-      ports.add(Number(trimmed));
-    } else {
-      invalid.push(value);
-    }
-  }
-
-  return { ports: [...ports], invalid };
-}
-
-const numOrUndef = (v: number | null | undefined): number | undefined =>
-  typeof v === "number" ? v : undefined;
-
-/** Value to show in the input: the scope's own override, else the inherited base (display only). */
-function resourceDisplayValue(
-  own: SandboxSettings | undefined,
-  base: SandboxSettings | undefined,
-  field: ResourceField
-): number | undefined {
-  const ownValue = own?.[field];
-  if (ownValue !== undefined) return numOrUndef(ownValue); // own value (null → blank)
-  return numOrUndef(base?.[field]);
-}
-
-/**
- * The value to persist for a resource field, or `undefined` to omit it from the
- * payload (`null` means "use the provider default"). A stored JSON value is never
- * `undefined`, so returning `prior` directly preserves an existing override and
- * skips an inherited-only field in one move.
- */
-function resourcePayloadValue(
-  isGlobal: boolean,
-  editState: string | null,
-  trimmed: string,
-  prior: number | null | undefined
-): number | null | undefined {
-  if (isGlobal) return trimmed === "" ? undefined : Number(trimmed);
-  if (editState !== null) return trimmed === "" ? null : Number(trimmed);
-  return prior; // not edited: keep existing override, or undefined → don't pin
-}
-
-/**
- * Like {@link resourcePayloadValue} but for optional numeric fields with no
- * explicit-null form (service ports, build timeout): at override scopes a
- * cleared field is omitted — back to inheriting — instead of pinned as null.
- */
-function numberPayloadValue(
-  isGlobal: boolean,
-  editState: string | null,
-  trimmed: string,
-  prior: number | undefined
-): number | undefined {
-  if (isGlobal || editState !== null) return trimmed === "" ? undefined : Number(trimmed);
-  return prior; // not edited: keep existing override, or undefined → don't pin
-}
 
 /** What a sandbox-settings scope reads/writes and what it inherits from. */
 interface SandboxScopeModel {
@@ -249,271 +150,56 @@ export function SandboxSettingsEditor({
   const { apiUrl, ownSettings, baseDefaults, enabledRepos, isLoading, mutate } =
     useSandboxSettingsScope(scope, owner, name, environmentId);
 
-  // Display values: the scope's own setting, else the inherited base. Only
-  // explicitly edited fields (or pre-existing overrides) are written back on
-  // save, so displaying an inherited value never silently pins it as an
-  // override.
-  const currentPorts: number[] = ownSettings?.tunnelPorts ?? baseDefaults?.tunnelPorts ?? [];
-
-  const currentTerminalEnabled: boolean =
-    ownSettings?.terminalEnabled ?? baseDefaults?.terminalEnabled ?? false;
-
-  const currentCodeServerPort: number | undefined =
-    ownSettings?.codeServerPort ?? baseDefaults?.codeServerPort;
-
-  const currentVncPort: number | undefined = ownSettings?.vncPort ?? baseDefaults?.vncPort;
-
-  const currentTerminalPort: number | undefined =
-    ownSettings?.terminalPort ?? baseDefaults?.terminalPort;
-
-  const currentBuildTimeoutSeconds: number | undefined =
-    ownSettings?.buildTimeoutSeconds ?? baseDefaults?.buildTimeoutSeconds;
-
-  const currentSandboxTimeoutMs: number | undefined =
-    ownSettings?.sandboxTimeoutMs ?? baseDefaults?.sandboxTimeoutMs;
-
-  const currentMaxConcurrentChildSessions: number =
-    ownSettings?.maxConcurrentChildSessions ??
-    baseDefaults?.maxConcurrentChildSessions ??
-    DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
-
-  const currentMaxTotalChildSessions: number =
-    ownSettings?.maxTotalChildSessions ??
-    baseDefaults?.maxTotalChildSessions ??
-    DEFAULT_MAX_TOTAL_CHILD_SESSIONS;
-
-  const currentCpuCores = resourceDisplayValue(ownSettings, baseDefaults, "cpuCores");
-  const currentMemoryMib = resourceDisplayValue(ownSettings, baseDefaults, "memoryMib");
-
-  const [portRows, setPortRows] = useState<string[] | null>(null);
-  const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
-  const [codeServerPort, setCodeServerPort] = useState<string | null>(null);
-  const [vncPort, setVncPort] = useState<string | null>(null);
-  const [terminalPort, setTerminalPort] = useState<string | null>(null);
-  const [buildTimeoutSeconds, setBuildTimeoutSeconds] = useState<string | null>(null);
-  const [sandboxTimeoutMinutes, setSandboxTimeoutMinutes] = useState<string | null>(null);
-  const [maxConcurrentChildSessions, setMaxConcurrentChildSessions] = useState<string | null>(null);
-  const [maxTotalChildSessions, setMaxTotalChildSessions] = useState<string | null>(null);
-  const [cpuCores, setCpuCores] = useState<string | null>(null);
-  const [memoryMib, setMemoryMib] = useState<string | null>(null);
+  const [draft, setDraft] = useState<SandboxSettingsDraft>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  // Resolve terminal toggle: local edit or server state
-  const resolvedTerminalEnabled = terminalEnabled ?? currentTerminalEnabled;
+  const { values, hasChanges, result } = resolveSandboxSettingsDraft({
+    isGlobal,
+    ownSettings,
+    baseDefaults,
+    draft,
+  });
+  const rows = values.tunnelPorts;
 
-  // Use server state unless user is editing
-  const rows = portRows ?? currentPorts.map(String);
-  const resolvedMaxConcurrentChildSessions =
-    maxConcurrentChildSessions ?? String(currentMaxConcurrentChildSessions);
-  const resolvedMaxTotalChildSessions =
-    maxTotalChildSessions ?? String(currentMaxTotalChildSessions);
-  const resolvedCpuCores =
-    cpuCores ?? (currentCpuCores !== undefined ? String(currentCpuCores) : "");
-  const resolvedMemoryMib =
-    memoryMib ?? (currentMemoryMib !== undefined ? String(currentMemoryMib) : "");
-  const resolvedCodeServerPort =
-    codeServerPort ?? (currentCodeServerPort !== undefined ? String(currentCodeServerPort) : "");
-  const resolvedVncPort = vncPort ?? (currentVncPort !== undefined ? String(currentVncPort) : "");
-  const resolvedTerminalPort =
-    terminalPort ?? (currentTerminalPort !== undefined ? String(currentTerminalPort) : "");
-  const resolvedBuildTimeoutSeconds =
-    buildTimeoutSeconds ??
-    (currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "");
-  const resolvedSandboxTimeoutMinutes =
-    sandboxTimeoutMinutes ?? sandboxTimeoutMinutesFromMs(currentSandboxTimeoutMs);
+  function updateField<K extends keyof SandboxSettingsDraft>(
+    field: K,
+    value: SandboxSettingsDraft[K]
+  ) {
+    setDraft((prev) => ({ ...prev, [field]: value }));
+  }
 
   const handleAddRow = () => {
     if (rows.length >= MAX_TUNNEL_PORTS) return;
-    setPortRows([...rows, ""]);
+    updateField("tunnelPorts", [...rows, ""]);
   };
 
   const handleUpdateRow = (index: number, value: string) => {
     const updated = [...rows];
     updated[index] = value;
-    setPortRows(updated);
+    updateField("tunnelPorts", updated);
   };
 
   const handleRemoveRow = (index: number) => {
     const updated = rows.filter((_, i) => i !== index);
-    setPortRows(updated);
+    updateField("tunnelPorts", updated);
   };
 
   const handleSave = async () => {
     setError(null);
     setSuccess(false);
 
-    const { ports, invalid } = normalizePorts(rows);
-    if (invalid.length > 0) {
-      setError(`Invalid port numbers: ${invalid.join(", ")}`);
-      return;
-    }
-
-    if (
-      !isPositiveInteger(resolvedMaxConcurrentChildSessions) ||
-      !isPositiveInteger(resolvedMaxTotalChildSessions)
-    ) {
-      setError("Child session limits must be positive whole numbers.");
-      return;
-    }
-
-    const trimmedCpu = resolvedCpuCores.trim();
-    if (trimmedCpu !== "" && !isValidCpuCores(trimmedCpu)) {
-      setError("CPU cores must be a positive number.");
-      return;
-    }
-
-    const trimmedMemory = resolvedMemoryMib.trim();
-    if (trimmedMemory !== "" && !isValidMemoryMib(trimmedMemory)) {
-      setError("Memory must be a positive whole number of MiB.");
-      return;
-    }
-
-    const trimmedCodeServerPort = resolvedCodeServerPort.trim();
-    if (trimmedCodeServerPort !== "" && !isValidPort(trimmedCodeServerPort)) {
-      setError("Code server port must be a whole number between 1 and 65535.");
-      return;
-    }
-
-    const trimmedVncPort = resolvedVncPort.trim();
-    if (trimmedVncPort !== "" && !isValidPort(trimmedVncPort)) {
-      setError("VNC port must be a whole number between 1 and 65535.");
-      return;
-    }
-
-    const trimmedTerminalPort = resolvedTerminalPort.trim();
-    if (trimmedTerminalPort !== "" && !isValidPort(trimmedTerminalPort)) {
-      setError("Terminal port must be a whole number between 1 and 65535.");
-      return;
-    }
-
-    const trimmedBuildTimeout = resolvedBuildTimeoutSeconds.trim();
-    if (trimmedBuildTimeout !== "" && !isValidBuildTimeout(trimmedBuildTimeout)) {
-      setError(
-        `Build timeout must be a whole number of seconds, at most ${MAX_BUILD_TIMEOUT_SECONDS}.`
-      );
-      return;
-    }
-
-    const trimmedSandboxTimeoutMinutes = resolvedSandboxTimeoutMinutes.trim();
-    const editedSandboxTimeoutMs = sandboxTimeoutMsFromMinutes(trimmedSandboxTimeoutMinutes);
-    if (trimmedSandboxTimeoutMinutes !== "" && editedSandboxTimeoutMs === undefined) {
-      setError("Session timeout must be at least one second, in one-second increments.");
-      return;
-    }
-
-    // Validate against the EFFECTIVE service ports the runtime will bind: an
-    // explicit value, else the inherited base, else the shared default. A
-    // blank field still occupies its default port, so a tunnel on 8080/7680
-    // must be caught here just like an explicit collision.
-    const effectiveCodeServerPort =
-      trimmedCodeServerPort !== ""
-        ? Number(trimmedCodeServerPort)
-        : (baseDefaults?.codeServerPort ?? DEFAULT_CODE_SERVER_PORT);
-    const effectiveTerminalPort =
-      trimmedTerminalPort !== ""
-        ? Number(trimmedTerminalPort)
-        : (baseDefaults?.terminalPort ?? DEFAULT_TERMINAL_PORT);
-    const effectiveVncPort =
-      trimmedVncPort !== "" ? Number(trimmedVncPort) : (baseDefaults?.vncPort ?? DEFAULT_VNC_PORT);
-    const configuredPorts: ConfiguredSandboxPort[] = [
-      ...ports.map((port) => ({ port, label: "tunnel port" })),
-      { port: effectiveCodeServerPort, label: "code server port" },
-      { port: effectiveTerminalPort, label: "terminal port" },
-      { port: effectiveVncPort, label: "VNC port" },
-    ];
-    const portConflict = findSandboxPortConflict(configuredPorts);
-    if (portConflict) {
-      setError(
-        portConflict.kind === "reserved"
-          ? `Port ${portConflict.port} is reserved for an internal sandbox service and cannot be used.`
-          : "Code server, VNC, terminal, and tunnel ports must all be different."
-      );
+    if (result.error) {
+      setError(result.error);
       return;
     }
 
     setSaving(true);
     try {
-      // Every field follows the same rule: persist when edited, when this
-      // scope already stored it, or at global scope (where the form IS the
-      // stored defaults); otherwise omit it and keep inheriting.
-      const settingsPayload: SandboxSettings = {};
-      if (isGlobal || portRows !== null || ownSettings?.tunnelPorts !== undefined) {
-        settingsPayload.tunnelPorts = ports;
-      }
-      if (isGlobal || terminalEnabled !== null || ownSettings?.terminalEnabled !== undefined) {
-        settingsPayload.terminalEnabled = resolvedTerminalEnabled;
-      }
-      const codeServerPortValue = numberPayloadValue(
-        isGlobal,
-        codeServerPort,
-        trimmedCodeServerPort,
-        ownSettings?.codeServerPort
-      );
-      if (codeServerPortValue !== undefined) {
-        settingsPayload.codeServerPort = codeServerPortValue;
-      }
-      const vncPortValue = numberPayloadValue(
-        isGlobal,
-        vncPort,
-        trimmedVncPort,
-        ownSettings?.vncPort
-      );
-      if (vncPortValue !== undefined) {
-        settingsPayload.vncPort = vncPortValue;
-      }
-      const terminalPortValue = numberPayloadValue(
-        isGlobal,
-        terminalPort,
-        trimmedTerminalPort,
-        ownSettings?.terminalPort
-      );
-      if (terminalPortValue !== undefined) {
-        settingsPayload.terminalPort = terminalPortValue;
-      }
-      const buildTimeoutValue = numberPayloadValue(
-        isGlobal,
-        buildTimeoutSeconds,
-        trimmedBuildTimeout,
-        ownSettings?.buildTimeoutSeconds
-      );
-      if (buildTimeoutValue !== undefined) {
-        settingsPayload.buildTimeoutSeconds = buildTimeoutValue;
-      }
-      const sandboxTimeoutMsValue =
-        isGlobal || sandboxTimeoutMinutes !== null
-          ? editedSandboxTimeoutMs
-          : ownSettings?.sandboxTimeoutMs;
-      if (sandboxTimeoutMsValue !== undefined) {
-        settingsPayload.sandboxTimeoutMs = sandboxTimeoutMsValue;
-      }
-      if (
-        isGlobal ||
-        maxConcurrentChildSessions !== null ||
-        ownSettings?.maxConcurrentChildSessions !== undefined
-      ) {
-        settingsPayload.maxConcurrentChildSessions = Number(resolvedMaxConcurrentChildSessions);
-      }
-      if (
-        isGlobal ||
-        maxTotalChildSessions !== null ||
-        ownSettings?.maxTotalChildSessions !== undefined
-      ) {
-        settingsPayload.maxTotalChildSessions = Number(resolvedMaxTotalChildSessions);
-      }
-      const cpu = resourcePayloadValue(isGlobal, cpuCores, trimmedCpu, ownSettings?.cpuCores);
-      if (cpu !== undefined) settingsPayload.cpuCores = cpu;
-      const memory = resourcePayloadValue(
-        isGlobal,
-        memoryMib,
-        trimmedMemory,
-        ownSettings?.memoryMib
-      );
-      if (memory !== undefined) settingsPayload.memoryMib = memory;
       const body = isGlobal
-        ? { settings: { defaults: settingsPayload, enabledRepos } }
-        : { settings: settingsPayload };
+        ? { settings: { defaults: result.settings, enabledRepos } }
+        : { settings: result.settings };
 
       const res = await browserApiFetch(apiUrl, {
         method: "PUT",
@@ -527,17 +213,7 @@ export function SandboxSettingsEditor({
       }
 
       await mutate();
-      setPortRows(null);
-      setTerminalEnabled(null);
-      setMaxConcurrentChildSessions(null);
-      setMaxTotalChildSessions(null);
-      setCpuCores(null);
-      setMemoryMib(null);
-      setCodeServerPort(null);
-      setVncPort(null);
-      setTerminalPort(null);
-      setBuildTimeoutSeconds(null);
-      setSandboxTimeoutMinutes(null);
+      setDraft({});
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
     } catch (e) {
@@ -546,51 +222,6 @@ export function SandboxSettingsEditor({
       setSaving(false);
     }
   };
-
-  const hasPortChanges =
-    portRows !== null &&
-    JSON.stringify(normalizePorts(portRows).ports) !== JSON.stringify(currentPorts);
-  const hasTerminalChange = terminalEnabled !== null && terminalEnabled !== currentTerminalEnabled;
-  const hasConcurrentLimitChange =
-    maxConcurrentChildSessions !== null &&
-    maxConcurrentChildSessions !== String(currentMaxConcurrentChildSessions);
-  const hasTotalLimitChange =
-    maxTotalChildSessions !== null &&
-    maxTotalChildSessions !== String(currentMaxTotalChildSessions);
-  const currentCpuCoresString = currentCpuCores !== undefined ? String(currentCpuCores) : "";
-  const currentMemoryMibString = currentMemoryMib !== undefined ? String(currentMemoryMib) : "";
-  const hasCpuChange = cpuCores !== null && cpuCores.trim() !== currentCpuCoresString;
-  const hasMemoryChange = memoryMib !== null && memoryMib.trim() !== currentMemoryMibString;
-  const currentCodeServerPortString =
-    currentCodeServerPort !== undefined ? String(currentCodeServerPort) : "";
-  const currentTerminalPortString =
-    currentTerminalPort !== undefined ? String(currentTerminalPort) : "";
-  const hasCodeServerPortChange =
-    codeServerPort !== null && codeServerPort.trim() !== currentCodeServerPortString;
-  const currentVncPortString = currentVncPort !== undefined ? String(currentVncPort) : "";
-  const hasVncPortChange = vncPort !== null && vncPort.trim() !== currentVncPortString;
-  const hasTerminalPortChange =
-    terminalPort !== null && terminalPort.trim() !== currentTerminalPortString;
-  const currentBuildTimeoutSecondsString =
-    currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "";
-  const hasBuildTimeoutChange =
-    buildTimeoutSeconds !== null && buildTimeoutSeconds.trim() !== currentBuildTimeoutSecondsString;
-  const currentSandboxTimeoutMinutesString = sandboxTimeoutMinutesFromMs(currentSandboxTimeoutMs);
-  const hasSandboxTimeoutChange =
-    sandboxTimeoutMinutes !== null &&
-    sandboxTimeoutMinutes.trim() !== currentSandboxTimeoutMinutesString;
-  const hasChanges =
-    hasPortChanges ||
-    hasTerminalChange ||
-    hasConcurrentLimitChange ||
-    hasTotalLimitChange ||
-    hasCpuChange ||
-    hasMemoryChange ||
-    hasCodeServerPortChange ||
-    hasVncPortChange ||
-    hasTerminalPortChange ||
-    hasBuildTimeoutChange ||
-    hasSandboxTimeoutChange;
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -617,15 +248,15 @@ export function SandboxSettingsEditor({
             type="button"
             role="switch"
             aria-label="Web Terminal"
-            aria-checked={resolvedTerminalEnabled}
-            onClick={() => setTerminalEnabled(!resolvedTerminalEnabled)}
+            aria-checked={values.terminalEnabled}
+            onClick={() => updateField("terminalEnabled", !values.terminalEnabled)}
             className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-              resolvedTerminalEnabled ? "bg-accent" : "bg-muted"
+              values.terminalEnabled ? "bg-accent" : "bg-muted"
             }`}
           >
             <span
               className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
-                resolvedTerminalEnabled ? "translate-x-4" : "translate-x-0"
+                values.terminalEnabled ? "translate-x-4" : "translate-x-0"
               }`}
             />
           </button>
@@ -652,8 +283,8 @@ export function SandboxSettingsEditor({
               id="code-server-port"
               type="text"
               inputMode="numeric"
-              value={resolvedCodeServerPort}
-              onChange={(e) => setCodeServerPort(e.target.value)}
+              value={values.codeServerPort}
+              onChange={(e) => updateField("codeServerPort", e.target.value)}
               placeholder={String(DEFAULT_CODE_SERVER_PORT)}
             />
           </div>
@@ -668,8 +299,8 @@ export function SandboxSettingsEditor({
               id="vnc-port"
               type="text"
               inputMode="numeric"
-              value={resolvedVncPort}
-              onChange={(e) => setVncPort(e.target.value)}
+              value={values.vncPort}
+              onChange={(e) => updateField("vncPort", e.target.value)}
               placeholder={String(DEFAULT_VNC_PORT)}
             />
           </div>
@@ -684,8 +315,8 @@ export function SandboxSettingsEditor({
               id="terminal-port"
               type="text"
               inputMode="numeric"
-              value={resolvedTerminalPort}
-              onChange={(e) => setTerminalPort(e.target.value)}
+              value={values.terminalPort}
+              onChange={(e) => updateField("terminalPort", e.target.value)}
               placeholder={String(DEFAULT_TERMINAL_PORT)}
             />
           </div>
@@ -741,6 +372,12 @@ export function SandboxSettingsEditor({
         </div>
       </fieldset>
 
+      <SessionCostSettingsFields
+        isGlobal={isGlobal}
+        maxSessionCostUsd={values.maxSessionCostUsd}
+        onMaxSessionCostUsdChange={(value) => updateField("maxSessionCostUsd", value)}
+      />
+
       <fieldset className="min-w-0">
         <legend className="block text-sm font-medium text-foreground mb-1.5">Child Sessions</legend>
         <p className="text-xs text-muted-foreground mb-2">
@@ -759,8 +396,8 @@ export function SandboxSettingsEditor({
               type="number"
               min="1"
               inputMode="numeric"
-              value={resolvedMaxConcurrentChildSessions}
-              onChange={(e) => setMaxConcurrentChildSessions(e.target.value)}
+              value={values.maxConcurrentChildSessions}
+              onChange={(e) => updateField("maxConcurrentChildSessions", e.target.value)}
             />
           </div>
           <div>
@@ -775,8 +412,8 @@ export function SandboxSettingsEditor({
               type="number"
               min="1"
               inputMode="numeric"
-              value={resolvedMaxTotalChildSessions}
-              onChange={(e) => setMaxTotalChildSessions(e.target.value)}
+              value={values.maxTotalChildSessions}
+              onChange={(e) => updateField("maxTotalChildSessions", e.target.value)}
             />
           </div>
         </div>
@@ -800,8 +437,8 @@ export function SandboxSettingsEditor({
               id="sandbox-cpu-cores"
               type="text"
               inputMode="decimal"
-              value={resolvedCpuCores}
-              onChange={(e) => setCpuCores(e.target.value)}
+              value={values.cpuCores}
+              onChange={(e) => updateField("cpuCores", e.target.value)}
               placeholder="provider default"
             />
           </div>
@@ -817,8 +454,8 @@ export function SandboxSettingsEditor({
               type="number"
               min={1}
               inputMode="numeric"
-              value={resolvedMemoryMib}
-              onChange={(e) => setMemoryMib(e.target.value)}
+              value={values.memoryMib}
+              onChange={(e) => updateField("memoryMib", e.target.value)}
               placeholder="provider default"
             />
           </div>
@@ -844,8 +481,8 @@ export function SandboxSettingsEditor({
             min={MIN_SANDBOX_TIMEOUT_MINUTES}
             step={MIN_SANDBOX_TIMEOUT_MINUTES}
             inputMode="decimal"
-            value={resolvedSandboxTimeoutMinutes}
-            onChange={(e) => setSandboxTimeoutMinutes(e.target.value)}
+            value={values.sandboxTimeoutMinutes}
+            onChange={(e) => updateField("sandboxTimeoutMinutes", e.target.value)}
             placeholder="provider default"
           />
         </div>
@@ -870,8 +507,8 @@ export function SandboxSettingsEditor({
             min={1}
             max={MAX_BUILD_TIMEOUT_SECONDS}
             inputMode="numeric"
-            value={resolvedBuildTimeoutSeconds}
-            onChange={(e) => setBuildTimeoutSeconds(e.target.value)}
+            value={values.buildTimeoutSeconds}
+            onChange={(e) => updateField("buildTimeoutSeconds", e.target.value)}
             placeholder={String(DEFAULT_BUILD_TIMEOUT_SECONDS)}
           />
           <p className="text-xs text-muted-foreground mt-1">

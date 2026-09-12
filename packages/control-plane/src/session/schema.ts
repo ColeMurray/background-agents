@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS session (
   branch_name TEXT,                                 -- Working branch (set after first commit)
   base_sha TEXT,                                    -- SHA of base branch at session start
   current_sha TEXT,                                 -- Current HEAD SHA
-  opencode_session_id TEXT,                         -- OpenCode session ID (for 1:1 mapping)
+  agent_session_id TEXT,                            -- The agent's own conversation id (1:1 mapping)
+  harness TEXT NOT NULL DEFAULT 'opencode',         -- Agent harness: 'opencode' | 'claude'; fixed at create
   model TEXT DEFAULT 'anthropic/claude-haiku-4-5',   -- LLM model to use
   reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'failed', 'archived', 'cancelled'
@@ -80,6 +81,8 @@ CREATE TABLE IF NOT EXISTS session (
   vnc_enabled INTEGER NOT NULL DEFAULT 0,           -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
+  max_cost_usd REAL,                                -- Mutable effective session cost limit; NULL = unlimited
+  budget_exhausted INTEGER NOT NULL DEFAULT 0,      -- Pauses prompt admission and dispatch
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -131,6 +134,7 @@ CREATE TABLE IF NOT EXISTS messages (
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
+  reported_cost_usd REAL NOT NULL DEFAULT 0,        -- Highest cumulative cost the runtime reported for this turn
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
   completed_at INTEGER,                             -- When processing finished
@@ -189,6 +193,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   tunnel_urls TEXT,                                 -- JSON mapping of port -> tunnel URL for extra ports
   ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
+  active_socket_id TEXT,                            -- Bridge socket the session dispatches to (socket:<id> tag)
   created_at INTEGER NOT NULL
 );
 
@@ -648,6 +653,41 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     description: "Persist terminal message projections awaiting retry",
     run: TERMINAL_MESSAGE_PROJECTION_TABLE_SQL,
   },
+  {
+    id: 48,
+    description: "Add active_socket_id to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN active_socket_id TEXT`,
+  },
+  {
+    id: 49,
+    description: "Add session budget state and message reported cost",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN max_cost_usd REAL`);
+      runMigration(
+        sql,
+        `ALTER TABLE session ADD COLUMN budget_exhausted INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN reported_cost_usd REAL NOT NULL DEFAULT 0`
+      );
+    },
+  },
+  {
+    id: 50,
+    description: "Add session harness and rename opencode_session_id to agent_session_id",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN harness TEXT NOT NULL DEFAULT 'opencode'`);
+      // A fresh DO already created agent_session_id through SCHEMA_SQL, so the
+      // legacy column is absent there; only an existing DO has it to rename.
+      try {
+        sql.exec(`ALTER TABLE session RENAME COLUMN opencode_session_id TO agent_session_id`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!msg.includes("no such column") && !msg.includes("duplicate column")) throw e;
+      }
+    },
+  },
 ];
 
 /**
@@ -689,7 +729,7 @@ export function applyMigrations(sql: SqlStorage): void {
     }
 
     sql.exec(
-      `INSERT OR IGNORE INTO _schema_migrations (id, applied_at) VALUES (?, ?)`,
+      `INSERT INTO _schema_migrations (id, applied_at) VALUES (?, ?) ON CONFLICT DO NOTHING`,
       migration.id,
       Date.now()
     );

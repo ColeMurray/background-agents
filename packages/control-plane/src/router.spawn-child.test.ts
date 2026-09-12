@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { handleRequest } from "./router";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import {
+  fakeSessionRuntimeDispatch,
+  handleRequest,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
@@ -40,6 +42,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     repoId: number | null;
     baseBranch?: string | null;
     model: string;
+    harness: HarnessId;
     reasoningEffort: string | null;
     sandboxTimeoutMs?: number;
     promptAuthor: {
@@ -73,6 +76,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     repoOwner: "acme",
     repoName: "web-app",
     repoId: 12345,
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
     sandboxTimeoutMs: 14_400_000,
@@ -154,6 +158,31 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     );
   });
 
+  it("rejects a child whose model needs an auth mode the harness cannot select", async () => {
+    const store = makeStore();
+    store.getCompleteProviderAuth.mockResolvedValue([
+      ...parentProviderAuth,
+      {
+        provider: "anthropic",
+        authMode: "provider_account",
+        providerAccountId: "3".repeat(32),
+        selectionSource: "installation_default",
+      },
+    ]);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env } = makeSuccessfulEnv(spawnContext);
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: expect.stringContaining("select an API key"),
+    });
+    expect(store.create).not.toHaveBeenCalled();
+  });
+
   it("fails closed when the parent D1 provider auth snapshot is unavailable", async () => {
     const store = makeStore();
     store.getCompleteProviderAuth.mockRejectedValue(new Error("D1 unavailable"));
@@ -207,10 +236,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
         ...TEST_SERVICE_SECRETS,
         SCM_PROVIDER: "github",
         DB: authorizedDb(permissions),
-        SESSION: {
-          idFromName: (name: string) => name,
-          get: (id: string) => (id === parentId ? parentStub : childStub),
-        },
+        SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
+          (sessionId === parentId ? parentStub : childStub).fetch(request)
+        ),
       },
     };
   }
@@ -387,10 +415,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: (id: string) => (id === parentId ? parentStub : childStub),
-      },
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
+        (sessionId === parentId ? parentStub : childStub).fetch(request)
+      ),
     };
 
     const response = await makeRequest(env);
@@ -481,10 +508,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: (id: string) => (id === parentId ? parentStub : childStub),
-      },
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
+        (sessionId === parentId ? parentStub : childStub).fetch(request)
+      ),
     };
 
     const response = await makeRequest(env);
@@ -529,10 +555,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: (id: string) => (id === parentId ? parentStub : childStub),
-      },
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
+        (sessionId === parentId ? parentStub : childStub).fetch(request)
+      ),
     };
 
     const response = await makeRequest(env);
@@ -561,10 +586,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await handleRequest(
@@ -602,10 +624,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -625,10 +644,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: vi.fn(),
-      },
+      SESSION: fakeSessionRuntimeDispatch(vi.fn()),
     };
 
     const response = await handleRequest(
@@ -647,6 +663,35 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     expect(SessionIndexStore).not.toHaveBeenCalled();
   });
 
+  it("returns 400 for a child spawn body that is not JSON", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+
+    const env = {
+      ...TEST_SERVICE_SECRETS,
+      SCM_PROVIDER: "github",
+      DB: authorizedDb(),
+      SESSION: fakeSessionRuntimeDispatch(vi.fn()),
+    };
+
+    const response = await handleRequest(
+      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
+        method: "POST",
+        service: "linear-bot",
+        actor: "linear:U1",
+        body: "{",
+      }),
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+    expect(SessionIndexStore).not.toHaveBeenCalled();
+  });
+
   it("returns 500 for a malformed parent spawn context", async () => {
     const store = makeStore();
     vi.mocked(SessionIndexStore).mockImplementation(function () {
@@ -661,10 +706,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -689,10 +731,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -715,10 +754,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -748,10 +784,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -789,10 +822,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -817,10 +847,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await handleRequest(
@@ -859,10 +886,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: () => parentStub,
-      },
+      SESSION: fakeSessionRuntimeDispatch((request) => parentStub.fetch(request)),
     };
 
     const response = await makeRequest(env);
@@ -899,10 +923,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: authorizedDb(),
-      SESSION: {
-        idFromName: (name: string) => name,
-        get: (id: string) => (id === parentId ? parentStub : childStub),
-      },
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
+        (sessionId === parentId ? parentStub : childStub).fetch(request)
+      ),
     };
 
     const response = await makeRequest(env);

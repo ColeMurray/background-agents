@@ -4,10 +4,9 @@ import {
   applyIdentityEnforcement,
   deriveIdentity,
   mayAttachCallbackContext,
-  resolveCanonicalUserId,
-} from "./identity-enforcement";
+  requireAdmittedCanonicalUserId,
+} from "../routing/identity-enforcement";
 import type { Principal, ResolvedIdentity } from "./principal";
-import type { UserStore } from "../db/user-store";
 import type { RequestContext } from "../routes/shared";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
@@ -41,12 +40,6 @@ function createCtx(principal?: Principal): RequestContext {
     db: { prepare: vi.fn(() => statement) },
     executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
   } as unknown as RequestContext;
-}
-
-function loggedEvents(spy: { mock: { calls: unknown[][] } }): Array<Record<string, unknown>> {
-  return spy.mock.calls.map(
-    ([message]: unknown[]) => JSON.parse(String(message)) as Record<string, unknown>
-  );
 }
 
 afterEach(() => {
@@ -185,145 +178,45 @@ describe("applyIdentityEnforcement — requires-user rejection", () => {
   });
 });
 
-describe("resolveCanonicalUserId", () => {
-  const display = { displayName: "Dana", email: "d@example.com" };
+describe("requireAdmittedCanonicalUserId", () => {
+  const enforced = {
+    participantUserId: "canon-1",
+    canonicalUserId: "canon-1",
+    actor: null,
+    spawnSource: "user" as const,
+  };
 
-  it("returns the canonical id directly when the principal already resolved", async () => {
-    const userStore = { resolveOrCreateUser: vi.fn() } as unknown as UserStore;
-    const result = await resolveCanonicalUserId(
-      userStore,
-      createCtx(USER_PRINCIPAL),
-      {
-        participantUserId: "canon-1",
-        canonicalUserId: "canon-1",
-        actor: null,
-        spawnSource: "user",
-      },
-      display
-    );
-    expect(result).toEqual({ userId: "canon-1" });
-  });
-
-  it("creates the user from the VERIFIED actor when unseen", async () => {
-    const resolveOrCreateUser = vi.fn(async () => ({ id: "canon-new" }));
-    const userStore = { resolveOrCreateUser } as unknown as UserStore;
-    const result = await resolveCanonicalUserId(
-      userStore,
-      createCtx(SLACK_BOT_PRINCIPAL),
-      {
-        participantUserId: "slack:U0123",
-        canonicalUserId: null,
-        actor: SLACK_ACTOR,
-        spawnSource: "slack-bot",
-      },
-      display
-    );
-    expect(result).toEqual({ userId: "canon-new" });
-    expect(resolveOrCreateUser).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "slack", providerUserId: "U0123", displayName: "Dana" })
-    );
-  });
-
-  it("rejects when actor enrichment relinks to a different authorized user", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const ctx = createCtx(SLACK_BOT_PRINCIPAL);
-    ctx.authorization = {
-      userId: "canon-provisional",
-      suspendedAt: null,
-      permissions: ["sessions.create"],
-      role: { id: "role-member", key: "member", name: "Member" },
-    };
-    const result = await resolveCanonicalUserId(
-      {
-        resolveOrCreateUser: vi.fn(async () => ({ id: "canon-existing" })),
-      } as unknown as UserStore,
-      ctx,
-      {
-        participantUserId: "slack:U0123",
-        canonicalUserId: null,
-        actor: SLACK_ACTOR,
-        spawnSource: "slack-bot",
-      },
-      display
-    );
-
-    expect(result).toBeInstanceOf(Response);
-    expect((result as Response).status).toBe(409);
-    await expect((result as Response).json()).resolves.toMatchObject({
-      code: "actor_identity_changed",
-    });
-    expect(loggedEvents(warn)).toContainEqual(
-      expect.objectContaining({
-        event: "identity.mismatch_rejected",
-        expected: "canon-provisional",
-        actual: "canon-existing",
-      })
-    );
-  });
-
-  it("rejects a canonical identity whose workspace access is suspended", async () => {
+  it("returns the canonical id only when it matches the admitted authorization subject", () => {
     const ctx = createCtx(USER_PRINCIPAL);
-    const statement = {
-      bind: vi.fn(() => statement),
-      first: vi.fn(async () => null),
+    ctx.authorization = {
+      userId: "canon-1",
+      suspendedAt: null,
+      role: { id: "role_builtin_member", key: "member", name: "Member" },
+      permissions: ["sessions.create"],
     };
-    ctx.db = { prepare: vi.fn(() => statement) } as never;
 
-    const result = await resolveCanonicalUserId(
-      { resolveOrCreateUser: vi.fn() } as unknown as UserStore,
-      ctx,
-      {
-        participantUserId: "canon-1",
-        canonicalUserId: "canon-1",
-        actor: null,
-        spawnSource: "user",
-      },
-      display
-    );
-
-    expect(result).toBeInstanceOf(Response);
-    expect((result as Response).status).toBe(403);
+    expect(requireAdmittedCanonicalUserId(ctx, enforced)).toBe("canon-1");
   });
 
-  it("fails closed with a 500 if a participant ever lacks both a canonical user and an actor", async () => {
+  it.each([
+    ["a missing canonical subject", { ...enforced, canonicalUserId: null }, "canon-1"],
+    ["a different admitted subject", enforced, "canon-other"],
+  ])("fails closed for %s", async (_case, identity, authorizedUserId) => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const userStore = { resolveOrCreateUser: vi.fn() } as unknown as UserStore;
-    const result = await resolveCanonicalUserId(
-      userStore,
-      createCtx(SLACK_BOT_PRINCIPAL),
-      {
-        participantUserId: "slack:U0123",
-        canonicalUserId: null,
-        actor: null,
-        spawnSource: "slack-bot",
-      },
-      display
-    );
-    expect(result).toBeInstanceOf(Response);
-    expect((result as Response).status).toBe(500);
-    expect(userStore.resolveOrCreateUser).not.toHaveBeenCalled();
-  });
+    const ctx = createCtx(USER_PRINCIPAL);
+    ctx.authorization = {
+      userId: authorizedUserId,
+      suspendedAt: null,
+      role: { id: "role_builtin_member", key: "member", name: "Member" },
+      permissions: ["sessions.create"],
+    };
 
-  it("fails closed with a 500 when resolution throws", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const userStore = {
-      resolveOrCreateUser: vi.fn(async () => {
-        throw new Error("d1 down");
-      }),
-    } as unknown as UserStore;
-    const result = await resolveCanonicalUserId(
-      userStore,
-      createCtx(SLACK_BOT_PRINCIPAL),
-      {
-        participantUserId: "slack:U0123",
-        canonicalUserId: null,
-        actor: SLACK_ACTOR,
-        spawnSource: "slack-bot",
-      },
-      display
-    );
+    const result = requireAdmittedCanonicalUserId(ctx, identity);
     expect(result).toBeInstanceOf(Response);
     expect((result as Response).status).toBe(500);
+    await expect((result as Response).json()).resolves.toEqual({
+      error: "Failed to resolve session identity",
+    });
   });
 });
 

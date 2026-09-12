@@ -1,6 +1,9 @@
 {
-  "runtimeVersion": "v61-sandbox-sbin-path",
-  "generation": 61,
-  "minimumCompatibleGeneration": 60,
-  "minimumRebuildGeneration": 60
+  "runtimeVersion": "v65-turn-inactivity-timeout",
+  "generation": 65,
+  "minimumCompatibleGeneration": 62,
+  "minimumRebuildGeneration": 65,
+  "harnessMinimumGeneration": {
+    "claude": 64
+  }
 }

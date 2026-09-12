@@ -580,6 +580,7 @@ describe("provider account device authorization routes", () => {
       ).finalizeDeviceAuthorizationReconnect({
         authorization: transaction as ProcessingProviderAuthorization,
         accountId: ACCOUNT_ID,
+        expectedExternalAccountId: "acct-integration",
         externalAccountId: "acct-integration",
         credential: { refreshToken: "new-secret" },
         credentialSchemaVersion: 1,

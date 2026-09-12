@@ -1,3 +1,4 @@
+import { DEFAULT_HARNESS, harnessIdSchema } from "../harnesses";
 import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
@@ -25,11 +26,19 @@ const sessionStateSchema = z.object({
   sandboxStatus: sandboxStatusSchema,
   messageCount: z.number(),
   createdAt: z.number(),
+  /**
+   * Agent harness the session runs on; fixed at create. A producer that
+   * predates the field reports the built-in harness, so readers never see
+   * an absent value.
+   */
+  harness: harnessIdSchema.default(DEFAULT_HARNESS),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   isProcessing: z.boolean().optional(),
   parentSessionId: z.string().nullable().optional(),
   totalCost: z.number().optional(),
+  maxSessionCostUsd: z.number().nullable().optional(),
+  budgetExhausted: z.boolean().optional(),
   codeServerUrl: z.string().nullable().optional(),
   codeServerPassword: z.string().nullable().optional(),
   vncUrl: z.string().nullable().optional(),
@@ -135,6 +144,7 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
     type: z.literal("subscribed"),
     participantId: z.string(),
     participant: participantSummarySchema.optional(),
+    canManageBudget: z.boolean().optional(),
   }),
   z.object({
     type: z.literal("prompt_queued"),
@@ -180,6 +190,12 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_restored"), message: z.string() }),
   z.object({ type: z.literal("sandbox_warning"), message: z.string() }),
   z.object({ type: z.literal("processing_status"), isProcessing: z.boolean() }),
+  z.object({
+    type: z.literal("budget_status"),
+    totalCost: z.number(),
+    maxSessionCostUsd: z.number().nullable(),
+    budgetExhausted: z.boolean(),
+  }),
   z.object({
     type: z.literal("diff_state_changed"),
     revisionId: z.string().nullable(),

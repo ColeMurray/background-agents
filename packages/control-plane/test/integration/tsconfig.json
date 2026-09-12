@@ -14,5 +14,6 @@
     "paths": { "@/*": ["../../src/*"] }
   },
   "include": ["**/*.ts", "../../src/**/*.ts"],
-  "exclude": ["../../src/**/*.test.ts"]
+  // The Node host's adapters (src/node/**) belong to tsconfig.node.json.
+  "exclude": ["../../src/**/*.test.ts", "../../src/node/**/*.ts"]
 }

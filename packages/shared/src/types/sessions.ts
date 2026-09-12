@@ -1,3 +1,4 @@
+import type { HarnessId } from "../harnesses";
 import { z } from "zod";
 import type { ResolvedSessionAttachment } from "./session-attachments";
 import type { SessionListRepository } from "./repositories";
@@ -143,7 +144,10 @@ export interface Session {
   branchName: string | null;
   baseSha: string | null;
   currentSha: string | null;
-  opencodeSessionId: string | null;
+  /** The agent's own conversation id (formerly opencodeSessionId). */
+  agentSessionId: string | null;
+  /** Agent harness the session runs on. */
+  harness: HarnessId;
   status: SessionStatus;
   parentSessionId: string | null;
   spawnSource: SpawnSource;

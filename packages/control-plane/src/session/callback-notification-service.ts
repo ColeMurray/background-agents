@@ -12,6 +12,7 @@ import {
   automationCallbackContextSchema,
   linearCompletionCallbackPayloadSchema,
   linearToolCallCallbackPayloadSchema,
+  SLACK_ACTIVITY_REFRESH_KIND,
 } from "@open-inspect/shared/types/session-api";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
@@ -66,6 +67,31 @@ export interface CallbackServiceDeps {
 const NOTIFIED_CALL_IDS_CAP = 500;
 const EMPTY_TOOL_ARGS: Record<string, unknown> = {};
 
+/**
+ * How stale a Slack assistant-thread activity indicator may get before the
+ * next sandbox heartbeat refreshes it.
+ *
+ * Slack clears the indicator two minutes after the last `setStatus`. The
+ * sandbox bridge heartbeats every 30s while a turn is in flight, and the
+ * control plane declares a sandbox dead after 90s without one, so a sandbox
+ * the session still believes in has proven itself within the last 90s. One
+ * refresh per minute therefore lands with a full minute to spare, and costs
+ * nothing on a session that is already emitting tool calls.
+ *
+ * The window is per activation, so an evicted runtime refreshes on its first
+ * heartbeat back. That can only make a refresh earlier, never later, and the
+ * floor is the 30s heartbeat itself — well under what a single turn already
+ * spends on tool-call status updates.
+ */
+export const SLACK_ACTIVITY_REFRESH_INTERVAL_MS = 60_000;
+
+/**
+ * One bounded attempt per refresh. A retry would buy a second correlated shot
+ * at the same binding while widening the window in which a turn can terminate
+ * under an in-flight refresh; the next heartbeat is the better retry.
+ */
+const ACTIVITY_REFRESH_TIMEOUT_MS = 10_000;
+
 interface CallbackDeliveryResult {
   delivered: boolean;
   attempts: number;
@@ -82,6 +108,13 @@ export class CallbackNotificationService {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly completeAutomationRun: AutomationRunCompletionHandler | undefined;
   private _lastToolCallCallbackTs = 0;
+  /**
+   * When Slack's activity indicator was last (re)asserted for this session, by
+   * any path that calls `setStatus` — tool-call progress or an explicit
+   * refresh. In memory on purpose: losing it on eviction costs one redundant
+   * refresh, never a missed one.
+   */
+  private _lastSlackActivityAt = 0;
   private readonly notifiedCallIds = new Set<string>();
 
   constructor(deps: CallbackServiceDeps) {
@@ -351,6 +384,120 @@ export class CallbackNotificationService {
   }
 
   /**
+   * Re-assert Slack's assistant-thread activity indicator while a turn is
+   * still in flight.
+   *
+   * Driven by the sandbox heartbeat rather than by a timer. The heartbeat is
+   * the session's evidence that the agent is still occupied with this turn —
+   * the same evidence the inactivity watchdog renews `last_activity` from — so
+   * the indicator cannot outlive the thing it claims. A turn that emits tool
+   * calls keeps the indicator alive through `notifyToolCall` and never reaches
+   * delivery here.
+   *
+   * Best-effort: the bot acknowledges the callback before it calls Slack, so a
+   * delivered refresh is not proof the indicator was set. It is only proof the
+   * next one is a minute away.
+   */
+  async refreshSlackActivity(messageId: string, now: number): Promise<void> {
+    if (now - this._lastSlackActivityAt < SLACK_ACTIVITY_REFRESH_INTERVAL_MS) return;
+
+    // Web, Linear, automation and agent turns have no Slack indicator to hold
+    // open. Nothing to log — this is the ordinary shape of most sessions.
+    const message = this.messageRepository.getMessageCallbackContext(messageId);
+    if (!message?.callback_context || message.source !== "slack") return;
+
+    const { binding, secret } = this.resolveCallbackRoute("slack");
+    if (!secret || !binding) {
+      this.log.debug("callback.activity_refresh", {
+        message_id: messageId,
+        source: "slack",
+        outcome: "skipped",
+        skip_reason: secret ? "no_binding" : "no_secret",
+      });
+      return;
+    }
+
+    let context: unknown;
+    try {
+      context = JSON.parse(message.callback_context);
+    } catch (error) {
+      this.log.warn("callback.activity_refresh", {
+        message_id: messageId,
+        source: "slack",
+        outcome: "skipped",
+        skip_reason: "invalid_callback_context",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return;
+    }
+
+    const sessionId = this.getSessionId();
+    const callbackData = {
+      kind: SLACK_ACTIVITY_REFRESH_KIND,
+      sessionId,
+      messageId,
+      timestamp: now,
+      context,
+    };
+    const signature = await this.signPayload(callbackData, secret);
+
+    // Last look before the wire. The turn can terminate between the heartbeat
+    // that asked for this refresh and here — completion posts the final reply
+    // and nothing clears the indicator afterwards, so a refresh that lands
+    // after it would re-assert `Working...` on a finished thread.
+    if (this.messageRepository.getProcessingMessageWithStartedAt()?.id !== messageId) {
+      this.log.debug("callback.activity_refresh", {
+        message_id: messageId,
+        session_id: sessionId,
+        source: "slack",
+        outcome: "skipped",
+        skip_reason: "no_longer_processing",
+      });
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ACTIVITY_REFRESH_TIMEOUT_MS);
+    try {
+      const response = await binding.fetch("https://internal/callbacks/activity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...callbackData, signature }),
+        signal: controller.signal,
+      });
+
+      const fields = {
+        message_id: messageId,
+        session_id: sessionId,
+        source: "slack",
+        outcome: response.ok ? "success" : "error",
+        http_status: response.status,
+        duration_ms: Date.now() - now,
+      };
+      if (response.ok) {
+        // `max` because a tool-call callback may have asserted the indicator
+        // while this refresh was in flight; that is the newer truth.
+        this._lastSlackActivityAt = Math.max(this._lastSlackActivityAt, now);
+        this.log.info("callback.activity_refresh", fields);
+      } else {
+        // The window stays open, so the next heartbeat retries in 30s.
+        this.log.warn("callback.activity_refresh", fields);
+      }
+    } catch (error) {
+      this.log.warn("callback.activity_refresh", {
+        message_id: messageId,
+        session_id: sessionId,
+        source: "slack",
+        outcome: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+        duration_ms: Date.now() - now,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /**
    * Notify the originating client of a tool_call event (best-effort, throttled).
    * Max 1 callback per 3 seconds per session.
    */
@@ -471,6 +618,11 @@ export class CallbackNotificationService {
         // event for this callId (Anthropic's running and completed may be
         // seconds apart for long-running tools — the second event should retry).
         if (callId) this.markCallIdNotified(callId);
+        // The bot sets the Slack indicator from this callback, so it renews the
+        // same window `refreshSlackActivity` guards. A turn that keeps calling
+        // tools therefore never pays for a separate refresh.
+        if (source === "slack")
+          this._lastSlackActivityAt = Math.max(this._lastSlackActivityAt, now);
         this.log.info("callback.tool_call", {
           message_id: messageId,
           session_id: sessionId,

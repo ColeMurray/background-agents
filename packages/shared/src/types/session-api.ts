@@ -1,3 +1,4 @@
+import { harnessIdSchema } from "../harnesses";
 import { z } from "zod";
 import { sessionSkillSelectionSchema } from "./skills";
 import type { AgentResponse } from "./artifacts";
@@ -45,6 +46,14 @@ export const slackCallbackContextSchema = z.object({
 });
 
 export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;
+
+/**
+ * Domain separator for the Slack activity-refresh callback. Signed into the
+ * body and required by the route, so a body minted for another callback — whose
+ * signature is equally valid — cannot satisfy this one. Shared so the producer
+ * and the route cannot drift apart on the literal.
+ */
+export const SLACK_ACTIVITY_REFRESH_KIND = "slack.activity_refresh";
 
 const linearCallbackContextBaseSchema = z.strictObject({
   source: z.literal("linear"),
@@ -154,6 +163,12 @@ export const sendPromptRequestSchema = z
 
 export type SendPromptRequest = z.infer<typeof sendPromptRequestSchema>;
 
+export const sessionBudgetUpdateSchema = z.strictObject({
+  maxCostUsd: z.number().finite().positive().nullable(),
+});
+
+export type SessionBudgetUpdate = z.infer<typeof sessionBudgetUpdateSchema>;
+
 /** Request body for POST /sessions/:parentId/children/:childId/prompt. */
 export const childFollowUpPromptRequestSchema = z.strictObject({
   content: z
@@ -215,6 +230,8 @@ const createSessionRequestBaseSchema = z.object({
   repoOwner: z.string().trim().min(1).nullish(),
   repoName: z.string().trim().min(1).nullish(),
   title: z.string().optional(),
+  /** Agent harness; fixed at create like base_branch. Omission means the built-in harness. */
+  harness: harnessIdSchema.optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   branch: z.string().optional(),
@@ -254,9 +271,10 @@ export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
 export const createSessionInputSchema = createSessionRequestBaseSchema
   .extend({
-    // Display-only identity fields. Callers may not assert identity or SCM
-    // credentials in the body — identity derives from the verified principal
-    // and the control plane rejects forbidden identity fields.
+    // Profile fields accompany the identity asserted by a verified principal;
+    // callers may not assert provider/user IDs or SCM credentials. The
+    // control plane treats actorEmail as identity-bearing only when an
+    // email-attesting Slack/Linear service signs this exact request body.
     scmLogin: z.string().optional(),
     scmName: z.string().optional(),
     scmEmail: z.string().optional(),

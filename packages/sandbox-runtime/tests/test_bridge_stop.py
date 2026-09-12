@@ -79,7 +79,7 @@ def bridge() -> AgentBridge:
         control_plane_url="http://localhost:8787",
         auth_token="test-token",
     )
-    bridge.opencode_session_id = "oc-session-123"
+    bridge.harness.session_id = "oc-session-123"
     wire_opencode_transport(bridge, MockHttpClient())
     return bridge
 
