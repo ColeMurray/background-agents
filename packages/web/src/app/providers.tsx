@@ -7,6 +7,9 @@ import { SyntaxHighlightTheme } from "@/components/syntax-highlight-theme";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
 async function swrFetcher<T>(url: BrowserApiPath): Promise<T> {
+  // SWR falls back to this fetcher for every hook that omits its own, including
+  // hooks whose key is local state rather than a request path.
+  if (!url.startsWith("/api/")) throw new Error(`SWR key is not a BFF API path: ${url}`);
   const res = await browserApiFetch(url);
   if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
   return res.json();
