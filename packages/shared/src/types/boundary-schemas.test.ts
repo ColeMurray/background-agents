@@ -94,7 +94,9 @@ describe("boundary schemas", () => {
   describe("session summary response schemas", () => {
     it("preserves the complete flat-list projection and optional viewer state", () => {
       const parsed = sessionListResponseSchema.parse({
-        sessions: [{ ...listSession, readState: { latestMessageId: null, unread: false } }],
+        sessions: [
+          { ...listSession, readState: { latestMessageId: null, unread: false, version: 0 } },
+        ],
         hasMore: false,
         cursor: "not-part-of-this-response",
       });

@@ -7,11 +7,22 @@ import {
 } from "@open-inspect/shared/session-list-query";
 import {
   sessionListResponseSchema,
+  sessionListSummarySchema,
   type SessionListResponse,
   type SessionListSummary,
 } from "@open-inspect/shared/types/sessions";
+import { z } from "zod";
 import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
+import { sessionReadStateClientSchema } from "./session-read-state";
+
+const sessionListClientResponseSchema = sessionListResponseSchema.extend({
+  sessions: z.array(
+    sessionListSummarySchema.extend({
+      readState: sessionReadStateClientSchema.optional(),
+    })
+  ),
+});
 
 const SESSIONS_PAGE_SIZE = DEFAULT_SESSION_LIST_LIMIT;
 const COMMAND_MENU_SESSIONS_LIMIT = 100;
@@ -33,7 +44,7 @@ export type { SessionListResponse };
 export async function fetchSessionListPage(path: BrowserApiPath): Promise<SessionListResponse> {
   const response = await browserApiFetch(path);
   if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
-  return sessionListResponseSchema.parse(await response.json());
+  return sessionListClientResponseSchema.parse(await response.json());
 }
 
 export function buildSessionsPageKey(options: SessionListQuery = {}): BrowserApiPath {

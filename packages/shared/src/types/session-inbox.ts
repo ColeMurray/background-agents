@@ -9,7 +9,8 @@ export type SessionInboxSession = z.infer<typeof sessionInboxSessionSchema>;
 /** @deprecated Use SessionInboxSession for this inbox-specific projection. */
 export type SessionListItem = SessionInboxSession;
 
-export const sessionInboxCategorySchema = z.enum(["needs_attention", "in_progress", "finished"]);
+export const SESSION_INBOX_CATEGORIES = ["needs_attention", "in_progress", "finished"] as const;
+export const sessionInboxCategorySchema = z.enum(SESSION_INBOX_CATEGORIES);
 export type SessionInboxCategory = z.infer<typeof sessionInboxCategorySchema>;
 
 export const sessionInboxItemSchema = z.object({
@@ -26,10 +27,6 @@ export const sessionInboxPageSchema = z.object({
 export type SessionInboxPage = z.infer<typeof sessionInboxPageSchema>;
 
 export const sessionInboxSnapshotSchema = z.object({
-  categories: z.object({
-    needs_attention: sessionInboxPageSchema,
-    in_progress: sessionInboxPageSchema,
-    finished: sessionInboxPageSchema,
-  }),
+  categories: z.record(sessionInboxCategorySchema, sessionInboxPageSchema),
 });
 export type SessionInboxSnapshot = z.infer<typeof sessionInboxSnapshotSchema>;

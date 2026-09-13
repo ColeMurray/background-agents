@@ -8,12 +8,10 @@ import {
   SESSION_LIST_CURRENT_USER,
 } from "@open-inspect/shared/session-list-query";
 import {
+  SESSION_INBOX_CATEGORIES,
   sessionInboxCategorySchema,
   sessionInboxPageSchema,
   sessionInboxSnapshotSchema,
-  type SessionInboxCategory,
-  type SessionInboxPage,
-  type SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import {
   sessionListResponseSchema,
@@ -161,13 +159,14 @@ export async function handleListSessionInbox(
 
   if (category === null) {
     const snapshot = await store.listInboxSnapshot(commonOptions);
-    const categories = Object.fromEntries(
-      (Object.keys(snapshot) as SessionInboxCategory[]).map((inboxCategory) => [
-        inboxCategory,
-        encodeInboxPage(snapshot[inboxCategory]),
-      ])
-    ) as Record<SessionInboxCategory, SessionInboxPage>;
-    const body: SessionInboxSnapshot = sessionInboxSnapshotSchema.parse({ categories });
+    const body = sessionInboxSnapshotSchema.parse({
+      categories: Object.fromEntries(
+        SESSION_INBOX_CATEGORIES.map((inboxCategory) => [
+          inboxCategory,
+          encodeInboxPage(snapshot[inboxCategory]),
+        ])
+      ),
+    });
     const response = json(body);
     response.headers.set("Cache-Control", "private, no-store");
     return response;

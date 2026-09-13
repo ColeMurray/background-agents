@@ -1,7 +1,8 @@
-import type {
-  SessionInboxCategory,
-  SessionInboxItem,
-  SessionInboxSession,
+import {
+  SESSION_INBOX_CATEGORIES,
+  type SessionInboxCategory,
+  type SessionInboxItem,
+  type SessionInboxSession,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { attachSessionListMetadata } from "./session-list-metadata";
@@ -51,8 +52,6 @@ interface InboxPageData {
   nextCursor: SessionInboxCursor | null;
 }
 
-const INBOX_CATEGORIES: SessionInboxCategory[] = ["needs_attention", "in_progress", "finished"];
-
 function toListItem(row: InboxSessionRow): SessionInboxSession {
   return {
     id: row.id,
@@ -94,7 +93,7 @@ export class SessionInboxStore {
   ): Promise<ListSessionInboxSnapshotResult> {
     const result = await this.bindInboxSnapshotQuery(options).all<InboxSessionRow>();
     const rows = result.results ?? [];
-    const pages = INBOX_CATEGORIES.map((category) =>
+    const pages = SESSION_INBOX_CATEGORIES.map((category) =>
       this.buildPageData(
         options.limit,
         rows.filter((row) => row.category === category)
@@ -106,7 +105,7 @@ export class SessionInboxStore {
     );
     const sessionsById = new Map(sessionsWithMetadata.map((session) => [session.id, session]));
     return Object.fromEntries(
-      INBOX_CATEGORIES.map((category, index) => [
+      SESSION_INBOX_CATEGORIES.map((category, index) => [
         category,
         this.assemblePage(pages[index], sessionsById),
       ])

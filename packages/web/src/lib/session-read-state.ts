@@ -2,10 +2,17 @@ import { browserApiFetch } from "./browser-api-fetch";
 import type { SandboxEvent } from "@/types/session";
 import {
   sessionReadResultSchema,
+  sessionReadStateSchema,
   type SessionReadAction,
   type SessionReadResult,
   type SessionReadState,
 } from "@open-inspect/shared/types/sessions";
+import { z } from "zod";
+
+export const sessionReadStateClientSchema = z.preprocess((data) => {
+  if (typeof data !== "object" || data === null || "version" in data) return data;
+  return { ...data, version: 0 };
+}, sessionReadStateSchema);
 
 export type SessionReadAttemptDisposition = "complete" | "retry" | "permanent_failure";
 export interface SessionReadStateReconciledDetail {

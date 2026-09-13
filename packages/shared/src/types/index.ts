@@ -90,6 +90,7 @@ export type {
 } from "./sessions";
 
 export {
+  SESSION_INBOX_CATEGORIES,
   sessionInboxCategorySchema,
   sessionInboxSessionSchema,
   sessionInboxItemSchema,

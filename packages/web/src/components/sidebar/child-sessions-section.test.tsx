@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SWRConfig } from "swr";
 import { ChildSessionsSection } from "./child-sessions-section";
+import type { ChildSessionSummary } from "@open-inspect/shared/types/sessions";
 
 expect.extend(matchers);
 
@@ -19,6 +20,39 @@ vi.mock("next/link", () => ({
     </a>
   ),
 }));
+
+function childSession(
+  id: string,
+  parentSessionId: string,
+  overrides: Partial<ChildSessionSummary> = {}
+): ChildSessionSummary {
+  return {
+    id,
+    title: "Child session",
+    repoOwner: "owner",
+    repoName: "repo",
+    baseBranch: "main",
+    status: "completed",
+    parentSessionId,
+    spawnSource: "agent",
+    environmentId: null,
+    createdAt: 1000,
+    updatedAt: 2000,
+    harness: "opencode",
+    model: "anthropic/claude-sonnet-4-6",
+    reasoningEffort: null,
+    spawnDepth: 1,
+    automationId: null,
+    automationRunId: null,
+    scmLogin: null,
+    userId: null,
+    totalCost: 0,
+    activeDurationMs: 0,
+    messageCount: 0,
+    prCount: 0,
+    ...overrides,
+  };
+}
 
 describe("ChildSessionsSection", () => {
   it("rejects malformed child summaries at the web boundary", async () => {
@@ -47,24 +81,7 @@ describe("ChildSessionsSection", () => {
     render(
       <SWRConfig
         value={{
-          fallback: {
-            [`/api/sessions/${sessionId}/children`]: {
-              children: [
-                {
-                  id: "child-session",
-                  title: "Child session",
-                  repoOwner: "owner",
-                  repoName: "repo",
-                  parentSessionId: sessionId,
-                  spawnSource: "agent",
-                  spawnDepth: 1,
-                  status: "completed",
-                  createdAt: 1000,
-                  updatedAt: 2000,
-                },
-              ],
-            },
-          },
+          fetcher: async () => ({ children: [childSession("child-session", sessionId)] }),
           provider: () => new Map(),
           revalidateOnFocus: false,
         }}
@@ -82,27 +99,14 @@ describe("ChildSessionsSection", () => {
   it("shows child sessions expanded when navigating to another session", async () => {
     const user = userEvent.setup();
     const swrConfig = {
-      fallback: Object.fromEntries(
-        ["parent-a", "parent-b"].map((sessionId) => [
-          `/api/sessions/${sessionId}/children`,
-          {
-            children: [
-              {
-                id: `child-${sessionId}`,
-                title: `Child ${sessionId}`,
-                repoOwner: "owner",
-                repoName: "repo",
-                parentSessionId: sessionId,
-                spawnSource: "agent",
-                spawnDepth: 1,
-                status: "completed",
-                createdAt: 1000,
-                updatedAt: 2000,
-              },
-            ],
-          },
-        ])
-      ),
+      fetcher: async (key: string) => {
+        const sessionId = key.split("/").at(-2)!;
+        return {
+          children: [
+            childSession(`child-${sessionId}`, sessionId, { title: `Child ${sessionId}` }),
+          ],
+        };
+      },
       provider: () => new Map(),
       revalidateOnFocus: false,
     };
@@ -133,31 +137,19 @@ describe("ChildSessionsSection", () => {
     render(
       <SWRConfig
         value={{
-          fallback: {
-            [`/api/sessions/${sessionId}/children`]: {
-              children: [
-                {
-                  id: "child-session",
-                  title: "Child session",
-                  repoOwner: "owner",
-                  repoName: "repo",
-                  parentSessionId: sessionId,
-                  spawnSource: "agent",
-                  spawnDepth: 1,
-                  status: "completed",
-                  createdAt: 1000,
-                  updatedAt: 2000,
-                  pullRequestSummary: {
-                    total: 1,
-                    open: 0,
-                    draft: 0,
-                    merged: 1,
-                    closed: 0,
-                  },
+          fetcher: async () => ({
+            children: [
+              childSession("child-session", sessionId, {
+                pullRequestSummary: {
+                  total: 1,
+                  open: 0,
+                  draft: 0,
+                  merged: 1,
+                  closed: 0,
                 },
-              ],
-            },
-          },
+              }),
+            ],
+          }),
           provider: () => new Map(),
           revalidateOnFocus: false,
         }}

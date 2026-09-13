@@ -1,5 +1,8 @@
 import {
+  sessionInboxCategorySchema,
+  sessionInboxItemSchema,
   sessionInboxPageSchema,
+  sessionInboxSessionSchema,
   sessionInboxSnapshotSchema,
   type SessionInboxCategory,
   type SessionInboxItem,
@@ -8,8 +11,24 @@ import {
   type SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionReadState } from "@open-inspect/shared/types/sessions";
+import { z } from "zod";
 import type { BrowserApiPath } from "./browser-api-fetch";
-import { applySessionReadStateToItem } from "./session-read-state";
+import { applySessionReadStateToItem, sessionReadStateClientSchema } from "./session-read-state";
+
+const sessionInboxSessionClientSchema = sessionInboxSessionSchema.extend({
+  readState: sessionReadStateClientSchema,
+});
+const sessionInboxPageClientSchema = sessionInboxPageSchema.extend({
+  items: z.array(
+    sessionInboxItemSchema.extend({
+      rootSession: sessionInboxSessionClientSchema,
+      descendantSessions: z.array(sessionInboxSessionClientSchema),
+    })
+  ),
+});
+const sessionInboxSnapshotClientSchema = sessionInboxSnapshotSchema.extend({
+  categories: z.record(sessionInboxCategorySchema, sessionInboxPageClientSchema),
+});
 
 const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 
@@ -42,11 +61,11 @@ export function isSessionInboxPaginationKey(key: unknown): boolean {
 }
 
 export function parseSessionInboxPage(data: unknown): SessionInboxPage {
-  return sessionInboxPageSchema.parse(data);
+  return sessionInboxPageClientSchema.parse(data);
 }
 
 export function parseSessionInboxSnapshot(data: unknown): SessionInboxSnapshot {
-  return sessionInboxSnapshotSchema.parse(data);
+  return sessionInboxSnapshotClientSchema.parse(data);
 }
 
 function applyTitleToSession(

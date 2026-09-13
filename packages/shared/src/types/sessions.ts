@@ -98,12 +98,12 @@ export const sessionReadStateSchema = z.union([
   z.object({
     latestMessageId: z.null(),
     unread: z.literal(false),
-    version: z.number().default(0),
+    version: z.number(),
   }),
   z.object({
     latestMessageId: z.string(),
     unread: z.boolean(),
-    version: z.number().default(0),
+    version: z.number(),
   }),
 ]);
 export type SessionReadState = z.infer<typeof sessionReadStateSchema>;
