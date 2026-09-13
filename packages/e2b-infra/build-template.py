@@ -42,7 +42,7 @@ def main() -> None:
         .run_cmd(
             "bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh", user="root"
         )
-        .set_user("user")
+        .set_user(plan["target"]["user"])
         .set_workdir("/workspace")
         .set_start_cmd(START_CMD, READY_CMD)
     )

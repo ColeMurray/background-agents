@@ -112,14 +112,20 @@ def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tm
     deployed_app = object()
     lookup = Mock(return_value=deployed_app)
     build = Mock()
+    plan = {
+        "buildHash": "packed-recipe",
+        "runtimeEnv": {"PACKED_PLAN": "true"},
+    }
 
     monkeypatch.setattr(deploy.modal.App, "lookup", lookup)
     monkeypatch.setattr(deploy, "base_image", Mock(build=build, object_id="im-verified"))
+    monkeypatch.setattr(deploy, "base_image_plan", plan)
     process = Mock(returncode=0)
     process.stdout.read.return_value = ""
     sandbox = Mock()
     sandbox.exec.return_value = process
-    monkeypatch.setattr(deploy.modal.Sandbox, "create", Mock(return_value=sandbox))
+    create = Mock(return_value=sandbox)
+    monkeypatch.setattr(deploy.modal.Sandbox, "create", create)
     monkeypatch.setattr(deploy, "image_reference_path", lambda: tmp_path / "selected.json")
     monkeypatch.setenv("OPENINSPECT_IMAGE_RESULT", str(tmp_path / "candidate.json"))
 
@@ -127,8 +133,34 @@ def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tm
 
     lookup.assert_called_once_with(deploy.app.name, create_if_missing=True)
     build.assert_called_once_with(deployed_app)
+    assert create.call_args.kwargs["env"] is plan["runtimeEnv"]
     sandbox.terminate.assert_called_once()
-    assert json.loads((tmp_path / "selected.json").read_text())["imageId"] == "im-verified"
+    assert json.loads((tmp_path / "selected.json").read_text()) == {
+        "imageId": "im-verified",
+        "buildHash": "packed-recipe",
+    }
+
+
+def test_local_base_image_retains_its_packed_plan(monkeypatch, tmp_path) -> None:
+    from src.images import base
+
+    plan = {
+        "runtimeEnv": {"PACKED_PLAN": "true"},
+        "runtimeVersion": "packed-runtime",
+        "target": {"base": "packed-base"},
+    }
+    image = Mock()
+    for method in ("add_local_dir", "run_commands", "env", "workdir"):
+        getattr(image, method).return_value = image
+    monkeypatch.setattr(base.modal, "is_local", lambda: True)
+    monkeypatch.setattr(base, "local_image_plan", lambda: (tmp_path, plan))
+    monkeypatch.setattr(base.modal.Image, "from_registry", Mock(return_value=image))
+
+    defined_image, defined_plan = base._define_image()
+
+    assert defined_image is image
+    assert defined_plan is plan
+    image.env.assert_called_once_with({"PACKED_PLAN": "true", "SANDBOX_VERSION": "packed-runtime"})
 
 
 def _run_deploy_script(

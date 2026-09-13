@@ -22,20 +22,21 @@ if __name__ == "__main__":
     # The eager builder must run before a verified image reference exists. Import
     # only build modules, without src.__init__ registering deployable functions.
     from app_config import APP_NAME
-    from images.base import base_image, image_reference_path, local_image_plan
+    from images.base import base_image, base_image_plan, image_reference_path
 else:
     # Modal imports this module to discover the fully registered application.
     from src.app import app
     from src.app_config import APP_NAME
-    from src.images.base import base_image, image_reference_path, local_image_plan
+    from src.images.base import base_image, base_image_plan, image_reference_path
 
 
 def build_sandbox_image() -> None:
     """Build the image used by dynamic sandboxes before requests can create them."""
+    if base_image_plan is None:
+        raise RuntimeError("Modal sandbox image build requires a local packed image plan")
     deployed_app = modal.App.lookup(APP_NAME, create_if_missing=True)
     with modal.enable_output():
         base_image.build(deployed_app)
-    _bundle, plan = local_image_plan()
     from sandbox_images.native import write_build_result
 
     # Verify the concrete baked artifact, without local source mounts.
@@ -44,7 +45,7 @@ def build_sandbox_image() -> None:
         "infinity",
         app=deployed_app,
         image=modal.Image.from_id(base_image.object_id),
-        env=plan["runtimeEnv"],
+        env=base_image_plan["runtimeEnv"],
         timeout=300,
     )
     try:
@@ -64,7 +65,7 @@ def build_sandbox_image() -> None:
     # Publish the function image reference only after fresh-artifact verification.
     record = {
         "imageId": base_image.object_id,
-        "buildHash": plan["buildHash"],
+        "buildHash": base_image_plan["buildHash"],
     }
     path = image_reference_path()
     path.parent.mkdir(parents=True, exist_ok=True)

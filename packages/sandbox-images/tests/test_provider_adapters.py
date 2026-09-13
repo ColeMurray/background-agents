@@ -13,11 +13,17 @@ from sandbox_images import bundle, native
 
 ROOT = Path(__file__).parents[3]
 PLAN = {
-    "provider": "test",
+    "provider": "e2b",
     "buildHash": "a" * 64,
     "runtimeEnv": {"PACKED_PLAN": "true"},
     "runtimeVersion": "test-runtime",
-    "target": {"base": "test-base"},
+    "target": {
+        "os": "debian",
+        "base": "test-base",
+        "node": "22",
+        "user": "test-user",
+        "home": "/home/test-user",
+    },
 }
 EXPECTED_NAME = "prefix-aaaaaaaaaaaa-123"
 
@@ -77,6 +83,7 @@ def test_e2b_retry_never_overwrites_existing_template(monkeypatch, build_mocks, 
         == bundle.pack_bundle.return_value.directory
     )
     template.from_dockerfile.assert_called_once_with("FROM test-base")
+    template.set_user.assert_called_once_with("test-user")
     assert sandbox_class.create.call_args.kwargs["template"] == EXPECTED_NAME
     assert sandbox_class.create.call_args.kwargs["envs"] is PLAN["runtimeEnv"]
     assert sandbox.commands.run.call_args.args[0].endswith("/app/verify/smoke_test.py verify")
