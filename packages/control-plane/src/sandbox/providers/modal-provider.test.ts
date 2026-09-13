@@ -637,7 +637,7 @@ describe("ModalSandboxProvider", () => {
       }
     });
 
-    it("does not infer artifact absence from an explicit snapshot failure", async () => {
+    it("preserves client-level snapshot failures", async () => {
       const provider = new ModalSandboxProvider(
         createMockModalClient({
           snapshotSandbox: vi.fn(async () => ({
@@ -704,7 +704,7 @@ describe("ModalSandboxProvider", () => {
     it("returns providerObjectId from restoreFromSnapshot", async () => {
       const client = createMockModalClient({
         restoreSandbox: vi.fn(async () => ({
-          success: true,
+          success: true as const,
           sandboxId: "restored-sandbox-123",
           modalObjectId: "new-modal-obj-456",
           vncUrl: "https://vnc.test",

@@ -172,22 +172,15 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         config.correlation
       );
 
-      if (result.success) {
-        return {
-          success: true,
-          sandboxId: result.sandboxId,
-          providerObjectId: result.modalObjectId,
-          codeServerUrl: result.codeServerUrl,
-          codeServerPassword: result.codeServerPassword,
-          vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
-          ttydUrl: result.ttydUrl,
-          tunnelUrls: result.tunnelUrls,
-        };
-      }
-
       return {
-        success: false,
-        error: result.error || "Unknown restore error",
+        success: true,
+        sandboxId: result.sandboxId,
+        providerObjectId: result.modalObjectId,
+        codeServerUrl: result.codeServerUrl,
+        codeServerPassword: result.codeServerPassword,
+        vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
+        ttydUrl: result.ttydUrl,
+        tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
       if (error instanceof ModalApiError) {

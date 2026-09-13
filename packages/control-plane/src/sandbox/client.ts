@@ -29,83 +29,63 @@ export const MODAL_SANDBOX_START_REQUEST_DEADLINE_MS = 60_000;
 export const MODAL_SNAPSHOT_REQUEST_DEADLINE_MS = 310_000;
 export const MODAL_CLEANUP_REQUEST_DEADLINE_MS = 60_000;
 
-const modalErrorResponseSchema = z.object({
-  success: z.literal(false),
-  error: z.string().optional(),
-});
-
 const modalTunnelUrlsSchema = z.record(z.string(), z.string());
 
-const createSandboxModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-    data: z.object({
-      sandbox_id: z.string(),
+const createSandboxModalResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    sandbox_id: z.string(),
+    modal_object_id: z.string().nullable().optional(),
+    created_at: z.number(),
+    code_server_url: z.string().nullable().optional(),
+    code_server_password: z.string().nullable().optional(),
+    vnc_url: z.string().nullable().optional(),
+    vnc_password: z.string().nullable().optional(),
+    ttyd_url: z.string().nullable().optional(),
+    tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
+  }),
+});
+
+const restoreSandboxModalResponseSchema = z.object({
+  success: z.literal(true),
+  data: z
+    .object({
+      sandbox_id: z.string().optional(),
       modal_object_id: z.string().nullable().optional(),
-      created_at: z.number(),
       code_server_url: z.string().nullable().optional(),
       code_server_password: z.string().nullable().optional(),
       vnc_url: z.string().nullable().optional(),
       vnc_password: z.string().nullable().optional(),
       ttyd_url: z.string().nullable().optional(),
       tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
-    }),
-  }),
-  modalErrorResponseSchema,
-]);
+    })
+    .optional(),
+});
 
-const restoreSandboxModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-    data: z
-      .object({
-        sandbox_id: z.string().optional(),
-        modal_object_id: z.string().nullable().optional(),
-        code_server_url: z.string().nullable().optional(),
-        code_server_password: z.string().nullable().optional(),
-        vnc_url: z.string().nullable().optional(),
-        vnc_password: z.string().nullable().optional(),
-        ttyd_url: z.string().nullable().optional(),
-        tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
-      })
-      .optional(),
-  }),
-  modalErrorResponseSchema,
-]);
+const snapshotSandboxModalResponseSchema = z.object({
+  success: z.literal(true),
+  data: z
+    .object({
+      image_id: z.string(),
+    })
+    .optional(),
+});
 
-const snapshotSandboxModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-    data: z
-      .object({
-        image_id: z.string(),
-      })
-      .optional(),
+const createImageBuildSandboxModalResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    // Non-empty: the previous hand-rolled check rejected a blank id.
+    provider_session_id: z.string().min(1),
   }),
-  modalErrorResponseSchema,
-]);
-
-const createImageBuildSandboxModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-    data: z.object({
-      // Non-empty: the previous hand-rolled check rejected a blank id.
-      provider_session_id: z.string().min(1),
-    }),
-  }),
-  modalErrorResponseSchema,
-]);
+});
 
 /**
- * Image-build operations (start/terminate) only signal success or failure; their
+ * Image-build operation 2xx responses only expose a success marker here. Their
  * `data` payload is never read, so it is deliberately left unvalidated.
  */
-const imageBuildOperationModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-  }),
-  modalErrorResponseSchema,
-]);
+const imageBuildOperationModalResponseSchema = z.object({
+  success: z.literal(true),
+});
 
 function parseModalApiResponse<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
@@ -225,10 +205,9 @@ export interface RestoreSandboxRequest {
 }
 
 export interface RestoreSandboxResponse {
-  success: boolean;
+  success: true;
   sandboxId?: string;
   modalObjectId?: string;
-  error?: string;
   codeServerUrl?: string;
   codeServerPassword?: string;
   vncUrl?: string;
@@ -435,10 +414,6 @@ export class ModalClient {
         (status) => (httpStatus = status)
       );
 
-      if (!result.success) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-      }
-
       outcome = "success";
       return {
         sandboxId: result.data.sandbox_id,
@@ -502,10 +477,6 @@ export class ModalClient {
         (status) => (httpStatus = status)
       );
 
-      if (!result.success) {
-        return { success: false, error: result.error || "Unknown restore error" };
-      }
-
       outcome = "success";
       return {
         success: true,
@@ -558,10 +529,6 @@ export class ModalClient {
         request.signal,
         (status) => (httpStatus = status)
       );
-      if (!result.success) {
-        return { success: false, error: result.error || "Unknown snapshot error" };
-      }
-
       if (!result.data?.image_id) {
         return { success: false, error: "Snapshot response missing image_id" };
       }
@@ -609,9 +576,6 @@ export class ModalClient {
         request.signal,
         (status) => (httpStatus = status)
       );
-      if (!result.success) {
-        return { success: false, error: result.error || "Unknown snapshot error" };
-      }
       if (!result.data?.image_id) {
         return { success: false, error: "Snapshot response missing image_id" };
       }
@@ -666,10 +630,6 @@ export class ModalClient {
         request.signal,
         (status) => (httpStatus = status)
       );
-
-      if (result.success === false) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-      }
 
       outcome = "success";
       return {
@@ -739,7 +699,7 @@ export class ModalClient {
     let httpStatus: number | undefined;
     let outcome: "success" | "error" = "error";
     try {
-      const result = await this.postJson(
+      await this.postJson(
         url,
         endpoint,
         deadlineMs,
@@ -749,9 +709,6 @@ export class ModalClient {
         request.signal,
         (status) => (httpStatus = status)
       );
-      if (result.success === false) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-      }
       outcome = "success";
     } finally {
       log.info("modal.request", {
