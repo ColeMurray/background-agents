@@ -302,9 +302,9 @@ docker compose up -d postgres redis
 - `setup.sh` failures are non-fatal for fresh sessions, but fatal in image build mode
 - `start.sh` runs for every non-build session startup (fresh, prebuilt-image, snapshot-restore)
 - `start.sh` failures are strict: if present and it fails, session startup fails
-- Default timeouts:
-  - `SETUP_TIMEOUT_SECONDS` (default `300`)
-  - `START_TIMEOUT_SECONDS` (default `120`)
+- Open-Inspect does not impose hook-specific timeouts. Scripts remain subject to enclosing sandbox
+  shutdown and image-build limits; scripts can apply their own command-specific deadlines when
+  needed.
 - Both hooks receive `OPENINSPECT_BOOT_MODE` (`build`, `fresh`, `repo_image`, `snapshot_restore`)
 - Git operations in hooks can authenticate to other private repos on the configured SCM host when
   the shared installation has access

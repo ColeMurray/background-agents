@@ -40,8 +40,8 @@ FATAL_ERROR_REPORT_TIMEOUT_SECONDS = 5.0
 FATAL_ERROR_REPORT_MAX_CHARS = 1000
 
 
-class ImageBuildExecutionCancelled(Exception):
-    """A handled process signal interrupted image-build work."""
+class BootExecutionCancelled(Exception):
+    """A handled process signal interrupted boot work."""
 
 
 class SandboxSupervisor:
@@ -350,15 +350,17 @@ class SandboxSupervisor:
         self, operation_factory: Callable[[], Awaitable[_ResultT]]
     ) -> _ResultT:
         if self.shutdown_event.is_set():
-            raise ImageBuildExecutionCancelled
+            raise BootExecutionCancelled
         operation_task = asyncio.ensure_future(operation_factory())
         shutdown_task = asyncio.create_task(self.shutdown_event.wait())
         tasks = {operation_task, shutdown_task}
         try:
             done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if shutdown_task in done or self.shutdown_event.is_set():
+                raise BootExecutionCancelled
             if operation_task in done:
                 return operation_task.result()
-            raise ImageBuildExecutionCancelled
+            raise BootExecutionCancelled
         finally:
             for task in tasks:
                 if not task.done():
@@ -411,8 +413,6 @@ class SandboxSupervisor:
         try:
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
-                if self.shutdown_event.is_set():
-                    raise ImageBuildExecutionCancelled
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
                 self.log.info(
                     "image_build.complete",
@@ -438,7 +438,9 @@ class SandboxSupervisor:
                 self.log.warn("vnc.start_failed", exc=error)
                 await self.browser_desktop.stop()
 
-            boot_result = await self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
+            boot_result = await self._run_until_shutdown(
+                lambda: self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
+            )
             self._repository_boot_result = boot_result
 
             # Materialization is sandbox-boot work; OpenCode process restarts
@@ -476,8 +478,13 @@ class SandboxSupervisor:
                 outcome="success",
             )
             await self.monitor_processes()
-        except ImageBuildExecutionCancelled:
-            self.log.info("image_build.cancelled", reason="shutdown_requested")
+        except BootExecutionCancelled:
+            event = (
+                "image_build.cancelled"
+                if self.boot_mode is BootMode.BUILD
+                else "supervisor.boot_cancelled"
+            )
+            self.log.info(event, reason="shutdown_requested")
             return True
         except Exception as error:
             self.log.error("supervisor.error", exc=error)
@@ -490,7 +497,7 @@ class SandboxSupervisor:
                     await self._run_until_shutdown(
                         lambda: repo_image_callback.report_failure(error_message)
                     )
-                except ImageBuildExecutionCancelled:
+                except BootExecutionCancelled:
                     self.log.info("image_build.cancelled", reason="shutdown_requested")
                     return True
             await self._report_fatal_error(str(error))

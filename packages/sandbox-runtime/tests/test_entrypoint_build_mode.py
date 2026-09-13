@@ -15,7 +15,7 @@ from sandbox_runtime.repository_sync import (
     RepositorySyncStatus,
 )
 from sandbox_runtime.runtime_config import BootMode
-from sandbox_runtime.supervisor import ImageBuildExecutionCancelled
+from sandbox_runtime.supervisor import BootExecutionCancelled
 
 
 @pytest.fixture(autouse=True)
@@ -140,10 +140,32 @@ class TestImageBuildMode:
         supervisor.shutdown_event.set()
         operation_factory = MagicMock()
 
-        with pytest.raises(ImageBuildExecutionCancelled):
+        with pytest.raises(BootExecutionCancelled):
             await supervisor._run_until_shutdown(operation_factory)
 
         operation_factory.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_wins_when_operation_succeeds_in_same_turn(self, build_env):
+        supervisor = _make_supervisor(build_env)
+
+        async def operation():
+            supervisor.shutdown_event.set()
+            return "complete"
+
+        with pytest.raises(BootExecutionCancelled):
+            await supervisor._run_until_shutdown(operation)
+
+    @pytest.mark.asyncio
+    async def test_shutdown_wins_when_operation_fails_in_same_turn(self, build_env):
+        supervisor = _make_supervisor(build_env)
+
+        async def operation():
+            supervisor.shutdown_event.set()
+            raise RuntimeError("racing failure")
+
+        with pytest.raises(BootExecutionCancelled):
+            await supervisor._run_until_shutdown(operation)
 
     @pytest.mark.asyncio
     async def test_resolves_diff_baseline_after_sync_before_setup(self, build_env):

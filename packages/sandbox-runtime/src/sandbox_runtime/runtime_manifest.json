@@ -1,8 +1,8 @@
 {
-  "runtimeVersion": "v66-claude-privacy-policy",
-  "generation": 66,
+  "runtimeVersion": "v67-unbounded-repository-hooks",
+  "generation": 67,
   "minimumCompatibleGeneration": 62,
-  "minimumRebuildGeneration": 66,
+  "minimumRebuildGeneration": 67,
   "harnessMinimumGeneration": {
     "claude": 64
   }

@@ -7,7 +7,40 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sandbox_runtime.process_output import communicate_owned_subprocess, terminate_owned_subprocess
+from sandbox_runtime.process_output import (
+    PROCESS_OUTPUT_TAIL_BYTES,
+    BoundedOutputCollector,
+    communicate_owned_subprocess,
+    terminate_owned_subprocess,
+    wait_for_process_exit,
+)
+
+
+async def test_bounded_output_collector_retains_only_tail_window():
+    stream = asyncio.StreamReader()
+    collector = BoundedOutputCollector(stream)
+    stream.feed_data(b"discarded\n" * 10_000 + b"final line\n")
+    stream.feed_eof()
+
+    await collector.wait()
+
+    tail = collector.tail_lines(max_lines=10_000)
+    assert len(tail.encode()) <= PROCESS_OUTPUT_TAIL_BYTES
+    assert tail.endswith("final line")
+
+
+async def test_wait_for_process_exit_does_not_wait_for_inherited_pipe_eof():
+    process = MagicMock(returncode=None)
+    wait_forever = asyncio.Event()
+    process.wait = AsyncMock(side_effect=wait_forever.wait)
+
+    async def mark_process_exited():
+        await asyncio.sleep(0)
+        process.returncode = 0
+
+    await asyncio.gather(wait_for_process_exit(process), mark_process_exited())
+
+    process.wait.assert_awaited_once()
 
 
 @pytest.mark.parametrize("returncode", [None, 0])
