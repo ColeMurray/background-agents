@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
@@ -13,11 +13,7 @@ import {
   applyModelPreferenceChanges,
   normalizeValidModels,
 } from "@open-inspect/shared/models";
-import {
-  MODEL_PREFERENCES_KEY,
-  ModelPreferencesProvider,
-  useEnabledModels,
-} from "@/hooks/use-enabled-models";
+import { MODEL_PREFERENCES_KEY, useEnabledModels } from "@/hooks/use-enabled-models";
 import { ModelsSettings } from "./models-settings";
 
 expect.extend(matchers);
@@ -48,18 +44,6 @@ function CachedModels() {
   return <span data-testid="cached-models">{JSON.stringify(enabledModels)}</span>;
 }
 
-function NavigableSettings() {
-  const [showModels, setShowModels] = useState(true);
-  return (
-    <>
-      <button onClick={() => setShowModels(!showModels)}>
-        {showModels ? "Other settings" : "Models"}
-      </button>
-      {showModels && <ModelsSettings />}
-    </>
-  );
-}
-
 function renderSettings(
   enabledModels = ["openai/gpt-5.4"],
   children: ReactNode = <ModelsSettings />
@@ -77,10 +61,8 @@ function renderSettings(
         revalidateIfStale: false,
       }}
     >
-      <ModelPreferencesProvider>
-        {children}
-        <CachedModels />
-      </ModelPreferencesProvider>
+      {children}
+      <CachedModels />
     </SWRConfig>
   );
 }
@@ -145,35 +127,6 @@ describe("ModelsSettings", () => {
     expect(screen.getByRole("switch", { name: /Claude Haiku 4.5/ })).toBeChecked();
   });
 
-  it("queues overlapping saves while showing every selection immediately", async () => {
-    let resolve!: (response: Response) => void;
-    const laterSaves = createSaveMock(["openai/gpt-5.4", "anthropic/claude-haiku-4-5"]);
-    const fetchMock = vi
-      .fn()
-      .mockReturnValueOnce(new Promise<Response>((done) => (resolve = done)))
-      .mockImplementation(laterSaves);
-    vi.stubGlobal("fetch", fetchMock);
-    const user = userEvent.setup();
-    renderSettings();
-    await user.click(screen.getByRole("switch", { name: /Claude Haiku 4.5/ }));
-    expect(screen.getByRole("switch", { name: /Claude Haiku 4.5/ })).toBeChecked();
-    expect(screen.getByTestId("cached-models")).toHaveTextContent("anthropic/claude-haiku-4-5");
-    expect(screen.getByRole("status")).toHaveTextContent("Saving...");
-    await user.click(screen.getByRole("switch", { name: /GPT 5.4/ }));
-    expect(screen.getByRole("switch", { name: /GPT 5.4/ })).not.toBeChecked();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    await act(async () =>
-      resolve(
-        Response.json({
-          enabledModels: ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"],
-          revision: 2,
-        })
-      )
-    );
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByRole("status")).toBeEmptyDOMElement());
-  });
-
   it.each(["server", "network"])(
     "restores the previous selection after a %s failure and allows retry",
     async (failure) => {
@@ -205,52 +158,6 @@ describe("ModelsSettings", () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     }
   );
-
-  it("preserves the pending selection and queue across navigation", async () => {
-    let resolve!: (response: Response) => void;
-    const saveMock = createSaveMock(["openai/gpt-5.4", "anthropic/claude-haiku-4-5"]);
-    const fetchMock = vi
-      .fn()
-      .mockReturnValueOnce(
-        new Promise((done) => {
-          resolve = done;
-        })
-      )
-      .mockImplementation(saveMock);
-    vi.stubGlobal("fetch", fetchMock);
-    const user = userEvent.setup();
-    renderSettings(undefined, <NavigableSettings />);
-
-    await user.click(screen.getByRole("switch", { name: /Claude Haiku 4.5/ }));
-    await user.click(screen.getByRole("button", { name: "Other settings" }));
-    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Models" }));
-
-    expect(screen.getByRole("switch", { name: /Claude Haiku 4.5/ })).toBeChecked();
-    expect(screen.getByRole("status")).toHaveTextContent("Saving...");
-    await user.click(screen.getByRole("switch", { name: /GPT 5.4/ }));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-
-    await act(async () =>
-      resolve(
-        Response.json({
-          enabledModels: ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"],
-          revision: 2,
-        })
-      )
-    );
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByRole("status")).toBeEmptyDOMElement());
-    const haiku = screen.getByRole("switch", { name: /Claude Haiku 4.5/ });
-    expect(haiku).toBeEnabled();
-    expect(haiku).toBeChecked();
-
-    await user.click(screen.getByRole("switch", { name: /Claude Sonnet 4.6/ }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({
-      changes: [{ modelId: "anthropic/claude-sonnet-4-6", enabled: true }],
-    });
-  });
 
   it("uses external cache updates for both the switches and the next save", async () => {
     let updateCache!: ReturnType<typeof useSWRConfig>["mutate"];
@@ -286,9 +193,7 @@ describe("ModelsSettings", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(
       <SWRConfig value={{ provider: () => new Map(), fetcher, shouldRetryOnError: false }}>
-        <ModelPreferencesProvider>
-          <ModelsSettings />
-        </ModelPreferencesProvider>
+        <ModelsSettings />
       </SWRConfig>
     );
     expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load model preferences");
