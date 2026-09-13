@@ -1,9 +1,11 @@
-import type {
-  SessionInboxCategory,
-  SessionInboxItem,
-  SessionInboxPage,
-  SessionInboxSnapshot,
-  SessionListItem,
+import {
+  sessionInboxPageSchema,
+  sessionInboxSnapshotSchema,
+  type SessionInboxCategory,
+  type SessionInboxItem,
+  type SessionInboxPage,
+  type SessionInboxSession,
+  type SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 import type { BrowserApiPath } from "./browser-api-fetch";
@@ -39,7 +41,19 @@ export function isSessionInboxPaginationKey(key: unknown): boolean {
   return Array.isArray(key) && isSessionInboxKey(key[0]);
 }
 
-function applyTitleToSession(session: SessionListItem, sessionId: string, title: string | null) {
+export function parseSessionInboxPage(data: unknown): SessionInboxPage {
+  return sessionInboxPageSchema.parse(data);
+}
+
+export function parseSessionInboxSnapshot(data: unknown): SessionInboxSnapshot {
+  return sessionInboxSnapshotSchema.parse(data);
+}
+
+function applyTitleToSession(
+  session: SessionInboxSession,
+  sessionId: string,
+  title: string | null
+) {
   return session.id === sessionId ? { ...session, title } : session;
 }
 

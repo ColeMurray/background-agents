@@ -10,7 +10,12 @@ import {
   serverMessageSchema,
   sessionAttachmentUploadResponseSchema,
 } from ".";
-import { sessionParticipantProfilesResponseSchema } from "./sessions";
+import {
+  childSessionListResponseSchema,
+  sessionListResponseSchema,
+  sessionParticipantProfilesResponseSchema,
+} from "./sessions";
+import { sessionInboxPageSchema, sessionInboxSnapshotSchema } from "./session-inbox";
 import { listArtifactsResponseSchema } from "./artifacts";
 import {
   callbackContextSchema,
@@ -34,6 +39,125 @@ import {
 } from "./sandbox-events";
 
 describe("boundary schemas", () => {
+  const listSession = {
+    id: "session-1",
+    title: "Investigate failure",
+    repoOwner: "open-inspect",
+    repoName: "background-agents",
+    harness: "opencode",
+    model: "anthropic/claude-sonnet-4-6",
+    reasoningEffort: null,
+    baseBranch: "main",
+    status: "active",
+    parentSessionId: null,
+    spawnSource: "user",
+    spawnDepth: 0,
+    automationId: null,
+    automationRunId: null,
+    scmLogin: "octocat",
+    userId: "user-1",
+    totalCost: 1.25,
+    activeDurationMs: 500,
+    messageCount: 2,
+    prCount: 1,
+    environmentId: "env-1",
+    createdAt: 100,
+    updatedAt: 200,
+    repositories: [
+      {
+        repoOwner: "open-inspect",
+        repoName: "background-agents",
+        repoId: null,
+        baseBranch: "main",
+      },
+    ],
+    pullRequestSummary: { total: 1, open: 1, draft: 0, merged: 0, closed: 0 },
+  };
+
+  const inboxSession = {
+    id: listSession.id,
+    title: listSession.title,
+    repoOwner: listSession.repoOwner,
+    repoName: listSession.repoName,
+    baseBranch: listSession.baseBranch,
+    status: listSession.status,
+    parentSessionId: listSession.parentSessionId,
+    spawnSource: listSession.spawnSource,
+    environmentId: listSession.environmentId,
+    createdAt: listSession.createdAt,
+    updatedAt: listSession.updatedAt,
+    repositories: listSession.repositories,
+    pullRequestSummary: listSession.pullRequestSummary,
+    readState: { latestMessageId: "message-1", unread: true, version: 200 },
+  };
+
+  describe("session summary response schemas", () => {
+    it("preserves the complete flat-list projection and optional viewer state", () => {
+      const parsed = sessionListResponseSchema.parse({
+        sessions: [{ ...listSession, readState: { latestMessageId: null, unread: false } }],
+        hasMore: false,
+        cursor: "not-part-of-this-response",
+      });
+
+      expect(parsed.sessions[0]).toMatchObject({
+        parentSessionId: null,
+        spawnSource: "user",
+        environmentId: "env-1",
+        repositories: listSession.repositories,
+        pullRequestSummary: listSession.pullRequestSummary,
+        readState: { latestMessageId: null, unread: false, version: 0 },
+      });
+      expect(parsed).not.toHaveProperty("cursor");
+      expect(
+        sessionListResponseSchema.safeParse({ sessions: [listSession], hasMore: true }).success
+      ).toBe(true);
+    });
+
+    it("keeps direct-child lists viewer-neutral", () => {
+      const parsed = childSessionListResponseSchema.parse({
+        children: [{ ...listSession, readState: inboxSession.readState }],
+      });
+
+      expect(parsed.children[0]).not.toHaveProperty("readState");
+      expect(parsed.children[0].parentSessionId).toBeNull();
+    });
+
+    it("requires viewer state and pagination fields on inbox pages", () => {
+      const page = {
+        items: [{ rootSession: inboxSession, descendantSessions: [] }],
+        hasMore: true,
+        nextCursor: "200:session-1",
+      };
+
+      expect(sessionInboxPageSchema.safeParse(page).success).toBe(true);
+      expect(
+        sessionInboxPageSchema.safeParse({
+          ...page,
+          items: [{ rootSession: listSession, descendantSessions: [] }],
+        }).success
+      ).toBe(false);
+      expect(sessionInboxPageSchema.safeParse({ items: [], hasMore: false }).success).toBe(false);
+    });
+
+    it("requires every inbox category in a snapshot", () => {
+      const emptyPage = { items: [], hasMore: false, nextCursor: null };
+      expect(
+        sessionInboxSnapshotSchema.safeParse({
+          categories: {
+            needs_attention: emptyPage,
+            in_progress: emptyPage,
+            finished: emptyPage,
+          },
+        }).success
+      ).toBe(true);
+      expect(
+        sessionInboxSnapshotSchema.safeParse({
+          categories: { needs_attention: emptyPage, in_progress: emptyPage },
+        }).success
+      ).toBe(false);
+    });
+  });
+
   describe("createSessionRequestSchema", () => {
     it("parses a valid session creation request", () => {
       const result = createSessionRequestSchema.safeParse({

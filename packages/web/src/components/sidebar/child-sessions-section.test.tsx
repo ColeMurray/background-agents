@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SWRConfig } from "swr";
@@ -21,6 +21,27 @@ vi.mock("next/link", () => ({
 }));
 
 describe("ChildSessionsSection", () => {
+  it("rejects malformed child summaries at the web boundary", async () => {
+    const onError = vi.fn();
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fetcher: async () => ({
+            children: [{ id: "child-session", title: "Incomplete child" }],
+          }),
+          onError,
+          shouldRetryOnError: false,
+        }}
+      >
+        <ChildSessionsSection sessionId="parent-session" />
+      </SWRConfig>
+    );
+
+    await waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("button", { name: "Child sessions" })).not.toBeInTheDocument();
+  });
+
   it("shows child sessions expanded by default", async () => {
     const sessionId = "parent-session";
     render(

@@ -9,11 +9,16 @@ import {
 } from "@open-inspect/shared/session-list-query";
 import {
   sessionInboxCategorySchema,
+  sessionInboxPageSchema,
+  sessionInboxSnapshotSchema,
   type SessionInboxCategory,
   type SessionInboxPage,
   type SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
-import { sessionReadActionSchema } from "@open-inspect/shared/types/sessions";
+import {
+  sessionListResponseSchema,
+  sessionReadActionSchema,
+} from "@open-inspect/shared/types/sessions";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {
@@ -118,10 +123,12 @@ export async function handleListSessions(
     });
   }
 
-  const response = json({
-    sessions: result.sessions,
-    hasMore: result.hasMore,
-  });
+  const response = json(
+    sessionListResponseSchema.parse({
+      sessions: result.sessions,
+      hasMore: result.hasMore,
+    })
+  );
   if (viewerUserId) {
     response.headers.set("Cache-Control", "private, no-store");
   }
@@ -160,7 +167,7 @@ export async function handleListSessionInbox(
         encodeInboxPage(snapshot[inboxCategory]),
       ])
     ) as Record<SessionInboxCategory, SessionInboxPage>;
-    const body: SessionInboxSnapshot = { categories };
+    const body: SessionInboxSnapshot = sessionInboxSnapshotSchema.parse({ categories });
     const response = json(body);
     response.headers.set("Cache-Control", "private, no-store");
     return response;
@@ -172,11 +179,13 @@ export async function handleListSessionInbox(
     cursor: parsedCursor.cursor,
   });
   const nextCursor = result.nextCursor ? encodeSessionInboxCursor(result.nextCursor) : null;
-  const response = json({
-    items: result.items,
-    hasMore: result.hasMore,
-    nextCursor,
-  });
+  const response = json(
+    sessionInboxPageSchema.parse({
+      items: result.items,
+      hasMore: result.hasMore,
+      nextCursor,
+    })
+  );
   response.headers.set("Cache-Control", "private, no-store");
   log.info("session_inbox.listed", {
     event: "session_inbox.listed",

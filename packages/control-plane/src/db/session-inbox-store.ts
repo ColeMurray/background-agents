@@ -1,7 +1,7 @@
 import type {
   SessionInboxCategory,
   SessionInboxItem,
-  SessionListItem,
+  SessionInboxSession,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { attachSessionListMetadata } from "./session-list-metadata";
@@ -53,7 +53,7 @@ interface InboxPageData {
 
 const INBOX_CATEGORIES: SessionInboxCategory[] = ["needs_attention", "in_progress", "finished"];
 
-function toListItem(row: InboxSessionRow): SessionListItem {
+function toListItem(row: InboxSessionRow): SessionInboxSession {
   return {
     id: row.id,
     title: row.title,
@@ -295,7 +295,7 @@ export class SessionInboxStore {
   /** Replace selected D1 rows with their metadata-enriched list items. */
   private assemblePage(
     page: InboxPageData,
-    sessionsById: Map<string, SessionListItem>
+    sessionsById: Map<string, SessionInboxSession>
   ): ListSessionInboxResult {
     const items = page.roots.map(([rootId, lineage]) => {
       const rootRow = lineage.find(({ id }) => id === rootId) ?? lineage[0];

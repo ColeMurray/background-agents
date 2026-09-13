@@ -10,29 +10,36 @@ import {
   isUnarchivedSessionListKey,
   type SessionListResponse,
 } from "./session-list";
-import type { Session } from "@open-inspect/shared/types/sessions";
+import type { SessionListSummary } from "@open-inspect/shared/types/sessions";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-function session(id: string, overrides: Partial<Session> = {}): Session {
+function session(id: string, overrides: Partial<SessionListSummary> = {}): SessionListSummary {
   return {
     id,
     title: id.toUpperCase(),
     repoOwner: "open-inspect",
     repoName: "background-agents",
-    baseBranch: "main",
-    branchName: null,
-    baseSha: null,
-    currentSha: null,
-    agentSessionId: null,
     harness: "opencode",
+    model: "anthropic/claude-sonnet-4-6",
+    reasoningEffort: null,
+    baseBranch: "main",
     status: "active",
     parentSessionId: null,
     spawnSource: "user",
     spawnDepth: 0,
+    automationId: null,
+    automationRunId: null,
+    scmLogin: null,
+    userId: null,
+    totalCost: 0,
+    activeDurationMs: 0,
+    messageCount: 0,
+    prCount: 0,
+    environmentId: null,
     createdAt: 1000,
     updatedAt: 2000,
     ...overrides,
@@ -70,15 +77,25 @@ describe("fetchSessionListPage", () => {
       "fetch",
       vi.fn(async () =>
         Response.json({
-          sessions: [session("session-1")],
+          sessions: [
+            {
+              ...session("session-1"),
+              readState: { latestMessageId: "message-1", unread: true },
+            },
+          ],
           hasMore: false,
         })
       )
     );
 
-    await expect(fetchSessionListPage(buildSessionsPageKey())).resolves.toMatchObject({
+    const page = await fetchSessionListPage(buildSessionsPageKey());
+
+    expect(page).toMatchObject({
       sessions: [{ id: "session-1", status: "active" }],
       hasMore: false,
+    });
+    expect(page).toMatchObject({
+      sessions: [{ readState: { version: 0 } }],
     });
   });
 

@@ -10,7 +10,7 @@ import {
   messageSourceSchema,
   sessionStatusSchema,
   type SandboxStatus,
-  type Session,
+  type SessionListResponse,
   type SessionStatus,
 } from "./sessions";
 
@@ -320,11 +320,8 @@ export const sendPromptResponseSchema = z.object({
 
 export type SendPromptResponse = z.infer<typeof sendPromptResponseSchema>;
 
-export interface ListSessionsResponse {
-  sessions: Session[];
-  cursor?: string;
-  hasMore: boolean;
-}
+/** @deprecated Import SessionListResponse from ./sessions. */
+export type ListSessionsResponse = SessionListResponse;
 
 /** Request body for POST /sessions/:parentId/children. */
 export const spawnChildSessionRequestSchema = z.object({

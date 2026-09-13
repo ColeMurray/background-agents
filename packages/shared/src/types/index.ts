@@ -43,6 +43,7 @@ export type { ClientMessage } from "./websocket";
 export {
   MAX_TARGET_REPOSITORIES,
   MAX_SESSION_REPOSITORIES,
+  sessionListRepositorySchema,
   sessionRepositoryStateSchema,
   prArtifactBelongsToRepo,
   repositoryPairInputSchema,
@@ -64,6 +65,44 @@ export type {
   RepositoryInput,
   RepositoryPair,
 } from "./repositories";
+
+export {
+  sessionStatusSchema,
+  spawnSourceSchema,
+  pullRequestSummarySchema,
+  sessionReadStateSchema,
+  sessionSummaryBaseSchema,
+  childSessionSummarySchema,
+  childSessionListResponseSchema,
+  sessionListSummarySchema,
+  sessionListResponseSchema,
+} from "./sessions";
+export type {
+  SessionStatus,
+  SpawnSource,
+  PullRequestSummary,
+  SessionReadState,
+  SessionSummaryBase,
+  ChildSessionSummary,
+  ChildSessionListResponse,
+  SessionListSummary,
+  SessionListResponse,
+} from "./sessions";
+
+export {
+  sessionInboxCategorySchema,
+  sessionInboxSessionSchema,
+  sessionInboxItemSchema,
+  sessionInboxPageSchema,
+  sessionInboxSnapshotSchema,
+} from "./session-inbox";
+export type {
+  SessionInboxCategory,
+  SessionInboxSession,
+  SessionInboxItem,
+  SessionInboxPage,
+  SessionInboxSnapshot,
+} from "./session-inbox";
 
 export {
   installationRepositorySchema,

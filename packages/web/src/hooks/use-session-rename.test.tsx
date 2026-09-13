@@ -6,7 +6,7 @@ import { SWRConfig, useSWRConfig } from "swr";
 import useSWR from "swr";
 import useSWRInfinite from "swr/infinite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Session } from "@open-inspect/shared/types/sessions";
+import type { SessionListSummary } from "@open-inspect/shared/types/sessions";
 import { buildSessionsPageKey, type SessionListResponse } from "@/lib/session-list";
 import { useSessionRename } from "./use-session-rename";
 
@@ -20,22 +20,29 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function createSession(title: string, id = "session-1"): Session {
+function createSession(title: string, id = "session-1"): SessionListSummary {
   return {
     id,
     title,
     status: "active",
     repoOwner: "acme",
     repoName: "web",
+    model: "anthropic/claude-sonnet-4-6",
+    reasoningEffort: null,
     baseBranch: null,
-    branchName: null,
-    baseSha: null,
-    currentSha: null,
-    agentSessionId: null,
     harness: "opencode",
     parentSessionId: null,
     spawnSource: "user",
     spawnDepth: 0,
+    automationId: null,
+    automationRunId: null,
+    scmLogin: null,
+    userId: null,
+    totalCost: 0,
+    activeDurationMs: 0,
+    messageCount: 0,
+    prCount: 0,
+    environmentId: null,
     createdAt: 1,
     updatedAt: 1,
     repositories: [],

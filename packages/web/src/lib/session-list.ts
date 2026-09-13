@@ -5,8 +5,11 @@ import {
   SESSION_LIST_CURRENT_USER,
   type SessionListQuery,
 } from "@open-inspect/shared/session-list-query";
-import { sessionStatusSchema } from "@open-inspect/shared/types/sessions";
-import { z } from "zod";
+import {
+  sessionListResponseSchema,
+  type SessionListResponse,
+  type SessionListSummary,
+} from "@open-inspect/shared/types/sessions";
 import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
@@ -24,48 +27,8 @@ export const COMMAND_MENU_SESSIONS_KEY = buildSessionsPageKey({
   limit: COMMAND_MENU_SESSIONS_LIMIT,
 });
 
-const sessionListItemSchema = z.object({
-  id: z.string(),
-  title: z.string().nullable(),
-  repoOwner: z.string().nullable(),
-  repoName: z.string().nullable(),
-  status: sessionStatusSchema,
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  repositories: z
-    .array(
-      z.object({
-        repoOwner: z.string(),
-        repoName: z.string(),
-        repoId: z.number().nullable(),
-        baseBranch: z.string(),
-      })
-    )
-    .optional(),
-  readState: z
-    .union([
-      z.object({
-        latestMessageId: z.null(),
-        unread: z.literal(false),
-        version: z.number().default(0),
-      }),
-      z.object({
-        latestMessageId: z.string(),
-        unread: z.boolean(),
-        version: z.number().default(0),
-      }),
-    ])
-    .optional(),
-});
-
-export type SessionListItem = z.infer<typeof sessionListItemSchema>;
-
-const sessionListResponseSchema = z.object({
-  sessions: z.array(sessionListItemSchema),
-  hasMore: z.boolean(),
-});
-
-export type SessionListResponse = z.infer<typeof sessionListResponseSchema>;
+export type SessionListItem = SessionListSummary;
+export type { SessionListResponse };
 
 export async function fetchSessionListPage(path: BrowserApiPath): Promise<SessionListResponse> {
   const response = await browserApiFetch(path);
