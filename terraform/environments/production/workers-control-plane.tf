@@ -65,7 +65,7 @@ module "control_plane_worker" {
     var.enable_github_bot ? {
       AUTOFIX_QUEUE = {
         queue_name = cloudflare_queue.github_autofix[0].queue_name
-      },
+      }
       AUTOFIX_DLQ = {
         queue_name = cloudflare_queue.github_autofix_dlq[0].queue_name
       }

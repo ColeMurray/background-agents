@@ -2,55 +2,56 @@
 # Uses the recommended 3-resource pattern: cloudflare_worker + cloudflare_worker_version + cloudflare_workers_deployment
 
 locals {
-  # The provider models bindings as a list, so sort map keys for stable plans.
+  # The provider takes every binding as one list; map iteration is key-ordered,
+  # so the projection is stable across plans.
   bindings = concat(
     # KV namespace bindings
-    [for binding_name in sort(keys(var.kv_namespaces)) : {
+    [for binding_name, binding in var.kv_namespaces : {
       type         = "kv_namespace"
       name         = binding_name
-      namespace_id = var.kv_namespaces[binding_name].namespace_id
+      namespace_id = binding.namespace_id
     }],
     # Service bindings (only when enabled - disable if target workers don't exist yet)
-    var.enable_service_bindings ? [for binding_name in sort(keys(var.service_bindings)) : {
+    var.enable_service_bindings ? [for binding_name, binding in var.service_bindings : {
       type    = "service"
       name    = binding_name
-      service = var.service_bindings[binding_name].service_name
+      service = binding.service_name
     }] : [],
     # D1 database bindings
-    [for binding_name in sort(keys(var.d1_databases)) : {
+    [for binding_name, binding in var.d1_databases : {
       type = "d1"
       name = binding_name
-      id   = var.d1_databases[binding_name].database_id
+      id   = binding.database_id
     }],
     # R2 bucket bindings
-    [for binding_name in sort(keys(var.r2_buckets)) : {
+    [for binding_name, binding in var.r2_buckets : {
       type        = "r2_bucket"
       name        = binding_name
-      bucket_name = var.r2_buckets[binding_name].bucket_name
+      bucket_name = binding.bucket_name
     }],
     # Queue producer bindings
-    [for binding_name in sort(keys(var.queue_bindings)) : {
+    [for binding_name, binding in var.queue_bindings : {
       type       = "queue"
       name       = binding_name
-      queue_name = var.queue_bindings[binding_name].queue_name
+      queue_name = binding.queue_name
     }],
     # Plain text bindings (environment variables)
-    [for binding_name in sort(keys(var.plain_text_bindings)) : {
+    [for binding_name, binding in var.plain_text_bindings : {
       type = "plain_text"
       name = binding_name
-      text = var.plain_text_bindings[binding_name].value
+      text = binding.value
     }],
     # Secret text bindings
-    [for binding_name in sort(keys(var.secrets)) : {
+    [for binding_name, binding in var.secrets : {
       type = "secret_text"
       name = binding_name
-      text = var.secrets[binding_name].value
+      text = binding.value
     }],
     # Durable Object bindings (disabled only for initial class creation)
-    var.enable_durable_object_bindings ? [for binding_name in sort(keys(var.durable_objects)) : {
+    var.enable_durable_object_bindings ? [for binding_name, binding in var.durable_objects : {
       type       = "durable_object_namespace"
       name       = binding_name
-      class_name = var.durable_objects[binding_name].class_name
+      class_name = binding.class_name
     }] : []
   )
 }
@@ -110,7 +111,7 @@ resource "cloudflare_worker_version" "this" {
   migrations = (length(var.durable_objects) > 0 || length(var.deleted_classes) > 0) && (!var.enable_durable_object_bindings || length(var.deleted_classes) > 0) ? {
     old_tag            = var.migration_old_tag
     new_tag            = var.migration_tag
-    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : (length(var.deleted_classes) > 0 ? [] : [for binding_name in sort(keys(var.durable_objects)) : var.durable_objects[binding_name].class_name])
+    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : (length(var.deleted_classes) > 0 ? [] : [for binding in var.durable_objects : binding.class_name])
     deleted_classes    = var.deleted_classes
   } : null
 
