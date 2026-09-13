@@ -48,17 +48,6 @@ async function getModelPreferences(
 
   try {
     const snapshot = await store.getSnapshot();
-    if (snapshot.reconciled) {
-      logger.info("model_preferences.reconciled", {
-        event: "model_preferences.reconciled",
-        stored_count: snapshot.storedCount,
-        valid_count: snapshot.enabledModels.length,
-        fallback_applied: snapshot.fallbackApplied,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-    }
-
     return json({ enabledModels: snapshot.enabledModels, revision: snapshot.revision });
   } catch (e) {
     logger.error("Failed to get model preferences", {

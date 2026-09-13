@@ -71,16 +71,13 @@ class ConflictDatabase implements SqlDatabase {
 }
 
 describe("ModelPreferencesStore", () => {
-  it("uses defaults and reconciliation metadata for malformed storage", async () => {
+  it("uses defaults for malformed storage", async () => {
     const db = new ConflictDatabase(false, "{");
     const snapshot = await new ModelPreferencesStore(db).getSnapshot();
 
     expect(snapshot).toEqual({
       enabledModels: DEFAULT_ENABLED_MODELS,
       revision: 1,
-      storedCount: 0,
-      reconciled: true,
-      fallbackApplied: true,
     });
     await expect(getEffectiveEnabledModels(db)).resolves.toEqual(DEFAULT_ENABLED_MODELS);
   });

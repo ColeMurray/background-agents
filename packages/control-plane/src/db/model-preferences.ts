@@ -33,20 +33,21 @@ interface ModelPreferencesRow {
 export interface ModelPreferencesSnapshot {
   enabledModels: ValidModel[];
   revision: number;
-  storedCount: number;
-  reconciled: boolean;
-  fallbackApplied: boolean;
 }
 
 export class ModelPreferencesStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  /** Resolve persisted preferences and reconciliation metadata through one decoding policy. */
+  /** Resolve persisted preferences through the canonical decoding policy. */
   async getSnapshot(): Promise<ModelPreferencesSnapshot> {
     const row = await this.db
       .prepare("SELECT enabled_models, revision FROM model_preferences WHERE id = 'global'")
       .first<ModelPreferencesRow>();
     return this.decodeSnapshot(row);
+  }
+
+  async getEnabledModels(): Promise<ValidModel[]> {
+    return (await this.getSnapshot()).enabledModels;
   }
 
   /** Apply set-membership changes with compare-and-swap retries across concurrent writers. */
@@ -86,9 +87,6 @@ export class ModelPreferencesStore {
         return {
           enabledModels: next,
           revision: row ? row.revision + 1 : 1,
-          storedCount: next.length,
-          reconciled: false,
-          fallbackApplied: false,
         };
       }
     }
@@ -118,9 +116,6 @@ export class ModelPreferencesStore {
       return {
         enabledModels: DEFAULT_ENABLED_MODELS,
         revision: 0,
-        storedCount: 0,
-        reconciled: false,
-        fallbackApplied: true,
       };
     }
 
@@ -139,14 +134,11 @@ export class ModelPreferencesStore {
     return {
       enabledModels,
       revision: row.revision,
-      storedCount: stored?.length ?? 0,
-      reconciled: !stored || JSON.stringify(enabledModels) !== JSON.stringify(stored),
-      fallbackApplied: normalized.length === 0,
     };
   }
 }
 
 /** Resolve the currently enabled catalog, using defaults only when no usable preferences exist. */
 export async function getEffectiveEnabledModels(db: SqlDatabase): Promise<ValidModel[]> {
-  return (await new ModelPreferencesStore(db).getSnapshot()).enabledModels;
+  return new ModelPreferencesStore(db).getEnabledModels();
 }
