@@ -286,62 +286,80 @@ describe("POST /webhooks/github", () => {
     expect(env.AUTOFIX_QUEUE.send).not.toHaveBeenCalled();
   });
 
-  it("continues normal webhook handling when Autofix queueing fails", async () => {
-    const body = JSON.stringify({
-      action: "created",
-      issue: {
-        number: 42,
-        title: "Handle nullable input",
-        pull_request: {
-          url: "https://api.github.com/repos/test/repo/pulls/42",
+  it.each([false, true])(
+    "rejects an unqueued delivery (KV cleanup failure: %s)",
+    async (cleanupFails) => {
+      const body = JSON.stringify({
+        action: "created",
+        issue: {
+          number: 42,
+          title: "Handle nullable input",
+          pull_request: {
+            url: "https://api.github.com/repos/test/repo/pulls/42",
+          },
         },
-      },
-      comment: {
-        id: 1236,
-        body: "Please handle the null case.",
-        user: { login: "alice" },
-      },
-      repository: {
-        id: 99,
-        name: "repo",
-        private: false,
-        owner: { login: "test" },
-      },
-      sender: {
-        id: 7,
-        login: "alice",
-        type: "User",
-        avatar_url: "https://example.com/alice.png",
-      },
-    });
-    const signature = await sign(SECRET, body);
-    const env = makeEnv();
-    const ctx = makeCtx();
-    env.AUTOFIX_QUEUE.send.mockRejectedValueOnce(new Error("queue unavailable"));
-
-    const res = await app.fetch(
-      new Request("http://localhost/webhooks/github", {
-        method: "POST",
-        body,
-        headers: {
-          "X-Hub-Signature-256": signature,
-          "X-GitHub-Event": "issue_comment",
-          "X-GitHub-Delivery": "delivery-comment-1236",
+        comment: {
+          id: 1236,
+          body: "Please handle the null case.",
+          user: { login: "alice" },
         },
-      }),
-      env,
-      ctx
-    );
+        repository: {
+          id: 99,
+          name: "repo",
+          private: false,
+          owner: { login: "test" },
+        },
+        sender: {
+          id: 7,
+          login: "alice",
+          type: "User",
+          avatar_url: "https://example.com/alice.png",
+        },
+      });
+      const signature = await sign(SECRET, body);
+      const env = makeEnv();
+      const ctx = makeCtx();
+      env.AUTOFIX_QUEUE.send.mockRejectedValueOnce(new Error("queue unavailable"));
+      if (cleanupFails)
+        vi.mocked(env.GITHUB_KV.delete).mockRejectedValueOnce(new Error("KV unavailable"));
 
-    expect(res.status).toBe(200);
-    expect(ctx.waitUntil).toHaveBeenCalledOnce();
-    await flushWaitUntil(ctx);
-    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
-      "https://internal/internal/github-event",
-      expect.any(Object)
-    );
-    expect(env.GITHUB_KV.delete).not.toHaveBeenCalled();
-  });
+      const res = await app.fetch(
+        new Request("http://localhost/webhooks/github", {
+          method: "POST",
+          body,
+          headers: {
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-comment-1236",
+          },
+        }),
+        env,
+        ctx
+      );
+
+      expect(res.status).toBe(503);
+      expect(ctx.waitUntil).not.toHaveBeenCalled();
+      expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
+      expect(env.GITHUB_KV.delete).toHaveBeenCalledWith("delivery:delivery-comment-1236");
+      if (cleanupFails) {
+        const retry = await app.fetch(
+          new Request("http://localhost/webhooks/github", {
+            method: "POST",
+            body,
+            headers: {
+              "X-Hub-Signature-256": signature,
+              "X-GitHub-Event": "issue_comment",
+              "X-GitHub-Delivery": "delivery-comment-1236",
+            },
+          }),
+          env,
+          ctx
+        );
+        expect(retry.status).toBe(503);
+        expect(env.AUTOFIX_QUEUE.send).toHaveBeenCalledTimes(1);
+      }
+    }
+  );
 
   it("returns 401 for invalid signature", async () => {
     const body = '{"action":"created"}';
