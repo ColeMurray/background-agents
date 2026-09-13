@@ -58,6 +58,7 @@ const sanitizeSchema = {
   // Strip all other attributes
   strip: ["script", "style", "iframe", "object", "embed", "form", "input", "button"],
 };
+const DEFAULT_IMAGE_MODE = "omit";
 
 interface SafeMarkdownProps {
   content: string;
@@ -70,7 +71,7 @@ export function SafeMarkdown({
   content,
   className = "",
   baseUrl,
-  imageMode = "omit",
+  imageMode = DEFAULT_IMAGE_MODE,
 }: SafeMarkdownProps) {
   return (
     <div

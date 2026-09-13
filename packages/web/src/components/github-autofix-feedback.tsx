@@ -15,6 +15,7 @@ import { getSafeExternalUrl } from "@/lib/urls";
 type ReviewFeedback = Extract<GitHubAutofixFeedback, { kind: "review" }>;
 type ReviewComment = ReviewFeedback["comments"][number];
 const REVIEW_BODY_PREVIEW_CHARS = 600;
+const REVIEW_BODY_PREVIEW_LINES = 14;
 const COMMENT_PREVIEW_CHARS = 280;
 const INITIAL_REVIEW_COMMENTS = 10;
 
@@ -102,14 +103,26 @@ function ReviewBody({
   onToggle: () => void;
 }) {
   const contentId = useId();
-  const needsDisclosure = body.length > REVIEW_BODY_PREVIEW_CHARS || body.split("\n").length > 14;
-  const preview = body.split("\n").slice(0, 14).join("\n").slice(0, REVIEW_BODY_PREVIEW_CHARS);
+  const needsDisclosure =
+    body.length > REVIEW_BODY_PREVIEW_CHARS || body.split("\n").length > REVIEW_BODY_PREVIEW_LINES;
+  const preview = body
+    .split("\n")
+    .slice(0, REVIEW_BODY_PREVIEW_LINES)
+    .join("\n")
+    .slice(0, REVIEW_BODY_PREVIEW_CHARS);
 
   return (
     <div className="mt-3">
       <div id={contentId}>
         {needsDisclosure && !expanded ? (
-          <p className="line-clamp-[14] whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+          <p
+            className="overflow-hidden whitespace-pre-wrap text-xs leading-5 text-muted-foreground"
+            style={{
+              display: "-webkit-box",
+              WebkitBoxOrient: "vertical",
+              WebkitLineClamp: REVIEW_BODY_PREVIEW_LINES,
+            }}
+          >
             {preview}
           </p>
         ) : (
