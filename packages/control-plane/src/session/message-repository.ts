@@ -343,15 +343,31 @@ export class MessageRepository {
   getAutomationMessageByRunId(
     runId: string
   ): Pick<MessageRow, "id" | "status" | "error_message" | "completed_at"> | null {
-    const result = this.sql.exec(
+    const direct = this.sql.exec(
       `SELECT id, status, error_message, completed_at
        FROM messages
        WHERE source = 'automation' AND client_request_id = ?
        LIMIT 1`,
       runId
     );
+    const row =
+      this.rows<Pick<MessageRow, "id" | "status" | "error_message" | "completed_at">>(direct)[0];
+    if (row) return row;
+
+    const legacy = this.sql.exec(
+      `SELECT id, status, error_message, completed_at
+       FROM messages
+       WHERE source = 'automation' AND client_request_id IS NULL
+         AND json_extract(
+           CASE WHEN json_valid(callback_context) THEN callback_context END,
+           '$.runId'
+         ) = ?
+       ORDER BY created_at DESC, rowid DESC
+       LIMIT 1`,
+      runId
+    );
     return (
-      this.rows<Pick<MessageRow, "id" | "status" | "error_message" | "completed_at">>(result)[0] ??
+      this.rows<Pick<MessageRow, "id" | "status" | "error_message" | "completed_at">>(legacy)[0] ??
       null
     );
   }

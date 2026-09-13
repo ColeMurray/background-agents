@@ -585,6 +585,22 @@ describe("MessageRepository", () => {
     expect(repository.getProcessingMessageAuthor()).toEqual({ author_id: "p-1" });
   });
 
+  it("falls back to the legacy automation callback run ID", () => {
+    mock.setMatchingData(/json_extract/, [
+      { id: "msg-legacy", status: "completed", error_message: null, completed_at: 2000 },
+    ]);
+
+    expect(repository.getAutomationMessageByRunId("run-legacy")).toEqual({
+      id: "msg-legacy",
+      status: "completed",
+      error_message: null,
+      completed_at: 2000,
+    });
+    expect(mock.calls).toHaveLength(2);
+    expect(mock.calls[1].query).toContain("client_request_id IS NULL");
+    expect(mock.calls[1].params).toEqual(["run-legacy"]);
+  });
+
   describe("raiseReportedCost", () => {
     it("returns the increase over the stored report", () => {
       mock.setMatchingData(/SELECT reported_cost_usd FROM messages/, [{ reported_cost_usd: 1 }]);

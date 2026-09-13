@@ -78,6 +78,30 @@ describe("POST /internal/prompt", () => {
     await expect(outcome.json()).resolves.toEqual({ state: "active", messageId });
   });
 
+  it("looks up a legacy automation outcome by callback context", async () => {
+    const { stub } = await initSession();
+    const runId = "run-legacy-callback";
+    const enqueue = await stub.fetch("http://internal/internal/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: "Run legacy automation",
+        authorId: "user-1",
+        source: "automation",
+        callbackContext: { source: "automation", automationId: "auto-legacy", runId },
+      }),
+    });
+    expect(enqueue.status).toBe(200);
+    const { messageId } = await enqueue.json<{ messageId: string }>();
+
+    const outcome = await stub.fetch(
+      `http://internal/internal/automation-run-outcome?run_id=${runId}`
+    );
+
+    expect(outcome.status).toBe(200);
+    await expect(outcome.json()).resolves.toEqual({ state: "active", messageId });
+  });
+
   it("persists queued prompts in FIFO order", async () => {
     const { stub } = await initSession();
     const enqueue = async (content: string) => {
