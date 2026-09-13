@@ -1,6 +1,5 @@
 import { generateId } from "../auth/crypto";
 import { ImageBuildStore, type ImageBuildRegistration } from "../db/image-builds";
-import type { Jobs } from "../jobs";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -77,8 +76,7 @@ export class ImageBuildWorkflow {
     private readonly env: Env,
     private readonly store: ImageBuildStore,
     private readonly adapterFactory: ImageBuildAdapterFactory,
-    private readonly providerDeps: ImageBuildProviderDeps,
-    private readonly jobs: Jobs
+    private readonly providerDeps: ImageBuildProviderDeps
   ) {}
 
   /**
@@ -359,7 +357,7 @@ export class ImageBuildWorkflow {
       throw new ImageBuildCompletionNotAcceptedError("Build is not accepting completion");
     }
     if (authenticated.build.status === "building") {
-      await this.jobs.send({ kind: "image_build.finalize", payload: job });
+      await this.env.JOBS.send({ kind: "image_build.finalize", payload: job });
     }
 
     logger.info("image_build.build_complete_received", {
@@ -403,7 +401,7 @@ export class ImageBuildWorkflow {
     if (acceptance === "rejected") {
       throw new ImageBuildFailureNotAcceptedError("Build is not accepting failure");
     }
-    await this.jobs.send({ kind: "image_build.finalize", payload: job });
+    await this.env.JOBS.send({ kind: "image_build.finalize", payload: job });
 
     logger.info("image_build.build_failed", {
       build_id: failure.buildId,
@@ -487,8 +485,7 @@ export function createImageBuildWorkflowFromEnv(env: Env, db: SqlDatabase): Imag
     env,
     new ImageBuildStore(db),
     createImageBuildAdapterFactory(env),
-    provider ? { provider, planner: new ImageBuildPlanner(env, db) } : null,
-    env.JOBS
+    provider ? { provider, planner: new ImageBuildPlanner(env, db) } : null
   );
 }
 

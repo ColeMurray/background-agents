@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageBuildStore } from "../db/image-builds";
-import type { Jobs } from "../jobs";
 import { createTestEnv } from "../router.test-support";
 import type { Env } from "../types";
 import {
@@ -113,7 +112,6 @@ function createWorkflow(options: {
   createCallbackAuth?: ReturnType<typeof vi.fn>;
   env?: Env;
   provider?: "modal" | "vercel" | "opencomputer" | null;
-  jobs?: Jobs;
 }) {
   const store = options.store ?? createStore();
   const adapter = options.adapter ?? createAdapter();
@@ -142,8 +140,7 @@ function createWorkflow(options: {
     options.env ?? createEnv(),
     store as unknown as ImageBuildStore,
     factory,
-    provider ? { provider, planner } : null,
-    options.jobs === undefined ? { send: vi.fn().mockResolvedValue(undefined) } : options.jobs
+    provider ? { provider, planner } : null
   );
   return { workflow, store, adapter, factory, planBuild, resolveTarget, createCallbackAuth };
 }
@@ -334,8 +331,7 @@ describe("ImageBuildWorkflow", () => {
           } as unknown as NonNullable<
             ConstructorParameters<typeof ImageBuildWorkflow>[3]
           >["planner"],
-        },
-        { send: vi.fn().mockResolvedValue(undefined) }
+        }
       );
 
       await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toMatchObject({
@@ -563,7 +559,7 @@ describe("ImageBuildWorkflow", () => {
     it("atomically accepts completion before publishing it", async () => {
       const store = sessionBuildStore();
       const jobs = { send: vi.fn().mockResolvedValue(undefined) };
-      const { workflow } = createWorkflow({ store, jobs });
+      const { workflow } = createWorkflow({ store, env: createEnv({ JOBS: jobs }) });
 
       await workflow.acceptBuildComplete({
         completion: validCompletion({
@@ -603,7 +599,7 @@ describe("ImageBuildWorkflow", () => {
     it("leaves an accepted completion recoverable when publishing fails", async () => {
       const store = sessionBuildStore();
       const jobs = { send: vi.fn().mockRejectedValue(new Error("queue unavailable")) };
-      const { workflow } = createWorkflow({ store, jobs });
+      const { workflow } = createWorkflow({ store, env: createEnv({ JOBS: jobs }) });
 
       await expect(
         workflow.acceptBuildComplete({
@@ -654,7 +650,7 @@ describe("ImageBuildWorkflow", () => {
     it("atomically accepts failures before publishing them", async () => {
       const store = sessionBuildStore();
       const jobs = { send: vi.fn().mockResolvedValue(undefined) };
-      const { workflow } = createWorkflow({ store, jobs });
+      const { workflow } = createWorkflow({ store, env: createEnv({ JOBS: jobs }) });
 
       await workflow.acceptBuildFailed({
         failure: {
@@ -697,7 +693,7 @@ describe("ImageBuildWorkflow", () => {
       });
       store.acceptSuccessfulCompletion.mockResolvedValue("replayed");
       const jobs = { send: vi.fn().mockResolvedValue(undefined) };
-      const { workflow } = createWorkflow({ store, jobs });
+      const { workflow } = createWorkflow({ store, env: createEnv({ JOBS: jobs }) });
 
       await expect(
         workflow.acceptBuildComplete({
@@ -729,7 +725,7 @@ describe("ImageBuildWorkflow", () => {
       });
       store.acceptFailedCompletion.mockResolvedValue("replayed");
       const jobs = { send: vi.fn().mockResolvedValue(undefined) };
-      const { workflow } = createWorkflow({ store, jobs });
+      const { workflow } = createWorkflow({ store, env: createEnv({ JOBS: jobs }) });
 
       await expect(
         workflow.acceptBuildFailed({
