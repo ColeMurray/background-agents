@@ -1474,12 +1474,11 @@ export class AutomationStore {
   // automation_runs.
   static readonly ORPHANED_STARTING_RUNS_SQL =
     "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
-  // A 'running' row without a deadline was claimed by a worker that predates
-  // migration 0079 (the migration backfills before that worker is replaced, so
-  // its claims land after the backfill). Those rows are held to the
-  // deployment-default deadline measured from started_at; leaving them out
-  // would let one lost callback keep the run 'running', and its automation
-  // blocked, forever.
+  // A 'running' row without a deadline predates migration 0079, or was claimed
+  // by a worker that does (the migration applies before that worker is
+  // replaced). Those rows are held to the deployment-default deadline measured
+  // from started_at; leaving them out would let one lost callback keep the run
+  // 'running', and its automation blocked, forever.
   static readonly RUNS_PAST_EXECUTION_DEADLINE_SQL =
     "SELECT * FROM automation_runs WHERE status = 'running' AND (execution_deadline_at < ? OR (execution_deadline_at IS NULL AND started_at < ?))";
 

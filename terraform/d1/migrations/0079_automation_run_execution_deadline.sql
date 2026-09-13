@@ -9,23 +9,15 @@
 -- 'execution_timeout' while the sessions behind them were still working, and
 -- the success callback that arrived later was dropped as a terminal-run
 -- transition.
+--
+-- Schema only, deliberately. A row's launch-time budget is not recoverable
+-- from SQL, so any value guessed here could land before a deadline the run was
+-- legitimately launched under. Rows that predate the column — and the ones a
+-- pre-0079 worker claims between this migration and its own replacement —
+-- keep a NULL deadline, and the sweep holds those to the deployment-default
+-- deadline measured from started_at.
 
 ALTER TABLE automation_runs ADD COLUMN execution_deadline_at INTEGER;
-
--- Rows already in flight predate the column. Give them a flat three-hour
--- deadline from launch: twice the 90 minutes they were launched under, so the
--- deploy itself is never the reason a run is reaped sooner than it would have
--- been. It is a one-time floor, not the per-session budget the sweep uses from
--- now on — a run launched before the deploy with a larger sandbox timeout can
--- still be reaped at three hours, once, which is accepted over holding a dead
--- run's automation for the full budget. Rows the old worker claims after this
--- backfill and before it is replaced stay NULL; the sweep holds those to the
--- deployment-default deadline from started_at.
-UPDATE automation_runs
-   SET execution_deadline_at = started_at + 10800000
- WHERE status = 'running'
-   AND started_at IS NOT NULL
-   AND execution_deadline_at IS NULL;
 
 -- The sweep now orders and filters on the deadline, so its partial index has
 -- to follow. Keep `status = 'running'` a literal (see migration 0024): a bound
