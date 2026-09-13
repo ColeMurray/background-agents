@@ -12,6 +12,7 @@ import {
   sessionInboxCategorySchema,
   sessionInboxPageSchema,
   sessionInboxSnapshotSchema,
+  type SessionInboxPage,
 } from "@open-inspect/shared/types/session-inbox";
 import {
   sessionListResponseSchema,
