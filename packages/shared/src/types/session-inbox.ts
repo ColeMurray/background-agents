@@ -19,11 +19,18 @@ export const sessionInboxItemSchema = z.object({
 });
 export type SessionInboxItem = z.infer<typeof sessionInboxItemSchema>;
 
-export const sessionInboxPageSchema = z.object({
-  items: z.array(sessionInboxItemSchema),
-  hasMore: z.boolean(),
-  nextCursor: z.string().nullable(),
-});
+export const sessionInboxPageSchema = z.discriminatedUnion("hasMore", [
+  z.object({
+    items: z.array(sessionInboxItemSchema),
+    hasMore: z.literal(true),
+    nextCursor: z.string().min(1),
+  }),
+  z.object({
+    items: z.array(sessionInboxItemSchema),
+    hasMore: z.literal(false),
+    nextCursor: z.null(),
+  }),
+]);
 export type SessionInboxPage = z.infer<typeof sessionInboxPageSchema>;
 
 export const sessionInboxSnapshotSchema = z.object({

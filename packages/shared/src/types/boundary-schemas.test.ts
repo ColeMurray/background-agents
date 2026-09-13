@@ -158,6 +158,18 @@ describe("boundary schemas", () => {
         }).success
       ).toBe(false);
     });
+
+    it("requires a non-empty inbox cursor exactly when another page exists", () => {
+      expect(
+        sessionInboxPageSchema.safeParse({ items: [], hasMore: true, nextCursor: null }).success
+      ).toBe(false);
+      expect(
+        sessionInboxPageSchema.safeParse({ items: [], hasMore: true, nextCursor: "" }).success
+      ).toBe(false);
+      expect(
+        sessionInboxPageSchema.safeParse({ items: [], hasMore: false, nextCursor: "next" }).success
+      ).toBe(false);
+    });
   });
 
   describe("createSessionRequestSchema", () => {

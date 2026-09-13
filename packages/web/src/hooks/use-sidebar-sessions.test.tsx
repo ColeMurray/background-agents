@@ -62,7 +62,10 @@ function unreadItem(id: string): SessionInboxItem {
 }
 
 function page(ids: string[], nextCursor: string | null = null): SessionInboxPage {
-  return { items: ids.map(item), hasMore: nextCursor !== null, nextCursor };
+  const items = ids.map(item);
+  return nextCursor === null
+    ? { items, hasMore: false, nextCursor: null }
+    : { items, hasMore: true, nextCursor };
 }
 
 function snapshot(

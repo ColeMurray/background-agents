@@ -85,6 +85,8 @@ export const pullRequestSummarySchema = z.object({
 });
 export type PullRequestSummary = z.infer<typeof pullRequestSummarySchema>;
 
+export const INITIAL_SESSION_READ_STATE_VERSION = 0;
+
 /**
  * Viewer-specific read state for a session's latest terminal message.
  *
@@ -180,14 +182,14 @@ export const sessionReadResultSchema = z.union([
     outcome: z.literal("no_terminal_message"),
     unread: z.literal(false),
     latestMessageId: z.null(),
-    version: z.number().default(0),
+    version: z.number().default(INITIAL_SESSION_READ_STATE_VERSION),
   }),
   z.object({
     sessionId: z.string(),
     outcome: z.enum(["marked_read", "already_read", "not_latest"]),
     unread: z.boolean(),
     latestMessageId: z.string(),
-    version: z.number().default(0),
+    version: z.number().default(INITIAL_SESSION_READ_STATE_VERSION),
   }),
 ]);
 export type SessionReadResult = z.infer<typeof sessionReadResultSchema>;

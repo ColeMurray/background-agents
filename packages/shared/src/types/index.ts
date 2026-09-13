@@ -70,6 +70,7 @@ export {
   sessionStatusSchema,
   spawnSourceSchema,
   pullRequestSummarySchema,
+  INITIAL_SESSION_READ_STATE_VERSION,
   sessionReadStateSchema,
   sessionSummaryBaseSchema,
   childSessionSummarySchema,

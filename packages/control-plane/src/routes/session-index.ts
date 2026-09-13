@@ -12,7 +12,6 @@ import {
   sessionInboxCategorySchema,
   sessionInboxPageSchema,
   sessionInboxSnapshotSchema,
-  type SessionInboxPage,
 } from "@open-inspect/shared/types/session-inbox";
 import {
   sessionListResponseSchema,
@@ -202,9 +201,7 @@ export async function handleListSessionInbox(
   return response;
 }
 
-function encodeInboxPage(
-  result: Awaited<ReturnType<SessionIndexStore["listInbox"]>>
-): SessionInboxPage {
+function encodeInboxPage(result: Awaited<ReturnType<SessionIndexStore["listInbox"]>>) {
   return {
     items: result.items,
     hasMore: result.hasMore,

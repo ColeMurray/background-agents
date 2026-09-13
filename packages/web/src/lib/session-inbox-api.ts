@@ -18,17 +18,22 @@ import { applySessionReadStateToItem, sessionReadStateClientSchema } from "./ses
 const sessionInboxSessionClientSchema = sessionInboxSessionSchema.extend({
   readState: sessionReadStateClientSchema,
 });
-const sessionInboxPageClientSchema = sessionInboxPageSchema.extend({
-  items: z.array(
-    sessionInboxItemSchema.extend({
-      rootSession: sessionInboxSessionClientSchema,
-      descendantSessions: z.array(sessionInboxSessionClientSchema),
-    })
-  ),
+const sessionInboxItemClientSchema = sessionInboxItemSchema.extend({
+  rootSession: sessionInboxSessionClientSchema,
+  descendantSessions: z.array(sessionInboxSessionClientSchema),
 });
-const sessionInboxSnapshotClientSchema = sessionInboxSnapshotSchema.extend({
-  categories: z.record(sessionInboxCategorySchema, sessionInboxPageClientSchema),
-});
+const sessionInboxPageClientSchema = z
+  .object({
+    items: z.array(sessionInboxItemClientSchema),
+  })
+  .passthrough()
+  .pipe(sessionInboxPageSchema);
+const sessionInboxSnapshotClientSchema = z
+  .object({
+    categories: z.record(sessionInboxCategorySchema, sessionInboxPageClientSchema),
+  })
+  .passthrough()
+  .pipe(sessionInboxSnapshotSchema);
 
 const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 

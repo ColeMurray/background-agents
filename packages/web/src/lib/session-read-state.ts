@@ -1,6 +1,7 @@
 import { browserApiFetch } from "./browser-api-fetch";
 import type { SandboxEvent } from "@/types/session";
 import {
+  INITIAL_SESSION_READ_STATE_VERSION,
   sessionReadResultSchema,
   sessionReadStateSchema,
   type SessionReadAction,
@@ -11,7 +12,7 @@ import { z } from "zod";
 
 export const sessionReadStateClientSchema = z.preprocess((data) => {
   if (typeof data !== "object" || data === null || "version" in data) return data;
-  return { ...data, version: 0 };
+  return { ...data, version: INITIAL_SESSION_READ_STATE_VERSION };
 }, sessionReadStateSchema);
 
 export type SessionReadAttemptDisposition = "complete" | "retry" | "permanent_failure";
