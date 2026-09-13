@@ -111,6 +111,7 @@ const sampleRunRow: AutomationRunRow = {
   failure_reason: null,
   scheduled_at: now,
   started_at: null,
+  execution_deadline_at: null,
   completed_at: null,
   created_at: now,
   invocation_id: "inv-test1",
@@ -501,15 +502,19 @@ describe("AutomationStore", () => {
     });
   });
 
-  describe("getTimedOutRunningRuns", () => {
-    it("returns runs stuck in running state", async () => {
+  describe("getRunsPastExecutionDeadline", () => {
+    it("returns running runs whose own deadline has passed", async () => {
       const { db, statements } = createFakeD1({
-        allResults: [{ ...sampleRunRow, status: "running", started_at: now }],
+        allResults: [
+          { ...sampleRunRow, status: "running", started_at: now, execution_deadline_at: now },
+        ],
       });
       const store = new AutomationStore(db);
-      const result = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
+      const result = await store.getRunsPastExecutionDeadline(now, 50);
       expect(result).toHaveLength(1);
       expect(statements[0].sql).toContain("status = 'running'");
+      expect(statements[0].sql).toContain("execution_deadline_at < ?");
+      expect(statements[0].params).toEqual([now, 50]);
     });
   });
 
@@ -542,11 +547,20 @@ describe("AutomationStore", () => {
       const { db, statements } = createFakeD1();
       const store = new AutomationStore(db);
 
-      await store.claimRunSession("run_test1", "session-1", now);
+      await store.claimRunSession("run_test1", "session-1", now, now + 1000);
 
       expect(statements[0].sql).toContain("SET status = 'running'");
       expect(statements[0].sql).toContain("WHERE id = ? AND status = 'starting'");
-      expect(statements[0].params).toEqual(["session-1", now, "run_test1"]);
+      expect(statements[0].params).toEqual(["session-1", now, now + 1000, "run_test1"]);
+    });
+
+    it("stamps the execution deadline in the statement that makes the run sweepable", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.claimRunSession("run_test1", "session-1", now, now + 1000);
+
+      expect(statements[0].sql).toContain("execution_deadline_at = ?");
     });
   });
 
