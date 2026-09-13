@@ -68,7 +68,7 @@ class RepositoryHooks:
             env = os.environ.copy()
             env["OPENINSPECT_BOOT_MODE"] = boot_mode.value
             process = await spawn_owned_subprocess(
-                lambda: asyncio.create_subprocess_exec(
+                asyncio.create_subprocess_exec(
                     "bash",
                     str(script_path),
                     cwd=repo.path,

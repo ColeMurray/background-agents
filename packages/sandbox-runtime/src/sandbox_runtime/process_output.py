@@ -112,16 +112,13 @@ async def finish_cancellation_cleanup[ResultT](task: asyncio.Task[ResultT]) -> R
 
 
 async def spawn_owned_subprocess(
-    process_factory: Callable[[], Awaitable[asyncio.subprocess.Process]],
+    process_awaitable: Awaitable[asyncio.subprocess.Process],
     *,
     kill_process_group: Callable[[int, int], None] = os.killpg,
 ) -> asyncio.subprocess.Process:
     """Create a subprocess or clean it up before propagating cancellation."""
 
-    async def spawn() -> asyncio.subprocess.Process:
-        return await process_factory()
-
-    spawn_task = asyncio.create_task(spawn())
+    spawn_task = asyncio.ensure_future(process_awaitable)
     try:
         return await asyncio.shield(spawn_task)
     except asyncio.CancelledError:
