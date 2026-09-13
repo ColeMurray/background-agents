@@ -105,7 +105,7 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "GET /image-builds/enabled owner=200",
   "GET /image-builds/enabled-repos owner=200",
   "GET /model-preferences owner=200",
-  "PUT /model-preferences owner=400",
+  "PUT /model-preferences owner=405",
   "PATCH /model-preferences owner=400",
   "GET /model-provider-accounts/legacy-credentials owner=200",
   "GET /model-provider-accounts owner=200",
