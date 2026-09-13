@@ -48,27 +48,23 @@ const createSandboxModalResponseSchema = z.object({
 
 const restoreSandboxModalResponseSchema = z.object({
   success: z.literal(true),
-  data: z
-    .object({
-      sandbox_id: z.string().optional(),
-      modal_object_id: z.string().nullable().optional(),
-      code_server_url: z.string().nullable().optional(),
-      code_server_password: z.string().nullable().optional(),
-      vnc_url: z.string().nullable().optional(),
-      vnc_password: z.string().nullable().optional(),
-      ttyd_url: z.string().nullable().optional(),
-      tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
-    })
-    .optional(),
+  data: z.object({
+    sandbox_id: z.string().min(1),
+    modal_object_id: z.string().nullable().optional(),
+    code_server_url: z.string().nullable().optional(),
+    code_server_password: z.string().nullable().optional(),
+    vnc_url: z.string().nullable().optional(),
+    vnc_password: z.string().nullable().optional(),
+    ttyd_url: z.string().nullable().optional(),
+    tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
+  }),
 });
 
 const snapshotSandboxModalResponseSchema = z.object({
   success: z.literal(true),
-  data: z
-    .object({
-      image_id: z.string(),
-    })
-    .optional(),
+  data: z.object({
+    image_id: z.string().min(1),
+  }),
 });
 
 const createImageBuildSandboxModalResponseSchema = z.object({
@@ -205,8 +201,7 @@ export interface RestoreSandboxRequest {
 }
 
 export interface RestoreSandboxResponse {
-  success: true;
-  sandboxId?: string;
+  sandboxId: string;
   modalObjectId?: string;
   codeServerUrl?: string;
   codeServerPassword?: string;
@@ -223,9 +218,7 @@ export interface SnapshotSandboxRequest {
 }
 
 export interface SnapshotSandboxResponse {
-  success: boolean;
-  imageId?: string;
-  error?: string;
+  imageId: string;
 }
 
 export interface SnapshotBuildSandboxRequest {
@@ -479,15 +472,14 @@ export class ModalClient {
 
       outcome = "success";
       return {
-        success: true,
-        sandboxId: result.data?.sandbox_id,
-        modalObjectId: result.data?.modal_object_id ?? undefined,
-        codeServerUrl: result.data?.code_server_url ?? undefined,
-        codeServerPassword: result.data?.code_server_password ?? undefined,
-        vncUrl: result.data?.vnc_url ?? undefined,
-        vncPassword: result.data?.vnc_password ?? undefined,
-        ttydUrl: result.data?.ttyd_url ?? undefined,
-        tunnelUrls: result.data?.tunnel_urls ?? undefined,
+        sandboxId: result.data.sandbox_id,
+        modalObjectId: result.data.modal_object_id ?? undefined,
+        codeServerUrl: result.data.code_server_url ?? undefined,
+        codeServerPassword: result.data.code_server_password ?? undefined,
+        vncUrl: result.data.vnc_url ?? undefined,
+        vncPassword: result.data.vnc_password ?? undefined,
+        ttydUrl: result.data.ttyd_url ?? undefined,
+        tunnelUrls: result.data.tunnel_urls ?? undefined,
       };
     } finally {
       log.info("modal.request", {
@@ -529,12 +521,8 @@ export class ModalClient {
         request.signal,
         (status) => (httpStatus = status)
       );
-      if (!result.data?.image_id) {
-        return { success: false, error: "Snapshot response missing image_id" };
-      }
-
       outcome = "success";
-      return { success: true, imageId: result.data.image_id };
+      return { imageId: result.data.image_id };
     } finally {
       log.info("modal.request", {
         event: "modal.request",
@@ -576,12 +564,8 @@ export class ModalClient {
         request.signal,
         (status) => (httpStatus = status)
       );
-      if (!result.data?.image_id) {
-        return { success: false, error: "Snapshot response missing image_id" };
-      }
-
       outcome = "success";
-      return { success: true, imageId: result.data.image_id };
+      return { imageId: result.data.image_id };
     } finally {
       log.info("modal.request", {
         event: "modal.request",

@@ -49,20 +49,17 @@ function createMockModalClient(
     ),
     restoreSandbox: vi.fn(
       async (): Promise<RestoreSandboxResponse> => ({
-        success: true,
         sandboxId: "sandbox-123",
         modalObjectId: "modal-obj-123",
       })
     ),
     snapshotSandbox: vi.fn(
       async (): Promise<SnapshotSandboxResponse> => ({
-        success: true,
         imageId: "image-123",
       })
     ),
     snapshotBuildSandbox: vi.fn(
       async (): Promise<SnapshotSandboxResponse> => ({
-        success: true,
         imageId: "build-image-123",
       })
     ),
@@ -637,31 +634,8 @@ describe("ModalSandboxProvider", () => {
       }
     });
 
-    it("preserves client-level snapshot failures", async () => {
-      const provider = new ModalSandboxProvider(
-        createMockModalClient({
-          snapshotSandbox: vi.fn(async () => ({
-            success: false,
-            error: "snapshot rejected",
-          })),
-        })
-      );
-
-      await expect(
-        provider.takeSnapshot({
-          providerObjectId: "obj-123",
-          sessionId: "session-123",
-          reason: "test",
-        })
-      ).resolves.toEqual({
-        success: false,
-        error: "snapshot rejected",
-      });
-    });
-
     it("uses the identity-bound snapshot operation for image builds", async () => {
       const snapshotBuildSandbox = vi.fn(async () => ({
-        success: true,
         imageId: "build-image-123",
       }));
       const provider = new ModalSandboxProvider(createMockModalClient({ snapshotBuildSandbox }));
@@ -704,7 +678,6 @@ describe("ModalSandboxProvider", () => {
     it("returns providerObjectId from restoreFromSnapshot", async () => {
       const client = createMockModalClient({
         restoreSandbox: vi.fn(async () => ({
-          success: true as const,
           sandboxId: "restored-sandbox-123",
           modalObjectId: "new-modal-obj-456",
           vncUrl: "https://vnc.test",

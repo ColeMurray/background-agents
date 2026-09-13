@@ -540,9 +540,14 @@ describe("ModalClient", () => {
     ]);
   });
 
-  it("rejects malformed restore responses instead of trusting the payload", async () => {
+  it.each([
+    { success: true },
+    { success: true, data: {} },
+    { success: true, data: { sandbox_id: "" } },
+    { success: true, data: { sandbox_id: 123 } },
+  ])("rejects incomplete restore responses instead of trusting the payload", async (body) => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ success: true, data: { sandbox_id: 123 } }), {
+      new Response(JSON.stringify(body), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       })
@@ -601,7 +606,6 @@ describe("ModalClient", () => {
         model: "anthropic/claude-sonnet-4-5",
       })
     ).resolves.toEqual({
-      success: true,
       sandboxId: "sb-1",
       modalObjectId: undefined,
       codeServerUrl: undefined,
@@ -667,28 +671,28 @@ describe("ModalClient", () => {
         providerObjectId: "mo-1",
         sessionId: "session-123",
       })
-    ).resolves.toEqual({ success: true, imageId: "img-1" });
+    ).resolves.toEqual({ imageId: "img-1" });
   });
 
-  it("preserves the client-level failure for a missing snapshot image ID", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ success: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      })
-    );
+  it.each([{ success: true }, { success: true, data: { image_id: "" } }])(
+    "rejects incomplete snapshot responses instead of synthesizing failures",
+    async (body) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
 
-    const client = createModalClient("secret", "acme", "prod-web");
-    await expect(
-      client.snapshotSandbox({
-        providerObjectId: "mo-1",
-        sessionId: "session-123",
-      })
-    ).resolves.toEqual({
-      success: false,
-      error: "Snapshot response missing image_id",
-    });
-  });
+      const client = createModalClient("secret", "acme", "prod-web");
+      await expect(
+        client.snapshotSandbox({
+          providerObjectId: "mo-1",
+          sessionId: "session-123",
+        })
+      ).rejects.toThrow("Modal API error: Invalid response");
+    }
+  );
 
   it("snapshots image builds through the identity-bound build endpoint", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -704,7 +708,7 @@ describe("ModalClient", () => {
         buildId: "imgb-1",
         providerSessionId: "mo-build-1",
       })
-    ).resolves.toEqual({ success: true, imageId: "img-build-1" });
+    ).resolves.toEqual({ imageId: "img-build-1" });
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://acme-prod-web--open-inspect-api-snapshot-build-sandbox.modal.run",
