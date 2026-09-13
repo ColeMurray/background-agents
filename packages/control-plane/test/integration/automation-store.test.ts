@@ -53,6 +53,7 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     scheduled_at: now,
     started_at: null,
     completed_at: null,
+    reconciliation_due_at: null,
     created_at: now,
     invocation_id: `inv-${id}`,
     repo_owner: null,
@@ -655,7 +656,7 @@ describe("AutomationStore (D1 integration)", () => {
       expect(orphaned).toHaveLength(0);
     });
 
-    it("finds timed-out running runs older than threshold", async () => {
+    it("finds running runs due for reconciliation", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-rec3" }));
@@ -668,13 +669,32 @@ describe("AutomationStore (D1 integration)", () => {
           session_id: "sess-t1",
           scheduled_at: twoHoursAgo,
           started_at: twoHoursAgo,
+          reconciliation_due_at: now - 1,
           created_at: twoHoursAgo,
         })
       );
 
-      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
-      expect(timedOut).toHaveLength(1);
-      expect(timedOut[0].id).toBe("run-timeout-1");
+      const due = await store.getRunsDueForReconciliation(now, now - 90 * 60 * 1000, 50);
+      expect(due).toHaveLength(1);
+      expect(due[0].id).toBe("run-timeout-1");
+    });
+
+    it("finds legacy running rows without a reconciliation deadline", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      const twoHoursAgo = now - 2 * 60 * 60 * 1000;
+      await store.create(makeAutomation({ id: "auto-reconcile-legacy" }));
+      await seedRun(
+        makeRun("auto-reconcile-legacy", {
+          id: "run-reconcile-legacy",
+          status: "running",
+          started_at: twoHoursAgo,
+          reconciliation_due_at: null,
+        })
+      );
+
+      const due = await store.getRunsDueForReconciliation(now, now - 90 * 60 * 1000, 50);
+      expect(due.map((run) => run.id)).toContain("run-reconcile-legacy");
     });
 
     it("does not find recent running runs", async () => {
@@ -687,12 +707,13 @@ describe("AutomationStore (D1 integration)", () => {
           id: "run-recent-running",
           status: "running",
           started_at: now,
+          reconciliation_due_at: now + 60_000,
           created_at: now,
         })
       );
 
-      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
-      expect(timedOut).toHaveLength(0);
+      const due = await store.getRunsDueForReconciliation(now, now - 90 * 60 * 1000, 50);
+      expect(due).toHaveLength(0);
     });
 
     it("drains oldest orphaned runs first when LIMIT is hit", async () => {
@@ -717,7 +738,7 @@ describe("AutomationStore (D1 integration)", () => {
       expect(orphaned.map((r) => r.id)).toEqual(["run-order-0", "run-order-1", "run-order-2"]);
     });
 
-    it("drains oldest timed-out runs first when LIMIT is hit", async () => {
+    it("drains earliest reconciliation deadlines first when LIMIT is hit", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-order2" }));
@@ -731,14 +752,15 @@ describe("AutomationStore (D1 integration)", () => {
             session_id: `sess-${i}`,
             scheduled_at: base + i * 1000,
             started_at: base + i * 1000,
+            reconciliation_due_at: base + i * 1000,
             created_at: base + i * 1000,
           })
         );
       }
 
-      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 3);
-      expect(timedOut).toHaveLength(3);
-      expect(timedOut.map((r) => r.id)).toEqual(["run-to-0", "run-to-1", "run-to-2"]);
+      const due = await store.getRunsDueForReconciliation(now, now - 90 * 60 * 1000, 3);
+      expect(due).toHaveLength(3);
+      expect(due.map((r) => r.id)).toEqual(["run-to-0", "run-to-1", "run-to-2"]);
     });
 
     // The behavioural tests above pass with or without the index (a scan returns
@@ -754,13 +776,14 @@ describe("AutomationStore (D1 integration)", () => {
       expect(detail).toContain("USING INDEX idx_runs_orphan_sweep");
     });
 
-    it("timeout sweep is served by idx_runs_timeout_sweep, not a full scan", async () => {
+    it("reconciliation sweep is served by idx_runs_reconciliation_sweep", async () => {
       const plan = await env.DB.prepare(
-        `EXPLAIN QUERY PLAN ${AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL}`
+        `EXPLAIN QUERY PLAN ${AutomationStore.RUNS_DUE_FOR_RECONCILIATION_SQL}`
       )
-        .bind(Date.now())
+        .bind(Date.now(), Date.now() - 90 * 60 * 1000)
         .all<{ detail: string }>();
       const detail = plan.results.map((r) => r.detail).join("\n");
+      expect(detail).toContain("USING INDEX idx_runs_reconciliation_sweep");
       expect(detail).toContain("USING INDEX idx_runs_timeout_sweep");
     });
   });

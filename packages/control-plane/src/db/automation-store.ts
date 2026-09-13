@@ -105,6 +105,7 @@ export interface AutomationRunRow {
   scheduled_at: number;
   started_at: number | null;
   completed_at: number | null;
+  reconciliation_due_at: number | null;
   created_at: number;
   /** Repository snapshot taken at firing time (null for repo-less runs). */
   repo_owner: string | null;
@@ -871,41 +872,33 @@ export class AutomationStore {
   }
 
   /** Atomically assign a session only while a run still awaits launch. */
-  async claimRunSession(id: string, sessionId: string, startedAt: number): Promise<boolean> {
+  async claimRunSession(
+    id: string,
+    sessionId: string,
+    startedAt: number,
+    reconciliationDueAt: number
+  ): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE automation_runs
-         SET status = 'running', session_id = ?, started_at = ?
-         WHERE id = ? AND status = 'starting'`
+          SET status = 'running', session_id = ?, started_at = ?, reconciliation_due_at = ?
+          WHERE id = ? AND status = 'starting'`
       )
-      .bind(sessionId, startedAt, id)
+      .bind(sessionId, startedAt, reconciliationDueAt, id)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
   async bulkFailStartingRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
-    await this.bulkFailRunsInStatus(runIds, "starting", reason, completedAt);
-  }
-
-  async bulkFailRunningRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
-    await this.bulkFailRunsInStatus(runIds, "running", reason, completedAt);
-  }
-
-  private async bulkFailRunsInStatus(
-    runIds: string[],
-    status: "starting" | "running",
-    reason: string,
-    completedAt: number
-  ): Promise<void> {
     if (runIds.length === 0) return;
     const placeholders = runIds.map(() => "?").join(", ");
     await this.db
       .prepare(
         `UPDATE automation_runs
          SET status = 'failed', failure_reason = ?, completed_at = ?
-         WHERE id IN (${placeholders}) AND status = ?`
+         WHERE id IN (${placeholders}) AND status = 'starting'`
       )
-      .bind(reason, completedAt, ...runIds, status)
+      .bind(reason, completedAt, ...runIds)
       .run();
   }
 
@@ -1026,9 +1019,9 @@ export class AutomationStore {
           .prepare(
             `INSERT INTO automation_runs
              (id, automation_id, invocation_id, session_id, status, skip_reason, failure_reason,
-              scheduled_at, started_at, completed_at, created_at,
-              repo_owner, repo_name, repo_id, base_branch, environment_id)
-             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+               scheduled_at, started_at, completed_at, reconciliation_due_at, created_at,
+               repo_owner, repo_name, repo_id, base_branch, environment_id)
+              SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
              WHERE EXISTS (SELECT 1 FROM automation_invocations WHERE id = ?)`
           )
           .bind(
@@ -1042,6 +1035,7 @@ export class AutomationStore {
             child.scheduled_at,
             child.started_at,
             child.completed_at,
+            child.reconciliation_due_at,
             child.created_at,
             child.repo_owner,
             child.repo_name,
@@ -1416,8 +1410,14 @@ export class AutomationStore {
   // a bound param, or the planner skips the index and full-scans automation_runs.
   static readonly ORPHANED_STARTING_RUNS_SQL =
     "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
-  static readonly TIMED_OUT_RUNNING_RUNS_SQL =
-    "SELECT * FROM automation_runs WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?";
+  static readonly RUNS_DUE_FOR_RECONCILIATION_SQL = `SELECT * FROM (
+       SELECT * FROM automation_runs
+       WHERE status = 'running' AND reconciliation_due_at IS NOT NULL AND reconciliation_due_at <= ?
+       UNION ALL
+       SELECT * FROM automation_runs
+       WHERE status = 'running' AND reconciliation_due_at IS NULL
+         AND started_at IS NOT NULL AND started_at <= ?
+     )`;
 
   async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
@@ -1428,16 +1428,28 @@ export class AutomationStore {
     return result.results || [];
   }
 
-  async getTimedOutRunningRuns(
-    executionTimeoutMs: number,
+  async getRunsDueForReconciliation(
+    now: number,
+    legacyStartedBefore: number,
     limit: number
   ): Promise<AutomationRunRow[]> {
-    const cutoff = Date.now() - executionTimeoutMs;
     const result = await this.db
-      .prepare(`${AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL} ORDER BY started_at ASC LIMIT ?`)
-      .bind(cutoff, limit)
+      .prepare(
+        `${AutomationStore.RUNS_DUE_FOR_RECONCILIATION_SQL} ORDER BY COALESCE(reconciliation_due_at, started_at) ASC LIMIT ?`
+      )
+      .bind(now, legacyStartedBefore, limit)
       .all<AutomationRunRow>();
     return result.results || [];
+  }
+
+  async deferRunReconciliation(id: string, dueAt: number): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE automation_runs SET reconciliation_due_at = ?
+         WHERE id = ? AND status = 'running'`
+      )
+      .bind(dueAt, id)
+      .run();
   }
 
   // --- Failure tracking ---

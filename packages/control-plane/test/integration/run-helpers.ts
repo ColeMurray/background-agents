@@ -24,6 +24,7 @@ export function makeRunRow(
     scheduled_at: now,
     started_at: null,
     completed_at: null,
+    reconciliation_due_at: null,
     created_at: now,
     repo_owner: null,
     repo_name: null,
@@ -54,9 +55,9 @@ export async function seedRun(
   const runInsert = env.DB.prepare(
     `INSERT INTO automation_runs
      (id, automation_id, invocation_id, session_id, status, skip_reason, failure_reason,
-       scheduled_at, started_at, completed_at, created_at, repo_owner, repo_name, repo_id, base_branch,
-      environment_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       scheduled_at, started_at, completed_at, reconciliation_due_at, created_at, repo_owner,
+       repo_name, repo_id, base_branch, environment_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     run.id,
     run.automation_id,
@@ -68,6 +69,7 @@ export async function seedRun(
     run.scheduled_at,
     run.started_at,
     run.completed_at,
+    run.reconciliation_due_at,
     run.created_at,
     run.repo_owner,
     run.repo_name,

@@ -465,8 +465,9 @@ firing finishes with every repository completed; partial failures never reset it
 neither way. Auto-pause stops future firings but never cancels repository sessions that already
 started.
 
-Runs that time out (sessions running longer than 90 minutes) also count as failures toward the
-auto-pause threshold.
+Runs whose sessions report a failed automation message count as failures toward the auto-pause
+threshold. Runs older than 90 minutes are reconciled against their session's durable message state;
+age alone never fails a run.
 
 ---
 
@@ -481,4 +482,4 @@ auto-pause threshold.
 | Webhook payload size                   | 64 KB                                  |
 | Concurrent runs per automation         | 1 for scheduled/manual triggers only   |
 | Consecutive failures before auto-pause | 3                                      |
-| Run execution timeout                  | 90 minutes                             |
+| Running-run reconciliation age         | 90 minutes                             |

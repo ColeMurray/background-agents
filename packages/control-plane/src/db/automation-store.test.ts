@@ -112,6 +112,7 @@ const sampleRunRow: AutomationRunRow = {
   scheduled_at: now,
   started_at: null,
   completed_at: null,
+  reconciliation_due_at: null,
   created_at: now,
   invocation_id: "inv-test1",
   repo_owner: null,
@@ -501,15 +502,16 @@ describe("AutomationStore", () => {
     });
   });
 
-  describe("getTimedOutRunningRuns", () => {
-    it("returns runs stuck in running state", async () => {
+  describe("getRunsDueForReconciliation", () => {
+    it("returns running runs whose reconciliation is due", async () => {
       const { db, statements } = createFakeD1({
-        allResults: [{ ...sampleRunRow, status: "running", started_at: now }],
+        allResults: [{ ...sampleRunRow, status: "running", reconciliation_due_at: now }],
       });
       const store = new AutomationStore(db);
-      const result = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
+      const result = await store.getRunsDueForReconciliation(now, now - 1000, 50);
       expect(result).toHaveLength(1);
       expect(statements[0].sql).toContain("status = 'running'");
+      expect(statements[0].sql).toContain("reconciliation_due_at <= ?");
     });
   });
 
@@ -542,11 +544,11 @@ describe("AutomationStore", () => {
       const { db, statements } = createFakeD1();
       const store = new AutomationStore(db);
 
-      await store.claimRunSession("run_test1", "session-1", now);
+      await store.claimRunSession("run_test1", "session-1", now, now + 1000);
 
       expect(statements[0].sql).toContain("SET status = 'running'");
       expect(statements[0].sql).toContain("WHERE id = ? AND status = 'starting'");
-      expect(statements[0].params).toEqual(["session-1", now, "run_test1"]);
+      expect(statements[0].params).toEqual(["session-1", now, now + 1000, "run_test1"]);
     });
   });
 

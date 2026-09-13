@@ -794,6 +794,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     listEvents: (_request, url) => messagesHandler.listEvents(url),
     listArtifacts: (_request, url) => messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => messagesHandler.listMessages(url),
+    automationRunOutcome: (_request, url) => {
+      if (!sessionCoreRepository.getSession()) {
+        return Response.json({ error: "Session not initialized" }, { status: 404 });
+      }
+      return messagesHandler.automationRunOutcome(url);
+    },
     createPr: (request, _url, requestLog) => pullRequestHandler.createPr(request, requestLog),
     pullRequestArtifactSnapshot: (request, url) =>
       pullRequestHandler.pullRequestArtifactSnapshot(request, url),

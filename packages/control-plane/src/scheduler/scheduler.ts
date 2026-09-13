@@ -69,7 +69,7 @@ import type { SqlDatabase } from "../db/sql-database";
 import type { BackgroundTasks } from "../platform-ports";
 import { initializeSession } from "../session/initialize";
 import { createSessionRuntimeClient } from "../session/runtime-client";
-import { SessionInternalPaths } from "../session/contracts";
+import { SessionInternalPaths, automationRunOutcomeResponseSchema } from "../session/contracts";
 import type { SessionInitInput } from "../session/initialize";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
@@ -106,8 +106,13 @@ const AUTOMATION_LAUNCH_CONCURRENCY = 4;
 /** Threshold for detecting orphaned "starting" runs (5 minutes). */
 const ORPHAN_THRESHOLD_MS = 5 * 60 * 1000;
 
-/** Default execution timeout for detecting timed-out runs (90 minutes). */
-const DEFAULT_EXECUTION_TIMEOUT_MS = 90 * 60 * 1000;
+/** Age before checking whether an active run's durable completion callback was missed. */
+const RUN_RECONCILIATION_AGE_MS = 90 * 60 * 1000;
+
+/** Healthy and temporarily unreachable sessions rotate behind other reconciliation candidates. */
+const RUN_RECONCILIATION_RETRY_MS = 15 * 60 * 1000;
+const RUN_RECONCILIATION_REQUEST_TIMEOUT_MS = 10_000;
+const RUN_RECONCILIATION_CONCURRENCY = 4;
 
 /** Consecutive failure threshold for auto-pause. */
 const AUTO_PAUSE_THRESHOLD = 3;
@@ -175,6 +180,7 @@ export interface AutomationRunCompletion {
   messageId: string;
   success: boolean;
   error?: string;
+  completedAt?: number;
 }
 
 export interface SchedulerTickResult {
@@ -422,6 +428,7 @@ export class Scheduler {
       scheduled_at: scheduledAt,
       started_at: null,
       completed_at: null,
+      reconciliation_due_at: null,
       created_at: now,
       repo_owner: null,
       repo_name: null,
@@ -555,7 +562,13 @@ export class Scheduler {
         const sessionId = generateId();
         // Claim the generated session before initialization. Otherwise the orphan sweep can
         // terminalize an old `starting` row while initialization is still creating its session.
-        const claimed = await store.claimRunSession(child.id, sessionId, Date.now());
+        const startedAt = Date.now();
+        const claimed = await store.claimRunSession(
+          child.id,
+          sessionId,
+          startedAt,
+          startedAt + RUN_RECONCILIATION_AGE_MS
+        );
         if (!claimed) {
           throw new Error("Automation run was recovered before launch claimed its session");
         }
@@ -798,18 +811,15 @@ export class Scheduler {
   // ─── Recovery sweep ──────────────────────────────────────────────────────
 
   private async recoverySweep(store: AutomationStore): Promise<void> {
-    const executionTimeoutMs = parseInt(
-      this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS),
-      10
-    );
-
-    const [orphanedResult, timedOutResult] = await Promise.allSettled([
+    const now = Date.now();
+    const [orphanedResult, reconciliationResult] = await Promise.allSettled([
       store.getOrphanedStartingRuns(ORPHAN_THRESHOLD_MS, RECOVERY_SWEEP_LIMIT),
-      store.getTimedOutRunningRuns(executionTimeoutMs, RECOVERY_SWEEP_LIMIT),
+      store.getRunsDueForReconciliation(now, now - RUN_RECONCILIATION_AGE_MS, RECOVERY_SWEEP_LIMIT),
     ]);
 
     const orphaned = orphanedResult.status === "fulfilled" ? orphanedResult.value : [];
-    const timedOut = timedOutResult.status === "fulfilled" ? timedOutResult.value : [];
+    const dueForReconciliation =
+      reconciliationResult.status === "fulfilled" ? reconciliationResult.value : [];
 
     if (orphanedResult.status === "rejected") {
       this.log.error("Recovery sweep failed to query orphaned runs", {
@@ -822,18 +832,18 @@ export class Scheduler {
       });
     }
 
-    if (timedOutResult.status === "rejected") {
-      this.log.error("Recovery sweep failed to query timed-out runs", {
+    if (reconciliationResult.status === "rejected") {
+      this.log.error("Recovery sweep failed to query runs due for reconciliation", {
         event: "scheduler.recovery.query_error",
-        category: "timed_out",
+        category: "reconciliation",
         error:
-          timedOutResult.reason instanceof Error
-            ? timedOutResult.reason.message
-            : String(timedOutResult.reason),
+          reconciliationResult.reason instanceof Error
+            ? reconciliationResult.reason.message
+            : String(reconciliationResult.reason),
       });
     }
 
-    if (orphaned.length === 0 && timedOut.length === 0) {
+    if (orphaned.length === 0 && dueForReconciliation.length === 0) {
       await this.finalizationSweep(store);
       return;
     }
@@ -845,15 +855,6 @@ export class Scheduler {
         automation_id: run.automation_id,
       });
     }
-    for (const run of timedOut) {
-      this.log.warn("Recovering timed-out running run", {
-        event: "scheduler.recovery.timed_out",
-        run_id: run.id,
-        automation_id: run.automation_id,
-      });
-    }
-
-    const now = Date.now();
     const recoveredRuns: AutomationRunRow[] = [];
 
     if (orphaned.length > 0) {
@@ -874,23 +875,29 @@ export class Scheduler {
       }
     }
 
-    if (timedOut.length > 0) {
-      try {
-        await store.bulkFailRunningRuns(
-          timedOut.map((r) => r.id),
-          "execution_timeout",
-          now
-        );
-        recoveredRuns.push(...timedOut);
-      } catch (e) {
-        this.log.error("Recovery sweep failed to mark timed-out runs as failed", {
-          event: "scheduler.recovery.bulk_fail_error",
-          category: "timed_out",
-          count: timedOut.length,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
+    let nextReconciliationIndex = 0;
+    const reconciliationWorkerCount = Math.min(
+      RUN_RECONCILIATION_CONCURRENCY,
+      dueForReconciliation.length
+    );
+    await Promise.all(
+      Array.from({ length: reconciliationWorkerCount }, async () => {
+        for (;;) {
+          const run = dueForReconciliation[nextReconciliationIndex++];
+          if (!run) return;
+          try {
+            await this.reconcileRunningRun(store, run, now);
+          } catch (e) {
+            this.log.error("Recovery sweep failed to reconcile running run", {
+              event: "scheduler.recovery.reconcile_error",
+              run_id: run.id,
+              automation_id: run.automation_id,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }
+      })
+    );
 
     if (recoveredRuns.length === 0) {
       await this.finalizationSweep(store);
@@ -918,6 +925,103 @@ export class Scheduler {
     }
 
     await this.finalizationSweep(store);
+  }
+
+  private async reconcileRunningRun(
+    store: AutomationStore,
+    run: AutomationRunRow,
+    now: number
+  ): Promise<void> {
+    const defer = () => store.deferRunReconciliation(run.id, now + RUN_RECONCILIATION_RETRY_MS);
+    if (!run.session_id) {
+      await defer();
+      return;
+    }
+
+    const client = createSessionRuntimeClient(this.env, {
+      trace_id: `automation:${run.automation_id}`,
+      request_id: run.id,
+    });
+    let response: Response;
+    try {
+      const search = new URLSearchParams({
+        automation_id: run.automation_id,
+        run_id: run.id,
+      }).toString();
+      response = await client.fetch(
+        run.session_id,
+        SessionInternalPaths.automationRunOutcome,
+        { signal: AbortSignal.timeout(RUN_RECONCILIATION_REQUEST_TIMEOUT_MS) },
+        `?${search}`
+      );
+    } catch (error) {
+      await defer();
+      this.log.warn("Automation run reconciliation probe failed", {
+        event: "scheduler.recovery.probe_failed",
+        automation_id: run.automation_id,
+        run_id: run.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    if (response.status === 404) {
+      await defer();
+      this.log.warn("Automation run reconciliation found no session authority", {
+        event: "scheduler.recovery.session_missing",
+        automation_id: run.automation_id,
+        run_id: run.id,
+        session_id: run.session_id,
+      });
+      return;
+    }
+    if (!response.ok) {
+      await defer();
+      return;
+    }
+
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      await defer();
+      return;
+    }
+    const parsed = automationRunOutcomeResponseSchema.safeParse(body);
+    if (!parsed.success) {
+      await defer();
+      this.log.error("Automation run reconciliation returned an invalid response", {
+        event: "scheduler.recovery.invalid_response",
+        automation_id: run.automation_id,
+        run_id: run.id,
+      });
+      return;
+    }
+
+    if (parsed.data.state === "active") {
+      await defer();
+      return;
+    }
+    if (parsed.data.state === "missing") {
+      await defer();
+      this.log.warn("Automation run reconciliation found no run message", {
+        event: "scheduler.recovery.message_missing",
+        automation_id: run.automation_id,
+        run_id: run.id,
+        session_id: run.session_id,
+      });
+      return;
+    }
+
+    await this.runComplete({
+      automationId: run.automation_id,
+      runId: run.id,
+      sessionId: run.session_id,
+      messageId: parsed.data.messageId,
+      success: parsed.data.state === "completed",
+      error: parsed.data.state === "failed" ? (parsed.data.error ?? "Unknown error") : undefined,
+      completedAt: parsed.data.completedAt,
+    });
   }
 
   /**
@@ -1245,6 +1349,17 @@ export class Scheduler {
       return;
     }
 
+    if (run.session_id !== body.sessionId) {
+      this.log.error("Ignoring run-complete callback with mismatched session", {
+        event: "scheduler.run_complete_session_mismatch",
+        automation_id: body.automationId,
+        run_id: body.runId,
+        expected_session_id: run.session_id,
+        received_session_id: body.sessionId,
+      });
+      return;
+    }
+
     // SQL-guarded transition: only an active run may go terminal. When the
     // guard suppresses the write (recovery sweep or a concurrent callback got
     // there first) the callback is acknowledged as ignored — a terminal child
@@ -1252,11 +1367,11 @@ export class Scheduler {
     const transitioned = await store.updateRun(
       body.runId,
       body.success
-        ? { status: "completed", completed_at: Date.now() }
+        ? { status: "completed", completed_at: body.completedAt ?? Date.now() }
         : {
             status: "failed",
             failure_reason: body.error || "Unknown error",
-            completed_at: Date.now(),
+            completed_at: body.completedAt ?? Date.now(),
           }
     );
 

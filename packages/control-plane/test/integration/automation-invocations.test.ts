@@ -74,6 +74,7 @@ function makeChild(automationId: string, overrides?: Partial<AutomationRunRow>):
     scheduled_at: now,
     started_at: null,
     completed_at: null,
+    reconciliation_due_at: null,
     created_at: now,
     repo_owner: null,
     repo_name: null,
@@ -617,39 +618,6 @@ describe("automation invocations (D1 integration)", () => {
       expect(row!.status).toBe("completed");
     });
 
-    it("bulkFailRunningRuns only fails running rows", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-bulkfail" }));
-      const invocation = makeInvocation("auto-bulkfail");
-      const done = makeChild("auto-bulkfail", {
-        status: "completed",
-        completed_at: 100,
-        repo_owner: "acme",
-        repo_name: "api",
-      });
-      const stuck = makeChild("auto-bulkfail", {
-        status: "running",
-        repo_owner: "acme",
-        repo_name: "web",
-      });
-      await store.insertInvocationGuarded({
-        invocation,
-        children: [done, stuck],
-        overlapScope: { kind: "automation" },
-      });
-
-      await store.bulkFailRunningRuns([done.id, stuck.id], "timeout", 999);
-
-      const statuses = await env.DB.prepare(
-        `SELECT id, status FROM automation_runs WHERE invocation_id = ?`
-      )
-        .bind(invocation.id)
-        .all<{ id: string; status: string }>();
-      const byId = new Map(statuses.results!.map((row) => [row.id, row.status]));
-      expect(byId.get(done.id)).toBe("completed");
-      expect(byId.get(stuck.id)).toBe("failed");
-    });
-
     it("does not fail a run claimed after the orphan sweep reads it", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-claim-race" }));
@@ -668,7 +636,7 @@ describe("automation invocations (D1 integration)", () => {
 
       const [staleOrphan] = await store.getOrphanedStartingRuns(0, 10);
       expect(staleOrphan?.id).toBe(child.id);
-      await expect(store.claimRunSession(child.id, "session-1", 500)).resolves.toBe(true);
+      await expect(store.claimRunSession(child.id, "session-1", 500, 1000)).resolves.toBe(true);
       await store.bulkFailStartingRuns([staleOrphan!.id], "session_creation_timeout", 999);
 
       const row = await env.DB.prepare(

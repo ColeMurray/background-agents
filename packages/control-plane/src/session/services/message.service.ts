@@ -9,6 +9,8 @@ import type { SessionMessageQueue } from "../message-queue";
 import type { EnqueuePromptRequest } from "../enqueue-prompt-contract";
 import { SessionEventStream, type SessionEventListRequest } from "../event-stream";
 import { parseStoredSessionAttachments } from "../session-attachment-resolver";
+import { automationCallbackContextSchema } from "@open-inspect/shared/types/session-api";
+import type { AutomationRunOutcomeResponse } from "../contracts";
 
 export type ListEventsRequest = SessionEventListRequest;
 
@@ -109,5 +111,40 @@ export class MessageService {
       cursor: messages.length > 0 ? messages[messages.length - 1].created_at.toString() : undefined,
       hasMore,
     };
+  }
+
+  getAutomationRunOutcome(automationId: string, runId: string): AutomationRunOutcomeResponse {
+    for (const message of this.deps.repository.listMessagesWithCallbackContext()) {
+      let context: unknown;
+      try {
+        context = JSON.parse(message.callback_context!);
+      } catch {
+        continue;
+      }
+      const parsed = automationCallbackContextSchema.safeParse(context);
+      if (
+        !parsed.success ||
+        parsed.data.automationId !== automationId ||
+        parsed.data.runId !== runId
+      ) {
+        continue;
+      }
+
+      if (message.status === "pending" || message.status === "processing") {
+        return { state: "active", messageId: message.id };
+      }
+      if (message.status === "completed" && message.completed_at !== null) {
+        return { state: "completed", messageId: message.id, completedAt: message.completed_at };
+      }
+      if (message.status === "failed" && message.completed_at !== null) {
+        return {
+          state: "failed",
+          messageId: message.id,
+          completedAt: message.completed_at,
+          error: message.error_message,
+        };
+      }
+    }
+    return { state: "missing" };
   }
 }

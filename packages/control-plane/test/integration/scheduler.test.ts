@@ -332,14 +332,14 @@ describe("Scheduler (integration)", () => {
       expect(automation!.consecutive_failures).toBe(1);
     });
 
-    it("recovers timed-out running runs during sweep", async () => {
+    it("does not guess an outcome when a claimed session is missing", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(
         makeAutomation({ id: "auto-t2", next_run_at: now + 86400000, enabled: 1 })
       );
 
-      // Default EXECUTION_TIMEOUT_MS is 90 minutes
+      // Reconciliation begins after 90 minutes, but age alone is not a failure.
       const twoHoursAgo = now - 2 * 60 * 60 * 1000;
       await seedRun(
         makeRunRow("auto-t2", {
@@ -348,6 +348,7 @@ describe("Scheduler (integration)", () => {
           session_id: "sess-timeout",
           scheduled_at: twoHoursAgo,
           started_at: twoHoursAgo,
+          reconciliation_due_at: now - 1,
           created_at: twoHoursAgo,
         })
       );
@@ -356,8 +357,59 @@ describe("Scheduler (integration)", () => {
       expect(result).toEqual({ processed: 0, skipped: 0, failed: 0 });
 
       const run = await store.getRunById("auto-t2", "run-timeout-t2");
-      expect(run!.status).toBe("failed");
-      expect(run!.failure_reason).toBe("execution_timeout");
+      expect(run!.status).toBe("running");
+      expect(run!.failure_reason).toBeNull();
+      expect(run!.reconciliation_due_at).toBeGreaterThan(now);
+    });
+
+    it("does not fail a healthy run when reconciliation becomes due", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-reconcile-active" }));
+      await seedRun(
+        makeRunRow("auto-reconcile-active", {
+          id: "run-reconcile-active",
+          status: "running",
+          session_id: "session-active",
+          started_at: now - 2 * 60 * 60 * 1000,
+          reconciliation_due_at: now - 1,
+        })
+      );
+      const schedulerEnv = createCloudflareEnv(env);
+      schedulerEnv.SESSION = async () =>
+        Response.json({ state: "active", messageId: "message-active" });
+
+      await createScheduler(schedulerEnv).tick();
+
+      const run = await store.getRunById("auto-reconcile-active", "run-reconcile-active");
+      expect(run).toMatchObject({
+        status: "running",
+        failure_reason: null,
+      });
+      expect(run!.reconciliation_due_at).toBeGreaterThan(now);
+    });
+
+    it("recovers a missed successful callback from the durable message outcome", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-reconcile-complete" }));
+      await seedRun(
+        makeRunRow("auto-reconcile-complete", {
+          id: "run-reconcile-complete",
+          status: "running",
+          session_id: "session-complete",
+          started_at: now - 2 * 60 * 60 * 1000,
+          reconciliation_due_at: now - 1,
+        })
+      );
+      const schedulerEnv = createCloudflareEnv(env);
+      schedulerEnv.SESSION = async () =>
+        Response.json({ state: "completed", messageId: "message-complete", completedAt: 1234 });
+
+      await createScheduler(schedulerEnv).tick();
+
+      const run = await store.getRunById("auto-reconcile-complete", "run-reconcile-complete");
+      expect(run).toMatchObject({ status: "completed", completed_at: 1234 });
     });
 
     it("skips overdue automations with active runs (concurrency guard)", async () => {
@@ -836,6 +888,7 @@ describe("Scheduler (integration)", () => {
           scheduled_at: now,
           started_at: child.status === "starting" ? null : now,
           completed_at: child.status === "failed" || child.status === "completed" ? now : null,
+          reconciliation_due_at: child.status === "running" ? now : null,
           created_at: now + index,
           repo_owner: null,
           repo_name: null,

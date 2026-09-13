@@ -28,6 +28,7 @@ export const SessionInternalPaths = {
   events: "/internal/events",
   artifacts: "/internal/artifacts",
   messages: "/internal/messages",
+  automationRunOutcome: "/internal/automation-run-outcome",
   createPr: "/internal/create-pr",
   // Static path + artifactId query param: the router matches paths as exact
   // strings, so the artifact id cannot ride in the path.
@@ -56,6 +57,24 @@ export const SessionInternalPaths = {
   diffResolveFile: "/internal/diff-resolve-file",
   diffRetry: "/internal/diff-retry",
 } as const;
+
+export const automationRunOutcomeResponseSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("missing") }),
+  z.object({ state: z.literal("active"), messageId: z.string() }),
+  z.object({
+    state: z.literal("completed"),
+    messageId: z.string(),
+    completedAt: z.number(),
+  }),
+  z.object({
+    state: z.literal("failed"),
+    messageId: z.string(),
+    completedAt: z.number(),
+    error: z.string().nullable(),
+  }),
+]);
+
+export type AutomationRunOutcomeResponse = z.infer<typeof automationRunOutcomeResponseSchema>;
 
 export type SessionInternalPath = (typeof SessionInternalPaths)[keyof typeof SessionInternalPaths];
 

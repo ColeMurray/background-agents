@@ -44,6 +44,7 @@ function run(overrides?: Partial<AutomationRunRow>): AutomationRunRow {
     scheduled_at: 0,
     started_at: null,
     completed_at: null,
+    reconciliation_due_at: null,
     created_at: 0,
     repo_owner: "acme",
     repo_name: "web-app",
