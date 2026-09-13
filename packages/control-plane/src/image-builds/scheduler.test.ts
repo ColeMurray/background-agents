@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { SqlDatabase } from "../db/sql-database";
+import type { Job } from "../jobs";
+import { createTestEnv } from "../router.test-support";
 import type { SourceControlProvider } from "../source-control";
 import type { Env } from "../types";
 import type { ImageBuildScope } from "./model";
@@ -115,7 +117,7 @@ function harness(
     })
   );
   const scheduler = new ImageBuildScheduler(
-    options.env ?? ({} as Env),
+    options.env ?? createTestEnv(),
     {} as SqlDatabase,
     options.provider === undefined ? "modal" : options.provider,
     store as unknown as ImageBuildStore,
@@ -302,7 +304,7 @@ describe("ImageBuildScheduler", () => {
   it("republishes persisted artifacts left behind by exhausted Queue delivery", async () => {
     const send = vi.fn(async () => undefined);
     const { scheduler, listRecoverableFinalizations } = harness({
-      env: { JOBS: { send } } as unknown as Env,
+      env: createTestEnv({ JOBS: { send } }),
     });
     listRecoverableFinalizations.mockResolvedValue([
       {
@@ -322,11 +324,13 @@ describe("ImageBuildScheduler", () => {
   });
 
   it("republishes every recoverable finalization and contains a publish failure", async () => {
-    const send = vi.fn(async ({ payload }: { payload: { buildId: string } }) => {
-      if (payload.buildId === "build-05") throw new Error("queue unavailable");
+    const send = vi.fn(async (job: Job) => {
+      if (job.kind === "image_build.finalize" && job.payload.buildId === "build-05") {
+        throw new Error("queue unavailable");
+      }
     });
     const { scheduler, listRecoverableFinalizations } = harness({
-      env: { JOBS: { send } } as unknown as Env,
+      env: createTestEnv({ JOBS: { send } }),
     });
     const recoverable = Array.from({ length: 21 }, (_, index) => ({
       id: `build-${String(index + 1).padStart(2, "0")}`,

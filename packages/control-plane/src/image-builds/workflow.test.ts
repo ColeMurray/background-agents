@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageBuildStore } from "../db/image-builds";
+import type { Jobs } from "../jobs";
+import { createTestEnv } from "../router.test-support";
 import type { Env } from "../types";
 import {
   ImageBuildCallbackAuthRejectedError,
@@ -11,7 +13,6 @@ import {
 } from "./errors";
 import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import type { ImageBuildScope } from "./model";
-import type { Jobs } from "../jobs";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { ImageBuildPlan } from "./types";
 import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
@@ -25,12 +26,12 @@ const ENV_SCOPE: ImageBuildScope = { kind: "environment", id: "env_1" };
 const MODAL_CALLBACK_TOKEN = "modal-callback-token";
 
 function createEnv(overrides: Partial<Env> = {}): Env {
-  return {
+  return createTestEnv({
     DB: {} as D1Database,
     WORKER_URL: "https://worker.test",
     IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
     ...overrides,
-  } as Env;
+  });
 }
 
 function createStore() {
@@ -112,7 +113,7 @@ function createWorkflow(options: {
   createCallbackAuth?: ReturnType<typeof vi.fn>;
   env?: Env;
   provider?: "modal" | "vercel" | "opencomputer" | null;
-  jobs?: Jobs | null;
+  jobs?: Jobs;
 }) {
   const store = options.store ?? createStore();
   const adapter = options.adapter ?? createAdapter();
@@ -296,19 +297,6 @@ describe("ImageBuildWorkflow", () => {
       ).rejects.toBeInstanceOf(ImageBuildScopeNotFoundError);
       expect(store.registerBuild).not.toHaveBeenCalled();
     });
-
-    it.each(["triggerBuild", "triggerBuildIfStale"] as const)(
-      "rejects %s before registration or provider work when jobs are unavailable",
-      async (method) => {
-        const { workflow, store, adapter, planBuild } = createWorkflow({ jobs: null });
-        await expect(workflow[method](ENV_SCOPE, ctx)).rejects.toThrow(
-          "Background jobs are not available on this host"
-        );
-        expect(store.registerBuild).not.toHaveBeenCalled();
-        expect(planBuild).not.toHaveBeenCalled();
-        expect(adapter.startBuild).not.toHaveBeenCalled();
-      }
-    );
 
     it("registers the build row before secrets are read (§7.4 supersede window)", async () => {
       const { workflow, store, planBuild } = createWorkflow({});
