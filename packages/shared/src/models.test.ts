@@ -6,6 +6,7 @@ import {
   MODEL_OPTIONS,
   MODEL_REASONING_CONFIG,
   VALID_MODELS,
+  applyModelPreferenceChanges,
   extractProviderAndModel,
   getSubscriptionProviderForModel,
   getDefaultReasoningEffort,
@@ -144,6 +145,28 @@ describe("model utilities", () => {
     ).toEqual(["openai/gpt-5.4", "openai/gpt-5.3-codex", "anthropic/claude-sonnet-4-6"]);
     expect(normalizeValidModels(["openai/gpt-5.2", "unknown/model"])).toEqual([]);
     expect(normalizeValidModels([])).toEqual([]);
+  });
+
+  it("applies model preference changes as an ordered set", () => {
+    expect(
+      applyModelPreferenceChanges(
+        ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+        [
+          { modelId: "openai/gpt-5.4", enabled: false },
+          { modelId: "anthropic/claude-haiku-4-5", enabled: true },
+          { modelId: "openai/gpt-5.4", enabled: true },
+        ]
+      )
+    ).toEqual(["anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5", "openai/gpt-5.4"]);
+  });
+
+  it("keeps enabled no-op changes in their existing position", () => {
+    expect(
+      applyModelPreferenceChanges(
+        ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+        [{ modelId: "openai/gpt-5.4", enabled: true }]
+      )
+    ).toEqual(["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"]);
   });
 
   it("resolves models using the shared enabled-model fallback policy", () => {

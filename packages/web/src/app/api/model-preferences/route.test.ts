@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import { GET, PUT } from "./route";
+import { GET, PATCH, PUT } from "./route";
 
 vi.mock("@/lib/control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
@@ -23,8 +23,10 @@ describe("/api/model-preferences", () => {
     await expect(response.json()).resolves.toEqual({ defaultModel: "anthropic/claude-sonnet-5" });
   });
 
-  it("forwards a preferences update with the browser session", async () => {
-    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ ok: true }));
+  it("relays the legacy PUT rejection", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Use PATCH" }, { status: 405 })
+    );
     const request = new NextRequest("http://localhost/api/model-preferences", {
       method: "PUT",
       headers: { Cookie: "__Secure-openinspect.session_token=session.signature" },
@@ -37,7 +39,27 @@ describe("/api/model-preferences", () => {
       method: "PUT",
       body: JSON.stringify({ defaultModel: "anthropic/claude-opus-5" }),
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(405);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
+  it("forwards atomic preference changes", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ ok: true }));
+    const body = JSON.stringify({
+      changes: [{ modelId: "anthropic/claude-haiku-4-5", enabled: true }],
+    });
+    const request = new NextRequest("http://localhost/api/model-preferences", {
+      method: "PATCH",
+      headers: { Cookie: "__Secure-openinspect.session_token=session.signature" },
+      body,
+    });
+
+    const response = await PATCH(request, context);
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/model-preferences", {
+      method: "PATCH",
+      body,
+    });
+    expect(response.status).toBe(200);
   });
 });
