@@ -385,6 +385,12 @@ export class SessionMessageQueue {
       return;
     }
 
+    const initialControlSocket = this.wsManager.getSandboxSocket();
+    if (initialControlSocket && !this.wsManager.getExecutionSocket()) {
+      this.log.debug("processMessageQueue: sandbox execution not ready");
+      return;
+    }
+
     const message = this.messageRepository.getNextPendingMessage();
     if (!message) {
       return;
@@ -413,8 +419,8 @@ export class SessionMessageQueue {
       }
       return;
     }
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (!sandboxWs) {
+    const controlSocket = this.wsManager.getSandboxSocket();
+    if (!controlSocket) {
       // The provider-auth lookup above is a non-storage await. The socket
       // path re-validates through the processing claim; this path has no
       // claim, so it re-reads what it acts on: a cancel or archive that
@@ -432,6 +438,10 @@ export class SessionMessageQueue {
           reason: "superseded_during_auth",
         });
         await this.processMessageQueue();
+        return;
+      }
+      if (this.sandboxLifecycle.isSnapshotting()) {
+        this.log.debug("processMessageQueue: sandbox snapshot in progress");
         return;
       }
       this.log.info("prompt.dispatch", {
@@ -462,6 +472,11 @@ export class SessionMessageQueue {
           context: { message_id: message.id },
         }
       );
+      return;
+    }
+    const sandboxWs = this.wsManager.getExecutionSocket();
+    if (!sandboxWs) {
+      this.log.debug("processMessageQueue: sandbox execution not ready");
       return;
     }
 

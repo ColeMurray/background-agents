@@ -9,10 +9,13 @@ import {
   queryDO,
   seedSandboxAuth,
   serviceFetch,
+  waitForSandboxStatus,
 } from "./helpers";
 
 async function reportReady(
   stub: DurableObjectStub,
+  sessionName: string,
+  auth: { authToken: string; sandboxId: string },
   repositories: Array<{
     position: number;
     repoOwner: string;
@@ -20,17 +23,19 @@ async function reportReady(
     baseSha: string;
   }>
 ): Promise<void> {
-  const response = await stub.fetch("http://internal/internal/sandbox-event", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const { ws } = await openSandboxWs(sessionName, auth);
+  expect(ws).not.toBeNull();
+  ws!.accept();
+  ws!.send(
+    JSON.stringify({
       type: "ready",
-      sandboxId: "sandbox-diff",
+      sandboxId: auth.sandboxId,
       timestamp: 100,
       repositories,
-    }),
-  });
-  expect(response.status).toBe(200);
+    })
+  );
+  await waitForSandboxStatus(stub, "ready");
+  ws!.close();
 }
 
 function bundle(baseSha: string, patch = "diff --git a/src/app.ts b/src/app.ts\n") {
@@ -98,12 +103,15 @@ describe("session diff routes", () => {
   it("requires the current sandbox token for writes", async () => {
     const sessionName = `diff-auth-${Date.now()}`;
     const { stub } = await initNamedSession(sessionName);
-    await seedSandboxAuth(stub, {
+    const auth = {
       authToken: "current-diff-token",
       sandboxId: "current-diff-sandbox",
-    });
+    };
+    await seedSandboxAuth(stub, auth);
     const baseSha = "a".repeat(40);
-    await reportReady(stub, [{ position: 0, repoOwner: "acme", repoName: "web-app", baseSha }]);
+    await reportReady(stub, sessionName, auth, [
+      { position: 0, repoOwner: "acme", repoName: "web-app", baseSha },
+    ]);
 
     const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/diff`, {
       method: "PUT",
@@ -166,7 +174,9 @@ describe("session diff routes", () => {
     await seedSandboxAuth(stub, auth);
     const baseSha = "a".repeat(40);
     const patch = "diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n";
-    await reportReady(stub, [{ position: 0, repoOwner: "acme", repoName: "web-app", baseSha }]);
+    await reportReady(stub, sessionName, auth, [
+      { position: 0, repoOwner: "acme", repoName: "web-app", baseSha },
+    ]);
 
     const upload = await SELF.fetch(`https://test.local/sessions/${sessionName}/diff`, {
       method: "PUT",
@@ -224,7 +234,9 @@ describe("session diff routes", () => {
     const auth = { authToken: "diff-failure-token", sandboxId: "sandbox-failure" };
     await seedSandboxAuth(stub, auth);
     const baseSha = "c".repeat(40);
-    await reportReady(stub, [{ position: 0, repoOwner: "acme", repoName: "web-app", baseSha }]);
+    await reportReady(stub, sessionName, auth, [
+      { position: 0, repoOwner: "acme", repoName: "web-app", baseSha },
+    ]);
     const headers = {
       Authorization: `Bearer ${auth.authToken}`,
       "Content-Type": "application/json",
@@ -259,7 +271,9 @@ describe("session diff routes", () => {
     const auth = { authToken: "diff-membership-token", sandboxId: "sandbox-membership" };
     await seedSandboxAuth(stub, auth);
     const baseSha = "d".repeat(40);
-    await reportReady(stub, [{ position: 0, repoOwner: "acme", repoName: "web-app", baseSha }]);
+    await reportReady(stub, sessionName, auth, [
+      { position: 0, repoOwner: "acme", repoName: "web-app", baseSha },
+    ]);
     const headers = {
       Authorization: `Bearer ${auth.authToken}`,
       "Content-Type": "application/json",
@@ -290,7 +304,7 @@ describe("session diff routes", () => {
     await seedSandboxAuth(stub, auth);
     const firstSha = "1".repeat(40);
     const secondSha = "2".repeat(40);
-    await reportReady(stub, [
+    await reportReady(stub, sessionName, auth, [
       { position: 0, repoOwner: "acme", repoName: "web-app", baseSha: firstSha },
       { position: 1, repoOwner: "group/subgroup", repoName: "api", baseSha: secondSha },
     ]);
@@ -333,6 +347,14 @@ describe("session diff routes", () => {
     const { ws } = await openSandboxWs(sessionName, auth);
     expect(ws).not.toBeNull();
     ws!.accept();
+    ws!.send(
+      JSON.stringify({
+        type: "ready",
+        sandboxId: auth.sandboxId,
+        timestamp: Date.now() / 1000,
+      })
+    );
+    await waitForSandboxStatus(stub, "ready");
     const messages = collectMessages(ws!, {
       until: (message) => message.type === "refresh_diff",
       timeoutMs: 2_000,

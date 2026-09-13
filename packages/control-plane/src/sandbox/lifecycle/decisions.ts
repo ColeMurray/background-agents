@@ -146,6 +146,8 @@ export interface SandboxState {
   status: SandboxStatus;
   /** When the sandbox was created/spawned */
   createdAt: number;
+  /** Last server-received runtime liveness report during startup. */
+  lastHeartbeat?: number | null;
   /** Provider object ID if the sandbox exists remotely */
   providerObjectId?: string | null;
   /** Snapshot image ID if available for restore */
@@ -336,11 +338,17 @@ export function evaluateSpawnDecision(
   // "connecting" forever — the connecting-timeout alarm may never have been
   // scheduled. Treat a stale spawn/connect as dead so a fresh spawn can recover
   // the session, instead of skipping indefinitely.
-  if (
-    (state.status === "spawning" || state.status === "connecting") &&
-    timeSinceLastSpawn < config.spawningTimeoutMs
-  ) {
-    return { action: "skip", reason: `already ${state.status}` };
+  if (state.status === "spawning" || state.status === "connecting") {
+    const startup = evaluateConnectingTimeout(
+      state.status,
+      state.createdAt,
+      state.lastHeartbeat ?? null,
+      { timeoutMs: config.spawningTimeoutMs },
+      now
+    );
+    if (!startup.isTimedOut) {
+      return { action: "skip", reason: `already ${state.status}` };
+    }
   }
 
   // Don't spawn if status is "ready" and we have an active WebSocket
@@ -566,7 +574,7 @@ export function evaluateHeartbeatHealth(
  * Configuration for the initial-connect watchdog.
  */
 export interface ConnectingTimeoutConfig {
-  /** Maximum time in ms a sandbox can stay in "connecting" before being failed */
+  /** Maximum gap without startup liveness. */
   timeoutMs: number;
 }
 
@@ -584,8 +592,12 @@ export const DEFAULT_CONNECTING_TIMEOUT_CONFIG: ConnectingTimeoutConfig = {
 export interface ConnectingTimeoutResult {
   /** Whether the sandbox has exceeded the connecting timeout */
   isTimedOut: boolean;
-  /** Time elapsed since sandbox was created (ms) */
+  /** Time elapsed since the latest startup liveness signal. */
   elapsedMs: number;
+  /** Timestamp from which the active timeout window is measured. */
+  livenessAt: number;
+  /** Next timestamp at which startup should be evaluated. */
+  deadlineAt: number;
 }
 
 /**
@@ -605,24 +617,29 @@ export interface ConnectingTimeoutResult {
  *
  * @param status - Current sandbox status
  * @param createdAt - Timestamp (ms) when the sandbox was spawned
+ * @param lastHeartbeat - Latest authenticated startup heartbeat receipt time
  * @param config - Connecting timeout configuration
  * @param now - Current timestamp (ms)
- * @returns Whether the sandbox has timed out and how long it's been spawning/connecting
+ * @returns Current timeout state and deadline
  */
 export function evaluateConnectingTimeout(
   status: SandboxStatus,
   createdAt: number,
+  lastHeartbeat: number | null,
   config: ConnectingTimeoutConfig,
   now: number
 ): ConnectingTimeoutResult {
   if (status !== "connecting" && status !== "spawning") {
-    return { isTimedOut: false, elapsedMs: 0 };
+    return { isTimedOut: false, elapsedMs: 0, livenessAt: createdAt, deadlineAt: createdAt };
   }
 
-  const elapsedMs = now - createdAt;
+  const livenessAt = Math.max(createdAt, lastHeartbeat ?? 0);
+  const elapsedMs = now - livenessAt;
   return {
     isTimedOut: elapsedMs >= config.timeoutMs,
     elapsedMs,
+    livenessAt,
+    deadlineAt: livenessAt + config.timeoutMs,
   };
 }
 

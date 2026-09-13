@@ -509,7 +509,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     recordTerminalMessage,
     statusService,
-    (reason) => lifecycleManager.triggerSnapshot(reason),
+    (reason) => lifecycleManager.triggerSnapshot(reason, () => messageQueue.processMessageQueue()),
     updateLastActivity,
     () => lifecycleManager.scheduleInactivityCheck(),
     () => messageQueue.processMessageQueue(),
@@ -526,6 +526,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     eventRepository,
     messenger,
     diffService,
+    wsManager,
     (title, options) => titleService.applySessionTitleUpdate(title, options),
     updateLastActivity,
     (messageId, timestamp) =>
@@ -533,6 +534,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         name: "callback.refresh_slack_activity",
         context: { message_id: messageId },
       }),
+    () => lifecycleManager.scheduleInactivityCheck(),
+    () => messageQueue.processMessageQueue(),
+    () => lifecycleManager.isProviderStartupPending(),
+    () => lifecycleManager.scheduleDisconnectCheck(),
     log
   );
   const pushService = new SandboxPushService(log, wsManager);
@@ -745,9 +750,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionCoreRepository,
     sandboxRepository,
     lifecycleManager,
-    messenger,
     backgroundTasks,
-    messageQueue,
     participantService,
     presenceService,
     snapshotReader,
@@ -863,7 +866,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       log,
       sockets,
       clientCommands,
-      processSandboxEvent: (event) => sandboxEventProcessor.processSandboxEvent(event),
+      processSandboxEvent: (event, sender) =>
+        sandboxEventProcessor.processSandboxEvent(event, sender),
       clock,
     }),
     disconnects: new SessionDisconnectHandler({
@@ -1002,6 +1006,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const config = {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl,
+    earlySandboxConnection: env.EARLY_SANDBOX_CONNECTION === "1",
     model: DEFAULT_MODEL,
     // Re-derived per use until the session row exists: on the first-ever
     // activation the manager is built during the init request, before the row

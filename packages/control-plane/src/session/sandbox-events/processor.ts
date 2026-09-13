@@ -1,5 +1,6 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
+import type { SessionWebSocket } from "../../platform-ports";
 import type { MessageRepository } from "../message-repository";
 import type { SandboxPushService } from "../sandbox-push-service";
 import type { SessionWebSocketManager } from "../websocket-manager";
@@ -39,7 +40,10 @@ export class SessionSandboxEventProcessor {
     private readonly pushService: SandboxPushService
   ) {}
 
-  async processSandboxEvent(event: SandboxEventWithAck): Promise<void> {
+  async processSandboxEvent(
+    event: SandboxEventWithAck,
+    sender: SessionWebSocket | null = null
+  ): Promise<void> {
     if (event.type === "heartbeat" || event.type === "token") {
       this.log.debug("Sandbox event", { event_type: event.type });
     } else if (event.type !== "execution_complete") {
@@ -53,25 +57,26 @@ export class SessionSandboxEventProcessor {
       now,
       messageId: eventMessageId ?? processingMessage?.id ?? null,
       processingMessage,
+      sender,
     };
 
     await this.dispatch(event, context);
 
     if (CRITICAL_EVENT_TYPES.has(event.type)) {
-      this.sendAck(event.ackId);
+      if (sender) this.sendAck(sender, event.ackId);
     }
   }
 
   private async dispatch(event: SandboxEvent, context: SandboxEventContext): Promise<void> {
     switch (event.type) {
       case "heartbeat":
-        this.runtime.handleHeartbeat(context);
+        this.runtime.handleHeartbeat(event, context);
         return;
       case "session_title":
         this.runtime.handleSessionTitle(event);
         return;
       case "ready":
-        this.runtime.handleReady(event, context);
+        await this.runtime.handleReady(event, context);
         return;
       case "git_sync":
         this.runtime.handleGitSync(event, context);
@@ -122,13 +127,10 @@ export class SessionSandboxEventProcessor {
     }
   }
 
-  private sendAck(ackId: string | undefined): void {
+  private sendAck(sender: SessionWebSocket, ackId: string | undefined): void {
     if (!ackId) return;
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (sandboxWs) {
-      this.wsManager.send(sandboxWs, { type: "ack", ackId });
-    } else {
-      this.log.debug("Cannot send ACK: no sandbox socket", { ack_id: ackId });
+    if (!this.wsManager.send(sender, { type: "ack", ackId })) {
+      this.log.debug("Cannot send ACK: sender unavailable", { ack_id: ackId });
     }
   }
 }

@@ -21,8 +21,6 @@ import { requestLogger } from "./request-logger";
 import { resolveParticipantName } from "./participant-name";
 import { getAvatarUrl, type ParticipantService } from "./participant-service";
 import type { PresenceService } from "./presence-service";
-import type { SessionMessageQueue } from "./message-queue";
-import type { SessionMessenger } from "./messenger";
 import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionSnapshotReader } from "./snapshot-reader";
@@ -43,9 +41,7 @@ export interface SessionConnectionAuthenticatorDeps {
   sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxRepository;
   lifecycleManager: SandboxLifecycleManager;
-  messenger: SessionMessenger;
   backgroundTasks: BackgroundTasks;
-  messageQueue: Pick<SessionMessageQueue, "processMessageQueue">;
   participantService: ParticipantService;
   presenceService: PresenceService;
   snapshotReader: SessionSnapshotReader;
@@ -121,7 +117,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     const expectedSandboxId = sandbox?.modal_sandbox_id;
 
     // Validate sandbox ID first (catches stale sandboxes reconnecting after restore)
-    if (expectedSandboxId && sandboxId !== expectedSandboxId) {
+    if (!expectedSandboxId || sandboxId !== expectedSandboxId) {
       log.warn("ws.connect", {
         event: "ws.connect",
         ws_type: "sandbox",
@@ -182,11 +178,31 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       });
       return reject("Sandbox is stopped", 410);
     }
+    if (currentSandbox?.status === "snapshotting") {
+      log.info("ws.connect", {
+        event: "ws.connect",
+        ws_type: "sandbox",
+        outcome: "rejected",
+        reject_reason: "sandbox_snapshotting",
+        duration_ms: Date.now() - wsStartTime,
+      });
+      return {
+        kind: "reject",
+        response: new Response("Sandbox snapshot is in progress", {
+          status: 503,
+          headers: { "Retry-After": "1" },
+        }),
+      };
+    }
     if (
       currentSandbox?.modal_sandbox_id !== expectedSandboxId ||
       currentSandbox?.auth_token_hash !== sandbox?.auth_token_hash ||
       currentSandbox?.auth_token !== sandbox?.auth_token
     ) {
+      return reject("Forbidden: Sandbox credentials changed", 403);
+    }
+
+    if (!(await this.deps.lifecycleManager.recordStartupHeartbeat(sandboxId, Date.now()))) {
       return reject("Forbidden: Sandbox credentials changed", 403);
     }
 
@@ -203,42 +219,17 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     });
   }
 
-  /**
-   * Prepare, then commit. The inactivity alarm is the one fallible step, so
-   * it runs first: a failure leaves the previous bridge in place and nothing
-   * published. Everything after the await is synchronous, so the new socket,
-   * the ready status, and the broadcasts land together.
-   */
+  /** Adopt an authenticated sandbox control socket without granting execution readiness. */
   private async attachSandbox(
     ws: SessionWebSocket,
     sandboxId: string | null,
     log: Logger
   ): Promise<void> {
-    const {
-      wsManager,
-      sandboxRepository,
-      lifecycleManager,
-      messenger,
-      backgroundTasks,
-      messageQueue,
-    } = this.deps;
+    const { wsManager, lifecycleManager } = this.deps;
 
     const now = Date.now();
-    lifecycleManager.updateLastActivity(now);
-    sandboxRepository.updateSandboxHeartbeat(now);
-    await lifecycleManager.scheduleInactivityCheck();
-
-    // The lifecycle manager publishes access after any pending provider
-    // startup has persisted its URLs and credentials.
-    const accessIsPersisted = !lifecycleManager.isProviderStartupPending();
     const { replaced } = wsManager.acceptAndSetSandboxSocket(ws, sandboxId ?? undefined);
-    // Notify manager that sandbox connected so it can reset the spawning flag
     lifecycleManager.onSandboxConnected();
-    sandboxRepository.updateSandboxStatus("ready");
-    messenger.broadcast({ type: "sandbox_status", status: "ready" });
-    if (accessIsPersisted) {
-      messenger.broadcast({ type: "sandbox_access_changed" });
-    }
 
     log.info("ws.connect", {
       event: "ws.connect",
@@ -247,11 +238,6 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       sandbox_id: sandboxId,
       replaced_existing: replaced,
       duration_ms: Date.now() - now,
-    });
-
-    // Process any pending messages now that sandbox is connected
-    backgroundTasks.submit(() => messageQueue.processMessageQueue(), {
-      name: "message_queue.process",
     });
   }
 

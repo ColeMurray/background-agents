@@ -106,7 +106,6 @@ describe("session runtime proxy routes", () => {
     vi.clearAllMocks();
     authenticateAs(USER);
   });
-
   it.each([
     { method: "GET", path: "/sessions/session-1/sandbox-access", internal: "sandboxAccess" },
     { method: "GET", path: "/sessions/session-1", internal: "snapshot", status: 502 },

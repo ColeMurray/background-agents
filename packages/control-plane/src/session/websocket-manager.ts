@@ -61,6 +61,9 @@ export interface SessionWebSocketManager {
    */
   getSandboxSocket(): SessionWebSocket | null;
 
+  getExecutionSocket(): SessionWebSocket | null;
+  isCurrentSandboxSocket(ws: SessionWebSocket, sandboxId: string): boolean;
+
   /** Clear the in-memory sandbox socket reference. */
   clearSandboxSocket(): void;
 
@@ -230,7 +233,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     // After inactivity timeout or heartbeat stale, the DO closes the WS and sets
     // status to stopped/stale, but the close handshake may not complete before
     // hibernation. On wake, the zombie WS still appears OPEN — skip it.
-    const terminalStatuses = ["stopped", "failed", "stale"];
+    const terminalStatuses = ["stopped", "stale"];
     if (sandbox && terminalStatuses.includes(sandbox.status)) {
       this.sandboxWs = null;
       // Close any lingering sandbox WebSockets so they don't persist
@@ -275,6 +278,21 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     }
 
     return null;
+  }
+
+  getExecutionSocket(): SessionWebSocket | null {
+    return this.sandboxRepository.getSandbox()?.status === "ready" ? this.getSandboxSocket() : null;
+  }
+
+  isCurrentSandboxSocket(ws: SessionWebSocket, sandboxId: string): boolean {
+    const sandbox = this.sandboxRepository.getSandbox();
+    const parsed = this.classify(ws);
+    return (
+      this.isActiveSandboxSocket(ws) &&
+      parsed.kind === "sandbox" &&
+      parsed.sandboxId === sandboxId &&
+      sandbox?.modal_sandbox_id === sandboxId
+    );
   }
 
   clearSandboxSocket(): void {

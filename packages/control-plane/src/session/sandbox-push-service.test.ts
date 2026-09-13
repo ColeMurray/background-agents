@@ -18,7 +18,8 @@ function createPushSpec(repoOwner: string, repoName: string, targetBranch: strin
 function createService() {
   const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
   const wsManager = {
-    getSandboxSocket: vi.fn(() => sandboxWs),
+    getSandboxSocket: vi.fn<() => WebSocket | null>(() => sandboxWs),
+    getExecutionSocket: vi.fn<() => WebSocket | null>(() => sandboxWs),
     send: vi.fn(() => true),
   };
   const log = {
@@ -33,6 +34,19 @@ function createService() {
 }
 
 describe("SandboxPushService", () => {
+  it("rejects a push while the sandbox is connected but not execution-ready", async () => {
+    const h = createService();
+    h.wsManager.getExecutionSocket.mockReturnValue(null);
+
+    await expect(
+      h.service.pushBranchToRemote(createPushSpec("acme", "web", "feature/test"))
+    ).resolves.toEqual({
+      success: false,
+      error: "Sandbox is not ready to push branches",
+    });
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+  });
+
   it("fails a push immediately when the command cannot be delivered", async () => {
     vi.useFakeTimers();
     try {

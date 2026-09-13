@@ -1,5 +1,6 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { generateId } from "../../auth/crypto";
+import type { SessionWebSocket } from "../../platform-ports";
 import type { EventRepository } from "../event-repository";
 
 /**
@@ -15,6 +16,7 @@ export interface SandboxEventContext {
   messageId: string | null;
   /** The processing message as of event arrival (single DO turn — stable). */
   processingMessage: { id: string } | null;
+  sender: SessionWebSocket | null;
 }
 
 /**

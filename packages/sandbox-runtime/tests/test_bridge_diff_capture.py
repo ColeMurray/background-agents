@@ -18,12 +18,14 @@ from sandbox_runtime.repo_config import RepoEntry, dump_repo_manifest
 
 
 def _bridge() -> AgentBridge:
-    return AgentBridge(
+    bridge = AgentBridge(
         sandbox_id="sandbox-1",
         session_id="session-1",
         control_plane_url="https://control.example.com",
         auth_token="sandbox-token",
     )
+    bridge._connection_ready_event.set()
+    return bridge
 
 
 def _manifest(tmp_path: Path) -> Path:

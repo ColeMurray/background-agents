@@ -289,7 +289,7 @@ describe("evaluateSpawnDecision", () => {
     expect(decision.action).toBe("skip");
   });
 
-  it('returns "spawn" when stuck in "spawning" past the spawning timeout (recovers interrupted spawn)', () => {
+  it('returns "spawn" when stuck in "spawning" past the spawning timeout', () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "spawning",
@@ -848,7 +848,7 @@ describe("evaluateConnectingTimeout", () => {
 
   it("returns not timed out for non-connecting status", () => {
     const now = Date.now();
-    const result = evaluateConnectingTimeout("ready", now - 200_000, config, now);
+    const result = evaluateConnectingTimeout("ready", now - 200_000, null, config, now);
 
     expect(result.isTimedOut).toBe(false);
     expect(result.elapsedMs).toBe(0);
@@ -859,7 +859,7 @@ describe("evaluateConnectingTimeout", () => {
     const elapsed = config.timeoutMs / 2; // comfortably inside the window
     const createdAt = now - elapsed;
 
-    const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
+    const result = evaluateConnectingTimeout("connecting", createdAt, null, config, now);
 
     expect(result.isTimedOut).toBe(false);
     expect(result.elapsedMs).toBe(elapsed);
@@ -870,7 +870,7 @@ describe("evaluateConnectingTimeout", () => {
     const elapsed = config.timeoutMs + 10_000; // past the window
     const createdAt = now - elapsed;
 
-    const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
+    const result = evaluateConnectingTimeout("connecting", createdAt, null, config, now);
 
     expect(result.isTimedOut).toBe(true);
     expect(result.elapsedMs).toBe(elapsed);
@@ -880,28 +880,50 @@ describe("evaluateConnectingTimeout", () => {
     const now = Date.now();
     const createdAt = now - config.timeoutMs; // Exactly at timeout
 
-    const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
+    const result = evaluateConnectingTimeout("connecting", createdAt, null, config, now);
 
     expect(result.isTimedOut).toBe(true);
     expect(result.elapsedMs).toBe(config.timeoutMs);
   });
 
-  it("returns timed out when stuck in spawning past timeout (interrupted spawn)", () => {
+  it("uses the existing timeout when no heartbeat has arrived", () => {
     const now = Date.now();
     const elapsed = config.timeoutMs + 10_000; // past the window
     const createdAt = now - elapsed;
 
-    const result = evaluateConnectingTimeout("spawning", createdAt, config, now);
+    const result = evaluateConnectingTimeout("spawning", createdAt, null, config, now);
 
     expect(result.isTimedOut).toBe(true);
     expect(result.elapsedMs).toBe(elapsed);
+    expect(result.livenessAt).toBe(createdAt);
   });
 
-  it("returns not timed out for spawning within timeout window", () => {
+  it("extends boot indefinitely while authenticated heartbeats remain recent", () => {
     const now = Date.now();
-    const result = evaluateConnectingTimeout("spawning", now - 60_000, config, now);
+    const createdAt = now - 60 * 60_000;
+    const lastHeartbeat = now - 30_000;
+
+    const result = evaluateConnectingTimeout("connecting", createdAt, lastHeartbeat, config, now);
 
     expect(result.isTimedOut).toBe(false);
+    expect(result.livenessAt).toBe(lastHeartbeat);
+    expect(result.deadlineAt).toBe(lastHeartbeat + config.timeoutMs);
+  });
+
+  it("times out when boot heartbeats become stale", () => {
+    const now = Date.now();
+    const lastHeartbeat = now - config.timeoutMs;
+
+    const result = evaluateConnectingTimeout(
+      "connecting",
+      now - 600_000,
+      lastHeartbeat,
+      config,
+      now
+    );
+
+    expect(result.isTimedOut).toBe(true);
+    expect(result.livenessAt).toBe(lastHeartbeat);
   });
 
   it("ignores all non-spawning/connecting statuses", () => {
@@ -909,7 +931,7 @@ describe("evaluateConnectingTimeout", () => {
     const old = now - 999_999;
 
     for (const status of ["pending", "ready", "stopped", "failed", "stale"] as const) {
-      const result = evaluateConnectingTimeout(status, old, config, now);
+      const result = evaluateConnectingTimeout(status, old, null, config, now);
       expect(result.isTimedOut).toBe(false);
     }
   });
@@ -945,6 +967,7 @@ describe("connect watchdog and spawn staleness defaults", () => {
       evaluateConnectingTimeout(
         "connecting",
         state.createdAt,
+        null,
         DEFAULT_CONNECTING_TIMEOUT_CONFIG,
         now
       ).isTimedOut
