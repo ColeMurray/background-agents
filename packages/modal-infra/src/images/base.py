@@ -23,8 +23,7 @@ def local_image_plan() -> tuple[Path, dict[str, Any]]:
     from sandbox_images.bundle import pack_bundle
 
     bundle = pack_bundle(root, "modal", root / ".cache/sandbox-images")
-    plan = json.loads((bundle / "build-config.json").read_text())
-    return bundle, plan
+    return bundle.directory, bundle.plan
 
 
 def image_reference_path() -> Path:
