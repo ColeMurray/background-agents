@@ -1,19 +1,18 @@
 import {
+  MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS,
+  MAX_GITHUB_AUTOFIX_PROMPT_BYTES,
+  MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS,
   githubAutofixSessionResponseSchema,
   type GitHubAutofixEnvelope,
   type GitHubAutofixSessionCommand,
   type ResolvedGitHubAutofixSettings,
 } from "@open-inspect/shared";
-import {
-  MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS,
-  type GitHubPullRequestFeedback,
-  type GetGitHubPullRequestFeedbackConfig,
+import type {
+  GitHubPullRequestFeedback,
+  GetGitHubPullRequestFeedbackConfig,
 } from "../source-control/providers/github-provider";
 import { SourceControlProviderError } from "../source-control/errors";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
-
-const MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS = 4_000;
-const MAX_GITHUB_AUTOFIX_PROMPT_BYTES = 200_000;
 
 interface FeedbackReceipt {
   feedbackKey: string;
@@ -152,8 +151,13 @@ function buildPrompt(feedback: GitHubPullRequestFeedback): string {
             path: comment.path,
             line: comment.line,
             startLine: comment.startLine,
+            originalLine: comment.originalLine ?? null,
+            originalStartLine: comment.originalStartLine ?? null,
+            side: comment.side,
+            startSide: comment.startSide,
             body: comment.body,
             diffHunk: comment.diffHunk.slice(0, MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS),
+            diffHunkTruncated: comment.diffHunk.length > MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS,
           })),
         };
   const serializedPayload = JSON.stringify(payload, null, 2)

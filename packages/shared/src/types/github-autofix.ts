@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { githubAutofixAttemptLimitSchema } from "./integrations";
 
+export const MAX_GITHUB_AUTOFIX_PROMPT_BYTES = 200_000;
+export const MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS = 100;
+export const MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS = 4_000;
+
 const repositorySchema = z.object({
   id: z.string().min(1),
   owner: z.string().min(1),

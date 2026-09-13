@@ -25,6 +25,9 @@ export type {
 } from "./session-attachments";
 
 export {
+  MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS,
+  MAX_GITHUB_AUTOFIX_PROMPT_BYTES,
+  MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS,
   githubAutofixEnvelopeSchema,
   githubAutofixOriginSchema,
   githubAutofixSessionCommandSchema,

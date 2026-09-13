@@ -87,6 +87,198 @@ describe("user message authors", () => {
     );
   });
 
+  it("renders validated Autofix review data instead of the raw agent prompt", () => {
+    const feedback = JSON.stringify({
+      url: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+      body: "### Summary\nPlease preserve the retry behavior.",
+      comments: [
+        {
+          url: "https://github.com/acme/widgets/pull/42#discussion_r1",
+          path: "src/retry.ts",
+          line: 42,
+          startLine: null,
+          body: "Keep this retry atomic.",
+          diffHunk: "@@ -42 +42 @@\n-old\n+new",
+        },
+      ],
+    });
+    render(
+      <EventItem
+        event={{
+          ...event("user-2"),
+          content: `Address the following pull request feedback.\n\n<github_feedback_data>\n\n${feedback}\n\n</github_feedback_data>`,
+          origin: {
+            kind: "review",
+            authorType: "bot",
+            feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+          },
+        }}
+        sessionId="session-1"
+        currentParticipantId="participant-1"
+        participantProfiles={{}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "Pull request review" })).toBeInTheDocument();
+    expect(screen.getByText("Please preserve the retry behavior.")).toBeInTheDocument();
+    expect(screen.queryByText("Address the following pull request feedback.")).toBeNull();
+  });
+
+  it("copies rendered Autofix Markdown instead of the hidden agent prompt", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const secureContextDescriptor = Object.getOwnPropertyDescriptor(window, "isSecureContext");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
+    const feedback = JSON.stringify({
+      url: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+      body: "Review body",
+      comments: [
+        {
+          url: "https://github.com/acme/widgets/pull/42#discussion_r1",
+          path: "src/retry.ts",
+          line: 42,
+          startLine: null,
+          body: "Inline body",
+          diffHunk: "@@ -42 +42 @@",
+        },
+      ],
+    });
+    const prComment = JSON.stringify({
+      url: "https://github.com/acme/widgets/pull/42#issuecomment-1",
+      body: "Pull request comment body",
+    });
+
+    try {
+      render(
+        <>
+          <EventItem
+            event={{
+              ...event("user-2"),
+              content: `Hidden agent instructions.\n\n<github_feedback_data>\n\n${feedback}\n\n</github_feedback_data>`,
+              origin: {
+                kind: "review",
+                authorType: "bot",
+                feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+              },
+            }}
+            sessionId="session-1"
+            currentParticipantId="participant-1"
+            participantProfiles={{}}
+            onOpenMedia={() => {}}
+          />
+          <EventItem
+            event={{
+              ...event("user-3"),
+              messageId: "message-2",
+              content: `Hidden agent instructions.\n\n<github_feedback_data>\n\n${prComment}\n\n</github_feedback_data>`,
+              origin: {
+                kind: "pr_comment",
+                authorType: "human",
+                feedbackUrl: "https://github.com/acme/widgets/pull/42#issuecomment-1",
+              },
+            }}
+            sessionId="session-1"
+            currentParticipantId="participant-1"
+            participantProfiles={{}}
+            onOpenMedia={() => {}}
+          />
+        </>
+      );
+
+      const copyButtons = screen.getAllByRole("button", { name: "Copy markdown" });
+      await userEvent.click(copyButtons[0]);
+      expect(writeText).toHaveBeenCalledWith(
+        'Review body\n\n---\n\n### `"src/retry.ts"` L42\n\nInline body\n\nhttps://github.com/acme/widgets/pull/42#discussion_r1'
+      );
+      await userEvent.click(copyButtons[1]);
+      expect(writeText).toHaveBeenLastCalledWith("Pull request comment body");
+    } finally {
+      if (clipboardDescriptor) Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      else Reflect.deleteProperty(navigator, "clipboard");
+      if (secureContextDescriptor) {
+        Object.defineProperty(window, "isSecureContext", secureContextDescriptor);
+      } else {
+        Reflect.deleteProperty(window, "isSecureContext");
+      }
+    }
+  });
+
+  it("falls back to the raw prompt when Autofix data is invalid", () => {
+    render(
+      <EventItem
+        event={{
+          ...event("user-2"),
+          content: "Address this feedback without a valid data envelope.",
+          origin: {
+            kind: "review",
+            authorType: "bot",
+            feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+          },
+        }}
+        sessionId="session-1"
+        currentParticipantId="participant-1"
+        participantProfiles={{}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    expect(
+      screen.getByText("Address this feedback without a valid data envelope.")
+    ).toBeInTheDocument();
+  });
+
+  it("bounds malformed Autofix prompt fallback content", () => {
+    const oversizedContent = "x".repeat(10_000);
+    const { container } = render(
+      <EventItem
+        event={{
+          ...event("user-2"),
+          content: oversizedContent,
+          origin: {
+            kind: "review",
+            authorType: "bot",
+            feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+          },
+        }}
+        sessionId="session-1"
+        currentParticipantId="participant-1"
+        participantProfiles={{}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    expect(
+      screen.getByText("This feedback could not be formatted. Showing a truncated raw prompt.")
+    ).toBeInTheDocument();
+    const fallback = container.querySelector("pre");
+    expect(fallback?.textContent).toHaveLength(4_032);
+    expect(fallback).toHaveTextContent("[Raw Autofix prompt truncated]");
+    expect(fallback).toHaveClass("max-h-96", "overflow-auto");
+    expect(fallback).toHaveAttribute("tabindex", "0");
+  });
+
+  it("does not cap ordinary long user messages", () => {
+    const { container } = render(
+      <EventItem
+        event={{ ...event("user-2"), content: "x".repeat(10_000) }}
+        sessionId="session-1"
+        currentParticipantId="participant-1"
+        participantProfiles={{}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    const content = container.querySelector("pre");
+    expect(content).not.toHaveClass("max-h-96", "overflow-auto");
+    expect(content).not.toHaveAttribute("tabindex");
+    expect(content?.textContent).toHaveLength(10_000);
+  });
+
   it("uses the canonical profile name and avatar when available", () => {
     render(
       <EventItem
@@ -954,5 +1146,74 @@ describe("timeline virtualization", () => {
       "aria-expanded",
       "true"
     );
+  });
+
+  it("preserves Autofix thread expansion after its row leaves the virtual window", async () => {
+    const feedback = JSON.stringify({
+      url: "https://github.com/acme/widgets/pull/42#pullrequestreview-1",
+      body: "Review body",
+      comments: [
+        {
+          url: "https://github.com/acme/widgets/pull/42#discussion_r1",
+          path: "src/retry.ts",
+          line: 42,
+          startLine: null,
+          body: "Keep this retry atomic.",
+          diffHunk: "@@ -42 +42 @@\n-old\n+new",
+        },
+      ],
+    });
+    const autofix: SandboxEvent = {
+      type: "user_message",
+      content: `Address feedback.\n\n<github_feedback_data>\n\n${feedback}\n\n</github_feedback_data>`,
+      messageId: "autofix-message",
+      timestamp: 1,
+      origin: {
+        kind: "review",
+        authorType: "bot",
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1",
+      },
+    };
+    const events: SandboxEvent[] = [
+      autofix,
+      ...Array.from(
+        { length: 500 },
+        (_, index): SandboxEvent => ({
+          type: "user_message",
+          content: `Message ${index}`,
+          messageId: `message-${index}`,
+          timestamp: index + 2,
+        })
+      ),
+    ];
+    const { container } = render(<SessionTimeline {...baseTimelineProps} events={events} />);
+    const threadButton = screen.getByRole("button", {
+      name: "Expand review comment on src/retry.ts L42",
+    });
+    await userEvent.click(threadButton);
+    expect(threadButton).toHaveAttribute("aria-expanded", "true");
+
+    const timeline = container.firstElementChild as HTMLDivElement;
+    Object.defineProperties(timeline, {
+      clientHeight: { configurable: true, value: 800 },
+      scrollHeight: { configurable: true, value: 500_000 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+    await act(async () => {
+      timeline.scrollTop = 400_000;
+      fireEvent.scroll(timeline);
+    });
+    expect(screen.queryByRole("button", { name: /review comment on src\/retry\.ts/ })).toBeNull();
+
+    await act(async () => {
+      timeline.scrollTop = 0;
+      fireEvent.scroll(timeline);
+    });
+    expect(
+      screen.getByRole("button", { name: "Collapse review comment on src/retry.ts L42" })
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen.getByRole("region", { name: "Diff context for src/retry.ts" })
+    ).toBeInTheDocument();
   });
 });

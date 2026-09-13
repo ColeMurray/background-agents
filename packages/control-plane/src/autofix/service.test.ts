@@ -376,6 +376,8 @@ describe("AutofixService", () => {
     expect(command.prompt).toContain("Preserve this complete comment.");
     expect(command.prompt).toContain("x".repeat(4_000));
     expect(command.prompt).not.toContain("x".repeat(4_001));
+    expect(command.prompt).toContain('"side": "RIGHT"');
+    expect(command.prompt).toContain('"diffHunkTruncated": true');
   });
 
   it("escapes feedback that could close the untrusted-data delimiter", async () => {
