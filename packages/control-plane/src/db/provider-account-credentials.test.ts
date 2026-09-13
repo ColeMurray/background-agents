@@ -21,30 +21,29 @@ function database(row: Record<string, unknown> | null): SqlDatabase {
   };
 }
 
+async function validCredentialRow(encryptionKey: string): Promise<Record<string, unknown>> {
+  return {
+    encrypted_payload: await encryptProviderAccountPayload({ token: "secret" }, encryptionKey, {
+      providerAccountId: "account-1",
+      provider: "openai",
+      credentialSchemaVersion: 1,
+    }),
+    credential_schema_version: 1,
+    credential_version: 2,
+    exchange_generation: 3,
+    exchange_state: "idle",
+    exchange_owner: null,
+    exchange_started_at: null,
+    access_token_expires_at: null,
+    updated_at: 4,
+  };
+}
+
 describe("ProviderCredentialStore credential rows", () => {
   it("returns a decrypted credential state from a valid row with nullable fields", async () => {
     const encryptionKey = generateEncryptionKey();
-    const encryptedPayload = await encryptProviderAccountPayload(
-      { token: "secret" },
-      encryptionKey,
-      {
-        providerAccountId: "account-1",
-        provider: "openai",
-        credentialSchemaVersion: 1,
-      }
-    );
     const store = new ProviderCredentialStore(
-      database({
-        encrypted_payload: encryptedPayload,
-        credential_schema_version: 1,
-        credential_version: 2,
-        exchange_generation: 3,
-        exchange_state: "idle",
-        exchange_owner: null,
-        exchange_started_at: null,
-        access_token_expires_at: null,
-        updated_at: 4,
-      }),
+      database(await validCredentialRow(encryptionKey)),
       encryptionKey
     );
 
@@ -61,7 +60,14 @@ describe("ProviderCredentialStore credential rows", () => {
     });
   });
 
-  it("rejects a malformed credential row before decrypting it", async () => {
+  it("returns null when no credential row exists", async () => {
+    const encryptionKey = generateEncryptionKey();
+    const store = new ProviderCredentialStore(database(null), encryptionKey);
+
+    await expect(store.readCredentialState("account-1", "openai")).resolves.toBeNull();
+  });
+
+  it("throws a credential integrity error for a malformed credential row", async () => {
     const encryptionKey = generateEncryptionKey();
     const store = new ProviderCredentialStore(
       database({
@@ -78,7 +84,9 @@ describe("ProviderCredentialStore credential rows", () => {
       encryptionKey
     );
 
-    await expect(store.readCredentialState("account-1", "openai")).resolves.toBeNull();
+    await expect(store.readCredentialState("account-1", "openai")).rejects.toThrow(
+      "Malformed provider credential row for account account-1"
+    );
   });
 
   it("rejects a partial credential row", async () => {
@@ -97,6 +105,34 @@ describe("ProviderCredentialStore credential rows", () => {
       encryptionKey
     );
 
-    await expect(store.readCredentialState("account-1", "openai")).resolves.toBeNull();
+    await expect(store.readCredentialState("account-1", "openai")).rejects.toThrow(
+      "Malformed provider credential row for account account-1"
+    );
+  });
+
+  it.each([
+    ["fractional schema version", { credential_schema_version: 1.5 }],
+    ["negative credential version", { credential_version: -1 }],
+    ["negative exchange generation", { exchange_generation: -1 }],
+    ["idle exchange with owner", { exchange_owner: "owner-1" }],
+    ["idle exchange with start time", { exchange_started_at: 1_000 }],
+    [
+      "in-flight exchange without owner",
+      { exchange_state: "in_flight", exchange_owner: null, exchange_started_at: 1_000 },
+    ],
+    [
+      "in-flight exchange without start time",
+      { exchange_state: "in_flight", exchange_owner: "owner-1", exchange_started_at: null },
+    ],
+  ])("rejects %s", async (_description, override) => {
+    const encryptionKey = generateEncryptionKey();
+    const store = new ProviderCredentialStore(
+      database({ ...(await validCredentialRow(encryptionKey)), ...override }),
+      encryptionKey
+    );
+
+    await expect(store.readCredentialState("account-1", "openai")).rejects.toThrow(
+      "Malformed provider credential row for account account-1"
+    );
   });
 });

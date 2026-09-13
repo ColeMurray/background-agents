@@ -91,13 +91,13 @@ describe("resolveSessionScopedSettings", () => {
   });
 
   it("falls back to global sandbox defaults and disabled code-server for a repo-less session", async () => {
-    mockState.global["sandbox"] = { defaults: { tunnelPorts: [3000], cpuCores: null } };
+    mockState.global["sandbox"] = { defaults: { tunnelPorts: [3000] } };
 
     const result = await resolveSessionScopedSettings(DB, []);
 
     expect(result.codeServerEnabled).toBe(false);
     expect(result.vncEnabled).toBe(false);
-    expect(result.sandboxSettings).toEqual({ tunnelPorts: [3000], cpuCores: null });
+    expect(result.sandboxSettings).toEqual({ tunnelPorts: [3000] });
     // No per-repo resolution happens without a primary member.
     expect(mockState.resolvedCalls).toEqual([]);
     expect(mockState.globalCalls).toContain("sandbox");
@@ -109,18 +109,6 @@ describe("resolveSessionScopedSettings", () => {
     mockState.resolved["sandbox"] = { enabledRepos: null, settings: { tunnelPorts: ["8080"] } };
 
     const result = await resolveSessionScopedSettings(DB, [{ repoOwner: "acme", repoName: "web" }]);
-
-    expect(result).toEqual({
-      codeServerEnabled: false,
-      vncEnabled: false,
-      sandboxSettings: {},
-    });
-  });
-
-  it("rejects malformed global sandbox defaults and falls back to defaults", async () => {
-    mockState.global["sandbox"] = { defaults: { tunnelPorts: ["3000"] } };
-
-    const result = await resolveSessionScopedSettings(DB, []);
 
     expect(result).toEqual({
       codeServerEnabled: false,

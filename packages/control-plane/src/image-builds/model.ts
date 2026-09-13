@@ -18,6 +18,7 @@ import type {
   ImageBuildStatus,
 } from "@open-inspect/shared/types/image-builds";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
+import { z } from "zod";
 import {
   HARNESS_MIN_RUNTIME_GENERATION,
   MIN_COMPATIBLE_RUNTIME_GENERATION,
@@ -27,7 +28,11 @@ import {
  * Providers with image-build support: Modal images, Vercel snapshots,
  * OpenComputer checkpoints, E2B snapshots. Daytona has no image support.
  */
-export type ImageBuildProvider = "modal" | "vercel" | "opencomputer" | "e2b";
+export const IMAGE_BUILD_PROVIDER_IDS = ["modal", "vercel", "opencomputer", "e2b"] as const;
+
+export const imageBuildProviderSchema = z.enum(IMAGE_BUILD_PROVIDER_IDS);
+
+export type ImageBuildProvider = z.infer<typeof imageBuildProviderSchema>;
 
 /**
  * What an image bakes. `id` is a lowercase `owner/name` pair for repo scopes

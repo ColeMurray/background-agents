@@ -10,25 +10,36 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { ModelProviderAccountStatus } from "@open-inspect/shared/types/provider-accounts";
 import { z } from "zod";
 
-const providerCredentialExchangeStateSchema = z.enum(["idle", "in_flight"]);
+const positiveIntegerSchema = z.number().int().positive();
+const nonnegativeIntegerSchema = z.number().int().nonnegative();
 
-type ProviderCredentialExchangeState = z.infer<typeof providerCredentialExchangeStateSchema>;
+const credentialRowBaseSchema = z.object({
+  encrypted_payload: z.string(),
+  credential_schema_version: positiveIntegerSchema,
+  credential_version: positiveIntegerSchema,
+  exchange_generation: nonnegativeIntegerSchema,
+  access_token_expires_at: nonnegativeIntegerSchema.nullable(),
+  updated_at: nonnegativeIntegerSchema,
+});
+
+const credentialRowSchema = z.discriminatedUnion("exchange_state", [
+  credentialRowBaseSchema.extend({
+    exchange_state: z.literal("idle"),
+    exchange_owner: z.null(),
+    exchange_started_at: z.null(),
+  }),
+  credentialRowBaseSchema.extend({
+    exchange_state: z.literal("in_flight"),
+    exchange_owner: z.string().min(1),
+    exchange_started_at: nonnegativeIntegerSchema,
+  }),
+]);
+
+type ProviderCredentialExchangeState = z.infer<typeof credentialRowSchema>["exchange_state"];
 export type ProviderCredentialExchangeAccountStatus = Exclude<
   ModelProviderAccountStatus,
   "disabled"
 >;
-
-const credentialRowSchema = z.object({
-  encrypted_payload: z.string(),
-  credential_schema_version: z.number(),
-  credential_version: z.number(),
-  exchange_generation: z.number(),
-  exchange_state: providerCredentialExchangeStateSchema,
-  exchange_owner: z.string().nullable(),
-  exchange_started_at: z.number().nullable(),
-  access_token_expires_at: z.number().nullable(),
-  updated_at: z.number(),
-});
 
 export interface ProviderCredentialState {
   payload: unknown;
@@ -129,8 +140,11 @@ export class ProviderCredentialStore {
       )
       .bind(providerAccountId, provider)
       .first();
+    if (row === null) return null;
     const parsed = credentialRowSchema.safeParse(row);
-    if (!parsed.success) return null;
+    if (!parsed.success) {
+      throw new Error(`Malformed provider credential row for account ${providerAccountId}`);
+    }
     const credential = parsed.data;
     return {
       payload: await decryptProviderAccountPayload(

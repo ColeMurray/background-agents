@@ -6,10 +6,12 @@ import {
 } from "@open-inspect/shared/types/image-builds";
 import { timingSafeEqual } from "@open-inspect/shared/auth";
 import { z } from "zod";
-import type { ImageBuildCallbackBuild, ImageBuildProvider } from "../image-builds/model";
+import {
+  imageBuildProviderSchema,
+  type ImageBuildCallbackBuild,
+  type ImageBuildProvider,
+} from "../image-builds/model";
 import type { SqlDatabase } from "./sql-database";
-
-const imageBuildProviderSchema = z.enum(["modal", "vercel", "opencomputer", "e2b"]);
 
 const callbackTokenRowSchema = z.object({
   id: z.string(),

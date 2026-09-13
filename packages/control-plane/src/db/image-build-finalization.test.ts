@@ -51,10 +51,11 @@ describe("ImageBuildFinalizationStore callback rows", () => {
     });
   });
 
-  it("rejects a malformed callback row before token authorization", async () => {
-    const store = new ImageBuildFinalizationStore(
-      database({ ...VALID_CALLBACK_ROW, status: "queued" })
-    );
+  it.each([
+    ["provider", { provider: "daytona" }],
+    ["scope kind", { scope_kind: "workspace" }],
+  ])("rejects an otherwise-authorizable callback row with invalid %s", async (_field, override) => {
+    const store = new ImageBuildFinalizationStore(database({ ...VALID_CALLBACK_ROW, ...override }));
 
     await expect(
       store.authorizeCompletionCallback({
