@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from sandbox_runtime.process_output import PROCESS_OUTPUT_TAIL_BYTES
 from sandbox_runtime.repository_boot import RepositoryBoot
 from sandbox_runtime.runtime_config import BootMode
 from tests.runtime_helpers import make_repository_boot
@@ -42,6 +43,19 @@ def _create_setup_script(repo_path, content="#!/bin/bash\necho hello\n"):
     script = setup_dir / "setup.sh"
     script.write_text(content)
     return script
+
+
+def _background_writer_script(*, exit_code: int) -> str:
+    return (
+        "#!/bin/bash\n"
+        f'"{sys.executable}" -c \'import os,time\n'
+        "while True:\n"
+        '    os.write(1, b"x" * 4095 + b"\\n")\n'
+        "    time.sleep(0.01)' &\n"
+        "echo $! > child.pid\n"
+        "echo diagnostic\n"
+        f"exit {exit_code}\n"
+    )
 
 
 def _fake_process(returncode=0):
@@ -184,6 +198,25 @@ class TestSetupScriptFailure:
         assert failure.args == ("setup.failed",)
         assert failure.kwargs["output_tail"] == "diagnostic"
 
+    async def test_failed_hook_stops_background_writer_before_reading_bounded_tail(self, tmp_path):
+        sup = _make_repository_boot(tmp_path)
+        sup.hooks.log = MagicMock()
+        _create_setup_script(sup.repo_path, content=_background_writer_script(exit_code=1))
+        child_pid = None
+
+        try:
+            async with asyncio.timeout(2):
+                result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
+            child_pid = int((sup.repo_path / "child.pid").read_text())
+            output_tail = sup.hooks.log.error.call_args.kwargs["output_tail"]
+            assert result is False
+            assert "diagnostic" in output_tail
+            assert len(output_tail.encode()) <= PROCESS_OUTPUT_TAIL_BYTES
+        finally:
+            if child_pid is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(child_pid, signal.SIGKILL)
+
 
 # ---------------------------------------------------------------------------
 # TestSetupScriptWaitPolicy
@@ -212,14 +245,7 @@ class TestSetupScriptWaitPolicy:
         sup = _make_repository_boot(tmp_path)
         _create_setup_script(
             sup.repo_path,
-            content=(
-                "#!/bin/bash\n"
-                f'"{sys.executable}" -c \'import os,time\n'
-                "while True:\n"
-                '    os.write(1, b"x" * 4096)\n'
-                "    time.sleep(0.001)' &\n"
-                "echo $! > child.pid\n"
-            ),
+            content=_background_writer_script(exit_code=0),
         )
         child_pid = None
 
