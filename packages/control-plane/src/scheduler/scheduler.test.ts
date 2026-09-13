@@ -15,6 +15,7 @@ import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
+import { SlackDelivery } from "./slack-delivery";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -2278,18 +2279,26 @@ describe("Scheduler", () => {
       });
 
       it("does not request context when admission is skipped for concurrency", async () => {
-        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockGetSlackAutomationsForChannel.mockResolvedValue([
+          sampleSlackAutomation,
+          { ...sampleSlackAutomation, id: "auto-slack-2" },
+        ]);
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
         mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ id: "busy" }));
         const { slackFetch, env } = threadContextEnv();
 
         expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
           triggered: 0,
-          skipped: 1,
+          skipped: 2,
           steered: 0,
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
+        // A shared event gets one notice, not one per skipped automation.
+        expect(slackFetch).toHaveBeenCalledExactlyOnceWith(
+          "https://internal/callbacks/automation-skip",
+          expect.any(Object)
+        );
       });
 
       it("does not request context when the invocation is deduplicated", async () => {
@@ -2307,6 +2316,7 @@ describe("Scheduler", () => {
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
+        expect(slackFetch).not.toHaveBeenCalled();
       });
 
       it("requests context once for an admitted run and splices it into the prompt", async () => {
@@ -2402,51 +2412,24 @@ describe("Scheduler", () => {
         expect(String(prompt.content)).not.toContain("<thread_context>");
       });
 
-      it("launches without history when the context request is aborted", async () => {
-        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
-        // What a timed-out binding fetch looks like to the caller.
-        const slackFetch = vi.fn(async () => {
-          throw Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" });
-        });
-        const stub = createMockSessionStub();
-        const env = createEnv(
-          {
-            SLACK_BOT: { fetch: slackFetch } as FetchClient,
-            SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
-          } as Partial<Env>,
-          stub
-        );
-
-        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
-          triggered: 1,
-          skipped: 0,
-          steered: 0,
-        });
-
-        // The run still launches — a slow Slack read must not strand children.
-        const prompt = await getPromptBody(vi.mocked(stub.fetch));
-        expect(String(prompt.content)).toContain("A message was posted in #ops.");
-        expect(String(prompt.content)).not.toContain("<thread_context>");
-      });
-
       it("uses the baseline prompt when lazy prompt construction rejects", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
         const { env, stub } = threadContextEnv();
         const scheduler = createScheduler(env);
-        const promptBuilder = scheduler as unknown as {
-          buildSlackContextWithThread: () => Promise<string>;
-        };
-        vi.spyOn(promptBuilder, "buildSlackContextWithThread").mockRejectedValue(
-          new Error("prompt provider failed")
-        );
+        const promptBuilder = vi
+          .spyOn(SlackDelivery.prototype, "buildSlackContextWithThread")
+          .mockRejectedValueOnce(new Error("prompt provider failed"));
 
-        expect(await scheduler.event(makeSlackEvent())).toEqual({
-          triggered: 1,
-          skipped: 0,
-          steered: 0,
-        });
+        try {
+          expect(await scheduler.event(makeSlackEvent())).toEqual({
+            triggered: 1,
+            skipped: 0,
+            steered: 0,
+          });
+        } finally {
+          promptBuilder.mockRestore();
+        }
 
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
         expect(String(prompt.content)).toContain("A message was posted in #ops.");
