@@ -189,9 +189,19 @@ describe("parseGitHubDiffHunk", () => {
   });
 
   it("treats unsafe hunk offsets as metadata", () => {
-    expect(parseGitHubDiffHunk("@@ -999999999999999999999 +1 @@")[0]).toEqual({
+    const lines = parseGitHubDiffHunk(
+      "@@ -10 +10 @@\n valid\n@@ -999999999999999999999 +1 @@\n unknown"
+    );
+
+    expect(lines[2]).toEqual({
       type: "meta",
       content: "@@ -999999999999999999999 +1 @@",
+      oldLine: null,
+      newLine: null,
+    });
+    expect(lines[3]).toEqual({
+      type: "context",
+      content: "unknown",
       oldLine: null,
       newLine: null,
     });

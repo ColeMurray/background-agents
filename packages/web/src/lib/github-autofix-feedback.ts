@@ -99,6 +99,8 @@ export function parseGitHubDiffHunk(diffHunk: string): GitHubDiffLine[] {
       const nextOldLine = Number(hunk[1]);
       const nextNewLine = Number(hunk[2]);
       if (!isSafeDiffLine(nextOldLine) || !isSafeDiffLine(nextNewLine)) {
+        oldLine = null;
+        newLine = null;
         return { type: "meta", content: rawLine, oldLine: null, newLine: null };
       }
       oldLine = nextOldLine;
