@@ -12,6 +12,13 @@ OpenCode, chosen in the composer and inherited by child sessions and automations
 sessions can use a **connected Claude subscription** from Settings > Provider Accounts instead of an
 API key. See [Using the Claude Agent Harness](docs/CLAUDE_AGENT.md).
 
+## September 2, 2026
+
+**Opening a session marks it read.** A session's latest reply is read as soon as its page is
+visible, without scrolling to the end of the timeline. The sidebar reflects the change on every row
+at once, including sessions loaded through "Load more", and Needs attention lists only sessions with
+an unread reply.
+
 ## September 1, 2026
 
 **Workspace audit log.** Owners, Administrators, and authorized custom roles can review paginated

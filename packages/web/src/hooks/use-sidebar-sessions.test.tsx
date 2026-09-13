@@ -9,28 +9,37 @@ import type {
   SessionInboxPage,
   SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
+import type { SessionReadResult } from "@open-inspect/shared/types/sessions";
 import { useSidebarSessions } from "./use-sidebar-sessions";
-import { reconcileSessionReadState } from "@/lib/session-read-state";
+import {
+  applySessionReadResult,
+  isSessionMessageRead,
+  resetSessionReadOverlay,
+} from "@/lib/session-read-state";
 
+const defaultUser = { id: "github:123", name: "Test User" };
+let authUser: typeof defaultUser | null = defaultUser;
 vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: () => ({ data: { user: { id: "github:123", name: "Test User" } } }),
+  useAuthSession: () => ({ data: authUser ? { user: authUser } : undefined }),
 }));
 
-vi.mock("@/lib/session-read-state", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    markLatestMessageRead: async (sessionId: string) => ({
-      sessionId,
-      outcome: "marked_read" as const,
-      unread: false,
-      latestMessageId: "msg-1",
-      version: 1,
-    }),
-  };
-});
+function readResult(
+  sessionId: string,
+  outcome: SessionReadResult["outcome"] = "marked_read"
+): SessionReadResult {
+  return outcome === "no_terminal_message"
+    ? { sessionId, outcome, unread: false, latestMessageId: null, version: 0 }
+    : { sessionId, outcome, unread: false, latestMessageId: "msg-1", version: 1 };
+}
+const markLatestMessageRead = vi.fn(async (sessionId: string) => readResult(sessionId));
+vi.mock("@/lib/session-read-state", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  markLatestMessageRead: (sessionId: string) => markLatestMessageRead(sessionId),
+}));
 
-function item(id: string) {
+// Rows are unread by default so they qualify for attention; read state is
+// what these tests change, so it is explicit where it matters.
+function item(id: string): SessionInboxItem {
   return {
     rootSession: {
       id,
@@ -38,27 +47,33 @@ function item(id: string) {
       repoOwner: null,
       repoName: null,
       baseBranch: null,
-      status: "active" as const,
+      status: "active",
       parentSessionId: null,
-      spawnSource: "user" as const,
+      spawnSource: "user",
       environmentId: null,
       createdAt: 1,
       updatedAt: 2,
-      readState: { latestMessageId: null, version: 0, unread: false as const },
+      readState: { latestMessageId: "msg-1", version: 1, unread: true },
     },
     descendantSessions: [],
   };
 }
 
-function unreadItem(id: string): SessionInboxItem {
+function readItem(id: string): SessionInboxItem {
   const base = item(id);
   return {
     ...base,
     rootSession: {
       ...base.rootSession,
-      readState: { latestMessageId: "msg-1", version: 1, unread: true },
+      readState: { latestMessageId: "msg-1", version: 1, unread: false },
     },
   };
+}
+
+const noRevalidate = async () => [];
+/** A read the session page recorded for the signed-in viewer. */
+function recordPageRead(result: SessionReadResult) {
+  applySessionReadResult(result, noRevalidate, defaultUser.id);
 }
 
 function page(ids: string[], nextCursor: string | null = null): SessionInboxPage {
@@ -115,9 +130,143 @@ afterEach(() => {
   setVisibility("visible");
   vi.restoreAllMocks();
   vi.useRealTimers();
+  resetSessionReadOverlay();
+  authUser = defaultUser;
+  markLatestMessageRead.mockReset();
+  markLatestMessageRead.mockImplementation(async (sessionId: string) => readResult(sessionId));
 });
 
 describe("useSidebarSessions", () => {
+  it.each(["in_progress", "finished"] as const)(
+    "finds a read hierarchy inserted behind an unchanged %s boundary",
+    async (category) => {
+      let markedRead = false;
+      const ranked = (id: string, updatedAt: number, unread = false) => {
+        const row = unread ? item(id) : readItem(id);
+        row.rootSession.updatedAt = updatedAt;
+        return row;
+      };
+      // Model the server's one-root pages and strict timestamp/root-ID cursor.
+      const serverPage = (rows: SessionInboxItem[], cursor: string | null): SessionInboxPage => {
+        const [timestamp, id] = cursor?.split(":") ?? [];
+        const remaining = rows.filter(({ rootSession: row }) =>
+          cursor === null
+            ? true
+            : row.updatedAt < Number(timestamp) ||
+              (row.updatedAt === Number(timestamp) && row.id < id)
+        );
+        const first = remaining[0];
+        const hasMore = remaining.length > 1;
+        return {
+          items: first ? [first] : [],
+          hasMore,
+          nextCursor: hasMore ? `${first.rootSession.updatedAt}:${first.rootSession.id}` : null,
+        };
+      };
+      const fetcher = vi.fn(async (key: string) => {
+        const url = new URL(key, "http://localhost");
+        const destination = [
+          ranked("head", 100),
+          ...(markedRead ? [ranked("moving", 80)] : []),
+          ranked("loaded-tail", 60),
+          ranked("last", 20),
+        ];
+        if (url.searchParams.has("category")) {
+          expect(url.searchParams.get("category")).toBe(category);
+          return serverPage(destination, url.searchParams.get("cursor"));
+        }
+        return snapshot({
+          needs_attention: serverPage(markedRead ? [] : [ranked("moving", 80, true)], null),
+          in_progress: page([]),
+          finished: page([]),
+          [category]: serverPage(destination, null),
+        });
+      });
+      markLatestMessageRead.mockImplementation(async (sessionId: string) => {
+        markedRead = true;
+        return readResult(sessionId);
+      });
+      const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+      const section = category === "in_progress" ? "inProgress" : "finished";
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      act(() => result.current.sectionPagination[section].loadMore());
+      await waitFor(() =>
+        expect(result.current[section].map(({ id }) => id)).toEqual(["head", "loaded-tail"])
+      );
+
+      await act(async () => result.current.handleMarkLatestMessageRead("moving"));
+      await act(async () => result.current.refreshSnapshot());
+      expect(result.current.needsAttention).toEqual([]);
+      expect(result.current.sectionPagination[section].firstPageItems[0].rootSession.id).toBe(
+        "head"
+      );
+      // Exhaust pagination: restarting the destination chain would discover moving.
+      while (result.current.sectionPagination[section].hasMore) {
+        act(() => result.current.sectionPagination[section].loadMore());
+        await waitFor(() =>
+          expect(result.current.sectionPagination[section].loadingMore).toBe(false)
+        );
+      }
+      await act(async () => result.current.refreshSnapshot());
+      expect(result.current[section].map(({ id }) => id)).toContain("moving");
+    }
+  );
+
+  it.each([false, true])(
+    "does not resurrect a canonical root (archive before response: %s)",
+    async (archiveBeforeResponse) => {
+      const pendingPage = deferred<SessionInboxPage>();
+      let phase: "unread" | "read-remotely" | "archived-remotely" = archiveBeforeResponse
+        ? "read-remotely"
+        : "unread";
+      const ranked = (id: string, updatedAt: number, read = false) => {
+        const row = read ? readItem(id) : item(id);
+        row.rootSession.updatedAt = updatedAt;
+        return row;
+      };
+      const fetcher = vi.fn(async (key: string) => {
+        if (key.includes("category=")) return pendingPage.promise;
+        return snapshot({
+          // Another unread tail remains in every phase, so the head cursor stays fixed.
+          needs_attention: { items: [ranked("head", 100)], hasMore: true, nextCursor: "100:head" },
+          in_progress: {
+            items: phase === "read-remotely" ? [ranked("moving", 80, true)] : [],
+            hasMore: false,
+            nextCursor: null,
+          },
+          finished: page([]),
+        });
+      });
+      const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      act(() => result.current.sectionPagination.needsAttention.loadMore());
+      await waitFor(() =>
+        expect(result.current.sectionPagination.needsAttention.loadingMore).toBe(true)
+      );
+
+      phase = "read-remotely";
+      await act(async () => result.current.refreshSnapshot());
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual(["moving"]);
+      if (archiveBeforeResponse) {
+        phase = "archived-remotely";
+        await act(async () => result.current.refreshSnapshot());
+      }
+      await act(async () =>
+        pendingPage.resolve({
+          items: [ranked("moving", 80)],
+          hasMore: true,
+          nextCursor: "80:moving",
+        })
+      );
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["head"]);
+
+      phase = "archived-remotely";
+      await act(async () => result.current.refreshSnapshot());
+      expect(result.current.inProgress).toEqual([]);
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["head"]);
+    }
+  );
+
   it("uses exactly one canonical request to supply all three categories", async () => {
     const fetcher = vi.fn(async () => snapshot());
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
@@ -190,6 +339,27 @@ describe("useSidebarSessions", () => {
     expect(fetcher).toHaveBeenCalledWith(
       "/api/sessions/inbox?category=needs_attention&cursor=next"
     );
+  });
+
+  it("sends one request when Load more is clicked twice before it renders as loading", async () => {
+    let paginationRequests = 0;
+    const fetcher = vi.fn(async (key: string) => {
+      if (key.includes("category=")) {
+        paginationRequests += 1;
+        return page(["page-2"]);
+      }
+      return snapshot({ needs_attention: page(["attention"], "next") });
+    });
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.sectionPagination.needsAttention.loadMore();
+      result.current.sectionPagination.needsAttention.loadMore();
+    });
+    await waitFor(() => expect(result.current.needsAttention).toHaveLength(2));
+
+    expect(paginationRequests).toBe(1);
   });
 
   it("keeps additional pages across unchanged and changed coherent head refreshes", async () => {
@@ -422,34 +592,75 @@ describe("useSidebarSessions", () => {
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-b"]);
   });
 
-  it("reconciles read state on retained pages when a session is marked read", async () => {
-    const fetcher = vi.fn(async (key: string) =>
-      key.includes("category=")
-        ? {
-            items: [unreadItem("tail-unread"), unreadItem("tail-other")],
-            hasMore: false,
-            nextCursor: null,
-          }
-        : snapshot({ needs_attention: page(["attention"], "next") })
-    );
+  it("hides a fully read hierarchy from attention and lets the refetched snapshot place it", async () => {
+    const refetchedSnapshot = deferred<SessionInboxSnapshot>();
+    let headRequests = 0;
+    const fetcher = vi.fn(async (key: string) => {
+      if (key.includes("category="))
+        return { items: [item("tail-read"), item("tail-other")], hasMore: false, nextCursor: null };
+      headRequests += 1;
+      if (headRequests === 1) return snapshot({ needs_attention: page(["attention"], "next") });
+      return refetchedSnapshot.promise;
+    });
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
     await waitFor(() => expect(result.current.loading).toBe(false));
     act(() => result.current.sectionPagination.needsAttention.loadMore());
     await waitFor(() => expect(result.current.needsAttention).toHaveLength(3));
 
-    await act(async () => result.current.handleMarkLatestMessageRead("tail-unread"));
+    await act(async () => result.current.handleMarkLatestMessageRead("tail-read"));
+    await waitFor(() =>
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"])
+    );
+    // Nothing on the client moved the session: it is absent until the server places it.
+    expect(result.current.inProgress.map(({ id }) => id)).toEqual(["running"]);
+    expect(result.current.sectionPagination.needsAttention.hasMore).toBe(true);
+    expect(headRequests).toBe(2);
 
-    // The freshly read hierarchy leaves the retained attention page; the still
-    // unread one stays with its read state intact.
-    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-other"]);
-    const remainingTail = result.current.needsAttention.find(({ id }) => id === "tail-other");
-    expect(remainingTail?.readState.unread).toBe(true);
+    await act(async () =>
+      refetchedSnapshot.resolve(
+        snapshot({
+          needs_attention: page(["attention"], "next"),
+          in_progress: {
+            items: [readItem("tail-read"), item("running")],
+            hasMore: false,
+            nextCursor: null,
+          },
+        })
+      )
+    );
+    await waitFor(() =>
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual(["tail-read", "running"])
+    );
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() =>
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-other"])
+    );
   });
 
-  it("keeps retained pages when an already-read session is acknowledged", async () => {
+  it("hides a read head row from attention until the server places it", async () => {
+    const fetcher = vi.fn(async () => snapshot({ needs_attention: page(["attention", "other"]) }));
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => recordPageRead(readResult("attention")));
+
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["other"]);
+    expect(result.current.inProgress.map(({ id }) => id)).toEqual(["running"]);
+  });
+
+  it("does not refetch when the server reports the session was already read", async () => {
+    markLatestMessageRead.mockImplementation(async (sessionId: string) =>
+      readResult(sessionId, "already_read")
+    );
     let snapshotFetches = 0;
     const fetcher = vi.fn(async (key: string) => {
-      if (key.includes("category=finished")) return page(["finished-tail-a", "finished-tail-b"]);
+      if (key.includes("category=finished")) {
+        return {
+          items: [readItem("finished-tail-a"), readItem("finished-tail-b")],
+          hasMore: false,
+          nextCursor: null,
+        };
+      }
       if (key.includes("category=in_progress")) return page(["progress-tail"]);
       snapshotFetches += 1;
       return snapshot({
@@ -467,15 +678,7 @@ describe("useSidebarSessions", () => {
 
     // Opening a session acknowledges its terminal message even when it is
     // already read. Nothing changed, so nothing in the sidebar should move.
-    await act(() =>
-      reconcileSessionReadState({
-        sessionId: "finished-tail-b",
-        outcome: "already_read",
-        latestMessageId: "msg-1",
-        version: 1,
-        unread: false,
-      })
-    );
+    await act(async () => result.current.handleMarkLatestMessageRead("finished-tail-b"));
     await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
 
     expect(result.current.finished.map(({ id }) => id)).toEqual([
@@ -487,133 +690,150 @@ describe("useSidebarSessions", () => {
     expect(snapshotFetches).toBe(fetchesBefore);
   });
 
-  it("keeps retained pages for a not_latest result", async () => {
-    const fetcher = vi.fn(async (key: string) =>
-      key.includes("category=")
-        ? page(["finished-tail"])
-        : snapshot({ finished: page(["finished"], "finished-next") })
-    );
-    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    act(() => result.current.sectionPagination.finished.loadMore());
-    await waitFor(() => expect(result.current.finished).toHaveLength(2));
-
-    await act(() =>
-      reconcileSessionReadState({
-        sessionId: "finished-tail",
-        outcome: "not_latest",
-        latestMessageId: "msg-9",
-        version: 9,
-        unread: true,
-      })
-    );
-
-    expect(result.current.finished.map(({ id }) => id)).toEqual(["finished", "finished-tail"]);
-  });
-
-  it("updates a read tail row in place instead of dropping it", async () => {
-    const fetcher = vi.fn(async (key: string) =>
-      key.includes("category=")
-        ? { items: [unreadItem("finished-tail")], hasMore: false, nextCursor: null }
-        : snapshot({ finished: page(["finished"], "finished-next") })
-    );
-    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    act(() => result.current.sectionPagination.finished.loadMore());
-    await waitFor(() => expect(result.current.finished).toHaveLength(2));
-
-    await act(() =>
-      reconcileSessionReadState({
-        sessionId: "finished-tail",
-        outcome: "marked_read",
-        latestMessageId: "msg-1",
-        version: 1,
-        unread: false,
-      })
-    );
-
-    const tail = result.current.finished.find(({ id }) => id === "finished-tail");
-    expect(tail?.readState).toEqual({ latestMessageId: "msg-1", version: 1, unread: false });
-  });
-
-  it("resets only the destination chain when an attention tail leaves attention", async () => {
+  it("invalidates loaded pages for not_latest and lets the server place the unread row", async () => {
+    markLatestMessageRead.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      outcome: "not_latest",
+      latestMessageId: "msg-9",
+      version: 9,
+      unread: true,
+    }));
+    let snapshotFetches = 0;
     const fetcher = vi.fn(async (key: string) => {
-      if (key.includes("category=needs_attention")) {
-        return { items: [unreadItem("moving")], hasMore: false, nextCursor: null };
+      if (key.includes("category=")) {
+        return { items: [readItem("finished-tail")], hasMore: false, nextCursor: null };
       }
-      if (key.includes("category=in_progress")) return page(["progress-tail"]);
-      if (key.includes("category=finished")) return page(["finished-tail"]);
-      return snapshot({
-        needs_attention: page(["attention"], "attention-next"),
-        in_progress: page(["running"], "progress-next"),
-        finished: page(["finished"], "finished-next"),
-      });
+      snapshotFetches += 1;
+      if (snapshotFetches > 1) return snapshot({ needs_attention: page(["finished-tail"]) });
+      return snapshot({ finished: page(["finished"], "finished-next") });
     });
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
     await waitFor(() => expect(result.current.loading).toBe(false));
-    act(() => result.current.sectionPagination.needsAttention.loadMore());
-    act(() => result.current.sectionPagination.inProgress.loadMore());
     act(() => result.current.sectionPagination.finished.loadMore());
-    await waitFor(() => expect(result.current.needsAttention).toHaveLength(2));
-    await waitFor(() => expect(result.current.inProgress).toHaveLength(2));
     await waitFor(() => expect(result.current.finished).toHaveLength(2));
+    const fetchesBefore = snapshotFetches;
 
-    await act(() =>
-      reconcileSessionReadState({
-        sessionId: "moving",
-        outcome: "marked_read",
-        latestMessageId: "msg-1",
-        version: 1,
-        unread: false,
-      })
-    );
+    await act(async () => result.current.handleMarkLatestMessageRead("finished-tail"));
 
-    // "moving" is active, so it heads for in_progress: that chain restarts from
-    // the head page. The finished chain is unaffected and keeps its tail.
-    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
-    expect(result.current.inProgress.map(({ id }) => id)).toEqual(["running"]);
-    expect(result.current.finished.map(({ id }) => id)).toEqual(["finished", "finished-tail"]);
+    await waitFor(() => expect(snapshotFetches).toBe(fetchesBefore + 1));
+    const tail = result.current.needsAttention.find(({ id }) => id === "finished-tail");
+    expect(tail?.readState).toEqual({ latestMessageId: "msg-9", version: 9, unread: true });
+    expect(result.current.finished.map(({ id }) => id)).not.toContain("finished-tail");
   });
 
-  it("reconciles retained pages when read state changes outside the sidebar", async () => {
+  it("shows an already_read confirmation on a loaded page row without dropping it", async () => {
+    markLatestMessageRead.mockImplementation(async (sessionId: string) =>
+      readResult(sessionId, "already_read")
+    );
     const fetcher = vi.fn(async (key: string) =>
       key.includes("category=")
-        ? { items: [unreadItem("tail-unread")], hasMore: false, nextCursor: null }
-        : snapshot({ needs_attention: page(["attention"], "next") })
+        ? { items: [item("finished-tail")], hasMore: false, nextCursor: null }
+        : snapshot({ finished: page(["finished"], "finished-next") })
     );
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
     await waitFor(() => expect(result.current.loading).toBe(false));
-    act(() => result.current.sectionPagination.needsAttention.loadMore());
-    await waitFor(() => expect(result.current.needsAttention).toHaveLength(2));
+    act(() => result.current.sectionPagination.finished.loadMore());
+    await waitFor(() => expect(result.current.finished).toHaveLength(2));
 
-    await act(() =>
-      reconcileSessionReadState({
-        sessionId: "tail-unread",
-        outcome: "marked_read",
-        latestMessageId: "msg-1",
-        version: 1,
-        unread: false,
-      })
-    );
+    await act(async () => result.current.handleMarkLatestMessageRead("finished-tail"));
 
-    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
+    const tail = result.current.finished.find(({ id }) => id === "finished-tail");
+    expect(tail?.readState).toEqual({ latestMessageId: "msg-1", version: 1, unread: false });
+    expect(result.current.finished.map(({ id }) => id)).toEqual(["finished", "finished-tail"]);
   });
 
-  it("resets destination pagination when an attention tail changes category", async () => {
+  it("does not let a read recorded earlier hide a newer fetched message", async () => {
+    const fetcher = vi.fn(async () =>
+      snapshot({
+        needs_attention: {
+          items: [
+            {
+              ...item("attention"),
+              rootSession: {
+                ...item("attention").rootSession,
+                readState: { latestMessageId: "msg-2", version: 2, unread: true },
+              },
+            },
+          ],
+          hasMore: false,
+          nextCursor: null,
+        },
+      })
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => recordPageRead(readResult("attention")));
+
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
+    expect(result.current.needsAttention[0]?.readState.unread).toBe(true);
+  });
+
+  it("keeps a recorded read once the fetched row catches up, so reopening need not ask", async () => {
+    let sessionRead = false;
+    const fetcher = vi.fn(async () =>
+      sessionRead
+        ? snapshot({
+            needs_attention: page([]),
+            in_progress: {
+              items: [readItem("target"), item("running")],
+              hasMore: false,
+              nextCursor: null,
+            },
+          })
+        : snapshot({ needs_attention: page(["target"]) })
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => recordPageRead(readResult("target")));
+    expect(result.current.needsAttention).toEqual([]);
+
+    sessionRead = true;
+    await act(async () => result.current.refreshSnapshot());
+
+    await waitFor(() =>
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual(["target", "running"])
+    );
+    expect(result.current.inProgress[0]?.readState.unread).toBe(false);
+    expect(isSessionMessageRead(defaultUser.id, "target", "msg-1")).toBe(true);
+  });
+
+  it("does not render another viewer's reads", async () => {
+    const fetcher = vi.fn(async () => snapshot());
+    const { result, rerender } = renderHook(() => useSidebarSessions(), {
+      wrapper: wrapper(fetcher),
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => recordPageRead(readResult("attention")));
+    expect(result.current.needsAttention).toEqual([]);
+
+    authUser = { id: "github:456", name: "Other User" };
+    rerender();
+
+    await waitFor(() =>
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"])
+    );
+    expect(result.current.needsAttention[0]?.readState.unread).toBe(true);
+  });
+
+  it("discards loaded pages when the head boundary moves", async () => {
     let sessionRead = false;
     const fetcher = vi.fn(async (key: string) => {
-      if (key.includes("category=needs_attention")) {
-        return { items: [unreadItem("moving")], hasMore: false, nextCursor: null };
-      }
       if (key.includes("category=in_progress")) {
         return page([
           key.includes("new-progress-next") ? "new-progress-tail" : "old-progress-tail",
         ]);
       }
+      if (key.includes("category=")) return page(["attention-tail"]);
       return sessionRead
         ? snapshot({
-            needs_attention: page(["attention"]),
-            in_progress: page(["moving", "running"], "new-progress-next"),
+            needs_attention: page(["attention"], "attention-next"),
+            in_progress: {
+              items: [readItem("moving"), item("running")],
+              hasMore: true,
+              nextCursor: "new-progress-next",
+            },
           })
         : snapshot({
             needs_attention: page(["attention"], "attention-next"),
@@ -628,20 +848,19 @@ describe("useSidebarSessions", () => {
     await waitFor(() => expect(result.current.inProgress).toHaveLength(2));
 
     sessionRead = true;
-    await act(() =>
-      reconcileSessionReadState({
-        sessionId: "moving",
-        outcome: "marked_read",
-        latestMessageId: "msg-2",
-        version: 2,
-        unread: false,
-      })
-    );
+    await act(async () => result.current.refreshSnapshot());
 
+    // The in-progress head gained a row, so its old tail could hide the rows
+    // now below the new boundary; it is dropped. The attention chain, whose
+    // boundary did not move, keeps its tail.
     await waitFor(() =>
       expect(result.current.inProgress.map(({ id }) => id)).toEqual(["moving", "running"])
     );
-    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
+    expect(result.current.sectionPagination.inProgress.hasMore).toBe(true);
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual([
+      "attention",
+      "attention-tail",
+    ]);
 
     act(() => result.current.sectionPagination.inProgress.loadMore());
     await waitFor(() =>
@@ -651,12 +870,76 @@ describe("useSidebarSessions", () => {
         "new-progress-tail",
       ])
     );
-    expect(fetcher).toHaveBeenCalledWith(
-      "/api/sessions/inbox?category=in_progress&cursor=new-progress-next"
+  });
+
+  it("drops a response from an earlier chain even when the filter returns to the same identity", async () => {
+    const pendingPage = deferred<SessionInboxPage>();
+    let paginationRequests = 0;
+    const fetcher = vi.fn(async (key: string) => {
+      if (key.includes("category=")) {
+        paginationRequests += 1;
+        return paginationRequests === 1 ? pendingPage.promise : page(["fresh-page-2"]);
+      }
+      return snapshot({
+        needs_attention: page([key.includes("mine=true") ? "mine-first" : "all-first"], "next"),
+      });
+    });
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() =>
+      expect(result.current.sectionPagination.needsAttention.loadingMore).toBe(true)
+    );
+
+    act(() => result.current.setSessionCreatorFilter("mine"));
+    await waitFor(() => expect(result.current.needsAttention[0]?.id).toBe("mine-first"));
+    act(() => result.current.setSessionCreatorFilter("all"));
+    await waitFor(() => expect(result.current.needsAttention[0]?.id).toBe("all-first"));
+    expect(result.current.sectionPagination.needsAttention.loadingMore).toBe(false);
+
+    await act(async () => pendingPage.resolve(page(["stale-page-2"])));
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["all-first"]);
+
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() =>
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual([
+        "all-first",
+        "fresh-page-2",
+      ])
     );
   });
 
-  it("invalidates cached pagination before a remount can restore stale unread state", async () => {
+  it.each(["marked_read", "not_latest"] as const)(
+    "drops in-flight pages only for the viewer whose page reports %s",
+    async (outcome) => {
+      const pendingPage = deferred<SessionInboxPage>();
+      let paginationRequests = 0;
+      const fetcher = vi.fn(async (key: string) => {
+        if (!key.includes("category=")) {
+          return snapshot({ finished: page(["head"], "next") });
+        }
+        return ++paginationRequests === 1 ? pendingPage.promise : page(["fresh-tail"]);
+      });
+      const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      act(() => result.current.sectionPagination.finished.loadMore());
+      await waitFor(() => expect(result.current.sectionPagination.finished.loadingMore).toBe(true));
+
+      act(() => applySessionReadResult(readResult("child", outcome), noRevalidate, "other-viewer"));
+      expect(result.current.sectionPagination.finished.loadingMore).toBe(true);
+      act(() => recordPageRead(readResult("child", outcome)));
+      expect(result.current.sectionPagination.finished.loadingMore).toBe(false);
+      await act(async () => pendingPage.resolve(page(["stale-tail"])));
+      expect(result.current.finished.map(({ id }) => id)).toEqual(["head"]);
+
+      act(() => result.current.sectionPagination.finished.loadMore());
+      await waitFor(() =>
+        expect(result.current.finished.map(({ id }) => id)).toEqual(["head", "fresh-tail"])
+      );
+    }
+  );
+
+  it("starts pagination from the head after a remount", async () => {
     let sessionRead = false;
     let paginationRequests = 0;
     const fetcher = vi.fn(async (key: string) => {
@@ -666,7 +949,7 @@ describe("useSidebarSessions", () => {
       paginationRequests += 1;
       return sessionRead
         ? { items: [], hasMore: false, nextCursor: null }
-        : { items: [unreadItem("tail-unread")], hasMore: false, nextCursor: null };
+        : { items: [item("tail-unread")], hasMore: false, nextCursor: null };
     });
     const cache = new Map();
     const TestWrapper = wrapper(fetcher, cache);
@@ -676,19 +959,12 @@ describe("useSidebarSessions", () => {
     await waitFor(() => expect(first.result.current.needsAttention).toHaveLength(2));
 
     sessionRead = true;
-    await act(() =>
-      reconcileSessionReadState({
-        sessionId: "tail-unread",
-        outcome: "marked_read",
-        latestMessageId: "msg-1",
-        version: 1,
-        unread: false,
-      })
-    );
+    await act(async () => first.result.current.handleMarkLatestMessageRead("tail-unread"));
     first.unmount();
 
     const second = renderHook(() => useSidebarSessions(), { wrapper: TestWrapper });
     await waitFor(() => expect(second.result.current.loading).toBe(false));
+    expect([...cache.keys()].every((key) => typeof key === "string")).toBe(true);
     act(() => second.result.current.sectionPagination.needsAttention.loadMore());
 
     await waitFor(() => expect(paginationRequests).toBe(2));

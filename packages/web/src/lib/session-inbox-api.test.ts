@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SessionListItem } from "@open-inspect/shared/types/session-inbox";
 import {
-  applySessionInboxReadStateUpdate,
+  applySessionInboxTitleUpdate,
   buildSessionInboxKey,
+  isSessionInboxItemFullyRead,
   isSessionInboxKey,
-  isSessionInboxPaginationKey,
   type SessionInboxPage,
   type SessionInboxSnapshot,
 } from "./session-inbox-api";
@@ -70,121 +70,44 @@ describe("session inbox API keys", () => {
   ])("does not match unrelated key %s", (key) => {
     expect(isSessionInboxKey(key)).toBe(false);
   });
+});
 
-  it("matches cached pagination tuple keys", () => {
-    expect(
-      isSessionInboxPaginationKey([
-        "/api/sessions/inbox?category=needs_attention&cursor=next",
-        '["user-1",false]',
-      ])
-    ).toBe(true);
-    expect(isSessionInboxPaginationKey(["/api/sessions?status=active", "filter"])).toBe(false);
+describe("isSessionInboxItemFullyRead", () => {
+  const read = { latestMessageId: "old-message", version: 1, unread: false } as const;
+
+  it("keeps a hierarchy in attention while any session in it is unread", () => {
+    const unread = page("root", ["child"]).items[0];
+    expect(isSessionInboxItemFullyRead(unread)).toBe(false);
+
+    const rootRead = { ...unread, rootSession: { ...unread.rootSession, readState: read } };
+    expect(isSessionInboxItemFullyRead(rootRead)).toBe(false);
+
+    const allRead = {
+      ...rootRead,
+      descendantSessions: rootRead.descendantSessions.map((child) => ({
+        ...child,
+        readState: read,
+      })),
+    };
+    expect(isSessionInboxItemFullyRead(allRead)).toBe(true);
   });
 });
 
-describe("applySessionInboxReadStateUpdate", () => {
-  const readState = { latestMessageId: "old-message", version: 1, unread: false } as const;
-
-  it("updates a matching root session in a page without disturbing unrelated sessions", () => {
-    const data: SessionInboxPage = {
-      ...page("target", ["target-child"]),
-      items: [...page("target", ["target-child"]).items, ...page("unrelated").items],
-    };
-
-    const result = applySessionInboxReadStateUpdate(data, "target", readState);
-
-    expect(result?.items[0].rootSession.readState).toEqual(readState);
-    expect(result?.items[0].descendantSessions[0].readState).toEqual({
-      latestMessageId: "old-message",
-      version: 1,
-      unread: true,
-    });
-    expect(result?.items[1].rootSession.readState).toEqual({
-      latestMessageId: "old-message",
-      version: 1,
-      unread: true,
-    });
-    expect(data.items[0].rootSession.readState.unread).toBe(true);
-  });
-
-  it("updates a matching descendant in a snapshot without disturbing other sessions", () => {
+describe("applySessionInboxTitleUpdate", () => {
+  it("renames a session in every category without disturbing other rows", () => {
     const data: SessionInboxSnapshot = {
       categories: {
-        needs_attention: page("attention-root", ["target-child", "sibling-child"]),
-        in_progress: page("progress-root", ["progress-child"]),
-        finished: page("finished-root"),
-      },
-    };
-
-    const result = applySessionInboxReadStateUpdate(data, "target-child", readState);
-
-    expect(result?.categories.needs_attention.items[0].descendantSessions[0].readState).toEqual(
-      readState
-    );
-    expect(result?.categories.needs_attention.items[0].rootSession.readState.unread).toBe(true);
-    expect(result?.categories.needs_attention.items[0].descendantSessions[1].readState.unread).toBe(
-      true
-    );
-    expect(result?.categories.in_progress.items[0].rootSession.readState.unread).toBe(true);
-    expect(data.categories.needs_attention.items[0].descendantSessions[0].readState.unread).toBe(
-      true
-    );
-  });
-
-  it("moves a fully read active hierarchy from attention to in progress", () => {
-    const data: SessionInboxSnapshot = {
-      categories: {
-        needs_attention: page("target"),
+        needs_attention: page("attention-root", ["target"]),
         in_progress: page("progress-root"),
         finished: page("finished-root"),
       },
     };
 
-    const result = applySessionInboxReadStateUpdate(data, "target", readState);
+    const result = applySessionInboxTitleUpdate(data, "target", "Renamed");
 
-    expect(result?.categories.needs_attention.items).toEqual([]);
-    expect(result?.categories.in_progress.items.map((item) => item.rootSession.id)).toEqual([
-      "target",
-      "progress-root",
-    ]);
-  });
-
-  it("moves a fully read finished descendant hierarchy from attention to finished", () => {
-    const attentionPage = page("target-root", ["target-child"]);
-    attentionPage.items[0].rootSession.status = "completed";
-    attentionPage.items[0].rootSession.readState.unread = false;
-    attentionPage.items[0].descendantSessions[0].status = "completed";
-    const data: SessionInboxSnapshot = {
-      categories: {
-        needs_attention: attentionPage,
-        in_progress: page("progress-root"),
-        finished: page("finished-root"),
-      },
-    };
-
-    const result = applySessionInboxReadStateUpdate(data, "target-child", readState);
-
-    expect(result?.categories.needs_attention.items).toEqual([]);
-    expect(result?.categories.finished.items.map((item) => item.rootSession.id)).toEqual([
-      "target-root",
-      "finished-root",
-    ]);
-  });
-
-  it("does not let an older result overwrite a newer cached terminal message", () => {
-    const data = page("target");
-    data.items[0].rootSession.readState = {
-      latestMessageId: "newer-message",
-      version: 2,
-      unread: true,
-    };
-
-    const result = applySessionInboxReadStateUpdate(data, "target", readState);
-
-    expect(result?.items[0].rootSession.readState).toEqual({
-      latestMessageId: "newer-message",
-      version: 2,
-      unread: true,
-    });
+    expect(result?.categories.needs_attention.items[0].descendantSessions[0].title).toBe("Renamed");
+    expect(result?.categories.needs_attention.items[0].rootSession.title).toBe("attention-root");
+    expect(result?.categories.in_progress).toEqual(data.categories.in_progress);
+    expect(applySessionInboxTitleUpdate(undefined, "target", "Renamed")).toBeUndefined();
   });
 });
