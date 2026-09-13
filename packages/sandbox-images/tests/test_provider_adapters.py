@@ -24,13 +24,15 @@ EXPECTED_NAME = "prefix-aaaaaaaaaaaa-123"
 
 @pytest.fixture
 def build_mocks(monkeypatch, tmp_path):
+    bundle_directory = tmp_path / "bundle"
+    bundle_directory.mkdir()
     monkeypatch.setattr(
         bundle, "plan_image", Mock(side_effect=AssertionError("provider replanned image"))
     )
     monkeypatch.setattr(
         bundle,
         "pack_bundle",
-        Mock(return_value=bundle.PackedBundle(tmp_path, PLAN)),
+        Mock(return_value=bundle.PackedBundle(bundle_directory, PLAN)),
     )
     publish = Mock()
     monkeypatch.setattr(native, "write_build_result", publish)
@@ -137,6 +139,7 @@ def test_daytona_retry_never_recreates_existing_snapshot(
     assert create.call_count == (0 if retained else 1)
     if not retained:
         create.assert_called_once_with(client, bundle.pack_bundle.return_value, EXPECTED_NAME)
+    assert not bundle.pack_bundle.return_value.directory.exists()
     assert sandbox_params.call_args.kwargs["env_vars"] is PLAN["runtimeEnv"]
     assert sandbox.process.exec.call_args.args[0].endswith("/app/verify/smoke_test.py verify")
     sandbox.delete.assert_called_once()
