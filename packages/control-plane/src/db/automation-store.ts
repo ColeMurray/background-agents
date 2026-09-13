@@ -899,22 +899,46 @@ export class AutomationStore {
     const now = Date.now();
 
     if (status === "completed") {
-      const [transitionResult] = await this.db.batch([
-        transition,
+      const [, transitionResult] = await this.db.batch([
         this.db
           .prepare(
             `UPDATE automations
              SET consecutive_failures = 0, updated_at = ?
              WHERE id = ? AND deleted_at IS NULL
                AND EXISTS (
-                 SELECT 1 FROM automation_invocations i
-                 WHERE i.id = ? AND i.automation_id = ?
-                   AND EXISTS (SELECT 1 FROM automation_runs r WHERE r.invocation_id = i.id)
+                 SELECT 1
+                 FROM automation_invocations i
+                 JOIN automation_runs current ON current.invocation_id = i.id
+                 WHERE i.id = ? AND i.automation_id = ? AND i.skip_reason IS NULL
+                   AND current.id = ? AND current.automation_id = i.automation_id
+                   AND current.session_id IS ?
+                   AND current.status IN ('starting', 'running')
                    AND NOT EXISTS (
-                     SELECT 1 FROM automation_runs r
-                     WHERE r.invocation_id = i.id AND r.status != 'completed'))`
+                     SELECT 1 FROM automation_runs sibling
+                     WHERE sibling.invocation_id = i.id AND sibling.id != current.id
+                       AND sibling.status != 'completed')
+                   AND NOT EXISTS (
+                     SELECT 1 FROM automation_invocations newer
+                     WHERE newer.automation_id = i.automation_id AND newer.skip_reason IS NULL
+                       AND (newer.created_at > i.created_at
+                         OR (newer.created_at = i.created_at AND newer.id > i.id)))
+                   AND NOT EXISTS (
+                     SELECT 1 FROM automation_invocations newer_failure
+                     WHERE newer_failure.automation_id = i.automation_id
+                       AND newer_failure.failure_counted_at IS NOT NULL
+                       AND (newer_failure.created_at > i.created_at
+                         OR (newer_failure.created_at = i.created_at
+                           AND newer_failure.id > i.id))))`
           )
-          .bind(now, run.automation_id, run.invocation_id, run.automation_id),
+          .bind(
+            now,
+            run.automation_id,
+            run.invocation_id,
+            run.automation_id,
+            run.id,
+            run.session_id
+          ),
+        transition,
       ]);
       return {
         transitioned: (transitionResult?.meta.changes ?? 0) > 0,

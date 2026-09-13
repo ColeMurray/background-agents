@@ -834,6 +834,58 @@ describe("AutomationStore (D1 integration)", () => {
     });
   });
 
+  describe("reconciliation completion accounting", () => {
+    it("does not let an older or duplicate completion reset a newer failure", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-account-order", consecutive_failures: 1 }));
+      const older = makeRun("auto-account-order", {
+        id: "run-account-older",
+        invocation_id: "inv-account-a",
+        status: "running",
+        session_id: "session-account-older",
+        created_at: 1000,
+      });
+      await seedRun(older);
+      await seedRun(
+        makeRun("auto-account-order", {
+          id: "run-account-newer",
+          invocation_id: "inv-account-z",
+          status: "failed",
+          failure_reason: "newer failure",
+          completed_at: 2100,
+          created_at: 1000,
+        })
+      );
+      await env.DB.prepare(
+        `UPDATE automation_invocations SET failure_counted_at = 2100
+         WHERE id = 'inv-account-z'`
+      ).run();
+
+      const first = await store.completeRunAndApplyAccounting({
+        run: older,
+        status: "completed",
+        failureReason: null,
+        completedAt: 1500,
+        autoPauseThreshold: 3,
+      });
+      expect(first.transitioned).toBe(true);
+      expect((await store.getById("auto-account-order"))!.consecutive_failures).toBe(1);
+
+      await env.DB.prepare(
+        `UPDATE automations SET consecutive_failures = 2 WHERE id = 'auto-account-order'`
+      ).run();
+      const duplicate = await store.completeRunAndApplyAccounting({
+        run: older,
+        status: "completed",
+        failureReason: null,
+        completedAt: 1500,
+        autoPauseThreshold: 3,
+      });
+      expect(duplicate.transitioned).toBe(false);
+      expect((await store.getById("auto-account-order"))!.consecutive_failures).toBe(2);
+    });
+  });
+
   // ─── Failure tracking ──────────────────────────────────────────────────────
 
   describe("failure tracking", () => {
