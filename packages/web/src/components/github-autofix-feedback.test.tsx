@@ -110,6 +110,90 @@ describe("GitHubAutofixFeedbackCard", () => {
     expect(screen.getByRole("link", { name: "Documentation" })).toBeInTheDocument();
   });
 
+  it("bounds line-triggered disclosure content in the accessibility tree", async () => {
+    const user = userEvent.setup();
+    const body = [
+      ...Array.from({ length: 14 }, (_, index) => `Line ${index + 1}`),
+      "Hidden line",
+    ].join("\n");
+    render(<FeedbackCard feedback={{ ...review, body }} />);
+
+    expect(screen.queryByText("Hidden line")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Show complete review" }));
+    expect(screen.getByText(/Hidden line/)).toBeInTheDocument();
+  });
+
+  it("resolves GitHub-relative links against the feedback URL", () => {
+    render(
+      <FeedbackCard
+        feedback={{
+          ...review,
+          body: "See [issue](/acme/widgets/issues/123) and [details](#details).",
+        }}
+      />
+    );
+
+    expect(screen.getByRole("link", { name: "issue" })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/widgets/issues/123"
+    );
+    expect(screen.getByRole("link", { name: "details" })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/widgets/pull/42#details"
+    );
+  });
+
+  it("renders image-only feedback as a safe non-interactive placeholder", async () => {
+    const user = userEvent.setup();
+    render(
+      <FeedbackCard
+        feedback={{
+          ...review,
+          comments: [
+            {
+              ...review.comments[0],
+              body: "![failure](https://github.com/user-attachments/assets/failure.png)",
+            },
+          ],
+        }}
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Expand review comment on src/widget.ts L10-L12" })
+    );
+    expect(
+      screen.getByText("failure: https://github.com/user-attachments/assets/failure.png")
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("does not create nested links for linked-image Markdown", async () => {
+    const user = userEvent.setup();
+    render(
+      <FeedbackCard
+        feedback={{
+          ...review,
+          comments: [
+            {
+              ...review.comments[0],
+              body: "[![failure](https://github.com/user-attachments/assets/failure.png)](https://github.com/acme/widgets/actions)",
+            },
+          ],
+        }}
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Expand review comment on src/widget.ts L10-L12" })
+    );
+    const link = screen.getByRole("link", {
+      name: "failure: https://github.com/user-attachments/assets/failure.png",
+    });
+    expect(link).toHaveAttribute("href", "https://github.com/acme/widgets/actions");
+    expect(link.querySelector("a")).toBeNull();
+  });
+
   it("renders pull request comments without a thread section", () => {
     render(
       <FeedbackCard

@@ -54,6 +54,7 @@ export function GitHubAutofixFeedbackCard({
         {feedback.body.trim() && (
           <ReviewBody
             body={feedback.body}
+            sourceUrl={sourceUrl ?? undefined}
             subject={feedback.kind === "review" ? "review" : "comment"}
             expanded={expandedSections.has(reviewBodyKey)}
             onToggle={() => onToggleSection(reviewBodyKey)}
@@ -89,28 +90,33 @@ export function GitHubAutofixFeedbackCard({
 
 function ReviewBody({
   body,
+  sourceUrl,
   subject,
   expanded,
   onToggle,
 }: {
   body: string;
+  sourceUrl?: string;
   subject: "review" | "comment";
   expanded: boolean;
   onToggle: () => void;
 }) {
   const contentId = useId();
   const needsDisclosure = body.length > REVIEW_BODY_PREVIEW_CHARS || body.split("\n").length > 14;
+  const preview = body.split("\n").slice(0, 14).join("\n").slice(0, REVIEW_BODY_PREVIEW_CHARS);
 
   return (
     <div className="mt-3">
       <div id={contentId}>
         {needsDisclosure && !expanded ? (
           <p className="line-clamp-[14] whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
-            {body.slice(0, REVIEW_BODY_PREVIEW_CHARS)}
+            {preview}
           </p>
         ) : (
           <SafeMarkdown
             content={body}
+            baseUrl={sourceUrl}
+            imageMode="placeholder"
             className="text-xs prose-headings:mb-2 prose-headings:mt-4 prose-headings:text-xs prose-p:text-xs prose-p:leading-5 prose-li:text-xs prose-li:leading-5"
           />
         )}
@@ -234,6 +240,8 @@ function ReviewThread({
             {comment.body.trim() && (
               <SafeMarkdown
                 content={comment.body}
+                baseUrl={threadUrl ?? undefined}
+                imageMode="placeholder"
                 className="text-xs prose-p:text-xs prose-p:leading-5"
               />
             )}

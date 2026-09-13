@@ -90,7 +90,9 @@ export function SessionTimeline({
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Set<string>>(new Set());
   const [expandedTaskSections, setExpandedTaskSections] = useState<Set<string>>(new Set());
-  const [expandedAutofixSections, setExpandedAutofixSections] = useState<Set<string>>(new Set());
+  const [expandedAutofixSections, setExpandedAutofixSections] = useState<
+    Map<string, ReadonlySet<string>>
+  >(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
@@ -212,11 +214,13 @@ export function SessionTimeline({
     });
   }, []);
 
-  const toggleAutofixSection = useCallback((key: string) => {
+  const toggleAutofixSection = useCallback((messageId: string, key: string) => {
     setExpandedAutofixSections((expanded) => {
-      const next = new Set(expanded);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+      const next = new Map(expanded);
+      const messageSections = new Set(expanded.get(messageId));
+      if (messageSections.has(key)) messageSections.delete(key);
+      else messageSections.add(key);
+      next.set(messageId, messageSections);
       return next;
     });
   }, []);
@@ -241,7 +245,11 @@ export function SessionTimeline({
         sessionId={sessionId}
         currentParticipantId={currentParticipantId}
         participantProfiles={participantProfiles}
-        expandedAutofixSections={expandedAutofixSections}
+        expandedAutofixSections={
+          item.event.type === "user_message"
+            ? (expandedAutofixSections.get(item.event.messageId) ?? EMPTY_EXPANDED_SECTIONS)
+            : EMPTY_EXPANDED_SECTIONS
+        }
         onToggleAutofixSection={toggleAutofixSection}
         onOpenMedia={onOpenMedia}
       />
@@ -363,7 +371,7 @@ type EventRendererProps = {
   copied: boolean;
   onCopyContent: (content: string) => void;
   expandedAutofixSections: ReadonlySet<string>;
-  onToggleAutofixSection: (key: string) => void;
+  onToggleAutofixSection: (messageId: string, key: string) => void;
   onOpenMedia: (artifactId: string) => void;
 };
 
@@ -571,7 +579,7 @@ function UserMessageEvent({
           feedback={autofixFeedback}
           messageId={event.messageId}
           expandedSections={expandedAutofixSections}
-          onToggleSection={onToggleAutofixSection}
+          onToggleSection={(key) => onToggleAutofixSection(event.messageId, key)}
         />
       ) : event.content ? (
         <div>
@@ -740,7 +748,7 @@ export const EventItem = memo(function EventItem({
   currentParticipantId: string | null;
   participantProfiles: Record<string, SessionParticipantProfile>;
   expandedAutofixSections?: ReadonlySet<string>;
-  onToggleAutofixSection?: (key: string) => void;
+  onToggleAutofixSection?: (messageId: string, key: string) => void;
   onOpenMedia: (artifactId: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
