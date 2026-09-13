@@ -356,6 +356,8 @@ class SandboxSupervisor:
         tasks = {operation_task, shutdown_task}
         try:
             done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if shutdown_task in done or self.shutdown_event.is_set():
+                raise BootExecutionCancelled
             if operation_task in done:
                 return operation_task.result()
             raise BootExecutionCancelled
@@ -411,8 +413,6 @@ class SandboxSupervisor:
         try:
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
-                if self.shutdown_event.is_set():
-                    raise BootExecutionCancelled
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
                 self.log.info(
                     "image_build.complete",
