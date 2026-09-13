@@ -871,6 +871,115 @@ export class AutomationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /** Reconciliation replay must roll back its terminal write if accounting fails. */
+  async completeRunAndApplyAccounting(params: {
+    run: AutomationRunRow;
+    status: "completed" | "failed";
+    failureReason: string | null;
+    completedAt: number;
+    autoPauseThreshold: number;
+  }): Promise<{ transitioned: boolean; autoPaused: boolean; consecutiveFailures: number }> {
+    const { run, status, failureReason, completedAt, autoPauseThreshold } = params;
+    const transition = this.db
+      .prepare(
+        `UPDATE automation_runs
+         SET status = ?, failure_reason = ?, completed_at = ?
+         WHERE id = ? AND automation_id = ? AND invocation_id = ? AND session_id = ?
+           AND status IN ('starting', 'running')`
+      )
+      .bind(
+        status,
+        failureReason,
+        completedAt,
+        run.id,
+        run.automation_id,
+        run.invocation_id,
+        run.session_id
+      );
+    const now = Date.now();
+
+    if (status === "completed") {
+      const [transitionResult] = await this.db.batch([
+        transition,
+        this.db
+          .prepare(
+            `UPDATE automations
+             SET consecutive_failures = 0, updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL
+               AND EXISTS (
+                 SELECT 1 FROM automation_invocations i
+                 WHERE i.id = ? AND i.automation_id = ?
+                   AND EXISTS (SELECT 1 FROM automation_runs r WHERE r.invocation_id = i.id)
+                   AND NOT EXISTS (
+                     SELECT 1 FROM automation_runs r
+                     WHERE r.invocation_id = i.id AND r.status != 'completed'))`
+          )
+          .bind(now, run.automation_id, run.invocation_id, run.automation_id),
+      ]);
+      return {
+        transitioned: (transitionResult?.meta.changes ?? 0) > 0,
+        autoPaused: false,
+        consecutiveFailures: 0,
+      };
+    }
+
+    const [transitionResult, automationResult, , countResult] = await this.db.batch<{
+      consecutive_failures: number;
+      enabled: number;
+    }>([
+      transition,
+      this.db
+        .prepare(
+          `UPDATE automations
+           SET consecutive_failures = consecutive_failures + 1,
+               enabled = CASE WHEN consecutive_failures + 1 >= ? THEN 0 ELSE enabled END,
+               next_run_at = CASE WHEN consecutive_failures + 1 >= ? THEN NULL ELSE next_run_at END,
+               updated_at = ?
+           WHERE id = ? AND deleted_at IS NULL
+             AND EXISTS (
+               SELECT 1 FROM automation_invocations i
+               WHERE i.id = ? AND i.automation_id = ? AND i.failure_counted_at IS NULL
+                 AND EXISTS (
+                   SELECT 1 FROM automation_runs r
+                   WHERE r.invocation_id = i.id AND r.status = 'failed'))`
+        )
+        .bind(
+          autoPauseThreshold,
+          autoPauseThreshold,
+          now,
+          run.automation_id,
+          run.invocation_id,
+          run.automation_id
+        ),
+      this.db
+        .prepare(
+          `UPDATE automation_invocations
+           SET failure_counted_at = ?, updated_at = ?
+           WHERE id = ? AND automation_id = ? AND failure_counted_at IS NULL
+             AND EXISTS (
+               SELECT 1 FROM automations a
+               WHERE a.id = ? AND a.deleted_at IS NULL)
+             AND EXISTS (
+               SELECT 1 FROM automation_runs r
+               WHERE r.invocation_id = automation_invocations.id AND r.status = 'failed')`
+        )
+        .bind(now, now, run.invocation_id, run.automation_id, run.automation_id),
+      this.db
+        .prepare(
+          `SELECT consecutive_failures, enabled FROM automations
+           WHERE id = ? AND deleted_at IS NULL`
+        )
+        .bind(run.automation_id),
+    ]);
+    const current = countResult?.results[0];
+    const failureCounted = (automationResult?.meta.changes ?? 0) > 0;
+    return {
+      transitioned: (transitionResult?.meta.changes ?? 0) > 0,
+      autoPaused: failureCounted && current?.enabled === 0,
+      consecutiveFailures: current?.consecutive_failures ?? 0,
+    };
+  }
+
   /** Atomically assign a session only while a run still awaits launch. */
   async claimRunSession(
     id: string,
@@ -1410,14 +1519,13 @@ export class AutomationStore {
   // a bound param, or the planner skips the index and full-scans automation_runs.
   static readonly ORPHANED_STARTING_RUNS_SQL =
     "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
-  static readonly RUNS_DUE_FOR_RECONCILIATION_SQL = `SELECT * FROM (
-       SELECT * FROM automation_runs
+  static readonly RUNS_DUE_FOR_RECONCILIATION_SQL = `SELECT *, reconciliation_due_at AS due_at FROM automation_runs
        WHERE status = 'running' AND reconciliation_due_at IS NOT NULL AND reconciliation_due_at <= ?
        UNION ALL
-       SELECT * FROM automation_runs
+       SELECT *, started_at AS due_at FROM automation_runs
        WHERE status = 'running' AND reconciliation_due_at IS NULL
          AND started_at IS NOT NULL AND started_at <= ?
-     )`;
+       ORDER BY due_at ASC LIMIT ?`;
 
   async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
@@ -1434,9 +1542,7 @@ export class AutomationStore {
     limit: number
   ): Promise<AutomationRunRow[]> {
     const result = await this.db
-      .prepare(
-        `${AutomationStore.RUNS_DUE_FOR_RECONCILIATION_SQL} ORDER BY COALESCE(reconciliation_due_at, started_at) ASC LIMIT ?`
-      )
+      .prepare(AutomationStore.RUNS_DUE_FOR_RECONCILIATION_SQL)
       .bind(now, legacyStartedBefore, limit)
       .all<AutomationRunRow>();
     return result.results || [];

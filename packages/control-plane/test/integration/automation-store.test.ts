@@ -780,11 +780,13 @@ describe("AutomationStore (D1 integration)", () => {
       const plan = await env.DB.prepare(
         `EXPLAIN QUERY PLAN ${AutomationStore.RUNS_DUE_FOR_RECONCILIATION_SQL}`
       )
-        .bind(Date.now(), Date.now() - 90 * 60 * 1000)
+        .bind(Date.now(), Date.now() - 90 * 60 * 1000, 50)
         .all<{ detail: string }>();
       const detail = plan.results.map((r) => r.detail).join("\n");
+      expect(detail).toContain("MERGE (UNION ALL)");
       expect(detail).toContain("USING INDEX idx_runs_reconciliation_sweep");
       expect(detail).toContain("USING INDEX idx_runs_timeout_sweep");
+      expect(detail).not.toContain("USE TEMP B-TREE");
     });
   });
 

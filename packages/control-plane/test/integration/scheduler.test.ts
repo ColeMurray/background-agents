@@ -392,7 +392,9 @@ describe("Scheduler (integration)", () => {
     it("recovers a missed successful callback from the durable message outcome", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
-      await store.create(makeAutomation({ id: "auto-reconcile-complete" }));
+      await store.create(
+        makeAutomation({ id: "auto-reconcile-complete", consecutive_failures: 2 })
+      );
       await seedRun(
         makeRunRow("auto-reconcile-complete", {
           id: "run-reconcile-complete",
@@ -410,6 +412,62 @@ describe("Scheduler (integration)", () => {
 
       const run = await store.getRunById("auto-reconcile-complete", "run-reconcile-complete");
       expect(run).toMatchObject({ status: "completed", completed_at: 1234 });
+      expect((await store.getById("auto-reconcile-complete"))!.consecutive_failures).toBe(0);
+    });
+
+    it("retries an old reconciliation when atomic failure accounting rolls back", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      const old = now - 25 * 60 * 60 * 1000;
+      await store.create(makeAutomation({ id: "auto-reconcile-retry" }));
+      await seedRun(
+        makeRunRow("auto-reconcile-retry", {
+          id: "run-reconcile-retry",
+          invocation_id: "inv-run-reconcile-retry",
+          status: "running",
+          session_id: "session-retry",
+          started_at: old,
+          reconciliation_due_at: now - 1,
+          created_at: old,
+        })
+      );
+      const schedulerEnv = createCloudflareEnv(env);
+      schedulerEnv.SESSION = async () =>
+        Response.json({
+          state: "failed",
+          messageId: "message-retry",
+          completedAt: old + 1000,
+          error: "Sandbox crashed",
+        });
+
+      await env.DB.prepare(
+        `CREATE TRIGGER fail_reconciliation_accounting
+         BEFORE UPDATE OF consecutive_failures ON automations
+         WHEN NEW.id = 'auto-reconcile-retry'
+         BEGIN
+           SELECT RAISE(ABORT, 'forced accounting failure');
+         END`
+      ).run();
+      try {
+        await createScheduler(schedulerEnv).tick();
+        expect(
+          (await store.getRunById("auto-reconcile-retry", "run-reconcile-retry"))!.status
+        ).toBe("running");
+      } finally {
+        await env.DB.exec("DROP TRIGGER IF EXISTS fail_reconciliation_accounting");
+      }
+
+      await createScheduler(schedulerEnv).tick();
+
+      expect(await store.getRunById("auto-reconcile-retry", "run-reconcile-retry")).toMatchObject({
+        status: "failed",
+        failure_reason: "Sandbox crashed",
+        completed_at: old + 1000,
+      });
+      expect((await store.getById("auto-reconcile-retry"))!.consecutive_failures).toBe(1);
+      expect(
+        (await store.getInvocationById("inv-run-reconcile-retry"))!.failure_counted_at
+      ).not.toBeNull();
     });
 
     it("skips overdue automations with active runs (concurrency guard)", async () => {

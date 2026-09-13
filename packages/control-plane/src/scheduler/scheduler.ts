@@ -1013,15 +1013,18 @@ export class Scheduler {
       return;
     }
 
-    await this.runComplete({
-      automationId: run.automation_id,
-      runId: run.id,
-      sessionId: run.session_id,
-      messageId: parsed.data.messageId,
-      success: parsed.data.state === "completed",
-      error: parsed.data.state === "failed" ? (parsed.data.error ?? "Unknown error") : undefined,
-      completedAt: parsed.data.completedAt,
-    });
+    await this.runComplete(
+      {
+        automationId: run.automation_id,
+        runId: run.id,
+        sessionId: run.session_id,
+        messageId: parsed.data.messageId,
+        success: parsed.data.state === "completed",
+        error: parsed.data.state === "failed" ? (parsed.data.error ?? "Unknown error") : undefined,
+        completedAt: parsed.data.completedAt,
+      },
+      true
+    );
   }
 
   /**
@@ -1335,7 +1338,7 @@ export class Scheduler {
 
   // ─── Run complete callback ───────────────────────────────────────────────
 
-  async runComplete(body: AutomationRunCompletion): Promise<void> {
+  async runComplete(body: AutomationRunCompletion, replayedOutcome = false): Promise<void> {
     const store = new AutomationStore(this.db);
 
     const run = await store.getRunById(body.automationId, body.runId);
@@ -1364,16 +1367,28 @@ export class Scheduler {
     // guard suppresses the write (recovery sweep or a concurrent callback got
     // there first) the callback is acknowledged as ignored — a terminal child
     // must never transition again.
-    const transitioned = await store.updateRun(
-      body.runId,
-      body.success
-        ? { status: "completed", completed_at: body.completedAt ?? Date.now() }
-        : {
-            status: "failed",
-            failure_reason: body.error || "Unknown error",
-            completed_at: body.completedAt ?? Date.now(),
-          }
-    );
+    const completedAt = body.completedAt ?? Date.now();
+    const accounting = replayedOutcome
+      ? await store.completeRunAndApplyAccounting({
+          run,
+          status: body.success ? "completed" : "failed",
+          failureReason: body.success ? null : body.error || "Unknown error",
+          completedAt,
+          autoPauseThreshold: AUTO_PAUSE_THRESHOLD,
+        })
+      : null;
+    const transitioned = accounting
+      ? accounting.transitioned
+      : await store.updateRun(
+          body.runId,
+          body.success
+            ? { status: "completed", completed_at: completedAt }
+            : {
+                status: "failed",
+                failure_reason: body.error || "Unknown error",
+                completed_at: completedAt,
+              }
+        );
 
     if (!transitioned) {
       this.log.warn("Ignoring run-complete callback for non-active run", {
@@ -1385,9 +1400,17 @@ export class Scheduler {
       return;
     }
 
-    // Invocation-level accounting: one CAS-guarded strike per invocation on
-    // first failure; streak reset once every sibling completed.
-    await this.applyInvocationAccounting(store, body.automationId, run.invocation_id);
+    if (!accounting) {
+      // Invocation-level accounting: one CAS-guarded strike per invocation on
+      // first failure; streak reset once every sibling completed.
+      await this.applyInvocationAccounting(store, body.automationId, run.invocation_id);
+    } else if (accounting.autoPaused) {
+      this.log.warn("Automation auto-paused due to consecutive failures", {
+        event: "scheduler.auto_pause",
+        automation_id: body.automationId,
+        consecutive_failures: accounting.consecutiveFailures,
+      });
+    }
 
     if (body.success) {
       this.log.info("Run completed successfully", {

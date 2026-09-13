@@ -104,6 +104,11 @@ function createMockStore() {
     getUncountedFailedInvocations: vi.fn().mockResolvedValue([]),
     getStaleFailureResetCandidates: vi.fn().mockResolvedValue([]),
     updateRun: vi.fn().mockResolvedValue(true),
+    completeRunAndApplyAccounting: vi.fn().mockResolvedValue({
+      transitioned: true,
+      autoPaused: false,
+      consecutiveFailures: 0,
+    }),
     claimRunSession: vi.fn().mockResolvedValue(true),
     getById: vi.fn().mockResolvedValue(null),
     getRunById: vi.fn().mockResolvedValue(null),
@@ -1554,11 +1559,14 @@ describe("Scheduler", () => {
 
       await createScheduler(createEnv(undefined, stub)).tick();
 
-      expect(mockStore.updateRun).toHaveBeenCalledWith("due-1", {
+      expect(mockStore.completeRunAndApplyAccounting).toHaveBeenCalledWith({
+        run: dueRun,
         status: "completed",
-        completed_at: 1234,
+        failureReason: null,
+        completedAt: 1234,
+        autoPauseThreshold: 3,
       });
-      expect(mockStore.resetConsecutiveFailures).toHaveBeenCalledWith("auto-1");
+      expect(mockStore.updateRun).not.toHaveBeenCalled();
     });
 
     it("defers an unclaimed running row when the orphan query fails", async () => {
