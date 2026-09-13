@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from .process_output import (
     BoundedOutputCollector,
+    finish_cancellation_cleanup,
+    spawn_owned_subprocess,
     terminate_owned_subprocess,
     wait_for_process_exit,
 )
@@ -65,8 +67,8 @@ class RepositoryHooks:
         try:
             env = os.environ.copy()
             env["OPENINSPECT_BOOT_MODE"] = boot_mode.value
-            spawn_task = asyncio.create_task(
-                asyncio.create_subprocess_exec(
+            process = await spawn_owned_subprocess(
+                lambda: asyncio.create_subprocess_exec(
                     "bash",
                     str(script_path),
                     cwd=repo.path,
@@ -74,15 +76,9 @@ class RepositoryHooks:
                     stderr=asyncio.subprocess.STDOUT,
                     env=env,
                     start_new_session=True,
-                )
+                ),
+                kill_process_group=os.killpg,
             )
-            try:
-                process = await asyncio.shield(spawn_task)
-            except asyncio.CancelledError:
-                # Process creation can complete after its caller is cancelled.
-                # Retain ownership so shutdown cannot leave a hook behind.
-                process = await spawn_task
-                raise
             output = self._collect_output(process)
             await wait_for_process_exit(process)
             fields = {
@@ -104,19 +100,16 @@ class RepositoryHooks:
         except asyncio.CancelledError:
             if process is not None:
                 cleanup = asyncio.create_task(self._terminate(process))
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    await cleanup
-                if output is not None:
-                    await output.wait()
-                self.log.info(
-                    f"{hook_name}.cancelled",
-                    reason="outer_operation_cancelled",
-                    script=str(script_path),
-                    boot_mode=boot_mode.value,
-                    duration_ms=int((time.time() - start_time) * 1000),
-                )
+                await finish_cancellation_cleanup(cleanup)
+            if output is not None:
+                output.discard_tail()
+            self.log.info(
+                f"{hook_name}.cancelled",
+                reason="outer_operation_cancelled",
+                script=str(script_path),
+                boot_mode=boot_mode.value,
+                duration_ms=int((time.time() - start_time) * 1000),
+            )
             raise
         except Exception as error:
             if process is not None:

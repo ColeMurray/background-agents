@@ -9,7 +9,7 @@ import signal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
 PROCESS_OUTPUT_TAIL_BYTES = 64 * 1024
@@ -99,6 +99,46 @@ async def terminate_owned_subprocess(
         # The leader may have exited while descendants still hold its output pipes.
         send_signal(signal.SIGKILL)
         await asyncio.shield(process.wait())
+
+
+async def finish_cancellation_cleanup[ResultT](task: asyncio.Task[ResultT]) -> ResultT:
+    """Finish an independent cleanup task despite repeated caller cancellation."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+    return task.result()
+
+
+async def spawn_owned_subprocess(
+    process_factory: Callable[[], Awaitable[asyncio.subprocess.Process]],
+    *,
+    kill_process_group: Callable[[int, int], None] = os.killpg,
+) -> asyncio.subprocess.Process:
+    """Create a subprocess or clean it up before propagating cancellation."""
+
+    async def spawn() -> asyncio.subprocess.Process:
+        return await process_factory()
+
+    spawn_task = asyncio.create_task(spawn())
+    try:
+        return await asyncio.shield(spawn_task)
+    except asyncio.CancelledError:
+
+        async def cleanup_spawned_process() -> None:
+            try:
+                process = await spawn_task
+            except (asyncio.CancelledError, Exception):
+                return
+            await terminate_owned_subprocess(
+                process,
+                kill_process_group=kill_process_group,
+            )
+
+        cleanup_task = asyncio.create_task(cleanup_spawned_process())
+        await finish_cancellation_cleanup(cleanup_task)
+        raise
 
 
 async def communicate_owned_subprocess(

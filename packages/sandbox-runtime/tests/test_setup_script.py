@@ -293,6 +293,36 @@ class TestSetupScriptWaitPolicy:
         kill_process_group.assert_called_once_with(12345, signal.SIGKILL)
         assert wait_calls == 2
 
+    async def test_repeated_cancellation_during_spawn_still_stops_process_group(self, tmp_path):
+        sup = _make_repository_boot(tmp_path)
+        _create_setup_script(sup.repo_path)
+        fake_proc = _fake_process(returncode=None)
+        fake_proc.pid = 12345
+        spawn_started = asyncio.Event()
+        release_spawn = asyncio.Event()
+
+        async def spawn(*_args, **_kwargs):
+            spawn_started.set()
+            await release_spawn.wait()
+            return fake_proc
+
+        with (
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, side_effect=spawn),
+            patch("sandbox_runtime.repository_hooks.os.killpg") as kill_process_group,
+        ):
+            task = asyncio.create_task(sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH))
+            await asyncio.wait_for(spawn_started.wait(), timeout=1)
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            release_spawn.set()
+
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=1)
+
+        kill_process_group.assert_called_once_with(12345, signal.SIGKILL)
+        fake_proc.wait.assert_awaited_once()
+
 
 # ---------------------------------------------------------------------------
 # TestSetupInRun (integration)
