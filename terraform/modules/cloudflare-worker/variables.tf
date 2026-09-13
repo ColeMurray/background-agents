@@ -30,76 +30,68 @@ variable "script_path" {
 }
 
 variable "kv_namespaces" {
-  description = "List of KV namespace bindings"
-  type = list(object({
-    binding_name = string
+  description = "Map of KV namespace bindings keyed by binding name"
+  type = map(object({
     namespace_id = string
   }))
-  default = []
+  default = {}
 }
 
 variable "service_bindings" {
-  description = "List of service bindings for worker-to-worker communication"
-  type = list(object({
-    binding_name = string
+  description = "Map of service bindings keyed by binding name for worker-to-worker communication"
+  type = map(object({
     service_name = string
   }))
-  default = []
+  default = {}
 }
 
 variable "d1_databases" {
-  description = "List of D1 database bindings"
-  type = list(object({
-    binding_name = string
-    database_id  = string
+  description = "Map of D1 database bindings keyed by binding name"
+  type = map(object({
+    database_id = string
   }))
-  default = []
+  default = {}
 }
 
 variable "r2_buckets" {
-  description = "List of R2 bucket bindings"
-  type = list(object({
-    binding_name = string
-    bucket_name  = string
+  description = "Map of R2 bucket bindings keyed by binding name"
+  type = map(object({
+    bucket_name = string
   }))
-  default = []
+  default = {}
 }
 
 variable "queue_bindings" {
-  description = "List of Queue producer bindings"
-  type = list(object({
-    binding_name = string
-    queue_name   = string
+  description = "Map of Queue producer bindings keyed by binding name"
+  type = map(object({
+    queue_name = string
   }))
-  default = []
+  default = {}
 }
 
 variable "plain_text_bindings" {
-  description = "List of plain text environment variable bindings"
-  type = list(object({
-    name  = string
+  description = "Map of plain text environment variable bindings keyed by binding name"
+  type = map(object({
     value = string
   }))
-  default = []
+  default = {}
 }
 
 variable "secrets" {
-  description = "List of secret bindings"
-  type = list(object({
-    name  = string
+  description = "Map of secret bindings keyed by binding name"
+  type = map(object({
     value = string
   }))
-  default   = []
+  default   = {}
   sensitive = true
 }
 
 variable "durable_objects" {
-  description = "List of Durable Object bindings"
-  type = list(object({
-    binding_name = string
-    class_name   = string
+  description = "Map of Durable Object bindings keyed by binding name"
+  type = map(object({
+    class_name = string
   }))
-  default = []
+  default = {}
 }
 
 variable "enable_durable_object_bindings" {
