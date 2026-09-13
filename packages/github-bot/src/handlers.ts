@@ -1,10 +1,5 @@
 import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
-import {
-  createSessionResponseSchema,
-  sendPromptResponseSchema,
-} from "@open-inspect/shared/types/session-api";
 import { resolveAppName } from "@open-inspect/shared/app-name";
-import { signedControlPlaneFetch } from "./internal-auth";
 import type {
   Env,
   PullRequestOpenedPayload,
@@ -15,88 +10,17 @@ import type {
 import type { Logger } from "./logger";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
-import { resolveSessionTarget, type SessionTargetFields } from "./session-target";
+import { launchSession, type SessionLaunchResult } from "./session-launch";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 import { requestedReviewerPayloadSchema } from "./payload-schemas";
 import { containsBotMention, stripBotMention } from "./github-mention";
 
-export type HandlerResult =
-  | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
-  | { outcome: "skipped"; skip_reason: string };
+export type HandlerResult = SessionLaunchResult | { outcome: "skipped"; skip_reason: string };
 
 export function isReviewRequestedForBot(payload: unknown, botUsername: string): boolean {
   const parsed = requestedReviewerPayloadSchema.safeParse(payload);
   if (!parsed.success) return false;
   return parsed.data.requested_reviewer?.login === botUsername;
-}
-
-async function createSession(
-  env: Env,
-  traceId: string,
-  params: {
-    target: SessionTargetFields;
-    title: string;
-    model: string;
-    reasoningEffort?: string | null;
-    scmLogin: string;
-    scmUserId: string;
-    scmAvatarUrl: string;
-  }
-): Promise<string> {
-  const body: Record<string, unknown> = {
-    ...params.target,
-    title: params.title,
-    model: params.model,
-    scmLogin: params.scmLogin,
-    scmAvatarUrl: params.scmAvatarUrl,
-  };
-  if (params.reasoningEffort) {
-    body.reasoningEffort = params.reasoningEffort;
-  }
-  const url = "https://internal/sessions";
-  const bodyText = JSON.stringify(body);
-  const response = await signedControlPlaneFetch(env, {
-    method: "POST",
-    url,
-    body: bodyText,
-    actor: `github:${params.scmUserId}`,
-    traceId,
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Session creation failed: ${response.status} ${body}`);
-  }
-  const result = createSessionResponseSchema.safeParse(await response.json());
-  if (!result.success) {
-    throw new Error("Session creation failed: invalid response");
-  }
-  return result.data.sessionId;
-}
-
-async function sendPrompt(
-  env: Env,
-  traceId: string,
-  sessionId: string,
-  params: { content: string; authorId: string }
-): Promise<string> {
-  const url = `https://internal/sessions/${sessionId}/prompt`;
-  const bodyText = JSON.stringify({ content: params.content, source: "github" });
-  const response = await signedControlPlaneFetch(env, {
-    method: "POST",
-    url,
-    body: bodyText,
-    actor: params.authorId.startsWith("github:") ? params.authorId : undefined,
-    traceId,
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Prompt delivery failed: ${response.status} ${body}`);
-  }
-  const result = sendPromptResponseSchema.safeParse(await response.json());
-  if (!result.success) {
-    throw new Error("Prompt delivery failed: invalid response");
-  }
-  return result.data.messageId;
 }
 
 async function withReaction<T>(
@@ -225,58 +149,31 @@ export async function handleReviewRequested(
     `https://api.github.com/repos/${repositoryPath}/issues/${pr.number}/reactions`,
     resolveAppName(env),
     meta,
-    async () => {
-      const target = await resolveSessionTarget(env, log, {
+    () =>
+      launchSession(env, log, {
         owner,
         repoName,
-        senderLogin: sender.login,
+        sender,
         config,
         ghToken,
         traceId,
-      });
-      const sessionId = await createSession(env, traceId, {
-        target,
+        pullNumber: pr.number,
         title: `GitHub: Review PR #${pr.number}`,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
-        scmLogin: sender.login,
-        scmUserId: String(sender.id),
-        scmAvatarUrl: sender.avatar_url,
-      });
-      log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
-
-      const prompt = buildCodeReviewPrompt({
-        owner,
-        repo: repoName,
-        number: pr.number,
-        title: pr.title,
-        body: pr.body,
-        author: pr.user.login,
-        base: pr.base.ref,
-        head: pr.head.ref,
-        isPublic: !repo.private,
-        codeReviewInstructions: config.codeReviewInstructions,
-      });
-
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${payload.sender.id}`,
-      });
-      log.info("prompt.sent", {
-        ...meta,
-        session_id: sessionId,
-        message_id: messageId,
-        source: "github",
-        content_length: prompt.length,
-      });
-
-      return {
-        outcome: "processed",
-        session_id: sessionId,
-        message_id: messageId,
-        handler_action: "review",
-      };
-    }
+        action: "review",
+        buildPrompt: () =>
+          buildCodeReviewPrompt({
+            owner,
+            repo: repoName,
+            number: pr.number,
+            title: pr.title,
+            body: pr.body,
+            author: pr.user.login,
+            base: pr.base.ref,
+            head: pr.head.ref,
+            isPublic: !repo.private,
+            codeReviewInstructions: config.codeReviewInstructions,
+          }),
+      })
   );
 }
 
@@ -329,59 +226,32 @@ export async function handlePullRequestOpened(
     `https://api.github.com/repos/${repositoryPath}/issues/${pr.number}/reactions`,
     resolveAppName(env),
     meta,
-    async () => {
-      const target = await resolveSessionTarget(env, log, {
+    () =>
+      launchSession(env, log, {
         owner,
         repoName,
-        senderLogin: sender.login,
+        sender,
         config,
         ghToken,
         traceId,
-      });
-      const sessionId = await createSession(env, traceId, {
-        target,
+        pullNumber: pr.number,
         title: `GitHub: Review PR #${pr.number}`,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
-        scmLogin: sender.login,
-        scmUserId: String(sender.id),
-        scmAvatarUrl: sender.avatar_url,
-      });
-      log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
-
-      const prompt = buildCodeReviewPrompt({
-        owner,
-        repo: repoName,
-        number: pr.number,
-        title: pr.title,
-        body: pr.body,
-        author: pr.user.login,
-        base: pr.base.ref,
-        head: pr.head.ref,
-        isPublic: !repo.private,
-        codeReviewInstructions: config.codeReviewInstructions,
-        isSelfReview: pr.user.login.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase(),
-      });
-
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${sender.id}`,
-      });
-      log.info("prompt.sent", {
-        ...meta,
-        session_id: sessionId,
-        message_id: messageId,
-        source: "github",
-        content_length: prompt.length,
-      });
-
-      return {
-        outcome: "processed",
-        session_id: sessionId,
-        message_id: messageId,
-        handler_action: "auto_review",
-      };
-    }
+        action: "auto_review",
+        buildPrompt: () =>
+          buildCodeReviewPrompt({
+            owner,
+            repo: repoName,
+            number: pr.number,
+            title: pr.title,
+            body: pr.body,
+            author: pr.user.login,
+            base: pr.base.ref,
+            head: pr.head.ref,
+            isPublic: !repo.private,
+            codeReviewInstructions: config.codeReviewInstructions,
+            isSelfReview: pr.user.login.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase(),
+          }),
+      })
   );
 }
 
@@ -445,56 +315,29 @@ export async function handleIssueComment(
     `https://api.github.com/repos/${repositoryPath}/issues/comments/${comment.id}/reactions`,
     resolveAppName(env),
     meta,
-    async () => {
-      const target = await resolveSessionTarget(env, log, {
+    () =>
+      launchSession(env, log, {
         owner,
         repoName,
-        senderLogin: sender.login,
+        sender,
         config,
         ghToken,
         traceId,
-      });
-      const sessionId = await createSession(env, traceId, {
-        target,
+        pullNumber: issue.number,
         title: `GitHub: PR #${issue.number} comment`,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
-        scmLogin: sender.login,
-        scmUserId: String(sender.id),
-        scmAvatarUrl: sender.avatar_url,
-      });
-      log.info("session.created", { ...meta, session_id: sessionId, action: "comment" });
-
-      const prompt = buildCommentActionPrompt({
-        owner,
-        repo: repoName,
-        number: issue.number,
-        title: issue.title,
-        commentBody,
-        commenter: sender.login,
-        isPublic: !repo.private,
-        commentActionInstructions: config.commentActionInstructions,
-      });
-
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${sender.id}`,
-      });
-      log.info("prompt.sent", {
-        ...meta,
-        session_id: sessionId,
-        message_id: messageId,
-        source: "github",
-        content_length: prompt.length,
-      });
-
-      return {
-        outcome: "processed",
-        session_id: sessionId,
-        message_id: messageId,
-        handler_action: "comment",
-      };
-    }
+        action: "comment",
+        buildPrompt: () =>
+          buildCommentActionPrompt({
+            owner,
+            repo: repoName,
+            number: issue.number,
+            title: issue.title,
+            commentBody,
+            commenter: sender.login,
+            isPublic: !repo.private,
+            commentActionInstructions: config.commentActionInstructions,
+          }),
+      })
   );
 }
 
@@ -553,60 +396,33 @@ export async function handleReviewComment(
     `https://api.github.com/repos/${repositoryPath}/pulls/comments/${comment.id}/reactions`,
     resolveAppName(env),
     meta,
-    async () => {
-      const target = await resolveSessionTarget(env, log, {
+    () =>
+      launchSession(env, log, {
         owner,
         repoName,
-        senderLogin: sender.login,
+        sender,
         config,
         ghToken,
         traceId,
-      });
-      const sessionId = await createSession(env, traceId, {
-        target,
+        pullNumber: pr.number,
         title: `GitHub: PR #${pr.number} review comment`,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
-        scmLogin: sender.login,
-        scmUserId: String(sender.id),
-        scmAvatarUrl: sender.avatar_url,
-      });
-      log.info("session.created", { ...meta, session_id: sessionId, action: "review_comment" });
-
-      const prompt = buildCommentActionPrompt({
-        owner,
-        repo: repoName,
-        number: pr.number,
-        title: pr.title,
-        base: pr.base.ref,
-        head: pr.head.ref,
-        commentBody,
-        commenter: sender.login,
-        isPublic: !repo.private,
-        filePath: comment.path,
-        diffHunk: comment.diff_hunk,
-        commentId: comment.id,
-        commentActionInstructions: config.commentActionInstructions,
-      });
-
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${sender.id}`,
-      });
-      log.info("prompt.sent", {
-        ...meta,
-        session_id: sessionId,
-        message_id: messageId,
-        source: "github",
-        content_length: prompt.length,
-      });
-
-      return {
-        outcome: "processed",
-        session_id: sessionId,
-        message_id: messageId,
-        handler_action: "review_comment",
-      };
-    }
+        action: "review_comment",
+        buildPrompt: () =>
+          buildCommentActionPrompt({
+            owner,
+            repo: repoName,
+            number: pr.number,
+            title: pr.title,
+            base: pr.base.ref,
+            head: pr.head.ref,
+            commentBody,
+            commenter: sender.login,
+            isPublic: !repo.private,
+            filePath: comment.path,
+            diffHunk: comment.diff_hunk,
+            commentId: comment.id,
+            commentActionInstructions: config.commentActionInstructions,
+          }),
+      })
   );
 }
