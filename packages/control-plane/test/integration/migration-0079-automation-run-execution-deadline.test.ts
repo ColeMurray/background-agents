@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AutomationStore } from "../../src/db/automation-store";
 import { cleanD1Tables } from "./cleanup";
 
+/** Default deadline the sweep holds a run to when the row carries none of its own. */
+const DEFAULT_DEADLINE_MS = 3 * 60 * 60 * 1000;
+
 /**
  * The backfill runs exactly once, against rows that were in flight when the
  * column landed, so nothing else in the suite can exercise it. Without it a
@@ -71,8 +74,12 @@ describe("migration 0079: automation run execution deadline", () => {
 
     const store = new AutomationStore(env.DB);
     const deadline = row!.execution_deadline_at;
-    expect(await store.getRunsPastExecutionDeadline(deadline + 1, 50)).toHaveLength(1);
-    expect(await store.getRunsPastExecutionDeadline(deadline, 50)).toHaveLength(0);
+    expect(
+      await store.getRunsPastExecutionDeadline(deadline + 1, DEFAULT_DEADLINE_MS, 50)
+    ).toHaveLength(1);
+    expect(
+      await store.getRunsPastExecutionDeadline(deadline, DEFAULT_DEADLINE_MS, 50)
+    ).toHaveLength(0);
   });
 
   it("leaves runs the orphan sweep owns alone", async () => {

@@ -24,4 +24,11 @@ describe("resolveExecutionBudgetMs", () => {
   it("falls back to the default sandbox lifetime when nothing is configured", () => {
     expect(resolveExecutionBudgetMs({}, env())).toBe(DEFAULT_SANDBOX_TIMEOUT_SECONDS * 1000);
   });
+
+  it.each(["", "   ", "invalid", "0", "-900000", "1000ms", "1.5", "NaN", "Infinity"])(
+    "treats a malformed deployment-wide value %j as unset",
+    (raw) => {
+      expect(resolveExecutionBudgetMs({}, env(raw))).toBe(DEFAULT_SANDBOX_TIMEOUT_SECONDS * 1000);
+    }
+  );
 });

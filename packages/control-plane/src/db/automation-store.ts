@@ -1474,8 +1474,14 @@ export class AutomationStore {
   // automation_runs.
   static readonly ORPHANED_STARTING_RUNS_SQL =
     "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
+  // A 'running' row without a deadline was claimed by a worker that predates
+  // migration 0079 (the migration backfills before that worker is replaced, so
+  // its claims land after the backfill). Those rows are held to the
+  // deployment-default deadline measured from started_at; leaving them out
+  // would let one lost callback keep the run 'running', and its automation
+  // blocked, forever.
   static readonly RUNS_PAST_EXECUTION_DEADLINE_SQL =
-    "SELECT * FROM automation_runs WHERE status = 'running' AND execution_deadline_at IS NOT NULL AND execution_deadline_at < ?";
+    "SELECT * FROM automation_runs WHERE status = 'running' AND (execution_deadline_at < ? OR (execution_deadline_at IS NULL AND started_at < ?))";
 
   async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
@@ -1489,14 +1495,20 @@ export class AutomationStore {
   /**
    * Runs whose session should have reported in by now. The deadline is the
    * run's own, stamped at launch, so this asks "has this run's budget been
-   * spent?" rather than "has it been running a long time?".
+   * spent?" rather than "has it been running a long time?". A run with no
+   * deadline of its own is due `defaultDeadlineMs` after it started.
    */
-  async getRunsPastExecutionDeadline(now: number, limit: number): Promise<AutomationRunRow[]> {
+  async getRunsPastExecutionDeadline(
+    now: number,
+    defaultDeadlineMs: number,
+    limit: number
+  ): Promise<AutomationRunRow[]> {
     const result = await this.db
       .prepare(
-        `${AutomationStore.RUNS_PAST_EXECUTION_DEADLINE_SQL} ORDER BY execution_deadline_at ASC LIMIT ?`
+        `${AutomationStore.RUNS_PAST_EXECUTION_DEADLINE_SQL}
+         ORDER BY COALESCE(execution_deadline_at, started_at) ASC LIMIT ?`
       )
-      .bind(now, limit)
+      .bind(now, now - defaultDeadlineMs, limit)
       .all<AutomationRunRow>();
     return result.results || [];
   }

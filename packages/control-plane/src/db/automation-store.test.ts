@@ -510,11 +510,12 @@ describe("AutomationStore", () => {
         ],
       });
       const store = new AutomationStore(db);
-      const result = await store.getRunsPastExecutionDeadline(now, 50);
+      const result = await store.getRunsPastExecutionDeadline(now, 10_800_000, 50);
       expect(result).toHaveLength(1);
       expect(statements[0].sql).toContain("status = 'running'");
       expect(statements[0].sql).toContain("execution_deadline_at < ?");
-      expect(statements[0].params).toEqual([now, 50]);
+      expect(statements[0].sql).toContain("execution_deadline_at IS NULL AND started_at < ?");
+      expect(statements[0].params).toEqual([now, now - 10_800_000, 50]);
     });
   });
 

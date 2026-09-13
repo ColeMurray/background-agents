@@ -13,6 +13,9 @@ import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { seedRun, fetchRuns } from "./run-helpers";
 
+/** Default deadline the sweep holds a run to when the row carries none of its own. */
+const DEFAULT_DEADLINE_MS = 3 * 60 * 60 * 1000;
+
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
   return {
@@ -674,7 +677,7 @@ describe("AutomationStore (D1 integration)", () => {
         })
       );
 
-      const timedOut = await store.getRunsPastExecutionDeadline(now, 50);
+      const timedOut = await store.getRunsPastExecutionDeadline(now, DEFAULT_DEADLINE_MS, 50);
       expect(timedOut).toHaveLength(1);
       expect(timedOut[0].id).toBe("run-timeout-1");
     });
@@ -697,7 +700,7 @@ describe("AutomationStore (D1 integration)", () => {
         })
       );
 
-      const timedOut = await store.getRunsPastExecutionDeadline(now, 50);
+      const timedOut = await store.getRunsPastExecutionDeadline(now, DEFAULT_DEADLINE_MS, 50);
       expect(timedOut).toHaveLength(0);
     });
 
@@ -710,8 +713,14 @@ describe("AutomationStore (D1 integration)", () => {
       await store.claimRunSession("run-widen", "sess-widen", now, now + 60_000);
       expect(await store.setRunExecutionDeadline("run-widen", now + 600_000)).toBe(true);
 
-      expect(await store.getRunsPastExecutionDeadline(now + 120_000, 50)).toHaveLength(0);
-      const [swept] = await store.getRunsPastExecutionDeadline(now + 700_000, 50);
+      expect(
+        await store.getRunsPastExecutionDeadline(now + 120_000, DEFAULT_DEADLINE_MS, 50)
+      ).toHaveLength(0);
+      const [swept] = await store.getRunsPastExecutionDeadline(
+        now + 700_000,
+        DEFAULT_DEADLINE_MS,
+        50
+      );
       expect(swept?.id).toBe("run-widen");
     });
 
@@ -731,22 +740,29 @@ describe("AutomationStore (D1 integration)", () => {
       expect(await store.setRunExecutionDeadline("run-done", now + 600_000)).toBe(false);
     });
 
-    it("skips runs that never claimed a deadline", async () => {
+    // A pre-0079 worker can claim a run after the migration's backfill and
+    // before it is replaced; that row has no deadline of its own.
+    it("holds a run that never claimed a deadline to the default deadline from its start", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-rec5" }));
 
-      await seedRun(
-        makeRun("auto-rec5", {
-          id: "run-no-deadline",
-          status: "running",
-          started_at: now - 24 * 60 * 60 * 1000,
-          execution_deadline_at: null,
-          created_at: now - 24 * 60 * 60 * 1000,
-        })
-      );
+      const seedUndeadlined = (id: string, startedAt: number) =>
+        seedRun(
+          makeRun("auto-rec5", {
+            id,
+            status: "running",
+            session_id: `sess-${id}`,
+            started_at: startedAt,
+            execution_deadline_at: null,
+            created_at: startedAt,
+          })
+        );
+      await seedUndeadlined("run-no-deadline-old", now - DEFAULT_DEADLINE_MS - 1);
+      await seedUndeadlined("run-no-deadline-fresh", now - DEFAULT_DEADLINE_MS + 60_000);
 
-      expect(await store.getRunsPastExecutionDeadline(now, 50)).toHaveLength(0);
+      const swept = await store.getRunsPastExecutionDeadline(now, DEFAULT_DEADLINE_MS, 50);
+      expect(swept.map((r) => r.id)).toEqual(["run-no-deadline-old"]);
     });
 
     it("drains oldest orphaned runs first when LIMIT is hit", async () => {
@@ -791,7 +807,7 @@ describe("AutomationStore (D1 integration)", () => {
         );
       }
 
-      const timedOut = await store.getRunsPastExecutionDeadline(now, 3);
+      const timedOut = await store.getRunsPastExecutionDeadline(now, DEFAULT_DEADLINE_MS, 3);
       expect(timedOut).toHaveLength(3);
       expect(timedOut.map((r) => r.id)).toEqual(["run-to-0", "run-to-1", "run-to-2"]);
     });
@@ -813,10 +829,14 @@ describe("AutomationStore (D1 integration)", () => {
       const plan = await env.DB.prepare(
         `EXPLAIN QUERY PLAN ${AutomationStore.RUNS_PAST_EXECUTION_DEADLINE_SQL}`
       )
-        .bind(Date.now())
+        .bind(Date.now(), Date.now())
         .all<{ detail: string }>();
       const detail = plan.results.map((r) => r.detail).join("\n");
       expect(detail).toContain("USING INDEX idx_runs_timeout_sweep");
+      // The OR over the deadline column walks the partial index rather than
+      // range-searching it. That index holds only 'running' rows, so the walk
+      // is bounded by the active set, never by the append-only table.
+      expect(detail).not.toMatch(/SCAN automation_runs(?! USING INDEX)/);
     });
   });
 

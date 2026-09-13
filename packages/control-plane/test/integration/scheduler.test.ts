@@ -198,19 +198,21 @@ describe("Scheduler (integration)", () => {
       // The sweep already struck this invocation on its way to auto-pause.
       await store.create(makeAutomation({ id: "auto-rc-late", consecutive_failures: 2 }));
 
-      await seedRun(
-        makeRunRow("auto-rc-late", {
-          id: "run-rc-late",
-          session_id: "sess-late",
-          status: "failed",
-          failure_reason: "execution_timeout",
-          started_at: now - 60_000,
-          completed_at: now - 1000,
-        })
-      );
-      await env.DB.prepare(`UPDATE automation_invocations SET failure_counted_at = ? WHERE id = ?`)
-        .bind(now - 1000, "inv-run-rc-late")
+      const sweptRun = makeRunRow("auto-rc-late", {
+        id: "run-rc-late",
+        session_id: "sess-late",
+        status: "failed",
+        failure_reason: "execution_timeout",
+        started_at: now - 60_000,
+        completed_at: now - 1000,
+      });
+      await seedRun(sweptRun);
+      const struck = await env.DB.prepare(
+        `UPDATE automation_invocations SET failure_counted_at = ? WHERE id = ?`
+      )
+        .bind(now - 1000, sweptRun.invocation_id)
         .run();
+      expect(struck.meta.changes).toBe(1);
 
       await createScheduler().runComplete({
         automationId: "auto-rc-late",
@@ -223,8 +225,12 @@ describe("Scheduler (integration)", () => {
       const run = await store.getRunById("auto-rc-late", "run-rc-late");
       expect(run!.status).toBe("completed");
       expect(run!.failure_reason).toBeNull();
-      // With no failed child left, the invocation's accounting releases the streak.
-      expect((await store.getById("auto-rc-late"))!.consecutive_failures).toBe(0);
+      // The correction stops at the run row: invocation accounting is
+      // unordered, so the sweep's strike stands until the next fully
+      // successful firing resets the streak.
+      expect((await store.getById("auto-rc-late"))!.consecutive_failures).toBe(2);
+      const invocation = await store.getInvocationById(sweptRun.invocation_id);
+      expect(invocation!.failure_counted_at).toBe(now - 1000);
     });
 
     it("leaves an observed failure final when a late success callback arrives", async () => {

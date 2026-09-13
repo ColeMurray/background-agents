@@ -77,6 +77,7 @@ import type { SessionModelProviderAuthInput } from "../model-provider-accounts/p
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
+import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/timeouts";
 import { resolveManagedSkills } from "../session/skill-resolution";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
@@ -110,16 +111,31 @@ const AUTOMATION_LAUNCH_CONCURRENCY = 4;
 const ORPHAN_THRESHOLD_MS = 5 * 60 * 1000;
 
 /**
- * Head start the session's own execution watchdog gets over the recovery
- * sweep. A run's deadline has to cover everything that happens outside that
- * watchdog's budget — repository image build and sandbox spawn before the first
- * message starts processing, then the inactivity alarm and its scheduling
- * jitter — so the session always fails its own message first and the callback
- * carries the real reason. Deliberately generous: the sweep exists to catch a
- * lost callback, and reaping a live run is far worse than reaping a dead one
- * late.
+ * Launch work the deadline must still cover once the longest image build has
+ * finished: sandbox spawn, prompt enqueue, and the slack in the session
+ * watchdog's own alarm scheduling.
  */
-export const EXECUTION_DEADLINE_GRACE_MS = 60 * 60 * 1000;
+const EXECUTION_DEADLINE_LAUNCH_ALLOWANCE_MS = 30 * 60 * 1000;
+
+/**
+ * Head start the session's own execution watchdog gets over the recovery
+ * sweep. A run's clock starts at claim; the watchdog's starts when the message
+ * begins processing, after any repository image build and the sandbox spawn.
+ * The grace is derived from the build provider-session bound rather than
+ * chosen, so a build that spends its entire budget still cannot let the sweep
+ * fire before the session fails its own message and the callback carries the
+ * real reason. The sweep exists to catch a lost callback, and reaping a live
+ * run is far worse than reaping a dead one late.
+ */
+export const EXECUTION_DEADLINE_GRACE_MS =
+  MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS + EXECUTION_DEADLINE_LAUNCH_ALLOWANCE_MS;
+
+/**
+ * Settings a session is created with when neither its repository nor its
+ * environment overrides the sandbox defaults; the budget then comes from the
+ * deployment configuration alone.
+ */
+const DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS: SandboxSettings = {};
 
 /** Consecutive failure threshold for auto-pause. */
 const AUTO_PAUSE_THRESHOLD = 3;
@@ -579,7 +595,7 @@ export class Scheduler {
           child.id,
           sessionId,
           claimedAt,
-          this.executionDeadlineFrom(claimedAt, {})
+          claimedAt + this.executionDeadlineMs(DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS)
         );
         if (!claimed) {
           throw new Error("Automation run was recovered before launch claimed its session");
@@ -825,9 +841,16 @@ export class Scheduler {
   // ─── Recovery sweep ──────────────────────────────────────────────────────
 
   private async recoverySweep(store: AutomationStore): Promise<void> {
+    const now = Date.now();
     const [orphanedResult, timedOutResult] = await Promise.allSettled([
       store.getOrphanedStartingRuns(ORPHAN_THRESHOLD_MS, RECOVERY_SWEEP_LIMIT),
-      store.getRunsPastExecutionDeadline(Date.now(), RECOVERY_SWEEP_LIMIT),
+      // A run claimed by a worker that predates the deadline column carries
+      // none; it is held to the deployment-default deadline instead.
+      store.getRunsPastExecutionDeadline(
+        now,
+        this.executionDeadlineMs(DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS),
+        RECOVERY_SWEEP_LIMIT
+      ),
     ]);
 
     const orphaned = orphanedResult.status === "fulfilled" ? orphanedResult.value : [];
@@ -877,7 +900,6 @@ export class Scheduler {
       });
     }
 
-    const now = Date.now();
     const recoveredRuns: AutomationRunRow[] = [];
 
     if (orphaned.length > 0) {
@@ -1286,24 +1308,13 @@ export class Scheduler {
     );
 
     // One exception: the sweep's execution timeout is inferred from silence,
-    // not observed, so a success that arrives after it is the better record.
-    // Correcting the run is enough to repair the auto-pause streak too — the
-    // accounting pass below sees an invocation with no failed child left and
-    // resets it.
-    const corrected =
-      !transitioned && body.success && (await store.completeTimedOutRun(body.runId, now));
-
-    if (!transitioned && !corrected) {
-      this.log.warn("Ignoring run-complete callback for non-active run", {
-        event: "scheduler.run_complete_ignored",
-        automation_id: body.automationId,
-        run_id: body.runId,
-        current_status: run.status,
-      });
-      return;
-    }
-
-    if (corrected) {
+    // not observed, so a success that arrives after it is the better record
+    // for the run. The correction stops at the run row. The strike the sweep
+    // took stays: invocation accounting is unordered, so releasing it here
+    // could erase a newer invocation's genuine strike, or race the sweep's own
+    // accounting pass into counting a run that is no longer failed. The next
+    // fully successful firing resets the streak as it always has.
+    if (!transitioned && body.success && (await store.completeTimedOutRun(body.runId, now))) {
       this.log.warn("Run completed after the sweep declared it lost", {
         event: "scheduler.run_complete_corrected",
         automation_id: body.automationId,
@@ -1311,6 +1322,17 @@ export class Scheduler {
         session_id: body.sessionId,
         execution_deadline_at: run.execution_deadline_at,
       });
+      return;
+    }
+
+    if (!transitioned) {
+      this.log.warn("Ignoring run-complete callback for non-active run", {
+        event: "scheduler.run_complete_ignored",
+        automation_id: body.automationId,
+        run_id: body.runId,
+        current_status: run.status,
+      });
+      return;
     }
 
     // Invocation-level accounting: one CAS-guarded strike per invocation on
@@ -1505,14 +1527,12 @@ export class Scheduler {
   // ─── Session creation ────────────────────────────────────────────────────
 
   /**
-   * When the recovery sweep may declare a run lost: the execution budget its
-   * session is created with, plus the grace that keeps the session's own
-   * watchdog ahead of the sweep.
+   * How long after claiming its session the recovery sweep may declare a run
+   * lost: the execution budget the session is created with, plus the grace
+   * that keeps the session's own watchdog ahead of the sweep.
    */
-  private executionDeadlineFrom(startedAt: number, sandboxSettings: SandboxSettings): number {
-    return (
-      startedAt + resolveExecutionBudgetMs(sandboxSettings, this.env) + EXECUTION_DEADLINE_GRACE_MS
-    );
+  private executionDeadlineMs(sandboxSettings: SandboxSettings): number {
+    return resolveExecutionBudgetMs(sandboxSettings, this.env) + EXECUTION_DEADLINE_GRACE_MS;
   }
 
   private async createSessionForAutomationRun(
@@ -1556,7 +1576,7 @@ export class Scheduler {
     // must not come for the run until it is spent.
     await store.setRunExecutionDeadline(
       run.id,
-      this.executionDeadlineFrom(startedAt, sandboxSettings)
+      startedAt + this.executionDeadlineMs(sandboxSettings)
     );
     // Automation runs use all target-applicable shared skills. Personal
     // profiles are interactive-user choices and are not automation policy.

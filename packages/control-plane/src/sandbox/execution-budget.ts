@@ -19,5 +19,21 @@ import type { Env } from "../types";
  */
 export function resolveExecutionBudgetMs(sandboxSettings: SandboxSettings, env: Env): number {
   if (sandboxSettings.sandboxTimeoutMs !== undefined) return sandboxSettings.sandboxTimeoutMs;
-  return parseInt(env.EXECUTION_TIMEOUT_MS || String(DEFAULT_SANDBOX_TIMEOUT_SECONDS * 1000), 10);
+  return (
+    parseConfiguredExecutionTimeoutMs(env.EXECUTION_TIMEOUT_MS) ??
+    DEFAULT_SANDBOX_TIMEOUT_SECONDS * 1000
+  );
+}
+
+/**
+ * `EXECUTION_TIMEOUT_MS` as a positive whole number of milliseconds, or
+ * undefined when it is unset or malformed. The budget is persisted as every
+ * automation run's sweep deadline, so a malformed value must fall through to
+ * the default rather than become a NaN or instant deadline, and a value with
+ * trailing garbage (`"1000ms"`) is rejected rather than partially honoured.
+ */
+function parseConfiguredExecutionTimeoutMs(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }

@@ -12,11 +12,15 @@
 
 ALTER TABLE automation_runs ADD COLUMN execution_deadline_at INTEGER;
 
--- Rows already in flight predate the column. NULL would exempt them from the
--- sweep entirely, so give them the deadline a default-configured run gets
--- under the new rule (7200000 execution budget + 3600000 grace). Never earlier
--- than the 90 minutes they were launched under, so this cannot fail live work
--- that the deploy interrupted.
+-- Rows already in flight predate the column. Give them a flat three-hour
+-- deadline from launch: twice the 90 minutes they were launched under, so the
+-- deploy itself is never the reason a run is reaped sooner than it would have
+-- been. It is a one-time floor, not the per-session budget the sweep uses from
+-- now on — a run launched before the deploy with a larger sandbox timeout can
+-- still be reaped at three hours, once, which is accepted over holding a dead
+-- run's automation for the full budget. Rows the old worker claims after this
+-- backfill and before it is replaced stay NULL; the sweep holds those to the
+-- deployment-default deadline from started_at.
 UPDATE automation_runs
    SET execution_deadline_at = started_at + 10800000
  WHERE status = 'running'
