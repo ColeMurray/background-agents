@@ -1997,6 +1997,52 @@ describe("Scheduler", () => {
       expect(body.signature).toEqual(expect.any(String));
     });
 
+    it("still posts to slack when a late success corrects a swept timeout", async () => {
+      // The sweep posts nothing when it declares a run lost, so the correction
+      // is the only chance to clear the `eyes` reaction on the triggering message.
+      mockStore.getRunById.mockResolvedValue(
+        sampleRunRow({
+          automation_id: "auto-slack",
+          invocation_id: "inv-slack",
+          status: "failed",
+          failure_reason: "execution_timeout",
+        })
+      );
+      mockStore.updateRun.mockResolvedValue(false);
+      mockStore.completeTimedOutRun.mockResolvedValue(true);
+      mockStore.getInvocationById.mockResolvedValue({
+        id: "inv-slack",
+        automation_id: "auto-slack",
+        source: "event",
+        scheduled_at: null,
+        trigger_key: "slack:msg:C1:1700000000.000200",
+        concurrency_key: "slack:C1:thread-root",
+        trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
+        skip_reason: null,
+        failure_counted_at: null,
+        created_at: now,
+        updated_at: now,
+      });
+      mockStore.getById.mockResolvedValue(sampleSlackAutomation);
+
+      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+      const scheduler = createScheduler(
+        createEnv({
+          SLACK_BOT: { fetch: slackFetch } as FetchClient,
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        })
+      );
+
+      await scheduler.runComplete(runCompletion({ automationId: "auto-slack" }));
+
+      expect(slackFetch).toHaveBeenCalledOnce();
+      const [, init] = slackFetch.mock.calls[0];
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body).toMatchObject({ channel: "C1", reactionMessageTs: "1700000000.000200" });
+      // The strike the sweep took stays; accounting is deliberately skipped.
+      expect(mockStore.getInvocationRunAggregate).not.toHaveBeenCalled();
+    });
+
     it("labels a repo-less run as No repository", async () => {
       mockStore.getRunById.mockResolvedValue(
         sampleRunRow({

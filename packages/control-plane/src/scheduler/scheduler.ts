@@ -1314,7 +1314,10 @@ export class Scheduler {
     // could erase a newer invocation's genuine strike, or race the sweep's own
     // accounting pass into counting a run that is no longer failed. The next
     // fully successful firing resets the streak as it always has.
-    if (!transitioned && body.success && (await store.completeTimedOutRun(body.runId, now))) {
+    const corrected =
+      !transitioned && body.success && (await store.completeTimedOutRun(body.runId, now));
+
+    if (corrected) {
       this.log.warn("Run completed after the sweep declared it lost", {
         event: "scheduler.run_complete_corrected",
         automation_id: body.automationId,
@@ -1322,10 +1325,7 @@ export class Scheduler {
         session_id: body.sessionId,
         execution_deadline_at: run.execution_deadline_at,
       });
-      return;
-    }
-
-    if (!transitioned) {
+    } else if (!transitioned) {
       this.log.warn("Ignoring run-complete callback for non-active run", {
         event: "scheduler.run_complete_ignored",
         automation_id: body.automationId,
@@ -1336,8 +1336,13 @@ export class Scheduler {
     }
 
     // Invocation-level accounting: one CAS-guarded strike per invocation on
-    // first failure; streak reset once every sibling completed.
-    await this.applyInvocationAccounting(store, body.automationId, run.invocation_id);
+    // first failure; streak reset once every sibling completed. Skipped for a
+    // correction, per above. The slack fan-out below is not: the sweep posts
+    // nothing when it declares a run lost, so returning early here would leave
+    // the triggering thread with an `eyes` reaction and no result forever.
+    if (!corrected) {
+      await this.applyInvocationAccounting(store, body.automationId, run.invocation_id);
+    }
 
     if (body.success) {
       this.log.info("Run completed successfully", {
