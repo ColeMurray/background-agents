@@ -697,6 +697,38 @@ describe("AutomationStore (D1 integration)", () => {
       expect(due.map((run) => run.id)).toEqual(["run-launch-expired"]);
     });
 
+    it("acknowledges the same running session without extending its deadline", async () => {
+      const store = new AutomationStore(env.DB);
+      const deadline = Date.now() + 60_000;
+      await store.create(makeAutomation({ id: "auto-launch-idempotent" }));
+      await seedRun(
+        makeRun("auto-launch-idempotent", {
+          id: "run-launch-idempotent",
+          status: "running",
+          session_id: "session-launch-idempotent",
+          reconciliation_due_at: deadline,
+        })
+      );
+
+      await expect(
+        store.acknowledgeRunLaunch(
+          "run-launch-idempotent",
+          "session-launch-idempotent",
+          deadline + 60_000
+        )
+      ).resolves.toBe(true);
+      await expect(
+        store.acknowledgeRunLaunch("run-launch-idempotent", "different-session", deadline + 60_000)
+      ).resolves.toBe(false);
+      expect(
+        await store.getRunById("auto-launch-idempotent", "run-launch-idempotent")
+      ).toMatchObject({
+        status: "running",
+        session_id: "session-launch-idempotent",
+        reconciliation_due_at: deadline,
+      });
+    });
+
     it("leases each reconciliation candidate to only one sweep", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();

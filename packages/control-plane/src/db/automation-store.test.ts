@@ -553,7 +553,7 @@ describe("AutomationStore", () => {
       expect(statements[0].params).toEqual(["session-1", now, now + 1000, "run_test1"]);
     });
 
-    it("acknowledges launch only for its claimed session", async () => {
+    it("acknowledges launch idempotently only for its claimed session", async () => {
       const { db, statements } = createFakeD1();
       const store = new AutomationStore(db);
 
@@ -561,8 +561,9 @@ describe("AutomationStore", () => {
 
       expect(statements[0].sql).toContain("SET status = 'running'");
       expect(statements[0].sql).toContain(
-        "WHERE id = ? AND status = 'starting' AND session_id = ?"
+        "WHERE id = ? AND session_id = ? AND status IN ('starting', 'running')"
       );
+      expect(statements[0].sql).toContain("WHEN status = 'starting' THEN ?");
       expect(statements[0].params).toEqual([now + 1000, "run_test1", "session-1"]);
     });
   });

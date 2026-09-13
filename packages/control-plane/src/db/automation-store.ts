@@ -1030,8 +1030,10 @@ export class AutomationStore {
     const result = await this.db
       .prepare(
         `UPDATE automation_runs
-         SET status = 'running', reconciliation_due_at = ?
-         WHERE id = ? AND status = 'starting' AND session_id = ?`
+         SET status = 'running',
+             reconciliation_due_at = CASE
+               WHEN status = 'starting' THEN ? ELSE reconciliation_due_at END
+         WHERE id = ? AND session_id = ? AND status IN ('starting', 'running')`
       )
       .bind(reconciliationDueAt, id, sessionId)
       .run();
