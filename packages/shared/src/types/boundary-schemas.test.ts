@@ -1101,6 +1101,78 @@ describe("boundary schemas", () => {
       expect(legacy.success).toBe(true);
       expect(current.success).toBe(true);
     });
+
+    it("accepts both structured and legacy Autofix origins", () => {
+      const baseEvent = {
+        type: "user_message",
+        content: "Address feedback",
+        messageId: "message-1",
+        timestamp: 1,
+      };
+      const legacy = sandboxEventSchema.safeParse({
+        ...baseEvent,
+        origin: {
+          kind: "review",
+          authorType: "bot",
+          feedbackUrl: "https://github.com/acme/repo/pull/42#pullrequestreview-1",
+        },
+      });
+      const structured = sandboxEventSchema.safeParse({
+        ...baseEvent,
+        origin: {
+          kind: "review",
+          authorType: "bot",
+          feedbackUrl: "https://github.com/acme/repo/pull/42#pullrequestreview-1",
+          feedback: {
+            version: 1,
+            kind: "review",
+            url: "https://github.com/acme/repo/pull/42#pullrequestreview-1",
+            body: "Review body",
+            comments: [],
+          },
+        },
+      });
+
+      expect(legacy.success).toBe(true);
+      expect(structured.success).toBe(true);
+    });
+
+    it("accepts Autofix ranges whose old and new sides use independent line numbers", () => {
+      const result = sandboxEventSchema.safeParse({
+        type: "user_message",
+        content: "Address feedback",
+        messageId: "message-1",
+        timestamp: 1,
+        origin: {
+          kind: "review",
+          authorType: "human",
+          feedbackUrl: "https://github.com/acme/repo/pull/42#pullrequestreview-1",
+          feedback: {
+            version: 1,
+            kind: "review",
+            url: "https://github.com/acme/repo/pull/42#pullrequestreview-1",
+            body: "Review body",
+            comments: [
+              {
+                url: "https://github.com/acme/repo/pull/42#discussion_r1",
+                path: "src/example.ts",
+                line: 10,
+                startLine: 20,
+                originalLine: 10,
+                originalStartLine: 20,
+                side: "RIGHT",
+                startSide: "LEFT",
+                body: "Comment",
+                diffHunk: "@@ -20 +10 @@",
+                diffHunkTruncated: false,
+              },
+            ],
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+    });
   });
 
   describe("spawnChildSessionRequestSchema", () => {

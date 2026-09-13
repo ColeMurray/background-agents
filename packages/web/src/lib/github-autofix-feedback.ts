@@ -1,57 +1,14 @@
-import { z } from "zod";
 import {
-  MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS,
+  githubAutofixFeedbackSchema,
   MAX_GITHUB_AUTOFIX_PROMPT_BYTES,
-  MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS,
+  type GitHubAutofixFeedback,
+  type GitHubAutofixReviewComment,
 } from "@open-inspect/shared/types/github-autofix";
+
+export type { GitHubAutofixFeedback, GitHubAutofixReviewComment };
 
 const FEEDBACK_DATA_OPEN = "<github_feedback_data>";
 const FEEDBACK_DATA_CLOSE = "</github_feedback_data>";
-
-const feedbackBaseSchema = z.object({
-  url: z.url(),
-  body: z.string(),
-});
-
-const sourceLineSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable();
-const optionalSourceLineSchema = sourceLineSchema.optional();
-const sideSchema = z.enum(["LEFT", "RIGHT"]).nullable().optional();
-
-const reviewCommentSchema = z
-  .object({
-    url: z.url(),
-    path: z.string(),
-    line: sourceLineSchema,
-    startLine: sourceLineSchema,
-    originalLine: optionalSourceLineSchema,
-    originalStartLine: optionalSourceLineSchema,
-    side: sideSchema,
-    startSide: sideSchema,
-    body: z.string(),
-    diffHunk: z.string().max(MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS),
-    diffHunkTruncated: z.boolean().optional(),
-  })
-  .refine(
-    ({ line, startLine }) => startLine === null || (line !== null && startLine <= line),
-    "Expected startLine to precede line"
-  )
-  .refine(
-    ({ originalLine, originalStartLine }) =>
-      originalStartLine == null || (originalLine != null && originalStartLine <= originalLine),
-    "Expected originalStartLine to precede originalLine"
-  );
-
-const reviewFeedbackSchema = feedbackBaseSchema.extend({
-  comments: z.array(reviewCommentSchema).max(MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS),
-});
-
-export type GitHubAutofixFeedback =
-  | ({ kind: "pr_comment" } & z.infer<typeof feedbackBaseSchema>)
-  | ({ kind: "review" } & z.infer<typeof reviewFeedbackSchema>);
-export type GitHubAutofixReviewComment = Extract<
-  GitHubAutofixFeedback,
-  { kind: "review" }
->["comments"][number];
 
 export type GitHubDiffLine = {
   type: "context" | "added" | "removed" | "hunk" | "meta";
@@ -80,13 +37,34 @@ export function parseGitHubAutofixFeedback(
     return null;
   }
 
-  if (kind === "review") {
-    const parsed = reviewFeedbackSchema.safeParse(payload);
-    return parsed.success ? { kind, ...parsed.data } : null;
-  }
+  const parsed = githubAutofixFeedbackSchema.safeParse(normalizeLegacyFeedback(payload, kind));
+  return parsed.success ? parsed.data : null;
+}
 
-  const parsed = feedbackBaseSchema.safeParse(payload);
-  return parsed.success ? { kind, ...parsed.data } : null;
+function normalizeLegacyFeedback(payload: unknown, kind: GitHubAutofixFeedback["kind"]): unknown {
+  if (typeof payload !== "object" || payload === null) return payload;
+  if (kind === "pr_comment") return { ...payload, version: 1, kind };
+
+  const comments = Reflect.get(payload, "comments");
+  return {
+    ...payload,
+    version: 1,
+    kind,
+    comments: Array.isArray(comments)
+      ? comments.map((comment) =>
+          typeof comment === "object" && comment !== null
+            ? {
+                originalLine: null,
+                originalStartLine: null,
+                side: null,
+                startSide: null,
+                diffHunkTruncated: false,
+                ...comment,
+              }
+            : comment
+        )
+      : comments,
+  };
 }
 
 export function parseGitHubDiffHunk(diffHunk: string): GitHubDiffLine[] {
@@ -162,7 +140,9 @@ export function formatGitHubReviewCommentLocation(
 
   const startLine = original ? comment.originalStartLine : comment.startLine;
   const prefix = original ? "Original " : "";
-  if (startLine != null && startLine !== line) {
+  const crossSide =
+    comment.startSide != null && comment.side != null && comment.startSide !== comment.side;
+  if (startLine != null && (startLine !== line || crossSide)) {
     if (comment.startSide && comment.side && comment.startSide !== comment.side) {
       return `${prefix}L${startLine} ${comment.startSide}-L${line} ${comment.side}`;
     }

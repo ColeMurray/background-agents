@@ -36,6 +36,7 @@ describe("parseGitHubAutofixFeedback", () => {
     });
 
     expect(parseGitHubAutofixFeedback(content, "review")).toEqual({
+      version: 1,
       kind: "review",
       url: "https://github.com/acme/widgets/pull/42#pullrequestreview-1",
       body: "### Review\nLooks close.",
@@ -45,8 +46,13 @@ describe("parseGitHubAutofixFeedback", () => {
           path: "src/widget.ts",
           line: 12,
           startLine: 10,
+          originalLine: null,
+          originalStartLine: null,
+          side: null,
+          startSide: null,
           body: "Please preserve this behavior.",
           diffHunk: "@@ -10,3 +10,3 @@\n-old\n+new",
+          diffHunkTruncated: false,
         },
       ],
     });
@@ -62,6 +68,7 @@ describe("parseGitHubAutofixFeedback", () => {
         "pr_comment"
       )
     ).toEqual({
+      version: 1,
       kind: "pr_comment",
       url: "https://github.com/acme/widgets/pull/42#issuecomment-1",
       body: "Please update the test.",
@@ -225,6 +232,7 @@ describe("formatGitHubAutofixFeedbackMarkdown", () => {
   it("formats the visible review body and inline comments for copying", () => {
     expect(
       formatGitHubAutofixFeedbackMarkdown({
+        version: 1,
         kind: "review",
         url: "https://github.com/acme/widgets/pull/42#pullrequestreview-1",
         body: "Review body",
@@ -234,8 +242,13 @@ describe("formatGitHubAutofixFeedbackMarkdown", () => {
             path: "src/widget.ts",
             line: 12,
             startLine: null,
+            originalLine: 12,
+            originalStartLine: null,
+            side: null,
+            startSide: null,
             body: "Inline body",
             diffHunk: "@@ -12 +12 @@",
+            diffHunkTruncated: false,
           },
         ],
       })
@@ -246,6 +259,7 @@ describe("formatGitHubAutofixFeedbackMarkdown", () => {
 
   it("preserves body whitespace and safely formats ranged unusual paths", () => {
     const markdown = formatGitHubAutofixFeedbackMarkdown({
+      version: 1,
       kind: "review",
       url: "https://github.com/acme/widgets/pull/42#pullrequestreview-1",
       body: "    indented review\n",
@@ -255,8 +269,13 @@ describe("formatGitHubAutofixFeedbackMarkdown", () => {
           path: "src/[odd]`file\n.ts",
           line: 12,
           startLine: 10,
+          originalLine: 12,
+          originalStartLine: 10,
+          side: null,
+          startSide: null,
           body: "    indented comment  \n",
           diffHunk: "@@ -10 +10 @@",
+          diffHunkTruncated: false,
         },
       ],
     });
@@ -269,6 +288,7 @@ describe("formatGitHubAutofixFeedbackMarkdown", () => {
   it("copies a pull request comment body without the hidden prompt wrapper", () => {
     expect(
       formatGitHubAutofixFeedbackMarkdown({
+        version: 1,
         kind: "pr_comment",
         url: "https://github.com/acme/widgets/pull/42#issuecomment-1",
         body: "Comment body",
@@ -299,5 +319,18 @@ describe("formatGitHubReviewCommentLocation", () => {
         startSide: "LEFT",
       })
     ).toBe("Original L7-L8 · LEFT");
+  });
+
+  it("preserves both endpoints for equal-number cross-side ranges", () => {
+    expect(
+      formatGitHubReviewCommentLocation({
+        line: 10,
+        startLine: 10,
+        originalLine: 10,
+        originalStartLine: 10,
+        side: "RIGHT",
+        startSide: "LEFT",
+      })
+    ).toBe("L10 LEFT-L10 RIGHT");
   });
 });

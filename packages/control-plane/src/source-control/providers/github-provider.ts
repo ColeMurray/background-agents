@@ -158,8 +158,8 @@ const githubReviewCommentSchema = z.object({
   start_line: z.number().nullable().optional(),
   original_line: z.number().nullable().optional(),
   original_start_line: z.number().nullable().optional(),
-  side: z.string().nullable().optional(),
-  start_side: z.string().nullable().optional(),
+  side: z.enum(["LEFT", "RIGHT"]).nullable().optional(),
+  start_side: z.enum(["LEFT", "RIGHT"]).nullable().optional(),
   diff_hunk: z.string(),
 });
 
@@ -211,10 +211,10 @@ interface GitHubReviewComment {
   path: string;
   line: number | null;
   startLine: number | null;
-  originalLine?: number | null;
-  originalStartLine?: number | null;
-  side: string | null;
-  startSide: string | null;
+  originalLine: number | null;
+  originalStartLine: number | null;
+  side: "LEFT" | "RIGHT" | null;
+  startSide: "LEFT" | "RIGHT" | null;
   diffHunk: string;
 }
 

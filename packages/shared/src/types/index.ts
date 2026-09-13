@@ -29,13 +29,16 @@ export {
   MAX_GITHUB_AUTOFIX_PROMPT_BYTES,
   MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS,
   githubAutofixEnvelopeSchema,
+  githubAutofixFeedbackSchema,
   githubAutofixOriginSchema,
   githubAutofixSessionCommandSchema,
   githubAutofixSessionResponseSchema,
 } from "./github-autofix";
 export type {
   GitHubAutofixEnvelope,
+  GitHubAutofixFeedback,
   GitHubAutofixOrigin,
+  GitHubAutofixReviewComment,
   GitHubAutofixSessionCommand,
   GitHubAutofixSessionResponse,
 } from "./github-autofix";

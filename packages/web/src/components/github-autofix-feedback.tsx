@@ -100,23 +100,19 @@ function ReviewBody({
 }) {
   const contentId = useId();
   const needsDisclosure = body.length > REVIEW_BODY_PREVIEW_CHARS || body.split("\n").length > 14;
-  const displayedBody =
-    needsDisclosure && !expanded ? body.slice(0, REVIEW_BODY_PREVIEW_CHARS) : body;
 
   return (
     <div className="mt-3">
-      <div className="relative">
-        <div
-          id={contentId}
-          className={cn("overflow-hidden", needsDisclosure && !expanded && "max-h-48")}
-        >
+      <div id={contentId}>
+        {needsDisclosure && !expanded ? (
+          <p className="line-clamp-[14] whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+            {body.slice(0, REVIEW_BODY_PREVIEW_CHARS)}
+          </p>
+        ) : (
           <SafeMarkdown
-            content={displayedBody}
+            content={body}
             className="text-xs prose-headings:mb-2 prose-headings:mt-4 prose-headings:text-xs prose-p:text-xs prose-p:leading-5 prose-li:text-xs prose-li:leading-5"
           />
-        </div>
-        {needsDisclosure && !expanded && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-card to-transparent" />
         )}
       </div>
       {needsDisclosure && (
@@ -220,12 +216,9 @@ function ReviewThread({
       </button>
 
       {!expanded && comment.body.trim() && (
-        <div className="line-clamp-2 overflow-hidden px-3 pb-3 pl-12">
-          <SafeMarkdown
-            content={comment.body.slice(0, COMMENT_PREVIEW_CHARS)}
-            className="text-xs text-muted-foreground prose-p:text-xs prose-p:leading-5"
-          />
-        </div>
+        <p className="line-clamp-2 whitespace-pre-wrap px-3 pb-3 pl-12 text-xs leading-5 text-muted-foreground">
+          {comment.body.slice(0, COMMENT_PREVIEW_CHARS)}
+        </p>
       )}
 
       {expanded && (

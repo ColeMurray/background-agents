@@ -4,6 +4,7 @@ import {
   MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS,
   githubAutofixSessionResponseSchema,
   type GitHubAutofixEnvelope,
+  type GitHubAutofixFeedback,
   type GitHubAutofixSessionCommand,
   type ResolvedGitHubAutofixSettings,
 } from "@open-inspect/shared";
@@ -133,34 +134,38 @@ function hasReviewContent(
   return Boolean(feedback.body.trim() || feedback.comments.some((comment) => comment.body.trim()));
 }
 
-function buildPrompt(feedback: GitHubPullRequestFeedback): string {
+function buildStructuredFeedback(feedback: GitHubPullRequestFeedback): GitHubAutofixFeedback {
   if (feedback.kind === "review" && feedback.comments.length > MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS) {
     throw new SourceControlProviderError(
       `Pull request review exceeds the Autofix limit of ${MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS} comments`,
       "permanent"
     );
   }
-  const payload =
-    feedback.kind === "pr_comment"
-      ? { url: feedback.url, body: feedback.body }
-      : {
-          url: feedback.url,
-          body: feedback.body,
-          comments: feedback.comments.map((comment) => ({
-            url: comment.url,
-            path: comment.path,
-            line: comment.line,
-            startLine: comment.startLine,
-            originalLine: comment.originalLine ?? null,
-            originalStartLine: comment.originalStartLine ?? null,
-            side: comment.side,
-            startSide: comment.startSide,
-            body: comment.body,
-            diffHunk: comment.diffHunk.slice(0, MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS),
-            diffHunkTruncated: comment.diffHunk.length > MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS,
-          })),
-        };
-  const serializedPayload = JSON.stringify(payload, null, 2)
+  return feedback.kind === "pr_comment"
+    ? { version: 1, kind: "pr_comment", url: feedback.url, body: feedback.body }
+    : {
+        version: 1,
+        kind: "review",
+        url: feedback.url,
+        body: feedback.body,
+        comments: feedback.comments.map((comment) => ({
+          url: comment.url,
+          path: comment.path,
+          line: comment.line,
+          startLine: comment.startLine,
+          originalLine: comment.originalLine,
+          originalStartLine: comment.originalStartLine,
+          side: comment.side,
+          startSide: comment.startSide,
+          body: comment.body,
+          diffHunk: comment.diffHunk.slice(0, MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS),
+          diffHunkTruncated: comment.diffHunk.length > MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS,
+        })),
+      };
+}
+
+function buildPrompt(feedback: GitHubAutofixFeedback): string {
+  const serializedPayload = JSON.stringify(feedback, null, 2)
     .replaceAll("<", "\\u003c")
     .replaceAll(">", "\\u003e");
   const prompt = [
@@ -344,6 +349,7 @@ export class AutofixService {
     eligibility: EligibleFeedback
   ): EnqueueAutofixCommand {
     const { feedback, settings } = eligibility;
+    const structuredFeedback = buildStructuredFeedback(feedback);
     return {
       type: "enqueue_feedback",
       feedbackKey: receipt.feedbackKey,
@@ -352,22 +358,24 @@ export class AutofixService {
         number: owner.prNumber,
         artifactId: owner.artifactId,
       },
-      prompt: buildPrompt(feedback),
+      prompt: buildPrompt(structuredFeedback),
       author: {
         id: feedback.author.id,
         login: feedback.author.login,
       },
       origin:
-        feedback.kind === "review"
+        structuredFeedback.kind === "review"
           ? {
               kind: "review",
               authorType: feedback.author.type.toLowerCase() === "bot" ? "bot" : "human",
               feedbackUrl: feedback.url,
+              feedback: structuredFeedback,
             }
           : {
               kind: "pr_comment",
               authorType: "human",
               feedbackUrl: feedback.url,
+              feedback: structuredFeedback,
             },
       attemptLimit: settings.maxAttemptsPerPrPer24Hours,
     };

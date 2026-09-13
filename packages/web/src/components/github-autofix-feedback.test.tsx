@@ -12,7 +12,8 @@ import { GitHubAutofixFeedbackCard } from "./github-autofix-feedback";
 expect.extend(matchers);
 afterEach(cleanup);
 
-const review: GitHubAutofixFeedback = {
+const review: Extract<GitHubAutofixFeedback, { kind: "review" }> = {
+  version: 1,
   kind: "review",
   url: "https://github.com/acme/widgets/pull/42#pullrequestreview-1",
   body: "### Summary\nPreserve the existing behavior.",
@@ -22,8 +23,13 @@ const review: GitHubAutofixFeedback = {
       path: "src/widget.ts",
       line: 12,
       startLine: 10,
+      originalLine: null,
+      originalStartLine: null,
+      side: null,
+      startSide: null,
       body: "**Please fix:** keep `widgetId` stable.",
       diffHunk: "@@ -10,2 +10,2 @@\n-old value\n+new value",
+      diffHunkTruncated: false,
     },
   ],
 };
@@ -88,21 +94,27 @@ describe("GitHubAutofixFeedbackCard", () => {
     const user = userEvent.setup();
     render(
       <FeedbackCard
-        feedback={{ ...review, body: `### Long review\n${"Detailed feedback. ".repeat(50)}` }}
+        feedback={{
+          ...review,
+          body: `### Long review\n[Documentation](https://example.com/docs)\n${"Detailed feedback. ".repeat(50)}`,
+        }}
       />
     );
 
     const disclosure = screen.getByRole("button", { name: "Show complete review" });
     expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("link", { name: "Documentation" })).toBeNull();
     await user.click(disclosure);
     expect(disclosure).toHaveTextContent("Show less");
     expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("link", { name: "Documentation" })).toBeInTheDocument();
   });
 
   it("renders pull request comments without a thread section", () => {
     render(
       <FeedbackCard
         feedback={{
+          version: 1,
           kind: "pr_comment",
           url: "https://github.com/acme/widgets/pull/42#issuecomment-1",
           body: "Please update the documentation.",
@@ -115,7 +127,7 @@ describe("GitHubAutofixFeedbackCard", () => {
     expect(screen.queryByText(/inline comment/)).toBeNull();
   });
 
-  it("keeps links in collapsed Markdown outside the thread button", () => {
+  it("renders collapsed Markdown as inert text", () => {
     render(
       <FeedbackCard
         feedback={{
@@ -130,8 +142,8 @@ describe("GitHubAutofixFeedbackCard", () => {
       />
     );
 
-    const link = screen.getByRole("link", { name: "the documentation" });
-    expect(link.closest("button")).toBeNull();
+    expect(screen.queryByRole("link", { name: "the documentation" })).toBeNull();
+    expect(screen.getByText(/\[the documentation\]/)).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Expand review comment on src/widget.ts L10-L12" })
     ).toHaveAttribute("aria-expanded", "false");
@@ -203,6 +215,7 @@ describe("GitHubAutofixFeedbackCard", () => {
     render(
       <FeedbackCard
         feedback={{
+          version: 1,
           kind: "pr_comment",
           url: "https://github.com/acme/widgets/pull/42#issuecomment-1",
           body: "Long comment. ".repeat(60),

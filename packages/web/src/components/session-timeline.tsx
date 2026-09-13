@@ -518,9 +518,9 @@ function UserMessageEvent({
   );
   const authorName = isCurrentUser ? "You" : display.name;
   const avatar = display.avatar;
-  const autofixFeedback = event.origin
-    ? parseGitHubAutofixFeedback(event.content, event.origin.kind)
-    : null;
+  const autofixFeedback =
+    event.origin?.feedback ??
+    (event.origin ? parseGitHubAutofixFeedback(event.content, event.origin.kind) : null);
   const feedbackUrl = getSafeExternalUrl(event.origin?.feedbackUrl);
   const boundedRawAutofix = Boolean(event.origin && !autofixFeedback);
   const rawContentTruncated = Boolean(

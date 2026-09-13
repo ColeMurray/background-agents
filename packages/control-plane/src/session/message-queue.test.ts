@@ -401,6 +401,13 @@ describe("SessionMessageQueue", () => {
         kind: "review",
         authorType: "human",
         feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+        feedback: {
+          version: 1,
+          kind: "review",
+          url: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+          body: "Review body",
+          comments: [],
+        },
       },
       attemptLimit: 10,
     };
