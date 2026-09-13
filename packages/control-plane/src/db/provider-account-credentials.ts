@@ -8,24 +8,27 @@ import {
 } from "../model-provider-accounts/provider-auth-contracts";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { ModelProviderAccountStatus } from "@open-inspect/shared/types/provider-accounts";
+import { z } from "zod";
 
-type ProviderCredentialExchangeState = "idle" | "in_flight";
+const providerCredentialExchangeStateSchema = z.enum(["idle", "in_flight"]);
+
+type ProviderCredentialExchangeState = z.infer<typeof providerCredentialExchangeStateSchema>;
 export type ProviderCredentialExchangeAccountStatus = Exclude<
   ModelProviderAccountStatus,
   "disabled"
 >;
 
-interface CredentialRow {
-  encrypted_payload: string;
-  credential_schema_version: number;
-  credential_version: number;
-  exchange_generation: number;
-  exchange_state: ProviderCredentialExchangeState;
-  exchange_owner: string | null;
-  exchange_started_at: number | null;
-  access_token_expires_at: number | null;
-  updated_at: number;
-}
+const credentialRowSchema = z.object({
+  encrypted_payload: z.string(),
+  credential_schema_version: z.number(),
+  credential_version: z.number(),
+  exchange_generation: z.number(),
+  exchange_state: providerCredentialExchangeStateSchema,
+  exchange_owner: z.string().nullable(),
+  exchange_started_at: z.number().nullable(),
+  access_token_expires_at: z.number().nullable(),
+  updated_at: z.number(),
+});
 
 export interface ProviderCredentialState {
   payload: unknown;
@@ -125,22 +128,28 @@ export class ProviderCredentialStore {
          WHERE credentials.provider_account_id = ? AND accounts.provider = ?`
       )
       .bind(providerAccountId, provider)
-      .first<CredentialRow>();
-    if (!row) return null;
+      .first();
+    const parsed = credentialRowSchema.safeParse(row);
+    if (!parsed.success) return null;
+    const credential = parsed.data;
     return {
-      payload: await decryptProviderAccountPayload(row.encrypted_payload, this.encryptionKey, {
-        providerAccountId,
-        provider,
-        credentialSchemaVersion: row.credential_schema_version,
-      }),
-      credentialSchemaVersion: row.credential_schema_version,
-      credentialVersion: row.credential_version,
-      exchangeGeneration: row.exchange_generation,
-      exchangeState: row.exchange_state,
-      exchangeOwner: row.exchange_owner,
-      exchangeStartedAt: row.exchange_started_at,
-      accessTokenExpiresAt: row.access_token_expires_at,
-      updatedAt: row.updated_at,
+      payload: await decryptProviderAccountPayload(
+        credential.encrypted_payload,
+        this.encryptionKey,
+        {
+          providerAccountId,
+          provider,
+          credentialSchemaVersion: credential.credential_schema_version,
+        }
+      ),
+      credentialSchemaVersion: credential.credential_schema_version,
+      credentialVersion: credential.credential_version,
+      exchangeGeneration: credential.exchange_generation,
+      exchangeState: credential.exchange_state,
+      exchangeOwner: credential.exchange_owner,
+      exchangeStartedAt: credential.exchange_started_at,
+      accessTokenExpiresAt: credential.access_token_expires_at,
+      updatedAt: credential.updated_at,
     };
   }
 
