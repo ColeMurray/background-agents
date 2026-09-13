@@ -12,6 +12,63 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
 
 TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
+PROCESS_OUTPUT_TAIL_BYTES = 64 * 1024
+
+
+class BoundedOutputCollector:
+    """Continuously drain a stream while retaining only a bounded byte tail."""
+
+    def __init__(
+        self,
+        stream: asyncio.StreamReader,
+        *,
+        max_tail_bytes: int = PROCESS_OUTPUT_TAIL_BYTES,
+    ) -> None:
+        if max_tail_bytes <= 0:
+            raise ValueError("max_tail_bytes must be positive")
+        self._stream = stream
+        self._max_tail_bytes = max_tail_bytes
+        self._tail = bytearray()
+        self._retaining = True
+        self.task = asyncio.create_task(self._drain())
+
+    async def _drain(self) -> None:
+        while chunk := await self._stream.read(16 * 1024):
+            if not self._retaining:
+                continue
+            self._tail.extend(chunk)
+            overflow = len(self._tail) - self._max_tail_bytes
+            if overflow > 0:
+                del self._tail[:overflow]
+
+    async def wait(self) -> None:
+        """Wait until every writer has closed the stream."""
+        await self.task
+
+    def discard_tail(self) -> None:
+        """Continue draining without retaining output."""
+        self._retaining = False
+        self._tail.clear()
+
+    def tail_lines(self, max_lines: int = 50) -> str:
+        """Decode and return at most the requested final lines."""
+        return "\n".join(bytes(self._tail).decode(errors="replace").splitlines()[-max_lines:])
+
+
+async def wait_for_process_exit(process: asyncio.subprocess.Process) -> int:
+    """Wait for the process leader without waiting for inherited output pipes to close."""
+    wait_task = asyncio.create_task(process.wait())
+    try:
+        await asyncio.sleep(0)
+        while process.returncode is None:
+            if wait_task.done():
+                return wait_task.result()
+            await asyncio.sleep(0.01)
+        return process.returncode
+    finally:
+        if not wait_task.done():
+            wait_task.cancel()
+        await asyncio.gather(wait_task, return_exceptions=True)
 
 
 async def terminate_owned_subprocess(

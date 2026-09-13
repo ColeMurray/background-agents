@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-import tempfile
 import time
 from typing import TYPE_CHECKING, Any
 
-from .process_output import terminate_owned_subprocess
+from .process_output import (
+    BoundedOutputCollector,
+    terminate_owned_subprocess,
+    wait_for_process_exit,
+)
 from .runtime_config import BootMode
 
 if TYPE_CHECKING:
@@ -19,6 +22,15 @@ class RepositoryHooks:
 
     def __init__(self, log: Any) -> None:
         self.log = log
+        self._output_collectors: set[BoundedOutputCollector] = set()
+
+    def _collect_output(self, process: asyncio.subprocess.Process) -> BoundedOutputCollector:
+        if process.stdout is None:
+            raise RuntimeError("hook process output pipe was not created")
+        collector = BoundedOutputCollector(process.stdout)
+        self._output_collectors.add(collector)
+        collector.task.add_done_callback(lambda _task: self._output_collectors.discard(collector))
+        return collector
 
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:
         await terminate_owned_subprocess(process, kill_process_group=os.killpg)
@@ -49,35 +61,30 @@ class RepositoryHooks:
             boot_mode=boot_mode.value,
         )
         process: asyncio.subprocess.Process | None = None
+        output: BoundedOutputCollector | None = None
         try:
             env = os.environ.copy()
             env["OPENINSPECT_BOOT_MODE"] = boot_mode.value
-            with tempfile.TemporaryFile() as output_file:
-                spawn_task = asyncio.create_task(
-                    asyncio.create_subprocess_exec(
-                        "bash",
-                        str(script_path),
-                        cwd=repo.path,
-                        stdout=output_file,
-                        stderr=asyncio.subprocess.STDOUT,
-                        env=env,
-                        start_new_session=True,
-                    )
+            spawn_task = asyncio.create_task(
+                asyncio.create_subprocess_exec(
+                    "bash",
+                    str(script_path),
+                    cwd=repo.path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env,
+                    start_new_session=True,
                 )
-                try:
-                    process = await asyncio.shield(spawn_task)
-                except asyncio.CancelledError:
-                    # Process creation can complete after its caller is cancelled.
-                    # Retain ownership so shutdown cannot leave a hook behind.
-                    process = await spawn_task
-                    raise
-                await process.wait()
-                output_tail = ""
-                if process.returncode != 0 and boot_mode is not BootMode.BUILD:
-                    output_file.seek(0)
-                    output_tail = "\n".join(
-                        output_file.read().decode(errors="replace").splitlines()[-50:]
-                    )
+            )
+            try:
+                process = await asyncio.shield(spawn_task)
+            except asyncio.CancelledError:
+                # Process creation can complete after its caller is cancelled.
+                # Retain ownership so shutdown cannot leave a hook behind.
+                process = await spawn_task
+                raise
+            output = self._collect_output(process)
+            await wait_for_process_exit(process)
             fields = {
                 "exit_code": process.returncode,
                 "script": str(script_path),
@@ -85,11 +92,13 @@ class RepositoryHooks:
                 "boot_mode": boot_mode.value,
             }
             if process.returncode == 0:
+                output.discard_tail()
                 self.log.info(f"{hook_name}.complete", **fields)
                 return True
             await self._terminate(process)
+            await output.wait()
             if boot_mode is not BootMode.BUILD:
-                fields["output_tail"] = output_tail
+                fields["output_tail"] = output.tail_lines()
             self.log.error(f"{hook_name}.failed", **fields)
             return False
         except asyncio.CancelledError:
@@ -99,6 +108,8 @@ class RepositoryHooks:
                     await asyncio.shield(cleanup)
                 except asyncio.CancelledError:
                     await cleanup
+                if output is not None:
+                    await output.wait()
                 self.log.info(
                     f"{hook_name}.cancelled",
                     reason="outer_operation_cancelled",
@@ -110,6 +121,8 @@ class RepositoryHooks:
         except Exception as error:
             if process is not None:
                 await self._terminate(process)
+            if output is not None:
+                await output.wait()
             self.log.error(
                 f"{hook_name}.error",
                 exc=error,

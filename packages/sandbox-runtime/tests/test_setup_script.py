@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import os
 import signal
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -50,6 +51,8 @@ def _fake_process(returncode=0):
     proc.communicate = AsyncMock(side_effect=AssertionError("hooks must wait for shell exit"))
     proc.kill = MagicMock()
     proc.wait = AsyncMock(return_value=returncode)
+    proc.stdout = asyncio.StreamReader()
+    proc.stdout.feed_eof()
     return proc
 
 
@@ -96,10 +99,7 @@ class TestSetupScriptSuccess:
         assert call_args[0][0] == "bash"
         assert call_args[0][1] == str(script)
         assert call_args[1]["cwd"] == sup.repo_path
-        assert call_args[1]["stdout"] not in (
-            asyncio.subprocess.PIPE,
-            asyncio.subprocess.DEVNULL,
-        )
+        assert call_args[1]["stdout"] == asyncio.subprocess.PIPE
         assert call_args[1]["stderr"] == asyncio.subprocess.STDOUT
         fake_proc.wait.assert_awaited_once()
         fake_proc.communicate.assert_not_awaited()
@@ -211,7 +211,15 @@ class TestSetupScriptWaitPolicy:
     async def test_background_child_does_not_delay_shell_completion(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_setup_script(
-            sup.repo_path, content="#!/bin/bash\nsleep 60 &\necho $! > child.pid\n"
+            sup.repo_path,
+            content=(
+                "#!/bin/bash\n"
+                f'"{sys.executable}" -c \'import os,time\n'
+                "while True:\n"
+                '    os.write(1, b"x" * 4096)\n'
+                "    time.sleep(0.001)' &\n"
+                "echo $! > child.pid\n"
+            ),
         )
         child_pid = None
 
@@ -220,6 +228,9 @@ class TestSetupScriptWaitPolicy:
                 result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
             child_pid = int((sup.repo_path / "child.pid").read_text())
             assert result is True
+            await asyncio.sleep(0.1)
+            os.kill(child_pid, 0)
+            assert sup.hooks._output_collectors
         finally:
             if child_pid is not None:
                 with contextlib.suppress(ProcessLookupError):
