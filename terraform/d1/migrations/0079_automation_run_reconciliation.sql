@@ -9,3 +9,7 @@ WHERE status = 'running' AND started_at IS NOT NULL;
 CREATE INDEX idx_runs_reconciliation_sweep
   ON automation_runs (reconciliation_due_at)
   WHERE status = 'running' AND reconciliation_due_at IS NOT NULL;
+
+CREATE INDEX idx_runs_launch_recovery
+  ON automation_runs (reconciliation_due_at)
+  WHERE status = 'starting' AND session_id IS NOT NULL;

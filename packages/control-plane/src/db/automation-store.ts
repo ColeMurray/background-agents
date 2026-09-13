@@ -980,7 +980,7 @@ export class AutomationStore {
     };
   }
 
-  /** Atomically assign a session only while a run still awaits launch. */
+  /** Lease launch to a session while the prompt is being durably enqueued. */
   async claimRunSession(
     id: string,
     sessionId: string,
@@ -990,10 +990,26 @@ export class AutomationStore {
     const result = await this.db
       .prepare(
         `UPDATE automation_runs
-          SET status = 'running', session_id = ?, started_at = ?, reconciliation_due_at = ?
-          WHERE id = ? AND status = 'starting'`
+          SET session_id = ?, started_at = ?, reconciliation_due_at = ?
+          WHERE id = ? AND status = 'starting' AND session_id IS NULL`
       )
       .bind(sessionId, startedAt, reconciliationDueAt, id)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async acknowledgeRunLaunch(
+    id: string,
+    sessionId: string,
+    reconciliationDueAt: number
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE automation_runs
+         SET status = 'running', reconciliation_due_at = ?
+         WHERE id = ? AND status = 'starting' AND session_id = ?`
+      )
+      .bind(reconciliationDueAt, id, sessionId)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -1004,8 +1020,8 @@ export class AutomationStore {
     await this.db
       .prepare(
         `UPDATE automation_runs
-         SET status = 'failed', failure_reason = ?, completed_at = ?
-         WHERE id IN (${placeholders}) AND status = 'starting'`
+          SET status = 'failed', failure_reason = ?, completed_at = ?
+          WHERE id IN (${placeholders}) AND status = 'starting' AND session_id IS NULL`
       )
       .bind(reason, completedAt, ...runIds)
       .run();
@@ -1518,7 +1534,9 @@ export class AutomationStore {
   // Backed by partial indexes (migration 0024); `status` must stay a literal, not
   // a bound param, or the planner skips the index and full-scans automation_runs.
   static readonly ORPHANED_STARTING_RUNS_SQL =
-    "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
+    "SELECT * FROM automation_runs WHERE status = 'starting' AND session_id IS NULL AND created_at < ?";
+  static readonly UNACKNOWLEDGED_STARTING_RUNS_SQL =
+    "SELECT * FROM automation_runs WHERE status = 'starting' AND session_id IS NOT NULL AND reconciliation_due_at <= ? ORDER BY reconciliation_due_at ASC LIMIT ?";
   static readonly RUNS_DUE_FOR_RECONCILIATION_SQL = `SELECT *, reconciliation_due_at AS due_at FROM automation_runs
        WHERE status = 'running' AND reconciliation_due_at IS NOT NULL AND reconciliation_due_at <= ?
        UNION ALL
@@ -1536,6 +1554,14 @@ export class AutomationStore {
     return result.results || [];
   }
 
+  async getUnacknowledgedStartingRuns(now: number, limit: number): Promise<AutomationRunRow[]> {
+    const result = await this.db
+      .prepare(AutomationStore.UNACKNOWLEDGED_STARTING_RUNS_SQL)
+      .bind(now, limit)
+      .all<AutomationRunRow>();
+    return result.results || [];
+  }
+
   async getRunsDueForReconciliation(
     now: number,
     legacyStartedBefore: number,
@@ -1548,14 +1574,22 @@ export class AutomationStore {
     return result.results || [];
   }
 
-  async deferRunReconciliation(id: string, dueAt: number): Promise<void> {
-    await this.db
-      .prepare(
-        `UPDATE automation_runs SET reconciliation_due_at = ?
-         WHERE id = ? AND status = 'running'`
+  async leaseRunsForRecovery(
+    runs: AutomationRunRow[],
+    leaseUntil: number
+  ): Promise<AutomationRunRow[]> {
+    if (runs.length === 0) return [];
+    const results = await this.db.batch(
+      runs.map((run) =>
+        this.db
+          .prepare(
+            `UPDATE automation_runs SET reconciliation_due_at = ?
+             WHERE id = ? AND status = ? AND reconciliation_due_at IS ?`
+          )
+          .bind(leaseUntil, run.id, run.status, run.reconciliation_due_at)
       )
-      .bind(dueAt, id)
-      .run();
+    );
+    return runs.filter((_, index) => (results[index]?.meta.changes ?? 0) > 0);
   }
 
   // --- Failure tracking ---

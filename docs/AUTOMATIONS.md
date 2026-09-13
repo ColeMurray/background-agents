@@ -465,9 +465,10 @@ firing finishes with every repository completed; partial failures never reset it
 neither way. Auto-pause stops future firings but never cancels repository sessions that already
 started.
 
-Runs whose sessions report a failed automation message count as failures toward the auto-pause
-threshold. Runs older than 90 minutes are reconciled against their session's durable message state;
-age alone never fails a run.
+Runs remain in launch recovery until their automation prompt is durably enqueued. An expired launch
+is acknowledged when that prompt exists, or failed when its session or prompt is missing. Running
+runs older than 90 minutes are reconciled against the exact durable message keyed by run ID; a
+confirmed active message is never failed because of age alone.
 
 ---
 

@@ -110,12 +110,14 @@ function createMockStore() {
       consecutiveFailures: 0,
     }),
     claimRunSession: vi.fn().mockResolvedValue(true),
+    acknowledgeRunLaunch: vi.fn().mockResolvedValue(true),
     getById: vi.fn().mockResolvedValue(null),
     getRunById: vi.fn().mockResolvedValue(null),
     countOverdue: vi.fn().mockResolvedValue(0),
     getOrphanedStartingRuns: vi.fn().mockResolvedValue([]),
+    getUnacknowledgedStartingRuns: vi.fn().mockResolvedValue([]),
     getRunsDueForReconciliation: vi.fn().mockResolvedValue([]),
-    deferRunReconciliation: vi.fn().mockResolvedValue(undefined),
+    leaseRunsForRecovery: vi.fn(async (runs: unknown[]) => runs),
     incrementConsecutiveFailures: vi.fn().mockResolvedValue(1),
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
     autoPause: vi.fn().mockResolvedValue(undefined),
@@ -555,6 +557,7 @@ describe("Scheduler", () => {
         nextRunAt: expect.any(Number),
       });
       expect(params.children).toHaveLength(1);
+      const runId = params.children[0].id;
 
       expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         expect.any(String),
@@ -569,7 +572,13 @@ describe("Scheduler", () => {
       await expect(getPromptBody(fetchMock)).resolves.toMatchObject({
         authorId: sampleAutomation.created_by,
         canonicalUserId: sampleAutomation.user_id,
+        clientRequestId: runId,
       });
+      expect(mockStore.acknowledgeRunLaunch).toHaveBeenCalledWith(
+        runId,
+        mockStore.claimRunSession.mock.calls[0][1],
+        expect.any(Number)
+      );
     });
 
     it("rejects unattended execution before invocation work when the owner is unauthorized", async () => {
@@ -618,10 +627,7 @@ describe("Scheduler", () => {
         expect.any(Number),
         expect.any(Number)
       );
-      expect(mockStore.updateRun).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ status: "failed" })
-      );
+      expect(mockStore.updateRun).not.toHaveBeenCalled();
     });
 
     it("fans out one child per selected repository", async () => {
@@ -1542,7 +1548,7 @@ describe("Scheduler", () => {
       await createScheduler(createEnv(undefined, stub)).tick();
 
       expect(mockStore.updateRun).not.toHaveBeenCalled();
-      expect(mockStore.deferRunReconciliation).toHaveBeenCalledWith("due-1", expect.any(Number));
+      expect(mockStore.leaseRunsForRecovery).toHaveBeenCalledWith([dueRun], expect.any(Number));
     });
 
     it("replays a durable successful message outcome into the run", async () => {
@@ -1569,7 +1575,7 @@ describe("Scheduler", () => {
       expect(mockStore.updateRun).not.toHaveBeenCalled();
     });
 
-    it("defers an unclaimed running row when the orphan query fails", async () => {
+    it("fails an invalid running row without a session when the orphan query fails", async () => {
       const dueRun = sampleRunRow({ id: "due-1", status: "running", session_id: null });
       mockStore.getOrphanedStartingRuns.mockRejectedValue(new Error("D1 orphan query timeout"));
       mockStore.getRunsDueForReconciliation.mockResolvedValue([dueRun]);
@@ -1579,7 +1585,13 @@ describe("Scheduler", () => {
         .mockImplementation(() => {});
 
       await scheduler.tick();
-      expect(mockStore.deferRunReconciliation).toHaveBeenCalledWith("due-1", expect.any(Number));
+      expect(mockStore.completeRunAndApplyAccounting).toHaveBeenCalledWith(
+        expect.objectContaining({
+          run: dueRun,
+          status: "failed",
+          failureReason: "automation_session_missing",
+        })
+      );
       expect(mockStore.updateRun).not.toHaveBeenCalled();
       expect(mockStore.tryMarkInvocationFailureCounted).not.toHaveBeenCalled();
 
@@ -1763,7 +1775,7 @@ describe("Scheduler", () => {
       expect(mockStore.getInvocationRunAggregate).not.toHaveBeenCalled();
     });
 
-    it("increments failures for orphaned runs when reconciliation deferral throws", async () => {
+    it("increments failures for orphaned runs when reconciliation leasing throws", async () => {
       const orphanedRun = {
         id: "orphan-1",
         automation_id: "auto-1",
@@ -1782,7 +1794,7 @@ describe("Scheduler", () => {
       };
       mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
       mockStore.getRunsDueForReconciliation.mockResolvedValue([dueRun]);
-      mockStore.deferRunReconciliation.mockRejectedValue(new Error("D1 timeout"));
+      mockStore.leaseRunsForRecovery.mockRejectedValue(new Error("D1 timeout"));
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ total: 1, active: 0, failed: 1 })
       );
@@ -1801,15 +1813,13 @@ describe("Scheduler", () => {
       );
       expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-orphan");
 
-      const bulkFailErrorCall = errorSpy.mock.calls.find(
+      const leaseErrorCall = errorSpy.mock.calls.find(
         ([, data]) =>
-          (data as Record<string, unknown> | undefined)?.event ===
-          "scheduler.recovery.reconcile_error"
+          (data as Record<string, unknown> | undefined)?.event === "scheduler.recovery.lease_error"
       );
-      expect(bulkFailErrorCall).toBeDefined();
-      expect(bulkFailErrorCall![1]).toMatchObject({
-        event: "scheduler.recovery.reconcile_error",
-        run_id: "due-1",
+      expect(leaseErrorCall).toBeDefined();
+      expect(leaseErrorCall![1]).toMatchObject({
+        event: "scheduler.recovery.lease_error",
         error: "D1 timeout",
       });
     });

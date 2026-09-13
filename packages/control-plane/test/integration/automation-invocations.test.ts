@@ -644,7 +644,7 @@ describe("automation invocations (D1 integration)", () => {
       )
         .bind(child.id)
         .first<{ status: string; session_id: string | null }>();
-      expect(row).toEqual({ status: "running", session_id: "session-1" });
+      expect(row).toEqual({ status: "starting", session_id: "session-1" });
     });
 
     it("getUncountedFailedInvocations finds exactly the crash-window invocations", async () => {

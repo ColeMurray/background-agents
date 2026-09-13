@@ -9,7 +9,7 @@ import { MessageService } from "./message.service";
 function createService() {
   const repository = {
     listMessages: vi.fn(),
-    listMessagesWithCallbackContext: vi.fn(),
+    getAutomationMessageByRunId: vi.fn(),
   } as unknown as MessageRepository;
   const eventRepository = {
     listEventPage: vi.fn(),
@@ -76,34 +76,14 @@ describe("MessageService", () => {
 
   it("returns the run-specific durable automation message outcome", () => {
     const { service, repository } = createService();
-    vi.mocked(repository.listMessagesWithCallbackContext).mockReturnValue([
-      {
-        id: "other",
-        status: "completed",
-        error_message: null,
-        completed_at: 10,
-        callback_context: JSON.stringify({
-          source: "automation",
-          automationId: "automation-1",
-          runId: "other-run",
-          automationName: "test",
-        }),
-      },
-      {
-        id: "message-1",
-        status: "failed",
-        error_message: "agent failed",
-        completed_at: 20,
-        callback_context: JSON.stringify({
-          source: "automation",
-          automationId: "automation-1",
-          runId: "run-1",
-          automationName: "test",
-        }),
-      },
-    ]);
+    vi.mocked(repository.getAutomationMessageByRunId).mockReturnValue({
+      id: "message-1",
+      status: "failed",
+      error_message: "agent failed",
+      completed_at: 20,
+    });
 
-    expect(service.getAutomationRunOutcome("automation-1", "run-1")).toEqual({
+    expect(service.getAutomationRunOutcome("run-1")).toEqual({
       state: "failed",
       messageId: "message-1",
       completedAt: 20,
@@ -113,9 +93,9 @@ describe("MessageService", () => {
 
   it("does not infer an outcome when the run-specific message is absent", () => {
     const { service, repository } = createService();
-    vi.mocked(repository.listMessagesWithCallbackContext).mockReturnValue([]);
+    vi.mocked(repository.getAutomationMessageByRunId).mockReturnValue(null);
 
-    expect(service.getAutomationRunOutcome("automation-1", "run-1")).toEqual({
+    expect(service.getAutomationRunOutcome("run-1")).toEqual({
       state: "missing",
     });
   });

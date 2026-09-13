@@ -540,15 +540,30 @@ describe("AutomationStore", () => {
   });
 
   describe("claimRunSession", () => {
-    it("claims only a starting run", async () => {
+    it("leases a starting run without acknowledging launch", async () => {
       const { db, statements } = createFakeD1();
       const store = new AutomationStore(db);
 
       await store.claimRunSession("run_test1", "session-1", now, now + 1000);
 
-      expect(statements[0].sql).toContain("SET status = 'running'");
-      expect(statements[0].sql).toContain("WHERE id = ? AND status = 'starting'");
+      expect(statements[0].sql).not.toContain("status = 'running'");
+      expect(statements[0].sql).toContain(
+        "WHERE id = ? AND status = 'starting' AND session_id IS NULL"
+      );
       expect(statements[0].params).toEqual(["session-1", now, now + 1000, "run_test1"]);
+    });
+
+    it("acknowledges launch only for its claimed session", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.acknowledgeRunLaunch("run_test1", "session-1", now + 1000);
+
+      expect(statements[0].sql).toContain("SET status = 'running'");
+      expect(statements[0].sql).toContain(
+        "WHERE id = ? AND status = 'starting' AND session_id = ?"
+      );
+      expect(statements[0].params).toEqual([now + 1000, "run_test1", "session-1"]);
     });
   });
 

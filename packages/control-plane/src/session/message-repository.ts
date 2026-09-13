@@ -340,16 +340,20 @@ export class MessageRepository {
     return rows[0] ?? null;
   }
 
-  listMessagesWithCallbackContext(): Array<
-    Pick<MessageRow, "id" | "status" | "error_message" | "completed_at" | "callback_context">
-  > {
+  getAutomationMessageByRunId(
+    runId: string
+  ): Pick<MessageRow, "id" | "status" | "error_message" | "completed_at"> | null {
     const result = this.sql.exec(
-      `SELECT id, status, error_message, completed_at, callback_context
+      `SELECT id, status, error_message, completed_at
        FROM messages
-       WHERE source = 'automation' AND callback_context IS NOT NULL
-       ORDER BY created_at ASC, rowid ASC`
+       WHERE source = 'automation' AND client_request_id = ?
+       LIMIT 1`,
+      runId
     );
-    return this.rows(result);
+    return (
+      this.rows<Pick<MessageRow, "id" | "status" | "error_message" | "completed_at">>(result)[0] ??
+      null
+    );
   }
 
   createMessage(data: CreateMessageData): void {

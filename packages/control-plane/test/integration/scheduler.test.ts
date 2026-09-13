@@ -332,24 +332,23 @@ describe("Scheduler (integration)", () => {
       expect(automation!.consecutive_failures).toBe(1);
     });
 
-    it("does not guess an outcome when a claimed session is missing", async () => {
+    it("fails an expired launch when its claimed session was never initialized", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(
         makeAutomation({ id: "auto-t2", next_run_at: now + 86400000, enabled: 1 })
       );
 
-      // Reconciliation begins after 90 minutes, but age alone is not a failure.
-      const twoHoursAgo = now - 2 * 60 * 60 * 1000;
+      const tenMinutesAgo = now - 10 * 60 * 1000;
       await seedRun(
         makeRunRow("auto-t2", {
           id: "run-timeout-t2",
-          status: "running",
+          status: "starting",
           session_id: "sess-timeout",
-          scheduled_at: twoHoursAgo,
-          started_at: twoHoursAgo,
+          scheduled_at: tenMinutesAgo,
+          started_at: tenMinutesAgo,
           reconciliation_due_at: now - 1,
-          created_at: twoHoursAgo,
+          created_at: tenMinutesAgo,
         })
       );
 
@@ -357,8 +356,54 @@ describe("Scheduler (integration)", () => {
       expect(result).toEqual({ processed: 0, skipped: 0, failed: 0 });
 
       const run = await store.getRunById("auto-t2", "run-timeout-t2");
+      expect(run!.status).toBe("failed");
+      expect(run!.failure_reason).toBe("automation_session_missing");
+    });
+
+    it("fails an expired launch initialized without its automation prompt", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-launch-missing-prompt" }));
+      await seedRun(
+        makeRunRow("auto-launch-missing-prompt", {
+          id: "run-launch-missing-prompt",
+          status: "starting",
+          session_id: "session-missing-prompt",
+          started_at: now - 10 * 60 * 1000,
+          reconciliation_due_at: now - 1,
+        })
+      );
+      const schedulerEnv = createCloudflareEnv(env);
+      schedulerEnv.SESSION = async () => Response.json({ state: "missing" });
+
+      await createScheduler(schedulerEnv).tick();
+
+      expect(
+        await store.getRunById("auto-launch-missing-prompt", "run-launch-missing-prompt")
+      ).toMatchObject({ status: "failed", failure_reason: "automation_message_missing" });
+    });
+
+    it("acknowledges an expired launch after finding its durable prompt", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-launch-ack" }));
+      await seedRun(
+        makeRunRow("auto-launch-ack", {
+          id: "run-launch-ack",
+          status: "starting",
+          session_id: "session-launch-ack",
+          started_at: now - 10 * 60 * 1000,
+          reconciliation_due_at: now - 1,
+        })
+      );
+      const schedulerEnv = createCloudflareEnv(env);
+      schedulerEnv.SESSION = async () =>
+        Response.json({ state: "active", messageId: "message-launch-ack" });
+
+      await createScheduler(schedulerEnv).tick();
+
+      const run = await store.getRunById("auto-launch-ack", "run-launch-ack");
       expect(run!.status).toBe("running");
-      expect(run!.failure_reason).toBeNull();
       expect(run!.reconciliation_due_at).toBeGreaterThan(now);
     });
 
@@ -457,6 +502,11 @@ describe("Scheduler (integration)", () => {
         await env.DB.exec("DROP TRIGGER IF EXISTS fail_reconciliation_accounting");
       }
 
+      await env.DB.prepare(
+        `UPDATE automation_runs SET reconciliation_due_at = ? WHERE id = 'run-reconcile-retry'`
+      )
+        .bind(now - 1)
+        .run();
       await createScheduler(schedulerEnv).tick();
 
       expect(await store.getRunById("auto-reconcile-retry", "run-reconcile-retry")).toMatchObject({

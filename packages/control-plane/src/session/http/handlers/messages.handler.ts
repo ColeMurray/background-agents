@@ -125,11 +125,10 @@ export class MessagesHandler {
   }
 
   automationRunOutcome(url: URL): Response {
-    const automationId = url.searchParams.get("automation_id");
     const runId = url.searchParams.get("run_id");
-    if (!automationId || !runId) {
-      return Response.json({ error: "automation_id and run_id are required" }, { status: 400 });
+    if (!runId) {
+      return Response.json({ error: "run_id is required" }, { status: 400 });
     }
-    return Response.json(this.messageService.getAutomationRunOutcome(automationId, runId));
+    return Response.json(this.messageService.getAutomationRunOutcome(runId));
   }
 }

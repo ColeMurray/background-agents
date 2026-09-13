@@ -679,6 +679,40 @@ describe("AutomationStore (D1 integration)", () => {
       expect(due[0].id).toBe("run-timeout-1");
     });
 
+    it("finds claimed starting runs whose launch lease expired", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-launch-expired" }));
+      await seedRun(
+        makeRun("auto-launch-expired", {
+          id: "run-launch-expired",
+          status: "starting",
+          session_id: "session-launch-expired",
+          reconciliation_due_at: now - 1,
+        })
+      );
+
+      const due = await store.getUnacknowledgedStartingRuns(now, 50);
+
+      expect(due.map((run) => run.id)).toEqual(["run-launch-expired"]);
+    });
+
+    it("leases each reconciliation candidate to only one sweep", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-reconcile-lease" }));
+      const run = makeRun("auto-reconcile-lease", {
+        id: "run-reconcile-lease",
+        status: "running",
+        session_id: "session-reconcile-lease",
+        reconciliation_due_at: now - 1,
+      });
+      await seedRun(run);
+
+      expect(await store.leaseRunsForRecovery([run], now + 60_000)).toHaveLength(1);
+      expect(await store.leaseRunsForRecovery([run], now + 60_000)).toHaveLength(0);
+    });
+
     it("finds legacy running rows without a reconciliation deadline", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
@@ -787,6 +821,16 @@ describe("AutomationStore (D1 integration)", () => {
       expect(detail).toContain("USING INDEX idx_runs_reconciliation_sweep");
       expect(detail).toContain("USING INDEX idx_runs_timeout_sweep");
       expect(detail).not.toContain("USE TEMP B-TREE");
+    });
+
+    it("unacknowledged launch sweep uses idx_runs_launch_recovery", async () => {
+      const plan = await env.DB.prepare(
+        `EXPLAIN QUERY PLAN ${AutomationStore.UNACKNOWLEDGED_STARTING_RUNS_SQL}`
+      )
+        .bind(Date.now(), 50)
+        .all<{ detail: string }>();
+      const detail = plan.results.map((row) => row.detail).join("\n");
+      expect(detail).toContain("USING INDEX idx_runs_launch_recovery");
     });
   });
 

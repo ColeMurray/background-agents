@@ -53,6 +53,31 @@ describe("POST /internal/prompt", () => {
     expect(["pending", "processing"]).toContain(messages[0].status);
   });
 
+  it("looks up an automation outcome by its durable run key", async () => {
+    const { stub } = await initSession();
+    const runId = "run-durable-key";
+    const enqueue = await stub.fetch("http://internal/internal/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: "Run automation",
+        authorId: "user-1",
+        source: "automation",
+        clientRequestId: runId,
+        callbackContext: { legacy: "metadata does not identify the run" },
+      }),
+    });
+    expect(enqueue.status).toBe(200);
+    const { messageId } = await enqueue.json<{ messageId: string }>();
+
+    const outcome = await stub.fetch(
+      `http://internal/internal/automation-run-outcome?run_id=${runId}`
+    );
+
+    expect(outcome.status).toBe(200);
+    await expect(outcome.json()).resolves.toEqual({ state: "active", messageId });
+  });
+
   it("persists queued prompts in FIFO order", async () => {
     const { stub } = await initSession();
     const enqueue = async (content: string) => {

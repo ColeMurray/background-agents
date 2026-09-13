@@ -265,7 +265,7 @@ type StartInvocationResult =
 
 type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
-  "content" | "authorId" | "canonicalUserId" | "source"
+  "content" | "authorId" | "canonicalUserId" | "source" | "clientRequestId"
 > & {
   callbackContext: AutomationCallbackContext | SlackCallbackContext;
 };
@@ -560,17 +560,15 @@ export class Scheduler {
       try {
         if ("error" in providerAuthSnapshot) throw providerAuthSnapshot.error;
         const sessionId = generateId();
-        // Claim the generated session before initialization. Otherwise the orphan sweep can
-        // terminalize an old `starting` row while initialization is still creating its session.
         const startedAt = Date.now();
         const claimed = await store.claimRunSession(
           child.id,
           sessionId,
           startedAt,
-          startedAt + RUN_RECONCILIATION_AGE_MS
+          startedAt + ORPHAN_THRESHOLD_MS
         );
         if (!claimed) {
-          throw new Error("Automation run was recovered before launch claimed its session");
+          return;
         }
         await this.createSessionForAutomationRun(
           automation,
@@ -586,6 +584,14 @@ export class Scheduler {
           executionPrincipal,
           instructionsOverride
         );
+        const acknowledged = await store.acknowledgeRunLaunch(
+          child.id,
+          sessionId,
+          Date.now() + RUN_RECONCILIATION_AGE_MS
+        );
+        if (!acknowledged) {
+          throw new Error("Automation run launch acknowledgement was lost");
+        }
         child.status = "running";
         child.session_id = sessionId;
       } catch (e) {
@@ -812,13 +818,16 @@ export class Scheduler {
 
   private async recoverySweep(store: AutomationStore): Promise<void> {
     const now = Date.now();
-    const [orphanedResult, reconciliationResult] = await Promise.allSettled([
+    const [orphanedResult, unacknowledgedResult, reconciliationResult] = await Promise.allSettled([
       store.getOrphanedStartingRuns(ORPHAN_THRESHOLD_MS, RECOVERY_SWEEP_LIMIT),
+      store.getUnacknowledgedStartingRuns(now, RECOVERY_SWEEP_LIMIT),
       store.getRunsDueForReconciliation(now, now - RUN_RECONCILIATION_AGE_MS, RECOVERY_SWEEP_LIMIT),
     ]);
 
     const orphaned = orphanedResult.status === "fulfilled" ? orphanedResult.value : [];
-    const dueForReconciliation =
+    const unacknowledged =
+      unacknowledgedResult.status === "fulfilled" ? unacknowledgedResult.value : [];
+    const reconciliationCandidates =
       reconciliationResult.status === "fulfilled" ? reconciliationResult.value : [];
 
     if (orphanedResult.status === "rejected") {
@@ -843,7 +852,31 @@ export class Scheduler {
       });
     }
 
-    if (orphaned.length === 0 && dueForReconciliation.length === 0) {
+    if (unacknowledgedResult.status === "rejected") {
+      this.log.error("Recovery sweep failed to query unacknowledged launches", {
+        event: "scheduler.recovery.query_error",
+        category: "unacknowledged_launch",
+        error:
+          unacknowledgedResult.reason instanceof Error
+            ? unacknowledgedResult.reason.message
+            : String(unacknowledgedResult.reason),
+      });
+    }
+
+    let leased: AutomationRunRow[] = [];
+    try {
+      leased = await store.leaseRunsForRecovery(
+        [...unacknowledged, ...reconciliationCandidates],
+        now + RUN_RECONCILIATION_RETRY_MS
+      );
+    } catch (error) {
+      this.log.error("Recovery sweep failed to lease runs", {
+        event: "scheduler.recovery.lease_error",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (orphaned.length === 0 && leased.length === 0) {
       await this.finalizationSweep(store);
       return;
     }
@@ -876,19 +909,16 @@ export class Scheduler {
     }
 
     let nextReconciliationIndex = 0;
-    const reconciliationWorkerCount = Math.min(
-      RUN_RECONCILIATION_CONCURRENCY,
-      dueForReconciliation.length
-    );
+    const reconciliationWorkerCount = Math.min(RUN_RECONCILIATION_CONCURRENCY, leased.length);
     await Promise.all(
       Array.from({ length: reconciliationWorkerCount }, async () => {
         for (;;) {
-          const run = dueForReconciliation[nextReconciliationIndex++];
+          const run = leased[nextReconciliationIndex++];
           if (!run) return;
           try {
-            await this.reconcileRunningRun(store, run, now);
+            await this.reconcileRun(store, run, now);
           } catch (e) {
-            this.log.error("Recovery sweep failed to reconcile running run", {
+            this.log.error("Recovery sweep failed to reconcile run", {
               event: "scheduler.recovery.reconcile_error",
               run_id: run.id,
               automation_id: run.automation_id,
@@ -927,14 +957,13 @@ export class Scheduler {
     await this.finalizationSweep(store);
   }
 
-  private async reconcileRunningRun(
+  private async reconcileRun(
     store: AutomationStore,
     run: AutomationRunRow,
     now: number
   ): Promise<void> {
-    const defer = () => store.deferRunReconciliation(run.id, now + RUN_RECONCILIATION_RETRY_MS);
     if (!run.session_id) {
-      await defer();
+      await this.failRunWithoutAuthority(store, run, now, "automation_session_missing");
       return;
     }
 
@@ -945,7 +974,6 @@ export class Scheduler {
     let response: Response;
     try {
       const search = new URLSearchParams({
-        automation_id: run.automation_id,
         run_id: run.id,
       }).toString();
       response = await client.fetch(
@@ -955,7 +983,6 @@ export class Scheduler {
         `?${search}`
       );
     } catch (error) {
-      await defer();
       this.log.warn("Automation run reconciliation probe failed", {
         event: "scheduler.recovery.probe_failed",
         automation_id: run.automation_id,
@@ -966,8 +993,8 @@ export class Scheduler {
     }
 
     if (response.status === 404) {
-      await defer();
-      this.log.warn("Automation run reconciliation found no session authority", {
+      await this.failRunWithoutAuthority(store, run, now, "automation_session_missing");
+      this.log.warn("Automation run reconciliation found a missing session", {
         event: "scheduler.recovery.session_missing",
         automation_id: run.automation_id,
         run_id: run.id,
@@ -976,7 +1003,6 @@ export class Scheduler {
       return;
     }
     if (!response.ok) {
-      await defer();
       return;
     }
 
@@ -984,12 +1010,10 @@ export class Scheduler {
     try {
       body = await response.json();
     } catch {
-      await defer();
       return;
     }
     const parsed = automationRunOutcomeResponseSchema.safeParse(body);
     if (!parsed.success) {
-      await defer();
       this.log.error("Automation run reconciliation returned an invalid response", {
         event: "scheduler.recovery.invalid_response",
         automation_id: run.automation_id,
@@ -999,11 +1023,13 @@ export class Scheduler {
     }
 
     if (parsed.data.state === "active") {
-      await defer();
+      if (run.status === "starting") {
+        await store.acknowledgeRunLaunch(run.id, run.session_id, now + RUN_RECONCILIATION_AGE_MS);
+      }
       return;
     }
     if (parsed.data.state === "missing") {
-      await defer();
+      await this.failRunWithoutAuthority(store, run, now, "automation_message_missing");
       this.log.warn("Automation run reconciliation found no run message", {
         event: "scheduler.recovery.message_missing",
         automation_id: run.automation_id,
@@ -1025,6 +1051,28 @@ export class Scheduler {
       },
       true
     );
+  }
+
+  private async failRunWithoutAuthority(
+    store: AutomationStore,
+    run: AutomationRunRow,
+    completedAt: number,
+    failureReason: string
+  ): Promise<void> {
+    const result = await store.completeRunAndApplyAccounting({
+      run,
+      status: "failed",
+      failureReason,
+      completedAt,
+      autoPauseThreshold: AUTO_PAUSE_THRESHOLD,
+    });
+    if (result.autoPaused) {
+      this.log.warn("Automation auto-paused due to consecutive failures", {
+        event: "scheduler.auto_pause",
+        automation_id: run.automation_id,
+        consecutive_failures: result.consecutiveFailures,
+      });
+    }
   }
 
   /**
@@ -1697,6 +1745,7 @@ export class Scheduler {
         canonicalUserId: executionPrincipal.platformUserId,
         source: "automation",
         callbackContext,
+        clientRequestId: runId,
       },
       { trace_id: `automation:${automation.id}`, request_id: runId }
     );
