@@ -4,7 +4,8 @@ ALTER TABLE automation_runs ADD COLUMN reconciliation_due_at INTEGER;
 
 UPDATE automation_runs
 SET reconciliation_due_at = started_at + 5400000
-WHERE status = 'running' AND started_at IS NOT NULL;
+WHERE started_at IS NOT NULL
+  AND (status = 'running' OR (status = 'starting' AND session_id IS NOT NULL));
 
 CREATE INDEX idx_runs_reconciliation_sweep
   ON automation_runs (reconciliation_due_at)
