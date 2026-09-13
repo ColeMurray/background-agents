@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
 PROCESS_OUTPUT_TAIL_BYTES = 64 * 1024
+PROCESS_OUTPUT_SHUTDOWN_SECONDS = 1.0
 
 
 class BoundedOutputCollector:
@@ -44,6 +45,20 @@ class BoundedOutputCollector:
     async def wait(self) -> None:
         """Wait until every writer has closed the stream."""
         await self.task
+
+    async def shutdown(self) -> None:
+        """Close the stream and bound how long collector cleanup can take."""
+        transport = getattr(self._stream, "_transport", None)
+        if transport is not None:
+            transport.close()
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(self.task),
+                timeout=PROCESS_OUTPUT_SHUTDOWN_SECONDS,
+            )
+        except TimeoutError:
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
 
     def discard_tail(self) -> None:
         """Continue draining without retaining output."""
@@ -98,7 +113,7 @@ async def terminate_owned_subprocess(
     finally:
         # The leader may have exited while descendants still hold its output pipes.
         send_signal(signal.SIGKILL)
-        await asyncio.shield(process.wait())
+        await asyncio.shield(wait_for_process_exit(process))
 
 
 async def finish_cancellation_cleanup[ResultT](task: asyncio.Task[ResultT]) -> ResultT:

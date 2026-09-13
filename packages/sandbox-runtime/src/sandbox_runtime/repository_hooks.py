@@ -92,15 +92,21 @@ class RepositoryHooks:
                 self.log.info(f"{hook_name}.complete", **fields)
                 return True
             await self._terminate(process)
-            await output.wait()
+            await output.shutdown()
             if boot_mode is not BootMode.BUILD:
                 fields["output_tail"] = output.tail_lines()
             self.log.error(f"{hook_name}.failed", **fields)
             return False
         except asyncio.CancelledError:
-            if process is not None:
-                cleanup = asyncio.create_task(self._terminate(process))
-                await finish_cancellation_cleanup(cleanup)
+
+            async def cleanup_cancelled_hook() -> None:
+                if process is not None:
+                    await self._terminate(process)
+                if output is not None:
+                    await output.shutdown()
+
+            cleanup = asyncio.create_task(cleanup_cancelled_hook())
+            await finish_cancellation_cleanup(cleanup)
             if output is not None:
                 output.discard_tail()
             self.log.info(
@@ -115,7 +121,7 @@ class RepositoryHooks:
             if process is not None:
                 await self._terminate(process)
             if output is not None:
-                await output.wait()
+                await output.shutdown()
             self.log.error(
                 f"{hook_name}.error",
                 exc=error,
