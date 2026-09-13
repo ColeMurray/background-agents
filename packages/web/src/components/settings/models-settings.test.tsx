@@ -14,8 +14,8 @@ import {
   normalizeValidModels,
 } from "@open-inspect/shared/models";
 import {
+  MODEL_PREFERENCES_KEY,
   ModelPreferencesProvider,
-  getModelPreferencesKey,
   useEnabledModels,
 } from "@/hooks/use-enabled-models";
 import { ModelsSettings } from "./models-settings";
@@ -69,7 +69,7 @@ function renderSettings(
       value={{
         provider: () => new Map(),
         fallback: {
-          [getModelPreferencesKey("test-user")]: {
+          [MODEL_PREFERENCES_KEY]: {
             enabledModels,
             revision: 1,
           },
@@ -77,7 +77,7 @@ function renderSettings(
         revalidateIfStale: false,
       }}
     >
-      <ModelPreferencesProvider identity="test-user">
+      <ModelPreferencesProvider>
         {children}
         <CachedModels />
       </ModelPreferencesProvider>
@@ -264,7 +264,7 @@ describe("ModelsSettings", () => {
     renderSettings(undefined, <CacheAccess />);
     await act(async () => {
       await updateCache(
-        getModelPreferencesKey("test-user"),
+        MODEL_PREFERENCES_KEY,
         {
           enabledModels: ["anthropic/claude-sonnet-4-6"],
           revision: 2,
@@ -286,7 +286,7 @@ describe("ModelsSettings", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(
       <SWRConfig value={{ provider: () => new Map(), fetcher, shouldRetryOnError: false }}>
-        <ModelPreferencesProvider identity="test-user">
+        <ModelPreferencesProvider>
           <ModelsSettings />
         </ModelPreferencesProvider>
       </SWRConfig>

@@ -24,16 +24,9 @@ import {
   type ValidModel,
 } from "@open-inspect/shared/models";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import { useAuthSession } from "@/lib/auth-session";
 
 export const MODEL_PREFERENCES_KEY = "/api/model-preferences";
 const INITIAL_MODEL_PREFERENCES_REVISION = 0;
-
-export function getModelPreferencesKey(
-  identity: string
-): `/api/model-preferences?identity=${string}` {
-  return `${MODEL_PREFERENCES_KEY}?identity=${encodeURIComponent(identity)}`;
-}
 
 const canonicalModelSchema = z.custom<ValidModel>(
   (value) => typeof value === "string" && isValidModel(value) && normalizeModelId(value) === value
@@ -45,11 +38,6 @@ const modelPreferencesSchema = z.object({
 type ModelPreferencesResponse = z.infer<typeof modelPreferencesSchema>;
 
 type PendingChange = readonly ModelPreferenceChange[];
-
-interface ProviderLifetime {
-  identity: string;
-  abortController: AbortController;
-}
 
 interface EnabledModelsContextValue {
   enabledModels: string[];
@@ -93,44 +81,25 @@ function rebasePending(
   });
 }
 
-export function AuthenticatedModelPreferencesProvider({ children }: { children: ReactNode }) {
-  const session = useAuthSession();
-  if (session.status !== "authenticated") return null;
-  return (
-    <ModelPreferencesProvider key={session.data.user.id} identity={session.data.user.id}>
-      {children}
-    </ModelPreferencesProvider>
-  );
-}
-
-export function ModelPreferencesProvider({
-  children,
-  identity,
-}: {
-  children: ReactNode;
-  identity: string;
-}) {
-  const cacheKey = getModelPreferencesKey(identity);
-  const { data, error, isLoading, mutate } = useSWR<ModelPreferencesResponse>(cacheKey);
+export function ModelPreferencesProvider({ children }: { children: ReactNode }) {
+  const { data, error, isLoading, mutate } =
+    useSWR<ModelPreferencesResponse>(MODEL_PREFERENCES_KEY);
   const [pending, setPending] = useState<PendingChange[]>([]);
   const queue = useRef<Promise<void>>(Promise.resolve());
-  const lifetime = useRef<ProviderLifetime | null>(null);
+  const lifetime = useRef<AbortController | null>(null);
   const confirmed = useRef<ModelPreferencesResponse>({
     enabledModels: DEFAULT_ENABLED_MODELS,
     revision: INITIAL_MODEL_PREFERENCES_REVISION,
   });
 
   useLayoutEffect(() => {
-    const current: ProviderLifetime = {
-      identity,
-      abortController: new AbortController(),
-    };
+    const current = new AbortController();
     lifetime.current = current;
     return () => {
       if (lifetime.current === current) lifetime.current = null;
-      current.abortController.abort();
+      current.abort();
     };
-  }, [identity]);
+  }, []);
 
   const confirmedModels = useMemo<ValidModel[]>(() => {
     if (isLoading) return [];
@@ -164,7 +133,7 @@ export function ModelPreferencesProvider({
       }
 
       const owner = lifetime.current;
-      if (!owner || owner.identity !== identity) return Promise.resolve();
+      if (!owner) return Promise.resolve();
       const isCurrent = () => lifetime.current === owner;
       const operation: PendingChange = [...changes];
       setPending((current) => [...current, operation]);
@@ -185,7 +154,7 @@ export function ModelPreferencesProvider({
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ changes: operation }),
-            signal: owner.abortController.signal,
+            signal: owner.signal,
           });
           if (!isCurrent()) return;
           const body: unknown = await res.json().catch(() => null);
@@ -228,7 +197,7 @@ export function ModelPreferencesProvider({
       queue.current = request.catch(() => undefined);
       return request;
     },
-    [error, identity, isLoading, mutate]
+    [error, isLoading, mutate]
   );
 
   const value = useMemo<EnabledModelsContextValue>(
