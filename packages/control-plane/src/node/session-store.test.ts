@@ -89,7 +89,7 @@ describe("openSessionStore", () => {
       import { mkdirSync } from "node:fs";
       mkdirSync(process.argv[2] + "/sessions", { recursive: true });
       const db = new DatabaseSync(process.argv[2] + "/sessions/session-1.db");
-      db.exec("BEGIN IMMEDIATE; CREATE TABLE held (v TEXT);");
+      db.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE; CREATE TABLE held (v TEXT);");
       process.stdout.write("locked\\n");
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
       db.exec("COMMIT");
