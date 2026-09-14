@@ -79,6 +79,9 @@ export function parseRepoAclConfig(
   env: Pick<EnvConfig, "ENFORCE_REPO_ACL" | "REPO_ACL_ALLOWLIST">
 ): RepoAclConfig {
   const enforce = env.ENFORCE_REPO_ACL === "true" || env.ENFORCE_REPO_ACL === "1";
+  // The allowlist only matters when the gate is enabled — a stale or
+  // malformed value must not block startup while enforcement is off.
+  if (!enforce) return { enforce: false, allowlist: [] };
   const allowlist = parseRepoAclAllowlist(env.REPO_ACL_ALLOWLIST);
   if (enforce && allowlist.length === 0) {
     throw new Error(

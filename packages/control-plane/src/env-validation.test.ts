@@ -71,10 +71,10 @@ describe("parseRepoAclConfig", () => {
     expect(parseRepoAclConfig({} as Env)).toEqual({ enforce: false, allowlist: [] });
   });
 
-  it("does not require an allowlist while the gate is off", () => {
+  it("does not parse the allowlist while the gate is off", () => {
     expect(parseRepoAclConfig({ REPO_ACL_ALLOWLIST: "acme/api" } as Env)).toEqual({
       enforce: false,
-      allowlist: [{ owner: "acme", name: "api" }],
+      allowlist: [],
     });
   });
 
@@ -88,8 +88,14 @@ describe("parseRepoAclConfig", () => {
   it("treats other ENFORCE_REPO_ACL values as off", () => {
     expect(parseRepoAclConfig({ ENFORCE_REPO_ACL: "yes", REPO_ACL_ALLOWLIST: "*" } as Env)).toEqual({
       enforce: false,
-      allowlist: [{ owner: "*", name: "*" }],
+      allowlist: [],
     });
+  });
+
+  it("ignores a malformed allowlist while the gate is off", () => {
+    expect(
+      parseRepoAclConfig({ ENFORCE_REPO_ACL: "false", REPO_ACL_ALLOWLIST: "acme/not-a-pattern" } as Env)
+    ).toEqual({ enforce: false, allowlist: [] });
   });
 
   it("refuses to enforce with an empty allowlist", () => {
