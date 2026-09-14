@@ -278,6 +278,8 @@ export interface SnapshotResult {
   imageId?: string;
   /** Error message if failed */
   error?: string;
+  /** Whether the provider's response confirms the source sandbox is no longer running. */
+  sourceStopped?: boolean;
 }
 
 /**
