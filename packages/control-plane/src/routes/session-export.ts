@@ -39,22 +39,33 @@ const EXPORT_MESSAGE_PAGE_LIMIT = 100;
 /** Hard cap on message pages per session, bounding a misbehaving runtime. */
 export const MAX_MESSAGE_PAGES_PER_SESSION = 1000;
 
-interface ExportedMessage {
-  id: string;
-  authorId: string;
-  content: string;
-  source: string;
-  status: string;
-  createdAt: number;
-  startedAt: number | null;
-  completedAt: number | null;
-}
+const exportedMessageSchema = z.object({
+  id: z.string(),
+  authorId: z.string(),
+  content: z.string(),
+  source: z.string(),
+  status: z.string(),
+  createdAt: z.number(),
+  startedAt: z.number().nullable(),
+  completedAt: z.number().nullable(),
+});
 
-interface MessageListResponse {
-  messages: ExportedMessage[];
-  cursor?: string;
-  hasMore: boolean;
-}
+type ExportedMessage = z.infer<typeof exportedMessageSchema>;
+
+/**
+ * One page of the runtime's message list. A page claiming hasMore without a
+ * cursor is malformed — treating it as "the end" would export truncated data
+ * as complete.
+ */
+const messagePageSchema = z
+  .object({
+    messages: z.array(exportedMessageSchema),
+    hasMore: z.boolean(),
+    cursor: z.string().min(1).optional(),
+  })
+  .refine((page) => !page.hasMore || page.cursor !== undefined, {
+    error: "cursor is required when hasMore is true",
+  });
 
 /** Non-empty decimal string → safe non-negative integer (epoch ms). Empty strings must fail, not coerce to 0. */
 function epochMsQuery(paramName: string) {
@@ -164,20 +175,24 @@ async function fetchAllMessages(
         });
         return { ok: false, reason: "http_error", status: response.status };
       }
-      let body: MessageListResponse;
+      let payload: unknown;
       try {
-        body = (await response.json()) as MessageListResponse;
+        payload = await response.json();
       } catch {
         log.warn("session_export.message_page_unreadable", { session_id: sessionId });
         return { ok: false, reason: "runtime_failure" };
       }
-      if (!Array.isArray(body.messages)) {
-        log.warn("session_export.message_page_invalid_shape", { session_id: sessionId });
+      const parsed = messagePageSchema.safeParse(payload);
+      if (!parsed.success) {
+        log.warn("session_export.message_page_invalid_shape", {
+          session_id: sessionId,
+          error: parsed.error.issues[0]?.message,
+        });
         return { ok: false, reason: "runtime_failure" };
       }
-      messages.push(...body.messages);
-      if (!body.hasMore || !body.cursor) return { ok: true, messages };
-      cursor = body.cursor;
+      messages.push(...parsed.data.messages);
+      if (!parsed.data.hasMore || !parsed.data.cursor) return { ok: true, messages };
+      cursor = parsed.data.cursor;
     }
   } catch (e) {
     log.warn("session_export.message_runtime_failure", {
