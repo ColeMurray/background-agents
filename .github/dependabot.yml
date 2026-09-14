@@ -1,0 +1,88 @@
+version: 2
+
+updates:
+  # npm — the root manifest covers every packages/* workspace.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      prefix-development: chore
+    groups:
+      # One PR per week for all minor/patch bumps; majors still get their own.
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # Python — every packages/* dir with a pyproject.toml + uv.lock, plus the
+  # pinned agent tool lock under sandbox-images.
+  - package-ecosystem: uv
+    directories:
+      - /packages/*
+      - /packages/sandbox-images/locks/python-tools
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+    groups:
+      python-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # Base images in Dockerfiles.
+  - package-ecosystem: docker
+    directories:
+      - /packages/control-plane
+      - /packages/sandbox-images
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore
+
+  # Base images in docker-compose*.yml at the repo root.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore
+
+  - package-ecosystem: terraform
+    directories:
+      - /terraform/environments/*
+      - /terraform/modules/*
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore
+    ignore:
+      # The cloudflare provider is deliberately held below 5.20.0 (worker
+      # observability regression, cloudflare/terraform-provider-cloudflare#7177).
+      # Drop this entry once that is fixed upstream.
+      - dependency-name: cloudflare/cloudflare
