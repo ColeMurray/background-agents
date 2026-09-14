@@ -1,0 +1,254 @@
+name: Terraform Run
+
+# Runs Terraform against one environment. Called by terraform.yml; it has no
+# triggers of its own.
+#
+# The TF_VAR_* block sits at job level rather than on each step. Job-level env
+# can read `secrets` where workflow-level env cannot, so this is the only place
+# a single copy of the list can live and still reach them. Previously the block
+# was written out twice, once in the plan job and once in apply, and every new
+# variable had to be added to both.
+#
+# The defaults reproduce today's behavior exactly: `state_key` points at the
+# existing production state, and `environment` is empty, which is what the plan
+# job has always used. The apply job passes `production`, as it always has.
+#
+# A second environment is a GitHub Environment holding whatever secrets differ,
+# plus a distinct state key, plus a caller workflow. No Terraform is copied.
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "plan or apply"
+        required: true
+        type: string
+      environment:
+        description: >-
+          GitHub Environment supplying this deployment's secrets. Empty means
+          no environment, so repository-level secrets are used.
+        required: false
+        default: ""
+        type: string
+      state_key:
+        description: "Key of this deployment's state object in the R2 backend bucket"
+        required: false
+        default: production/terraform.tfstate
+        type: string
+
+jobs:
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ inputs.environment }}
+    env:
+      TF_VERSION: "1.14.8"
+      TF_WORKING_DIR: terraform/environments/production
+      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TF_VAR_cloudflare_worker_subdomain: ${{ vars.CLOUDFLARE_WORKER_SUBDOMAIN || secrets.CLOUDFLARE_WORKER_SUBDOMAIN }}
+      TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID || secrets.CLOUDFLARE_ZONE_ID }}
+      TF_VAR_cloudflare_custom_domain: ${{ vars.CLOUDFLARE_CUSTOM_DOMAIN || secrets.CLOUDFLARE_CUSTOM_DOMAIN }}
+      TF_VAR_vercel_api_token: "${{ secrets.VERCEL_API_TOKEN || '000000000000000000000000' }}"
+      TF_VAR_vercel_team_id: "${{ vars.VERCEL_TEAM_ID || secrets.VERCEL_TEAM_ID || 'unused' }}"
+      TF_VAR_modal_token_id: ${{ secrets.MODAL_TOKEN_ID }}
+      TF_VAR_modal_token_secret: ${{ secrets.MODAL_TOKEN_SECRET }}
+      TF_VAR_modal_workspace: ${{ vars.MODAL_WORKSPACE || secrets.MODAL_WORKSPACE }}
+      TF_VAR_modal_environment: "${{ vars.MODAL_ENVIRONMENT || secrets.MODAL_ENVIRONMENT || 'main' }}"
+      TF_VAR_modal_environment_web_suffix: ${{ vars.MODAL_ENVIRONMENT_WEB_SUFFIX || secrets.MODAL_ENVIRONMENT_WEB_SUFFIX }}
+      TF_VAR_github_client_id: ${{ vars.GH_OAUTH_CLIENT_ID || secrets.GH_OAUTH_CLIENT_ID }}
+      TF_VAR_github_client_secret: ${{ secrets.GH_OAUTH_CLIENT_SECRET }}
+      TF_VAR_google_client_id: ${{ vars.GOOGLE_CLIENT_ID || secrets.GOOGLE_CLIENT_ID }}
+      TF_VAR_google_client_secret: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      TF_VAR_github_app_id: ${{ vars.GH_APP_ID || secrets.GH_APP_ID }}
+      TF_VAR_github_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      TF_VAR_github_app_installation_id: ${{ vars.GH_APP_INSTALLATION_ID || secrets.GH_APP_INSTALLATION_ID }}
+      TF_VAR_enable_slack_bot: "${{ vars.ENABLE_SLACK_BOT || secrets.ENABLE_SLACK_BOT || 'true' }}"
+      TF_VAR_slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+      TF_VAR_slack_signing_secret: ${{ secrets.SLACK_SIGNING_SECRET }}
+      TF_VAR_slack_bot_default_model: "${{ vars.SLACK_BOT_DEFAULT_MODEL || secrets.SLACK_BOT_DEFAULT_MODEL || 'claude-haiku-4-5' }}"
+      TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+      TF_VAR_classification_openai_api_key: ${{ secrets.CLASSIFICATION_OPENAI_API_KEY }}
+      TF_VAR_classification_model: "${{ vars.CLASSIFICATION_MODEL || 'claude-haiku-4-5' }}"
+      TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
+      TF_VAR_repo_secrets_encryption_key: ${{ secrets.REPO_SECRETS_ENCRYPTION_KEY }}
+      TF_VAR_provider_accounts_encryption_key: ${{ secrets.PROVIDER_ACCOUNTS_ENCRYPTION_KEY }}
+      TF_VAR_nextauth_secret: ${{ secrets.NEXTAUTH_SECRET }}
+      TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
+      TF_VAR_allowed_users: ${{ vars.ALLOWED_USERS || secrets.ALLOWED_USERS }}
+      TF_VAR_allowed_email_domains: ${{ vars.ALLOWED_EMAIL_DOMAINS || secrets.ALLOWED_EMAIL_DOMAINS }}
+      TF_VAR_allowed_emails: ${{ vars.ALLOWED_EMAILS || secrets.ALLOWED_EMAILS }}
+      TF_VAR_allowed_github_orgs: ${{ vars.ALLOWED_GITHUB_ORGS || secrets.ALLOWED_GITHUB_ORGS }}
+      TF_VAR_deployment_name: ${{ vars.DEPLOYMENT_NAME || secrets.DEPLOYMENT_NAME }}
+      TF_VAR_enable_github_bot: "${{ vars.ENABLE_GITHUB_BOT || secrets.ENABLE_GITHUB_BOT || 'false' }}"
+      TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
+      TF_VAR_github_bot_username: ${{ vars.GH_BOT_USERNAME || secrets.GH_BOT_USERNAME }}
+      TF_VAR_github_bot_default_model: "${{ vars.GH_BOT_DEFAULT_MODEL || secrets.GH_BOT_DEFAULT_MODEL || 'anthropic/claude-haiku-4-5' }}"
+      TF_VAR_app_name: "${{ vars.APP_NAME || secrets.APP_NAME || 'Open-Inspect' }}"
+      TF_VAR_app_icon_url: ${{ vars.APP_ICON_URL || secrets.APP_ICON_URL }}
+      TF_VAR_enable_linear_bot: "${{ vars.ENABLE_LINEAR_BOT || secrets.ENABLE_LINEAR_BOT || 'false' }}"
+      TF_VAR_linear_client_id: ${{ vars.LINEAR_CLIENT_ID || secrets.LINEAR_CLIENT_ID }}
+      TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
+      TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
+      TF_VAR_linear_bot_default_model: "${{ vars.LINEAR_BOT_DEFAULT_MODEL || secrets.LINEAR_BOT_DEFAULT_MODEL || 'claude-sonnet-4-6' }}"
+      TF_VAR_web_platform: "${{ vars.WEB_PLATFORM || secrets.WEB_PLATFORM || 'vercel' }}"
+      TF_VAR_enable_durable_object_bindings: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
+      TF_VAR_sandbox_provider: "${{ vars.SANDBOX_PROVIDER || secrets.SANDBOX_PROVIDER || 'modal' }}"
+      TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
+      TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
+      TF_VAR_daytona_base_snapshot: ${{ vars.DAYTONA_BASE_SNAPSHOT || secrets.DAYTONA_BASE_SNAPSHOT }}
+      TF_VAR_daytona_target: ${{ vars.DAYTONA_TARGET || secrets.DAYTONA_TARGET }}
+      TF_VAR_vercel_sandbox_token: ${{ secrets.VERCEL_SANDBOX_TOKEN }}
+      TF_VAR_vercel_sandbox_project_id: ${{ vars.VERCEL_SANDBOX_PROJECT_ID || secrets.VERCEL_SANDBOX_PROJECT_ID }}
+      TF_VAR_vercel_sandbox_team_id: ${{ vars.VERCEL_SANDBOX_TEAM_ID || secrets.VERCEL_SANDBOX_TEAM_ID }}
+      TF_VAR_vercel_sandbox_api_base_url: ${{ vars.VERCEL_SANDBOX_API_BASE_URL || secrets.VERCEL_SANDBOX_API_BASE_URL }}
+      TF_VAR_vercel_base_snapshot_id: ${{ vars.VERCEL_BASE_SNAPSHOT_ID || secrets.VERCEL_BASE_SNAPSHOT_ID }}
+      TF_VAR_vercel_sandbox_runtime: "${{ vars.VERCEL_SANDBOX_RUNTIME || secrets.VERCEL_SANDBOX_RUNTIME || 'node24' }}"
+      TF_VAR_vercel_snapshot_expiration_ms: "${{ vars.VERCEL_SNAPSHOT_EXPIRATION_MS || secrets.VERCEL_SNAPSHOT_EXPIRATION_MS || '0' }}"
+      # Sandbox provider: OpenComputer. Inert while sandbox_provider defaults to "modal";
+      # when set to "opencomputer", Terraform builds the managed base snapshot during apply.
+      TF_VAR_opencomputer_api_url: ${{ vars.OPENCOMPUTER_API_URL || secrets.OPENCOMPUTER_API_URL }}
+      TF_VAR_opencomputer_api_key: ${{ secrets.OPENCOMPUTER_API_KEY }}
+      TF_VAR_opencomputer_template: ${{ vars.OPENCOMPUTER_TEMPLATE || secrets.OPENCOMPUTER_TEMPLATE }}
+      TF_VAR_opencomputer_project_id: ${{ vars.OPENCOMPUTER_PROJECT_ID || secrets.OPENCOMPUTER_PROJECT_ID }}
+      TF_VAR_opencomputer_target: ${{ vars.OPENCOMPUTER_TARGET || secrets.OPENCOMPUTER_TARGET }}
+      TF_VAR_e2b_api_key: ${{ secrets.E2B_API_KEY }}
+      TF_VAR_e2b_template_id: ${{ vars.E2B_TEMPLATE_ID || secrets.E2B_TEMPLATE_ID }}
+      TF_VAR_e2b_api_url: "${{ vars.E2B_API_URL || secrets.E2B_API_URL || 'https://api.e2b.app' }}"
+      TF_VAR_e2b_sandbox_timeout_seconds: "${{ vars.E2B_SANDBOX_TIMEOUT_SECONDS || secrets.E2B_SANDBOX_TIMEOUT_SECONDS || '7200' }}"
+      TF_VAR_e2b_auto_pause: "${{ vars.E2B_AUTO_PAUSE || secrets.E2B_AUTO_PAUSE || 'true' }}"
+      TF_VAR_e2b_template_cpu: "${{ vars.E2B_TEMPLATE_CPU || secrets.E2B_TEMPLATE_CPU || '2' }}"
+      TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build worker packages
+        run: |
+          npm run build -w @open-inspect/shared
+          npm run build -w @open-inspect/control-plane
+          npm run build -w @open-inspect/slack-bot
+          npm run build -w @open-inspect/github-bot
+          npm run build -w @open-inspect/linear-bot
+
+      - name: Setup uv
+        if: inputs.mode == 'apply'
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Install Modal and Python dependencies
+        if: inputs.mode == 'apply'
+        run: uv sync --frozen
+        working-directory: packages/modal-infra
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          terraform init \
+            -backend-config="key=${{ inputs.state_key }}" \
+            -backend-config="access_key=${{ secrets.R2_ACCESS_KEY_ID }}" \
+            -backend-config="secret_key=${{ secrets.R2_SECRET_ACCESS_KEY }}" \
+            -backend-config="endpoints={s3=\"https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com\"}"
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Stage SchedulerDO deletion migration
+        run: |
+          set -euo pipefail
+          # Read state and parse it as separate steps: piping straight into jq
+          # turns a failed state read into an empty tag, which would silently
+          # skip the deletion migration and ship a worker whose class was never
+          # retired. An absent or empty state is still a valid "not v2" answer.
+          state="$(terraform state pull)"
+          current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
+          if [ "$current_tag" = "v2" ]; then
+            printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
+          fi
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Plan
+        id: plan
+        if: inputs.mode == 'plan'
+        run: |
+          terraform plan -no-color -out=tfplan 2>&1 | tee plan_output.txt
+          echo "plan<<EOF" >> $GITHUB_OUTPUT
+          cat plan_output.txt | head -c 60000 >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        continue-on-error: true
+
+      # Modal credentials stay on this step rather than the job env: they are
+      # only needed to deploy the Modal app during apply, and a plan run has no
+      # business holding them.
+      - name: Terraform Apply
+        if: inputs.mode == 'apply'
+        run: terraform apply -auto-approve
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+
+      # Posted from the job that produced it. Handing it back as a workflow
+      # output does not work: GitHub drops a reusable-workflow output whose
+      # value contains a secret ("Skip output 'plan' since it may contain
+      # secret"), and plan text does, so the caller receives an empty string.
+      - name: Post Plan Results
+        if: always() && inputs.mode == 'plan' && github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const planOutcome = '${{ steps.plan.outcome }}';
+            const plan = `${{ steps.plan.outputs.plan }}`;
+
+            const truncatedPlan = plan.length > 60000
+              ? plan.substring(0, 60000) + '\n... (truncated)'
+              : plan;
+
+            const output = `### Terraform Plan Results
+
+            **Status:** ${planOutcome === 'success' ? '✅ Success' : '❌ Failed'}
+
+            <details><summary>Show Plan</summary>
+
+            \`\`\`terraform
+            ${truncatedPlan}
+            \`\`\`
+
+            </details>
+
+            *Pushed by: @${{ github.actor }}*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+      - name: Plan Status
+        if: inputs.mode == 'plan' && steps.plan.outcome == 'failure'
+        run: exit 1
+
+      - name: Post Run Results
+        if: always()
+        run: |
+          echo "### Terraform ${{ inputs.mode }} Results"
+          echo "Status: ${{ job.status }}"
+          echo "Environment: ${{ inputs.environment }}"
+          echo "State: ${{ inputs.state_key }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Run by: ${{ github.actor }}"

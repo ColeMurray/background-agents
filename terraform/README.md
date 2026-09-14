@@ -401,22 +401,44 @@ variables.
 
 ## Adding New Environments
 
+Environments share `environments/production/`. They differ only in which secrets they use and which
+state object they write to, so there is nothing to copy.
+
 To add a staging environment:
 
+1. Create a GitHub Environment named `staging` and set on it only the secrets that differ from the
+   repository-level ones. Anything you leave unset falls back to the repository value.
+
+2. Add a caller workflow that runs `terraform-run.yml` against it:
+
+   ```yaml
+   # .github/workflows/deploy-staging.yml
+   name: Deploy Staging
+
+   on:
+     workflow_dispatch:
+
+   jobs:
+     terraform:
+       uses: ./.github/workflows/terraform-run.yml
+       secrets: inherit
+       with:
+         mode: apply
+         environment: staging
+         state_key: staging/terraform.tfstate
+   ```
+
+`terraform-run.yml` binds the job to the named GitHub Environment, so every `TF_VAR_*` resolves
+against that environment's secrets. The variable list itself lives in one place and does not need to
+be restated per environment. This is the same approach `deploy-aws.yml` uses for `aws-staging` and
+`aws-production`.
+
+To run Terraform against a non-production environment locally, pass the state key at init:
+
 ```bash
-# Copy production config
-cp -r environments/production environments/staging
-
-# Update backend key in staging/backend.tf
-# key = "staging/terraform.tfstate"
-
-# Update environment variable in staging/terraform.tfvars
-# environment = "staging"
-
-# Initialize and apply
-cd environments/staging
-terraform init -backend-config="access_key=..." -backend-config="secret_key=..."
-terraform apply
+cd environments/production
+terraform init -backend-config="key=staging/terraform.tfstate" \
+  -backend-config="access_key=..." -backend-config="secret_key=..."
 ```
 
 ## Security Considerations
