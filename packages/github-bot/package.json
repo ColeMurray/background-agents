@@ -18,9 +18,9 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "esbuild": "^0.28.1",
     "typescript": "^5.7.2",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.11"
   }
 }
