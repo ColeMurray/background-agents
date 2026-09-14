@@ -103,6 +103,64 @@ describe("resolveSessionScopedSettings", () => {
     expect(mockState.globalCalls).toContain("sandbox");
   });
 
+  it("disables all primary-scoped settings when the primary repo is outside the allowlist", async () => {
+    mockState.resolved["code-server"] = {
+      enabledRepos: ["acme/backend"],
+      settings: { enabled: true },
+    };
+    mockState.resolved["vnc"] = { enabledRepos: ["acme/backend"], settings: { enabled: true } };
+    mockState.resolved["sandbox"] = {
+      enabledRepos: ["acme/backend"],
+      settings: { tunnelPorts: [8080], cpuCores: 2 },
+    };
+
+    const result = await resolveSessionScopedSettings(DB, [
+      { repoOwner: "acme", repoName: "web" },
+      { repoOwner: "acme", repoName: "backend" },
+    ]);
+
+    expect(result).toEqual({
+      codeServerEnabled: false,
+      vncEnabled: false,
+      sandboxSettings: {},
+    });
+    expect(mockState.resolvedCalls.map((c) => c.repo)).toEqual([
+      "acme/web",
+      "acme/web",
+      "acme/web",
+    ]);
+  });
+
+  it("matches enabled repo allowlists case-insensitively, including nested owners", async () => {
+    mockState.resolved["code-server"] = {
+      enabledRepos: ["group/subgroup/web"],
+      settings: { enabled: true },
+    };
+    mockState.resolved["vnc"] = {
+      enabledRepos: ["group/subgroup/web"],
+      settings: { enabled: true },
+    };
+    mockState.resolved["sandbox"] = {
+      enabledRepos: ["group/subgroup/web"],
+      settings: { buildTimeoutSeconds: 1200 },
+    };
+
+    const result = await resolveSessionScopedSettings(DB, [
+      { repoOwner: "Group/SubGroup", repoName: "Web" },
+    ]);
+
+    expect(result).toEqual({
+      codeServerEnabled: true,
+      vncEnabled: true,
+      sandboxSettings: { buildTimeoutSeconds: 1200 },
+    });
+    expect(mockState.resolvedCalls.map((c) => c.repo)).toEqual([
+      "Group/SubGroup/Web",
+      "Group/SubGroup/Web",
+      "Group/SubGroup/Web",
+    ]);
+  });
+
   it("rejects malformed persisted settings and falls back to disabled/defaults", async () => {
     mockState.resolved["code-server"] = { enabledRepos: null, settings: { enabled: "true" } };
     mockState.resolved["vnc"] = { enabledRepos: null, settings: { enabled: "true" } };
