@@ -222,6 +222,24 @@ export const MODEL_CATALOG = [
     ],
   },
   {
+    // OpenCode Go is a flat-rate subscription over the same Zen credential:
+    // one OPENCODE_API_KEY, a separate gateway (zen/go/v1) and its own
+    // curated model list.
+    category: "OpenCode Go",
+    enabledByDefault: false,
+    models: [
+      { id: "opencode-go/kimi-k3", name: "Kimi K3", description: "Moonshot AI" },
+      { id: "opencode-go/kimi-k2.7-code", name: "Kimi K2.7 Code", description: "Moonshot AI" },
+      { id: "opencode-go/minimax-m3", name: "MiniMax M3", description: "MiniMax" },
+      { id: "opencode-go/qwen3.8-max", name: "Qwen3.8 Max", description: "Alibaba Cloud" },
+      { id: "opencode-go/qwen3.8-flash", name: "Qwen3.8 Flash", description: "Alibaba Cloud" },
+      { id: "opencode-go/glm-5.3", name: "GLM 5.3", description: "Z.ai" },
+      { id: "opencode-go/glm-5.3-flash", name: "GLM 5.3 Flash", description: "Z.ai" },
+      { id: "opencode-go/deepseek-v4-pro", name: "DeepSeek V4 Pro", description: "DeepSeek" },
+      { id: "opencode-go/deepseek-v4-flash", name: "DeepSeek V4 Flash", description: "DeepSeek" },
+    ],
+  },
+  {
     category: "xAI / SuperGrok",
     enabledByDefault: false,
     models: [

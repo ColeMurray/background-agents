@@ -1,10 +1,11 @@
 # Available Models
 
 Open-Inspect exposes these models in the model picker and integration preferences. The default
-enabled set includes Anthropic and OpenAI models. xAI / SuperGrok, OpenCode Zen, Z.AI Coding Plan,
-and DeepSeek models are available but must be enabled in **Settings > Models**. OpenAI and SuperGrok
-subscriptions are configured in **Settings > Provider Accounts**; Z.AI Coding Plan requires
-`ZHIPU_API_KEY`; DeepSeek requires `DEEPSEEK_API_KEY`.
+enabled set includes Anthropic and OpenAI models. xAI / SuperGrok, OpenCode Zen, OpenCode Go, Z.AI
+Coding Plan, and DeepSeek models are available but must be enabled in **Settings > Models**. OpenAI
+and SuperGrok subscriptions are configured in **Settings > Provider Accounts**; OpenCode Zen and
+OpenCode Go require `OPENCODE_API_KEY`; Z.AI Coding Plan requires `ZHIPU_API_KEY`; DeepSeek requires
+`DEEPSEEK_API_KEY`.
 
 OpenAI, xAI and Anthropic session selectors offer provider policy, any active connected account, and
 API-key mode. Automation editors can resolve defaults on each run or pin an account/API-key choice.
@@ -73,6 +74,9 @@ instructions.
 
 ## OpenCode Zen
 
+OpenCode Zen models require `OPENCODE_API_KEY` as a global or repository secret. Zen is
+pay-per-token against `https://opencode.ai/zen/v1`.
+
 | Model ID                | Display name | Description   | Reasoning efforts | Default effort |
 | ----------------------- | ------------ | ------------- | ----------------- | -------------- |
 | `opencode/kimi-k2.5`    | Kimi K2.5    | Moonshot AI   | Not supported     | N/A            |
@@ -83,6 +87,35 @@ instructions.
 | `opencode/glm-5`        | GLM 5        | Z.ai 744B MoE | Not supported     | N/A            |
 | `opencode/glm-5.1`      | GLM 5.1      | Z.ai          | Not supported     | N/A            |
 | `opencode/glm-5.2`      | GLM 5.2      | Z.ai          | Not supported     | N/A            |
+
+## OpenCode Go
+
+[OpenCode Go](https://opencode.ai/docs/go/) is a flat-rate subscription over the same credential as
+Zen: one `OPENCODE_API_KEY` global or repository secret serves both. Go routes to a separate gateway
+(`https://opencode.ai/zen/go/v1`) and bills against the subscription's rolling usage allowance
+instead of per token, so a key without an active Go subscription fails on `opencode-go/*` models
+while still working on `opencode/*` ones.
+
+Usage is capped on three rolling windows — 20% of the monthly allowance per 5 hours, 50% per week,
+100% per month. Allowances differ per model, so an unattended session pinned to a Go model can
+exhaust its window and fail mid-run; keep Go models off unattended Slack, GitHub, Linear, and
+automation launches unless you accept that.
+
+| Model ID                        | Display name      | Description   | Reasoning efforts | Default effort |
+| ------------------------------- | ----------------- | ------------- | ----------------- | -------------- |
+| `opencode-go/kimi-k3`           | Kimi K3           | Moonshot AI   | Not supported     | N/A            |
+| `opencode-go/kimi-k2.7-code`    | Kimi K2.7 Code    | Moonshot AI   | Not supported     | N/A            |
+| `opencode-go/minimax-m3`        | MiniMax M3        | MiniMax       | Not supported     | N/A            |
+| `opencode-go/qwen3.8-max`       | Qwen3.8 Max       | Alibaba Cloud | Not supported     | N/A            |
+| `opencode-go/qwen3.8-flash`     | Qwen3.8 Flash     | Alibaba Cloud | Not supported     | N/A            |
+| `opencode-go/glm-5.3`           | GLM 5.3           | Z.ai          | Not supported     | N/A            |
+| `opencode-go/glm-5.3-flash`     | GLM 5.3 Flash     | Z.ai          | Not supported     | N/A            |
+| `opencode-go/deepseek-v4-pro`   | DeepSeek V4 Pro   | DeepSeek      | Not supported     | N/A            |
+| `opencode-go/deepseek-v4-flash` | DeepSeek V4 Flash | DeepSeek      | Not supported     | N/A            |
+
+Go's gateway carries more models than the catalog exposes (see
+`https://opencode.ai/zen/go/v1/models`); the catalog is a curated subset. These models run on the
+OpenCode harness only — the Claude Agent harness runs Anthropic models exclusively.
 
 ## Z.AI Coding Plan
 
