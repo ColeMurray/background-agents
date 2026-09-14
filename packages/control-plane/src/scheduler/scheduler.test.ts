@@ -191,10 +191,12 @@ vi.mock("../db/environments", () => ({
 }));
 
 const mockGetSlackAutomationsForChannel = vi.fn().mockResolvedValue([]);
+const mockGetChannelsForAutomation = vi.fn().mockResolvedValue([]);
 vi.mock("../db/slack-channel-store", () => ({
   SlackChannelStore: vi.fn().mockImplementation(function () {
     return {
       getSlackAutomationsForChannel: mockGetSlackAutomationsForChannel,
+      getChannelsForAutomation: mockGetChannelsForAutomation,
     };
   }),
 }));
@@ -506,6 +508,7 @@ describe("Scheduler", () => {
     capturedInvocationParams = [];
     mockStore = createMockStore();
     mockGetSlackAutomationsForChannel.mockResolvedValue([]);
+    mockGetChannelsForAutomation.mockResolvedValue([]);
     mockCheckRepositoryAccess.mockResolvedValue({
       repoId: 12345,
       repoOwner: "acme",
@@ -1738,6 +1741,112 @@ describe("Scheduler", () => {
           (data as Record<string, unknown> | undefined)?.automation_id === "auto-2"
       );
       expect(autoPauseSuccessCall).toBeDefined();
+    });
+
+    it("notifies watched slack channels when an automation is auto-paused", async () => {
+      const orphanedRun = {
+        id: "orphan-1",
+        automation_id: "auto-slack",
+        invocation_id: "inv-pause",
+        status: "starting",
+        created_at: now - 10 * 60 * 1000,
+      };
+      mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 1, active: 0, failed: 1 })
+      );
+      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
+      mockStore.getById.mockResolvedValue(sampleSlackAutomation);
+      mockGetChannelsForAutomation.mockResolvedValue(["C1", "C2"]);
+
+      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+      const scheduler = createScheduler(
+        createEnv({
+          SLACK_BOT: { fetch: slackFetch } as FetchClient,
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        })
+      );
+
+      await scheduler.tick();
+
+      expect(mockStore.autoPause).toHaveBeenCalledWith("auto-slack");
+      expect(slackFetch).toHaveBeenCalledOnce();
+      const [url, init] = slackFetch.mock.calls[0];
+      expect(String(url)).toBe("https://internal/callbacks/automation-paused");
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        channels: ["C1", "C2"],
+        automationName: "Slack triage",
+        consecutiveFailures: 3,
+      });
+      expect(body.signature).toEqual(expect.any(String));
+    });
+
+    it("does not notify slack when the auto-paused automation watches no channels", async () => {
+      const orphanedRun = {
+        id: "orphan-1",
+        automation_id: "auto-1",
+        invocation_id: "inv-pause",
+        status: "starting",
+        created_at: now - 10 * 60 * 1000,
+      };
+      mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 1, active: 0, failed: 1 })
+      );
+      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
+      mockStore.getById.mockResolvedValue(sampleAutomation);
+
+      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+      const scheduler = createScheduler(
+        createEnv({
+          SLACK_BOT: { fetch: slackFetch } as FetchClient,
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        })
+      );
+
+      await scheduler.tick();
+
+      expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
+      expect(slackFetch).not.toHaveBeenCalled();
+    });
+
+    it("keeps the pause even when the slack notification fails", async () => {
+      const orphanedRun = {
+        id: "orphan-1",
+        automation_id: "auto-slack",
+        invocation_id: "inv-pause",
+        status: "starting",
+        created_at: now - 10 * 60 * 1000,
+      };
+      mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 1, active: 0, failed: 1 })
+      );
+      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
+      mockStore.getById.mockResolvedValue(sampleSlackAutomation);
+      mockGetChannelsForAutomation.mockResolvedValue(["C1"]);
+
+      const slackFetch = vi.fn().mockRejectedValue(new Error("bot unreachable"));
+      const scheduler = createScheduler(
+        createEnv({
+          SLACK_BOT: { fetch: slackFetch } as FetchClient,
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        })
+      );
+      const warnSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
+        .mockImplementation(() => {});
+
+      await expect(scheduler.tick()).resolves.toBeDefined();
+
+      expect(mockStore.autoPause).toHaveBeenCalledWith("auto-slack");
+      const notifyErrorCall = warnSpy.mock.calls.find(
+        ([, data]) =>
+          (data as Record<string, unknown> | undefined)?.event ===
+          "scheduler.slack_auto_pause_failed"
+      );
+      expect(notifyErrorCall).toBeDefined();
     });
 
     it("swallows orphan recovery write errors and logs scheduler.recovery.bulk_fail_error", async () => {

@@ -55,6 +55,7 @@ import {
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { IntegrationSettingsStore } from "../db/integration-settings";
 import {
+  buildSlackAutoPauseNotification,
   buildSlackCompletionNotification,
   buildSlackSkipNotification,
   parseSlackTriggerMetadata,
@@ -347,6 +348,59 @@ export class Scheduler {
         event: "scheduler.auto_pause",
         automation_id: automationId,
         consecutive_failures: count,
+      });
+      await this.notifySlackAutoPause(store, automationId, count);
+    }
+  }
+
+  /**
+   * Best-effort heads-up when an automation is auto-paused: asks slack-bot to
+   * post a notice into each channel the automation watches, so an unattended
+   * automation doesn't silently stop. Only slack_event automations have watched
+   * channels; everything else no-ops. A notification failure must never break
+   * the pause flow — every error is swallowed into a warn log.
+   */
+  private async notifySlackAutoPause(
+    store: AutomationStore,
+    automationId: string,
+    consecutiveFailures: number
+  ): Promise<void> {
+    try {
+      const binding = this.env.SLACK_BOT;
+      const secret = callbackSigningSecret(this.env, "slack-bot");
+      if (!binding || !secret) return;
+
+      const automation = await store.getById(automationId);
+      if (!automation) return;
+
+      const channelIds = await new SlackChannelStore(this.db).getChannelsForAutomation(
+        automationId
+      );
+      const body = buildSlackAutoPauseNotification({
+        automationName: automation.name,
+        consecutiveFailures,
+        channelIds,
+      });
+      if (!body) return;
+
+      const signature = await computeHmacHex(JSON.stringify(body), secret);
+      const response = await binding.fetch("https://internal/callbacks/automation-paused", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, signature }),
+      });
+      if (!response.ok) {
+        this.log.warn("Slack auto-pause callback failed", {
+          event: "scheduler.slack_auto_pause_failed",
+          automation_id: automationId,
+          http_status: response.status,
+        });
+      }
+    } catch (e) {
+      this.log.warn("Slack auto-pause callback errored", {
+        event: "scheduler.slack_auto_pause_failed",
+        automation_id: automationId,
+        error: e instanceof Error ? e : new Error(String(e)),
       });
     }
   }
