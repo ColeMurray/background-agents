@@ -112,6 +112,20 @@ function messagePage(
   return Response.json({ messages, hasMore, ...(cursor ? { cursor } : {}) });
 }
 
+/** A message record passing the runtime page schema — export fixtures need all fields. */
+function sampleMessage(id: string, content: string): Record<string, unknown> {
+  return {
+    id,
+    authorId: "user-1",
+    content,
+    source: "slack",
+    status: "completed",
+    createdAt: 1_000,
+    startedAt: 1_100,
+    completedAt: 1_200,
+  };
+}
+
 async function readLines(response: Response): Promise<Record<string, unknown>[]> {
   const text = await response.text();
   return text
@@ -179,16 +193,16 @@ describe("GET /sessions/export", () => {
   it("inlines every message page when include=messages", async () => {
     mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false });
     mocks.runtimeFetch
-      .mockResolvedValueOnce(messagePage([{ id: "msg-1", content: "hello" }], true, "5000"))
-      .mockResolvedValueOnce(messagePage([{ id: "msg-2", content: "done" }], false));
+      .mockResolvedValueOnce(messagePage([sampleMessage("msg-1", "hello")], true, "5000"))
+      .mockResolvedValueOnce(messagePage([sampleMessage("msg-2", "done")], false));
 
     const response = await callExport({ include: "messages" });
     const lines = await readLines(response);
 
     expect(lines).toHaveLength(1);
     expect(lines[0].messages).toEqual([
-      { id: "msg-1", content: "hello" },
-      { id: "msg-2", content: "done" },
+      sampleMessage("msg-1", "hello"),
+      sampleMessage("msg-2", "done"),
     ]);
     expect(mocks.runtimeFetch).toHaveBeenCalledTimes(2);
     const [sessionId, path, , search] = mocks.runtimeFetch.mock.calls[0];
@@ -229,7 +243,7 @@ describe("GET /sessions/export", () => {
     mocks.list.mockResolvedValue({ sessions: [sampleRow, secondRow], hasMore: false });
     mocks.runtimeFetch
       .mockResolvedValueOnce(new Response("boom", { status: 503 }))
-      .mockResolvedValueOnce(messagePage([{ id: "msg-ok", content: "fine" }], false));
+      .mockResolvedValueOnce(messagePage([sampleMessage("msg-ok", "fine")], false));
 
     const response = await callExport({ include: "messages" });
     const lines = await readLines(response);
@@ -244,7 +258,7 @@ describe("GET /sessions/export", () => {
     });
     expect(lines[0]).not.toHaveProperty("messages");
     expect(lines[1]).toMatchObject({ type: "session", id: "session-2" });
-    expect(lines[1].messages).toEqual([{ id: "msg-ok", content: "fine" }]);
+    expect(lines[1].messages).toEqual([sampleMessage("msg-ok", "fine")]);
   });
 
   it("emits a session_error line and continues when the runtime rejects a fetch", async () => {
@@ -252,7 +266,7 @@ describe("GET /sessions/export", () => {
     mocks.list.mockResolvedValue({ sessions: [sampleRow, secondRow], hasMore: false });
     mocks.runtimeFetch
       .mockRejectedValueOnce(new Error("connection reset"))
-      .mockResolvedValueOnce(messagePage([{ id: "msg-ok", content: "fine" }], false));
+      .mockResolvedValueOnce(messagePage([sampleMessage("msg-ok", "fine")], false));
 
     const response = await callExport({ include: "messages" });
     expect(response.status).toBe(200);
@@ -268,11 +282,45 @@ describe("GET /sessions/export", () => {
     expect(lines[1]).toMatchObject({ type: "session", id: "session-2" });
   });
 
+  it.each([
+    [
+      "claims hasMore without a cursor",
+      () => Response.json({ messages: [sampleMessage("msg-1", "hello")], hasMore: true }),
+    ],
+    [
+      "drops a required message field",
+      () => {
+        const malformed = sampleMessage("msg-1", "hello");
+        delete malformed.createdAt;
+        return messagePage([malformed], false);
+      },
+    ],
+    [
+      "types hasMore as a string",
+      () => Response.json({ messages: [sampleMessage("msg-1", "hello")], hasMore: "false" }),
+    ],
+  ])("emits only a session_error line when a page %s", async (_name, makePage) => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false });
+    mocks.runtimeFetch.mockResolvedValueOnce(makePage());
+
+    const response = await callExport({ include: "messages" });
+    const lines = await readLines(response);
+
+    expect(lines).toEqual([
+      {
+        schemaVersion: 1,
+        type: "session_error",
+        sessionId: "session-1",
+        reason: "runtime_failure",
+      },
+    ]);
+  });
+
   it("does not serialize truncated messages when the page cap is reached", async () => {
     mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false });
     let page = 0;
     mocks.runtimeFetch.mockImplementation(() =>
-      Promise.resolve(messagePage([{ id: `msg-${page++}` }], true, String(page)))
+      Promise.resolve(messagePage([sampleMessage(`msg-${page++}`, "part")], true, String(page)))
     );
 
     const response = await callExport({ include: "messages" });
