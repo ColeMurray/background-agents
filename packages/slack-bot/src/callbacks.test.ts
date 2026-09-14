@@ -736,7 +736,12 @@ describe("POST /callbacks/automation-paused", () => {
   });
 
   it("posts a notice into every watched channel", async () => {
-    const fetchMock = okFetchMock();
+    // A postMessage success envelope needs channel and ts — a bare { ok: true }
+    // parses as invalid_response and would exercise the failure branch instead.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { channel?: string };
+      return Response.json({ ok: true, channel: body.channel, ts: "1700000000.000300" });
+    });
     const payload = await signPayload(pausedData());
     const { response, ctx } = await postCallback("/callbacks/automation-paused", payload);
 
