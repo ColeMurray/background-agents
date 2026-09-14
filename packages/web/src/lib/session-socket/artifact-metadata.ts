@@ -62,52 +62,55 @@ function narrowDimensions(value: unknown): { width: number; height: number } | u
 }
 
 export function toUiArtifact(artifact: SessionArtifact): Artifact {
-  const meta = artifact.metadata;
   return {
     id: artifact.id,
     type: artifact.type as Artifact["type"],
     url: artifact.url,
     createdAt: artifact.createdAt,
     updatedAt: artifact.updatedAt,
-    metadata: meta
-      ? {
-          prNumber: typeof meta.number === "number" ? meta.number : undefined,
-          prState: derivePrState(meta),
-          mode: meta.mode === "manual_pr" ? "manual_pr" : undefined,
-          createPrUrl: typeof meta.createPrUrl === "string" ? meta.createPrUrl : undefined,
-          head: typeof meta.head === "string" ? meta.head : undefined,
-          base: typeof meta.base === "string" ? meta.base : undefined,
-          provider: typeof meta.provider === "string" ? meta.provider : undefined,
-          filename: typeof meta.filename === "string" ? meta.filename : undefined,
-          objectKey: typeof meta.objectKey === "string" ? meta.objectKey : undefined,
-          mimeType:
-            typeof meta.mimeType === "string" && isMediaMimeType(meta.mimeType)
-              ? meta.mimeType
-              : undefined,
-          sizeBytes: typeof meta.sizeBytes === "number" ? meta.sizeBytes : undefined,
-          viewport: narrowDimensions(meta.viewport),
-          sourceUrl: typeof meta.sourceUrl === "string" ? meta.sourceUrl : undefined,
-          endUrl: typeof meta.endUrl === "string" ? meta.endUrl : undefined,
-          fullPage: typeof meta.fullPage === "boolean" ? meta.fullPage : undefined,
-          annotated: typeof meta.annotated === "boolean" ? meta.annotated : undefined,
-          caption: typeof meta.caption === "string" ? meta.caption : undefined,
-          durationMs: typeof meta.durationMs === "number" ? meta.durationMs : undefined,
-          recordingStartedAt:
-            typeof meta.recordingStartedAt === "number" ? meta.recordingStartedAt : undefined,
-          recordingEndedAt:
-            typeof meta.recordingEndedAt === "number" ? meta.recordingEndedAt : undefined,
-          dimensions: narrowDimensions(meta.dimensions),
-          truncated: typeof meta.truncated === "boolean" ? meta.truncated : undefined,
-          hasAudio: meta.hasAudio === false ? false : undefined,
-          previewStatus:
-            meta.previewStatus === "active" ||
-            meta.previewStatus === "outdated" ||
-            meta.previewStatus === "stopped"
-              ? meta.previewStatus
-              : undefined,
-          repoOwner: typeof meta.repoOwner === "string" ? meta.repoOwner : undefined,
-          repoName: typeof meta.repoName === "string" ? meta.repoName : undefined,
-        }
-      : undefined,
+    metadata: toUiArtifactMetadata(artifact.metadata),
+  };
+}
+
+export function toUiArtifactMetadata(
+  meta: Record<string, unknown> | null | undefined
+): Artifact["metadata"] | undefined {
+  if (!meta) return undefined;
+  return {
+    prNumber: typeof meta.number === "number" ? meta.number : undefined,
+    prState: derivePrState(meta),
+    mode: meta.mode === "manual_pr" ? "manual_pr" : undefined,
+    createPrUrl: typeof meta.createPrUrl === "string" ? meta.createPrUrl : undefined,
+    head: typeof meta.head === "string" ? meta.head : undefined,
+    base: typeof meta.base === "string" ? meta.base : undefined,
+    provider: typeof meta.provider === "string" ? meta.provider : undefined,
+    filename: typeof meta.filename === "string" ? meta.filename : undefined,
+    objectKey: typeof meta.objectKey === "string" ? meta.objectKey : undefined,
+    mimeType:
+      typeof meta.mimeType === "string" && isMediaMimeType(meta.mimeType)
+        ? meta.mimeType
+        : undefined,
+    sizeBytes: typeof meta.sizeBytes === "number" ? meta.sizeBytes : undefined,
+    viewport: narrowDimensions(meta.viewport),
+    sourceUrl: typeof meta.sourceUrl === "string" ? meta.sourceUrl : undefined,
+    endUrl: typeof meta.endUrl === "string" ? meta.endUrl : undefined,
+    fullPage: typeof meta.fullPage === "boolean" ? meta.fullPage : undefined,
+    annotated: typeof meta.annotated === "boolean" ? meta.annotated : undefined,
+    caption: typeof meta.caption === "string" ? meta.caption : undefined,
+    durationMs: typeof meta.durationMs === "number" ? meta.durationMs : undefined,
+    recordingStartedAt:
+      typeof meta.recordingStartedAt === "number" ? meta.recordingStartedAt : undefined,
+    recordingEndedAt: typeof meta.recordingEndedAt === "number" ? meta.recordingEndedAt : undefined,
+    dimensions: narrowDimensions(meta.dimensions),
+    truncated: typeof meta.truncated === "boolean" ? meta.truncated : undefined,
+    hasAudio: meta.hasAudio === false ? false : undefined,
+    previewStatus:
+      meta.previewStatus === "active" ||
+      meta.previewStatus === "outdated" ||
+      meta.previewStatus === "stopped"
+        ? meta.previewStatus
+        : undefined,
+    repoOwner: typeof meta.repoOwner === "string" ? meta.repoOwner : undefined,
+    repoName: typeof meta.repoName === "string" ? meta.repoName : undefined,
   };
 }
