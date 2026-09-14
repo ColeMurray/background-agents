@@ -24,16 +24,30 @@ on:
         description: "Key of this deployment's state object in the R2 backend bucket"
         required: true
         type: string
+      terraform_version:
+        # Required rather than defaulted so the caller stays the single source.
+        # A default here could drift from the version the validate job uses.
+        description: "Terraform version to run"
+        required: true
+        type: string
+      working_directory:
+        description: "Terraform stack directory"
+        required: true
+        type: string
+      timeout_minutes:
+        description: "Job timeout"
+        required: false
+        default: 45
+        type: number
 
 jobs:
   terraform:
-    name: Terraform
+    name: ${{ inputs.mode }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     environment: ${{ inputs.environment }}
     env:
-      TF_VERSION: "1.14.8"
-      TF_WORKING_DIR: terraform/environments/production
+      TF_WORKING_DIR: ${{ inputs.working_directory }}
       TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
       TF_VAR_cloudflare_worker_subdomain: ${{ vars.CLOUDFLARE_WORKER_SUBDOMAIN || secrets.CLOUDFLARE_WORKER_SUBDOMAIN }}
@@ -110,6 +124,15 @@ jobs:
       TF_VAR_e2b_template_cpu: "${{ vars.E2B_TEMPLATE_CPU || secrets.E2B_TEMPLATE_CPU || '2' }}"
       TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
     steps:
+      # Every step below gates on mode. Without this, a typo skips all of them
+      # and the job reports success having done nothing.
+      - name: Validate mode
+        run: |
+          case "${{ inputs.mode }}" in
+            plan|apply) ;;
+            *) echo "::error::mode must be 'plan' or 'apply', got '${{ inputs.mode }}'"; exit 1 ;;
+          esac
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -142,7 +165,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: ${{ inputs.terraform_version }}
 
       - name: Terraform Init
         env:
@@ -180,8 +203,8 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         continue-on-error: true
 
-      # Step-scoped: only the Modal deploy needs these, and plan runs should
-      # not hold them.
+      # Step-scoped because only the Modal CLI reads these names. The same
+      # values reach Terraform as TF_VAR_modal_token_* in the job env above.
       - name: Terraform Apply
         if: inputs.mode == 'apply'
         run: terraform apply -auto-approve

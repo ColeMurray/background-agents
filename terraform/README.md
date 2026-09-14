@@ -406,8 +406,15 @@ state object they write to, so there is nothing to copy.
 
 To add a staging environment:
 
-1. Create a GitHub Environment named `staging` and set on it only the secrets that differ from the
-   repository-level ones. Anything you leave unset falls back to the repository value.
+1. Create a GitHub Environment named `staging`.
+
+   **`DEPLOYMENT_NAME` is mandatory on every environment.** It feeds `name_suffix` in
+   `environments/production/locals.tf`, which names every Worker, D1 database and R2 bucket. An
+   environment that does not set it falls back to the repository-level value, so a fresh
+   `staging/terraform.tfstate` would plan to create resources under production's exact names.
+
+   Beyond that, set only the secrets that differ. Anything left unset falls back to the
+   repository-level value.
 
 2. Add a caller workflow that runs `terraform-run.yml` against it:
 
@@ -426,6 +433,8 @@ To add a staging environment:
          mode: apply
          environment: staging
          state_key: staging/terraform.tfstate
+         terraform_version: "1.14.8"
+         working_directory: terraform/environments/production
    ```
 
 `terraform-run.yml` binds the job to the named GitHub Environment, so every `TF_VAR_*` resolves
@@ -433,13 +442,18 @@ against that environment's secrets. The variable list itself lives in one place 
 be restated per environment. This is the same approach `deploy-aws.yml` uses for `aws-staging` and
 `aws-production`.
 
-To run Terraform against a non-production environment locally, pass the state key at init:
+To run Terraform against a non-production environment locally, pass the state key at init. A
+directory already initialized against another environment needs `-reconfigure`:
 
 ```bash
 cd environments/production
-terraform init -backend-config="key=staging/terraform.tfstate" \
+terraform init -reconfigure \
+  -backend-config="key=staging/terraform.tfstate" \
   -backend-config="access_key=..." -backend-config="secret_key=..."
 ```
+
+Use `-reconfigure`, not `-migrate-state`. Migrating copies the state you are currently initialized
+against into the new key, which would write production's state to the staging key.
 
 ## Security Considerations
 
