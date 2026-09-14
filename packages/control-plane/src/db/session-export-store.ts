@@ -1,0 +1,123 @@
+import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
+import type { SessionExportCursor } from "./session-export-cursor";
+import type { SqlDatabase } from "./sql-database";
+
+/**
+ * One exported session-trace record: the session-index projection deployers
+ * need for analytics. Messages live in each session's Durable Object, not
+ * D1, and are attached per session by the export route's runtime client.
+ */
+export interface SessionExportRow {
+  id: string;
+  title: string | null;
+  status: SessionStatus;
+  source: SpawnSource;
+  repoOwner: string | null;
+  repoName: string | null;
+  model: string;
+  userId: string | null;
+  automationId: string | null;
+  messageCount: number;
+  totalCost: number;
+  activeDurationMs: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface SessionExportRowRaw {
+  id: string;
+  title: string | null;
+  status: SessionStatus;
+  spawn_source: SpawnSource;
+  repo_owner: string | null;
+  repo_name: string | null;
+  model: string;
+  user_id: string | null;
+  automation_id: string | null;
+  message_count: number;
+  total_cost: number;
+  active_duration_ms: number;
+  created_at: number;
+  updated_at: number;
+}
+
+function toExportRow(row: SessionExportRowRaw): SessionExportRow {
+  return {
+    id: row.id,
+    title: row.title,
+    status: row.status,
+    source: row.spawn_source,
+    repoOwner: row.repo_owner,
+    repoName: row.repo_name,
+    model: row.model,
+    userId: row.user_id,
+    automationId: row.automation_id,
+    messageCount: row.message_count,
+    totalCost: row.total_cost,
+    activeDurationMs: row.active_duration_ms,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** Filters and keyset pagination for an export page. */
+export interface ListSessionsForExportOptions {
+  cursor: SessionExportCursor | null;
+  /** Page size; the store reads one extra row to answer hasMore. */
+  limit: number;
+  /** Inclusive lower bound on created_at (epoch ms). */
+  createdAfter?: number;
+  /** Inclusive upper bound on created_at (epoch ms). */
+  createdBefore?: number;
+}
+
+export interface ListSessionsForExportResult {
+  sessions: SessionExportRow[];
+  hasMore: boolean;
+}
+
+/**
+ * Reads the session index for bulk export, ordered by (created_at, id) so
+ * keyset pagination is stable under concurrent inserts.
+ */
+export class SessionExportStore {
+  constructor(private readonly db: SqlDatabase) {}
+
+  async list(options: ListSessionsForExportOptions): Promise<ListSessionsForExportResult> {
+    const conditions: string[] = [];
+    const bindings: (string | number)[] = [];
+
+    if (options.cursor) {
+      conditions.push("(created_at > ? OR (created_at = ? AND id > ?))");
+      bindings.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
+    }
+    if (options.createdAfter !== undefined) {
+      conditions.push("created_at >= ?");
+      bindings.push(options.createdAfter);
+    }
+    if (options.createdBefore !== undefined) {
+      conditions.push("created_at <= ?");
+      bindings.push(options.createdBefore);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const result = await this.db
+      .prepare(
+        `SELECT id, title, status, spawn_source, repo_owner, repo_name, model, user_id,
+                automation_id, message_count, total_cost, active_duration_ms, created_at, updated_at
+         FROM sessions
+         ${where}
+         ORDER BY created_at ASC, id ASC
+         LIMIT ?`
+      )
+      .bind(...bindings, options.limit + 1)
+      .all<SessionExportRowRaw>();
+
+    const rows = result.results;
+    const hasMore = rows.length > options.limit;
+    return {
+      sessions: rows.slice(0, options.limit).map(toExportRow),
+      hasMore,
+    };
+  }
+}
