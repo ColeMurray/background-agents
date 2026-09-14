@@ -2,7 +2,7 @@
  * Callback handlers for control-plane notifications.
  */
 
-import { postEphemeral } from "@open-inspect/shared/slack";
+import { postEphemeral, postMessage } from "@open-inspect/shared/slack";
 import { verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
 import { SLACK_ACTIVITY_REFRESH_KIND } from "@open-inspect/shared/types/session-api";
 import { Hono, type Context } from "hono";
@@ -109,6 +109,15 @@ const automationSkipSchema = z.looseObject({
 });
 
 type AutomationSkipPayload = z.infer<typeof automationSkipSchema>;
+
+const automationPausedSchema = z.looseObject({
+  channels: z.array(z.string().min(1)).min(1),
+  automationName: z.string().min(1),
+  consecutiveFailures: z.number().int().nonnegative(),
+  signature: z.string(),
+});
+
+type AutomationPausedPayload = z.infer<typeof automationPausedSchema>;
 
 /**
  * Shared rejection guard for signed callback routes: validate the payload shape,
@@ -461,6 +470,41 @@ callbacksRouter.post("/automation-skip", async (c) => {
   return c.json({ ok: true });
 });
 
+/**
+ * Callback endpoint for an auto-pause notice. Posts a warning into each channel
+ * the automation watches so an unattended automation doesn't silently stop —
+ * the scheduler fires this only on the enabled → paused transition, so each
+ * auto-pause reaches Slack at most once.
+ */
+callbacksRouter.post("/automation-paused", async (c) => {
+  const startTime = Date.now();
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
+
+  let payload: unknown;
+  try {
+    payload = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid payload" }, 400);
+  }
+
+  const parsed = automationPausedSchema.safeParse(payload);
+  if (!parsed.success || !isSignedCallbackPayload(payload)) {
+    return rejectInvalidPayload(c, "/callbacks/automation-paused", traceId, startTime);
+  }
+  const valid = parsed.data;
+
+  const rejection = await rejectInvalidCallback(c, payload, {
+    path: "/callbacks/automation-paused",
+    traceId,
+    startTime,
+  });
+  if (rejection) return rejection;
+
+  c.executionCtx.waitUntil(handleAutomationPaused(valid, c.env, traceId));
+
+  return c.json({ ok: true });
+});
+
 async function handleToolCallCallback(
   payload: ToolCallCallbackPayload,
   env: Env,
@@ -530,5 +574,44 @@ async function handleAutomationSkip(
       outcome: "error",
       error: error instanceof Error ? error : new Error(String(error)),
     });
+  }
+}
+
+/**
+ * Post a best-effort auto-pause notice into every channel the automation
+ * watches. Runs in waitUntil — one channel's Slack failure must not stop the
+ * others, so per-channel errors are logged and the loop continues.
+ */
+async function handleAutomationPaused(
+  payload: AutomationPausedPayload,
+  env: Env,
+  traceId?: string
+): Promise<void> {
+  const text =
+    `:warning: Automation *${payload.automationName}* has been auto-paused after ` +
+    `${payload.consecutiveFailures} consecutive failures. Re-enable it from the ` +
+    `automations dashboard once the issue is resolved.`;
+
+  for (const channel of payload.channels) {
+    try {
+      const result = await postMessage(env.SLACK_BOT_TOKEN, channel, text);
+      if (!result.ok) {
+        log.warn("callback.automation_paused", {
+          trace_id: traceId,
+          channel,
+          automation_name: payload.automationName,
+          outcome: "error",
+          slack_error: result.error,
+        });
+      }
+    } catch (error) {
+      log.warn("callback.automation_paused", {
+        trace_id: traceId,
+        channel,
+        automation_name: payload.automationName,
+        outcome: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
   }
 }

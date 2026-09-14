@@ -115,7 +115,7 @@ function createMockStore() {
     getRunsPastExecutionDeadline: vi.fn().mockResolvedValue([]),
     incrementConsecutiveFailures: vi.fn().mockResolvedValue(1),
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
-    autoPause: vi.fn().mockResolvedValue(undefined),
+    autoPause: vi.fn().mockResolvedValue(true),
     update: vi.fn().mockResolvedValue(undefined),
     advanceNextRunAt: vi.fn().mockResolvedValue(true),
     bulkFailStartingRuns: vi.fn().mockResolvedValue(undefined),
@@ -1708,6 +1708,7 @@ describe("Scheduler", () => {
         if (automationId === "auto-1") {
           throw new Error("D1 auto-pause timeout");
         }
+        return true;
       });
 
       const scheduler = createScheduler();
@@ -1780,6 +1781,47 @@ describe("Scheduler", () => {
         consecutiveFailures: 3,
       });
       expect(body.signature).toEqual(expect.any(String));
+    });
+
+    it("does not log or notify when the automation was already paused", async () => {
+      const orphanedRun = {
+        id: "orphan-1",
+        automation_id: "auto-slack",
+        invocation_id: "inv-pause",
+        status: "starting",
+        created_at: now - 10 * 60 * 1000,
+      };
+      mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ total: 1, active: 0, failed: 1 })
+      );
+      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
+      // Another path (a concurrent callback) already performed the transition.
+      mockStore.autoPause.mockResolvedValue(false);
+      mockStore.getById.mockResolvedValue(sampleSlackAutomation);
+      mockGetChannelsForAutomation.mockResolvedValue(["C1"]);
+
+      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+      const scheduler = createScheduler(
+        createEnv({
+          SLACK_BOT: { fetch: slackFetch } as FetchClient,
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        })
+      );
+      const warnSpy = vi
+        .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
+        .mockImplementation(() => {});
+
+      await scheduler.tick();
+
+      expect(mockStore.autoPause).toHaveBeenCalledWith("auto-slack");
+      expect(slackFetch).not.toHaveBeenCalled();
+      expect(
+        warnSpy.mock.calls.some(
+          ([, data]) =>
+            (data as Record<string, unknown> | undefined)?.event === "scheduler.auto_pause"
+        )
+      ).toBe(false);
     });
 
     it("does not notify slack when the auto-paused automation watches no channels", async () => {

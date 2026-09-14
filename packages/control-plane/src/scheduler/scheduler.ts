@@ -343,7 +343,8 @@ export class Scheduler {
   ): Promise<void> {
     const count = await store.incrementConsecutiveFailures(automationId);
     if (count >= AUTO_PAUSE_THRESHOLD) {
-      await store.autoPause(automationId);
+      const paused = await store.autoPause(automationId);
+      if (!paused) return;
       this.log.warn("Automation auto-paused due to consecutive failures", {
         event: "scheduler.auto_pause",
         automation_id: automationId,

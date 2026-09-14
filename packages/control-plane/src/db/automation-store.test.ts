@@ -480,13 +480,22 @@ describe("AutomationStore", () => {
   });
 
   describe("autoPause", () => {
-    it("sets enabled=0 and nulls next_run_at", async () => {
+    it("sets enabled=0 and nulls next_run_at, guarded on enabled=1", async () => {
       const { db, statements } = createFakeD1();
       const store = new AutomationStore(db);
       await store.autoPause("auto_test1");
 
       expect(statements[0].sql).toContain("enabled = 0");
       expect(statements[0].sql).toContain("next_run_at = NULL");
+      expect(statements[0].sql).toContain("enabled = 1");
+    });
+
+    it("reports whether the enabled→paused transition happened", async () => {
+      const transitioned = new AutomationStore(createFakeD1({ changes: 1 }).db);
+      await expect(transitioned.autoPause("auto_test1")).resolves.toBe(true);
+
+      const alreadyPaused = new AutomationStore(createFakeD1({ changes: 0 }).db);
+      await expect(alreadyPaused.autoPause("auto_test1")).resolves.toBe(false);
     });
   });
 

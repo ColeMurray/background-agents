@@ -694,3 +694,81 @@ describe("POST /callbacks/automation-skip", () => {
     await expect(flushWaitUntil(ctx)).resolves.toBeUndefined();
   });
 });
+
+describe("POST /callbacks/automation-paused", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function pausedData(overrides: Record<string, unknown> = {}) {
+    return {
+      channels: ["C1", "C2"],
+      automationName: "Slack triage",
+      consecutiveFailures: 3,
+      ...overrides,
+    };
+  }
+
+  it("rejects an invalid payload", async () => {
+    const { response, ctx } = await postCallback("/callbacks/automation-paused", {
+      automationName: "Slack triage",
+    });
+    expect(response.status).toBe(400);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["empty channels", { channels: [] }],
+    ["non-numeric failure count", { consecutiveFailures: "three" }],
+  ])("rejects a signed payload with %s", async (_name, override) => {
+    const payload = await signPayload(pausedData(override));
+    const { response, ctx } = await postCallback("/callbacks/automation-paused", payload);
+
+    expect(response.status).toBe(400);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("rejects a bad signature", async () => {
+    const payload = await signPayload(pausedData(), "wrong-secret");
+    const { response, ctx } = await postCallback("/callbacks/automation-paused", payload);
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("posts a notice into every watched channel", async () => {
+    const fetchMock = okFetchMock();
+    const payload = await signPayload(pausedData());
+    const { response, ctx } = await postCallback("/callbacks/automation-paused", payload);
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const posts = fetchMock.mock.calls.filter(([url]) => String(url).includes("chat.postMessage"));
+    expect(posts).toHaveLength(2);
+    const bodies = posts.map(
+      ([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>
+    );
+    expect(bodies.map((body) => body.channel)).toEqual(["C1", "C2"]);
+    expect(String(bodies[0].text)).toContain("Slack triage");
+    expect(String(bodies[0].text)).toContain("3 consecutive failures");
+  });
+
+  it("keeps posting to later channels when one post throws", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      if (body.channel === "C1") throw new Error("network down");
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    const payload = await signPayload(pausedData());
+    const { response, ctx } = await postCallback("/callbacks/automation-paused", payload);
+
+    expect(response.status).toBe(200);
+    await expect(flushWaitUntil(ctx)).resolves.toBeUndefined();
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).includes("chat.postMessage"))
+    ).toHaveLength(2);
+  });
+});
