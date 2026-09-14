@@ -1,20 +1,8 @@
 name: Terraform Run
 
-# Runs Terraform against one environment. Called by terraform.yml; it has no
-# triggers of its own.
-#
-# The TF_VAR_* block sits at job level rather than on each step. Job-level env
-# can read `secrets` where workflow-level env cannot, so this is the only place
-# a single copy of the list can live and still reach them. Previously the block
-# was written out twice, once in the plan job and once in apply, and every new
-# variable had to be added to both.
-#
-# The defaults reproduce today's behavior exactly: `state_key` points at the
-# existing production state, and `environment` is empty, which is what the plan
-# job has always used. The apply job passes `production`, as it always has.
-#
-# A second environment is a GitHub Environment holding whatever secrets differ,
-# plus a distinct state key, plus a caller workflow. No Terraform is copied.
+# The TF_VAR_* block is at job level because only job-level env can read
+# `secrets` and still apply to every step. Moving it to a step, or to
+# workflow-level env, brings back a copy per step.
 
 on:
   workflow_call:
@@ -191,9 +179,8 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         continue-on-error: true
 
-      # Modal credentials stay on this step rather than the job env: they are
-      # only needed to deploy the Modal app during apply, and a plan run has no
-      # business holding them.
+      # Step-scoped: only the Modal deploy needs these, and plan runs should
+      # not hold them.
       - name: Terraform Apply
         if: inputs.mode == 'apply'
         run: terraform apply -auto-approve
@@ -202,10 +189,9 @@ jobs:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
-      # Posted from the job that produced it. Handing it back as a workflow
-      # output does not work: GitHub drops a reusable-workflow output whose
-      # value contains a secret ("Skip output 'plan' since it may contain
-      # secret"), and plan text does, so the caller receives an empty string.
+      # Must be posted here, not returned to the caller: GitHub drops a
+      # reusable-workflow output whose value contains a secret, and plan text
+      # does, so the caller would receive an empty string.
       - name: Post Plan Results
         if: always() && inputs.mode == 'plan' && github.event_name == 'pull_request'
         uses: actions/github-script@v8
