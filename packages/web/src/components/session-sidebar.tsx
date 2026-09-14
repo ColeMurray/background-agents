@@ -31,7 +31,7 @@ const DEFAULT_SESSION_GROUP_EXPANDED_STATE: Record<SessionGroupId, boolean> = {
   "in-progress": true,
   recent: true,
 };
-const SESSION_GROUP_EXPANDED_STORAGE_KEY = "open-inspect-session-sidebar-expanded-groups";
+const SESSION_GROUP_EXPANDED_STORAGE_KEY_PREFIX = "open-inspect-session-sidebar-expanded:";
 
 interface SidebarActionButtonProps {
   onClick?: () => void;
@@ -92,33 +92,23 @@ export function SessionSidebar({
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
   const [expandedGroups, setExpandedGroups] = useState(DEFAULT_SESSION_GROUP_EXPANDED_STATE);
-  const [hasHydratedExpandedGroups, setHasHydratedExpandedGroups] = useState(false);
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(SESSION_GROUP_EXPANDED_STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored) as Partial<Record<SessionGroupId, boolean>>;
-        setExpandedGroups({
-          "needs-attention": parsed["needs-attention"] !== false,
-          "in-progress": parsed["in-progress"] !== false,
-          recent: parsed.recent !== false,
-        });
-      }
+      setExpandedGroups({
+        "needs-attention":
+          localStorage.getItem(`${SESSION_GROUP_EXPANDED_STORAGE_KEY_PREFIX}needs-attention`) !==
+          "false",
+        "in-progress":
+          localStorage.getItem(`${SESSION_GROUP_EXPANDED_STORAGE_KEY_PREFIX}in-progress`) !==
+          "false",
+        recent:
+          localStorage.getItem(`${SESSION_GROUP_EXPANDED_STORAGE_KEY_PREFIX}recent`) !== "false",
+      });
     } catch {
       // Storage is optional; all groups stay expanded when unavailable.
     }
-    setHasHydratedExpandedGroups(true);
   }, []);
-
-  useEffect(() => {
-    if (!hasHydratedExpandedGroups) return;
-    try {
-      localStorage.setItem(SESSION_GROUP_EXPANDED_STORAGE_KEY, JSON.stringify(expandedGroups));
-    } catch {
-      // Continue with the in-memory preference when storage is unavailable.
-    }
-  }, [expandedGroups, hasHydratedExpandedGroups]);
 
   const {
     needsAttention,
@@ -195,24 +185,29 @@ export function SessionSidebar({
             className={`flex min-h-10 w-full items-center gap-1.5 px-4 text-left text-xs font-medium uppercase tracking-wider transition-colors hover:bg-muted hover:text-foreground ${
               emphasize ? "text-foreground" : "text-secondary-foreground"
             }`}
-            onClick={() =>
+            onClick={() => {
+              const nextExpanded = !expanded;
               setExpandedGroups((previous) => ({
                 ...previous,
-                [groupId]: !previous[groupId],
-              }))
-            }
+                [groupId]: nextExpanded,
+              }));
+              try {
+                localStorage.setItem(
+                  `${SESSION_GROUP_EXPANDED_STORAGE_KEY_PREFIX}${groupId}`,
+                  String(nextExpanded)
+                );
+              } catch {
+                // Continue with the in-memory preference when storage is unavailable.
+              }
+            }}
           >
-            {expanded ? (
-              <ChevronDownIcon
-                aria-hidden="true"
-                className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-              />
-            ) : (
-              <ChevronRightIcon
-                aria-hidden="true"
-                className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-              />
-            )}
+            <span aria-hidden="true">
+              {expanded ? (
+                <ChevronDownIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              )}
+            </span>
             {title}
           </button>
         </h2>

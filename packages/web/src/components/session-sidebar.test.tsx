@@ -150,6 +150,7 @@ describe("SessionSidebar", () => {
       "session-group-needs-attention-content"
     );
     expect(attentionToggle.querySelector('path[d="M19 9l-7 7-7-7"]')).toBeInTheDocument();
+    expect(attentionToggle.querySelector("[aria-hidden='true']")).toBeInTheDocument();
 
     fireEvent.click(attentionToggle);
 
@@ -158,6 +159,11 @@ describe("SessionSidebar", () => {
     expect(screen.queryByText("Needs review")).not.toBeInTheDocument();
     expect(screen.getByText("Implementing inbox")).toBeInTheDocument();
     expect(recentToggle).toHaveAttribute("aria-expanded", "true");
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:needs-attention")).toBe(
+      "false"
+    );
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:in-progress")).toBeNull();
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:recent")).toBeNull();
 
     fireEvent.click(progressToggle);
 
@@ -166,6 +172,8 @@ describe("SessionSidebar", () => {
     expect(recentToggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.queryByText("Implementing inbox")).not.toBeInTheDocument();
     expect(screen.getByText("Finished work")).toBeInTheDocument();
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:in-progress")).toBe("false");
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:recent")).toBeNull();
   });
 
   it("restores collapsed groups after remounting", async () => {
@@ -173,9 +181,7 @@ describe("SessionSidebar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Recent" }));
     await waitFor(() =>
-      expect(
-        JSON.parse(localStorage.getItem("open-inspect-session-sidebar-expanded-groups") ?? "{}")
-      ).toMatchObject({ recent: false })
+      expect(localStorage.getItem("open-inspect-session-sidebar-expanded:recent")).toBe("false")
     );
 
     view.unmount();
