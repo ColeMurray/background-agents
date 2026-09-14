@@ -709,23 +709,27 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         repo_name: session?.repo_name,
       });
 
-      // Only increment circuit breaker for permanent errors
-      if (error instanceof SandboxProviderError) {
-        if (error.errorType === "permanent") {
-          this.storage.incrementCircuitBreakerFailure(Date.now());
-          this.log.info("Circuit breaker incremented", { error_type: "permanent" });
+      // The breaker counts attempts, and only the write that fails the row
+      // owns this one: the connect alarm may already have failed it while
+      // the provider call was pending, and that timeout was counted then.
+      if (this.failAttempt(generation, "spawning", errorMessage)) {
+        // Only permanent errors count; a transient one is the provider's
+        // problem, not evidence that the next attempt will fail too.
+        if (error instanceof SandboxProviderError) {
+          if (error.errorType === "permanent") {
+            this.recordSpawnFailure(Date.now());
+            this.log.info("Circuit breaker incremented", { error_type: "permanent" });
+          } else {
+            this.log.info("Transient error, not incrementing circuit breaker", {
+              error_type: error.errorType,
+            });
+          }
         } else {
-          this.log.info("Transient error, not incrementing circuit breaker", {
-            error_type: error.errorType,
-          });
+          // Unknown error type - treat as permanent
+          this.recordSpawnFailure(Date.now());
+          this.log.info("Circuit breaker incremented", { error_type: "unknown" });
         }
-      } else {
-        // Unknown error type - treat as permanent
-        this.storage.incrementCircuitBreakerFailure(Date.now());
-        this.log.info("Circuit breaker incremented", { error_type: "unknown" });
       }
-
-      this.failAttempt(generation, "spawning", errorMessage);
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
@@ -875,24 +879,45 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   /**
+   * Count one failed attempt toward the circuit breaker. The window is
+   * measured from the latest failure, so a failure that arrives after the
+   * previous streak expired starts a new streak of one rather than extending
+   * a count the breaker would already have discarded at the next spawn.
+   */
+  private recordSpawnFailure(now: number): void {
+    const sandbox = this.storage.getSandboxWithCircuitBreaker();
+    const streak = evaluateCircuitBreaker(
+      {
+        failureCount: sandbox?.spawn_failure_count || 0,
+        lastFailureTime: sandbox?.last_spawn_failure || 0,
+      },
+      this.config.circuitBreaker,
+      now
+    );
+    if (streak.shouldReset) this.storage.resetCircuitBreaker();
+    this.storage.incrementCircuitBreakerFailure(now);
+  }
+
+  /**
    * Record that this spawn, restore, or resume attempt failed. The status
    * write applies only while the row still shows the attempt in flight
    * (`inFlight`): a bridge that connected during the provider call has
    * already published `ready` and is serving the session, and an alarm that
    * timed the attempt out has already failed it and told the user. In either
    * case the failure is the provider's, not the sandbox's, and reporting it
-   * would persist a spawn error on a session that has none.
+   * would persist a spawn error on a session that has none. Reports whether
+   * this call is the one that failed the row.
    */
   private failAttempt(
     generation: SandboxGeneration | null,
     inFlight: "spawning" | "connecting",
     reason: string
-  ): void {
+  ): boolean {
     // No generation: the attempt failed before it reserved anything, so the
     // row still describes whatever came before it and is left alone.
     if (generation && this.storage.transitionSandboxStatus(generation, inFlight, "failed")) {
       this.reportSandboxError(reason);
-      return;
+      return true;
     }
     this.log.warn("Sandbox attempt failed after its row moved on; leaving the row as it is", {
       event: "sandbox.attempt_failed_superseded",
@@ -901,6 +926,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       sandbox_status: this.storage.getSandbox()?.status ?? null,
       error: reason,
     });
+    return false;
   }
 
   /**
@@ -1395,7 +1421,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         timeout_ms: this.config.connectingTimeout.timeoutMs,
       });
       this.storage.updateSandboxStatus("failed");
-      this.storage.incrementCircuitBreakerFailure(now);
+      this.recordSpawnFailure(now);
       this.clearSandboxAccessState();
       if (this.canStopProviderSandbox()) {
         try {
@@ -1595,7 +1621,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     });
     this.isTerminatingSandbox = true;
     this.storage.updateSandboxStatus("failed");
-    this.storage.incrementCircuitBreakerFailure(Date.now());
+    this.recordSpawnFailure(Date.now());
     this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
     this.reportSandboxError(reason);
     this.clearSandboxAccessState();

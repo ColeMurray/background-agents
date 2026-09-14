@@ -2478,6 +2478,35 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.last_spawn_failure).toBeGreaterThanOrEqual(now);
     });
 
+    it("restarts the streak when the previous failure is older than the breaker window", async () => {
+      // The window is measured from the latest failure. A failure that lands
+      // after the previous one expired starts a new streak of one; it must
+      // not resurrect and extend a streak the breaker would already ignore.
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting" as SandboxStatus,
+        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
+        last_heartbeat: null,
+        spawn_failure_count: 2,
+        last_spawn_failure: now - (DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.windowMs + 60_000),
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(manager.handleAlarm()).resolves.toBe("sandbox_failed");
+
+      expect(sandbox.spawn_failure_count).toBe(1);
+    });
+
     it("does not timeout connecting sandbox within timeout window", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
@@ -2644,10 +2673,11 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it("opens the circuit breaker after repeated fatal boots so the re-drive stops spawning", async () => {
-      // Each fatal report re-drives the pending prompt onto a fresh sandbox
-      // that fails the same way. The breaker has to count those, or a boot
-      // that dies deterministically respawns until the provider quota does.
-      const sandbox = createMockSandbox({ status: "ready" as SandboxStatus });
+      // A boot that reports fatal before its bridge connects (setup.sh exits
+      // non-zero, the harness never comes up) re-drives the pending prompt
+      // onto a fresh sandbox that dies the same way. Nothing connects, so
+      // nothing clears the streak, and the breaker has to end it.
+      const sandbox = createMockSandbox({ status: "failed" as SandboxStatus });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
       const provider = createMockProvider();
@@ -2656,6 +2686,43 @@ describe("SandboxLifecycleManager", () => {
         storage,
         storage,
         broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      for (
+        let attempt = 0;
+        attempt < DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.threshold;
+        attempt++
+      ) {
+        await manager.spawnSandbox();
+        expect(sandbox.status).toBe("connecting");
+        await expect(manager.terminateFailedSandbox("setup.sh exited 1")).resolves.toBe(true);
+      }
+      const spawnsBeforeOpen = vi.mocked(provider.createSandbox).mock.calls.length;
+
+      await manager.spawnSandbox();
+
+      expect(vi.mocked(provider.createSandbox).mock.calls.length).toBe(spawnsBeforeOpen);
+      expect(sandbox.last_spawn_error).toContain("temporarily disabled");
+    });
+
+    it("keeps replacing a sandbox whose bridge connected before each fatal report", async () => {
+      // The breaker guards boot: a connected bridge is the success that
+      // clears it. A sandbox that connects and then dies is a different
+      // failure, and its re-drive is bounded without the breaker — a fatal
+      // report fails the prompt that sandbox was processing, so each
+      // replacement costs a queued prompt and the queue is finite.
+      const sandbox = createMockSandbox({ status: "failed" as SandboxStatus });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
@@ -2668,15 +2735,17 @@ describe("SandboxLifecycleManager", () => {
         attempt++
       ) {
         await manager.spawnSandbox();
+        // The production connection path calls this before publishing ready.
+        manager.onSandboxConnected();
         sandbox.status = "ready";
-        await expect(manager.terminateFailedSandbox("setup.sh exited 1")).resolves.toBe(true);
+        await expect(manager.terminateFailedSandbox("OpenCode crashed")).resolves.toBe(true);
+        expect(sandbox.spawn_failure_count).toBe(1);
       }
-      const spawnsBeforeOpen = vi.mocked(provider.createSandbox).mock.calls.length;
+      const spawnsBeforeLast = vi.mocked(provider.createSandbox).mock.calls.length;
 
       await manager.spawnSandbox();
 
-      expect(vi.mocked(provider.createSandbox).mock.calls.length).toBe(spawnsBeforeOpen);
-      expect(sandbox.last_spawn_error).toContain("temporarily disabled");
+      expect(vi.mocked(provider.createSandbox).mock.calls.length).toBe(spawnsBeforeLast + 1);
     });
 
     it.each(["stopped", "stale", "failed"] as const)(
@@ -4187,6 +4256,28 @@ describe("status writes after a provider await (COL-99)", () => {
     });
     // The provider-side sandbox exists and a later stop needs its handle.
     expect(sandbox.modal_object_id).toBe("provider-obj-late");
+  });
+
+  it("counts an attempt once when the watchdog fails it before the provider rejects it", async () => {
+    // The connect alarm is armed at reservation, before the provider call,
+    // so it can fail the attempt while createSandbox() is still pending. The
+    // provider's later rejection is the same attempt, not a second failure.
+    vi.useFakeTimers();
+    try {
+      const sandbox = createMockSandbox({ status: "failed" });
+      const h = harness(sandbox, async () => {
+        vi.advanceTimersByTime(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1000);
+        await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_failed");
+        throw new SandboxProviderError("quota exceeded", "permanent");
+      });
+
+      await h.manager.spawnSandbox();
+
+      expect(sandbox.status).toBe("failed");
+      expect(sandbox.spawn_failure_count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("leaves a sandbox that connected during the provider call ready when the call then fails", async () => {
