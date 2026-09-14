@@ -156,6 +156,7 @@ jobs:
     secrets: inherit
     with:
       mode: plan
+      state_key: production/terraform.tfstate
 
   apply:
     name: Apply
@@ -166,3 +167,4 @@ jobs:
     with:
       mode: apply
       environment: production
+      state_key: production/terraform.tfstate

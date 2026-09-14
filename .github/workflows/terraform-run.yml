@@ -19,9 +19,10 @@ on:
         default: ""
         type: string
       state_key:
+        # Deliberately no default: omitting it would silently target another
+        # environment's state.
         description: "Key of this deployment's state object in the R2 backend bucket"
-        required: false
-        default: production/terraform.tfstate
+        required: true
         type: string
 
 jobs:
