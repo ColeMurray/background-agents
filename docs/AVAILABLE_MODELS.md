@@ -101,21 +101,49 @@ Usage is capped on three rolling windows — 20% of the monthly allowance per 5 
 exhaust its window and fail mid-run; keep Go models off unattended Slack, GitHub, Linear, and
 automation launches unless you accept that.
 
-| Model ID                        | Display name      | Description   | Reasoning efforts | Default effort |
-| ------------------------------- | ----------------- | ------------- | ----------------- | -------------- |
-| `opencode-go/kimi-k3`           | Kimi K3           | Moonshot AI   | Not supported     | N/A            |
-| `opencode-go/kimi-k2.7-code`    | Kimi K2.7 Code    | Moonshot AI   | Not supported     | N/A            |
-| `opencode-go/minimax-m3`        | MiniMax M3        | MiniMax       | Not supported     | N/A            |
-| `opencode-go/qwen3.8-max`       | Qwen3.8 Max       | Alibaba Cloud | Not supported     | N/A            |
-| `opencode-go/qwen3.8-flash`     | Qwen3.8 Flash     | Alibaba Cloud | Not supported     | N/A            |
-| `opencode-go/glm-5.3`           | GLM 5.3           | Z.ai          | Not supported     | N/A            |
-| `opencode-go/glm-5.3-flash`     | GLM 5.3 Flash     | Z.ai          | Not supported     | N/A            |
-| `opencode-go/deepseek-v4-pro`   | DeepSeek V4 Pro   | DeepSeek      | Not supported     | N/A            |
-| `opencode-go/deepseek-v4-flash` | DeepSeek V4 Flash | DeepSeek      | Not supported     | N/A            |
+The catalog mirrors the model list Go publishes under
+[Endpoints](https://opencode.ai/docs/go/#endpoints), in the same order, with one exception: Go
+documents `minimax-m2.5`, but the OpenCode release pinned in
+`packages/sandbox-images/toolchain.json` does not resolve `opencode-go/minimax-m2.5`
+(`opencode models` lists 27 Go models, not 28), so it is left out rather than offered as a selection
+that fails. That model is reachable as `opencode/minimax-m2.5` on Zen.
 
-Go's gateway carries more models than the catalog exposes (see
-`https://opencode.ai/zen/go/v1/models`); the catalog is a curated subset. These models run on the
-OpenCode harness only — the Claude Agent harness runs Anthropic models exclusively.
+| Model ID                                   | Display name                 | Description                   | Reasoning efforts | Default effort |
+| ------------------------------------------ | ---------------------------- | ----------------------------- | ----------------- | -------------- |
+| `opencode-go/grok-4.6`                     | Grok 4.6                     | xAI                           | Not supported     | N/A            |
+| `opencode-go/gpt-5.6-luna`                 | GPT 5.6 Luna                 | OpenAI                        | Not supported     | N/A            |
+| `opencode-go/glm-5.3-flash`                | GLM 5.3 Flash                | Z.ai                          | Not supported     | N/A            |
+| `opencode-go/glm-5.3`                      | GLM 5.3                      | Z.ai                          | Not supported     | N/A            |
+| `opencode-go/glm-5.2`                      | GLM 5.2                      | Z.ai                          | Not supported     | N/A            |
+| `opencode-go/glm-5.1`                      | GLM 5.1                      | Z.ai                          | Not supported     | N/A            |
+| `opencode-go/kimi-k3`                      | Kimi K3                      | Moonshot AI                   | Not supported     | N/A            |
+| `opencode-go/kimi-k2.7-code`               | Kimi K2.7 Code               | Moonshot AI                   | Not supported     | N/A            |
+| `opencode-go/kimi-k2.6`                    | Kimi K2.6                    | Moonshot AI                   | Not supported     | N/A            |
+| `opencode-go/longcat-2.0`                  | LongCat 2.0                  | Meituan                       | Not supported     | N/A            |
+| `opencode-go/deepseek-v4.1-flash`          | DeepSeek V4.1 Flash          | DeepSeek                      | Not supported     | N/A            |
+| `opencode-go/deepseek-v4-pro`              | DeepSeek V4 Pro              | DeepSeek                      | Not supported     | N/A            |
+| `opencode-go/deepseek-v4-flash`            | DeepSeek V4 Flash            | DeepSeek                      | Not supported     | N/A            |
+| `opencode-go/deepseek-v4-flash-vision-exp` | DeepSeek V4 Flash Vision Exp | DeepSeek, experimental vision | Not supported     | N/A            |
+| `opencode-go/mimo-v2.5`                    | MiMo V2.5                    | Xiaomi                        | Not supported     | N/A            |
+| `opencode-go/mimo-v2.5-pro`                | MiMo V2.5 Pro                | Xiaomi                        | Not supported     | N/A            |
+| `opencode-go/minimax-m3`                   | MiniMax M3                   | MiniMax                       | Not supported     | N/A            |
+| `opencode-go/minimax-m2.7`                 | MiniMax M2.7                 | MiniMax                       | Not supported     | N/A            |
+| `opencode-go/muse-spark-1.3-contributor`   | Muse Spark 1.3 Contributor   | Multimodal contributor tier   | Not supported     | N/A            |
+| `opencode-go/muse-spark-1.2-contributor`   | Muse Spark 1.2 Contributor   | Multimodal contributor tier   | Not supported     | N/A            |
+| `opencode-go/qwen3.8-max`                  | Qwen3.8 Max                  | Alibaba Cloud                 | Not supported     | N/A            |
+| `opencode-go/qwen3.8-flash`                | Qwen3.8 Flash                | Alibaba Cloud                 | Not supported     | N/A            |
+| `opencode-go/qwen3.7-max`                  | Qwen3.7 Max                  | Alibaba Cloud                 | Not supported     | N/A            |
+| `opencode-go/qwen3.7-plus`                 | Qwen3.7 Plus                 | Alibaba Cloud                 | Not supported     | N/A            |
+| `opencode-go/qwen3.6-plus`                 | Qwen3.6 Plus                 | Alibaba Cloud                 | Not supported     | N/A            |
+| `opencode-go/hy4-preview`                  | Hy4 Preview                  | Tencent Hunyuan               | Not supported     | N/A            |
+| `opencode-go/hy3`                          | Hy3                          | Tencent Hunyuan               | Not supported     | N/A            |
+
+Some of these models are reachable through more than one provider — `opencode-go/grok-4.6`,
+`xai/grok-4.6` and `opencode/glm-5.2` are the same model behind different gateways, billed against
+different credentials. Pick the entry whose billing you want.
+
+These models run on the OpenCode harness only — the Claude Agent harness runs Anthropic models
+exclusively.
 
 ## Z.AI Coding Plan
 
