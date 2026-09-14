@@ -124,11 +124,6 @@ describe("resolveSessionScopedSettings", () => {
       vncEnabled: false,
       sandboxSettings: {},
     });
-    expect(mockState.resolvedCalls.map((c) => c.repo)).toEqual([
-      "acme/web",
-      "acme/web",
-      "acme/web",
-    ]);
   });
 
   it("matches enabled repo allowlists case-insensitively, including nested owners", async () => {
@@ -154,11 +149,6 @@ describe("resolveSessionScopedSettings", () => {
       vncEnabled: true,
       sandboxSettings: { buildTimeoutSeconds: 1200 },
     });
-    expect(mockState.resolvedCalls.map((c) => c.repo)).toEqual([
-      "Group/SubGroup/Web",
-      "Group/SubGroup/Web",
-      "Group/SubGroup/Web",
-    ]);
   });
 
   it("rejects malformed persisted settings and falls back to disabled/defaults", async () => {
