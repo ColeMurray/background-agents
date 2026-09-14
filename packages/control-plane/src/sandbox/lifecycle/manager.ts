@@ -330,6 +330,7 @@ export interface SlackAgentNotifyLookup {
 export interface SandboxLifecycle {
   spawnSandbox(): Promise<void>;
   updateLastActivity(timestamp: number): void;
+  onPromptDispatched(): void;
   terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
   terminateFailedSandbox(reason: string): Promise<boolean>;
   reportSandboxError(reason: string): void;
@@ -711,8 +712,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       // The breaker counts attempts, and only the write that fails the row
       // owns this one: the connect alarm may already have failed it while
-      // the provider call was pending, and that timeout was counted then.
-      if (this.failAttempt(generation, "spawning", errorMessage)) {
+      // the provider call was pending, and that timeout was counted then. A
+      // failure before any generation was reserved has no competing writer,
+      // so it is this catch's to count.
+      const ownsFailure =
+        this.failAttempt(generation, "spawning", errorMessage) || generation === null;
+      if (ownsFailure) {
         // Only permanent errors count; a transient one is the provider's
         // problem, not evidence that the next attempt will fail too.
         if (error instanceof SandboxProviderError) {
@@ -1845,6 +1850,17 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   onSandboxConnected(): void {
     this.isSpawningSandbox = false;
     this.storage.setLastSpawnError(null, null);
+  }
+
+  /**
+   * A prompt reached the sandbox. This, not the bridge connecting, is where
+   * the boot-failure streak ends: the prompt is claimed only after a further
+   * await past the connect, and a fatal report inside that gap re-drives the
+   * same prompt onto a replacement. From dispatch on, a fatal report fails
+   * the prompt the sandbox was running, so every later replacement costs a
+   * queued prompt and the queue bounds it without the breaker.
+   */
+  onPromptDispatched(): void {
     this.storage.resetCircuitBreaker();
   }
 }

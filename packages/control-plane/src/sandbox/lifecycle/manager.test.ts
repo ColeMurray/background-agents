@@ -1723,7 +1723,11 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.spawn_failure_count).toBe(2);
     });
 
-    it("clears the boot-failure streak once the bridge connects", async () => {
+    it("leaves the boot-failure streak in place when the bridge connects", async () => {
+      // A connected bridge has not yet consumed anything: the pending prompt
+      // is claimed only after a further await, and a fatal report in that
+      // gap re-drives the same prompt. Clearing here would let a sandbox
+      // that connects and dies before taking a prompt loop unbounded.
       const now = Date.now();
       const sandbox = createMockSandbox({
         status: "connecting" as SandboxStatus,
@@ -1744,7 +1748,61 @@ describe("SandboxLifecycleManager", () => {
 
       manager.onSandboxConnected();
 
+      expect(sandbox.spawn_failure_count).toBe(2);
+    });
+
+    it("clears the boot-failure streak once a prompt is dispatched to the sandbox", async () => {
+      // Dispatch is the first point where a failure costs something: from
+      // here a fatal report fails the prompt the sandbox was running, so
+      // every replacement after this consumes a queued prompt.
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready" as SandboxStatus,
+        spawn_failure_count: 2,
+        last_spawn_failure: now - 60000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      manager.onPromptDispatched();
+
       expect(sandbox.spawn_failure_count).toBe(0);
+    });
+
+    it("counts a failure that lands before the attempt reserved a generation", async () => {
+      // Reservation persists `spawning` and then awaits the connect alarm.
+      // If that await throws, no generation was claimed, so no watchdog or
+      // provider write can be competing for this failure: it is nobody
+      // else's to count.
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const alarmScheduler = createMockAlarmScheduler();
+      alarmScheduler.schedule = vi.fn(async () => {
+        throw new Error("alarm storage unavailable");
+      });
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        alarmScheduler,
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(sandbox.spawn_failure_count).toBe(1);
     });
 
     it("handles provider errors and increments failure count for permanent errors", async () => {
@@ -2709,12 +2767,11 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.last_spawn_error).toContain("temporarily disabled");
     });
 
-    it("keeps replacing a sandbox whose bridge connected before each fatal report", async () => {
-      // The breaker guards boot: a connected bridge is the success that
-      // clears it. A sandbox that connects and then dies is a different
-      // failure, and its re-drive is bounded without the breaker — a fatal
-      // report fails the prompt that sandbox was processing, so each
-      // replacement costs a queued prompt and the queue is finite.
+    it("opens the circuit breaker when replacements connect but die before taking a prompt", async () => {
+      // The bridge connecting consumes nothing: the pending prompt is
+      // claimed only after a further await, and a fatal report in that gap
+      // re-drives the same prompt. So connect must not clear the streak, or
+      // this sequence would replace the sandbox forever.
       const sandbox = createMockSandbox({ status: "failed" as SandboxStatus });
       const storage = createMockStorage(createMockSession(), sandbox);
       const provider = createMockProvider();
@@ -2738,6 +2795,43 @@ describe("SandboxLifecycleManager", () => {
         // The production connection path calls this before publishing ready.
         manager.onSandboxConnected();
         sandbox.status = "ready";
+        await expect(manager.terminateFailedSandbox("OpenCode crashed")).resolves.toBe(true);
+      }
+      const spawnsBeforeOpen = vi.mocked(provider.createSandbox).mock.calls.length;
+
+      await manager.spawnSandbox();
+
+      expect(vi.mocked(provider.createSandbox).mock.calls.length).toBe(spawnsBeforeOpen);
+      expect(sandbox.last_spawn_error).toContain("temporarily disabled");
+    });
+
+    it("keeps replacing a sandbox that took a prompt before each fatal report", async () => {
+      // Once a prompt is dispatched, a fatal report fails that prompt, so
+      // each replacement costs a queued prompt and the queue bounds the
+      // sequence without the breaker.
+      const sandbox = createMockSandbox({ status: "failed" as SandboxStatus });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      for (
+        let attempt = 0;
+        attempt < DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.threshold;
+        attempt++
+      ) {
+        await manager.spawnSandbox();
+        manager.onSandboxConnected();
+        sandbox.status = "ready";
+        manager.onPromptDispatched();
         await expect(manager.terminateFailedSandbox("OpenCode crashed")).resolves.toBe(true);
         expect(sandbox.spawn_failure_count).toBe(1);
       }

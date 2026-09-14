@@ -45,16 +45,17 @@ export function isSandboxReconnectBlockedStatus(status: SandboxStatus): boolean 
 /**
  * Circuit breaker state from the database.
  *
- * A failure is an attempt that did not end with a connected bridge: the
+ * A failure is an attempt that did not get as far as taking a prompt: the
  * provider refusing the spawn with a permanent error, the connect watchdog
  * giving up on the boot, or the runtime reporting a fatal error. The count
- * clears when a bridge connects, so a provider accepting the request does
- * not break the streak, and the window is measured from the latest failure:
- * the streak lives as long as each failure lands within the window of the
- * one before it.
+ * clears when a prompt is dispatched to the sandbox, not when the provider
+ * accepts the request or the bridge connects: neither of those has consumed
+ * anything yet, and a fatal report before dispatch re-drives the same prompt.
+ * The window is measured from the latest failure: the streak lives as long
+ * as each failure lands within the window of the one before it.
  */
 export interface CircuitBreakerState {
-  /** Number of consecutive attempts that failed before a bridge connected */
+  /** Number of consecutive attempts that failed before a prompt was dispatched */
   failureCount: number;
   /** Timestamp of the last such failure */
   lastFailureTime: number;
