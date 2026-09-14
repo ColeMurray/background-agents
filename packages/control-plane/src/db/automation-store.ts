@@ -1539,14 +1539,22 @@ export class AutomationStore {
       .run();
   }
 
-  async autoPause(automationId: string): Promise<void> {
+  /**
+   * Disables an enabled automation at the failure threshold. Returns whether
+   * this call performed the transition: the `enabled = 1` guard makes an
+   * already-paused automation a no-op (SQLite counts matched rows, so without
+   * the guard `changes` would report 1 even when nothing flipped), letting the
+   * scheduler fire the auto-pause notice exactly once.
+   */
+  async autoPause(automationId: string): Promise<boolean> {
     const now = Date.now();
-    await this.db
+    const result = await this.db
       .prepare(
-        "UPDATE automations SET enabled = 0, next_run_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
+        "UPDATE automations SET enabled = 0, next_run_at = NULL, updated_at = ? WHERE id = ? AND enabled = 1 AND deleted_at IS NULL"
       )
       .bind(now, automationId)
       .run();
+    return (result.meta?.changes ?? 0) > 0;
   }
 }
 
