@@ -85,6 +85,7 @@ function createMockStore() {
     getOverdueAutomations: vi.fn().mockResolvedValue([]),
     getActiveRunForAutomation: vi.fn().mockResolvedValue(null),
     getActiveRunForKey: vi.fn().mockResolvedValue(null),
+    countActiveInvocations: vi.fn().mockResolvedValue(0),
     getLatestSteerableRunForThread: vi.fn().mockResolvedValue(null),
     getRepositoriesForAutomation: vi.fn().mockResolvedValue([]),
     getRepositoriesForAutomationIds: vi.fn().mockResolvedValue(new Map()),
@@ -369,6 +370,7 @@ const sampleAutomation = {
   model: "anthropic/claude-sonnet-4-6",
   reasoning_effort: null,
   enabled: 1,
+  max_concurrent_runs: 1,
   next_run_at: now - 60000,
   consecutive_failures: 0,
   created_by: "user-1",
@@ -1170,10 +1172,7 @@ describe("Scheduler", () => {
 
     it("records an atomic childless skip when a run is active (concurrency guard)", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
-      mockStore.getActiveRunForAutomation.mockResolvedValue({
-        id: "existing-run",
-        status: "running",
-      });
+      mockStore.countActiveInvocations.mockResolvedValue(1);
 
       const scheduler = createScheduler();
       const result = await scheduler.tick();
@@ -1354,13 +1353,13 @@ describe("Scheduler", () => {
       expect(mockSessionStoreCreate).not.toHaveBeenCalled();
     });
 
-    it("auto-pauses after 3 consecutive failures", async () => {
+    it("auto-pauses after 5 consecutive failures", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ active: 0, failed: 1, completed: 0 })
       );
-      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
+      mockStore.incrementConsecutiveFailures.mockResolvedValue(5);
 
       const failingStub = {
         fetch: vi.fn().mockRejectedValue(new Error("Session init failed")),
@@ -1374,13 +1373,13 @@ describe("Scheduler", () => {
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
     });
 
-    it("does not auto-pause at fewer than 3 failures", async () => {
+    it("does not auto-pause at fewer than 5 failures", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ active: 0, failed: 1, completed: 0 })
       );
-      mockStore.incrementConsecutiveFailures.mockResolvedValue(2);
+      mockStore.incrementConsecutiveFailures.mockResolvedValue(4);
 
       const failingStub = {
         fetch: vi.fn().mockRejectedValue(new Error("fail")),
@@ -1657,7 +1656,7 @@ describe("Scheduler", () => {
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ total: 1, active: 0, failed: 1 })
       );
-      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
+      mockStore.incrementConsecutiveFailures.mockResolvedValue(5);
 
       const scheduler = createScheduler();
       const warnSpy = vi
@@ -1675,7 +1674,7 @@ describe("Scheduler", () => {
       expect(autoPauseCall![1]).toMatchObject({
         event: "scheduler.auto_pause",
         automation_id: "auto-1",
-        consecutive_failures: 3,
+        consecutive_failures: 5,
       });
     });
 
@@ -1700,7 +1699,7 @@ describe("Scheduler", () => {
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ total: 1, active: 0, failed: 1 })
       );
-      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
+      mockStore.incrementConsecutiveFailures.mockResolvedValue(5);
       mockStore.autoPause.mockImplementation(async (automationId: string) => {
         if (automationId === "auto-1") {
           throw new Error("D1 auto-pause timeout");
@@ -2131,15 +2130,15 @@ describe("Scheduler", () => {
       expect(mockStore.getInvocationRunAggregate).not.toHaveBeenCalled();
     });
 
-    it("auto-pauses after run-complete pushes failures to 3", async () => {
+    it("auto-pauses after run-complete pushes failures to 5", async () => {
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ total: 1, active: 0, failed: 1, completed: 0 })
       );
-      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
+      mockStore.incrementConsecutiveFailures.mockResolvedValue(5);
 
       const scheduler = createScheduler();
       await expect(
-        scheduler.runComplete(runCompletion({ success: false, error: "Third failure" }))
+        scheduler.runComplete(runCompletion({ success: false, error: "Fifth failure" }))
       ).resolves.toBeUndefined();
 
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
@@ -2167,7 +2166,7 @@ describe("Scheduler", () => {
 
     it("rejects when active run exists, recording nothing", async () => {
       mockStore.getById.mockResolvedValue(sampleAutomation);
-      mockStore.getActiveRunForAutomation.mockResolvedValue({ id: "run-active" });
+      mockStore.countActiveInvocations.mockResolvedValue(1);
 
       const scheduler = createScheduler();
       await expect(scheduler.trigger("auto-1", "user-1")).rejects.toThrow(
@@ -2190,7 +2189,7 @@ describe("Scheduler", () => {
 
     it("creates an invocation and launches runs on successful trigger", async () => {
       mockStore.getById.mockResolvedValue(sampleAutomation);
-      mockStore.getActiveRunForAutomation.mockResolvedValue(null);
+      mockStore.countActiveInvocations.mockResolvedValue(0);
       mockStore.getRepositoriesForAutomation.mockResolvedValue([repositoryRow("auto-1")]);
 
       const stub = createMockSessionStub();
@@ -2239,7 +2238,7 @@ describe("Scheduler", () => {
 
     it("rejects when every launch fails, still recording the failed children", async () => {
       mockStore.getById.mockResolvedValue(sampleAutomation);
-      mockStore.getActiveRunForAutomation.mockResolvedValue(null);
+      mockStore.countActiveInvocations.mockResolvedValue(0);
       mockStore.getRepositoriesForAutomation.mockResolvedValue([repositoryRow("auto-1")]);
       mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
       mockStore.getInvocationRunAggregate.mockResolvedValue(

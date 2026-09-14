@@ -42,6 +42,26 @@ export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
 export const MAX_AUTOMATION_INSTRUCTIONS_LENGTH = 15_000;
 
 /**
+ * Most firings of one automation that may be in flight at once. The bound
+ * counts invocations rather than runs, so at the ceiling a fan-out automation
+ * can still have ten times as many sessions alive; the tick's own child-launch
+ * budget is what paces those, and this is what bounds how much of one queue an
+ * automation works in parallel.
+ */
+export const MAX_AUTOMATION_CONCURRENT_RUNS = 10;
+
+/**
+ * Concurrency bound as a request field. One reproduces the serialized
+ * behaviour every automation had before the field existed, which is why it is
+ * the default rather than something inferred from the trigger or the cadence.
+ */
+export const automationMaxConcurrentRunsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_AUTOMATION_CONCURRENT_RUNS);
+
+/**
  * Validate target-count rules shared by automation clients and the API.
  * Repository-scoped triggers bind to exactly one repository and no
  * environments; fan-out is schedule-only; both target kinds share one cap.
@@ -114,6 +134,7 @@ const automationSchema = z.object({
   model: z.string(),
   reasoningEffort: z.string().nullable(),
   enabled: z.boolean(),
+  maxConcurrentRuns: z.number(),
   nextRunAt: z.number().nullable(),
   consecutiveFailures: z.number(),
   createdBy: z.string(),
@@ -182,6 +203,8 @@ export const createAutomationRequestSchema = z.object({
   eventType: z.string().optional(),
   triggerConfig: triggerConfigSchema.optional(),
   sentryClientSecret: sentryClientSecretSchema.optional(),
+  /** Firings allowed in flight at once. Omission means one (serialized). */
+  maxConcurrentRuns: automationMaxConcurrentRunsSchema.optional(),
   /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
   repositories: automationRepositoriesInputSchema.optional(),
   /** Environments to fan out over, one workspace session each (design §13.3). */
@@ -201,6 +224,8 @@ export const updateAutomationRequestSchema = z.object({
   reasoningEffort: z.string().nullable().optional(),
   eventType: z.string().optional(),
   triggerConfig: triggerConfigSchema.nullable().optional(),
+  /** Firings allowed in flight at once. */
+  maxConcurrentRuns: automationMaxConcurrentRunsSchema.optional(),
   /** Replaces the full repository selection when present. */
   repositories: automationRepositoriesInputSchema.optional(),
   /** Replaces the full environment selection when present (empty clears). */

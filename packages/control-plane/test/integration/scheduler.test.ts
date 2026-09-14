@@ -32,6 +32,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
+    max_concurrent_runs: 1,
     next_run_at: now + 86400000,
     consecutive_failures: 0,
     created_by: "user-1",
@@ -295,13 +296,13 @@ describe("Scheduler (integration)", () => {
       expect(automation!.consecutive_failures).toBe(1);
     });
 
-    it("auto-pauses after 3 consecutive failures", async () => {
+    it("auto-pauses after 5 consecutive failures", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(
         makeAutomation({
           id: "auto-rc3",
-          consecutive_failures: 2,
+          consecutive_failures: 4,
           enabled: 1,
           next_run_at: now + 86400000,
         })
@@ -322,12 +323,12 @@ describe("Scheduler (integration)", () => {
         sessionId: "sess-3",
         messageId: "msg-3",
         success: false,
-        error: "Third consecutive failure",
+        error: "Fifth consecutive failure",
       });
       expect(result).toBeUndefined();
 
       const automation = await store.getById("auto-rc3");
-      expect(automation!.consecutive_failures).toBe(3);
+      expect(automation!.consecutive_failures).toBe(5);
       expect(automation!.enabled).toBe(0);
       expect(automation!.next_run_at).toBeNull();
     });
@@ -500,6 +501,139 @@ describe("Scheduler (integration)", () => {
       expect(advanced!.next_run_at!).toBeGreaterThan(now);
     });
 
+    it("admits an overdue firing below the automation's concurrency limit", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(
+        makeAutomation({ id: "auto-conc-below", next_run_at: now - 60_000, max_concurrent_runs: 3 })
+      );
+
+      // Two firings in flight, each its own invocation — one short of the bound.
+      for (const suffix of ["a", "b"]) {
+        await seedRun(
+          makeRunRow("auto-conc-below", {
+            id: `run-conc-below-${suffix}`,
+            invocation_id: `inv-conc-below-${suffix}`,
+            status: "running",
+            session_id: `sess-conc-below-${suffix}`,
+            started_at: now - 120_000,
+            created_at: now - 120_000,
+          })
+        );
+      }
+
+      await createScheduler().tick();
+
+      // The third firing is admitted: a new invocation with a child of its own,
+      // on top of the two that were already active.
+      const runs = await fetchRuns("auto-conc-below");
+      expect(runs).toHaveLength(3);
+      const invocationIds = new Set(runs.map((run) => run.invocation_id));
+      expect(invocationIds.size).toBe(3);
+
+      const { invocations } = await store.listInvocations("auto-conc-below", {
+        limit: 10,
+        offset: 0,
+      });
+      expect(invocations.filter((invocation) => invocation.status === "skipped")).toHaveLength(0);
+    });
+
+    it("skips an overdue firing at the automation's concurrency limit", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(
+        makeAutomation({ id: "auto-conc-at", next_run_at: now - 60_000, max_concurrent_runs: 3 })
+      );
+
+      for (const suffix of ["a", "b", "c"]) {
+        await seedRun(
+          makeRunRow("auto-conc-at", {
+            id: `run-conc-at-${suffix}`,
+            invocation_id: `inv-conc-at-${suffix}`,
+            status: "running",
+            session_id: `sess-conc-at-${suffix}`,
+            started_at: now - 120_000,
+            created_at: now - 120_000,
+          })
+        );
+      }
+
+      await createScheduler().tick();
+
+      // No fourth run, and the firing is recorded as a childless skip whose
+      // schedule still advances — the same disposition the limit-1 guard gives.
+      expect(await fetchRuns("auto-conc-at")).toHaveLength(3);
+      const { invocations } = await store.listInvocations("auto-conc-at", { limit: 10, offset: 0 });
+      const skipped = invocations.filter((invocation) => invocation.status === "skipped");
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0]!.skipReason).toBe("concurrent_run_active");
+      expect(skipped[0]!.runs).toHaveLength(0);
+
+      const advanced = await store.getById("auto-conc-at");
+      expect(advanced!.next_run_at!).toBeGreaterThan(now);
+    });
+
+    it("starts at most one firing per tick however much headroom the limit leaves", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(
+        makeAutomation({
+          id: "auto-conc-onepertick",
+          next_run_at: now - 60_000,
+          max_concurrent_runs: 5,
+        })
+      );
+
+      // Nothing in flight and four slots of headroom — the tick still fires the
+      // automation once, because it advances next_run_at past the slot it just
+      // claimed. Concurrency therefore accrues one cron interval at a time
+      // rather than as a burst, which is what keeps two runs of one automation
+      // from racing out of the gate on the same tick.
+      await createScheduler().tick();
+      expect(await fetchRuns("auto-conc-onepertick")).toHaveLength(1);
+
+      // A second tick in the same moment finds the schedule already advanced.
+      await createScheduler().tick();
+      expect(await fetchRuns("auto-conc-onepertick")).toHaveLength(1);
+
+      const automation = await store.getById("auto-conc-onepertick");
+      expect(automation!.next_run_at!).toBeGreaterThan(now);
+    });
+
+    it("bounds invocations rather than runs, so one fan-out firing cannot exhaust the limit", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(
+        makeAutomation({
+          id: "auto-conc-fanout",
+          next_run_at: now - 60_000,
+          max_concurrent_runs: 2,
+        })
+      );
+
+      // One firing that fanned out over three targets. Counting rows would read
+      // this as three in flight and refuse the next firing; counting firings
+      // reads it as one.
+      for (const suffix of ["a", "b", "c"]) {
+        await seedRun(
+          makeRunRow("auto-conc-fanout", {
+            id: `run-conc-fanout-${suffix}`,
+            invocation_id: "inv-conc-fanout-shared",
+            status: "running",
+            session_id: `sess-conc-fanout-${suffix}`,
+            started_at: now - 120_000,
+            created_at: now - 120_000,
+          })
+        );
+      }
+
+      await createScheduler().tick();
+
+      const runs = await fetchRuns("auto-conc-fanout");
+      expect(runs).toHaveLength(4);
+      expect(new Set(runs.map((run) => run.invocation_id)).size).toBe(2);
+    });
+
     it("processes overdue automations (creates run, advances schedule)", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
@@ -564,7 +698,7 @@ describe("Scheduler (integration)", () => {
       expect(secondInvocations.invocations).toHaveLength(1);
     });
 
-    it("auto-pauses after recovery sweep detects 3rd consecutive failure", async () => {
+    it("auto-pauses after recovery sweep detects 5th consecutive failure", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(
@@ -572,7 +706,7 @@ describe("Scheduler (integration)", () => {
           id: "auto-t5",
           next_run_at: now + 86400000,
           enabled: 1,
-          consecutive_failures: 2,
+          consecutive_failures: 4,
         })
       );
 
@@ -589,7 +723,7 @@ describe("Scheduler (integration)", () => {
       await createScheduler().tick();
 
       const automation = await store.getById("auto-t5");
-      expect(automation!.consecutive_failures).toBe(3);
+      expect(automation!.consecutive_failures).toBe(5);
       expect(automation!.enabled).toBe(0);
       expect(automation!.next_run_at).toBeNull();
     });

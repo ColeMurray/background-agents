@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_AUTOMATION_CONCURRENT_RUNS,
   validateAutomationTargetCounts,
   createAutomationRequestSchema,
   listAutomationsResponseSchema,
@@ -20,6 +21,7 @@ const automation = {
   harness: "opencode",
   reasoningEffort: null,
   enabled: true,
+  maxConcurrentRuns: 1,
   nextRunAt: 123,
   consecutiveFailures: 0,
   createdBy: "user-1",
@@ -114,6 +116,52 @@ describe("listAutomationsResponseSchema", () => {
         nextCursor: null,
       }).success
     ).toBe(false);
+  });
+});
+
+describe("automation concurrency bound", () => {
+  const create = (maxConcurrentRuns: unknown) =>
+    createAutomationRequestSchema.safeParse({
+      name: "Queue drain",
+      instructions: "Drain the queue",
+      maxConcurrentRuns,
+    });
+
+  it("admits the supported range on create and update", () => {
+    expect(create(1).success).toBe(true);
+    expect(create(MAX_AUTOMATION_CONCURRENT_RUNS).success).toBe(true);
+    expect(updateAutomationRequestSchema.safeParse({ maxConcurrentRuns: 3 }).success).toBe(true);
+  });
+
+  it("omission is the serialized default rather than an unbounded one", () => {
+    // The column defaults to 1, so a request that says nothing must not read as
+    // a request to lift the bound.
+    expect(
+      createAutomationRequestSchema.parse({ name: "Queue drain", instructions: "Drain" })
+    ).not.toHaveProperty("maxConcurrentRuns");
+  });
+
+  it("requires the bound on a response record", () => {
+    // The column is NOT NULL, so a response that omits it is a serialization
+    // bug rather than an older automation — reading it as absent would let a
+    // client silently treat an unbounded automation as the default.
+    const { maxConcurrentRuns: _omitted, ...withoutBound } = automation;
+    expect(
+      listAutomationsResponseSchema.safeParse({
+        automations: [withoutBound],
+        hasMore: false,
+        nextCursor: null,
+      }).success
+    ).toBe(false);
+  });
+
+  it("refuses a bound outside the range or off the integer grid", () => {
+    expect(create(0).success).toBe(false);
+    expect(create(-1).success).toBe(false);
+    expect(create(MAX_AUTOMATION_CONCURRENT_RUNS + 1).success).toBe(false);
+    expect(create(1.5).success).toBe(false);
+    expect(create("3").success).toBe(false);
+    expect(updateAutomationRequestSchema.safeParse({ maxConcurrentRuns: 0 }).success).toBe(false);
   });
 });
 

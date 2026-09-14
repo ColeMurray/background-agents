@@ -23,6 +23,7 @@ function automation(id: string, name: string): AutomationListItem {
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
     enabled: true,
+    maxConcurrentRuns: 1,
     nextRunAt: null,
     consecutiveFailures: 0,
     createdBy: "user-1",

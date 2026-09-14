@@ -120,6 +120,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
               reasoningEffort: automation.reasoningEffort,
               scheduleCron: automation.scheduleCron ?? "0 9 * * *",
               scheduleTz: automation.scheduleTz,
+              maxConcurrentRuns: automation.maxConcurrentRuns,
               instructions: automation.instructions,
               triggerType: automation.triggerType,
               eventType: automation.eventType ?? undefined,

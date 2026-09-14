@@ -9,6 +9,7 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import {
+  MAX_AUTOMATION_CONCURRENT_RUNS,
   validateAutomationTargetCounts,
   type AutomationRepositoryInput,
 } from "@open-inspect/shared/types/automations";
@@ -30,6 +31,7 @@ export interface AutomationFormValues {
   reasoningEffort: string | null;
   scheduleCron?: string;
   scheduleTz?: string;
+  maxConcurrentRuns?: number;
   instructions: string;
   triggerType: AutomationTriggerType;
   eventType?: string;
@@ -42,6 +44,7 @@ export interface AutomationTriggerDraft {
   type: AutomationTriggerType;
   scheduleCron: string;
   scheduleTz: string;
+  maxConcurrentRuns: number;
   eventType: string;
   conditions: TriggerCondition[];
   sentryClientSecret: string;
@@ -91,6 +94,16 @@ type InitialAutomationFormValues = Partial<AutomationFormValues>;
 
 export const DEFAULT_AUTOMATION_SCHEDULE_CRON = "0 9 * * *";
 
+/**
+ * Coerce a stored or template concurrency to the range the API accepts. An
+ * automation created before the field existed, or a template that omits it,
+ * reads as the serialized default rather than as an invalid form.
+ */
+export function clampConcurrentRuns(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 1;
+  return Math.min(MAX_AUTOMATION_CONCURRENT_RUNS, Math.max(1, Math.trunc(value)));
+}
+
 export function createAutomationFormDraft(
   initialValues: InitialAutomationFormValues = {}
 ): AutomationFormDraft {
@@ -106,6 +119,7 @@ export function createAutomationFormDraft(
       type: initialValues.triggerType ?? "schedule",
       scheduleCron: initialValues.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
       scheduleTz: initialValues.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+      maxConcurrentRuns: clampConcurrentRuns(initialValues.maxConcurrentRuns),
       eventType: initialValues.eventType ?? "",
       conditions: initialValues.triggerConfig?.conditions ?? [],
       sentryClientSecret: "",
@@ -267,6 +281,7 @@ function buildSubmissionValues({
       ...values,
       scheduleCron: draft.trigger.scheduleCron,
       scheduleTz: draft.trigger.scheduleTz,
+      maxConcurrentRuns: clampConcurrentRuns(draft.trigger.maxConcurrentRuns),
     };
   }
 

@@ -26,6 +26,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
+    max_concurrent_runs: 1,
     next_run_at: now + 86_400_000,
     consecutive_failures: 0,
     created_by: "user-1",
@@ -335,6 +336,75 @@ describe("automation invocations (D1 integration)", () => {
       expect(await countRows("automation_runs", `invocation_id = '${invocation.id}'`)).toBe(2);
       const automation = await store.getById("auto-g1");
       expect(automation!.next_run_at).toBe(2_000);
+    });
+
+    it("admits up to the automation's bound and refuses past it", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-g-bound", max_concurrent_runs: 3 }));
+
+      for (const slot of [1_000, 2_000, 3_000]) {
+        const { inserted } = await store.insertInvocationGuarded({
+          invocation: makeInvocation("auto-g-bound", { source: "schedule", scheduled_at: slot }),
+          children: [makeChild("auto-g-bound", { status: "running" })],
+          overlapScope: { kind: "automation" },
+        });
+        expect(inserted).toBe(true);
+      }
+
+      const past = await store.insertInvocationGuarded({
+        invocation: makeInvocation("auto-g-bound", { source: "schedule", scheduled_at: 4_000 }),
+        children: [makeChild("auto-g-bound", { status: "running" })],
+        overlapScope: { kind: "automation" },
+      });
+      expect(past.inserted).toBe(false);
+    });
+
+    it("reads the bound at insert time, so a lowered limit is not overtaken by a firing in flight", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-g-patch", max_concurrent_runs: 3 }));
+
+      for (const slot of [1_000, 2_000]) {
+        await store.insertInvocationGuarded({
+          invocation: makeInvocation("auto-g-patch", { source: "schedule", scheduled_at: slot }),
+          children: [makeChild("auto-g-patch", { status: "running" })],
+          overlapScope: { kind: "automation" },
+        });
+      }
+
+      // The firing read the automation at 3 and would have been admitted. The
+      // operator lowers the bound while it resolves repositories and provider
+      // auth; the guard must see 1, not the snapshot the firing started with.
+      await store.update("auto-g-patch", { max_concurrent_runs: 1 });
+
+      const afterPatch = await store.insertInvocationGuarded({
+        invocation: makeInvocation("auto-g-patch", { source: "schedule", scheduled_at: 3_000 }),
+        children: [makeChild("auto-g-patch", { status: "running" })],
+        overlapScope: { kind: "automation" },
+      });
+      expect(afterPatch.inserted).toBe(false);
+    });
+
+    it("treats a bound below one as the serialized default rather than as no bound", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-g-zero" }));
+      // No CHECK constraint stands behind the column, so the guard owns this.
+      await env.DB.prepare("UPDATE automations SET max_concurrent_runs = 0 WHERE id = ?")
+        .bind("auto-g-zero")
+        .run();
+
+      const first = await store.insertInvocationGuarded({
+        invocation: makeInvocation("auto-g-zero", { source: "schedule", scheduled_at: 1_000 }),
+        children: [makeChild("auto-g-zero", { status: "running" })],
+        overlapScope: { kind: "automation" },
+      });
+      expect(first.inserted).toBe(true);
+
+      const second = await store.insertInvocationGuarded({
+        invocation: makeInvocation("auto-g-zero", { source: "schedule", scheduled_at: 2_000 }),
+        children: [makeChild("auto-g-zero", { status: "running" })],
+        overlapScope: { kind: "automation" },
+      });
+      expect(second.inserted).toBe(false);
     });
 
     it("suppresses the invocation and children when an active run exists, but still advances", async () => {
