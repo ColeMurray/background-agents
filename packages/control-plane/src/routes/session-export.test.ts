@@ -19,7 +19,7 @@ import {
 } from "../router.test-support";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { Env } from "../types";
-import { sessionExportRoutes } from "./session-export";
+import { MAX_MESSAGE_PAGES_PER_SESSION, sessionExportRoutes } from "./session-export";
 
 const mocks = vi.hoisted(() => ({
   authenticate: vi.fn(),
@@ -211,5 +211,79 @@ describe("GET /sessions/export", () => {
 
     expect(response.status).toBe(400);
     expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  it.each([["createdAfter"], ["createdBefore"]])(
+    "rejects an empty %s instead of coercing it to epoch zero",
+    async (param) => {
+      const response = await callExport({ [param]: "" });
+
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain(`${param} must be a non-negative integer`);
+      expect(mocks.list).not.toHaveBeenCalled();
+    }
+  );
+
+  it("emits a session_error line and continues when a session's messages 500", async () => {
+    const secondRow = { ...sampleRow, id: "session-2", createdAt: 3_000 };
+    mocks.list.mockResolvedValue({ sessions: [sampleRow, secondRow], hasMore: false });
+    mocks.runtimeFetch
+      .mockResolvedValueOnce(new Response("boom", { status: 503 }))
+      .mockResolvedValueOnce(messagePage([{ id: "msg-ok", content: "fine" }], false));
+
+    const response = await callExport({ include: "messages" });
+    const lines = await readLines(response);
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({
+      schemaVersion: 1,
+      type: "session_error",
+      sessionId: "session-1",
+      reason: "http_error",
+      status: 503,
+    });
+    expect(lines[0]).not.toHaveProperty("messages");
+    expect(lines[1]).toMatchObject({ type: "session", id: "session-2" });
+    expect(lines[1].messages).toEqual([{ id: "msg-ok", content: "fine" }]);
+  });
+
+  it("emits a session_error line and continues when the runtime rejects a fetch", async () => {
+    const secondRow = { ...sampleRow, id: "session-2", createdAt: 3_000 };
+    mocks.list.mockResolvedValue({ sessions: [sampleRow, secondRow], hasMore: false });
+    mocks.runtimeFetch
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValueOnce(messagePage([{ id: "msg-ok", content: "fine" }], false));
+
+    const response = await callExport({ include: "messages" });
+    expect(response.status).toBe(200);
+
+    const lines = await readLines(response);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toEqual({
+      schemaVersion: 1,
+      type: "session_error",
+      sessionId: "session-1",
+      reason: "runtime_failure",
+    });
+    expect(lines[1]).toMatchObject({ type: "session", id: "session-2" });
+  });
+
+  it("does not serialize truncated messages when the page cap is reached", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false });
+    let page = 0;
+    mocks.runtimeFetch.mockImplementation(() =>
+      Promise.resolve(messagePage([{ id: `msg-${page++}` }], true, String(page)))
+    );
+
+    const response = await callExport({ include: "messages" });
+    const lines = await readLines(response);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      type: "session_error",
+      sessionId: "session-1",
+      reason: "page_cap_reached",
+    });
+    expect(mocks.runtimeFetch).toHaveBeenCalledTimes(MAX_MESSAGE_PAGES_PER_SESSION);
   });
 });
