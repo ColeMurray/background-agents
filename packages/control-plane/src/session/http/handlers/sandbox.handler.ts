@@ -79,7 +79,7 @@ export class SandboxHandler {
     return Response.json({ status: "ok" });
   }
 
-  async sandboxError(request: Request): Promise<Response> {
+  async sandboxError(request: Request, log: Logger): Promise<Response> {
     const authHeader = request.headers.get("Authorization");
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
     const sandboxId = request.headers.get("X-Sandbox-ID");
@@ -114,7 +114,18 @@ export class SandboxHandler {
     ) {
       return Response.json({ error: "Sandbox credentials changed" }, { status: 403 });
     }
-    if (currentSandbox.status === "stopped" || currentSandbox.status === "stale") {
+    // A dead row has nobody to terminate and nothing to retry. `failed` is
+    // deliberately in that set: the connect watchdog fails a slow boot but
+    // cannot always stop it (Modal has no explicit stop), so the orphan runs
+    // on until a sandbox-authenticated call refuses it and it reports that
+    // refusal as fatal. Acting on that report would re-drive the pending
+    // prompt onto a fresh sandbox that meets the same fate.
+    if (isDeadSandboxStatus(currentSandbox.status)) {
+      log.warn("Ignoring fatal report from a sandbox that is no longer live", {
+        event: "sandbox.error_ignored",
+        sandbox_status: currentSandbox.status,
+        error: result.data.error,
+      });
       return Response.json({ status: "ignored" });
     }
 

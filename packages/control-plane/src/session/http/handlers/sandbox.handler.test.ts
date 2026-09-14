@@ -63,7 +63,7 @@ function createHandler() {
   // repeating it at every invocation.
   const handler = {
     sandboxEvent: (request: Request) => sandboxHandler.sandboxEvent(request),
-    sandboxError: (request: Request) => sandboxHandler.sandboxError(request),
+    sandboxError: (request: Request) => sandboxHandler.sandboxError(request, log),
     createMediaArtifact: (request: Request) => sandboxHandler.createMediaArtifact(request),
     verifySandboxToken: (request: Request) => sandboxHandler.verifySandboxToken(request, log),
     openaiTokenRefresh: () => sandboxHandler.openaiTokenRefresh(log),
@@ -181,10 +181,10 @@ describe("SandboxHandler", () => {
     expect(failSandbox).not.toHaveBeenCalled();
   });
 
-  it.each(["stopped", "stale"] as const)(
+  it.each(["stopped", "stale", "failed"] as const)(
     "does not overwrite a %s sandbox with a delayed fatal report",
     async (status) => {
-      const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
+      const { handler, getSandbox, isValidSandboxToken, failSandbox, log } = createHandler();
       getSandbox.mockReturnValue({
         id: "sandbox-row-1",
         modal_sandbox_id: "sandbox-1",
@@ -209,6 +209,10 @@ describe("SandboxHandler", () => {
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({ status: "ignored" });
       expect(failSandbox).not.toHaveBeenCalled();
+      expect(log.warn).toHaveBeenCalledWith(
+        "Ignoring fatal report from a sandbox that is no longer live",
+        { event: "sandbox.error_ignored", sandbox_status: status, error: "Delayed failure" }
+      );
     }
   );
 

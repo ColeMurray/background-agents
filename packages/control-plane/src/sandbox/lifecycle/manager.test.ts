@@ -2542,7 +2542,7 @@ describe("SandboxLifecycleManager", () => {
       expect(manager.isSpawning()).toBe(false);
     });
 
-    it.each(["stopped", "stale"] as const)(
+    it.each(["stopped", "stale", "failed"] as const)(
       "does not overwrite or detach a %s sandbox",
       async (status) => {
         const storage = createMockStorage(createMockSession(), createMockSandbox({ status }));
@@ -2564,6 +2564,44 @@ describe("SandboxLifecycleManager", () => {
         expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
       }
     );
+
+    it("reports nothing to terminate for a boot the connect watchdog already failed", async () => {
+      // A provider without explicit stop cannot kill the boot the watchdog
+      // gave up on, so it runs on and eventually reports a fatal error of its
+      // own. That report must not read as a fresh termination, or the caller
+      // re-drives the pending prompt onto yet another sandbox.
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting" as SandboxStatus,
+        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
+        last_heartbeat: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const wsManager = createMockWebSocketManager();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider({ capabilities: { supportsExplicitStop: false } }),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(manager.handleAlarm()).resolves.toBe("sandbox_failed");
+      expect(sandbox.status).toBe("failed");
+
+      await expect(
+        manager.terminateFailedSandbox("failed to fetch managed skills: 401 Unauthorized")
+      ).resolves.toBe(false);
+
+      expect(storage.calls.filter((c) => c === "updateSandboxStatus:failed")).toHaveLength(1);
+      expect(storage.calls).not.toContain(
+        "setLastSpawnError:failed to fetch managed skills: 401 Unauthorized"
+      );
+      expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+    });
   });
 
   describe("scheduleDisconnectCheck", () => {

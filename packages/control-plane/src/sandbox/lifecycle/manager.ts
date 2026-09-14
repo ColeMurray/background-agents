@@ -1575,22 +1575,24 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
   }
 
+  /**
+   * Fail the live sandbox after a fatal runtime report and stop it where the
+   * provider allows. Resolves true only when this call took the sandbox down,
+   * which is the caller's cue to re-drive the queue onto a replacement. A row
+   * that is already dead — including one the connect watchdog failed while
+   * its boot was still running — resolves false: there is nothing to
+   * terminate, and re-driving the queue for it would spawn a replacement for
+   * every late report.
+   */
   async terminateFailedSandbox(reason: string): Promise<boolean> {
     const sandbox = this.storage.getSandbox();
-    if (
-      !sandbox ||
-      sandbox.status === "stopped" ||
-      sandbox.status === "stale" ||
-      this.isTerminatingSandbox
-    ) {
+    if (!sandbox || isDeadSandboxStatus(sandbox.status) || this.isTerminatingSandbox) {
       return false;
     }
 
     this.isTerminatingSandbox = true;
-    if (sandbox.status !== "failed") {
-      this.storage.updateSandboxStatus("failed");
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-    }
+    this.storage.updateSandboxStatus("failed");
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
     this.reportSandboxError(reason);
     this.clearSandboxAccessState();
 
