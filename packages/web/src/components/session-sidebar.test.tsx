@@ -67,27 +67,13 @@ const noPagination = {
 };
 
 beforeEach(() => {
-  const values = new Map<string, string>();
+  const values: Record<string, string> = {};
   vi.stubGlobal("localStorage", {
-    get length() {
-      return values.size;
+    getItem: (key: string) => values[key] ?? null,
+    setItem: (key: string, value: string) => {
+      values[key] = value;
     },
-    clear() {
-      values.clear();
-    },
-    getItem(key: string) {
-      return values.get(key) ?? null;
-    },
-    key(index: number) {
-      return [...values.keys()][index] ?? null;
-    },
-    removeItem(key: string) {
-      values.delete(key);
-    },
-    setItem(key: string, value: string) {
-      values.set(key, value);
-    },
-  } satisfies Storage);
+  });
   authorization.permissions = null;
   const attention = session("attention", "Needs review");
   const running = session("running", "Implementing inbox");

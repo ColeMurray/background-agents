@@ -74,6 +74,9 @@ interface SessionSidebarProps {
   onSessionSelect?: () => void;
 }
 
+/**
+ * Renders navigation and session groups, preserving each group's expanded state across visits.
+ */
 export function SessionSidebar({
   onNewSession,
   onSearchSessions,
