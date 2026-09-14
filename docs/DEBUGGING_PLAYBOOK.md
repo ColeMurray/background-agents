@@ -386,6 +386,11 @@ If the circuit breaker opened:
 service="control-plane" component="lifecycle-manager" msg="Circuit breaker open"
 ```
 
+The breaker counts every attempt that ends without a connected bridge: a provider spawn error, a
+`sandbox.connecting_timeout`, or a fatal runtime report (`sandbox.fatal_runtime_error`). It clears
+when a bridge connects, and opens after three failures inside its window. Find the failures that
+tripped it by searching the session for those three events.
+
 ### "Why did snapshot restore fail?"
 
 ```

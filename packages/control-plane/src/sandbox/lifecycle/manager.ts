@@ -682,9 +682,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       await this.finishProviderStartup(generation);
 
-      // Reset circuit breaker on successful spawn initiation
-      this.storage.resetCircuitBreaker();
-
       this.log.info("Sandbox spawn completed", {
         event: "sandbox.spawn",
         outcome: "success",
@@ -1128,7 +1125,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
       await this.finishProviderStartup(generation);
-      this.storage.resetCircuitBreaker();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Failed to resume sandbox";
       this.failAttempt(generation, "connecting", errorMessage);
@@ -1399,6 +1395,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         timeout_ms: this.config.connectingTimeout.timeoutMs,
       });
       this.storage.updateSandboxStatus("failed");
+      this.storage.incrementCircuitBreakerFailure(now);
       this.clearSandboxAccessState();
       if (this.canStopProviderSandbox()) {
         try {
@@ -1582,7 +1579,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * that is already dead — including one the connect watchdog failed while
    * its boot was still running — resolves false: there is nothing to
    * terminate, and re-driving the queue for it would spawn a replacement for
-   * every late report.
+   * every late report. A termination counts toward the circuit breaker, so a
+   * boot that dies the same way every time stops being replaced.
    */
   async terminateFailedSandbox(reason: string): Promise<boolean> {
     const sandbox = this.storage.getSandbox();
@@ -1590,8 +1588,14 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       return false;
     }
 
+    this.log.warn("Fatal sandbox runtime error", {
+      event: "sandbox.fatal_runtime_error",
+      sandbox_status: sandbox.status,
+      error: reason,
+    });
     this.isTerminatingSandbox = true;
     this.storage.updateSandboxStatus("failed");
+    this.storage.incrementCircuitBreakerFailure(Date.now());
     this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
     this.reportSandboxError(reason);
     this.clearSandboxAccessState();
@@ -1815,5 +1819,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   onSandboxConnected(): void {
     this.isSpawningSandbox = false;
     this.storage.setLastSpawnError(null, null);
+    this.storage.resetCircuitBreaker();
   }
 }

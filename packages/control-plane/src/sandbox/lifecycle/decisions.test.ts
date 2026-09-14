@@ -16,6 +16,7 @@ import {
   evaluateExecutionTimeout,
   isSandboxReconnectBlockedStatus,
   isSnapshotRuntimeCompatible,
+  DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -45,6 +46,18 @@ describe("isSandboxReconnectBlockedStatus", () => {
 });
 
 // ==================== Circuit Breaker Tests ====================
+
+describe("DEFAULT_CIRCUIT_BREAKER_CONFIG", () => {
+  it("keeps the window longer than one watchdog cycle so consecutive boot timeouts accumulate", () => {
+    // A boot that overruns the connect watchdog fails one cycle later, and the
+    // next attempt waits out the spawn cooldown first. If the window were
+    // shorter than that cadence, every timeout would land in a fresh window
+    // and the breaker could never open on them.
+    const slowestCadenceMs =
+      DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs + DEFAULT_SPAWN_CONFIG.cooldownMs;
+    expect(DEFAULT_CIRCUIT_BREAKER_CONFIG.windowMs).toBeGreaterThan(slowestCadenceMs);
+  });
+});
 
 describe("evaluateCircuitBreaker", () => {
   const config: CircuitBreakerConfig = {
