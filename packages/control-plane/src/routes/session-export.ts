@@ -7,6 +7,11 @@
  * GET /sessions and GET /sessions/:id/messages exactly: the `sessions.read`
  * permission over the user-or-service authentication policy — no session is
  * exported that the caller could not already read through those surfaces.
+ *
+ * Line types: `session` (complete record), `session_error` (a session whose
+ * messages could not be fetched — emitted instead of a partial record, and
+ * the stream continues with the next session), `cursor` (pagination), and
+ * `error` (stream-level failure after which the stream closes).
  */
 
 import { Hono } from "hono";
@@ -32,7 +37,7 @@ const MAX_EXPORT_LIMIT = 500;
 /** Per-session message page size; the DO caps it at 100. */
 const EXPORT_MESSAGE_PAGE_LIMIT = 100;
 /** Hard cap on message pages per session, bounding a misbehaving runtime. */
-const MAX_MESSAGE_PAGES_PER_SESSION = 1000;
+export const MAX_MESSAGE_PAGES_PER_SESSION = 1000;
 
 interface ExportedMessage {
   id: string;
@@ -51,6 +56,19 @@ interface MessageListResponse {
   hasMore: boolean;
 }
 
+/** Non-empty decimal string → safe non-negative integer (epoch ms). Empty strings must fail, not coerce to 0. */
+function epochMsQuery(paramName: string) {
+  return z
+    .string()
+    .refine((raw) => /^\d+$/.test(raw), {
+      error: `${paramName} must be a non-negative integer (epoch ms)`,
+    })
+    .transform((raw) => Number(raw))
+    .refine((value) => Number.isSafeInteger(value), {
+      error: `${paramName} must be a safe integer`,
+    });
+}
+
 const exportQuerySchema = z.object({
   cursor: z.string().min(1, { error: "Invalid cursor" }).optional(),
   limit: z
@@ -61,16 +79,8 @@ const exportQuerySchema = z.object({
       error: `limit must be an integer between 1 and ${MAX_EXPORT_LIMIT}`,
     }),
   include: z.enum(["messages"], { error: "include must be messages" }).optional(),
-  createdAfter: z.coerce
-    .number()
-    .int({ error: "createdAfter must be an integer" })
-    .nonnegative({ error: "createdAfter must be a non-negative epoch ms" })
-    .optional(),
-  createdBefore: z.coerce
-    .number()
-    .int({ error: "createdBefore must be an integer" })
-    .nonnegative({ error: "createdBefore must be a non-negative epoch ms" })
-    .optional(),
+  createdAfter: epochMsQuery("createdAfter").optional(),
+  createdBefore: epochMsQuery("createdBefore").optional(),
 });
 
 function exportLine(row: SessionExportRow, messages?: ExportedMessage[]): string {
@@ -107,32 +117,77 @@ function cursorLine(nextCursor: string): string {
   );
 }
 
+/** Typed, session-scoped error record — no partial session/message data. */
+function sessionErrorLine(
+  sessionId: string,
+  reason: MessageFetchFailureReason,
+  status?: number
+): string {
+  return (
+    JSON.stringify({
+      schemaVersion: EXPORT_SCHEMA_VERSION,
+      type: "session_error",
+      sessionId,
+      reason,
+      ...(status !== undefined ? { status } : {}),
+    }) + "\n"
+  );
+}
+
+/**
+ * Result of fetching one session's full message history. Failures are
+ * discriminated so the stream can emit a session-scoped error record and
+ * continue, instead of serializing a partial message list as complete data.
+ */
+type MessageFetchFailureReason = "http_error" | "page_cap_reached" | "runtime_failure";
+type MessageFetchResult =
+  | { ok: true; messages: ExportedMessage[] }
+  | { ok: false; reason: MessageFetchFailureReason; status?: number };
+
 /** Fetch every message of one session from its runtime, paging via the DO cursor. */
 async function fetchAllMessages(
   runtime: SessionRuntimeClient,
   sessionId: string,
   log: { warn: (message: string, fields: Record<string, unknown>) => void }
-): Promise<ExportedMessage[]> {
+): Promise<MessageFetchResult> {
   const messages: ExportedMessage[] = [];
   let cursor: string | undefined;
-  for (let page = 0; page < MAX_MESSAGE_PAGES_PER_SESSION; page++) {
-    const search = new URLSearchParams({ limit: String(EXPORT_MESSAGE_PAGE_LIMIT) });
-    if (cursor) search.set("cursor", cursor);
-    const response = await runtime.fetch(sessionId, SessionInternalPaths.messages, undefined, `?${search}`);
-    if (!response.ok) {
-      log.warn("session_export.message_page_failed", {
-        session_id: sessionId,
-        status: response.status,
-      });
-      return messages;
+  try {
+    for (let page = 0; page < MAX_MESSAGE_PAGES_PER_SESSION; page++) {
+      const search = new URLSearchParams({ limit: String(EXPORT_MESSAGE_PAGE_LIMIT) });
+      if (cursor) search.set("cursor", cursor);
+      const response = await runtime.fetch(sessionId, SessionInternalPaths.messages, undefined, `?${search}`);
+      if (!response.ok) {
+        log.warn("session_export.message_page_failed", {
+          session_id: sessionId,
+          status: response.status,
+        });
+        return { ok: false, reason: "http_error", status: response.status };
+      }
+      let body: MessageListResponse;
+      try {
+        body = (await response.json()) as MessageListResponse;
+      } catch {
+        log.warn("session_export.message_page_unreadable", { session_id: sessionId });
+        return { ok: false, reason: "runtime_failure" };
+      }
+      if (!Array.isArray(body.messages)) {
+        log.warn("session_export.message_page_invalid_shape", { session_id: sessionId });
+        return { ok: false, reason: "runtime_failure" };
+      }
+      messages.push(...body.messages);
+      if (!body.hasMore || !body.cursor) return { ok: true, messages };
+      cursor = body.cursor;
     }
-    const body = (await response.json()) as MessageListResponse;
-    messages.push(...(body.messages ?? []));
-    if (!body.hasMore || !body.cursor) return messages;
-    cursor = body.cursor;
+  } catch (e) {
+    log.warn("session_export.message_runtime_failure", {
+      session_id: sessionId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return { ok: false, reason: "runtime_failure" };
   }
   log.warn("session_export.message_page_cap_reached", { session_id: sessionId });
-  return messages;
+  return { ok: false, reason: "page_cap_reached" };
 }
 
 async function handleExport(
@@ -162,10 +217,16 @@ async function handleExport(
           ...(query.createdBefore !== undefined ? { createdBefore: query.createdBefore } : {}),
         });
         for (const row of page.sessions) {
-          const messages = includeMessages
-            ? await fetchAllMessages(ctx.sessionRuntime, row.id, log)
-            : undefined;
-          controller.enqueue(encoder.encode(exportLine(row, messages)));
+          if (!includeMessages) {
+            controller.enqueue(encoder.encode(exportLine(row)));
+            continue;
+          }
+          const result = await fetchAllMessages(ctx.sessionRuntime, row.id, log);
+          if (result.ok) {
+            controller.enqueue(encoder.encode(exportLine(row, result.messages)));
+          } else {
+            controller.enqueue(encoder.encode(sessionErrorLine(row.id, result.reason, result.status)));
+          }
         }
         if (page.hasMore && page.sessions.length > 0) {
           const last = page.sessions[page.sessions.length - 1];
