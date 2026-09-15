@@ -26,6 +26,7 @@ const sessionStateSchema = z.object({
   sandboxStatus: sandboxStatusSchema,
   messageCount: z.number(),
   createdAt: z.number(),
+  updatedAt: z.number().optional(),
   /**
    * Agent harness the session runs on; fixed at create. A producer that
    * predates the field reports the built-in harness, so readers never see
@@ -208,7 +209,7 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
     cursor: historyCursorSchema.nullable(),
   }),
   z.object({ type: z.literal("session_status"), status: sessionStatusSchema }),
-  z.object({ type: z.literal("session_title"), title: z.string() }),
+  z.object({ type: z.literal("session_title"), title: z.string(), updatedAt: z.number() }),
   z.object({
     type: z.literal("child_session_update"),
     childSessionId: z.string(),

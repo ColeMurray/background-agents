@@ -14,6 +14,7 @@ import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { isSessionListKey, isUnarchivedSessionListKey } from "@/lib/session-list";
 import { useSessionSocket } from "./use-session-socket";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
+import { clearSessionTitleRevisions } from "@/lib/session-title-reconciliation";
 
 const FULL_CAPABILITIES = {
   read: true,
@@ -131,6 +132,7 @@ function sendSandboxDashboard(socket: FakeWebSocket, sandboxId: string) {
 
 describe("useSessionSocket", () => {
   beforeEach(() => {
+    clearSessionTitleRevisions();
     FakeWebSocket.instances = [];
     mutateMock.mockReset();
     vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
@@ -628,18 +630,20 @@ describe("useSessionSocket", () => {
     act(() => {
       socket.open();
       socket.receive(createSubscribedMessage());
-      socket.receive({ type: "session_title", title: "Generated title" });
+      socket.receive({ type: "session_title", title: "Generated title", updatedAt: 2 });
     });
 
     await waitFor(() => {
       expect(result.current.sessionState?.title).toBe("Generated title");
     });
 
-    expect(mutateMock).toHaveBeenCalledWith(isSessionListKey, expect.any(Function), {
+    // No list/inbox entry is loaded in this hook test. The revision is kept by
+    // the reconciler and merged if either projection subsequently loads.
+    expect(mutateMock).not.toHaveBeenCalledWith(isSessionListKey, expect.any(Function), {
       populateCache: true,
       revalidate: false,
     });
-    expect(mutateMock).toHaveBeenCalledWith(isSessionInboxKey, expect.any(Function), {
+    expect(mutateMock).not.toHaveBeenCalledWith(isSessionInboxKey, expect.any(Function), {
       populateCache: true,
       revalidate: false,
     });

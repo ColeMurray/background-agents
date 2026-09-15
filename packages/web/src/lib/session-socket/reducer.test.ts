@@ -680,7 +680,7 @@ describe("sessionSocketReducer", () => {
     it("applies title, status, and processing updates", () => {
       const state = reduce(
         subscribedState(),
-        serverMessage({ type: "session_title", title: "Generated title" }),
+        serverMessage({ type: "session_title", title: "Generated title", updatedAt: 2 }),
         serverMessage({ type: "session_status", status: "completed" }),
         serverMessage({ type: "processing_status", isProcessing: true })
       );
@@ -694,7 +694,10 @@ describe("sessionSocketReducer", () => {
     });
 
     it("ignores an empty title", () => {
-      const state = reduce(subscribedState(), serverMessage({ type: "session_title", title: "" }));
+      const state = reduce(
+        subscribedState(),
+        serverMessage({ type: "session_title", title: "", updatedAt: 2 })
+      );
       expect(state.sessionState?.title).toBe("Session 1");
     });
 

@@ -8,6 +8,10 @@ import useSWRInfinite from "swr/infinite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionListSummary } from "@open-inspect/shared/types/sessions";
 import { buildSessionsPageKey, type SessionListResponse } from "@/lib/session-list";
+import {
+  clearSessionTitleRevisions,
+  reconcileSessionTitleRevision,
+} from "@/lib/session-title-reconciliation";
 import { useSessionRename } from "./use-session-rename";
 
 function deferred<T>() {
@@ -50,6 +54,7 @@ function createSession(title: string, id = "session-1"): SessionListSummary {
 }
 
 afterEach(() => {
+  clearSessionTitleRevisions();
   vi.restoreAllMocks();
 });
 
@@ -138,7 +143,7 @@ describe("useSessionRename", () => {
     expect(result.current.optimisticTitle).toBe("Rename B");
     expect(result.current.cache.get(firstPageKey)?.data.sessions[0].title).toBe("Other");
 
-    secondResponse.resolve(new Response(null, { status: 204 }));
+    secondResponse.resolve(Response.json({ title: "Rename B", updatedAt: 3 }, { status: 200 }));
     await expect(renameB).resolves.toBe(true);
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(2);
     await waitFor(() => {
@@ -210,7 +215,7 @@ describe("useSessionRename", () => {
       renameA = result.current.renameA("Rename A");
       renameB = result.current.renameB("Rename B");
     });
-    firstResponse.resolve(new Response(null, { status: 204 }));
+    firstResponse.resolve(Response.json({ title: "Rename A", updatedAt: 2 }, { status: 200 }));
     await expect(renameA).resolves.toBe(true);
     secondResponse.resolve(new Response(null, { status: 500 }));
     await expect(renameB).resolves.toBe(false);
@@ -401,6 +406,118 @@ describe("useSessionRename", () => {
     await waitFor(() => {
       expect(result.current.optimisticTitle).toBeUndefined();
       expect(result.current.cache.get(listKey)?.data.sessions[0].title).toBe("Original");
+    });
+  });
+
+  it("does not let an older HTTP success overwrite a newer socket revision", async () => {
+    const listKey = buildSessionsPageKey({ excludeStatus: "archived" });
+    const renameResponse = deferred<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "PATCH") return renameResponse.promise;
+        return Response.json({
+          sessions: [createSession("Original", "session-unordered")],
+          hasMore: false,
+        });
+      })
+    );
+    const { result } = renderHook(
+      () => {
+        useSWR<SessionListResponse>(listKey);
+        const rename = useSessionRename({
+          sessionId: "session-unordered",
+          currentTitle: "Original",
+        });
+        return { ...rename, cache: useSWRConfig().cache };
+      },
+      {
+        wrapper: ({ children }: PropsWithChildren) => (
+          <SWRConfig
+            value={{
+              provider: () => new Map(),
+              dedupingInterval: 0,
+              fetcher: async (url: string) => (await fetch(url)).json(),
+            }}
+          >
+            {children}
+          </SWRConfig>
+        ),
+      }
+    );
+    await waitFor(() => expect(result.current.cache.get(listKey)?.data).toBeDefined());
+
+    let rename!: Promise<boolean>;
+    act(() => {
+      rename = result.current.renameSession("Rename B");
+    });
+    reconcileSessionTitleRevision({
+      sessionId: "session-unordered",
+      title: "Rename C",
+      updatedAt: 3,
+    });
+    renameResponse.resolve(Response.json({ title: "Rename B", updatedAt: 2 }));
+
+    await expect(rename).resolves.toBe(true);
+    expect(result.current.cache.get(listKey)?.data.sessions[0]).toMatchObject({
+      title: "Rename C",
+      updatedAt: 3,
+    });
+  });
+
+  it("accepts a socket-confirmed rename after the HTTP response is lost", async () => {
+    const listKey = buildSessionsPageKey({ excludeStatus: "archived" });
+    const renameResponse = deferred<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "PATCH") return renameResponse.promise;
+        return Response.json({
+          sessions: [createSession("Original", "session-lost-response")],
+          hasMore: false,
+        });
+      })
+    );
+    const { result } = renderHook(
+      () => {
+        useSWR<SessionListResponse>(listKey);
+        const rename = useSessionRename({
+          sessionId: "session-lost-response",
+          currentTitle: "Original",
+        });
+        return { ...rename, cache: useSWRConfig().cache };
+      },
+      {
+        wrapper: ({ children }: PropsWithChildren) => (
+          <SWRConfig
+            value={{
+              provider: () => new Map(),
+              dedupingInterval: 0,
+              fetcher: async (url: string) => (await fetch(url)).json(),
+            }}
+          >
+            {children}
+          </SWRConfig>
+        ),
+      }
+    );
+    await waitFor(() => expect(result.current.cache.get(listKey)?.data).toBeDefined());
+
+    let rename!: Promise<boolean>;
+    act(() => {
+      rename = result.current.renameSession("Rename B");
+    });
+    reconcileSessionTitleRevision({
+      sessionId: "session-lost-response",
+      title: "Rename B",
+      updatedAt: 2,
+    });
+    renameResponse.reject(new TypeError("Response connection lost"));
+
+    await expect(rename).resolves.toBe(true);
+    expect(result.current.cache.get(listKey)?.data.sessions[0]).toMatchObject({
+      title: "Rename B",
+      updatedAt: 2,
     });
   });
 });

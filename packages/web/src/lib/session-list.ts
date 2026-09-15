@@ -15,6 +15,7 @@ import { z } from "zod";
 import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 import { sessionReadStateClientSchema } from "./session-read-state";
+import { applySessionTitleRevision } from "./session-title-reconciliation";
 
 const sessionListClientResponseSchema = sessionListResponseSchema.extend({
   sessions: z.array(
@@ -44,7 +45,13 @@ export type { SessionListResponse };
 export async function fetchSessionListPage(path: BrowserApiPath): Promise<SessionListResponse> {
   const response = await browserApiFetch(path);
   if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
-  return sessionListClientResponseSchema.parse(await response.json());
+  const parsed = sessionListClientResponseSchema.parse(await response.json());
+  return {
+    ...parsed,
+    sessions: parsed.sessions
+      .map(applySessionTitleRevision)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)),
+  };
 }
 
 export function buildSessionsPageKey(options: SessionListQuery = {}): BrowserApiPath {
@@ -83,14 +90,23 @@ export function isArchivedSessionListKey(key: unknown): key is string {
 export function applyTitleUpdate(
   data: SessionListResponse | undefined,
   sessionId: string,
-  title: string | null
+  title: string | null,
+  updatedAt?: number
 ): SessionListResponse | undefined {
   if (!data) return data;
   return {
     ...data,
-    sessions: data.sessions.map((session) =>
-      session.id === sessionId ? { ...session, title } : session
-    ),
+    sessions: data.sessions
+      .map((session) => {
+        if (
+          session.id !== sessionId ||
+          (updatedAt !== undefined && updatedAt < session.updatedAt)
+        ) {
+          return session;
+        }
+        return { ...session, title, updatedAt: updatedAt ?? session.updatedAt };
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)),
   };
 }
 

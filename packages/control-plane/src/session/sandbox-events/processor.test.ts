@@ -84,7 +84,11 @@ function createProcessor() {
   const broadcastPromptQueue = vi.fn();
   const updateLastActivity = vi.fn();
   const refreshSlackActivity = vi.fn();
-  const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
+  const applySessionTitleUpdate = vi.fn((title: string) => ({
+    ok: true as const,
+    title,
+    updatedAt: 1,
+  }));
   const offerFallbackTitle = vi.fn((_title: string) => {});
   const log = {
     debug: vi.fn(),

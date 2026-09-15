@@ -4,6 +4,10 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore }
 import { useSWRConfig } from "swr";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { applySessionTitleToCaches } from "@/lib/session-title-cache";
+import {
+  getSessionTitleRevision,
+  reconcileSessionTitleRevision,
+} from "@/lib/session-title-reconciliation";
 
 interface RenameOwner {
   latestRequestId: number;
@@ -51,6 +55,7 @@ interface UseSessionRenameOptions {
   sessionId: string;
   currentTitle: string | null;
   authoritativeTitle?: string | null;
+  authoritativeUpdatedAt?: number;
   awaitAuthoritativeTitle?: boolean;
 }
 
@@ -58,9 +63,10 @@ export function useSessionRename({
   sessionId,
   currentTitle,
   authoritativeTitle,
+  authoritativeUpdatedAt,
   awaitAuthoritativeTitle = false,
 }: UseSessionRenameOptions) {
-  const { mutate } = useSWRConfig();
+  const { cache, mutate } = useSWRConfig();
   const currentTitleRef = useRef(currentTitle);
   const authoritativeTitleRef = useRef(authoritativeTitle);
 
@@ -90,11 +96,18 @@ export function useSessionRename({
     }
 
     if (authoritativeTitle !== undefined) {
+      if (authoritativeUpdatedAt !== undefined) {
+        reconcileSessionTitleRevision({
+          sessionId,
+          title: authoritativeTitle,
+          updatedAt: authoritativeUpdatedAt,
+        });
+      }
       if (owner.pendingRequests === 0) {
         owner.confirmedTitle = authoritativeTitle;
       }
       if (authoritativeTitle === owner.optimisticTitle && owner.pendingRequests === 0) {
-        void applySessionTitleToCaches(mutate, sessionId, authoritativeTitle)
+        void applySessionTitleToCaches(mutate, cache, sessionId, authoritativeTitle)
           .catch(() => undefined)
           .then(() => {
             if (owner.pendingRequests === 0 && owner.optimisticTitle === authoritativeTitle) {
@@ -110,19 +123,27 @@ export function useSessionRename({
       }
       deleteIdleOwner(sessionId, owner);
     };
-  }, [authoritativeTitle, awaitAuthoritativeTitle, mutate, sessionId]);
+  }, [
+    authoritativeTitle,
+    authoritativeUpdatedAt,
+    awaitAuthoritativeTitle,
+    cache,
+    mutate,
+    sessionId,
+  ]);
 
   const renameSession = useCallback(
     (title: string): Promise<boolean> => {
       const owner = getRenameOwner(sessionId);
       const requestId = ++owner.latestRequestId;
+      const authoritativeRevisionAtStart = getSessionTitleRevision(sessionId)?.updatedAt;
       if (owner.pendingRequests === 0) {
         owner.confirmedTitle = currentTitleRef.current;
       }
       owner.pendingRequests += 1;
 
       publishOptimisticTitle(owner, title);
-      const optimisticUpdate = applySessionTitleToCaches(mutate, sessionId, title);
+      const optimisticUpdate = applySessionTitleToCaches(mutate, cache, sessionId, title);
 
       const request = owner.queue.then(async () => {
         await optimisticUpdate.catch(() => undefined);
@@ -136,7 +157,21 @@ export function useSessionRename({
           throw new Error("Failed to update session title");
         }
 
-        owner.confirmedTitle = title;
+        const payload: unknown = await response.json();
+        if (
+          !payload ||
+          typeof payload !== "object" ||
+          typeof (payload as { title?: unknown }).title !== "string" ||
+          typeof (payload as { updatedAt?: unknown }).updatedAt !== "number"
+        ) {
+          throw new Error("Invalid session title response");
+        }
+        const latest = reconcileSessionTitleRevision({
+          sessionId,
+          title: (payload as { title: string }).title,
+          updatedAt: (payload as { updatedAt: number }).updatedAt,
+        });
+        owner.confirmedTitle = latest.title;
       });
 
       owner.queue = request.then(
@@ -148,10 +183,16 @@ export function useSessionRename({
         async () => {
           owner.pendingRequests -= 1;
           if (owner.latestRequestId === requestId) {
-            await applySessionTitleToCaches(mutate, sessionId, title).catch(() => undefined);
-            if (owner.authoritativeSubscribers === 0 || authoritativeTitleRef.current === title) {
-              publishOptimisticTitle(owner, undefined);
-            }
+            const latest = getSessionTitleRevision(sessionId);
+            const confirmedTitle = latest?.title ?? title;
+            await applySessionTitleToCaches(
+              mutate,
+              cache,
+              sessionId,
+              confirmedTitle,
+              latest?.updatedAt
+            ).catch(() => undefined);
+            publishOptimisticTitle(owner, undefined);
           }
           deleteIdleOwner(sessionId, owner);
           return true;
@@ -163,9 +204,28 @@ export function useSessionRename({
             return true;
           }
 
+          const latest = getSessionTitleRevision(sessionId);
+          if (
+            latest &&
+            (authoritativeRevisionAtStart === undefined ||
+              latest.updatedAt > authoritativeRevisionAtStart)
+          ) {
+            owner.confirmedTitle = latest.title;
+            await applySessionTitleToCaches(
+              mutate,
+              cache,
+              sessionId,
+              latest.title,
+              latest.updatedAt
+            ).catch(() => undefined);
+            publishOptimisticTitle(owner, undefined);
+            deleteIdleOwner(sessionId, owner);
+            return latest.title === title;
+          }
+
           if (authoritativeTitleRef.current === title) {
             owner.confirmedTitle = title;
-            await applySessionTitleToCaches(mutate, sessionId, title).catch(() => undefined);
+            await applySessionTitleToCaches(mutate, cache, sessionId, title).catch(() => undefined);
             publishOptimisticTitle(owner, undefined);
             deleteIdleOwner(sessionId, owner);
             return true;
@@ -177,9 +237,12 @@ export function useSessionRename({
               ? undefined
               : (owner.confirmedTitle ?? undefined)
           );
-          await applySessionTitleToCaches(mutate, sessionId, owner.confirmedTitle ?? null).catch(
-            () => undefined
-          );
+          await applySessionTitleToCaches(
+            mutate,
+            cache,
+            sessionId,
+            owner.confirmedTitle ?? null
+          ).catch(() => undefined);
           if (owner.authoritativeSubscribers === 0) {
             publishOptimisticTitle(owner, undefined);
           }
@@ -188,7 +251,7 @@ export function useSessionRename({
         }
       );
     },
-    [mutate, sessionId]
+    [cache, mutate, sessionId]
   );
 
   return { optimisticTitle, renameSession };

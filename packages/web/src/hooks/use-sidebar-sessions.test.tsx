@@ -11,6 +11,10 @@ import type {
 } from "@open-inspect/shared/types/session-inbox";
 import { useSidebarSessions } from "./use-sidebar-sessions";
 import { reconcileSessionReadState } from "@/lib/session-read-state";
+import {
+  clearSessionTitleRevisions,
+  reconcileSessionTitleRevision,
+} from "@/lib/session-title-reconciliation";
 
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "github:123", name: "Test User" } } }),
@@ -111,10 +115,11 @@ function deferred<T>() {
 }
 
 afterEach(() => {
+  clearSessionTitleRevisions();
   // Vitest globals are disabled, so Testing Library never registers its own
   // afterEach cleanup — unmount explicitly or the 30s poll leaks across tests.
   cleanup();
-  localStorage.clear();
+  if (typeof localStorage.clear === "function") localStorage.clear();
   setVisibility("visible");
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -423,6 +428,38 @@ describe("useSidebarSessions", () => {
     await act(async () => result.current.handleSessionArchived("tail-a"));
 
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-b"]);
+  });
+
+  it("reconciles and reranks a title revision in retained pagination", async () => {
+    const fetcher = vi.fn(async (key: string) =>
+      key.includes("category=")
+        ? page(["tail-a", "tail-b"])
+        : snapshot({ needs_attention: page(["attention"], "next") })
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() => expect(result.current.needsAttention).toHaveLength(3));
+
+    act(() => {
+      reconcileSessionTitleRevision({
+        sessionId: "tail-b",
+        title: "Renamed tail",
+        updatedAt: 10,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual([
+        "tail-b",
+        "attention",
+        "tail-a",
+      ]);
+      expect(result.current.needsAttention[0]).toMatchObject({
+        title: "Renamed tail",
+        updatedAt: 10,
+      });
+    });
   });
 
   it("reconciles read state on retained pages when a session is marked read", async () => {

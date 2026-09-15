@@ -13,16 +13,19 @@ import type {
 } from "@open-inspect/shared/types/session-inbox";
 import {
   applySessionInboxItemReadState,
+  applySessionInboxItemTitleRevision,
   applySessionInboxReadStateUpdate,
   buildSessionInboxKey,
   buildSessionInboxSnapshotKey,
   isSessionInboxItemFullyRead,
   isSessionInboxKey,
   isSessionInboxPaginationKey,
+  latestHierarchyUpdate,
   parseSessionInboxPage,
   parseSessionInboxSnapshot,
   sessionInboxDestinationCategory,
 } from "@/lib/session-inbox-api";
+import { subscribeSessionTitleReconciliation } from "@/lib/session-title-reconciliation";
 import {
   markLatestMessageRead,
   reconcileSessionReadState,
@@ -310,7 +313,7 @@ export function useSidebarSessions() {
             return true;
           })
         ),
-      ];
+      ].sort((a, b) => latestHierarchyUpdate(b) - latestHierarchyUpdate(a));
     });
   }, [
     attention.additionalPages,
@@ -355,6 +358,14 @@ export function useSidebarSessions() {
       updateFinishedRetained(update);
     },
     [updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
+  );
+
+  useEffect(
+    () =>
+      subscribeSessionTitleReconciliation((revision) => {
+        updateAllRetainedItems((item) => applySessionInboxItemTitleRevision(item, revision));
+      }),
+    [updateAllRetainedItems]
   );
 
   // Every session open acknowledges its terminal message, read or not, so

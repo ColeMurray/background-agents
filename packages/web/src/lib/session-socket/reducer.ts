@@ -294,7 +294,11 @@ function reduceServerMessage(
 
     case "session_title":
       if (!message.title) return state;
-      return updateSessionState(state, (prev) => ({ ...prev, title: message.title }));
+      return updateSessionState(state, (prev) => ({
+        ...prev,
+        title: message.title,
+        updatedAt: message.updatedAt,
+      }));
 
     case "session_status":
       return updateSessionState(state, (prev) => ({ ...prev, status: message.status }));

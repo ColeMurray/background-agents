@@ -88,10 +88,12 @@ describe("swrKeysToRevalidate", () => {
   });
 
   it("does not revalidate eventually consistent projections on title updates", () => {
-    expect(swrKeysToRevalidate({ type: "session_title", title: "New title" }, SESSION_ID)).toEqual(
-      []
-    );
-    expect(swrKeysToRevalidate({ type: "session_title", title: "" }, SESSION_ID)).toEqual([]);
+    expect(
+      swrKeysToRevalidate({ type: "session_title", title: "New title", updatedAt: 2 }, SESSION_ID)
+    ).toEqual([]);
+    expect(
+      swrKeysToRevalidate({ type: "session_title", title: "", updatedAt: 2 }, SESSION_ID)
+    ).toEqual([]);
   });
 
   it("revalidates the session list on status changes", () => {

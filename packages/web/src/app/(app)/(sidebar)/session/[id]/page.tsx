@@ -121,6 +121,7 @@ export default function SessionPage() {
     sessionId,
     currentTitle: sessionState?.title ?? initialSnapshot.session.title,
     authoritativeTitle: sessionState?.title,
+    authoritativeUpdatedAt: sessionState?.updatedAt,
     awaitAuthoritativeTitle: true,
   });
   // Fixed at create; per-message model overrides must stay within it.

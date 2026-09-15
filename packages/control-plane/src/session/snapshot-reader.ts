@@ -98,6 +98,7 @@ export class SessionSnapshotReader {
       sandboxStatus: sandbox?.status ?? DEFAULT_SANDBOX_STATUS,
       messageCount: this.deps.messageRepository.getMessageCount(),
       createdAt: session.created_at,
+      updatedAt: session.updated_at,
       harness: getValidHarnessOrDefault(session.harness),
       model: session.model ?? DEFAULT_MODEL,
       reasoningEffort: session.reasoning_effort ?? undefined,

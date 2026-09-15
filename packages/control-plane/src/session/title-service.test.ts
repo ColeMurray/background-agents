@@ -80,11 +80,12 @@ describe("SessionTitleService", () => {
 
     const result = h.service.applySessionTitleUpdate("  New title  ");
 
-    expect(result).toEqual({ ok: true, title: "New title" });
+    expect(result).toEqual({ ok: true, title: "New title", updatedAt: NOW });
     expect(h.repository.updateSessionTitle).toHaveBeenCalledWith("session-1", "New title", NOW);
     expect(h.messenger.broadcast).toHaveBeenCalledWith({
       type: "session_title",
       title: "New title",
+      updatedAt: NOW,
     });
     expect(h.backgroundTasks.submissions).toEqual([
       expect.objectContaining({ name: "session_index.update_title" }),

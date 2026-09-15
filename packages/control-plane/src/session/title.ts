@@ -9,7 +9,7 @@ export type SessionTitleValidationResult =
   | { ok: false; reason: "invalid"; error: string };
 
 export type SessionTitleUpdateResult =
-  | { ok: true; title: string }
+  | { ok: true; title: string; updatedAt: number }
   | { ok: false; reason: SessionTitleUpdateErrorReason; error: string };
 
 export function normalizeSessionTitle(title: unknown): SessionTitleValidationResult {
