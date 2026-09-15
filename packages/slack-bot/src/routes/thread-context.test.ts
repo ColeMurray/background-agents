@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type * as SharedSlack from "@open-inspect/shared/slack";
+import { makeExecutionContext } from "../test-helpers";
 import type { Env } from "../types";
 
 const { mockGetThreadMessages, mockResolveUserNames, mockAuthTest } = vi.hoisted(() => ({
@@ -52,11 +53,7 @@ async function post(body: Record<string, unknown>, env = makeEnv(), secret = SEC
       body: JSON.stringify(signed),
     }),
     env,
-    {
-      props: {},
-      waitUntil: vi.fn(),
-      passThroughOnException: vi.fn(),
-    } as unknown as ExecutionContext
+    makeExecutionContext()
   );
 }
 
