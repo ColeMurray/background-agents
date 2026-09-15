@@ -47,7 +47,8 @@ import { SessionIndexStore } from "../db/session-index";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
-import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
+import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey, parseRepoAclConfig } from "../env-validation";
+import { isRepoAllowed } from "../repos/repo-acl";
 import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -249,6 +250,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // the validated key, so no fallback path can persist a secret in plaintext.
   const repoSecretsEncryptionKey = requireRepoSecretsEncryptionKey(env);
   const tokenEncryptionKey = requireTokenEncryptionKey(env);
+  // Opt-in repository access gate; undefined when ENFORCE_REPO_ACL is unset.
+  const repoAclConfig = parseRepoAclConfig(env);
+  const repoAclCheck = repoAclConfig.enforce
+    ? (repoOwner: string, repoName: string) =>
+        isRepoAllowed(repoAclConfig.allowlist, repoOwner, repoName)
+    : undefined;
 
   // The session-scoped logger, created before anything can capture a logger
   // at all. Its `session_id` is injected per emit through the latched
@@ -665,7 +672,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         name: "sandbox.warm",
       }),
     (token) => encryptToken(token, tokenEncryptionKey),
-    generateId
+    generateId,
+    Date.now,
+    repoAclCheck
   );
   const sessionLifecycleHandler = new SessionLifecycleHandler(
     sessionCoreRepository,

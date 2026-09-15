@@ -96,6 +96,12 @@ export interface EnvConfig {
   EXECUTION_TIMEOUT_MS?: string; // Max processing time for one message before auto-fail, for sessions and for the automation runs watching them; overridden per session by sandboxTimeoutMs, and falls back to DEFAULT_SANDBOX_TIMEOUT_SECONDS
   SECRETS_CAP_ENFORCEMENT?: string; // "enforce" (default) fails spawn/build on oversized secret payloads; set "warn" to only log
 
+  // Repository access gate (opt-in). ENFORCE_REPO_ACL="true" (or "1") validates
+  // every session's repositories against REPO_ACL_ALLOWLIST before creation;
+  // unset keeps today's behavior.
+  ENFORCE_REPO_ACL?: string;
+  REPO_ACL_ALLOWLIST?: string; // Comma-separated owner/name entries; either segment may be *
+
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
 }

@@ -88,6 +88,8 @@ const ENV_CONFIG_KEYS = {
   SANDBOX_INACTIVITY_TIMEOUT_MS: true,
   EXECUTION_TIMEOUT_MS: true,
   SECRETS_CAP_ENFORCEMENT: true,
+  ENFORCE_REPO_ACL: true,
+  REPO_ACL_ALLOWLIST: true,
   LOG_LEVEL: true,
 } as const satisfies Record<keyof EnvConfig, true>;
 
