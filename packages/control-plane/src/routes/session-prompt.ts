@@ -111,7 +111,6 @@ export async function handleSessionPrompt(
         enrichment =
           (await resolveGitHubEnrichmentForRequest(
             env,
-            ctx.db,
             userStore,
             userId,
             await resolveGitHubCredentialAuthority(ctx, request.headers)

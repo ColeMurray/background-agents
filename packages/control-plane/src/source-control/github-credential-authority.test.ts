@@ -127,9 +127,34 @@ describe("resolveGitHubCredentialAuthority", () => {
     ).rejects.toThrow("User principal is missing browser-session provenance");
   });
 
-  it("uses the legacy credential authority only for non-browser principals", async () => {
+  it("uses Better Auth's trusted server authority for service principals", async () => {
+    const accountClient: ProviderAccountClient = {
+      listUserAccounts: vi.fn(async () => []),
+      getAccessToken: vi.fn(async () => null),
+      accountInfo: vi.fn(async () => null),
+    };
+
+    await expect(
+      resolveGitHubCredentialAuthority(
+        createContext({ getUserAuth: () => ({ api: accountClient }) }),
+        BROWSER_HEADERS
+      )
+    ).resolves.toEqual({ kind: "service_principal", accountClient });
+    expect(accountClient.listUserAccounts).not.toHaveBeenCalled();
+  });
+
+  it("rejects a service principal without the user authentication runtime", async () => {
     await expect(
       resolveGitHubCredentialAuthority(createContext({}), BROWSER_HEADERS)
-    ).resolves.toEqual({ kind: "legacy" });
+    ).rejects.toThrow("User authentication runtime is unavailable");
+  });
+
+  it("rejects sandbox principals", async () => {
+    await expect(
+      resolveGitHubCredentialAuthority(
+        createContext({ principal: { kind: "sandbox", sessionId: "session-1" } }),
+        BROWSER_HEADERS
+      )
+    ).rejects.toThrow("Principal cannot authorize GitHub user credentials");
   });
 });

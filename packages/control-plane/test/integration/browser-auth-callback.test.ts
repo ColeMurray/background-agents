@@ -325,10 +325,12 @@ describe("browser auth callback", () => {
         "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.owner_bootstrapped'"
       ).first()
     ).resolves.toEqual({ count: 0 });
+    await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM user_scm_tokens").first()
+    ).resolves.toEqual({ count: 0 });
 
     const enrichment = await resolveGitHubEnrichmentForRequest(
       createCloudflareEnv(env),
-      env.DB,
       new UserStore(env.DB),
       session.user.id,
       await resolveGitHubCredentialAuthority(
@@ -352,6 +354,27 @@ describe("browser auth callback", () => {
     });
     await expect(
       decryptToken(enrichment?.accessTokenEncrypted ?? "", env.TOKEN_ENCRYPTION_KEY)
+    ).resolves.toBe("github-access-token");
+
+    const serviceEnrichment = await resolveGitHubEnrichmentForRequest(
+      createCloudflareEnv(env),
+      new UserStore(env.DB),
+      session.user.id,
+      await resolveGitHubCredentialAuthority(
+        {
+          principal: { kind: "service", service: "slack-bot", actor: null },
+          getUserAuth: () => getUserAuth(createCloudflareEnv(env), env.DB),
+        },
+        new Headers()
+      )
+    );
+    expect(serviceEnrichment).toMatchObject({
+      scmUserId: "583231",
+      scmLogin: "octocat",
+      accessTokenEncrypted: expect.any(String),
+    });
+    await expect(
+      decryptToken(serviceEnrichment?.accessTokenEncrypted ?? "", env.TOKEN_ENCRYPTION_KEY)
     ).resolves.toBe("github-access-token");
 
     await expect(

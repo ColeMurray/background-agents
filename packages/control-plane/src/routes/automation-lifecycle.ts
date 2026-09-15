@@ -111,7 +111,6 @@ async function handleTriggerAutomation(
   try {
     requesterEnrichment = await resolveGitHubEnrichmentForRequest(
       env,
-      ctx.db,
       new UserStore(ctx.db),
       requesterUserId,
       await resolveGitHubCredentialAuthority(ctx, request.headers)

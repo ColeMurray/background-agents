@@ -174,15 +174,13 @@ export async function handleCreateSession(
   let scmTokenEncrypted: string | null = null;
   let scmRefreshTokenEncrypted: string | null = null;
 
-  // Browser sessions resolve a linked GitHub identity/token through Better
-  // Auth only when SCM enrichment is needed. Transitional callers retain the
-  // legacy D1 lookup. A user without a linked GitHub account uses the GitHub
-  // App bot fallback; account linking is intentionally deferred.
+  // Resolve linked GitHub identity and credentials through Better Auth only
+  // when SCM enrichment is needed. A user without a linked GitHub account uses
+  // the GitHub App fallback; account linking is intentionally deferred.
   if (githubDeployment) {
     try {
       const enrichment = await resolveGitHubEnrichmentForRequest(
         env,
-        ctx.db,
         userStore,
         resolvedUserId,
         await resolveGitHubCredentialAuthority(ctx, request.headers)

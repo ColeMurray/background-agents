@@ -8,12 +8,11 @@ import { requireTokenEncryptionKey } from "../env-validation";
 import type {
   GitHubAccountSelection,
   GitHubCredentialAuthority,
+  ProviderAccountSelection,
 } from "../source-control/github-credential-authority";
-import { UserScmTokenStore } from "../db/user-scm-tokens";
 import type { UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
 import type { Env } from "../types";
-import type { SqlDatabase } from "../db/sql-database";
 
 const FALLBACK_GIT_AUTHOR = {
   name: "OpenInspect",
@@ -62,12 +61,12 @@ export interface GitHubEnrichment {
   tokenExpiresAt?: number;
 }
 
-const browserAccessTokenSchema = z.object({
+const betterAuthAccessTokenSchema = z.object({
   accessToken: z.string().min(1),
   accessTokenExpiresAt: z.coerce.date().optional(),
 });
 
-const browserGitHubAccountInfoSchema = z.object({
+const betterAuthGitHubAccountInfoSchema = z.object({
   user: z.object({
     id: z.string().min(1),
   }),
@@ -82,18 +81,26 @@ const browserGitHubAccountInfoSchema = z.object({
   }),
 });
 
-export interface BrowserGitHubEnrichmentDependencies {
-  readonly getAccessToken: (selection: {
-    providerId: "github";
-    accountId: string;
-    userId: string;
-  }) => Promise<unknown>;
-  readonly getAccountInfo: (selection: {
-    providerId: "github";
-    accountId: string;
-    userId: string;
-  }) => Promise<unknown>;
+class BetterAuthGitHubAccountMismatchError extends Error {}
+
+export interface BetterAuthGitHubEnrichmentDependencies {
+  readonly getAccessToken: (selection: ProviderAccountSelection) => Promise<unknown>;
+  readonly getAccountInfo: (selection: ProviderAccountSelection) => Promise<unknown>;
   readonly encryptAccessToken: (accessToken: string) => Promise<string>;
+}
+
+export async function resolveBetterAuthGitHubAccessToken(
+  userId: string,
+  account: GitHubAccountSelection,
+  getAccessToken: (selection: ProviderAccountSelection) => Promise<unknown>
+): Promise<z.infer<typeof betterAuthAccessTokenSchema>> {
+  return betterAuthAccessTokenSchema.parse(
+    await getAccessToken({
+      providerId: "github",
+      accountId: account.subject,
+      userId,
+    })
+  );
 }
 
 /**
@@ -103,22 +110,28 @@ export interface BrowserGitHubEnrichmentDependencies {
  * only a re-encrypted, currently valid access token; it never copies the
  * long-lived refresh credential into a second store.
  */
-export async function resolveBrowserGitHubEnrichment(
+export async function resolveBetterAuthGitHubEnrichment(
   userId: string,
   account: GitHubAccountSelection,
-  dependencies: BrowserGitHubEnrichmentDependencies
+  dependencies: BetterAuthGitHubEnrichmentDependencies
 ): Promise<GitHubEnrichment> {
   const selection = {
     providerId: "github" as const,
     accountId: account.subject,
     userId,
   };
-  const token = browserAccessTokenSchema.parse(await dependencies.getAccessToken(selection));
-  const profile = browserGitHubAccountInfoSchema.parse(
+  const token = await resolveBetterAuthGitHubAccessToken(
+    userId,
+    account,
+    dependencies.getAccessToken
+  );
+  const profile = betterAuthGitHubAccountInfoSchema.parse(
     await dependencies.getAccountInfo(selection)
   );
   if (profile.user.id !== account.subject || profile.data.subject !== account.subject) {
-    throw new Error("Better Auth returned a mismatched GitHub account");
+    throw new BetterAuthGitHubAccountMismatchError(
+      "Better Auth returned a mismatched GitHub account"
+    );
   }
 
   const accessTokenEncrypted = await dependencies.encryptAccessToken(token.accessToken);
@@ -153,26 +166,22 @@ export function parseAuthorId(
 }
 
 /**
- * Given a resolved D1 user, find their linked GitHub identity and return
- * enrichment data (display name, email, OAuth tokens). Returns null if no
- * GitHub identity is linked. Parallelizes independent D1 lookups.
+ * Given a resolved D1 user, return attribution for their one linked GitHub
+ * identity. Better Auth remains the sole credential authority.
  */
 export async function resolveGitHubEnrichment(
-  env: Env,
-  db: SqlDatabase,
   userStore: UserStore,
   userId: string
 ): Promise<GitHubEnrichment | null> {
   const identities = await userStore.getIdentitiesForUser(userId);
-  const githubIdentity = identities.find((i) => i.provider === "github");
+  const githubIdentities = identities.filter((identity) => identity.provider === "github");
+  if (githubIdentities.length > 1) {
+    throw new Error("User resolves to multiple GitHub provider accounts");
+  }
+  const githubIdentity = githubIdentities[0];
   if (!githubIdentity) return null;
 
-  const [user, tokens] = await Promise.all([
-    userStore.getUserById(userId),
-    new UserScmTokenStore(db, requireTokenEncryptionKey(env)).getEncryptedTokens(
-      githubIdentity.providerUserId
-    ),
-  ]);
+  const user = await userStore.getUserById(userId);
 
   const authorIdentity = resolveGitAuthorIdentity({
     scmProvider: "github",
@@ -187,38 +196,49 @@ export async function resolveGitHubEnrichment(
     scmLogin: githubIdentity.providerLogin ?? undefined,
     displayName: user?.displayName ?? githubIdentity.providerLogin ?? undefined,
     email: authorIdentity?.email ?? undefined,
-    accessTokenEncrypted: tokens?.accessTokenEncrypted,
-    refreshTokenEncrypted: tokens?.refreshTokenEncrypted,
-    tokenExpiresAt: tokens?.expiresAt,
   };
 }
 
 /**
  * Select the credential authority associated with the authenticated request.
  *
- * Browser sessions read/refresh through Better Auth. Bot identities retain
- * their existing actor identity/token-store lookup.
+ * Browser sessions prove account ownership through their session. Service
+ * principals use the canonical user established by route admission and may
+ * retain identity-only attribution when that user has no usable OAuth token.
  */
 export async function resolveGitHubEnrichmentForRequest(
   env: Env,
-  db: SqlDatabase,
   userStore: UserStore,
   userId: string,
   authority: GitHubCredentialAuthority
 ): Promise<GitHubEnrichment | null> {
-  // One invariant for the whole boundary: both authorities encrypt with
-  // validated AES-256 material, regardless of which branch runs.
   const tokenEncryptionKey = requireTokenEncryptionKey(env);
-  if (authority.kind === "legacy") {
-    return resolveGitHubEnrichment(env, db, userStore, userId);
-  }
-
   const accountClient = authority.accountClient;
-  const githubAccount = authority.githubAccount;
+  const identityEnrichment =
+    authority.kind === "service_principal"
+      ? await resolveGitHubEnrichment(userStore, userId)
+      : undefined;
+  const githubAccount =
+    authority.kind === "browser_session"
+      ? authority.githubAccount
+      : identityEnrichment
+        ? { subject: identityEnrichment.scmUserId }
+        : null;
   if (!githubAccount) return null;
-  return resolveBrowserGitHubEnrichment(userId, githubAccount, {
-    getAccessToken: (selection) => accountClient.getAccessToken({ body: selection }),
-    getAccountInfo: (selection) => accountClient.accountInfo({ query: selection }),
-    encryptAccessToken: (accessToken) => encryptToken(accessToken, tokenEncryptionKey),
-  });
+
+  try {
+    return await resolveBetterAuthGitHubEnrichment(userId, githubAccount, {
+      getAccessToken: (selection) => accountClient.getAccessToken({ body: selection }),
+      getAccountInfo: (selection) => accountClient.accountInfo({ query: selection }),
+      encryptAccessToken: (accessToken) => encryptToken(accessToken, tokenEncryptionKey),
+    });
+  } catch (error) {
+    if (
+      authority.kind === "browser_session" ||
+      error instanceof BetterAuthGitHubAccountMismatchError
+    ) {
+      throw error;
+    }
+    return identityEnrichment ?? null;
+  }
 }

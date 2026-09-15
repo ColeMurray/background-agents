@@ -11,7 +11,7 @@ export interface GitHubAccountSelection {
   readonly subject: string;
 }
 
-interface ProviderAccountSelection {
+export interface ProviderAccountSelection {
   readonly providerId: "github";
   readonly accountId: string;
   readonly userId: string;
@@ -30,7 +30,8 @@ export type GitHubCredentialAuthority =
       readonly githubAccount: GitHubAccountSelection | null;
     }
   | {
-      readonly kind: "legacy";
+      readonly kind: "service_principal";
+      readonly accountClient: ProviderAccountClient;
     };
 
 export interface GitHubCredentialAuthorityContext {
@@ -40,13 +41,13 @@ export interface GitHubCredentialAuthorityContext {
 }
 
 /**
- * Select the credential store associated with the verified principal.
+ * Select the credential authority associated with the verified principal.
  *
- * A browser user must never silently fall back to the legacy token store when
- * its authentication provenance is missing. Linked GitHub accounts are
- * enumerated here, only when an SCM workflow requests them; they are not part
- * of browser-session authentication. Service actors are the only transitional
- * callers that retain the legacy authority.
+ * A browser user must prove account ownership through browser-session
+ * provenance. Linked GitHub accounts are enumerated only when an SCM workflow
+ * requests them; they are not part of browser-session authentication. Service
+ * actors use Better Auth's trusted server API, scoped later to the canonical
+ * user admitted for the request.
  */
 export async function resolveGitHubCredentialAuthority(
   context: GitHubCredentialAuthorityContext,
@@ -88,5 +89,14 @@ export async function resolveGitHubCredentialAuthority(
   if (context.authentication) {
     throw new Error("Non-user principal cannot carry browser-session provenance");
   }
-  return { kind: "legacy" };
+  if (context.principal.kind !== "service") {
+    throw new Error("Principal cannot authorize GitHub user credentials");
+  }
+  if (!context.getUserAuth) {
+    throw new Error("User authentication runtime is unavailable");
+  }
+  return {
+    kind: "service_principal",
+    accountClient: context.getUserAuth().api,
+  };
 }
