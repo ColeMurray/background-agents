@@ -121,12 +121,29 @@ export class SandboxExecutionEventHandler {
       });
     }
 
-    this.backgroundTasks.submit(() => this.triggerSnapshot("execution_complete"), {
-      name: "snapshot.trigger",
-      context: { reason: "execution_complete", message_id: event.messageId },
-    });
+    this.backgroundTasks.submit(
+      async () => {
+        try {
+          // A prompt may have claimed the queue during terminal projection, or
+          // this may be a late completion from its predecessor. Never stop that
+          // newer turn with a provider's destructive snapshot operation.
+          if (!this.messageRepository.getProcessingMessage()) {
+            await this.triggerSnapshot("execution_complete");
+          }
+        } finally {
+          await this.processMessageQueue();
+        }
+      },
+      {
+        name: "snapshot.trigger",
+        context: { reason: "execution_complete", message_id: event.messageId },
+      }
+    );
     this.updateLastActivity(context.now);
     await this.scheduleInactivityCheck();
+    // The task above has already marked the sandbox `snapshotting` by now. The
+    // queue dispatches through the snapshot for providers that keep the source
+    // running and holds until the task's final pump for providers that stop it.
     await this.processMessageQueue();
   }
 }

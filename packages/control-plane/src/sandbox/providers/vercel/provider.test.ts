@@ -165,6 +165,7 @@ describe("VercelSandboxProvider", () => {
     expect(provider.capabilities).toEqual({
       supportsSandboxTimeout: true,
       supportsSnapshots: true,
+      snapshotStopsSandbox: true,
       supportsRestore: true,
       supportsPersistentResume: false,
       supportsExplicitStop: true,
@@ -591,7 +592,7 @@ describe("VercelSandboxProvider", () => {
       { expirationMs: 60_000 },
       undefined
     );
-    expect(snapshot).toEqual({ success: true, imageId: "snapshot-1" });
+    expect(snapshot).toEqual({ success: true, imageId: "snapshot-1", sourceStopped: false });
     expect(vi.mocked(client.deleteSnapshot)).toHaveBeenCalledWith("snapshot-1");
   });
 
@@ -632,7 +633,7 @@ describe("VercelSandboxProvider", () => {
       snapshotSession: vi.fn(
         async (): Promise<VercelSnapshotResponse> => ({
           snapshot: { id: "snapshot-1", status: "failed", createdAt: 456 },
-          session: createSessionResponse().session,
+          session: { ...createSessionResponse().session, status: "stopped" },
         })
       ),
     });
@@ -644,7 +645,11 @@ describe("VercelSandboxProvider", () => {
       reason: "execution_complete",
     });
 
-    expect(result).toEqual({ success: false, error: "Snapshot status was failed" });
+    expect(result).toEqual({
+      success: false,
+      error: "Snapshot status was failed",
+      sourceStopped: true,
+    });
   });
 
   it("keeps reserved callback env keys and clone secrets out of the build sandbox env", async () => {

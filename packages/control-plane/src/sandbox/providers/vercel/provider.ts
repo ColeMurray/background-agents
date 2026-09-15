@@ -84,6 +84,7 @@ export class VercelSandboxProvider implements SandboxProvider {
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSandboxTimeout: true,
     supportsSnapshots: true,
+    snapshotStopsSandbox: true,
     supportsRestore: true,
     supportsPersistentResume: false,
     supportsExplicitStop: true,
@@ -222,14 +223,16 @@ export class VercelSandboxProvider implements SandboxProvider {
         config.correlation
       );
 
+      const sourceStopped = snapshot.session.status !== "running";
       if (snapshot.snapshot.status !== "created") {
         return {
           success: false,
           error: `Snapshot status was ${snapshot.snapshot.status}`,
+          sourceStopped,
         };
       }
 
-      return { success: true, imageId: snapshot.snapshot.id };
+      return { success: true, imageId: snapshot.snapshot.id, sourceStopped };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to snapshot Vercel sandbox", error);
