@@ -95,7 +95,11 @@ function createHandler() {
     confirmIndexStatus,
     settleFromMessageState,
   } as unknown as SessionStatusService;
-  const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
+  const applySessionTitleUpdate = vi.fn((title: string) => ({
+    ok: true as const,
+    title,
+    updatedAt: 2000,
+  }));
   const cancelSession = vi.fn();
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
   const sendToSandbox = vi.fn();
@@ -280,7 +284,7 @@ describe("SessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ title: "New Title" });
+    expect(await response.json()).toEqual({ title: "New Title", updatedAt: 2000 });
     expect(applySessionTitleUpdate).toHaveBeenCalledWith("New Title", { onlyIfUnset: false });
   });
 

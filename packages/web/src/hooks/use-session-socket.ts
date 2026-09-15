@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { mutate } from "swr";
+import { mutate, useSWRConfig } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
 import { useSandboxAccess } from "@/hooks/use-sandbox-access";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
@@ -13,6 +13,8 @@ import {
 } from "@/lib/session-socket/event-log";
 import { createSessionSocketState, sessionSocketReducer } from "@/lib/session-socket/reducer";
 import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
+import { applySessionTitleToCaches } from "@/lib/session-title-cache";
+import { reconcileSessionTitleRevision } from "@/lib/session-title-reconciliation";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type {
@@ -106,6 +108,7 @@ export function useSessionSocket(
   initialSnapshot: SessionSnapshot,
   capabilities: SessionCapabilities
 ): UseSessionSocketReturn {
+  const { cache } = useSWRConfig();
   const [state, dispatch] = useReducer(
     sessionSocketReducer,
     initialSnapshot,
@@ -222,12 +225,26 @@ export function useSessionSocket(
           ["spawning", "stale", "stopped", "failed"].includes(message.status));
       if (clearsSandboxAccess) void clearSandboxAccess();
 
+      if (message.type === "session_title") {
+        const revision = reconcileSessionTitleRevision({
+          sessionId,
+          title: message.title,
+          updatedAt: message.updatedAt,
+        });
+        void applySessionTitleToCaches(
+          mutate,
+          cache,
+          revision.sessionId,
+          revision.title,
+          revision.updatedAt
+        ).catch(() => undefined);
+      }
       dispatch({ type: "server_message", message });
       for (const key of swrKeysToRevalidate(message, sessionId)) {
         mutate(key);
       }
     },
-    [clearSandboxAccess, refreshSandboxAccess, sessionId]
+    [cache, clearSandboxAccess, refreshSandboxAccess, sessionId]
   );
 
   const handleClose = useCallback(() => {

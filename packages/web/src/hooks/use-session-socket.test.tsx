@@ -10,9 +10,11 @@ import type {
   SessionState,
 } from "@open-inspect/shared/types/server-messages";
 import type * as SwrModule from "swr";
-import { isUnarchivedSessionListKey } from "@/lib/session-list";
+import { isSessionInboxKey } from "@/lib/session-inbox-api";
+import { isSessionListKey, isUnarchivedSessionListKey } from "@/lib/session-list";
 import { useSessionSocket } from "./use-session-socket";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
+import { clearSessionTitleRevisions } from "@/lib/session-title-reconciliation";
 
 const FULL_CAPABILITIES = {
   read: true,
@@ -130,6 +132,7 @@ function sendSandboxDashboard(socket: FakeWebSocket, sandboxId: string) {
 
 describe("useSessionSocket", () => {
   beforeEach(() => {
+    clearSessionTitleRevisions();
     FakeWebSocket.instances = [];
     mutateMock.mockReset();
     vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
@@ -614,7 +617,7 @@ describe("useSessionSocket", () => {
     });
   });
 
-  it("revalidates the sidebar session list on title updates", async () => {
+  it("applies authoritative title updates directly to projected caches", async () => {
     const { result } = renderHook(() =>
       useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
     );
@@ -627,14 +630,24 @@ describe("useSessionSocket", () => {
     act(() => {
       socket.open();
       socket.receive(createSubscribedMessage());
-      socket.receive({ type: "session_title", title: "Generated title" });
+      socket.receive({ type: "session_title", title: "Generated title", updatedAt: 2 });
     });
 
     await waitFor(() => {
       expect(result.current.sessionState?.title).toBe("Generated title");
     });
 
-    expect(mutateMock).toHaveBeenCalledWith(isUnarchivedSessionListKey);
+    // No list/inbox entry is loaded in this hook test. The revision is kept by
+    // the reconciler and merged if either projection subsequently loads.
+    expect(mutateMock).not.toHaveBeenCalledWith(isSessionListKey, expect.any(Function), {
+      populateCache: true,
+      revalidate: false,
+    });
+    expect(mutateMock).not.toHaveBeenCalledWith(isSessionInboxKey, expect.any(Function), {
+      populateCache: true,
+      revalidate: false,
+    });
+    expect(mutateMock).not.toHaveBeenCalledWith(isUnarchivedSessionListKey);
   });
 
   it("hydrates replayed assistant text before completion when storage ordering is tied", async () => {

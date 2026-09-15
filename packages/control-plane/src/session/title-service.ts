@@ -60,7 +60,7 @@ export class SessionTitleService {
 
     const publicSessionId = resolvePublicSessionId(session, durableObjectId);
     this.syncSessionIndexTitle(publicSessionId, titleText, updatedAt);
-    messenger.broadcast({ type: "session_title", title: titleText });
+    messenger.broadcast({ type: "session_title", title: titleText, updatedAt });
 
     if (session.parent_session_id) {
       statusService.notifyParentOfChildUpdate({ ...session, title: titleText }, publicSessionId, {
@@ -69,7 +69,7 @@ export class SessionTitleService {
       });
     }
 
-    return { ok: true, title: titleText };
+    return { ok: true, title: titleText, updatedAt };
   }
 
   private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {

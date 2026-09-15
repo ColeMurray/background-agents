@@ -14,6 +14,10 @@ import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import type { BrowserApiPath } from "./browser-api-fetch";
 import { applySessionReadStateToItem, sessionReadStateClientSchema } from "./session-read-state";
+import {
+  applySessionTitleRevision,
+  type SessionTitleRevision,
+} from "./session-title-reconciliation";
 
 const sessionInboxSessionClientSchema = sessionInboxSessionSchema.extend({
   readState: sessionReadStateClientSchema,
@@ -66,34 +70,62 @@ export function isSessionInboxPaginationKey(key: unknown): boolean {
 }
 
 export function parseSessionInboxPage(data: unknown): SessionInboxPage {
-  return sessionInboxPageClientSchema.parse(data);
+  return applyKnownTitleRevisionsToPage(sessionInboxPageClientSchema.parse(data));
 }
 
 export function parseSessionInboxSnapshot(data: unknown): SessionInboxSnapshot {
-  return sessionInboxSnapshotClientSchema.parse(data);
+  const parsed = sessionInboxSnapshotClientSchema.parse(data);
+  return {
+    ...parsed,
+    categories: Object.fromEntries(
+      Object.entries(parsed.categories).map(([category, page]) => [
+        category,
+        applyKnownTitleRevisionsToPage(page),
+      ])
+    ) as Record<SessionInboxCategory, SessionInboxPage>,
+  };
 }
 
 function applyTitleToSession(
   session: SessionInboxSession,
   sessionId: string,
-  title: string | null
+  title: string | null,
+  updatedAt?: number
 ) {
-  return session.id === sessionId ? { ...session, title } : session;
+  if (session.id !== sessionId || (updatedAt !== undefined && updatedAt < session.updatedAt)) {
+    return session;
+  }
+  return { ...session, title, updatedAt: updatedAt ?? session.updatedAt };
 }
 
 function applyTitleToPage(
   page: SessionInboxPage,
   sessionId: string,
-  title: string | null
+  title: string | null,
+  updatedAt?: number
 ): SessionInboxPage {
   return {
     ...page,
-    items: page.items.map((item) => ({
-      rootSession: applyTitleToSession(item.rootSession, sessionId, title),
-      descendantSessions: item.descendantSessions.map((session) =>
-        applyTitleToSession(session, sessionId, title)
-      ),
-    })),
+    items: page.items
+      .map((item) => ({
+        rootSession: applyTitleToSession(item.rootSession, sessionId, title, updatedAt),
+        descendantSessions: item.descendantSessions.map((session) =>
+          applyTitleToSession(session, sessionId, title, updatedAt)
+        ),
+      }))
+      .sort((a, b) => latestHierarchyUpdate(b) - latestHierarchyUpdate(a)),
+  };
+}
+
+function applyKnownTitleRevisionsToPage(page: SessionInboxPage): SessionInboxPage {
+  return {
+    ...page,
+    items: page.items
+      .map((item) => ({
+        rootSession: applySessionTitleRevision(item.rootSession),
+        descendantSessions: item.descendantSessions.map(applySessionTitleRevision),
+      }))
+      .sort((a, b) => latestHierarchyUpdate(b) - latestHierarchyUpdate(a)),
   };
 }
 
@@ -108,7 +140,7 @@ function applyReadStateToPage(
   };
 }
 
-function latestHierarchyUpdate(item: SessionInboxItem): number {
+export function latestHierarchyUpdate(item: SessionInboxItem): number {
   return Math.max(
     item.rootSession.updatedAt,
     ...item.descendantSessions.map(({ updatedAt }) => updatedAt)
@@ -154,7 +186,8 @@ export function applySessionInboxItemReadState(
 export function applySessionInboxTitleUpdate<T extends SessionInboxSnapshot | SessionInboxPage>(
   data: T | undefined,
   sessionId: string,
-  title: string | null
+  title: string | null,
+  updatedAt?: number
 ): T | undefined {
   if (!data) return data;
   if ("categories" in data) {
@@ -163,12 +196,29 @@ export function applySessionInboxTitleUpdate<T extends SessionInboxSnapshot | Se
       categories: Object.fromEntries(
         Object.entries(data.categories).map(([category, page]) => [
           category,
-          applyTitleToPage(page, sessionId, title),
+          applyTitleToPage(page, sessionId, title, updatedAt),
         ])
       ) as Record<SessionInboxCategory, SessionInboxPage>,
     };
   }
-  return applyTitleToPage(data, sessionId, title) as T;
+  return applyTitleToPage(data, sessionId, title, updatedAt) as T;
+}
+
+export function applySessionInboxItemTitleRevision(
+  item: SessionInboxItem,
+  revision: SessionTitleRevision
+): SessionInboxItem {
+  return {
+    rootSession: applyTitleToSession(
+      item.rootSession,
+      revision.sessionId,
+      revision.title,
+      revision.updatedAt
+    ),
+    descendantSessions: item.descendantSessions.map((session) =>
+      applyTitleToSession(session, revision.sessionId, revision.title, revision.updatedAt)
+    ),
+  };
 }
 
 export function applySessionInboxReadStateUpdate<T extends SessionInboxSnapshot | SessionInboxPage>(

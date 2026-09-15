@@ -140,7 +140,7 @@ export class SessionLifecycleHandler {
       return Response.json({ error: result.error }, { status: sessionTitleUpdateStatus(result) });
     }
 
-    return Response.json({ title: result.title });
+    return Response.json({ title: result.title, updatedAt: result.updatedAt });
   }
 
   /** Archive the session after route-level lifecycle authorization has succeeded. */
