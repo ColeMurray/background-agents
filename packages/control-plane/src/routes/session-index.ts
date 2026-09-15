@@ -17,6 +17,7 @@ import {
   sessionListResponseSchema,
   sessionReadActionSchema,
 } from "@open-inspect/shared/types/sessions";
+import { canonicalUserIdOf } from "../auth/principal";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {
@@ -88,12 +89,7 @@ export async function handleListSessions(
 
   const { createdBy, status, excludeStatus, excludeAutomationLineage, limit, offset } =
     parsedQuery.data;
-  const viewerUserId =
-    ctx.principal?.kind === "user"
-      ? ctx.principal.userId
-      : ctx.principal?.kind === "service"
-        ? (ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId)
-        : undefined;
+  const viewerUserId = canonicalUserIdOf(ctx.principal) ?? ctx.authorization?.userId ?? undefined;
   const createdByUserIds = parseCreatedByFilters(createdBy, viewerUserId ?? null);
 
   if (createdByUserIds instanceof Response) {

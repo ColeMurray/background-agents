@@ -16,11 +16,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(179);
+    expect(routes).toHaveLength(182);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(136);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(179);
+    expect(new Set(paths).size).toBe(138);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(182);
   });
 
   it("declares every path in the literal-or-parameter grammar", () => {
@@ -576,7 +576,7 @@ describe("route principal policy", () => {
       { kind: "service", service: "linear-bot", actor: null } as const,
     ],
   ])("accepts matching principals for %o", (authentication, principal) => {
-    expect(enforceRoutePrincipal(authentication, principal)).toBeNull();
+    expect(enforceRoutePrincipal(authentication, principal, "GET")).toBeNull();
   });
 
   it.each([
@@ -593,6 +593,143 @@ describe("route principal policy", () => {
     ],
     [{ kind: "service" } as const, { kind: "user", userId: "user-1" } as const, 403],
   ])("rejects mismatched principals for %o", (authentication, principal, status) => {
-    expect(enforceRoutePrincipal(authentication, principal)?.response.status).toBe(status);
+    expect(enforceRoutePrincipal(authentication, principal, "GET")?.response.status).toBe(status);
+  });
+
+  const tokenPrincipal = {
+    kind: "access-token",
+    userId: "user-1",
+    tokenId: "token-1",
+  } as const;
+  const readRoute = { kind: "user-or-service" } as const;
+
+  it.each(["GET", "HEAD", "get"])("lets an access token read (%s)", (method) => {
+    expect(enforceRoutePrincipal(readRoute, tokenPrincipal, method)).toBeNull();
+  });
+
+  it.each(["POST", "PUT", "PATCH", "DELETE"])(
+    "refuses an access token every mutating method (%s), whatever the route policy allows",
+    (method) => {
+      // The trust boundary for the read-only claim: the route itself accepts
+      // any user-or-service principal, so only this check stands between a
+      // leaked token and DELETE /sessions/:id.
+      expect(enforceRoutePrincipal(readRoute, tokenPrincipal, method)?.response.status).toBe(403);
+    }
+  );
+
+  it("keeps human-only routes human-only, so a token cannot mint another token", () => {
+    // /access-tokens is a { kind: "user" } route. An access token reaching it
+    // would make revocation meaningless.
+    expect(enforceRoutePrincipal({ kind: "user" }, tokenPrincipal, "GET")?.response.status).toBe(
+      403
+    );
+  });
+
+  it("leaves services unrestricted by method", () => {
+    const bot = { kind: "service", service: "linear-bot", actor: null } as const;
+    expect(enforceRoutePrincipal(readRoute, bot, "DELETE")).toBeNull();
+  });
+
+  it.each(["POST", "PUT", "PATCH", "DELETE"])(
+    "lets a token use %s on a route that declares accessTokenWrites",
+    (method) => {
+      expect(
+        enforceRoutePrincipal(readRoute, tokenPrincipal, method, undefined, "allow")
+      ).toBeNull();
+    }
+  );
+
+  it("admits a token to a human-only route it declares token writes for", () => {
+    // Skill import is a { kind: "user" } route: without this the token would
+    // be refused for its principal kind before the method was ever considered.
+    expect(
+      enforceRoutePrincipal({ kind: "user" }, tokenPrincipal, "POST", undefined, "allow")
+    ).toBeNull();
+  });
+
+  it("keeps the declaration route-local, so a neighbouring route stays read-only", () => {
+    expect(
+      enforceRoutePrincipal(readRoute, tokenPrincipal, "DELETE", undefined, "deny")?.response.status
+    ).toBe(403);
+    expect(enforceRoutePrincipal(readRoute, tokenPrincipal, "DELETE")?.response.status).toBe(403);
+  });
+});
+
+describe("access-token write declarations", () => {
+  it("is declared by the skill import and additive automation routes and nothing else", () => {
+    // The read-only claim is only as good as this list is short. A new route
+    // opting in has to change this test, which is where the reviewer looks.
+    // Every entry is additive — it adds a skill revision, an automation, or a
+    // run — which is the bar for joining it.
+    const declared = routes
+      .filter((route) => route.accessTokenWrites === "allow")
+      .map((route) => `${route.method} ${route.path}`)
+      .sort();
+
+    expect(declared).toEqual([
+      "POST /automations",
+      "POST /automations/:id/trigger",
+      "POST /skills/:id/reimport",
+      "POST /skills/:id/reimport/preview",
+      "POST /skills/import",
+      "POST /skills/import/preview",
+    ]);
+  });
+
+  it("still requires the automation permissions, so the token widens the credential and not the user", () => {
+    expect(
+      routes.find((entry) => entry.method === "POST" && entry.path === "/automations")
+        ?.authorization
+    ).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission: "automations.create" }],
+    });
+    expect(
+      routes.find((entry) => entry.method === "POST" && entry.path === "/automations/:id/trigger")
+        ?.authorization
+    ).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "automation", operation: "trigger" }],
+    });
+  });
+
+  it("leaves the automation routes that rewrite or silence one human-only", () => {
+    // Delete and update replace an automation other people may depend on;
+    // pause and resume decide whether its schedule fires at all. None of the
+    // four is recoverable from a run history the way an added row is.
+    for (const [method, path] of [
+      ["PUT", "/automations/:id"],
+      ["DELETE", "/automations/:id"],
+      ["POST", "/automations/:id/pause"],
+      ["POST", "/automations/:id/resume"],
+      ["POST", "/automations/:id/regenerate-key"],
+    ] as const) {
+      const route = routes.find((entry) => entry.method === method && entry.path === path);
+      expect(route, `${method} ${path}`).toBeDefined();
+      expect(route?.accessTokenWrites, `${method} ${path}`).toBeUndefined();
+    }
+  });
+
+  it("still requires skills.manage, so the token widens the credential and not the user", () => {
+    for (const path of ["/skills/import", "/skills/:id/reimport"]) {
+      const route = routes.find((entry) => entry.method === "POST" && entry.path === path);
+      expect(route?.authorization).toMatchObject({
+        kind: "active-user",
+        allOf: [{ kind: "permission", permission: "skills.manage" }],
+      });
+    }
+  });
+
+  it("leaves the destructive skill routes human-only", () => {
+    for (const [method, path] of [
+      ["DELETE", "/skills/:id"],
+      ["PUT", "/skills/:id"],
+      ["PATCH", "/skills/:id"],
+      ["POST", "/skills"],
+    ] as const) {
+      const route = routes.find((entry) => entry.method === method && entry.path === path);
+      expect(route, `${method} ${path}`).toBeDefined();
+      expect(route?.accessTokenWrites, `${method} ${path}`).toBeUndefined();
+    }
   });
 });
