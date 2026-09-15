@@ -128,18 +128,24 @@ jobs:
         continue-on-error: ${{ inputs.mode == 'plan' }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          set -euo pipefail
-          if [ "$MODE" = plan ]; then
-            terraform plan -no-color -out=tfplan 2>&1 | tee plan_output.txt
-            {
-              echo "plan<<TFPLAN_EOF"
-              head -c 60000 plan_output.txt
-              echo
-              echo "TFPLAN_EOF"
-            } >> "$GITHUB_OUTPUT"
-          else
+          set -uo pipefail
+          if [ "$MODE" = apply ]; then
             terraform apply -auto-approve
+            exit $?
           fi
+
+          # Capture the status instead of aborting on it: a failed plan still
+          # has to reach the PR comment, which is the whole point of posting
+          # one. Plan Status turns a non-zero status into a failed check.
+          status=0
+          terraform plan -no-color -out=tfplan 2>&1 | tee plan_output.txt || status=$?
+          {
+            echo "plan<<TFPLAN_EOF"
+            head -c 60000 plan_output.txt
+            echo
+            echo "TFPLAN_EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit "$status"
         env:
           MODE: ${{ inputs.mode }}
           # Only the Modal CLI reads these names; Terraform gets the same
