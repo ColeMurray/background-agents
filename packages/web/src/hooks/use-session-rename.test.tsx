@@ -146,6 +146,7 @@ describe("useSessionRename", () => {
       expect(result.current.cache.get(secondPageKey)?.data.sessions[0].title).toBe("Rename B");
       expect(result.current.optimisticTitle).toBeUndefined();
     });
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method !== "PATCH")).toHaveLength(2);
   });
 
   it("rolls the latest failure back to an earlier confirmed rename", async () => {
@@ -222,19 +223,17 @@ describe("useSessionRename", () => {
   it("keeps the latest overlay until its authoritative title is cached", async () => {
     const listKey = buildSessionsPageKey({ excludeStatus: "archived" });
     const renameResponse = deferred<Response>();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        if (init?.method === "PATCH") return renameResponse.promise;
-        return new Response(
-          JSON.stringify({
-            sessions: [createSession("Original", "session-authoritative")],
-            hasMore: false,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      })
-    );
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PATCH") return renameResponse.promise;
+      return new Response(
+        JSON.stringify({
+          sessions: [createSession("Original", "session-authoritative")],
+          hasMore: false,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     const { result, rerender } = renderHook(
       ({ authoritativeTitle }: { authoritativeTitle?: string }) => {
@@ -291,6 +290,7 @@ describe("useSessionRename", () => {
       expect(result.current.cache.get(listKey)?.data.sessions[0].title).toBe("Rename B");
       expect(result.current.optimisticTitle).toBeUndefined();
     });
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method !== "PATCH")).toHaveLength(1);
   });
 
   it("captures the current title when renamed from a layout effect after it changes", async () => {

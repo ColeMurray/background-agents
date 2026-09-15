@@ -3,45 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { useSWRConfig } from "swr";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import { applyTitleUpdate, isSessionListKey, type SessionListResponse } from "@/lib/session-list";
-import {
-  applySessionInboxTitleUpdate,
-  isSessionInboxKey,
-  type SessionInboxPage,
-  type SessionInboxSnapshot,
-} from "@/lib/session-inbox-api";
-
-type SessionCacheMutator = ReturnType<typeof useSWRConfig>["mutate"];
-
-/**
- * A session's title is cached in two payload families: session-list responses
- * and inbox snapshots/pages. Every optimistic update, settlement, and rollback
- * must touch both, or the sidebar inbox briefly reverts to the stale title
- * once the optimistic overlay clears.
- */
-function applyTitleToSessionCaches(
-  mutate: SessionCacheMutator,
-  sessionId: string,
-  title: string | null
-): Promise<unknown> {
-  return Promise.all([
-    mutate<SessionListResponse>(
-      isSessionListKey,
-      (current) => applyTitleUpdate(current, sessionId, title),
-      { populateCache: true, revalidate: false }
-    ),
-    mutate<SessionInboxSnapshot | SessionInboxPage>(
-      isSessionInboxKey,
-      (current) => applySessionInboxTitleUpdate(current, sessionId, title),
-      { populateCache: true, revalidate: false }
-    ),
-  ]);
-}
-
-function revalidateSessionCaches(mutate: SessionCacheMutator) {
-  void mutate(isSessionListKey).catch(() => undefined);
-  void mutate(isSessionInboxKey).catch(() => undefined);
-}
+import { applySessionTitleToCaches } from "@/lib/session-title-cache";
 
 interface RenameOwner {
   latestRequestId: number;
@@ -132,7 +94,7 @@ export function useSessionRename({
         owner.confirmedTitle = authoritativeTitle;
       }
       if (authoritativeTitle === owner.optimisticTitle && owner.pendingRequests === 0) {
-        void applyTitleToSessionCaches(mutate, sessionId, authoritativeTitle)
+        void applySessionTitleToCaches(mutate, sessionId, authoritativeTitle)
           .catch(() => undefined)
           .then(() => {
             if (owner.pendingRequests === 0 && owner.optimisticTitle === authoritativeTitle) {
@@ -160,7 +122,7 @@ export function useSessionRename({
       owner.pendingRequests += 1;
 
       publishOptimisticTitle(owner, title);
-      const optimisticUpdate = applyTitleToSessionCaches(mutate, sessionId, title);
+      const optimisticUpdate = applySessionTitleToCaches(mutate, sessionId, title);
 
       const request = owner.queue.then(async () => {
         await optimisticUpdate.catch(() => undefined);
@@ -186,11 +148,10 @@ export function useSessionRename({
         async () => {
           owner.pendingRequests -= 1;
           if (owner.latestRequestId === requestId) {
-            await applyTitleToSessionCaches(mutate, sessionId, title).catch(() => undefined);
+            await applySessionTitleToCaches(mutate, sessionId, title).catch(() => undefined);
             if (owner.authoritativeSubscribers === 0 || authoritativeTitleRef.current === title) {
               publishOptimisticTitle(owner, undefined);
             }
-            revalidateSessionCaches(mutate);
           }
           deleteIdleOwner(sessionId, owner);
           return true;
@@ -204,9 +165,8 @@ export function useSessionRename({
 
           if (authoritativeTitleRef.current === title) {
             owner.confirmedTitle = title;
-            await applyTitleToSessionCaches(mutate, sessionId, title).catch(() => undefined);
+            await applySessionTitleToCaches(mutate, sessionId, title).catch(() => undefined);
             publishOptimisticTitle(owner, undefined);
-            revalidateSessionCaches(mutate);
             deleteIdleOwner(sessionId, owner);
             return true;
           }
@@ -217,7 +177,7 @@ export function useSessionRename({
               ? undefined
               : (owner.confirmedTitle ?? undefined)
           );
-          await applyTitleToSessionCaches(mutate, sessionId, owner.confirmedTitle ?? null).catch(
+          await applySessionTitleToCaches(mutate, sessionId, owner.confirmedTitle ?? null).catch(
             () => undefined
           );
           if (owner.authoritativeSubscribers === 0) {

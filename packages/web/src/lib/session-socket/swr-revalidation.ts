@@ -12,6 +12,9 @@ export type SwrRevalidationKey = string | ((key: unknown) => boolean);
  * refetch. `useSessionSocket` maps each key through `mutate`; everything here
  * stays pure and testable.
  *
+ * Session-title messages are applied directly to projected caches because the
+ * D1 list index can lag behind the session authority.
+ *
  * Only PR artifacts revalidate the session list — they feed the sidebar's PR
  * summary; media artifacts (screenshots, video) arrive at high frequency
  * during a run and cannot change the list.
@@ -26,7 +29,7 @@ export function swrKeysToRevalidate(
       return message.artifact.type === "pr" ? [isUnarchivedSessionListKey, isSessionInboxKey] : [];
 
     case "session_title":
-      return message.title ? [isUnarchivedSessionListKey, isSessionInboxKey] : [];
+      return [];
 
     case "session_status":
       // Revalidate so the status change is reflected in the sidebar.

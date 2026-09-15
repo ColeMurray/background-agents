@@ -13,6 +13,7 @@ import {
 } from "@/lib/session-socket/event-log";
 import { createSessionSocketState, sessionSocketReducer } from "@/lib/session-socket/reducer";
 import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
+import { applySessionTitleToCaches } from "@/lib/session-title-cache";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type {
@@ -223,6 +224,9 @@ export function useSessionSocket(
       if (clearsSandboxAccess) void clearSandboxAccess();
 
       dispatch({ type: "server_message", message });
+      if (message.type === "session_title") {
+        void applySessionTitleToCaches(mutate, sessionId, message.title).catch(() => undefined);
+      }
       for (const key of swrKeysToRevalidate(message, sessionId)) {
         mutate(key);
       }
