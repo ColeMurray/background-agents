@@ -499,6 +499,37 @@ describe("ChildSummaryHandler", () => {
     expect(repository.getLatestTerminalMessage).not.toHaveBeenCalled();
   });
 
+  it("keeps legacy trajectory fallbacks for malformed persisted event data", async () => {
+    const { handler, getSession, getSandbox, repository, artifactRepository } = createHandler();
+    getSession.mockReturnValue(createSession());
+    getSandbox.mockReturnValue(createSandbox());
+    artifactRepository.listArtifacts.mockReturnValue([]);
+    repository.getLatestTerminalMessage.mockReturnValue(null);
+    repository.listEventPage.mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null });
+    repository.getEventTimelinePage.mockReturnValue({
+      events: [
+        createEvent({ id: "array", type: "tool_result", data: '["not","record"]' }),
+        createEvent({ id: "malformed", type: "tool_result", data: "{bad" }),
+      ],
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    const response = handler.getChildSummary(
+      new URL("http://internal/internal/child-summary?include=trajectory")
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      trajectory: {
+        events: [
+          { id: "array", data: { value: ["not", "record"] } },
+          { id: "malformed", data: { value: "{bad" } },
+        ],
+      },
+    });
+  });
+
   it("returns 400 for malformed trajectory cursors", async () => {
     const { handler, getSession, getSandbox, repository, artifactRepository } = createHandler();
     getSession.mockReturnValue(createSession());

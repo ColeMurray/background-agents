@@ -1,5 +1,6 @@
 import type { ClientMessage } from "@open-inspect/shared/types/websocket";
 import {
+  eventDataSchema,
   eventResponseSchema,
   type EventResponse,
   type ListEventsResponse,
@@ -115,10 +116,11 @@ function toEventStreamCursor(cursor: EventTimelineCursor): EventStreamCursor {
 }
 
 function toEventResponse(event: EventRow): EventResponse {
+  const data = eventDataSchema.parse(JSON.parse(event.data));
   return eventResponseSchema.parse({
     id: event.id,
     type: event.type,
-    data: JSON.parse(event.data) as unknown,
+    data,
     messageId: event.message_id,
     createdAt: event.created_at,
   });
