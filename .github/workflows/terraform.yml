@@ -63,11 +63,6 @@ jobs:
     timeout-minutes: 2
     outputs:
       has-secrets: ${{ steps.check.outputs.has-secrets }}
-      # Re-exported so the plan/apply calls can reach them: `env` is not
-      # available in a reusable workflow's `with:` block, but `needs` is. This
-      # keeps TF_VERSION defined once, here, for validate and both calls.
-      terraform-version: ${{ steps.config.outputs.terraform-version }}
-      working-directory: ${{ steps.config.outputs.working-directory }}
     steps:
       - name: Check if secrets are configured
         id: check
@@ -78,12 +73,6 @@ jobs:
             echo "has-secrets=false" >> $GITHUB_OUTPUT
             echo "::notice::Terraform plan/apply skipped - secrets not configured. See docs/GETTING_STARTED.md for setup instructions."
           fi
-
-      - name: Export Terraform config
-        id: config
-        run: |
-          echo "terraform-version=${TF_VERSION}" >> $GITHUB_OUTPUT
-          echo "working-directory=${TF_WORKING_DIR}" >> $GITHUB_OUTPUT
 
   validate:
     name: Validate
@@ -168,8 +157,6 @@ jobs:
     with:
       mode: plan
       state_key: production/terraform.tfstate
-      terraform_version: ${{ needs.check-secrets.outputs.terraform-version }}
-      working_directory: ${{ needs.check-secrets.outputs.working-directory }}
       timeout_minutes: 15
 
   apply:
@@ -182,5 +169,3 @@ jobs:
       mode: apply
       environment: production
       state_key: production/terraform.tfstate
-      terraform_version: ${{ needs.check-secrets.outputs.terraform-version }}
-      working_directory: ${{ needs.check-secrets.outputs.working-directory }}

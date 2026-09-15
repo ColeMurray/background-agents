@@ -23,6 +23,10 @@ terraform {
     key    = "production/terraform.tfstate"
     region = "auto"
 
+    # Matches the AWS environments. Without it, two runs against the same state
+    # key can interleave.
+    use_lockfile = true
+
     # All sensitive/account-specific values passed via -backend-config
     # endpoints = { s3 = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com" }
     # access_key = "..."

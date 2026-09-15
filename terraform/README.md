@@ -401,8 +401,9 @@ variables.
 
 ## Adding New Environments
 
-Environments share `environments/production/`. They differ only in which secrets they use and which
-state object they write to, so there is nothing to copy.
+The Cloudflare stack in `environments/production/` is shared across environments. They differ only
+in which secrets they use and which state object they write to, so there is no Terraform to copy.
+(The AWS environments are laid out differently, with a directory each.)
 
 To add a staging environment:
 
@@ -425,6 +426,10 @@ To add a staging environment:
    on:
      workflow_dispatch:
 
+   concurrency:
+     group: deploy-staging
+     cancel-in-progress: false
+
    jobs:
      terraform:
        uses: ./.github/workflows/terraform-run.yml
@@ -433,14 +438,11 @@ To add a staging environment:
          mode: apply
          environment: staging
          state_key: staging/terraform.tfstate
-         terraform_version: "1.14.8"
-         working_directory: terraform/environments/production
    ```
 
 `terraform-run.yml` binds the job to the named GitHub Environment, so every `TF_VAR_*` resolves
 against that environment's secrets. The variable list itself lives in one place and does not need to
-be restated per environment. This is the same approach `deploy-aws.yml` uses for `aws-staging` and
-`aws-production`.
+be restated per environment.
 
 To run Terraform against a non-production environment locally, pass the state key at init. A
 directory already initialized against another environment needs `-reconfigure`:
