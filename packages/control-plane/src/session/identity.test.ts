@@ -4,7 +4,7 @@ import type { UserStore } from "../db/user-store";
 import type { Env } from "../types";
 import {
   parseAuthorId,
-  resolveBrowserGitHubEnrichment,
+  resolveBetterAuthGitHubEnrichment,
   resolveGitAuthorIdentity,
   resolveGitHubEnrichment,
   resolveGitHubEnrichmentForRequest,
@@ -119,33 +119,49 @@ describe("parseAuthorId", () => {
   });
 });
 
+const emptyTokenDb = {
+  prepare: () => ({ bind: () => ({ first: async () => null }) }),
+} as unknown as Env["DB"];
+
+function fakeStore(
+  identities: Array<{
+    provider: string;
+    providerUserId: string;
+    providerEmail?: string | null;
+    providerLogin?: string | null;
+  }>,
+  user?: { id: string; displayName?: string | null; email?: string | null }
+): UserStore {
+  return {
+    getIdentitiesForUser: async () => identities,
+    getUserById: async () => user ?? null,
+  } as unknown as UserStore;
+}
+
+const GITHUB_ACCOUNT_INFO = {
+  user: {
+    id: "42",
+  },
+  data: {
+    provider: "github",
+    issuer: "https://github.com",
+    subject: "42",
+    login: "ada",
+    displayName: "Ada Lovelace",
+    verifiedEmails: ["private@example.com"],
+    primaryEmail: "private@example.com",
+  },
+} as const;
+
 describe("resolveGitHubEnrichment", () => {
   // This is the fire-time F1/F2 gate: a resolved user with no linked GitHub
   // identity must yield null so no SCM token is attached (bot-attributed
   // fallback). The db stub answers the token-store lookup with "no stored
   // tokens", so these tests pin the identity-selection boundary without D1.
-  const emptyTokenDb = {
-    prepare: () => ({ bind: () => ({ first: async () => null }) }),
-  } as unknown as Env["DB"];
   const env = {
     DB: emptyTokenDb,
     TOKEN_ENCRYPTION_KEY: generateEncryptionKey(),
   } as unknown as Env;
-
-  function fakeStore(
-    identities: Array<{
-      provider: string;
-      providerUserId: string;
-      providerEmail?: string | null;
-      providerLogin?: string | null;
-    }>,
-    user?: { id: string; displayName?: string | null; email?: string | null }
-  ): UserStore {
-    return {
-      getIdentitiesForUser: async () => identities,
-      getUserById: async () => user ?? null,
-    } as unknown as UserStore;
-  }
 
   it("returns null for a pure-Google user — no linked GitHub identity means no SCM token", async () => {
     const store = fakeStore([
@@ -214,9 +230,101 @@ describe("resolveGitHubEnrichmentForRequest", () => {
     // The guard fires before either branch touches identity or account state.
     expect(store.getIdentitiesForUser).not.toHaveBeenCalled();
   });
+
+  it("uses a service principal's canonical Better Auth account token", async () => {
+    const encryptionKey = generateEncryptionKey();
+    const env = {
+      DB: emptyTokenDb,
+      TOKEN_ENCRYPTION_KEY: encryptionKey,
+    } as unknown as Env;
+    const getAccessToken = vi.fn(async () => ({
+      accessToken: "current-access-token",
+      accessTokenExpiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    }));
+    const getAccountInfo = vi.fn(async () => GITHUB_ACCOUNT_INFO);
+    const store = fakeStore(
+      [
+        {
+          provider: "github",
+          providerUserId: "42",
+          providerLogin: "ada",
+          providerEmail: "private@example.com",
+        },
+      ],
+      { id: "user-1", displayName: "Ada Lovelace" }
+    );
+
+    const enrichment = await resolveGitHubEnrichmentForRequest(env, env.DB, store, "user-1", {
+      kind: "service_principal",
+      accountClient: {
+        listUserAccounts: vi.fn(async () => []),
+        getAccessToken,
+        accountInfo: getAccountInfo,
+      },
+    });
+
+    expect(enrichment).toMatchObject({
+      scmUserId: "42",
+      scmLogin: "ada",
+      displayName: "Ada Lovelace",
+      email: "42+ada@users.noreply.github.com",
+      accessTokenEncrypted: expect.any(String),
+      tokenExpiresAt: new Date("2030-01-01T00:00:00.000Z").getTime(),
+    });
+    expect(enrichment?.refreshTokenEncrypted).toBeUndefined();
+    expect(getAccessToken).toHaveBeenCalledWith({
+      body: {
+        providerId: "github",
+        accountId: "42",
+        userId: "user-1",
+      },
+    });
+    expect(getAccountInfo).toHaveBeenCalledWith({
+      query: {
+        providerId: "github",
+        accountId: "42",
+        userId: "user-1",
+      },
+    });
+  });
+
+  it("falls back to pre-cutover enrichment when Better Auth has no usable token", async () => {
+    const env = {
+      DB: emptyTokenDb,
+      TOKEN_ENCRYPTION_KEY: generateEncryptionKey(),
+    } as unknown as Env;
+    const store = fakeStore(
+      [
+        {
+          provider: "github",
+          providerUserId: "42",
+          providerLogin: "ada",
+        },
+      ],
+      { id: "user-1", displayName: "Ada Lovelace" }
+    );
+
+    await expect(
+      resolveGitHubEnrichmentForRequest(env, env.DB, store, "user-1", {
+        kind: "service_principal",
+        accountClient: {
+          listUserAccounts: vi.fn(async () => []),
+          getAccessToken: vi.fn(async () => {
+            throw new Error("Access token not found");
+          }),
+          accountInfo: vi.fn(async () => null),
+        },
+      })
+    ).resolves.toMatchObject({
+      scmUserId: "42",
+      scmLogin: "ada",
+      displayName: "Ada Lovelace",
+      email: "42+ada@users.noreply.github.com",
+    });
+  });
 });
 
-describe("resolveBrowserGitHubEnrichment", () => {
+describe("resolveBetterAuthGitHubEnrichment", () => {
   const githubAccount = {
     subject: "42",
   };
@@ -227,27 +335,11 @@ describe("resolveBrowserGitHubEnrichment", () => {
       accessTokenExpiresAt: new Date("2030-01-01T00:00:00.000Z"),
       scopes: [],
     }));
-    const getAccountInfo = vi.fn(async () => ({
-      user: {
-        id: "42",
-        name: "Ada Lovelace",
-        email: "private@example.com",
-        emailVerified: true,
-      },
-      data: {
-        provider: "github",
-        issuer: "https://github.com",
-        subject: "42",
-        login: "ada",
-        displayName: "Ada Lovelace",
-        verifiedEmails: ["private@example.com"],
-        primaryEmail: "private@example.com",
-      },
-    }));
+    const getAccountInfo = vi.fn(async () => GITHUB_ACCOUNT_INFO);
     const encryptAccessToken = vi.fn(async () => "encrypted-current-access-token");
 
     await expect(
-      resolveBrowserGitHubEnrichment("0123456789abcdef0123456789abcdef", githubAccount, {
+      resolveBetterAuthGitHubEnrichment("0123456789abcdef0123456789abcdef", githubAccount, {
         getAccessToken,
         getAccountInfo,
         encryptAccessToken,
@@ -273,7 +365,7 @@ describe("resolveBrowserGitHubEnrichment", () => {
 
   it("rejects provider profile substitution", async () => {
     await expect(
-      resolveBrowserGitHubEnrichment("0123456789abcdef0123456789abcdef", githubAccount, {
+      resolveBetterAuthGitHubEnrichment("0123456789abcdef0123456789abcdef", githubAccount, {
         getAccessToken: async () => ({ accessToken: "token" }),
         getAccountInfo: async () => ({
           user: {

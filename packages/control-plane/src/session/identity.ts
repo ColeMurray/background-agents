@@ -62,12 +62,12 @@ export interface GitHubEnrichment {
   tokenExpiresAt?: number;
 }
 
-const browserAccessTokenSchema = z.object({
+const accessTokenSchema = z.object({
   accessToken: z.string().min(1),
   accessTokenExpiresAt: z.coerce.date().optional(),
 });
 
-const browserGitHubAccountInfoSchema = z.object({
+const betterAuthGitHubAccountInfoSchema = z.object({
   user: z.object({
     id: z.string().min(1),
   }),
@@ -82,7 +82,7 @@ const browserGitHubAccountInfoSchema = z.object({
   }),
 });
 
-export interface BrowserGitHubEnrichmentDependencies {
+export interface BetterAuthGitHubEnrichmentDependencies {
   readonly getAccessToken: (selection: {
     providerId: "github";
     accountId: string;
@@ -103,18 +103,18 @@ export interface BrowserGitHubEnrichmentDependencies {
  * only a re-encrypted, currently valid access token; it never copies the
  * long-lived refresh credential into a second store.
  */
-export async function resolveBrowserGitHubEnrichment(
+export async function resolveBetterAuthGitHubEnrichment(
   userId: string,
   account: GitHubAccountSelection,
-  dependencies: BrowserGitHubEnrichmentDependencies
+  dependencies: BetterAuthGitHubEnrichmentDependencies
 ): Promise<GitHubEnrichment> {
   const selection = {
     providerId: "github" as const,
     accountId: account.subject,
     userId,
   };
-  const token = browserAccessTokenSchema.parse(await dependencies.getAccessToken(selection));
-  const profile = browserGitHubAccountInfoSchema.parse(
+  const token = accessTokenSchema.parse(await dependencies.getAccessToken(selection));
+  const profile = betterAuthGitHubAccountInfoSchema.parse(
     await dependencies.getAccountInfo(selection)
   );
   if (profile.user.id !== account.subject || profile.data.subject !== account.subject) {
@@ -196,8 +196,9 @@ export async function resolveGitHubEnrichment(
 /**
  * Select the credential authority associated with the authenticated request.
  *
- * Browser sessions read/refresh through Better Auth. Bot identities retain
- * their existing actor identity/token-store lookup.
+ * Browser sessions read/refresh through Better Auth after proving account
+ * ownership through the browser session. Service principals use Better Auth's
+ * trusted server API after route admission binds them to a canonical user.
  */
 export async function resolveGitHubEnrichmentForRequest(
   env: Env,
@@ -214,11 +215,28 @@ export async function resolveGitHubEnrichmentForRequest(
   }
 
   const accountClient = authority.accountClient;
-  const githubAccount = authority.githubAccount;
-  if (!githubAccount) return null;
-  return resolveBrowserGitHubEnrichment(userId, githubAccount, {
+  const dependencies: BetterAuthGitHubEnrichmentDependencies = {
     getAccessToken: (selection) => accountClient.getAccessToken({ body: selection }),
     getAccountInfo: (selection) => accountClient.accountInfo({ query: selection }),
     encryptAccessToken: (accessToken) => encryptToken(accessToken, tokenEncryptionKey),
-  });
+  };
+  if (authority.kind === "service_principal") {
+    const existing = await resolveGitHubEnrichment(env, db, userStore, userId);
+    if (!existing) return null;
+
+    try {
+      return await resolveBetterAuthGitHubEnrichment(
+        userId,
+        { subject: existing.scmUserId },
+        dependencies
+      );
+    } catch {
+      // Preserve pre-cutover credentials and identity-only attribution.
+      return existing;
+    }
+  }
+
+  const githubAccount = authority.githubAccount;
+  if (!githubAccount) return null;
+  return resolveBetterAuthGitHubEnrichment(userId, githubAccount, dependencies);
 }

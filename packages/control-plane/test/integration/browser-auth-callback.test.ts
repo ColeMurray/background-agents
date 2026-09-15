@@ -355,6 +355,41 @@ describe("browser auth callback", () => {
     ).resolves.toBe("github-access-token");
 
     await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM user_scm_tokens").first()
+    ).resolves.toEqual({ count: 0 });
+    const serviceEnrichment = await resolveGitHubEnrichmentForRequest(
+      createCloudflareEnv(env),
+      env.DB,
+      new UserStore(env.DB),
+      session.user.id,
+      await resolveGitHubCredentialAuthority(
+        {
+          principal: {
+            kind: "service",
+            service: "linear-bot",
+            actor: {
+              provider: "linear",
+              providerUserId: "linear-user-1",
+              canonicalUserId: session.user.id,
+              participantUserId: "linear:linear-user-1",
+            },
+          },
+          getUserAuth: () => getUserAuth(createCloudflareEnv(env), env.DB),
+        },
+        new Headers()
+      )
+    );
+    expect(serviceEnrichment).toMatchObject({
+      scmUserId: "583231",
+      scmLogin: "octocat",
+      email: "583231+octocat@users.noreply.github.com",
+      accessTokenEncrypted: expect.any(String),
+    });
+    await expect(
+      decryptToken(serviceEnrichment?.accessTokenEncrypted ?? "", env.TOKEN_ENCRYPTION_KEY)
+    ).resolves.toBe("github-access-token");
+
+    await expect(
       env.DB.prepare(
         `SELECT id, display_name, email, avatar_url
          FROM users

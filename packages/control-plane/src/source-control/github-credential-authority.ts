@@ -30,6 +30,10 @@ export type GitHubCredentialAuthority =
       readonly githubAccount: GitHubAccountSelection | null;
     }
   | {
+      readonly kind: "service_principal";
+      readonly accountClient: ProviderAccountClient;
+    }
+  | {
       readonly kind: "legacy";
     };
 
@@ -45,8 +49,8 @@ export interface GitHubCredentialAuthorityContext {
  * A browser user must never silently fall back to the legacy token store when
  * its authentication provenance is missing. Linked GitHub accounts are
  * enumerated here, only when an SCM workflow requests them; they are not part
- * of browser-session authentication. Service actors are the only transitional
- * callers that retain the legacy authority.
+ * of browser-session authentication. Service actors use Better Auth's trusted
+ * server API, scoped later to the canonical user admitted for the request.
  */
 export async function resolveGitHubCredentialAuthority(
   context: GitHubCredentialAuthorityContext,
@@ -87,6 +91,15 @@ export async function resolveGitHubCredentialAuthority(
 
   if (context.authentication) {
     throw new Error("Non-user principal cannot carry browser-session provenance");
+  }
+  if (context.principal.kind === "service") {
+    if (!context.getUserAuth) {
+      throw new Error("User authentication runtime is unavailable");
+    }
+    return {
+      kind: "service_principal",
+      accountClient: context.getUserAuth().api,
+    };
   }
   return { kind: "legacy" };
 }
