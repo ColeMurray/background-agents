@@ -104,3 +104,34 @@ for file in "$MIGRATIONS_DIR"/*.sql; do
 done
 
 echo "Done. Applied $COUNT migration(s)."
+
+# 4. Postcondition: the ledger must record exactly the migration files on disk.
+# Steps 1-3 can leave the schema silently incomplete — a lost wrangler response,
+# a provider that reports success on a partial batch, or any future early return
+# — and callers (Terraform's null_resource) then record a successful deploy over
+# a half-migrated database. Re-read the ledger from the database and compare it
+# to the files, so divergence fails the deploy instead of shipping it.
+EXPECTED_LEDGER=$(
+  for file in "$MIGRATIONS_DIR"/*.sql; do
+    [ -f "$file" ] || continue
+    BASE=$(basename "$file")
+    printf '%s\t%s\n' "$(printf '%s' "$BASE" | grep -oE '^[0-9]+')" "$BASE"
+  done | sort
+)
+
+FINAL_LEDGER=$(
+  $WRANGLER d1 execute "$DATABASE_NAME" --remote \
+    --command "SELECT version, name FROM _schema_migrations" --json |
+    jq -r '.[0].results[]? | [.version, .name] | @tsv' | sort
+)
+
+if [ "$EXPECTED_LEDGER" != "$FINAL_LEDGER" ]; then
+  echo "ERROR: migration ledger does not match $MIGRATIONS_DIR after applying." >&2
+  echo "Missing from the database (expected but not recorded):" >&2
+  comm -23 <(printf '%s\n' "$EXPECTED_LEDGER") <(printf '%s\n' "$FINAL_LEDGER") | sed 's/^/  /' >&2
+  echo "Unexpected in the database (recorded but no such file):" >&2
+  comm -13 <(printf '%s\n' "$EXPECTED_LEDGER") <(printf '%s\n' "$FINAL_LEDGER") | sed 's/^/  /' >&2
+  exit 1
+fi
+
+echo "Verified: ledger matches all $(printf '%s\n' "$EXPECTED_LEDGER" | wc -l | tr -d ' ') migration file(s)."
