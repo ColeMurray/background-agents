@@ -633,7 +633,7 @@ You can configure environment variables (API keys, credentials) at global, per-r
 per-environment scope. A session receives global secrets plus its **session target's** secrets:
 
 - **Global secrets** apply to all sessions (e.g., `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`,
-  `ZHIPU_API_KEY`)
+  `ZHIPU_API_KEY`, `OPENCODE_API_KEY`)
 - **Repository secrets** apply to sessions launched from that repo (including all bot-created
   sessions) and override global secrets with the same key; ad-hoc multi-repository sessions receive
   each selected repository's secrets, with the primary winning collisions
@@ -680,10 +680,11 @@ operators may remove legacy keys after legacy-bound sessions are no longer neede
 > into Modal session sandboxes and OpenComputer sandboxes; a global secret of the same name takes
 > precedence over it, and the other providers read only the secret store.
 >
-> **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, and Z.AI Coding Plan
-> models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider. SuperGrok models
-> require an xAI provider account or `XAI_API_KEY` mode and must be enabled under **Settings >
-> Models**.
+> **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, Z.AI Coding Plan models
+> require `ZHIPU_API_KEY`, and OpenCode Zen and OpenCode Go models require `OPENCODE_API_KEY` (Go
+> also needs an active Go subscription on that key), as a global secret with any sandbox provider.
+> SuperGrok models require an xAI provider account or `XAI_API_KEY` mode and must be enabled under
+> **Settings > Models**.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 

@@ -71,6 +71,7 @@ The most common example:
 | `ANTHROPIC_API_KEY` | Required for Claude models, unless the deployment configured a fleet-wide key (see below) |
 | `DEEPSEEK_API_KEY`  | Required for DeepSeek models with any sandbox provider                                    |
 | `ZHIPU_API_KEY`     | Required for Z.AI Coding Plan GLM models with any sandbox provider                        |
+| `OPENCODE_API_KEY`  | Required for OpenCode Zen and OpenCode Go models with any sandbox provider                |
 
 > **Claude models**: add `ANTHROPIC_API_KEY` as a global secret after deploying. A deployment can
 > instead set `anthropic_api_key` in Terraform to inject one fleet-wide key into Modal session
@@ -205,6 +206,7 @@ from it, even after you rotate the secret. Two guidelines:
 | `XAI_API_KEY`       | Global | xAI API access when a session selects API-key mode    |
 | `DEEPSEEK_API_KEY`  | Global | DeepSeek API access                                   |
 | `ZHIPU_API_KEY`     | Global | Z.AI Coding Plan GLM access                           |
+| `OPENCODE_API_KEY`  | Global | OpenCode Zen and OpenCode Go access                   |
 | `DATABASE_URL`      | Repo   | Database connection string                            |
 | `AWS_ACCESS_KEY_ID` | Repo   | AWS credentials for a specific project                |
 | `STRIPE_SECRET_KEY` | Repo   | Stripe API key for a specific project                 |
@@ -218,9 +220,11 @@ from it, even after you rotate the secret. Two guidelines:
 If you see "Model not found" errors, verify the selected provider authentication mode first. For
 provider-account mode, verify the account and model entitlement. For API-key mode, add the required
 key to the session's secret scope. OpenAI uses `OPENAI_API_KEY`; xAI uses `XAI_API_KEY`; Claude uses
-`ANTHROPIC_API_KEY`; DeepSeek uses `DEEPSEEK_API_KEY`; Z.AI Coding Plan uses `ZHIPU_API_KEY`. For
-subscription authentication, follow the provider-account setup guidance in
-[OpenAI models](OPENAI_MODELS.md) or [Grok models](GROK_MODELS.md).
+`ANTHROPIC_API_KEY`; DeepSeek uses `DEEPSEEK_API_KEY`; Z.AI Coding Plan uses `ZHIPU_API_KEY`;
+OpenCode Zen and OpenCode Go both use `OPENCODE_API_KEY`, and an `opencode-go/*` model additionally
+needs an active Go subscription on that key. For subscription authentication, follow the
+provider-account setup guidance in [OpenAI models](OPENAI_MODELS.md) or
+[Grok models](GROK_MODELS.md).
 
 ### Secret not appearing in sandbox
 

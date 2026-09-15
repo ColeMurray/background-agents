@@ -2,6 +2,15 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 14, 2026
+
+**OpenCode Go models.** The 27 `opencode-go/*` models Go publishes and the harness can run (Grok,
+GPT, GLM, Kimi, LongCat, DeepSeek, MiMo, MiniMax, Muse Spark, Qwen, Hunyuan) can be enabled under
+Settings > Models and run on the OpenCode harness. Go is a flat-rate subscription that reuses the
+OpenCode Zen credential: add `OPENCODE_API_KEY` under Settings > Secrets, with an active Go
+subscription on that key. Usage is capped on rolling 5-hour, weekly, and monthly windows. See
+[Available models](docs/AVAILABLE_MODELS.md#opencode-go).
+
 ## September 9, 2026
 
 **Claude Fable 5.1.** Adds `claude-fable-5-1` to the model picker and integrations, with adaptive

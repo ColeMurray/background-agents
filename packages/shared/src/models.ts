@@ -222,6 +222,61 @@ export const MODEL_CATALOG = [
     ],
   },
   {
+    // OpenCode Go is a flat-rate subscription over the same Zen credential:
+    // one OPENCODE_API_KEY, a separate gateway (zen/go/v1) and its own
+    // curated model list.
+    category: "OpenCode Go",
+    enabledByDefault: false,
+    models: [
+      { id: "opencode-go/grok-4.6", name: "Grok 4.6", description: "xAI" },
+      { id: "opencode-go/gpt-5.6-luna", name: "GPT 5.6 Luna", description: "OpenAI" },
+      { id: "opencode-go/glm-5.3-flash", name: "GLM 5.3 Flash", description: "Z.ai" },
+      { id: "opencode-go/glm-5.3", name: "GLM 5.3", description: "Z.ai" },
+      { id: "opencode-go/glm-5.2", name: "GLM 5.2", description: "Z.ai" },
+      { id: "opencode-go/glm-5.1", name: "GLM 5.1", description: "Z.ai" },
+      { id: "opencode-go/kimi-k3", name: "Kimi K3", description: "Moonshot AI" },
+      { id: "opencode-go/kimi-k2.7-code", name: "Kimi K2.7 Code", description: "Moonshot AI" },
+      { id: "opencode-go/kimi-k2.6", name: "Kimi K2.6", description: "Moonshot AI" },
+      { id: "opencode-go/longcat-2.0", name: "LongCat 2.0", description: "Meituan" },
+      {
+        id: "opencode-go/deepseek-v4.1-flash",
+        name: "DeepSeek V4.1 Flash",
+        description: "DeepSeek",
+      },
+      { id: "opencode-go/deepseek-v4-pro", name: "DeepSeek V4 Pro", description: "DeepSeek" },
+      { id: "opencode-go/deepseek-v4-flash", name: "DeepSeek V4 Flash", description: "DeepSeek" },
+      {
+        id: "opencode-go/deepseek-v4-flash-vision-exp",
+        name: "DeepSeek V4 Flash Vision Exp",
+        description: "DeepSeek, experimental vision",
+      },
+      { id: "opencode-go/mimo-v2.5", name: "MiMo V2.5", description: "Xiaomi" },
+      { id: "opencode-go/mimo-v2.5-pro", name: "MiMo V2.5 Pro", description: "Xiaomi" },
+      { id: "opencode-go/minimax-m3", name: "MiniMax M3", description: "MiniMax" },
+      // Go's docs list minimax-m2.5 too, but opencode does not resolve
+      // opencode-go/minimax-m2.5 at the pinned version — it is reachable as
+      // opencode/minimax-m2.5 on Zen. Re-add when the harness exposes it.
+      { id: "opencode-go/minimax-m2.7", name: "MiniMax M2.7", description: "MiniMax" },
+      {
+        id: "opencode-go/muse-spark-1.3-contributor",
+        name: "Muse Spark 1.3 Contributor",
+        description: "Multimodal contributor tier",
+      },
+      {
+        id: "opencode-go/muse-spark-1.2-contributor",
+        name: "Muse Spark 1.2 Contributor",
+        description: "Multimodal contributor tier",
+      },
+      { id: "opencode-go/qwen3.8-max", name: "Qwen3.8 Max", description: "Alibaba Cloud" },
+      { id: "opencode-go/qwen3.8-flash", name: "Qwen3.8 Flash", description: "Alibaba Cloud" },
+      { id: "opencode-go/qwen3.7-max", name: "Qwen3.7 Max", description: "Alibaba Cloud" },
+      { id: "opencode-go/qwen3.7-plus", name: "Qwen3.7 Plus", description: "Alibaba Cloud" },
+      { id: "opencode-go/qwen3.6-plus", name: "Qwen3.6 Plus", description: "Alibaba Cloud" },
+      { id: "opencode-go/hy4-preview", name: "Hy4 Preview", description: "Tencent Hunyuan" },
+      { id: "opencode-go/hy3", name: "Hy3", description: "Tencent Hunyuan" },
+    ],
+  },
+  {
     category: "xAI / SuperGrok",
     enabledByDefault: false,
     models: [
