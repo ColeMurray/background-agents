@@ -518,12 +518,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * because the provider has not been invoked yet.
    */
   private async reserveSpawnIdentity(
-    session: SessionRow,
-    createdAt: number,
+    generation: SandboxGeneration & { sandboxId: string },
     opts: { preserveProviderObjectId: boolean }
   ): Promise<{ sandboxAuthToken: string; expectedSandboxId: string }> {
     const sandboxAuthToken = this.idGenerator.generateId();
-    const expectedSandboxId = buildSandboxIdForSession(session, createdAt);
+    const { sandboxId: expectedSandboxId, createdAt } = generation;
     await this.enterProviderStartup("spawning", createdAt, () =>
       this.storage.updateSandboxForSpawn({
         status: "spawning",
@@ -537,6 +536,22 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       throw new SpawnSupersededError();
     }
     return { sandboxAuthToken, expectedSandboxId };
+  }
+
+  /**
+   * The identity an attempt will reserve, fixed before reservation persists
+   * it: a reservation that fails after its phase-1 write (the connect alarm
+   * refusing to schedule) leaves a `spawning` row with no watchdog, and the
+   * catch needs this identity to fail that row rather than leave the next
+   * prompt waiting on an attempt that has already ended.
+   */
+  private spawnGeneration(
+    session: SessionRow,
+    createdAt: number
+  ): SandboxGeneration & {
+    sandboxId: string;
+  } {
+    return { sandboxId: buildSandboxIdForSession(session, createdAt), createdAt };
   }
 
   /**
@@ -561,10 +576,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const now = Date.now();
       const sessionId = session.session_name || session.id;
       const hasRepository = sessionHasRepository(session);
-      let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(session, now, {
+      const reserved = this.spawnGeneration(session, now);
+      generation = reserved;
+      let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
         preserveProviderObjectId: true,
       });
-      generation = { sandboxId: expectedSandboxId, createdAt: now };
 
       await this.stopPriorProviderSandbox();
 
@@ -652,12 +668,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         // locks such an orphan out of this DO exactly like the next
         // user-initiated respawn would.
         const retryNow = Math.max(Date.now(), now + 1);
-        ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(
-          session,
-          retryNow,
-          { preserveProviderObjectId: false }
-        ));
-        generation = { sandboxId: expectedSandboxId, createdAt: retryNow };
+        const retry = this.spawnGeneration(session, retryNow);
+        generation = retry;
+        ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(retry, {
+          preserveProviderObjectId: false,
+        }));
         result = await this.provider.createSandbox({
           ...createConfig,
           sandboxId: expectedSandboxId,
@@ -964,12 +979,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.storage.setLastSpawnError(null, null);
 
       const now = Date.now();
-      const { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(
-        session,
-        now,
-        { preserveProviderObjectId: true }
-      );
-      generation = { sandboxId: expectedSandboxId, createdAt: now };
+      const reserved = this.spawnGeneration(session, now);
+      generation = reserved;
+      const { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
+        preserveProviderObjectId: true,
+      });
 
       // A restored sandbox runs the snapshot's binaries whatever the provider
       // exports at launch, so the snapshot's version is the authoritative one.

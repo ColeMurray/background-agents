@@ -1778,11 +1778,10 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.spawn_failure_count).toBe(0);
     });
 
-    it("counts a failure that lands before the attempt reserved a generation", async () => {
+    it("fails and counts an attempt whose reservation broke after persisting it", async () => {
       // Reservation persists `spawning` and then awaits the connect alarm.
-      // If that await throws, no generation was claimed, so no watchdog or
-      // provider write can be competing for this failure: it is nobody
-      // else's to count.
+      // If that await throws, no watchdog was armed and no provider call was
+      // made, so nothing else will ever fail or count this attempt.
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession(), sandbox);
       const alarmScheduler = createMockAlarmScheduler();
@@ -1803,6 +1802,12 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(sandbox.spawn_failure_count).toBe(1);
+      // Phase 1 already persisted `spawning` for this identity, and no
+      // watchdog was armed to fail it later, so this catch must: a row left
+      // in `spawning` would make the next prompt wait on an attempt that
+      // has already ended.
+      expect(sandbox.status).toBe("failed");
+      expect(sandbox.last_spawn_error).toContain("alarm storage unavailable");
     });
 
     it("handles provider errors and increments failure count for permanent errors", async () => {
