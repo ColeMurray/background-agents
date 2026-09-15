@@ -4,7 +4,11 @@ import type {
   SessionDiffManifest,
   SessionDiffRepository,
 } from "@open-inspect/shared/types/session-diffs";
-import { isRepositoryFileHref, resolveDiffFileLink } from "./diff-file-links";
+import {
+  createDiffFileLinkResolver,
+  isRepositoryFileHref,
+  resolveDiffFileLink,
+} from "./diff-file-links";
 
 function file(path: string, extra: Partial<SessionDiffFile> = {}): SessionDiffFile {
   return {
@@ -55,12 +59,16 @@ const single = manifest(
 );
 
 describe("isRepositoryFileHref", () => {
-  it.each(["docs/plans/x.md", "./docs/plans/x.md", "../x.md", "/workspace/web/src/index.ts"])(
-    "treats %s as a repository file",
-    (href) => {
-      expect(isRepositoryFileHref(href)).toBe(true);
-    }
-  );
+  it.each([
+    "docs/plans/x.md",
+    "./docs/plans/x.md",
+    "../x.md",
+    "/workspace/web/src/index.ts",
+    "README.md:42",
+    "package.json:10:2",
+  ])("treats %s as a repository file", (href) => {
+    expect(isRepositoryFileHref(href)).toBe(true);
+  });
 
   it.each([
     undefined,
@@ -99,6 +107,47 @@ describe("resolveDiffFileLink", () => {
       repositoryPosition: 0,
       path: "docs/with space.md",
     });
+  });
+
+  it("resolves a root-level file with a trailing line reference", () => {
+    const root = manifest(repository(0, "web", [file("README.md"), file("package.json")]));
+    expect(resolveDiffFileLink(root, "README.md:42")).toEqual({
+      repositoryPosition: 0,
+      path: "README.md",
+    });
+    expect(resolveDiffFileLink(root, "package.json:10:2")).toEqual({
+      repositoryPosition: 0,
+      path: "package.json",
+    });
+  });
+
+  it("prefers a literal filename ending in a colon and number over a line reference", () => {
+    const colon = manifest(repository(0, "web", [file("notes:42"), file("notes")]));
+    expect(resolveDiffFileLink(colon, "notes:42")).toEqual({
+      repositoryPosition: 0,
+      path: "notes:42",
+    });
+  });
+
+  it("lets a current path win over a renamed file's old path", () => {
+    const recreated = manifest(
+      repository(0, "web", [
+        file("a.ts", { status: "renamed", oldPath: "z.ts" }),
+        file("z.ts", { status: "added" }),
+      ])
+    );
+    expect(resolveDiffFileLink(recreated, "z.ts")).toEqual({ repositoryPosition: 0, path: "z.ts" });
+    expect(resolveDiffFileLink(recreated, "a.ts")).toEqual({ repositoryPosition: 0, path: "a.ts" });
+  });
+
+  it("reuses one resolver for many links", () => {
+    const resolve = createDiffFileLinkResolver(single);
+    expect(resolve("src/old-name.ts")).toEqual({ repositoryPosition: 0, path: "src/new-name.ts" });
+    expect(resolve("docs/with%20space.md")).toEqual({
+      repositoryPosition: 0,
+      path: "docs/with space.md",
+    });
+    expect(resolve(undefined)).toBeNull();
   });
 
   it("resolves a renamed file by its old path to the new path", () => {

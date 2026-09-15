@@ -67,37 +67,14 @@ interface SafeMarkdownProps {
   className?: string;
   baseUrl?: string;
   imageMode?: "omit" | "placeholder";
+  /**
+   * Inside a session, open links to changed repository files in the changes panel. Only
+   * agent-authored text opts in; other markdown (e.g. pull request bodies) keeps plain links.
+   */
+  linkRepositoryFiles?: boolean;
 }
 
 function MarkdownLink({ href, children, ...props }: ComponentPropsWithoutRef<"a">) {
-  const fileLinks = useSessionFileLinks();
-
-  if (fileLinks && isRepositoryFileHref(href)) {
-    const selection = fileLinks.resolve(href);
-    if (!selection) {
-      // The control plane can only show files in the session's diff, so a link to any
-      // other repository file has nowhere to go; plain text beats a link that 404s.
-      return (
-        <span className="text-muted-foreground" title="Not in this session's changes">
-          {children}
-        </span>
-      );
-    }
-    return (
-      <a
-        href={href}
-        className="text-accent hover:underline"
-        {...props}
-        onClick={(event) => {
-          event.preventDefault();
-          fileLinks.open(selection);
-        }}
-      >
-        {children}
-      </a>
-    );
-  }
-
   return (
     <a
       href={href}
@@ -111,11 +88,47 @@ function MarkdownLink({ href, children, ...props }: ComponentPropsWithoutRef<"a"
   );
 }
 
+function RepositoryFileMarkdownLink({ href, children, ...props }: ComponentPropsWithoutRef<"a">) {
+  const fileLinks = useSessionFileLinks();
+
+  if (!fileLinks || !isRepositoryFileHref(href)) {
+    return (
+      <MarkdownLink href={href} {...props}>
+        {children}
+      </MarkdownLink>
+    );
+  }
+
+  const selection = fileLinks.resolve(href);
+  if (!selection) {
+    // The control plane can only show files in the session's diff, so a link to any
+    // other repository file has nowhere to go; plain text beats a link that 404s.
+    return (
+      <span className="text-muted-foreground" title="Not in this session's changes">
+        {children}
+      </span>
+    );
+  }
+  // An in-page action, not a destination: a button, so middle-click and "Open link" can't
+  // navigate to the session-relative href.
+  return (
+    <button
+      type="button"
+      className="text-accent hover:underline cursor-pointer bg-transparent p-0 border-0 text-left font-[inherit]"
+      title={selection.path}
+      onClick={() => fileLinks.open(selection)}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function SafeMarkdown({
   content,
   className = "",
   baseUrl,
   imageMode = DEFAULT_IMAGE_MODE,
+  linkRepositoryFiles = false,
 }: SafeMarkdownProps) {
   return (
     <div
@@ -125,11 +138,22 @@ export function SafeMarkdown({
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
         components={{
-          a: ({ href, children, ...props }: ComponentPropsWithoutRef<"a">) => (
-            <MarkdownLink href={resolveMarkdownUrl(href, baseUrl) ?? undefined} {...props}>
-              {children}
-            </MarkdownLink>
-          ),
+          a: ({ href, children, ...props }: ComponentPropsWithoutRef<"a">) => {
+            const resolvedHref = resolveMarkdownUrl(href, baseUrl);
+            if (!resolvedHref) return <span>{children}</span>;
+            if (linkRepositoryFiles && isRepositoryFileHref(href)) {
+              return (
+                <RepositoryFileMarkdownLink href={href} {...props}>
+                  {children}
+                </RepositoryFileMarkdownLink>
+              );
+            }
+            return (
+              <MarkdownLink href={resolvedHref} {...props}>
+                {children}
+              </MarkdownLink>
+            );
+          },
           img: ({ src, alt }: ComponentPropsWithoutRef<"img">) => {
             const resolvedSrc = resolveMarkdownUrl(
               typeof src === "string" ? src : undefined,

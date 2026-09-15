@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionDiffManifest } from "@open-inspect/shared/types/session-diffs";
 import { SessionFileLinksProvider } from "@/lib/session-file-links";
+import { CreatePullRequestEvent } from "./create-pull-request-event";
 import { SafeMarkdown } from "./safe-markdown";
 
 const manifest: SessionDiffManifest = {
@@ -38,7 +39,7 @@ const manifest: SessionDiffManifest = {
 function renderInSession(content: string, onOpen = vi.fn()) {
   render(
     <SessionFileLinksProvider manifest={manifest} onOpen={onOpen}>
-      <SafeMarkdown content={content} />
+      <SafeMarkdown content={content} linkRepositoryFiles />
     </SessionFileLinksProvider>
   );
   return onOpen;
@@ -47,15 +48,12 @@ function renderInSession(content: string, onOpen = vi.fn()) {
 afterEach(cleanup);
 
 describe("SafeMarkdown links", () => {
-  it("opens a changed file in the changes panel instead of navigating", () => {
+  it("opens a changed file in the changes panel from a button, not a link", () => {
     const onOpen = renderInSession("See [parity.md](docs/plans/parity.md).");
-    const link = screen.getByRole("link", { name: "parity.md" });
 
-    expect(link).not.toHaveAttribute("target");
-    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-    fireEvent(link, click);
+    expect(screen.queryByRole("link", { name: "parity.md" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "parity.md" }));
 
-    expect(click.defaultPrevented).toBe(true);
     expect(onOpen).toHaveBeenCalledWith({ repositoryPosition: 0, path: "docs/plans/parity.md" });
   });
 
@@ -86,8 +84,50 @@ describe("SafeMarkdown links", () => {
     expect(screen.getByRole("link", { name: "jump" })).toHaveAttribute("href", "#details");
   });
 
+  it("keeps plain links when a session markdown block does not opt in", () => {
+    render(
+      <SessionFileLinksProvider manifest={manifest} onOpen={vi.fn()}>
+        <SafeMarkdown content="See [parity.md](docs/plans/parity.md)." />
+      </SessionFileLinksProvider>
+    );
+
+    expect(screen.getByRole("link", { name: "parity.md" })).toHaveAttribute("target", "_blank");
+  });
+
+  it("leaves relative links in a pull request body alone inside a session", () => {
+    const onOpen = vi.fn();
+    render(
+      <SessionFileLinksProvider manifest={manifest} onOpen={onOpen}>
+        <CreatePullRequestEvent
+          event={{
+            type: "tool_call",
+            tool: "create-pull-request",
+            callId: "call-1",
+            messageId: "message-1",
+            sandboxId: "sandbox-1",
+            timestamp: 1_700_000_000,
+            status: "completed",
+            args: {
+              title: "Plan",
+              body: "See [parity.md](docs/plans/parity.md).",
+              repo: "acme/web",
+            },
+          }}
+          isExpanded
+          onToggle={() => {}}
+        />
+      </SessionFileLinksProvider>
+    );
+
+    const link = screen.getByRole("link", { name: "parity.md" });
+    expect(link).toHaveAttribute("href", "docs/plans/parity.md");
+    expect(link).toHaveAttribute("target", "_blank");
+    fireEvent.click(link);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
   it("renders relative links as before outside a session", () => {
-    render(<SafeMarkdown content="See [parity.md](docs/plans/parity.md)." />);
+    render(<SafeMarkdown content="See [parity.md](docs/plans/parity.md)." linkRepositoryFiles />);
     const link = screen.getByRole("link", { name: "parity.md" });
 
     expect(link).toHaveAttribute("href", "docs/plans/parity.md");
