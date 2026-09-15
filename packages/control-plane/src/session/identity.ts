@@ -77,6 +77,13 @@ const betterAuthGitHubAccountInfoSchema = z.object({
   }),
 });
 
+export class BetterAuthGitHubTokenUnavailableError extends Error {
+  constructor(readonly retrievalError: unknown) {
+    super("Better Auth GitHub token is unavailable", { cause: retrievalError });
+    this.name = "BetterAuthGitHubTokenUnavailableError";
+  }
+}
+
 /** Resolve current PR credentials without copying Better Auth tokens into session state. */
 export async function resolveCurrentGitHubAccessToken(
   userStore: UserStore,
@@ -99,8 +106,8 @@ export async function resolveCurrentGitHubAccessToken(
   let tokenResponse: unknown;
   try {
     tokenResponse = await accountClient.getAccessToken({ body: selection });
-  } catch {
-    return null;
+  } catch (error) {
+    throw new BetterAuthGitHubTokenUnavailableError(error);
   }
   const token = betterAuthAccessTokenSchema.parse(tokenResponse);
   if (

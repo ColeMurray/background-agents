@@ -253,11 +253,12 @@ describe("resolveCurrentGitHubAccessToken", () => {
     expect(getAccountClient).not.toHaveBeenCalled();
   });
 
-  it("returns null when Better Auth cannot provide a token", async () => {
+  it("classifies Better Auth token retrieval failures", async () => {
+    const retrievalError = new Error("Access token not found");
     const unavailableClient = {
       ...accountClient,
       getAccessToken: vi.fn(async () => {
-        throw new Error("Access token not found");
+        throw retrievalError;
       }),
     };
 
@@ -268,7 +269,10 @@ describe("resolveCurrentGitHubAccessToken", () => {
         "user-1",
         "42"
       )
-    ).resolves.toBeNull();
+    ).rejects.toMatchObject({
+      name: "BetterAuthGitHubTokenUnavailableError",
+      retrievalError,
+    });
   });
 
   it("returns null when the resolved token expires too soon", async () => {

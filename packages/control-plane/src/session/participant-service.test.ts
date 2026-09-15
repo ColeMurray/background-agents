@@ -8,6 +8,7 @@ import {
   type ParticipantServiceEnv,
 } from "./participant-service";
 import type { ParticipantRepository } from "./participant-repository";
+import { BetterAuthGitHubTokenUnavailableError } from "./identity";
 
 // ---- Module-level mocks for local refresh tests ----
 
@@ -382,6 +383,25 @@ describe("ParticipantService", () => {
         error: "Failed to resolve GitHub credentials",
         status: 500,
       });
+    });
+
+    it("logs Better Auth retrieval failures before using app fallback", async () => {
+      const retrievalError = new Error("Access token not found");
+      const h = createTestHarness({
+        resolveCurrentGitHubAccessToken: vi.fn(async () => {
+          throw new BetterAuthGitHubTokenUnavailableError(retrievalError);
+        }),
+      });
+      const participant = createParticipant({
+        canonical_user_id: "user-1",
+        scm_user_id: "42",
+      });
+
+      await expect(h.service.resolveAuthForPR(participant)).resolves.toEqual({ auth: null });
+      expect(h.log.warn).toHaveBeenCalledWith(
+        "Better Auth GitHub token retrieval failed, using app fallback",
+        { user_id: "user-1", error: retrievalError }
+      );
     });
 
     it("returns auth: null when participant has no OAuth token", async () => {

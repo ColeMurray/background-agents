@@ -12,6 +12,7 @@ import { decryptToken, encryptToken } from "../auth/crypto";
 import { refreshAccessToken } from "../auth/github";
 import type { SourceControlAuthContext, SourceControlProviderName } from "../source-control";
 import type { Logger } from "../logger";
+import { BetterAuthGitHubTokenUnavailableError } from "./identity";
 import type { ParticipantRow } from "./types";
 import type { ParticipantRepository } from "./participant-repository";
 
@@ -259,6 +260,16 @@ export class ParticipantService {
           return { auth: { authType: "oauth", token: accessToken } };
         }
       } catch (error) {
+        if (error instanceof BetterAuthGitHubTokenUnavailableError) {
+          this.log.warn("Better Auth GitHub token retrieval failed, using app fallback", {
+            user_id: participant.user_id,
+            error:
+              error.retrievalError instanceof Error
+                ? error.retrievalError
+                : String(error.retrievalError),
+          });
+          return { auth: null };
+        }
         this.log.error("Failed to resolve current Better Auth token for PR creation", {
           user_id: participant.user_id,
           error: error instanceof Error ? error : String(error),
