@@ -134,7 +134,7 @@ function makeCtx() {
     props: {},
     waitUntil: vi.fn(),
     passThroughOnException: vi.fn(),
-  } as any;
+  } as unknown as ExecutionContext & { waitUntil: ReturnType<typeof vi.fn> };
 }
 
 /** Build N numbered repos (acme/repo-001 …) for picker/suggestion tests. */

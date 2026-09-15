@@ -66,7 +66,7 @@ function makeCtx() {
     props: {},
     waitUntil: vi.fn(),
     passThroughOnException: vi.fn(),
-  } as any;
+  } as unknown as ExecutionContext & { waitUntil: ReturnType<typeof vi.fn> };
 }
 
 async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): Promise<void> {

@@ -66,7 +66,7 @@ function makeCtx() {
     props: {},
     waitUntil: vi.fn(),
     passThroughOnException: vi.fn(),
-  } as any;
+  } as unknown as ExecutionContext & { waitUntil: ReturnType<typeof vi.fn> };
 }
 
 describe("POST /events deduplication", () => {
