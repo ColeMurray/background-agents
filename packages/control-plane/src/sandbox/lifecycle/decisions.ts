@@ -44,11 +44,20 @@ export function isSandboxReconnectBlockedStatus(status: SandboxStatus): boolean 
 
 /**
  * Circuit breaker state from the database.
+ *
+ * A failure is an attempt that did not get as far as taking a prompt: the
+ * provider refusing the spawn with a permanent error, the connect watchdog
+ * giving up on the boot, or the runtime reporting a fatal error. The count
+ * clears when a prompt is dispatched to the sandbox, not when the provider
+ * accepts the request or the bridge connects: neither of those has consumed
+ * anything yet, and a fatal report before dispatch re-drives the same prompt.
+ * The window is measured from the latest failure: the streak lives as long
+ * as each failure lands within the window of the one before it.
  */
 export interface CircuitBreakerState {
-  /** Number of consecutive spawn failures */
+  /** Number of consecutive attempts that failed before a prompt was dispatched */
   failureCount: number;
-  /** Timestamp of the last spawn failure */
+  /** Timestamp of the last such failure */
   lastFailureTime: number;
 }
 
@@ -64,6 +73,10 @@ export interface CircuitBreakerConfig {
 
 /**
  * Default circuit breaker configuration.
+ *
+ * The window must outlast one connect-watchdog cycle plus the spawn cooldown:
+ * that is the slowest cadence at which consecutive failures can arrive, and a
+ * shorter window would let every watchdog timeout start a fresh count.
  */
 export const DEFAULT_CIRCUIT_BREAKER_CONFIG: CircuitBreakerConfig = {
   threshold: 3,

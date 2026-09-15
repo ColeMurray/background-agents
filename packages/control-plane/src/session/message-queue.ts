@@ -523,6 +523,7 @@ export class SessionMessageQueue {
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
       this.broadcastPromptQueue();
       this.sandboxLifecycle.updateLastActivity(now);
+      this.sandboxLifecycle.onPromptDispatched();
 
       // Execution timeout shares the DO's single alarm slot with lifecycle checks.
       const deadline = now + this.getExecutionTimeoutMs();
