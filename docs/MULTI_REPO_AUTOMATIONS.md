@@ -142,14 +142,22 @@ automations past the budget stay overdue and are picked up next tick.
 ### What happens if the next schedule fires while an invocation is active?
 
 Answer: the firing is skipped — recorded as a childless invocation with skip reason
-`concurrent_run_active` — and the schedule advances. Scheduled and manual firings block on the whole
-automation; event firings block per concurrency key (an active PR-42 run does not block PR-43). A
-manual "Trigger Now" against an active invocation is rejected with `409` rather than recorded.
+`concurrent_run_active` — and the schedule advances. Scheduled and manual firings block once the
+automation holds `automations.max_concurrent_runs` invocations in flight; event firings block per
+concurrency key (an active PR-42 run does not block PR-43). A manual "Trigger Now" against an
+automation at its bound is rejected with `409` rather than recorded.
 
-Reasoning: recurring maintenance should not overlap itself. Two details are load-bearing: the skip
-is recorded **atomically with the schedule advance** (one D1 batch), so a crash between the two can
-never make the tick re-collide on the same cron slot forever; and skip invocations never carry the
-event `trigger_key`, so a skip never consumes the dedup slot of the real event delivery.
+Reasoning: recurring maintenance should not overlap itself by default, so the column defaults to 1
+and every automation that predates it keeps the serialized behaviour. Raising it is an explicit
+statement that this automation's runs are safe to overlap — nothing about a trigger or a cadence
+implies that, which is why it is never inferred.
+
+Three details are load-bearing: the skip is recorded **atomically with the schedule advance** (one
+D1 batch), so a crash between the two can never make the tick re-collide on the same cron slot
+forever; skip invocations never carry the event `trigger_key`, so a skip never consumes the dedup
+slot of the real event delivery; and the bound counts **DISTINCT invocations** rather than run rows,
+because a fan-out firing posts one run per target and counting rows would let a single
+ten-repository firing exhaust a bound of three on its own.
 
 ### Should skipped firings count as failures?
 
@@ -161,7 +169,7 @@ would double-count one long-running sweep and could auto-pause a recoverable aut
 ### Should repeated partial failures auto-pause the automation?
 
 Answer: yes. Any invocation with at least one failed child counts **one** failure toward the same
-3-strike auto-pause threshold as a fully failed invocation. The failure is counted when the first
+5-strike auto-pause threshold as a fully failed invocation. The failure is counted when the first
 child fails (via a compare-and-set stamp on the invocation, `failure_counted_at`, so concurrent
 completion callbacks, launch failures, and recovery sweeps count it exactly once), not when the last
 child finishes.

@@ -55,6 +55,7 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
     model: "openai/gpt-5.4",
     reasoningEffort: null,
     enabled: true,
+    maxConcurrentRuns: 1,
     nextRunAt: null,
     consecutiveFailures: 0,
     createdBy: "user-1",
