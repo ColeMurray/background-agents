@@ -315,6 +315,28 @@ describe("handleCreateSession D1 ordering", () => {
     expect(initFetch).not.toHaveBeenCalled();
   });
 
+  it("does not initialize a session when GitHub credential integrity fails", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    vi.mocked(UserStore).mockImplementation(function () {
+      return {
+        getIdentitiesForUser: async () => [
+          { provider: "github", providerUserId: "1001" },
+          { provider: "github", providerUserId: "2002" },
+        ],
+      } as never;
+    });
+    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+
+    const response = await createSessionRequest(createEnv(initFetch));
+
+    expect(response.status).toBe(500);
+    expect(create).not.toHaveBeenCalled();
+    expect(initFetch).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed create-session JSON before resolving the repo", async () => {
     const response = await invalidCreateSessionRequest("{");
 

@@ -334,7 +334,7 @@ describe("ParticipantService", () => {
       expect(resolveCurrentGitHubAccessToken).toHaveBeenCalledWith("user-1", "42");
     });
 
-    it("falls back to a participant token when Better Auth lookup fails", async () => {
+    it("falls back to a pre-cutover participant token when Better Auth lookup fails", async () => {
       const resolveCurrentGitHubAccessToken = vi.fn(async () => {
         throw new Error("Better Auth unavailable");
       });
@@ -343,6 +343,7 @@ describe("ParticipantService", () => {
         canonical_user_id: "user-1",
         scm_user_id: "42",
         scm_access_token_encrypted: "enc:existing-access-token",
+        scm_refresh_token_encrypted: "enc:existing-refresh-token",
       });
 
       await expect(h.service.resolveAuthForPR(participant)).resolves.toEqual({
@@ -352,6 +353,22 @@ describe("ParticipantService", () => {
         "Failed to resolve current Better Auth token for PR creation",
         expect.objectContaining({ user_id: "user-1" })
       );
+    });
+
+    it("does not use a current session's cached token when Better Auth rejects it", async () => {
+      const resolveCurrentGitHubAccessToken = vi.fn(async () => {
+        throw new Error("GitHub account is no longer linked");
+      });
+      const h = createTestHarness({ resolveCurrentGitHubAccessToken });
+      const participant = createParticipant({
+        canonical_user_id: "user-1",
+        scm_user_id: "42",
+        scm_access_token_encrypted: "enc:cached-access-token",
+        scm_refresh_token_encrypted: null,
+      });
+
+      await expect(h.service.resolveAuthForPR(participant)).resolves.toEqual({ auth: null });
+      expect(decryptToken).not.toHaveBeenCalled();
     });
 
     it("returns auth: null when participant has no OAuth token", async () => {

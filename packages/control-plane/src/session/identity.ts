@@ -81,7 +81,12 @@ const betterAuthGitHubAccountInfoSchema = z.object({
   }),
 });
 
-class BetterAuthGitHubAccountMismatchError extends Error {}
+class BetterAuthGitHubAccessTokenUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("Better Auth GitHub access token is unavailable", { cause });
+    this.name = "BetterAuthGitHubAccessTokenUnavailableError";
+  }
+}
 
 export interface BetterAuthGitHubEnrichmentDependencies {
   readonly getAccessToken: (selection: ProviderAccountSelection) => Promise<unknown>;
@@ -94,13 +99,17 @@ export async function resolveBetterAuthGitHubAccessToken(
   account: GitHubAccountSelection,
   getAccessToken: (selection: ProviderAccountSelection) => Promise<unknown>
 ): Promise<z.infer<typeof betterAuthAccessTokenSchema>> {
-  return betterAuthAccessTokenSchema.parse(
-    await getAccessToken({
-      providerId: "github",
-      accountId: account.subject,
-      userId,
-    })
-  );
+  try {
+    return betterAuthAccessTokenSchema.parse(
+      await getAccessToken({
+        providerId: "github",
+        accountId: account.subject,
+        userId,
+      })
+    );
+  } catch (error) {
+    throw new BetterAuthGitHubAccessTokenUnavailableError(error);
+  }
 }
 
 /**
@@ -129,9 +138,7 @@ export async function resolveBetterAuthGitHubEnrichment(
     await dependencies.getAccountInfo(selection)
   );
   if (profile.user.id !== account.subject || profile.data.subject !== account.subject) {
-    throw new BetterAuthGitHubAccountMismatchError(
-      "Better Auth returned a mismatched GitHub account"
-    );
+    throw new Error("Better Auth returned a mismatched GitHub account");
   }
 
   const accessTokenEncrypted = await dependencies.encryptAccessToken(token.accessToken);
@@ -234,11 +241,11 @@ export async function resolveGitHubEnrichmentForRequest(
     });
   } catch (error) {
     if (
-      authority.kind === "browser_session" ||
-      error instanceof BetterAuthGitHubAccountMismatchError
+      authority.kind === "service_principal" &&
+      error instanceof BetterAuthGitHubAccessTokenUnavailableError
     ) {
-      throw error;
+      return identityEnrichment ?? null;
     }
-    return identityEnrichment ?? null;
+    throw error;
   }
 }

@@ -259,6 +259,11 @@ export class ParticipantService {
           error: error instanceof Error ? error : String(error),
         });
       }
+      // Better Auth sessions never copy refresh tokens; their presence marks a
+      // pre-cutover participant whose local credentials remain compatible.
+      if (!participant.scm_refresh_token_encrypted) {
+        return { auth: null };
+      }
     }
 
     let resolvedParticipant = participant;

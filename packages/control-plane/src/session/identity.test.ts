@@ -282,6 +282,29 @@ describe("resolveGitHubEnrichmentForRequest", () => {
       )
     ).rejects.toThrow("Better Auth returned a mismatched GitHub account");
   });
+
+  it("rejects a malformed service actor profile instead of falling back", async () => {
+    const store = fakeStore([{ provider: "github", providerUserId: "42" }]);
+
+    await expect(
+      resolveGitHubEnrichmentForRequest(
+        { TOKEN_ENCRYPTION_KEY: generateEncryptionKey() } as Env,
+        store,
+        "user-1",
+        {
+          kind: "service_principal",
+          accountClient: {
+            listUserAccounts: vi.fn(async () => []),
+            getAccessToken: vi.fn(async () => ({ accessToken: "token" })),
+            accountInfo: vi.fn(async () => ({
+              user: { id: "42" },
+              data: { ...GITHUB_ACCOUNT_INFO.data, provider: "gitlab" },
+            })),
+          },
+        }
+      )
+    ).rejects.toThrow();
+  });
 });
 
 describe("resolveBetterAuthGitHubEnrichment", () => {

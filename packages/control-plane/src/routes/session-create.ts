@@ -167,8 +167,8 @@ export async function handleCreateSession(
   let scmLogin = body.scmLogin;
   let scmName = body.scmName;
   let scmEmail = body.scmEmail;
-  // SCM credentials never arrive in the body; enrichment below fills them
-  // from the token store via the canonical user.
+  // SCM credentials never arrive in the body; enrichment below resolves them
+  // through Better Auth using the canonical user.
   let scmTokenExpiresAt: number | undefined;
   let scmUserId: string | undefined;
   let scmTokenEncrypted: string | null = null;
@@ -178,26 +178,20 @@ export async function handleCreateSession(
   // when SCM enrichment is needed. A user without a linked GitHub account uses
   // the GitHub App fallback; account linking is intentionally deferred.
   if (githubDeployment) {
-    try {
-      const enrichment = await resolveGitHubEnrichmentForRequest(
-        env,
-        userStore,
-        resolvedUserId,
-        await resolveGitHubCredentialAuthority(ctx, request.headers)
-      );
-      if (enrichment) {
-        scmUserId = enrichment.scmUserId;
-        scmLogin ??= enrichment.scmLogin;
-        scmName ??= enrichment.displayName;
-        scmEmail ??= enrichment.email;
-        scmTokenEncrypted = enrichment.accessTokenEncrypted ?? null;
-        scmRefreshTokenEncrypted = enrichment.refreshTokenEncrypted ?? null;
-        scmTokenExpiresAt = enrichment.tokenExpiresAt;
-      }
-    } catch (e) {
-      logger.warn("Failed to enrich session with GitHub identity", {
-        error: e instanceof Error ? e : String(e),
-      });
+    const enrichment = await resolveGitHubEnrichmentForRequest(
+      env,
+      userStore,
+      resolvedUserId,
+      await resolveGitHubCredentialAuthority(ctx, request.headers)
+    );
+    if (enrichment) {
+      scmUserId = enrichment.scmUserId;
+      scmLogin ??= enrichment.scmLogin;
+      scmName ??= enrichment.displayName;
+      scmEmail ??= enrichment.email;
+      scmTokenEncrypted = enrichment.accessTokenEncrypted ?? null;
+      scmRefreshTokenEncrypted = enrichment.refreshTokenEncrypted ?? null;
+      scmTokenExpiresAt = enrichment.tokenExpiresAt;
     }
   }
 
