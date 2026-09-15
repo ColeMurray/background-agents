@@ -24,6 +24,7 @@
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken } from "../auth/crypto";
+import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
@@ -42,6 +43,7 @@ import {
   type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
 import { McpServerStore } from "../db/mcp-servers";
+import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
@@ -77,7 +79,7 @@ import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { XaiTokenRefreshService } from "./xai-token-refresh-service";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService } from "./participant-service";
-import { UserScmTokenStore } from "../db/user-scm-tokens";
+import { resolveCurrentGitHubAccessToken } from "./identity";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
@@ -344,14 +346,24 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       terminalMessageCompletedAt: completedAt,
     });
 
-  const userScmTokenStore = new UserScmTokenStore(db, tokenEncryptionKey);
   const participantService = new ParticipantService({
     repository: participantRepository,
     getProcessingMessageAuthor: () => messageRepository.getProcessingMessageAuthor(),
     env,
     log,
     generateId: () => generateId(),
-    userScmTokenStore,
+    resolveCurrentGitHubAccessToken:
+      scmProviderName === "github"
+        ? async (canonicalUserId, scmUserId) => {
+            if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) return null;
+            return resolveCurrentGitHubAccessToken(
+              new UserStore(db),
+              () => getUserAuth(env, db).api,
+              canonicalUserId,
+              scmUserId
+            );
+          }
+        : undefined,
   });
 
   const scheduler = new Scheduler(db, env, backgroundTasks);

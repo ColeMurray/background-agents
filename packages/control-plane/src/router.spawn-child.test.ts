@@ -451,7 +451,6 @@ describe("handleSpawnChild prompt enqueue handling", () => {
         userId: "slack:U2",
         canonicalUserId: "canonical-user-2",
         scmLogin: "second-user",
-        scmAccessTokenEncrypted: "second-access",
       },
     };
     const store = makeStore("canonical-user-1", activeAuthorContext as never);
@@ -464,12 +463,13 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
     expect(response.status).toBe(201);
     expect(store.create.mock.calls[0]?.[0]?.userId).toBe("canonical-user-2");
-    await expect(getInitBody(childStub)).resolves.toMatchObject({
+    const initBody = await getInitBody(childStub);
+    expect(initBody).toMatchObject({
       userId: "slack:U2",
       canonicalUserId: "canonical-user-2",
       scmLogin: "second-user",
-      scmTokenEncrypted: "second-access",
     });
+    expect(initBody).not.toHaveProperty("scmTokenEncrypted");
     const promptRequest = vi.mocked(childStub.fetch).mock.calls.find((call) => {
       const request = call[0] as Request;
       return new URL(request.url).pathname === SessionInternalPaths.prompt;

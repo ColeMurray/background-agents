@@ -55,7 +55,7 @@ function createUserContext(accounts: unknown[]) {
 
 describe("resolveGitHubCredentialAuthority", () => {
   it("selects a linked GitHub account only when credential authority is requested", async () => {
-    const { context, listUserAccounts, accountClient } = createUserContext([
+    const { context, listUserAccounts } = createUserContext([
       {
         providerId: "github",
         accountId: "583231",
@@ -70,14 +70,13 @@ describe("resolveGitHubCredentialAuthority", () => {
 
     await expect(resolveGitHubCredentialAuthority(context, BROWSER_HEADERS)).resolves.toEqual({
       kind: "browser_session",
-      accountClient,
       githubAccount: { subject: "583231" },
     });
     expect(listUserAccounts).toHaveBeenCalledWith({ headers: BROWSER_HEADERS });
   });
 
   it("allows browser users without a linked GitHub account", async () => {
-    const { context, accountClient } = createUserContext([
+    const { context } = createUserContext([
       {
         providerId: "google",
         accountId: "google-subject",
@@ -87,7 +86,6 @@ describe("resolveGitHubCredentialAuthority", () => {
 
     await expect(resolveGitHubCredentialAuthority(context, BROWSER_HEADERS)).resolves.toEqual({
       kind: "browser_session",
-      accountClient,
       githubAccount: null,
     });
   });
@@ -127,9 +125,23 @@ describe("resolveGitHubCredentialAuthority", () => {
     ).rejects.toThrow("User principal is missing browser-session provenance");
   });
 
-  it("uses the legacy credential authority only for non-browser principals", async () => {
+  it("does not construct Better Auth for service principals", async () => {
+    const getUserAuth = vi.fn(() => {
+      throw new Error("At least one sign-in provider must be configured");
+    });
+
     await expect(
-      resolveGitHubCredentialAuthority(createContext({}), BROWSER_HEADERS)
-    ).resolves.toEqual({ kind: "legacy" });
+      resolveGitHubCredentialAuthority(createContext({ getUserAuth }), BROWSER_HEADERS)
+    ).resolves.toEqual({ kind: "service_principal" });
+    expect(getUserAuth).not.toHaveBeenCalled();
+  });
+
+  it("rejects sandbox principals", async () => {
+    await expect(
+      resolveGitHubCredentialAuthority(
+        createContext({ principal: { kind: "sandbox", sessionId: "session-1" } }),
+        BROWSER_HEADERS
+      )
+    ).rejects.toThrow("Principal cannot authorize GitHub user credentials");
   });
 });

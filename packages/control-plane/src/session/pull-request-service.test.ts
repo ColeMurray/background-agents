@@ -121,7 +121,7 @@ function createInput(overrides: Partial<CreatePullRequestInput> = {}): CreatePul
     repoOwner: "acme",
     repoName: "web",
     promptingUserId: "user-1",
-    promptingAuth: null,
+    resolvePromptingAuth: vi.fn(async () => ({ auth: null })),
     sessionUrl: "https://app.example.com/session/session-name-1",
     ...overrides,
   };
@@ -272,6 +272,9 @@ describe("SessionPullRequestService", () => {
   });
 
   it("returns 500 when push to remote fails", async () => {
+    const resolvePromptingAuth = vi.fn(async () => ({
+      auth: { authType: "oauth" as const, token: "user-token" },
+    }));
     harness.deps.pushBranchToRemote = vi.fn(async () => ({
       success: false as const,
       error: "Failed to push branch: timeout",
@@ -279,7 +282,9 @@ describe("SessionPullRequestService", () => {
     harness.service = new SessionPullRequestService(harness.deps);
 
     const result = await harness.service.createPullRequest(
-      createInput({ promptingAuth: { authType: "oauth", token: "user-token" } })
+      createInput({
+        resolvePromptingAuth,
+      })
     );
 
     expect(result).toEqual({
@@ -288,10 +293,11 @@ describe("SessionPullRequestService", () => {
       error: "Failed to push branch: timeout",
     });
     expect(harness.deps.messenger.broadcast).not.toHaveBeenCalled();
+    expect(resolvePromptingAuth).not.toHaveBeenCalled();
   });
 
   it("creates PR with app auth when prompting auth is unavailable", async () => {
-    const result = await harness.service.createPullRequest(createInput({ promptingAuth: null }));
+    const result = await harness.service.createPullRequest(createInput());
 
     expect(result).toEqual({
       kind: "created",
@@ -427,9 +433,10 @@ describe("SessionPullRequestService", () => {
   });
 
   it("creates PR with OAuth token and stores PR artifact", async () => {
-    const result = await harness.service.createPullRequest(
-      createInput({ promptingAuth: { authType: "oauth", token: "user-token" } })
-    );
+    const resolvePromptingAuth = vi.fn(async () => ({
+      auth: { authType: "oauth" as const, token: "user-token" },
+    }));
+    const result = await harness.service.createPullRequest(createInput({ resolvePromptingAuth }));
 
     expect(result).toEqual({
       kind: "created",
@@ -444,6 +451,12 @@ describe("SessionPullRequestService", () => {
     const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
       .calls[0];
     expect(createPrCall[0]).toEqual({ authType: "oauth", token: "user-token" });
+    expect(vi.mocked(harness.deps.pushBranchToRemote).mock.invocationCallOrder[0]).toBeLessThan(
+      resolvePromptingAuth.mock.invocationCallOrder[0]
+    );
+    expect(resolvePromptingAuth.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(harness.provider.createPullRequest).mock.invocationCallOrder[0]
+    );
     expect(createPrCall[1].body).toContain(
       "*Created with [Open-Inspect](https://app.example.com/session/session-name-1)*"
     );
@@ -474,7 +487,11 @@ describe("SessionPullRequestService", () => {
     const customService = new SessionPullRequestService(customDeps);
 
     await customService.createPullRequest(
-      createInput({ promptingAuth: { authType: "oauth", token: "user-token" } })
+      createInput({
+        resolvePromptingAuth: vi.fn(async () => ({
+          auth: { authType: "oauth" as const, token: "user-token" },
+        })),
+      })
     );
 
     const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
@@ -801,7 +818,7 @@ describe("SessionPullRequestService", () => {
       updated_at: Date.now(),
     });
 
-    const result = await harness.service.createPullRequest(createInput({ promptingAuth: null }));
+    const result = await harness.service.createPullRequest(createInput());
 
     expect(result).toEqual({
       kind: "created",

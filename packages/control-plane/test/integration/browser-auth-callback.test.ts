@@ -6,9 +6,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { getUserAuth } from "../../src/auth/user/runtime";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { resolveGitHubCredentialAuthority } from "../../src/source-control/github-credential-authority";
-import { decryptToken } from "../../src/auth/crypto";
 import { UserStore } from "../../src/db/user-store";
-import { resolveGitHubEnrichmentForRequest } from "../../src/session/identity";
+import {
+  resolveCurrentGitHubAccessToken,
+  resolveGitHubEnrichmentForRequest,
+} from "../../src/session/identity";
 import { cleanD1Tables } from "./cleanup";
 import { createSignedGoogleIdToken } from "./google-id-token";
 
@@ -325,10 +327,11 @@ describe("browser auth callback", () => {
         "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.owner_bootstrapped'"
       ).first()
     ).resolves.toEqual({ count: 0 });
+    await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM user_scm_tokens").first()
+    ).resolves.toEqual({ count: 0 });
 
     const enrichment = await resolveGitHubEnrichmentForRequest(
-      createCloudflareEnv(env),
-      env.DB,
       new UserStore(env.DB),
       session.user.id,
       await resolveGitHubCredentialAuthority(
@@ -346,13 +349,30 @@ describe("browser auth callback", () => {
     );
     expect(enrichment).toMatchObject({
       scmUserId: "583231",
-      scmLogin: "octocat",
-      email: "583231+octocat@users.noreply.github.com",
-      accessTokenEncrypted: expect.any(String),
     });
     await expect(
-      decryptToken(enrichment?.accessTokenEncrypted ?? "", env.TOKEN_ENCRYPTION_KEY)
+      resolveCurrentGitHubAccessToken(
+        new UserStore(env.DB),
+        () => getUserAuth(createCloudflareEnv(env), env.DB).api,
+        session.user.id,
+        "583231"
+      )
     ).resolves.toBe("github-access-token");
+
+    const serviceEnrichment = await resolveGitHubEnrichmentForRequest(
+      new UserStore(env.DB),
+      session.user.id,
+      await resolveGitHubCredentialAuthority(
+        {
+          principal: { kind: "service", service: "slack-bot", actor: null },
+          getUserAuth: () => getUserAuth(createCloudflareEnv(env), env.DB),
+        },
+        new Headers()
+      )
+    );
+    expect(serviceEnrichment).toMatchObject({
+      scmUserId: "583231",
+    });
 
     await expect(
       env.DB.prepare(

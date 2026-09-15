@@ -78,9 +78,6 @@ describe("MessagesHandler", () => {
         login: "octocat",
         name: null,
         email: null,
-        accessTokenEncrypted: "encrypted-token",
-        refreshTokenEncrypted: null,
-        tokenExpiresAt: null,
       },
     };
 

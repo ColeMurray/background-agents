@@ -670,9 +670,6 @@ export class SessionMessageQueue {
         scmEmail: enrichment.email,
         scmLogin: enrichment.login,
         scmUserId: enrichment.userId,
-        scmAccessTokenEncrypted: enrichment.accessTokenEncrypted,
-        scmRefreshTokenEncrypted: enrichment.refreshTokenEncrypted,
-        scmTokenExpiresAt: enrichment.tokenExpiresAt,
       });
       participant = this.participantRepository.getParticipantById(participant.id) ?? participant;
     }
