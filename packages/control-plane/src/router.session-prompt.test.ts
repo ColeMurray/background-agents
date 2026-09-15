@@ -111,9 +111,6 @@ describe("session prompt identity enrichment", () => {
           login: "ada",
           name: "Trusted Ada",
           email: "1001+ada@users.noreply.github.com",
-          accessTokenEncrypted: null,
-          refreshTokenEncrypted: null,
-          tokenExpiresAt: null,
         },
       });
       return Response.json({ status: "queued" });

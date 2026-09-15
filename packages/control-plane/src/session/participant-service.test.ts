@@ -334,7 +334,7 @@ describe("ParticipantService", () => {
       expect(resolveCurrentGitHubAccessToken).toHaveBeenCalledWith("user-1", "42");
     });
 
-    it("falls back to a pre-cutover participant token when Better Auth lookup fails", async () => {
+    it("uses a pre-cutover participant token without consulting Better Auth", async () => {
       const resolveCurrentGitHubAccessToken = vi.fn(async () => {
         throw new Error("Better Auth unavailable");
       });
@@ -349,16 +349,11 @@ describe("ParticipantService", () => {
       await expect(h.service.resolveAuthForPR(participant)).resolves.toEqual({
         auth: { authType: "oauth", token: "existing-access-token" },
       });
-      expect(h.log.warn).toHaveBeenCalledWith(
-        "Failed to resolve current Better Auth token for PR creation",
-        expect.objectContaining({ user_id: "user-1" })
-      );
+      expect(resolveCurrentGitHubAccessToken).not.toHaveBeenCalled();
     });
 
-    it("does not use a current session's cached token when Better Auth rejects it", async () => {
-      const resolveCurrentGitHubAccessToken = vi.fn(async () => {
-        throw new Error("GitHub account is no longer linked");
-      });
+    it("treats access-token presence as an explicit pre-cutover participant", async () => {
+      const resolveCurrentGitHubAccessToken = vi.fn(async () => null);
       const h = createTestHarness({ resolveCurrentGitHubAccessToken });
       const participant = createParticipant({
         canonical_user_id: "user-1",
@@ -367,8 +362,26 @@ describe("ParticipantService", () => {
         scm_refresh_token_encrypted: null,
       });
 
-      await expect(h.service.resolveAuthForPR(participant)).resolves.toEqual({ auth: null });
-      expect(decryptToken).not.toHaveBeenCalled();
+      await expect(h.service.resolveAuthForPR(participant)).resolves.toEqual({
+        auth: { authType: "oauth", token: "cached-access-token" },
+      });
+      expect(resolveCurrentGitHubAccessToken).not.toHaveBeenCalled();
+    });
+
+    it("fails closed when current credential integrity validation fails", async () => {
+      const resolveCurrentGitHubAccessToken = vi.fn(async () => {
+        throw new Error("GitHub account does not match");
+      });
+      const h = createTestHarness({ resolveCurrentGitHubAccessToken });
+      const participant = createParticipant({
+        canonical_user_id: "user-1",
+        scm_user_id: "42",
+      });
+
+      await expect(h.service.resolveAuthForPR(participant)).resolves.toEqual({
+        error: "Failed to resolve GitHub credentials",
+        status: 500,
+      });
     });
 
     it("returns auth: null when participant has no OAuth token", async () => {
@@ -378,7 +391,7 @@ describe("ParticipantService", () => {
 
       expect(result).toEqual({ auth: null });
       expect(harness.log.info).toHaveBeenCalledWith(
-        "PR creation: prompting user has no OAuth token, using manual fallback",
+        "PR creation: prompting user has no OAuth token, using app fallback",
         expect.any(Object)
       );
     });

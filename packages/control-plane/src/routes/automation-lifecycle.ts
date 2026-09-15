@@ -108,7 +108,6 @@ async function handleTriggerAutomation(
   if (!requesterUserId) return error("Authorization unavailable", 503);
 
   const requesterEnrichment = await resolveGitHubEnrichmentForRequest(
-    env,
     new UserStore(ctx.db),
     requesterUserId,
     await resolveGitHubCredentialAuthority(ctx, request.headers)

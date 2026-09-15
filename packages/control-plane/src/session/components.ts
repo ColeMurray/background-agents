@@ -43,6 +43,7 @@ import {
   type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
 import { McpServerStore } from "../db/mcp-servers";
+import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
@@ -78,7 +79,7 @@ import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { XaiTokenRefreshService } from "./xai-token-refresh-service";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService } from "./participant-service";
-import { resolveBetterAuthGitHubAccessToken } from "./identity";
+import { resolveCurrentGitHubAccessToken } from "./identity";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
@@ -354,12 +355,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     resolveCurrentGitHubAccessToken:
       scmProviderName === "github"
         ? async (canonicalUserId, scmUserId) => {
-            const token = await resolveBetterAuthGitHubAccessToken(
+            if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) return null;
+            return resolveCurrentGitHubAccessToken(
+              new UserStore(db),
+              () => getUserAuth(env, db).api,
               canonicalUserId,
-              { subject: scmUserId },
-              (selection) => getUserAuth(env, db).api.getAccessToken({ body: selection })
+              scmUserId
             );
-            return token.accessToken;
           }
         : undefined,
   });

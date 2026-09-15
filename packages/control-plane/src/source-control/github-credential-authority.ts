@@ -26,12 +26,10 @@ export interface ProviderAccountClient {
 export type GitHubCredentialAuthority =
   | {
       readonly kind: "browser_session";
-      readonly accountClient: ProviderAccountClient;
       readonly githubAccount: GitHubAccountSelection | null;
     }
   | {
       readonly kind: "service_principal";
-      readonly accountClient: ProviderAccountClient;
     };
 
 export interface GitHubCredentialAuthorityContext {
@@ -81,7 +79,6 @@ export async function resolveGitHubCredentialAuthority(
     }
     return {
       kind: "browser_session",
-      accountClient,
       githubAccount: githubAccounts[0] ? { subject: githubAccounts[0].accountId } : null,
     };
   }
@@ -92,11 +89,5 @@ export async function resolveGitHubCredentialAuthority(
   if (context.principal.kind !== "service") {
     throw new Error("Principal cannot authorize GitHub user credentials");
   }
-  if (!context.getUserAuth) {
-    throw new Error("User authentication runtime is unavailable");
-  }
-  return {
-    kind: "service_principal",
-    accountClient: context.getUserAuth().api,
-  };
+  return { kind: "service_principal" };
 }

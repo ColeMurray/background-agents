@@ -169,17 +169,13 @@ export async function handleCreateSession(
   let scmEmail = body.scmEmail;
   // SCM credentials never arrive in the body; enrichment below resolves them
   // through Better Auth using the canonical user.
-  let scmTokenExpiresAt: number | undefined;
   let scmUserId: string | undefined;
-  let scmTokenEncrypted: string | null = null;
-  let scmRefreshTokenEncrypted: string | null = null;
 
   // Resolve linked GitHub identity and credentials through Better Auth only
   // when SCM enrichment is needed. A user without a linked GitHub account uses
   // the GitHub App fallback; account linking is intentionally deferred.
   if (githubDeployment) {
     const enrichment = await resolveGitHubEnrichmentForRequest(
-      env,
       userStore,
       resolvedUserId,
       await resolveGitHubCredentialAuthority(ctx, request.headers)
@@ -189,9 +185,6 @@ export async function handleCreateSession(
       scmLogin ??= enrichment.scmLogin;
       scmName ??= enrichment.displayName;
       scmEmail ??= enrichment.email;
-      scmTokenEncrypted = enrichment.accessTokenEncrypted ?? null;
-      scmRefreshTokenEncrypted = enrichment.refreshTokenEncrypted ?? null;
-      scmTokenExpiresAt = enrichment.tokenExpiresAt;
     }
   }
 
@@ -270,9 +263,6 @@ export async function handleCreateSession(
     scmName,
     scmEmail,
     scmUserId,
-    scmTokenEncrypted,
-    scmRefreshTokenEncrypted,
-    scmTokenExpiresAt,
     codeServerEnabled,
     vncEnabled,
     sandboxSettings,

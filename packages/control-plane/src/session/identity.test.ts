@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { generateEncryptionKey } from "../auth/crypto";
 import type { UserStore } from "../db/user-store";
-import type { Env } from "../types";
 import {
   parseAuthorId,
-  resolveBetterAuthGitHubEnrichment,
+  resolveCurrentGitHubAccessToken,
   resolveGitAuthorIdentity,
   resolveGitHubEnrichment,
   resolveGitHubEnrichmentForRequest,
@@ -189,69 +187,14 @@ describe("resolveGitHubEnrichment", () => {
 });
 
 describe("resolveGitHubEnrichmentForRequest", () => {
-  it("rejects invalid token-encryption key material before resolving identity", async () => {
-    const env = { TOKEN_ENCRYPTION_KEY: "dG9vc2hvcnQ=" } as unknown as Env;
-    const store = { getIdentitiesForUser: vi.fn(), getUserById: vi.fn() } as unknown as UserStore;
-    const authority = {
-      kind: "service_principal",
-      accountClient: {},
-    } as unknown as Parameters<typeof resolveGitHubEnrichmentForRequest>[3];
-
-    await expect(
-      resolveGitHubEnrichmentForRequest(env, store, "user-1", authority)
-    ).rejects.toThrow(/TOKEN_ENCRYPTION_KEY must decode to 32 bytes/);
-    expect(store.getIdentitiesForUser).not.toHaveBeenCalled();
-  });
-
-  it("uses the admitted service actor's Better Auth account", async () => {
-    const getAccessToken = vi.fn(async () => ({
-      accessToken: "current-access-token",
-      accessTokenExpiresAt: new Date("2030-01-01T00:00:00.000Z"),
-    }));
-    const store = fakeStore([{ provider: "github", providerUserId: "42" }]);
-    const env = { TOKEN_ENCRYPTION_KEY: generateEncryptionKey() } as Env;
-
-    const enrichment = await resolveGitHubEnrichmentForRequest(env, store, "user-1", {
-      kind: "service_principal",
-      accountClient: {
-        listUserAccounts: vi.fn(async () => []),
-        getAccessToken,
-        accountInfo: vi.fn(async () => GITHUB_ACCOUNT_INFO),
-      },
-    });
-
-    expect(enrichment).toMatchObject({
-      scmUserId: "42",
-      scmLogin: "ada",
-      accessTokenEncrypted: expect.any(String),
-    });
-    expect(getAccessToken).toHaveBeenCalledWith({
-      body: { providerId: "github", accountId: "42", userId: "user-1" },
-    });
-  });
-
-  it("retains service actor identity when Better Auth has no usable token", async () => {
+  it("uses only canonical identity for an admitted service actor", async () => {
     const store = fakeStore([{ provider: "github", providerUserId: "42", providerLogin: "ada" }], {
       id: "user-1",
       displayName: "Ada Lovelace",
     });
 
     await expect(
-      resolveGitHubEnrichmentForRequest(
-        { TOKEN_ENCRYPTION_KEY: generateEncryptionKey() } as Env,
-        store,
-        "user-1",
-        {
-          kind: "service_principal",
-          accountClient: {
-            listUserAccounts: vi.fn(async () => []),
-            getAccessToken: vi.fn(async () => {
-              throw new Error("Access token not found");
-            }),
-            accountInfo: vi.fn(async () => null),
-          },
-        }
-      )
+      resolveGitHubEnrichmentForRequest(store, "user-1", { kind: "service_principal" })
     ).resolves.toEqual({
       scmUserId: "42",
       scmLogin: "ada",
@@ -260,98 +203,142 @@ describe("resolveGitHubEnrichmentForRequest", () => {
     });
   });
 
-  it("rejects a mismatched service actor profile instead of falling back", async () => {
-    const store = fakeStore([{ provider: "github", providerUserId: "42" }]);
+  it("accepts browser authority bound to the canonical GitHub identity", async () => {
+    const store = fakeStore([{ provider: "github", providerUserId: "42", providerLogin: "ada" }]);
 
     await expect(
-      resolveGitHubEnrichmentForRequest(
-        { TOKEN_ENCRYPTION_KEY: generateEncryptionKey() } as Env,
-        store,
-        "user-1",
-        {
-          kind: "service_principal",
-          accountClient: {
-            listUserAccounts: vi.fn(async () => []),
-            getAccessToken: vi.fn(async () => ({ accessToken: "token" })),
-            accountInfo: vi.fn(async () => ({
-              user: { id: "7" },
-              data: { ...GITHUB_ACCOUNT_INFO.data, subject: "7" },
-            })),
-          },
-        }
-      )
-    ).rejects.toThrow("Better Auth returned a mismatched GitHub account");
+      resolveGitHubEnrichmentForRequest(store, "user-1", {
+        kind: "browser_session",
+        githubAccount: { subject: "42" },
+      })
+    ).resolves.toMatchObject({ scmUserId: "42", scmLogin: "ada" });
   });
 
-  it("rejects a malformed service actor profile instead of falling back", async () => {
+  it("rejects browser authority that differs from the canonical identity", async () => {
     const store = fakeStore([{ provider: "github", providerUserId: "42" }]);
 
     await expect(
-      resolveGitHubEnrichmentForRequest(
-        { TOKEN_ENCRYPTION_KEY: generateEncryptionKey() } as Env,
-        store,
-        "user-1",
-        {
-          kind: "service_principal",
-          accountClient: {
-            listUserAccounts: vi.fn(async () => []),
-            getAccessToken: vi.fn(async () => ({ accessToken: "token" })),
-            accountInfo: vi.fn(async () => ({
-              user: { id: "42" },
-              data: { ...GITHUB_ACCOUNT_INFO.data, provider: "gitlab" },
-            })),
-          },
-        }
-      )
-    ).rejects.toThrow();
+      resolveGitHubEnrichmentForRequest(store, "user-1", {
+        kind: "browser_session",
+        githubAccount: { subject: "7" },
+      })
+    ).rejects.toThrow("GitHub account authority is corrupt");
+  });
+
+  it("rejects a browser session missing its canonical linked account", async () => {
+    const store = fakeStore([{ provider: "github", providerUserId: "42" }]);
+
+    await expect(
+      resolveGitHubEnrichmentForRequest(store, "user-1", {
+        kind: "browser_session",
+        githubAccount: null,
+      })
+    ).rejects.toThrow("GitHub account authority is corrupt");
   });
 });
 
-describe("resolveBetterAuthGitHubEnrichment", () => {
-  const githubAccount = { subject: "42" };
+describe("resolveCurrentGitHubAccessToken", () => {
+  const accountClient = {
+    listUserAccounts: vi.fn(async () => []),
+    getAccessToken: vi.fn(async () => ({ accessToken: "current-access-token" })),
+    accountInfo: vi.fn(async () => GITHUB_ACCOUNT_INFO),
+  };
 
-  it("gets a current token and binds it to the verified GitHub profile", async () => {
-    const getAccessToken = vi.fn(async () => ({
-      accessToken: "current-access-token",
-      accessTokenExpiresAt: new Date("2030-01-01T00:00:00.000Z"),
-    }));
-    const getAccountInfo = vi.fn(async () => GITHUB_ACCOUNT_INFO);
-    const encryptAccessToken = vi.fn(async () => "encrypted-current-access-token");
+  it("does not construct Better Auth when the GitHub identity was unlinked", async () => {
+    const getAccountClient = vi.fn(() => accountClient);
 
     await expect(
-      resolveBetterAuthGitHubEnrichment("user-1", githubAccount, {
-        getAccessToken,
-        getAccountInfo,
-        encryptAccessToken,
-      })
-    ).resolves.toEqual({
-      scmUserId: "42",
-      scmLogin: "ada",
-      displayName: "Ada Lovelace",
-      email: "42+ada@users.noreply.github.com",
-      accessTokenEncrypted: "encrypted-current-access-token",
-      tokenExpiresAt: new Date("2030-01-01T00:00:00.000Z").getTime(),
-    });
+      resolveCurrentGitHubAccessToken(fakeStore([]), getAccountClient, "user-1", "42")
+    ).resolves.toBeNull();
+    expect(getAccountClient).not.toHaveBeenCalled();
+  });
 
-    const selection = { providerId: "github", accountId: "42", userId: "user-1" };
-    expect(getAccessToken).toHaveBeenCalledWith(selection);
-    expect(getAccountInfo).toHaveBeenCalledWith(selection);
+  it("returns null when Better Auth cannot provide a token", async () => {
+    const unavailableClient = {
+      ...accountClient,
+      getAccessToken: vi.fn(async () => {
+        throw new Error("Access token not found");
+      }),
+    };
+
+    await expect(
+      resolveCurrentGitHubAccessToken(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        () => unavailableClient,
+        "user-1",
+        "42"
+      )
+    ).resolves.toBeNull();
+  });
+
+  it("returns null when the resolved token expires too soon", async () => {
+    const accountInfo = vi.fn(async () => GITHUB_ACCOUNT_INFO);
+    const expiringClient = {
+      ...accountClient,
+      accountInfo,
+      getAccessToken: vi.fn(async () => ({
+        accessToken: "expiring-token",
+        accessTokenExpiresAt: new Date(Date.now() + 30_000),
+      })),
+    };
+
+    await expect(
+      resolveCurrentGitHubAccessToken(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        () => expiringClient,
+        "user-1",
+        "42"
+      )
+    ).resolves.toBeNull();
+    expect(accountInfo).not.toHaveBeenCalled();
+  });
+
+  it("resolves the current credential after validating canonical identity", async () => {
+    await expect(
+      resolveCurrentGitHubAccessToken(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        () => accountClient,
+        "user-1",
+        "42"
+      )
+    ).resolves.toBe("current-access-token");
+    expect(accountClient.getAccessToken).toHaveBeenCalledWith({
+      body: { providerId: "github", accountId: "42", userId: "user-1" },
+    });
   });
 
   it("rejects provider profile substitution", async () => {
+    const substitutedClient = {
+      ...accountClient,
+      accountInfo: vi.fn(async () => ({
+        user: { id: "7" },
+        data: { ...GITHUB_ACCOUNT_INFO.data, subject: "7", login: "mallory" },
+      })),
+    };
+
     await expect(
-      resolveBetterAuthGitHubEnrichment("user-1", githubAccount, {
-        getAccessToken: async () => ({ accessToken: "token" }),
-        getAccountInfo: async () => ({
-          user: { id: "7" },
-          data: {
-            ...GITHUB_ACCOUNT_INFO.data,
-            subject: "7",
-            login: "mallory",
-          },
-        }),
-        encryptAccessToken: async () => "encrypted",
-      })
+      resolveCurrentGitHubAccessToken(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        () => substitutedClient,
+        "user-1",
+        "42"
+      )
     ).rejects.toThrow("Better Auth returned a mismatched GitHub account");
+  });
+
+  it("treats a malformed token response as an integrity failure", async () => {
+    const malformedClient = {
+      ...accountClient,
+      getAccessToken: vi.fn(async () => ({ accessToken: "" })),
+    };
+
+    await expect(
+      resolveCurrentGitHubAccessToken(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        () => malformedClient,
+        "user-1",
+        "42"
+      )
+    ).rejects.toThrow();
   });
 });

@@ -55,7 +55,7 @@ function createUserContext(accounts: unknown[]) {
 
 describe("resolveGitHubCredentialAuthority", () => {
   it("selects a linked GitHub account only when credential authority is requested", async () => {
-    const { context, listUserAccounts, accountClient } = createUserContext([
+    const { context, listUserAccounts } = createUserContext([
       {
         providerId: "github",
         accountId: "583231",
@@ -70,14 +70,13 @@ describe("resolveGitHubCredentialAuthority", () => {
 
     await expect(resolveGitHubCredentialAuthority(context, BROWSER_HEADERS)).resolves.toEqual({
       kind: "browser_session",
-      accountClient,
       githubAccount: { subject: "583231" },
     });
     expect(listUserAccounts).toHaveBeenCalledWith({ headers: BROWSER_HEADERS });
   });
 
   it("allows browser users without a linked GitHub account", async () => {
-    const { context, accountClient } = createUserContext([
+    const { context } = createUserContext([
       {
         providerId: "google",
         accountId: "google-subject",
@@ -87,7 +86,6 @@ describe("resolveGitHubCredentialAuthority", () => {
 
     await expect(resolveGitHubCredentialAuthority(context, BROWSER_HEADERS)).resolves.toEqual({
       kind: "browser_session",
-      accountClient,
       githubAccount: null,
     });
   });
@@ -127,26 +125,15 @@ describe("resolveGitHubCredentialAuthority", () => {
     ).rejects.toThrow("User principal is missing browser-session provenance");
   });
 
-  it("uses Better Auth's trusted server authority for service principals", async () => {
-    const accountClient: ProviderAccountClient = {
-      listUserAccounts: vi.fn(async () => []),
-      getAccessToken: vi.fn(async () => null),
-      accountInfo: vi.fn(async () => null),
-    };
+  it("does not construct Better Auth for service principals", async () => {
+    const getUserAuth = vi.fn(() => {
+      throw new Error("At least one sign-in provider must be configured");
+    });
 
     await expect(
-      resolveGitHubCredentialAuthority(
-        createContext({ getUserAuth: () => ({ api: accountClient }) }),
-        BROWSER_HEADERS
-      )
-    ).resolves.toEqual({ kind: "service_principal", accountClient });
-    expect(accountClient.listUserAccounts).not.toHaveBeenCalled();
-  });
-
-  it("rejects a service principal without the user authentication runtime", async () => {
-    await expect(
-      resolveGitHubCredentialAuthority(createContext({}), BROWSER_HEADERS)
-    ).rejects.toThrow("User authentication runtime is unavailable");
+      resolveGitHubCredentialAuthority(createContext({ getUserAuth }), BROWSER_HEADERS)
+    ).resolves.toEqual({ kind: "service_principal" });
+    expect(getUserAuth).not.toHaveBeenCalled();
   });
 
   it("rejects sandbox principals", async () => {

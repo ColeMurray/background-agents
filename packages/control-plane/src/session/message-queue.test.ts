@@ -2085,9 +2085,6 @@ describe("SessionMessageQueue", () => {
           login: "octocat",
           name: "Octo Cat",
           email: "1001+octocat@users.noreply.github.com",
-          accessTokenEncrypted: null,
-          refreshTokenEncrypted: null,
-          tokenExpiresAt: null,
         },
       });
 
@@ -2107,7 +2104,7 @@ describe("SessionMessageQueue", () => {
       expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "github:1001");
     });
 
-    it("updates stored SCM identity and tokens after successful enrichment", async () => {
+    it("updates stored SCM identity after successful enrichment", async () => {
       const h = buildQueue();
 
       await h.queue.enqueuePromptFromApi({
@@ -2119,9 +2116,6 @@ describe("SessionMessageQueue", () => {
           login: "octocat",
           name: "Trusted Octo Cat",
           email: "1001+octocat@users.noreply.github.com",
-          accessTokenEncrypted: "enc-access",
-          refreshTokenEncrypted: "enc-refresh",
-          tokenExpiresAt: 9999999,
         },
       });
 
@@ -2130,9 +2124,6 @@ describe("SessionMessageQueue", () => {
         scmEmail: "1001+octocat@users.noreply.github.com",
         scmLogin: "octocat",
         scmUserId: "1001",
-        scmAccessTokenEncrypted: "enc-access",
-        scmRefreshTokenEncrypted: "enc-refresh",
-        scmTokenExpiresAt: 9999999,
       });
     });
 

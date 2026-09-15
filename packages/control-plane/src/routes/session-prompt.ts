@@ -116,7 +116,6 @@ export async function handleSessionPrompt(
       canonicalUserId = userId;
       enrichment =
         (await resolveGitHubEnrichmentForRequest(
-          env,
           userStore,
           userId,
           await resolveGitHubCredentialAuthority(ctx, request.headers)
@@ -139,9 +138,6 @@ export async function handleSessionPrompt(
           login: enrichment.scmLogin ?? null,
           name: enrichment.displayName ?? null,
           email: enrichment.email ?? null,
-          accessTokenEncrypted: enrichment.accessTokenEncrypted ?? null,
-          refreshTokenEncrypted: enrichment.refreshTokenEncrypted ?? null,
-          tokenExpiresAt: enrichment.tokenExpiresAt ?? null,
         }
       : undefined,
   } satisfies EnqueuePromptRequest;

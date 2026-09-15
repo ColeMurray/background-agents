@@ -2204,9 +2204,6 @@ describe("Scheduler", () => {
         scmLogin: "requester",
         displayName: "Requester",
         email: "123+requester@users.noreply.github.com",
-        accessTokenEncrypted: "encrypted-access",
-        refreshTokenEncrypted: "encrypted-refresh",
-        tokenExpiresAt: 123456,
       });
 
       expect(result).toEqual({
@@ -2231,9 +2228,6 @@ describe("Scheduler", () => {
         scmLogin: "requester",
         scmName: "Requester",
         scmEmail: "123+requester@users.noreply.github.com",
-        scmTokenEncrypted: "encrypted-access",
-        scmRefreshTokenEncrypted: "encrypted-refresh",
-        scmTokenExpiresAt: 123456,
       });
     });
 

@@ -165,7 +165,6 @@ describe("automation lifecycle routes", () => {
       const enrichment = {
         scmUserId: "123",
         scmLogin: "requester",
-        accessTokenEncrypted: "encrypted-access",
       };
       mockResolveGitHubEnrichmentForRequest.mockResolvedValue(enrichment);
 

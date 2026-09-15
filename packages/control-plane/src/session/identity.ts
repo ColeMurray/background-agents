@@ -3,16 +3,13 @@ import {
   githubLoginSchema,
 } from "@open-inspect/shared/types/github-identity";
 import { z } from "zod";
-import { encryptToken } from "../auth/crypto";
-import { requireTokenEncryptionKey } from "../env-validation";
 import type {
-  GitHubAccountSelection,
   GitHubCredentialAuthority,
   ProviderAccountSelection,
+  ProviderAccountClient,
 } from "../source-control/github-credential-authority";
 import type { UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
-import type { Env } from "../types";
 
 const FALLBACK_GIT_AUTHOR = {
   name: "OpenInspect",
@@ -56,10 +53,9 @@ export interface GitHubEnrichment {
   scmLogin?: string;
   displayName?: string;
   email?: string;
-  accessTokenEncrypted?: string;
-  refreshTokenEncrypted?: string;
-  tokenExpiresAt?: number;
 }
+
+const GITHUB_ACCESS_TOKEN_EXPIRY_BUFFER_MS = 60_000;
 
 const betterAuthAccessTokenSchema = z.object({
   accessToken: z.string().min(1),
@@ -81,83 +77,46 @@ const betterAuthGitHubAccountInfoSchema = z.object({
   }),
 });
 
-class BetterAuthGitHubAccessTokenUnavailableError extends Error {
-  constructor(cause: unknown) {
-    super("Better Auth GitHub access token is unavailable", { cause });
-    this.name = "BetterAuthGitHubAccessTokenUnavailableError";
+/** Resolve current PR credentials without copying Better Auth tokens into session state. */
+export async function resolveCurrentGitHubAccessToken(
+  userStore: UserStore,
+  getAccountClient: () => ProviderAccountClient,
+  canonicalUserId: string,
+  expectedScmUserId: string
+): Promise<string | null> {
+  const enrichment = await resolveGitHubEnrichment(userStore, canonicalUserId);
+  if (!enrichment) return null;
+  if (enrichment.scmUserId !== expectedScmUserId) {
+    throw new Error("Session GitHub account no longer matches the canonical user");
   }
-}
 
-export interface BetterAuthGitHubEnrichmentDependencies {
-  readonly getAccessToken: (selection: ProviderAccountSelection) => Promise<unknown>;
-  readonly getAccountInfo: (selection: ProviderAccountSelection) => Promise<unknown>;
-  readonly encryptAccessToken: (accessToken: string) => Promise<string>;
-}
-
-export async function resolveBetterAuthGitHubAccessToken(
-  userId: string,
-  account: GitHubAccountSelection,
-  getAccessToken: (selection: ProviderAccountSelection) => Promise<unknown>
-): Promise<z.infer<typeof betterAuthAccessTokenSchema>> {
-  try {
-    return betterAuthAccessTokenSchema.parse(
-      await getAccessToken({
-        providerId: "github",
-        accountId: account.subject,
-        userId,
-      })
-    );
-  } catch (error) {
-    throw new BetterAuthGitHubAccessTokenUnavailableError(error);
-  }
-}
-
-/**
- * Resolve GitHub attribution and a current provider token from Better Auth.
- *
- * Better Auth owns refresh-token storage and rotation. Session state receives
- * only a re-encrypted, currently valid access token; it never copies the
- * long-lived refresh credential into a second store.
- */
-export async function resolveBetterAuthGitHubEnrichment(
-  userId: string,
-  account: GitHubAccountSelection,
-  dependencies: BetterAuthGitHubEnrichmentDependencies
-): Promise<GitHubEnrichment> {
-  const selection = {
-    providerId: "github" as const,
-    accountId: account.subject,
-    userId,
+  const selection: ProviderAccountSelection = {
+    providerId: "github",
+    accountId: expectedScmUserId,
+    userId: canonicalUserId,
   };
-  const token = await resolveBetterAuthGitHubAccessToken(
-    userId,
-    account,
-    dependencies.getAccessToken
-  );
+  const accountClient = getAccountClient();
+  let tokenResponse: unknown;
+  try {
+    tokenResponse = await accountClient.getAccessToken({ body: selection });
+  } catch {
+    return null;
+  }
+  const token = betterAuthAccessTokenSchema.parse(tokenResponse);
+  if (
+    token.accessTokenExpiresAt &&
+    token.accessTokenExpiresAt.getTime() <= Date.now() + GITHUB_ACCESS_TOKEN_EXPIRY_BUFFER_MS
+  ) {
+    return null;
+  }
+
   const profile = betterAuthGitHubAccountInfoSchema.parse(
-    await dependencies.getAccountInfo(selection)
+    await accountClient.accountInfo({ query: selection })
   );
-  if (profile.user.id !== account.subject || profile.data.subject !== account.subject) {
+  if (profile.user.id !== expectedScmUserId || profile.data.subject !== expectedScmUserId) {
     throw new Error("Better Auth returned a mismatched GitHub account");
   }
-
-  const accessTokenEncrypted = await dependencies.encryptAccessToken(token.accessToken);
-  const author = resolveGitAuthorIdentity({
-    scmProvider: "github",
-    scmUserId: profile.data.subject,
-    scmLogin: profile.data.login,
-    scmName: profile.data.displayName,
-    scmEmail: profile.data.primaryEmail,
-  });
-
-  return {
-    scmUserId: profile.data.subject,
-    scmLogin: profile.data.login,
-    displayName: profile.data.displayName ?? profile.data.login,
-    email: author?.email,
-    accessTokenEncrypted,
-    ...(token.accessTokenExpiresAt ? { tokenExpiresAt: token.accessTokenExpiresAt.getTime() } : {}),
-  };
+  return token.accessToken;
 }
 
 /**
@@ -210,42 +169,23 @@ export async function resolveGitHubEnrichment(
  * Select the credential authority associated with the authenticated request.
  *
  * Browser sessions prove account ownership through their session. Service
- * principals use the canonical user established by route admission and may
- * retain identity-only attribution when that user has no usable OAuth token.
+ * principals use the canonical user established by route admission. Tokens
+ * remain in Better Auth and are resolved only at the final provider boundary.
  */
 export async function resolveGitHubEnrichmentForRequest(
-  env: Env,
   userStore: UserStore,
   userId: string,
   authority: GitHubCredentialAuthority
 ): Promise<GitHubEnrichment | null> {
-  const tokenEncryptionKey = requireTokenEncryptionKey(env);
-  const accountClient = authority.accountClient;
-  const identityEnrichment =
-    authority.kind === "service_principal"
-      ? await resolveGitHubEnrichment(userStore, userId)
-      : undefined;
-  const githubAccount =
-    authority.kind === "browser_session"
-      ? authority.githubAccount
-      : identityEnrichment
-        ? { subject: identityEnrichment.scmUserId }
-        : null;
-  if (!githubAccount) return null;
+  const enrichment = await resolveGitHubEnrichment(userStore, userId);
+  if (authority.kind === "service_principal") return enrichment;
 
-  try {
-    return await resolveBetterAuthGitHubEnrichment(userId, githubAccount, {
-      getAccessToken: (selection) => accountClient.getAccessToken({ body: selection }),
-      getAccountInfo: (selection) => accountClient.accountInfo({ query: selection }),
-      encryptAccessToken: (accessToken) => encryptToken(accessToken, tokenEncryptionKey),
-    });
-  } catch (error) {
-    if (
-      authority.kind === "service_principal" &&
-      error instanceof BetterAuthGitHubAccessTokenUnavailableError
-    ) {
-      return identityEnrichment ?? null;
-    }
-    throw error;
+  if (!authority.githubAccount) {
+    if (enrichment) throw new Error("GitHub account authority is corrupt");
+    return null;
   }
+  if (!enrichment || enrichment.scmUserId !== authority.githubAccount.subject) {
+    throw new Error("GitHub account authority is corrupt");
+  }
+  return enrichment;
 }

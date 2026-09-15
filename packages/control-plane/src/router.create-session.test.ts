@@ -555,10 +555,8 @@ describe("handleCreateSession D1 ordering", () => {
         scmLogin: "caller-login",
         scmName: "Trusted Ada",
         scmEmail: "2002+ada@users.noreply.github.com",
-        scmTokenEncrypted: expect.any(String),
-        scmRefreshTokenEncrypted: null,
-        scmTokenExpiresAt: new Date("2030-01-01T00:00:00.000Z").getTime(),
       });
+      expect(body).not.toHaveProperty("scmTokenEncrypted");
       return Response.json({ status: "created" });
     });
 
@@ -570,13 +568,7 @@ describe("handleCreateSession D1 ordering", () => {
 
     expect(response.status).toBe(201);
     expect(initFetch).toHaveBeenCalledOnce();
-    expect(getAccessToken).toHaveBeenCalledWith({
-      body: {
-        providerId: "github",
-        accountId: "2002",
-        userId: "user-1",
-      },
-    });
+    expect(getAccessToken).not.toHaveBeenCalled();
   });
 
   it("resolves an unseen verified actor into a canonical user from display fields", async () => {

@@ -4,7 +4,7 @@
  * Extracted from SessionDO to reduce its size. Handles:
  * - Creating and looking up participants
  * - Resolving current GitHub credentials through Better Auth
- * - Refreshing credentials copied into existing session participants
+ * - Refreshing legacy credentials copied into existing session participants
  * - Resolving auth context for PR creation
  */
 
@@ -40,6 +40,10 @@ export interface ParticipantServiceDeps {
     scmUserId: string
   ) => Promise<string | null>;
 }
+
+export type PromptingAuthResolution =
+  | { auth: SourceControlAuthContext | null }
+  | { error: string; status: number };
 
 /**
  * Build avatar URL from SCM login.
@@ -234,12 +238,13 @@ export class ParticipantService {
    * - `{ auth: null }` when user has no usable OAuth token (caller falls back to app token)
    * - `{ error, status }` on unexpected failure
    */
-  async resolveAuthForPR(
-    participant: ParticipantRow
-  ): Promise<
-    | { auth: SourceControlAuthContext | null; error?: never; status?: never }
-    | { auth?: never; error: string; status: number }
-  > {
+  async resolveAuthForPR(participant: ParticipantRow): Promise<PromptingAuthResolution> {
+    // Token-bearing participant rows predate Better Auth authority. Keep their
+    // local refresh/decrypt flow isolated from current identity-only sessions.
+    if (participant.scm_access_token_encrypted || participant.scm_refresh_token_encrypted) {
+      return this.resolveLegacyAuthForPR(participant);
+    }
+
     if (
       this.resolveCurrentGitHubAccessToken &&
       participant.canonical_user_id &&
@@ -254,22 +259,27 @@ export class ParticipantService {
           return { auth: { authType: "oauth", token: accessToken } };
         }
       } catch (error) {
-        this.log.warn("Failed to resolve current Better Auth token for PR creation", {
+        this.log.error("Failed to resolve current Better Auth token for PR creation", {
           user_id: participant.user_id,
           error: error instanceof Error ? error : String(error),
         });
-      }
-      // Better Auth sessions never copy refresh tokens; their presence marks a
-      // pre-cutover participant whose local credentials remain compatible.
-      if (!participant.scm_refresh_token_encrypted) {
-        return { auth: null };
+        return { error: "Failed to resolve GitHub credentials", status: 500 };
       }
     }
 
+    this.log.info("PR creation: prompting user has no OAuth token, using app fallback", {
+      user_id: participant.user_id,
+    });
+    return { auth: null };
+  }
+
+  private async resolveLegacyAuthForPR(
+    participant: ParticipantRow
+  ): Promise<{ auth: SourceControlAuthContext | null }> {
     let resolvedParticipant = participant;
 
     if (!resolvedParticipant.scm_access_token_encrypted) {
-      this.log.info("PR creation: prompting user has no OAuth token, using manual fallback", {
+      this.log.info("PR creation: legacy participant has no OAuth token, using app fallback", {
         user_id: resolvedParticipant.user_id,
       });
       return { auth: null };
