@@ -5,6 +5,7 @@ import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 import { githubAutofixOriginSchema } from "./github-autofix";
 
 const recordSchema = z.record(z.string(), z.unknown());
+export const eventDataSchema = recordSchema;
 const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
 export type GitSyncStatus = z.infer<typeof gitSyncStatusSchema>;
 
@@ -242,7 +243,7 @@ export const eventTypeSchema = z.enum(
 export const eventResponseSchema = z.object({
   id: z.string(),
   type: eventTypeSchema,
-  data: recordSchema,
+  data: eventDataSchema,
   messageId: z.string().nullable(),
   createdAt: z.number(),
 });

@@ -35,4 +35,12 @@ describe("AuditEventStore boundaries", () => {
       metadata: { future: { value: true } },
     });
   });
+
+  it("rejects stored metadata that is valid JSON but not an object", () => {
+    expect(() => toAuditEvent({ ...row, metadata_json: "[]" })).toThrow();
+  });
+
+  it("rejects malformed stored metadata JSON", () => {
+    expect(() => toAuditEvent({ ...row, metadata_json: "{bad" })).toThrow(SyntaxError);
+  });
 });

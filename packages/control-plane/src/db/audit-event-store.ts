@@ -1,4 +1,8 @@
-import { auditEventSchema, type AuditEvent } from "@open-inspect/shared/types/audit-events";
+import {
+  auditEventMetadataSchema,
+  auditEventSchema,
+  type AuditEvent,
+} from "@open-inspect/shared/types/audit-events";
 import type { AuditEventCursor } from "./audit-event-cursor";
 import type { SqlDatabase } from "./sql-database";
 
@@ -19,6 +23,7 @@ export interface AuditEventRow {
 }
 
 export function toAuditEvent(row: AuditEventRow): AuditEvent {
+  const metadata = auditEventMetadataSchema.parse(JSON.parse(row.metadata_json));
   return auditEventSchema.parse({
     id: row.id,
     occurredAt: row.occurred_at,
@@ -32,7 +37,7 @@ export function toAuditEvent(row: AuditEventRow): AuditEvent {
     targetUserIdSnapshot: row.target_user_id_snapshot,
     reasonCode: row.reason_code,
     operationResult: row.operation_result,
-    metadata: JSON.parse(row.metadata_json),
+    metadata,
   });
 }
 

@@ -4,7 +4,7 @@ import type {
   ChildSessionFinalResponse,
   ChildSessionTrajectory,
 } from "@open-inspect/shared/types/session-api";
-import type { EventResponse } from "@open-inspect/shared/types/sandbox-events";
+import { eventDataSchema, type EventResponse } from "@open-inspect/shared/types/sandbox-events";
 import {
   buildAgentResponseFromEvents,
   getArtifactLabelFromArtifact,
@@ -249,14 +249,11 @@ function parseTrajectoryCursor(
   return parseEventTimelineCursor(raw, "trajectoryCursor");
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function parseJsonRecord(raw: string): Record<string, unknown> {
   try {
-    const parsed = JSON.parse(raw) as unknown;
-    return isRecord(parsed) ? parsed : { value: parsed };
+    const parsed: unknown = JSON.parse(raw);
+    const result = eventDataSchema.safeParse(parsed);
+    return result.success ? result.data : { value: parsed };
   } catch {
     return { value: raw };
   }
