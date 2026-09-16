@@ -380,6 +380,71 @@ describe("useSessionRename", () => {
     expect(result.current.optimisticTitle).toBeUndefined();
   });
 
+  it.each(["success", "lost response"])(
+    "retains socket confirmation across detail unmount until %s settlement",
+    async (settlement) => {
+      const firstResponse = deferred<Response>();
+      const secondResponse = deferred<Response>();
+      let patchCount = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+          if (init?.method === "PATCH") {
+            patchCount += 1;
+            return patchCount === 1 ? firstResponse.promise : secondResponse.promise;
+          }
+          throw new Error("Unexpected list fetch");
+        })
+      );
+      const sessionId = `session-pending-unmount-${settlement}`;
+      const wrapper = ({ children }: PropsWithChildren) => (
+        <SWRConfig value={{ provider: () => new Map() }}>{children}</SWRConfig>
+      );
+      const detail = renderHook(
+        ({ authoritativeTitle }: { authoritativeTitle: string }) =>
+          useSessionRename({
+            sessionId,
+            currentTitle: authoritativeTitle,
+            authoritativeTitle,
+            awaitAuthoritativeTitle: true,
+          }),
+        { initialProps: { authoritativeTitle: "Original" }, wrapper }
+      );
+      const sidebar = renderHook(() => useSessionRename({ sessionId, currentTitle: "Original" }), {
+        wrapper,
+      });
+
+      let rename!: Promise<boolean>;
+      act(() => {
+        rename = sidebar.result.current.renameSession("Renamed");
+      });
+      await waitFor(() => expect(patchCount).toBe(1));
+      detail.rerender({ authoritativeTitle: "Renamed" });
+      detail.unmount();
+
+      await act(async () => {
+        if (settlement === "success") {
+          firstResponse.resolve(new Response(null, { status: 204 }));
+        } else {
+          firstResponse.reject(new TypeError("Response connection lost"));
+        }
+        expect(await rename).toBe(true);
+      });
+      expect(sidebar.result.current.optimisticTitle).toBeUndefined();
+
+      // With no detail subscriber, the old confirmation cannot validate a new request.
+      act(() => {
+        rename = sidebar.result.current.renameSession("Renamed");
+      });
+      await waitFor(() => expect(patchCount).toBe(2));
+      await act(async () => {
+        secondResponse.reject(new TypeError("Second response connection lost"));
+        expect(await rename).toBe(false);
+      });
+      expect(sidebar.result.current.optimisticTitle).toBeUndefined();
+    }
+  );
+
   it("hands an HTTP-confirmed overlay to the next authoritative title", async () => {
     vi.stubGlobal(
       "fetch",

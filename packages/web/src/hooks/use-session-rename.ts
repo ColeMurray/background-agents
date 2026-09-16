@@ -42,12 +42,11 @@ function getRenameOwner(sessionId: string): RenameOwner {
 }
 
 function deleteIdleOwner(sessionId: string, owner: RenameOwner) {
-  if (
-    owner.listeners.size === 0 &&
-    owner.pendingRequests === 0 &&
-    owner.authoritativeSubscribers === 0
-  ) {
-    renameOwners.delete(sessionId);
+  if (owner.pendingRequests === 0 && owner.authoritativeSubscribers === 0) {
+    owner.authoritativeTitle = undefined;
+    if (owner.listeners.size === 0) {
+      renameOwners.delete(sessionId);
+    }
   }
 }
 
@@ -112,11 +111,8 @@ export function useSessionRename({
     return () => {
       if (awaitAuthoritativeTitle) {
         owner.authoritativeSubscribers -= 1;
-        if (owner.authoritativeSubscribers === 0) {
-          owner.authoritativeTitle = undefined;
-          if (owner.pendingRequests === 0) {
-            publishOptimisticTitle(owner, undefined);
-          }
+        if (owner.authoritativeSubscribers === 0 && owner.pendingRequests === 0) {
+          publishOptimisticTitle(owner, undefined);
         }
       }
       deleteIdleOwner(sessionId, owner);
