@@ -103,7 +103,8 @@ export function useSessionRename({
       if (owner.pendingRequests === 0) {
         owner.confirmedTitle = authoritativeTitle;
       }
-      if (owner.pendingRequests === 0 && owner.optimisticTitle !== undefined) {
+      // The next authoritative title wins even if its HTTP response is still pending.
+      if (owner.optimisticTitle !== undefined) {
         publishOptimisticTitle(owner, undefined);
       }
     }
@@ -168,12 +169,13 @@ export function useSessionRename({
             return true;
           }
 
-          if (owner.authoritativeTitle === title) {
-            owner.confirmedTitle = title;
+          const confirmedByAuthority = owner.authoritativeTitle === title;
+          if (confirmedByAuthority || owner.optimisticTitle === undefined) {
+            if (confirmedByAuthority) owner.confirmedTitle = title;
             publishOptimisticTitle(owner, undefined);
             revalidateSessionCaches(mutate);
             deleteIdleOwner(sessionId, owner);
-            return true;
+            return confirmedByAuthority;
           }
 
           publishOptimisticTitle(

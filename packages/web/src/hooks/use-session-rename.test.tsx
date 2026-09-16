@@ -479,6 +479,62 @@ describe("useSessionRename", () => {
     await waitFor(() => expect(result.current.optimisticTitle).toBeUndefined());
   });
 
+  it.each([
+    { settlement: "success", authorityTitles: ["Newer cross-tab title"] },
+    { settlement: "failure", authorityTitles: ["Newer cross-tab title"] },
+    { settlement: "success", authorityTitles: ["Intermediate title", "Original"] },
+    { settlement: "failure", authorityTitles: ["Intermediate title", "Original"] },
+  ])(
+    "keeps authority $authorityTitles visible across pending rename $settlement",
+    async ({ settlement, authorityTitles }) => {
+      const renameResponse = deferred<Response>();
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "PATCH") return renameResponse.promise;
+        throw new Error("Unexpected list fetch");
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { result, rerender } = renderHook(
+        ({ authoritativeTitle }: { authoritativeTitle: string }) => {
+          const rename = useSessionRename({
+            sessionId: "session-pending-authority",
+            currentTitle: authoritativeTitle,
+            authoritativeTitle,
+            awaitAuthoritativeTitle: true,
+          });
+          return { ...rename, displayTitle: rename.optimisticTitle ?? authoritativeTitle };
+        },
+        {
+          initialProps: { authoritativeTitle: "Original" },
+          wrapper: ({ children }: PropsWithChildren) => (
+            <SWRConfig value={{ provider: () => new Map() }}>{children}</SWRConfig>
+          ),
+        }
+      );
+
+      let rename!: Promise<boolean>;
+      act(() => {
+        rename = result.current.renameSession("Local rename");
+      });
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      expect(result.current.displayTitle).toBe("Local rename");
+
+      for (const authoritativeTitle of authorityTitles) {
+        rerender({ authoritativeTitle });
+        expect(result.current.displayTitle).toBe(authoritativeTitle);
+      }
+      await act(async () => {
+        if (settlement === "success") {
+          renameResponse.resolve(new Response(null, { status: 204 }));
+        } else {
+          renameResponse.reject(new TypeError("Response connection lost"));
+        }
+        expect(await rename).toBe(settlement === "success");
+      });
+      expect(result.current.displayTitle).toBe(authorityTitles.at(-1));
+      expect(result.current.optimisticTitle).toBeUndefined();
+    }
+  );
+
   it("releases an HTTP-confirmed overlay when the detail subscriber unmounts", async () => {
     vi.stubGlobal(
       "fetch",
