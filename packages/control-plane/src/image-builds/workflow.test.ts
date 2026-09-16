@@ -57,7 +57,13 @@ function createStore() {
     markStaleBuildsAsFailed: vi.fn().mockResolvedValue(0),
     getStatus: vi.fn().mockResolvedValue([]),
     getStatusForEnabledScopes: vi.fn().mockResolvedValue([]),
+    markSourceCreateIntent: vi.fn().mockResolvedValue(true),
   };
+}
+
+/** An adapter whose provider can find a source again by its reserved name. */
+function createRecoverableAdapter() {
+  return { ...createAdapter(), recoverUnboundSource: vi.fn().mockResolvedValue(null) };
 }
 
 function createAdapter() {
@@ -106,7 +112,7 @@ function vercelPlannedBuild(): ImageBuildPlan {
 
 function createWorkflow(options: {
   store?: ReturnType<typeof createStore>;
-  adapter?: ReturnType<typeof createAdapter>;
+  adapter?: ReturnType<typeof createAdapter> | ReturnType<typeof createRecoverableAdapter>;
   planBuild?: ReturnType<typeof vi.fn>;
   resolveTarget?: ReturnType<typeof vi.fn>;
   createCallbackAuth?: ReturnType<typeof vi.fn>;
@@ -784,5 +790,65 @@ describe("ImageBuildWorkflow", () => {
         })
       ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
     });
+  });
+});
+
+describe("ImageBuildWorkflow build source create intent", () => {
+  it("records the cleanup obligation before the provider can create anything", async () => {
+    const store = createStore();
+    const adapter = createRecoverableAdapter();
+    const order: string[] = [];
+    store.markSourceCreateIntent.mockImplementation(async () => {
+      order.push("intent");
+      return true;
+    });
+    adapter.startBuild.mockImplementation(async () => {
+      order.push("start");
+    });
+    const { workflow } = createWorkflow({ store, adapter });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).resolves.toEqual({
+      type: "triggered",
+      buildId: expect.any(String),
+    });
+    expect(order).toEqual(["intent", "start"]);
+    expect(store.markSourceCreateIntent).toHaveBeenCalledWith(expect.any(String), "modal");
+  });
+
+  it("does not record an intent for a provider that cannot recover a source by name", async () => {
+    const store = createStore();
+    const { workflow } = createWorkflow({ store, adapter: createAdapter() });
+
+    await workflow.triggerBuild(ENV_SCOPE, ctx);
+
+    expect(store.markSourceCreateIntent).not.toHaveBeenCalled();
+  });
+
+  it("refuses to create a source it could not record", async () => {
+    const store = createStore();
+    const adapter = createRecoverableAdapter();
+    store.markSourceCreateIntent.mockResolvedValue(false);
+    const { workflow } = createWorkflow({ store, adapter });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toBeInstanceOf(
+      ImageBuildTriggerFailedError
+    );
+    expect(adapter.startBuild).not.toHaveBeenCalled();
+    expect(store.markBuildFailed).toHaveBeenCalled();
+  });
+
+  it("keeps the intent when the start fails before any id was bound", async () => {
+    const store = createStore();
+    const adapter = createRecoverableAdapter();
+    adapter.startBuild.mockRejectedValue(new Error("create timed out"));
+    const { workflow } = createWorkflow({ store, adapter });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toBeInstanceOf(
+      ImageBuildTriggerFailedError
+    );
+    // Nothing clears the obligation here: the source may exist under its
+    // reserved name, and maintenance is what settles that.
+    expect(adapter.cleanupFailedBuild).not.toHaveBeenCalled();
+    expect(store.markBuildFailed).toHaveBeenCalled();
   });
 });

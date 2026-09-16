@@ -83,10 +83,63 @@ export interface DeleteImageInput {
   signal?: AbortSignal;
 }
 
-/** Finalization input for provider-session builds (the deferred snapshot/checkpoint). */
-export interface FinalizeImageBuildInput {
+/** A provider artifact operation already reserved for this build. */
+export interface ImageBuildProviderOperation {
+  /** The unique provider name the operation was submitted under. */
+  ref: string;
+  /** Fixed wall-clock deadline (ms) by which it must settle; never extended. */
+  deadlineAt: number;
+}
+
+/** Teardown input for a build whose artifact is already recorded. */
+export interface CompletedImageBuildInput {
   buildId: string;
   providerSessionId: string;
+  correlation: CorrelationContext;
+  signal?: AbortSignal;
+}
+
+/** Finalization input for provider-session builds (the deferred snapshot/checkpoint). */
+export interface FinalizeImageBuildInput extends CompletedImageBuildInput {
+  /**
+   * The operation a previous delivery reserved, or null when none has been.
+   * An adapter that reads this must reconcile that exact operation instead of
+   * submitting another; adapters whose provider returns a finished artifact
+   * from one call ignore it.
+   */
+  operation: ImageBuildProviderOperation | null;
+  /**
+   * Reserves the name an asynchronous operation will be submitted under,
+   * before submitting it. False means another delivery holds the reservation
+   * or the build moved on, and the caller must not submit anything.
+   */
+  reserveOperation(ref: string, deadlineAt: number): Promise<boolean>;
+}
+
+/** Input for reconciling an operation whose build is already terminal. */
+export interface ReconcileOrphanOperationInput {
+  buildId: string;
+  /** The reserved provider name to reconcile. */
+  operationRef: string;
+  /** The source sandbox that owns it; null once the row has dropped it. */
+  providerSessionId: string | null;
+  correlation: CorrelationContext;
+  signal?: AbortSignal;
+}
+
+/**
+ * What became of an orphaned operation. `absent` and `deleted` both settle
+ * the obligation; `pending` keeps it, so the next pass tries again rather
+ * than losing a resource nothing else records.
+ */
+export type ReconcileOrphanOperationOutcome =
+  | { type: "absent" }
+  | { type: "deleted" }
+  | { type: "pending" };
+
+/** Input for finding a build source whose create response was never seen. */
+export interface RecoverUnboundSourceInput {
+  buildId: string;
   correlation: CorrelationContext;
   signal?: AbortSignal;
 }
@@ -110,5 +163,25 @@ export type ImageBuildAdapter = {
   deleteImage(input: DeleteImageInput): Promise<void>;
   finalizeSuccessfulBuild(input: FinalizeImageBuildInput): Promise<ImageBuildProviderImageRef>;
   cleanupFailedBuild(input: FailedImageBuildInput): Promise<void>;
-  cleanupCompletedBuild(input: FinalizeImageBuildInput): Promise<void>;
+  cleanupCompletedBuild(input: CompletedImageBuildInput): Promise<void>;
+  /**
+   * Finds a build source by the name reserved for it, for a create whose
+   * response never arrived. Null means the provider has no such sandbox.
+   *
+   * Implementing this is also what tells the workflow to record a create
+   * intent before creating: only a provider whose sources can be found again
+   * by name has anything to recover, and only then is the intent a handle
+   * rather than a row that can never be settled.
+   */
+  recoverUnboundSource?(input: RecoverUnboundSourceInput): Promise<{
+    providerSessionId: string;
+  } | null>;
+  /**
+   * Settles an artifact operation left behind by a build that failed or was
+   * superseded: reclaim what the reserved name produced, or report that it
+   * produced nothing.
+   */
+  reconcileOrphanOperation?(
+    input: ReconcileOrphanOperationInput
+  ): Promise<ReconcileOrphanOperationOutcome>;
 };

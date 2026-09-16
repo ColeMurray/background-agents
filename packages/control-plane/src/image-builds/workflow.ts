@@ -263,6 +263,18 @@ export class ImageBuildWorkflow {
         callbackAuth,
       });
 
+      // Record the cleanup obligation BEFORE the provider can create
+      // anything, for adapters that can find a source again by its reserved
+      // name. A create whose response is lost leaves a sandbox no row names,
+      // and an unrecorded source is an untracked one — so a failed intent
+      // write aborts the trigger rather than creating regardless.
+      if (adapter.recoverUnboundSource) {
+        const intentRecorded = await this.store.markSourceCreateIntent(buildId, provider);
+        if (!intentRecorded) {
+          throw new Error(`Failed to record ${provider} build source cleanup intent`);
+        }
+      }
+
       await adapter.startBuild(plan, {
         bindProviderSession: async (providerSessionId) => {
           providerSessionIdForCleanup = providerSessionId;

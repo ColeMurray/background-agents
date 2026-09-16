@@ -79,6 +79,22 @@ describe("NodeJobs", () => {
     expect(queue.stats()).toMatchObject({ pending: 0, running: 0, dead: 0 });
   });
 
+  it("holds a delayed send until its delay has passed", async () => {
+    const handle = vi.fn(async (): Promise<JobOutcome> => "ack");
+    const queue = createQueue(handle);
+
+    await queue.send({ kind: KIND, payload: PAYLOAD }, { delayMs: 30_000 });
+    expect(store.earliest([KIND])).toBe(40_000);
+    queue.start();
+    await runPoller(queue);
+    expect(handle).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await queue.drain();
+
+    expect(handle).toHaveBeenCalledOnce();
+  });
+
   it("delivers nothing before start, or after stop", async () => {
     const handle = vi.fn(async (): Promise<JobOutcome> => "ack");
     const queue = createQueue(handle);
