@@ -18,7 +18,7 @@ function createPushSpec(repoOwner: string, repoName: string, targetBranch: strin
 function createService() {
   const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
   const wsManager = {
-    getSandboxSocket: vi.fn(() => sandboxWs),
+    getReadySandboxSocket: vi.fn(() => sandboxWs),
     send: vi.fn(() => true),
   };
   const log = {
@@ -33,6 +33,19 @@ function createService() {
 }
 
 describe("SandboxPushService", () => {
+  it("treats a booting sandbox as no sandbox rather than waiting on it", async () => {
+    const h = createService();
+    h.wsManager.getReadySandboxSocket.mockReturnValue(null as unknown as WebSocket);
+
+    const result = await h.service.pushBranchToRemote(createPushSpec("acme", "web", "feature/x"));
+
+    expect(result).toEqual({ success: true });
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+    expect(h.log.info).toHaveBeenCalledWith(
+      "No sandbox connected, assuming branch was pushed manually"
+    );
+  });
+
   it("fails a push immediately when the command cannot be delivered", async () => {
     vi.useFakeTimers();
     try {

@@ -1,7 +1,9 @@
-import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxBootPhase, SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
+import type { BackgroundTasks } from "../../platform-ports";
 import type { SessionDiffService } from "../diffs/service";
 import type { EventRepository } from "../event-repository";
+import type { SessionMessageQueue } from "../message-queue";
 import type { SessionMessenger } from "../messenger";
 import type { SandboxRepository } from "../sandbox-repository";
 import type { SessionCoreRepository } from "../session-core-repository";
@@ -10,10 +12,15 @@ import { persistSandboxEvent, type SandboxEventContext } from "./context";
 
 /**
  * Sandbox-runtime family: events about the sandbox itself rather than the
- * execution inside it — liveness (`heartbeat`), boot (`ready`), repository
- * sync (`git_sync`), and the runtime's title suggestion (`session_title`).
- * Heartbeat and title are pure side effects; ready and git_sync also land
- * on the timeline.
+ * execution inside it — liveness (`heartbeat`), boot (`boot_progress`,
+ * `ready`), repository sync (`git_sync`), and the runtime's title suggestion
+ * (`session_title`). Heartbeat and title are pure side effects; the boot and
+ * git_sync events also land on the timeline.
+ *
+ * `ready` is where the sandbox becomes usable. The bridge attaches ahead of
+ * the repository boot, so the socket's existence proves only that the
+ * runtime process is up; this event proves the harness is attached, and it
+ * is what moves the row to `ready` and releases the prompt queue.
  */
 export class SandboxRuntimeEventHandler {
   constructor(
@@ -28,6 +35,9 @@ export class SandboxRuntimeEventHandler {
     ) => SessionTitleUpdateResult,
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly refreshSlackActivity: (messageId: string, timestamp: number) => void,
+    private readonly scheduleInactivityCheck: () => Promise<void>,
+    private readonly backgroundTasks: BackgroundTasks,
+    private readonly messageQueue: Pick<SessionMessageQueue, "processMessageQueue">,
     private readonly log: Logger
   ) {}
 
@@ -49,7 +59,10 @@ export class SandboxRuntimeEventHandler {
     this.applySessionTitleUpdate(event.title, { onlyIfUnset: true });
   }
 
-  handleReady(event: Extract<SandboxEvent, { type: "ready" }>, context: SandboxEventContext): void {
+  async handleReady(
+    event: Extract<SandboxEvent, { type: "ready" }>,
+    context: SandboxEventContext
+  ): Promise<void> {
     // The runtime reports which harness actually booted; the session's
     // harness is fixed at create, so a mismatch is an image/config drift
     // worth a log line, never something to reconcile silently.
@@ -65,6 +78,60 @@ export class SandboxRuntimeEventHandler {
     // Fills the column a fresh spawn cleared; a restore has already seeded
     // the snapshot's version, which outranks whatever this sandbox reports.
     this.sandboxRepository.recordReportedSandboxRuntimeVersion(event.runtimeVersion ?? null);
+    persistSandboxEvent(this.eventRepository, event, context);
+    this.messenger.broadcast({ type: "sandbox_event", event });
+
+    // The alarm is the one fallible step, so it goes first: a failure leaves
+    // the row booting and a re-sent `ready` retries the whole transition,
+    // whereas a row already marked ready would treat the resend as a no-op
+    // and the queue would never be released. The scheduler keeps the earlier
+    // of two deadlines, so arming again on a repeat `ready` changes nothing.
+    await this.scheduleInactivityCheck();
+    // Transition-only: a bridge resends `ready` on every reconnect, and only
+    // the first one for a generation may stamp activity, publish readiness
+    // and release the queue. The repository decides which rows may move.
+    if (!this.sandboxRepository.markSandboxReady()) return;
+    this.log.info("sandbox.ready", { event: "sandbox.ready", harness: event.harness ?? null });
+    // Activity is stamped here, not at attach: the inactivity reaper measures
+    // from this value, and a long boot must not count as idle time.
+    this.updateLastActivity(context.now);
+    this.messenger.broadcast({ type: "sandbox_status", status: "ready" });
+    this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
+      name: "message_queue.process",
+    });
+  }
+
+  /**
+   * A boot phase the supervisor reported through the bridge. Recorded once
+   * per sequence number (the bridge resends its latest phase on reconnect),
+   * then observed on the timeline like any other runtime fact. Never gates
+   * anything: the row's status still moves only on `ready`.
+   */
+  handleBootProgress(
+    event: Extract<SandboxEvent, { type: "boot_progress" }>,
+    context: SandboxEventContext
+  ): void {
+    const phase: SandboxBootPhase = {
+      phase: event.phase,
+      status: event.status,
+      ...(event.warning !== undefined ? { warning: event.warning } : {}),
+      ...(event.repoOwner !== undefined ? { repoOwner: event.repoOwner } : {}),
+      ...(event.repoName !== undefined ? { repoName: event.repoName } : {}),
+    };
+    if (!this.sandboxRepository.recordBootProgress(phase, event.bootSeq)) {
+      this.log.debug("sandbox.boot_progress_repeated", { boot_seq: event.bootSeq });
+      return;
+    }
+    this.log.info("sandbox.boot_progress", {
+      event: "sandbox.boot_progress",
+      boot_seq: event.bootSeq,
+      phase: event.phase,
+      phase_status: event.status,
+      repo_owner: event.repoOwner ?? null,
+      repo_name: event.repoName ?? null,
+      elapsed_ms: event.elapsedMs ?? null,
+      warning: event.warning ?? false,
+    });
     persistSandboxEvent(this.eventRepository, event, context);
     this.messenger.broadcast({ type: "sandbox_event", event });
   }

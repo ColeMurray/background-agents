@@ -9,7 +9,7 @@ import type { SessionTerminalMessageProjection } from "../terminal-message-proje
 
 export interface AlarmHandlerDeps {
   repository: MessageRepository;
-  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage">;
+  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage" | "failHeadPendingMessage">;
   executionStop: Pick<
     ExecutionStopCoordinator,
     "recoverStopConfirmationTimeout" | "resumeAfterSandboxTermination"
@@ -82,6 +82,11 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       }
       if (lifecycleResult === "sandbox_terminated") {
         await deps.executionStop.resumeAfterSandboxTermination();
+      }
+      if (typeof lifecycleResult === "object" && lifecycleResult.kind === "boot_budget_exceeded") {
+        // The boot was for the head pending prompt; it fails with the same
+        // words the user sees, and nothing re-drives it onto a fresh sandbox.
+        await deps.messageQueue.failHeadPendingMessage(lifecycleResult.reason);
       }
       if (projectionFailure) throw projectionFailure.error;
     },

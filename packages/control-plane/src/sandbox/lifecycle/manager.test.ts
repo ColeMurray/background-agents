@@ -127,6 +127,9 @@ function createMockSandbox(
     ttyd_url: null,
     ttyd_token: null,
     active_socket_id: null,
+    boot_phase: null,
+    boot_seq: null,
+    fenced: 0,
     created_at: Date.now() - 60000,
     spawn_failure_count: 0,
     last_spawn_failure: 0,
@@ -293,6 +296,15 @@ function createMockStorage(
       calls.push("clearSandboxTunnelUrls");
       if (sandbox) {
         sandbox.tunnel_urls = null;
+      }
+    }),
+    fenceSandboxGeneration: vi.fn(() => {
+      calls.push("fenceSandboxGeneration");
+      if (sandbox) {
+        sandbox.auth_token_hash = "";
+        sandbox.auth_token = null;
+        sandbox.active_socket_id = "";
+        sandbox.fenced = 1;
       }
     }),
   };
@@ -1918,6 +1930,379 @@ describe("SandboxLifecycleManager", () => {
     });
   });
 
+  describe("onSandboxSocketAttached", () => {
+    it("moves the attaching generation from spawning to connecting and says so", () => {
+      const sandbox = createMockSandbox({ status: "spawning", created_at: 7000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      manager.onSandboxSocketAttached({ sandboxId: sandbox.modal_sandbox_id, createdAt: 7000 });
+
+      expect(sandbox.status).toBe("connecting");
+      expect(broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "connecting" });
+    });
+
+    it("moves an unfenced failed row to connecting: a watchdog-failed boot that finally connected", () => {
+      // #1905 self-heal. The socket registry closes every sandbox socket of a
+      // `failed` row, so the row must leave `failed` at attach or the bridge
+      // it just admitted is cut off and its ready event spawns a duplicate.
+      const sandbox = createMockSandbox({ status: "failed", fenced: 0, created_at: 7000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      manager.onSandboxSocketAttached({ sandboxId: sandbox.modal_sandbox_id, createdAt: 7000 });
+
+      expect(sandbox.status).toBe("connecting");
+      expect(broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "connecting" });
+    });
+
+    it("leaves a fenced failed row failed", () => {
+      const sandbox = createMockSandbox({ status: "failed", fenced: 1, created_at: 7000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      manager.onSandboxSocketAttached({ sandboxId: sandbox.modal_sandbox_id, createdAt: 7000 });
+
+      expect(sandbox.status).toBe("failed");
+      expect(broadcaster.messages).toEqual([]);
+    });
+
+    it.each(["connecting", "ready"] as const)(
+      "leaves a %s row as it is (the ready event, not attach, decides readiness)",
+      (status) => {
+        const sandbox = createMockSandbox({ status, created_at: 7000 });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        const broadcaster = createMockBroadcaster();
+        const manager = new SandboxLifecycleManager(
+          createMockProvider(),
+          storage,
+          storage,
+          broadcaster,
+          createMockWebSocketManager(true),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        manager.onSandboxSocketAttached({ sandboxId: sandbox.modal_sandbox_id, createdAt: 7000 });
+
+        expect(sandbox.status).toBe(status);
+        expect(broadcaster.messages).toEqual([]);
+      }
+    );
+
+    it("does not move a row a newer reservation owns", () => {
+      const sandbox = createMockSandbox({ status: "spawning", created_at: 9000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      manager.onSandboxSocketAttached({ sandboxId: sandbox.modal_sandbox_id, createdAt: 7000 });
+
+      expect(sandbox.status).toBe("spawning");
+    });
+  });
+
+  describe("a booting generation whose bridge has connected", () => {
+    const BOOT_BUDGET_MS = DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs;
+
+    function build(
+      sandbox: ReturnType<typeof createMockSandbox>,
+      opts: { hasSocket?: boolean; provider?: SandboxProvider } = {}
+    ) {
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager(opts.hasSocket ?? true);
+      const provider = opts.provider ?? createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        broadcaster,
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+      return { storage, broadcaster, wsManager, provider, manager };
+    }
+
+    it("is not failed by the connect watchdog past its window while heartbeats arrive", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting",
+        created_at: now - DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs * 3,
+        last_heartbeat: now - 5_000,
+      });
+      const { manager, storage } = build(sandbox);
+
+      expect(await manager.handleAlarm()).toBe("no_action");
+      expect(sandbox.status).toBe("connecting");
+      expect(storage.calls).not.toContain("updateSandboxStatus:failed");
+    });
+
+    it("waits for a dropped bridge instead of spawning a replacement past the staleness bound", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting",
+        created_at: now - DEFAULT_LIFECYCLE_CONFIG.spawn.spawningTimeoutMs * 2,
+        last_heartbeat: now - 20_000,
+      });
+      const { manager, provider } = build(sandbox, { hasSocket: false });
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+      expect(sandbox.status).toBe("connecting");
+    });
+
+    it("counts a heartbeat-stale boot as a failure and terminates it without snapshotting", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting",
+        created_at: now - 300_000,
+        last_heartbeat: now - 100_000,
+      });
+      const { manager, provider, wsManager } = build(sandbox, { hasSocket: false });
+
+      expect(await manager.handleAlarm()).toBe("sandbox_terminated");
+
+      expect(sandbox.status).toBe("stale");
+      expect(sandbox.spawn_failure_count).toBe(1);
+      expect(provider.takeSnapshot).not.toHaveBeenCalled();
+      // A stale row has no adoptable socket, so a shutdown here could never
+      // be delivered; the bridge is gone and the detach is what remains.
+      expect(wsManager.sendToSandbox).not.toHaveBeenCalled();
+      expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(1000, "Heartbeat stale");
+    });
+
+    it("still snapshots a ready sandbox that goes heartbeat-stale", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({ status: "ready", last_heartbeat: now - 100_000 });
+      const { manager, provider } = build(sandbox, { hasSocket: false });
+
+      await manager.handleAlarm();
+
+      expect(provider.takeSnapshot).toHaveBeenCalled();
+      expect(sandbox.spawn_failure_count).toBe(0);
+    });
+
+    describe("boot budget", () => {
+      function expired() {
+        const now = Date.now();
+        return createMockSandbox({
+          status: "connecting",
+          created_at: now - BOOT_BUDGET_MS,
+          last_heartbeat: now - 5_000,
+          boot_phase: JSON.stringify({
+            phase: "setup",
+            status: "started",
+            repoOwner: "acme",
+            repoName: "api",
+          }),
+          code_server_url: "https://code.test",
+        });
+      }
+
+      it("shuts the runtime down over the socket, fences the generation, fails the row and counts it", async () => {
+        const sandbox = expired();
+        const { manager, storage, broadcaster, wsManager } = build(sandbox);
+        const order: string[] = [];
+        vi.mocked(wsManager.sendToSandbox).mockImplementation((message) => {
+          order.push(`send:${(message as { type: string }).type}`);
+          return true;
+        });
+        vi.mocked(storage.fenceSandboxGeneration).mockImplementation(() => {
+          order.push("fence");
+          sandbox.fenced = 1;
+          sandbox.auth_token_hash = "";
+          sandbox.active_socket_id = "";
+        });
+        vi.mocked(storage.updateSandboxStatus).mockImplementation((status) => {
+          order.push(`status:${status}`);
+          sandbox.status = status;
+        });
+
+        const result = await manager.handleAlarm();
+
+        expect(result).toEqual({
+          kind: "boot_budget_exceeded",
+          reason: expect.stringContaining("SANDBOX_BOOT_TIMEOUT_MS"),
+        });
+        // The shutdown must go out while the socket is still adoptable: the
+        // lifecycle send path refuses a failed row.
+        expect(order).toEqual(["send:shutdown", "fence", "status:failed"]);
+        expect(sandbox.fenced).toBe(1);
+        expect(sandbox.auth_token_hash).toBe("");
+        expect(sandbox.spawn_failure_count).toBe(1);
+        expect(sandbox.code_server_url).toBeNull();
+        expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(1000, "Boot budget exceeded");
+        expect(broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "failed" });
+        const error = broadcaster.messages.find(
+          (m) => (m as { type: string }).type === "sandbox_error"
+        ) as { error: string } | undefined;
+        expect(error?.error).toContain("30 minutes");
+        expect(error?.error).toContain("setup.sh");
+        expect(error?.error).toContain("acme/api");
+        expect(sandbox.last_spawn_error).toBe(error?.error);
+      });
+
+      it("stops the provider sandbox where the provider can", async () => {
+        const sandbox = expired();
+        const stopSandbox = vi.fn(async () => ({ success: true }));
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          stopSandbox,
+        });
+        const { manager } = build(sandbox, { provider });
+
+        await manager.handleAlarm();
+
+        expect(stopSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "boot_budget_exceeded" })
+        );
+      });
+
+      it("names the boot itself when no phase was reported", async () => {
+        const sandbox = expired();
+        sandbox.boot_phase = null;
+        const { manager, broadcaster } = build(sandbox);
+
+        await manager.handleAlarm();
+
+        const error = broadcaster.messages.find(
+          (m) => (m as { type: string }).type === "sandbox_error"
+        ) as { error: string } | undefined;
+        expect(error?.error).toMatch(/^Sandbox boot exceeded 30 minutes while booting\./);
+      });
+
+      it("does not apply to a ready sandbox, however old its reservation", async () => {
+        const now = Date.now();
+        const sandbox = createMockSandbox({
+          status: "ready",
+          created_at: now - BOOT_BUDGET_MS * 2,
+          last_heartbeat: now - 5_000,
+          last_activity: now - 5_000,
+        });
+        const { manager, storage } = build(sandbox);
+
+        expect(await manager.handleAlarm()).toBe("no_action");
+        expect(storage.fenceSandboxGeneration).not.toHaveBeenCalled();
+        expect(sandbox.status).toBe("ready");
+      });
+    });
+  });
+
+  describe("circuit breaker window as the idle gap between attempts", () => {
+    // A re-drive chain has no idle time: each attempt starts the moment the
+    // previous one failed. Measured failure-to-failure, boots longer than the
+    // window would reset the streak every time and the chain would never end.
+    it("opens after three automatic re-drives whose boots each outlast the window", async () => {
+      vi.useFakeTimers();
+      try {
+        const bootMs = DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.windowMs + 60_000;
+        const sandbox = createMockSandbox({ status: "connecting", spawn_failure_count: 0 });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        const provider = createMockProvider();
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(true),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+          // The attempt started when the previous failure re-drove the queue.
+          sandbox.status = "connecting";
+          sandbox.created_at = Date.now();
+          vi.advanceTimersByTime(bootMs);
+          expect(await manager.terminateFailedSandbox("start.sh exited 1")).toBe(true);
+        }
+        expect(sandbox.spawn_failure_count).toBe(3);
+
+        await manager.spawnSandbox();
+
+        expect(provider.createSandbox).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("starts a fresh streak when the next attempt began after an idle gap of a full window", async () => {
+      vi.useFakeTimers();
+      try {
+        const sandbox = createMockSandbox({
+          status: "connecting",
+          spawn_failure_count: 2,
+          last_spawn_failure: Date.now(),
+        });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        const manager = new SandboxLifecycleManager(
+          createMockProvider(),
+          storage,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(true),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+        // The user came back after the window and this attempt began then.
+        vi.advanceTimersByTime(DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.windowMs);
+        sandbox.created_at = Date.now();
+        vi.advanceTimersByTime(6 * 60_000);
+
+        await manager.terminateFailedSandbox("start.sh exited 1");
+
+        expect(sandbox.spawn_failure_count).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("triggerSnapshot", () => {
     it("takes snapshot when provider supports it", async () => {
       const sandbox = createMockSandbox({ status: "ready" });
@@ -2541,17 +2926,19 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.last_spawn_failure).toBeGreaterThanOrEqual(now);
     });
 
-    it("restarts the streak when the previous failure is older than the breaker window", async () => {
-      // The window is measured from the latest failure. A failure that lands
-      // after the previous one expired starts a new streak of one; it must
-      // not resurrect and extend a streak the breaker would already ignore.
+    it("restarts the streak when this attempt began a full window after the previous failure", async () => {
+      // The window measures the idle gap between the previous failure and the
+      // start of the attempt that failed. An attempt begun after the previous
+      // streak expired starts a new streak of one; it must not resurrect and
+      // extend a streak the breaker would already ignore.
       const now = Date.now();
+      const createdAt = now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000);
       const sandbox = createMockSandbox({
         status: "connecting" as SandboxStatus,
-        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
+        created_at: createdAt,
         last_heartbeat: null,
         spawn_failure_count: 2,
-        last_spawn_failure: now - (DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.windowMs + 60_000),
+        last_spawn_failure: createdAt - DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.windowMs,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const manager = new SandboxLifecycleManager(
@@ -4377,6 +4764,42 @@ describe("status writes after a provider await (COL-99)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("leaves a sandbox whose bridge attached during the provider call booting when the call then fails", async () => {
+    // The bridge now connects ahead of its boot, so a provider error that
+    // lands after attach (E2B's process-start check, a slow restore response)
+    // describes a sandbox that is demonstrably alive. The row moved to
+    // `connecting` at attach; the attempt must neither fail it nor count it.
+    const sandbox = createMockSandbox({ status: "failed" });
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const broadcaster = createMockBroadcaster();
+    const wsManager = createMockWebSocketManager(false);
+    const manager = new SandboxLifecycleManager(
+      createMockProvider({
+        createSandbox: vi.fn(async () => {
+          sandbox.status = "connecting";
+          vi.mocked(wsManager.getSandboxWebSocket).mockReturnValue({} as WebSocket);
+          throw new SandboxProviderError("process did not start in time", "permanent");
+        }),
+      }),
+      storage,
+      storage,
+      broadcaster,
+      wsManager,
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      createTestConfig()
+    );
+
+    await manager.spawnSandbox();
+
+    expect(sandbox.status).toBe("connecting");
+    expect(storage.calls).not.toContain("transitionSandboxStatus:spawning->failed");
+    expect(sandbox.spawn_failure_count).toBe(0);
+    expect(broadcaster.messages).not.toContainEqual(
+      expect.objectContaining({ type: "sandbox_error" })
+    );
   });
 
   it("leaves a sandbox that connected during the provider call ready when the call then fails", async () => {

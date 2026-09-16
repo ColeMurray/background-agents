@@ -174,6 +174,7 @@ describe("DaytonaSandboxProvider", () => {
         repo_name: "testrepo",
         provider: "anthropic",
         model: "anthropic/claude-sonnet-4-5",
+        bridge_early_connect: true,
       });
     });
 

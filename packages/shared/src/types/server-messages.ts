@@ -2,7 +2,7 @@ import { DEFAULT_HARNESS, harnessIdSchema } from "../harnesses";
 import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
-import { sandboxEventSchema } from "./sandbox-events";
+import { sandboxBootPhaseSchema, sandboxEventSchema } from "./sandbox-events";
 import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
 import { clientRequestIdSchema } from "./prompts";
 
@@ -123,6 +123,8 @@ export const sessionSnapshotSchema = z.object({
   artifacts: z.array(sessionArtifactSchema),
   timeline: sessionTimelineSchema,
   spawnError: z.string().nullable().optional(),
+  /** The boot phase a spawning/connecting sandbox last reported; null otherwise. */
+  bootPhase: sandboxBootPhaseSchema.nullable().optional(),
   promptQueue: z.array(promptQueueItemSchema),
 });
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
@@ -171,7 +173,6 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_warming") }),
   z.object({ type: z.literal("sandbox_spawning") }),
   z.object({ type: z.literal("sandbox_status"), status: sandboxStatusSchema }),
-  z.object({ type: z.literal("sandbox_ready") }),
   z.object({ type: z.literal("sandbox_error"), error: z.string() }),
   z.object({ type: z.literal("artifact_created"), artifact: sessionArtifactSchema }),
   // Existing artifact changed (e.g. PR lifecycle update). Consumers upsert by

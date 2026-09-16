@@ -12,12 +12,14 @@ import {
   evaluateInactivityTimeout,
   evaluateHeartbeatHealth,
   evaluateConnectingTimeout,
+  evaluateBootBudget,
   evaluateWarmDecision,
   evaluateExecutionTimeout,
   isSandboxReconnectBlockedStatus,
   isSnapshotRuntimeCompatible,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+  DEFAULT_BOOT_BUDGET_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   type CircuitBreakerState,
@@ -963,6 +965,111 @@ describe("connect watchdog and spawn staleness defaults", () => {
       ).isTimedOut
     ).toBe(true);
     expect(evaluateSpawnDecision(state, DEFAULT_SPAWN_CONFIG, now, false).action).toBe("spawn");
+  });
+});
+
+describe("a generation whose bridge has connected", () => {
+  const booting = (overrides: Partial<SandboxState>): SandboxState => ({
+    status: "connecting",
+    createdAt: Date.now() - (DEFAULT_SPAWN_CONFIG.spawningTimeoutMs + 60_000),
+    snapshotImageId: null,
+    snapshotRuntimeVersion: null,
+    hasActiveWebSocket: false,
+    hasConnected: true,
+    ...overrides,
+  });
+
+  it("is never replaced by age while its bridge is attached", () => {
+    const now = Date.now();
+    const decision = evaluateSpawnDecision(
+      booting({ hasActiveWebSocket: true }),
+      DEFAULT_SPAWN_CONFIG,
+      now,
+      false
+    );
+
+    expect(decision).toEqual({
+      action: "skip",
+      reason: "already connecting with a live bridge",
+    });
+  });
+
+  it("waits for its bridge to reconnect instead of spawning a replacement past the staleness bound", () => {
+    const now = Date.now();
+    const decision = evaluateSpawnDecision(booting({}), DEFAULT_SPAWN_CONFIG, now, false);
+
+    expect(decision.action).toBe("wait");
+  });
+
+  it("still replaces a generation that never connected once the bound has passed", () => {
+    const now = Date.now();
+    const decision = evaluateSpawnDecision(
+      booting({ hasConnected: false }),
+      DEFAULT_SPAWN_CONFIG,
+      now,
+      false
+    );
+
+    expect(decision.action).toBe("spawn");
+  });
+
+  it("is not timed out by the connect watchdog, however long its boot runs", () => {
+    const now = Date.now();
+    const createdAt = now - DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs * 3;
+
+    expect(
+      evaluateConnectingTimeout(
+        "connecting",
+        createdAt,
+        DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+        now,
+        true
+      ).isTimedOut
+    ).toBe(false);
+    expect(
+      evaluateConnectingTimeout(
+        "connecting",
+        createdAt,
+        DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+        now,
+        false
+      ).isTimedOut
+    ).toBe(true);
+  });
+});
+
+describe("evaluateBootBudget", () => {
+  const config = { timeoutMs: 1_800_000 };
+
+  it.each(["spawning", "connecting"] as const)("expires a %s row past the budget", (status) => {
+    const now = Date.now();
+    const result = evaluateBootBudget(status, now - config.timeoutMs, config, now);
+
+    expect(result).toEqual({ isExceeded: true, elapsedMs: config.timeoutMs });
+  });
+
+  it("does not expire a boot still inside the budget", () => {
+    const now = Date.now();
+    const result = evaluateBootBudget("connecting", now - config.timeoutMs + 1, config, now);
+
+    expect(result.isExceeded).toBe(false);
+  });
+
+  it.each(["ready", "snapshotting", "failed", "stopped", "stale", "pending"] as const)(
+    "never applies to a %s row",
+    (status) => {
+      const now = Date.now();
+      expect(evaluateBootBudget(status, now - config.timeoutMs * 2, config, now)).toEqual({
+        isExceeded: false,
+        elapsedMs: 0,
+      });
+    }
+  );
+
+  it("outlasts the connect watchdog, since both are measured from the same origin", () => {
+    expect(DEFAULT_BOOT_BUDGET_CONFIG.timeoutMs).toBeGreaterThan(
+      DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs
+    );
   });
 });
 

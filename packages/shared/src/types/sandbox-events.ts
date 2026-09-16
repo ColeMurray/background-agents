@@ -36,6 +36,33 @@ const tokenUsageDetailsSchema = z
 
 const tokenUsageSchema = z.union([z.number(), tokenUsageDetailsSchema]);
 
+/** The steps of a sandbox boot, in the order the supervisor runs them. */
+export const bootPhaseNameSchema = z.enum([
+  "starting",
+  "sync",
+  "setup",
+  "start",
+  "skills",
+  "harness",
+]);
+export type BootPhaseName = z.infer<typeof bootPhaseNameSchema>;
+
+export const bootPhaseStatusSchema = z.enum(["started", "completed", "failed"]);
+export type BootPhaseStatus = z.infer<typeof bootPhaseStatusSchema>;
+
+/**
+ * The phase a booting sandbox last reported, as the subscribe snapshot
+ * carries it. Present only while the sandbox is booting; cleared at ready.
+ */
+export const sandboxBootPhaseSchema = z.object({
+  phase: bootPhaseNameSchema,
+  status: bootPhaseStatusSchema,
+  warning: z.boolean().optional(),
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
+});
+export type SandboxBootPhase = z.infer<typeof sandboxBootPhaseSchema>;
+
 const sandboxEventBaseSchema = z.object({
   sandboxId: z.string(),
   timestamp: z.number(),
@@ -166,6 +193,29 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     message: z.string(),
     repoOwner: z.string().optional(),
     repoName: z.string().optional(),
+    sandboxId: z.string().optional(),
+    timestamp: z.number(),
+    ackId: z.string().optional(),
+  }),
+  // Boot phase reports from the sandbox supervisor, relayed by the bridge
+  // while it is connected ahead of the harness. `bootSeq` is monotonic per
+  // boot so a phase resent after a reconnect can be recognised. Informational:
+  // the control plane never gates admission on a phase, only names it. Live
+  // ingest drops unknown union entries, so this entry must exist before
+  // runtimes emit it.
+  z.object({
+    type: z.literal("boot_progress"),
+    bootSeq: z.number().int(),
+    phase: bootPhaseNameSchema,
+    status: bootPhaseStatusSchema,
+    /** A non-fatal hook exit was tolerated (setup.sh outside an image build). */
+    warning: z.boolean().optional(),
+    repoOwner: z.string().optional(),
+    repoName: z.string().optional(),
+    elapsedMs: z.number().optional(),
+    /** Last lines of the failing script, bounded and redacted by the runtime. */
+    outputTail: z.array(z.string().max(4096)).max(200).optional(),
+    detail: z.string().optional(),
     sandboxId: z.string().optional(),
     timestamp: z.number(),
     ackId: z.string().optional(),

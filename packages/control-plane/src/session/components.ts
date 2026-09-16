@@ -534,6 +534,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         name: "callback.refresh_slack_activity",
         context: { message_id: messageId },
       }),
+    () => lifecycleManager.scheduleInactivityCheck(),
+    backgroundTasks,
+    messageQueue,
     log
   );
   const pushService = new SandboxPushService(log, wsManager);
@@ -1012,6 +1015,12 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     inactivity: {
       ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
       timeoutMs: parseInt(env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
+    },
+    bootBudget: {
+      timeoutMs: parseInt(
+        env.SANDBOX_BOOT_TIMEOUT_MS || String(DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs),
+        10
+      ),
     },
     mcpServerLookup,
     slackAgentNotifyLookup,

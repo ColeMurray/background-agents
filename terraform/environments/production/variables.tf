@@ -659,6 +659,12 @@ variable "sandbox_inactivity_timeout_ms" {
   default     = 600000
 }
 
+variable "sandbox_boot_timeout_ms" {
+  description = "Milliseconds a sandbox whose bridge has connected may keep booting (clone, setup.sh, start.sh, agent start) before OpenInspect fails it and the prompt it was for."
+  type        = number
+  default     = 1800000
+}
+
 variable "web_platform" {
   description = "Platform for the web app deployment: 'vercel' or 'cloudflare' (OpenNext)"
   type        = string
