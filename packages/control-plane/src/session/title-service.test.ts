@@ -27,17 +27,17 @@ function makeHarness(options: { session?: SessionRow | null } = {}) {
   const messenger = { broadcast: vi.fn(), sendToSandbox: vi.fn(async () => {}) };
   const statusService = { notifyParentOfChildUpdate: vi.fn() };
   const backgroundTasks = createTestBackgroundTasks();
-  const updateTitleIfNewer = vi.fn(async () => true);
+  const updateTitle = vi.fn(async () => true);
   const service = new SessionTitleService({
     sessionCoreRepository: repository as unknown as SessionCoreRepository,
     messenger,
     statusService,
     backgroundTasks,
-    sessionIndexStore: { updateTitleIfNewer },
+    sessionIndexStore: { updateTitle },
     durableObjectId: "do-hex-id",
     now: () => NOW,
   });
-  return { service, repository, messenger, statusService, backgroundTasks, updateTitleIfNewer };
+  return { service, repository, messenger, statusService, backgroundTasks, updateTitle };
 }
 
 describe("SessionTitleService", () => {
@@ -91,7 +91,7 @@ describe("SessionTitleService", () => {
     ]);
     await h.backgroundTasks.settle();
     expect(h.backgroundTasks.failures).toEqual([]);
-    expect(h.updateTitleIfNewer).toHaveBeenCalledWith("public-name", "New title", NOW);
+    expect(h.updateTitle).toHaveBeenCalledWith("public-name", "New title", NOW);
     expect(h.statusService.notifyParentOfChildUpdate).not.toHaveBeenCalled();
   });
 
@@ -105,6 +105,31 @@ describe("SessionTitleService", () => {
       "A title",
       NOW + 10_001
     );
+  });
+
+  it("serializes index title projections and continues after a failure", async () => {
+    const h = makeHarness();
+    let rejectFirst!: (error: unknown) => void;
+    const firstProjection = new Promise<boolean>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    h.updateTitle.mockImplementationOnce(() => firstProjection).mockResolvedValueOnce(true);
+
+    h.service.applySessionTitleUpdate("First title");
+    h.service.applySessionTitleUpdate("Second title");
+
+    await vi.waitFor(() => expect(h.updateTitle).toHaveBeenCalledTimes(1));
+    expect(h.updateTitle).toHaveBeenLastCalledWith("public-name", "First title", NOW);
+
+    const projectionError = new Error("D1 unavailable");
+    rejectFirst(projectionError);
+    await h.backgroundTasks.settle();
+
+    expect(h.updateTitle.mock.calls).toEqual([
+      ["public-name", "First title", NOW],
+      ["public-name", "Second title", NOW],
+    ]);
+    expect(h.backgroundTasks.failures).toEqual([projectionError]);
   });
 
   it("notifies the parent session for child sessions", () => {
