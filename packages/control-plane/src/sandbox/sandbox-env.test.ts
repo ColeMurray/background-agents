@@ -7,8 +7,10 @@ import {
   buildImageBuildEnvVars,
   buildSandboxEnvVars,
   buildSessionConfig,
+  DEFERRED_START_ENV_VAR,
   deriveCodeServerPassword,
   deriveVncPassword,
+  IMAGE_BUILD_CONTEXT_START_ARGUMENT,
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
   IMAGE_BUILD_MODE_ENV_VAR,
   imageBuildSandboxIdentity,
@@ -484,6 +486,8 @@ describe("cross-plane env-key contract manifest", () => {
     callback_env: Record<string, string>;
     build_mode_env_var: string;
     execution_timeout_env_var: string;
+    deferred_start_env_var: string;
+    context_start_argument: string;
     reserved_only_control_plane: string[];
     reserved_only_modal: string[];
   };
@@ -501,6 +505,13 @@ describe("cross-plane env-key contract manifest", () => {
   it("pins the build-mode marker and execution-timeout key to the manifest", () => {
     expect(IMAGE_BUILD_MODE_ENV_VAR).toBe(manifest.build_mode_env_var);
     expect(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY).toBe(manifest.execution_timeout_env_var);
+  });
+
+  it("pins the deferred-start marker and context-launch argument to the manifest", () => {
+    expect(DEFERRED_START_ENV_VAR).toBe(manifest.deferred_start_env_var);
+    expect(IMAGE_BUILD_CONTEXT_START_ARGUMENT).toBe(manifest.context_start_argument);
+    // The dormant marker is a boot control, so the user layer can never carry it.
+    expect(BOOT_MODE_ENV_KEYS).toContain(manifest.deferred_start_env_var);
   });
 
   it("pins the reserved scrub list to the callback keys plus the control-plane-only extras", () => {

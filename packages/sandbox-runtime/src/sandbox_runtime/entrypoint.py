@@ -16,6 +16,12 @@ from .claude_stager import ClaudeStager, isolated_claude_config_dir, resolve_cla
 from .code_server import CodeServer
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
 from .harness.base import HarnessId, HarnessProcessOwner
+from .image_build_context_start import (
+    IMAGE_BUILD_CONTEXT_START_ARGUMENT,
+    deferred_start_requested,
+    run_deferred_start,
+    run_image_build_context_start,
+)
 from .image_environment import apply_image_environment
 from .log_config import configure_logging, get_logger
 from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
@@ -156,7 +162,21 @@ async def main(argv: list[str] | None = None) -> int:
         dest="await_modal_image_build_token",
         action="store_true",
     )
+    parser.add_argument(
+        IMAGE_BUILD_CONTEXT_START_ARGUMENT,
+        dest="await_image_build_context",
+        action="store_true",
+    )
     args = parser.parse_args(argv)
+
+    # Both image-build launch protocols decide the process environment before
+    # anything reads it, so they branch ahead of build_supervisor(). The
+    # stdin-context launcher composes that environment itself and ignores the
+    # deferred marker; an unlaunched deferred sandbox composes nothing at all.
+    if args.await_image_build_context:
+        return await run_image_build_context_start(build_supervisor, install_signal_handlers)
+    if deferred_start_requested(os.environ):
+        return await run_deferred_start()
 
     supervisor = build_supervisor(asyncio.Event())
     install_signal_handlers(supervisor)
