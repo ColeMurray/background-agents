@@ -10,6 +10,55 @@ import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { initSchema } from "./schema";
 import { SessionCoreRepository } from "./session-core-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import { SessionStorageIntegrityError, type SessionRepositoryRow, type SessionRow } from "./types";
+
+function sessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
+  return {
+    id: "sess-1",
+    session_name: "test-session",
+    title: "Test",
+    repo_owner: "owner",
+    repo_name: "repo",
+    repo_id: null,
+    base_branch: "main",
+    branch_name: null,
+    base_sha: null,
+    current_sha: null,
+    agent_session_id: null,
+    harness: "opencode",
+    model: "claude-sonnet-4",
+    reasoning_effort: null,
+    status: "created",
+    status_revision: 1,
+    parent_session_id: null,
+    spawn_source: "user",
+    spawn_depth: 0,
+    code_server_enabled: 0,
+    vnc_enabled: 0,
+    total_cost: 0,
+    sandbox_settings: null,
+    max_cost_usd: null,
+    budget_exhausted: 0,
+    environment_id: null,
+    created_at: 1000,
+    updated_at: 1000,
+    ...overrides,
+  };
+}
+
+function sessionRepositoryRow(overrides: Partial<SessionRepositoryRow> = {}): SessionRepositoryRow {
+  return {
+    position: 0,
+    repo_owner: "acme",
+    repo_name: "frontend",
+    repo_id: null,
+    base_branch: "main",
+    branch_name: null,
+    base_sha: null,
+    current_sha: null,
+    ...overrides,
+  };
+}
 
 /**
  * Create a mock SqlStorage that tracks calls and returns configurable data.
@@ -85,16 +134,15 @@ describe("SessionCoreRepository", () => {
     });
 
     it("returns session when it exists", () => {
-      const session = {
-        id: "sess-1",
-        session_name: "test-session",
-        title: "Test",
-        repo_owner: "owner",
-        repo_name: "repo",
-        repo_id: null,
-      };
+      const session = sessionRow({ title: null });
       mock.setData(`SELECT * FROM session LIMIT 1`, [session]);
       expect(repo.getSession()).toEqual(session);
+    });
+
+    it("throws on malformed persisted session rows", () => {
+      mock.setData(`SELECT * FROM session LIMIT 1`, [sessionRow({ status: "queued" as never })]);
+
+      expect(() => repo.getSession()).toThrow(SessionStorageIntegrityError);
     });
   });
 
@@ -368,12 +416,20 @@ describe("SessionCoreRepository", () => {
   describe("getSessionRepositoryRows", () => {
     it("returns rows ordered by position", () => {
       const rows = [
-        { position: 0, repo_owner: "acme", repo_name: "frontend" },
-        { position: 1, repo_owner: "acme", repo_name: "backend" },
+        sessionRepositoryRow(),
+        sessionRepositoryRow({ position: 1, repo_name: "backend", base_branch: "develop" }),
       ];
       mock.setData(`SELECT * FROM session_repositories ORDER BY position`, rows);
 
       expect(repo.getSessionRepositoryRows()).toEqual(rows);
+    });
+
+    it("throws on malformed persisted session repository rows", () => {
+      mock.setData(`SELECT * FROM session_repositories ORDER BY position`, [
+        sessionRepositoryRow({ repo_id: "bad" as never }),
+      ]);
+
+      expect(() => repo.getSessionRepositoryRows()).toThrow(SessionStorageIntegrityError);
     });
 
     it("returns an empty list for pre-feature sessions", () => {
