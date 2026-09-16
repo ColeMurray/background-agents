@@ -14,7 +14,10 @@ import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { isSessionListKey, isUnarchivedSessionListKey } from "@/lib/session-list";
 import { useSessionSocket } from "./use-session-socket";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
-import { clearSessionTitleRevisions } from "@/lib/session-title-reconciliation";
+import {
+  clearSessionTitleRevisions,
+  getSessionTitleRevision,
+} from "@/lib/session-title-reconciliation";
 
 const FULL_CAPABILITIES = {
   read: true,
@@ -648,6 +651,23 @@ describe("useSessionSocket", () => {
       revalidate: false,
     });
     expect(mutateMock).not.toHaveBeenCalledWith(isUnarchivedSessionListKey);
+  });
+
+  it("ignores empty title messages before cache reconciliation", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+
+    act(() => {
+      const socket = FakeWebSocket.instances[0];
+      socket.open();
+      socket.receive(createSubscribedMessage());
+      socket.receive({ type: "session_title", title: "", updatedAt: 2 });
+    });
+
+    expect(result.current.sessionState?.title).toBe("Session 1");
+    expect(getSessionTitleRevision("session-1")).toBeUndefined();
   });
 
   it("hydrates replayed assistant text before completion when storage ordering is tied", async () => {

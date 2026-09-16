@@ -701,6 +701,17 @@ describe("sessionSocketReducer", () => {
       expect(state.sessionState?.title).toBe("Session 1");
     });
 
+    it("ignores a title revision older than the session state", () => {
+      const state = reduce(
+        subscribedState({ session: createSessionState({ title: "Newest", updatedAt: 3 }) }),
+        serverMessage({ type: "session_title", title: "Stale", updatedAt: 2 })
+      );
+
+      expect(state.sessionState).toEqual(
+        expect.objectContaining({ title: "Newest", updatedAt: 3 })
+      );
+    });
+
     it("upserts artifacts by id, prepending new ones and replacing in place", () => {
       const pr = (id: string, createdAt: number) => ({
         id,

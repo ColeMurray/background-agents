@@ -225,7 +225,7 @@ export function useSessionSocket(
           ["spawning", "stale", "stopped", "failed"].includes(message.status));
       if (clearsSandboxAccess) void clearSandboxAccess();
 
-      if (message.type === "session_title") {
+      if (message.type === "session_title" && message.title) {
         const revision = reconcileSessionTitleRevision({
           sessionId,
           title: message.title,
