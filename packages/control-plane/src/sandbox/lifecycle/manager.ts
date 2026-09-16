@@ -651,15 +651,23 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         result = await this.provider.createSandbox(createConfig);
       } catch (error) {
         if (!selectedImage) throw error;
-        // A provider restore failure is "no image" (design §7.3): fail the
-        // row so the cron rebuilds it and boot this session from base rather
-        // than failing the spawn. Unrelated create failures (quota, network)
-        // can false-positive here — the cost is one rebuild, and the base
-        // retry surfaces them through the normal failure path anyway.
+        if (!(error instanceof SandboxProviderError)) throw error;
+        if (error.errorType === "transient") {
+          this.log.warn("Prebuilt-image spawn failed with a transient provider error", {
+            event: "image_build.spawn_error_transient",
+            image_build_id: selectedImage.imageBuildId,
+            error_type: error.errorType,
+            error: error.message,
+          });
+          throw error;
+        }
+        // A permanent provider restore failure is "no image" (design §7.3):
+        // fail the row so the cron rebuilds it and boot this session from base.
         this.log.warn("Prebuilt-image spawn failed, retrying from base image", {
           event: "image_build.restore_failed",
           image_build_id: selectedImage.imageBuildId,
-          error: error instanceof Error ? error.message : String(error),
+          error_type: error.errorType,
+          error: error.message,
         });
         await this.markImageBuildRestoreFailed(selectedImage, error);
         // The retry gets a fresh spawn identity: the failed attempt may have

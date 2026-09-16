@@ -3236,7 +3236,7 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("marks the repo image restore-failed and retries from base when the provider rejects it", async () => {
+    it("marks the repo image restore-failed and retries from base on a permanent provider error", async () => {
       // Deliberate behavior change: the old repo path failed the spawn
       // outright; repo images now take the same restore fallback the
       // environment side has.
@@ -3246,7 +3246,7 @@ describe("SandboxLifecycleManager", () => {
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValueOnce(new Error("image expired"))
+        .mockRejectedValueOnce(new SandboxProviderError("image expired", "permanent"))
         .mockImplementation(async (config) => ({
           sandboxId: config.sandboxId,
           providerObjectId: "provider-obj-123",
@@ -3257,6 +3257,7 @@ describe("SandboxLifecycleManager", () => {
         imageBuildLookup,
         provider: createMockProvider({ createSandbox }),
       });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
       await manager.spawnSandbox();
 
@@ -3274,6 +3275,43 @@ describe("SandboxLifecycleManager", () => {
       expect(retryAttempt.sandboxId).not.toBe(firstAttempt.sandboxId);
       expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
       expect(storage.calls).not.toContain("transitionSandboxStatus:spawning->failed");
+      expect(parseStructuredLogs(warnSpy)).toContainEqual(
+        expect.objectContaining({
+          event: "image_build.restore_failed",
+          error_type: "permanent",
+        })
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("does not fail the image or retry from base on a transient provider error", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const createSandbox = vi.fn(async () => {
+        throw new SandboxProviderError("request timed out", "transient");
+      });
+      const { manager, storage } = createRepoSessionManager({
+        imageBuildLookup,
+        provider: createMockProvider({ createSandbox }),
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+      await manager.spawnSandbox();
+
+      expect(createSandbox).toHaveBeenCalledOnce();
+      expect(imageBuildLookup.markRestoreFailed).not.toHaveBeenCalled();
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
+      expect(parseStructuredLogs(warnSpy)).toContainEqual(
+        expect.objectContaining({
+          event: "image_build.spawn_error_transient",
+          image_build_id: "imgb-repo-1",
+          error_type: "transient",
+          error: "request timed out",
+        })
+      );
+      warnSpy.mockRestore();
     });
   });
 
@@ -3424,14 +3462,14 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("marks the image restore-failed and retries from base when the provider rejects it", async () => {
+    it("marks the image restore-failed and retries from base on a permanent provider error", async () => {
       const environmentImageLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () => envImageRow()),
         markRestoreFailed: vi.fn(async () => true),
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValueOnce(new Error("image expired"))
+        .mockRejectedValueOnce(new SandboxProviderError("image expired", "permanent"))
         .mockImplementation(async (config) => ({
           sandboxId: config.sandboxId,
           providerObjectId: "provider-obj-123",
@@ -3484,7 +3522,7 @@ describe("SandboxLifecycleManager", () => {
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValue(new Error("quota exceeded"));
+        .mockRejectedValue(new SandboxProviderError("quota exceeded", "permanent"));
       const { manager, storage } = createEnvironmentSessionManager({
         environmentImageLookup,
         provider: createMockProvider({ createSandbox }),
@@ -3506,7 +3544,7 @@ describe("SandboxLifecycleManager", () => {
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValueOnce(new Error("image expired"))
+        .mockRejectedValueOnce(new SandboxProviderError("image expired", "permanent"))
         .mockImplementation(async (config) => ({
           sandboxId: config.sandboxId,
           providerObjectId: "provider-obj-123",
