@@ -1,7 +1,8 @@
 import { env } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
+import { cleanD1Tables } from "./cleanup";
 import {
   initSession,
   queryDO,
@@ -9,6 +10,8 @@ import {
   seedSandboxAuthHash,
   waitForSandboxStatus,
 } from "./helpers";
+
+beforeEach(cleanD1Tables);
 
 describe("GET /internal/state", () => {
   it("state includes sandbox after init", async () => {
