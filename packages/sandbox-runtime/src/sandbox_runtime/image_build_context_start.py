@@ -65,12 +65,15 @@ IMAGE_BUILD_LAUNCH_GUARD_PATH = "/tmp/oi-image-build.launched"
 
 _CALLBACK_TOKEN_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
-#: Keys the launcher owns. Scrubbed from the inherited container environment
-#: and from the context's user environment before the system values are
-#: applied, so neither a baked image variable nor a repository secret can
-#: choose the boot mode, redirect a callback, or impersonate session auth.
-#: ``OI_DEFERRED_START`` is here so the composed build process — and every
-#: setup hook under it — no longer sees the dormant marker.
+#: Credential the git credential helper pairs with ``VCS_HOST``.
+VCS_CLONE_TOKEN_ENV = "VCS_CLONE_TOKEN"
+
+#: Keys the launcher owns in the environment the image itself carries.
+#: Scrubbed before anything is layered on, so no baked variable can choose the
+#: boot mode, redirect a callback, impersonate session auth, or leave a stale
+#: clone credential in place. ``OI_DEFERRED_START`` is here so the composed
+#: build process — and every setup hook under it — no longer sees the dormant
+#: marker.
 RESERVED_CONTEXT_ENV_KEYS: frozenset[str] = frozenset(
     {
         # Boot mode (runtime_config.BootMode.from_env).
@@ -97,9 +100,17 @@ RESERVED_CONTEXT_ENV_KEYS: frozenset[str] = frozenset(
         "SANDBOX_AUTH_TOKEN",
         "VCS_HOST",
         "VCS_CLONE_USERNAME",
-        "VCS_CLONE_TOKEN",
+        VCS_CLONE_TOKEN_ENV,
     }
 )
+
+#: Keys a repository secret may not set, which is every launcher-owned key
+#: except the clone token. The control-plane's own build environment
+#: (``buildImageBuildEnvVars``/``applyScmCloneEnv`` in the control plane) lets
+#: a scope-supplied ``VCS_CLONE_TOKEN`` stand when no token could be brokered,
+#: and overwrites it when one could; a deployment whose SCM credential is a
+#: repository secret clones the same way here as on every other provider.
+RESERVED_SCOPE_ENV_KEYS: frozenset[str] = RESERVED_CONTEXT_ENV_KEYS - {VCS_CLONE_TOKEN_ENV}
 
 
 class ImageBuildContextStartCancelled(Exception):
@@ -209,11 +220,15 @@ def compose_image_build_environment(
     carried, the scope environment is applied, then the system values are
     overlaid so no user value can shadow one. The callback token is absent by
     construction — it lives in the callback object, not here.
+
+    The one key a scope may still supply is the clone token, which the
+    brokered one overwrites when there is one. That is the shared build
+    environment's rule, not a Daytona exception.
     """
     for key in RESERVED_CONTEXT_ENV_KEYS:
         environment.pop(key, None)
     for key, value in context.env.items():
-        if key in RESERVED_CONTEXT_ENV_KEYS:
+        if key in RESERVED_SCOPE_ENV_KEYS:
             continue
         environment[key] = value
 
@@ -245,7 +260,7 @@ def compose_image_build_environment(
         environment["VCS_HOST"] = context.clone.host
         environment["VCS_CLONE_USERNAME"] = context.clone.username
         if context.clone.token:
-            environment["VCS_CLONE_TOKEN"] = context.clone.token
+            environment[VCS_CLONE_TOKEN_ENV] = context.clone.token
 
 
 async def run_deferred_start() -> int:

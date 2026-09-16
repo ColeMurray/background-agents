@@ -211,7 +211,7 @@ class TestComposeImageBuildEnvironment:
                         "SANDBOX_ID": "hijacked",
                         BUILD_ID_ENV: "hijacked",
                         CALLBACK_TOKEN_ENV: "hijacked",
-                        "VCS_CLONE_TOKEN": "hijacked",
+                        "VCS_CLONE_TOKEN": "scope-clone-token",
                     }
                 )
             )[:-1]
@@ -234,6 +234,8 @@ class TestComposeImageBuildEnvironment:
         assert environment[IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR] == "1800"
         assert environment["VCS_HOST"] == "github.com"
         assert environment["VCS_CLONE_USERNAME"] == "x-access-token"
+        # The brokered token wins over a scope-supplied one, exactly as
+        # applyScmCloneEnv overwrites it in the shared build environment.
         assert environment["VCS_CLONE_TOKEN"] == "clone-secret"
         # The dormant marker and every inherited boot/callback key are gone, so
         # the build cannot inherit a stale mode or a stale callback identity.
@@ -271,7 +273,29 @@ class TestComposeImageBuildEnvironment:
         compose_image_build_environment(context, environment)
 
         assert environment["VCS_HOST"] == "gitlab.com"
+        # A credential baked into the image is still dropped; only the scope's
+        # own environment may supply one.
         assert "VCS_CLONE_TOKEN" not in environment
+
+    def test_keeps_a_scope_clone_token_when_none_was_brokered(self):
+        context = parse_image_build_context(
+            _line(
+                _context(
+                    clone={"host": "gitlab.com", "username": "oauth2"},
+                    env={"VCS_CLONE_TOKEN": "scope-clone-token"},
+                )
+            )[:-1]
+        )
+        environment = {"VCS_CLONE_TOKEN": "stale"}
+
+        compose_image_build_environment(context, environment)
+
+        # Same rule as buildImageBuildEnvVars on every other provider: with no
+        # brokered token, a scope-supplied one is what the credential helper
+        # clones with.
+        assert environment["VCS_CLONE_TOKEN"] == "scope-clone-token"
+        assert environment["VCS_HOST"] == "gitlab.com"
+        assert environment["VCS_CLONE_USERNAME"] == "oauth2"
 
 
 class TestDeferredStart:
