@@ -205,13 +205,36 @@ describe("resolveGitHubEnrichmentForRequest", () => {
 
   it("accepts browser authority bound to the canonical GitHub identity", async () => {
     const store = fakeStore([{ provider: "github", providerUserId: "42", providerLogin: "ada" }]);
+    const resolveProfile = vi.fn(async () => GITHUB_ACCOUNT_INFO);
 
     await expect(
       resolveGitHubEnrichmentForRequest(store, "user-1", {
         kind: "browser_session",
-        githubAccount: { subject: "42" },
+        githubAccount: { subject: "42", resolveProfile },
       })
     ).resolves.toMatchObject({ scmUserId: "42", scmLogin: "ada" });
+    expect(resolveProfile).not.toHaveBeenCalled();
+  });
+
+  it("uses the verified browser profile when canonical GitHub metadata is incomplete", async () => {
+    await expect(
+      resolveGitHubEnrichmentForRequest(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        "user-1",
+        {
+          kind: "browser_session",
+          githubAccount: {
+            subject: "42",
+            resolveProfile: vi.fn(async () => GITHUB_ACCOUNT_INFO),
+          },
+        }
+      )
+    ).resolves.toEqual({
+      scmUserId: "42",
+      scmLogin: "ada",
+      displayName: "Ada Lovelace",
+      email: "42+ada@users.noreply.github.com",
+    });
   });
 
   it("rejects browser authority that differs from the canonical identity", async () => {
@@ -220,7 +243,10 @@ describe("resolveGitHubEnrichmentForRequest", () => {
     await expect(
       resolveGitHubEnrichmentForRequest(store, "user-1", {
         kind: "browser_session",
-        githubAccount: { subject: "7" },
+        githubAccount: {
+          subject: "7",
+          resolveProfile: vi.fn(async () => GITHUB_ACCOUNT_INFO),
+        },
       })
     ).rejects.toThrow("GitHub account authority is corrupt");
   });
@@ -241,6 +267,7 @@ describe("resolveCurrentGitHubAccessToken", () => {
   const accountClient = {
     listUserAccounts: vi.fn(async () => []),
     getAccessToken: vi.fn(async () => ({ accessToken: "current-access-token" })),
+    refreshToken: vi.fn(async () => ({ accessToken: "refreshed-access-token" })),
     accountInfo: vi.fn(async () => GITHUB_ACCOUNT_INFO),
   };
 
@@ -275,11 +302,16 @@ describe("resolveCurrentGitHubAccessToken", () => {
     });
   });
 
-  it("returns null when the resolved token expires too soon", async () => {
+  it("refreshes a token that expires inside the PR safety window", async () => {
     const accountInfo = vi.fn(async () => GITHUB_ACCOUNT_INFO);
+    const refreshToken = vi.fn(async () => ({
+      accessToken: "refreshed-access-token",
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+    }));
     const expiringClient = {
       ...accountClient,
       accountInfo,
+      refreshToken,
       getAccessToken: vi.fn(async () => ({
         accessToken: "expiring-token",
         accessTokenExpiresAt: new Date(Date.now() + 30_000),
@@ -290,6 +322,28 @@ describe("resolveCurrentGitHubAccessToken", () => {
       resolveCurrentGitHubAccessToken(
         fakeStore([{ provider: "github", providerUserId: "42" }]),
         () => expiringClient,
+        "user-1",
+        "42"
+      )
+    ).resolves.toBe("refreshed-access-token");
+    expect(refreshToken).toHaveBeenCalledWith({
+      body: { providerId: "github", accountId: "42", userId: "user-1" },
+    });
+    expect(accountInfo).toHaveBeenCalledOnce();
+  });
+
+  it("returns null for a linked identity without an OAuth grant", async () => {
+    const accountInfo = vi.fn(async () => GITHUB_ACCOUNT_INFO);
+    const grantlessClient = {
+      ...accountClient,
+      accountInfo,
+      getAccessToken: vi.fn(async () => ({ accessToken: "" })),
+    };
+
+    await expect(
+      resolveCurrentGitHubAccessToken(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        () => grantlessClient,
         "user-1",
         "42"
       )
@@ -333,7 +387,7 @@ describe("resolveCurrentGitHubAccessToken", () => {
   it("treats a malformed token response as an integrity failure", async () => {
     const malformedClient = {
       ...accountClient,
-      getAccessToken: vi.fn(async () => ({ accessToken: "" })),
+      getAccessToken: vi.fn(async () => ({})),
     };
 
     await expect(

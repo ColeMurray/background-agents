@@ -86,6 +86,19 @@ beforeAll(async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url === "https://github.com/login/oauth/access_token") {
+      const body = new URLSearchParams(
+        input instanceof Request ? await input.clone().text() : String(init?.body ?? "")
+      );
+      if (body.get("grant_type") === "refresh_token") {
+        expect(body.get("refresh_token")).toBe("github-refresh-token");
+        return Response.json({
+          access_token: "github-refreshed-access-token",
+          token_type: "bearer",
+          expires_in: 28_800,
+          refresh_token: "github-rotated-refresh-token",
+          refresh_token_expires_in: 15_897_600,
+        });
+      }
       return Response.json({
         access_token: "github-access-token",
         token_type: "bearer",
@@ -349,6 +362,8 @@ describe("browser auth callback", () => {
     );
     expect(enrichment).toMatchObject({
       scmUserId: "583231",
+      scmLogin: "octocat",
+      email: "583231+octocat@users.noreply.github.com",
     });
     await expect(
       resolveCurrentGitHubAccessToken(
@@ -358,6 +373,35 @@ describe("browser auth callback", () => {
         "583231"
       )
     ).resolves.toBe("github-access-token");
+
+    await env.DB.prepare("UPDATE user_identities SET access_token_expires_at = ? WHERE id = ?")
+      .bind(Date.now() + 30_000, account?.id)
+      .run();
+    await expect(
+      resolveCurrentGitHubAccessToken(
+        new UserStore(env.DB),
+        () => getUserAuth(createCloudflareEnv(env), env.DB).api,
+        session.user.id,
+        "583231"
+      )
+    ).resolves.toBe("github-refreshed-access-token");
+
+    await env.DB.prepare(
+      `UPDATE user_identities
+       SET access_token = NULL, refresh_token = NULL,
+           access_token_expires_at = NULL, refresh_token_expires_at = NULL
+       WHERE id = ?`
+    )
+      .bind(account?.id)
+      .run();
+    await expect(
+      resolveCurrentGitHubAccessToken(
+        new UserStore(env.DB),
+        () => getUserAuth(createCloudflareEnv(env), env.DB).api,
+        session.user.id,
+        "583231"
+      )
+    ).resolves.toBeNull();
 
     const serviceEnrichment = await resolveGitHubEnrichmentForRequest(
       new UserStore(env.DB),

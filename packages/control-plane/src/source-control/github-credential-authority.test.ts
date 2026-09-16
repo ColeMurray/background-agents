@@ -37,6 +37,7 @@ function createUserContext(accounts: unknown[]) {
   const accountClient: ProviderAccountClient = {
     listUserAccounts,
     getAccessToken: vi.fn(async () => null),
+    refreshToken: vi.fn(async () => null),
     accountInfo: vi.fn(async () => null),
   };
   const runtime = {
@@ -55,7 +56,7 @@ function createUserContext(accounts: unknown[]) {
 
 describe("resolveGitHubCredentialAuthority", () => {
   it("selects a linked GitHub account only when credential authority is requested", async () => {
-    const { context, listUserAccounts } = createUserContext([
+    const { context, listUserAccounts, accountClient } = createUserContext([
       {
         providerId: "github",
         accountId: "583231",
@@ -68,11 +69,23 @@ describe("resolveGitHubCredentialAuthority", () => {
       },
     ]);
 
-    await expect(resolveGitHubCredentialAuthority(context, BROWSER_HEADERS)).resolves.toEqual({
+    const authority = await resolveGitHubCredentialAuthority(context, BROWSER_HEADERS);
+    expect(authority).toEqual({
       kind: "browser_session",
-      githubAccount: { subject: "583231" },
+      githubAccount: {
+        subject: "583231",
+        resolveProfile: expect.any(Function),
+      },
     });
     expect(listUserAccounts).toHaveBeenCalledWith({ headers: BROWSER_HEADERS });
+
+    if (authority.kind !== "browser_session" || !authority.githubAccount) {
+      throw new Error("Expected GitHub browser authority");
+    }
+    await authority.githubAccount.resolveProfile();
+    expect(accountClient.accountInfo).toHaveBeenCalledWith({
+      query: { providerId: "github", accountId: "583231", userId: "user-1" },
+    });
   });
 
   it("allows browser users without a linked GitHub account", async () => {

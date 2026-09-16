@@ -58,7 +58,7 @@ export interface GitHubEnrichment {
 const GITHUB_ACCESS_TOKEN_EXPIRY_BUFFER_MS = 60_000;
 
 const betterAuthAccessTokenSchema = z.object({
-  accessToken: z.string().min(1),
+  accessToken: z.string(),
   accessTokenExpiresAt: z.coerce.date().optional(),
 });
 
@@ -82,6 +82,21 @@ export class BetterAuthGitHubTokenUnavailableError extends Error {
     super("Better Auth GitHub token is unavailable", { cause: retrievalError });
     this.name = "BetterAuthGitHubTokenUnavailableError";
   }
+}
+
+function expiresWithinGitHubSafetyWindow(token: { accessTokenExpiresAt?: Date }): boolean {
+  return Boolean(
+    token.accessTokenExpiresAt &&
+    token.accessTokenExpiresAt.getTime() <= Date.now() + GITHUB_ACCESS_TOKEN_EXPIRY_BUFFER_MS
+  );
+}
+
+function parseBetterAuthGitHubProfile(response: unknown, expectedScmUserId: string) {
+  const profile = betterAuthGitHubAccountInfoSchema.parse(response);
+  if (profile.user.id !== expectedScmUserId || profile.data.subject !== expectedScmUserId) {
+    throw new Error("Better Auth returned a mismatched GitHub account");
+  }
+  return profile.data;
 }
 
 /** Resolve current PR credentials without copying Better Auth tokens into session state. */
@@ -109,20 +124,27 @@ export async function resolveCurrentGitHubAccessToken(
   } catch (error) {
     throw new BetterAuthGitHubTokenUnavailableError(error);
   }
-  const token = betterAuthAccessTokenSchema.parse(tokenResponse);
-  if (
-    token.accessTokenExpiresAt &&
-    token.accessTokenExpiresAt.getTime() <= Date.now() + GITHUB_ACCESS_TOKEN_EXPIRY_BUFFER_MS
-  ) {
-    return null;
+  let token = betterAuthAccessTokenSchema.parse(tokenResponse);
+  if (token.accessToken === "") return null;
+
+  if (expiresWithinGitHubSafetyWindow(token)) {
+    let refreshResponse: unknown;
+    try {
+      refreshResponse = await accountClient.refreshToken({ body: selection });
+    } catch (error) {
+      throw new BetterAuthGitHubTokenUnavailableError(error);
+    }
+    token = betterAuthAccessTokenSchema.parse(refreshResponse);
+    if (token.accessToken === "") {
+      throw new Error("Better Auth returned an empty refreshed GitHub access token");
+    }
+    if (expiresWithinGitHubSafetyWindow(token)) return null;
   }
 
-  const profile = betterAuthGitHubAccountInfoSchema.parse(
-    await accountClient.accountInfo({ query: selection })
+  parseBetterAuthGitHubProfile(
+    await accountClient.accountInfo({ query: selection }),
+    expectedScmUserId
   );
-  if (profile.user.id !== expectedScmUserId || profile.data.subject !== expectedScmUserId) {
-    throw new Error("Better Auth returned a mismatched GitHub account");
-  }
   return token.accessToken;
 }
 
@@ -194,5 +216,23 @@ export async function resolveGitHubEnrichmentForRequest(
   if (!enrichment || enrichment.scmUserId !== authority.githubAccount.subject) {
     throw new Error("GitHub account authority is corrupt");
   }
-  return enrichment;
+  if (enrichment.scmLogin) return enrichment;
+
+  const profile = parseBetterAuthGitHubProfile(
+    await authority.githubAccount.resolveProfile(),
+    authority.githubAccount.subject
+  );
+  const displayName = enrichment.displayName ?? profile.displayName ?? profile.login;
+  const authorIdentity = resolveGitAuthorIdentity({
+    scmProvider: "github",
+    scmUserId: enrichment.scmUserId,
+    scmLogin: profile.login,
+    scmName: displayName,
+  });
+  return {
+    ...enrichment,
+    scmLogin: profile.login,
+    displayName,
+    email: authorIdentity?.email,
+  };
 }

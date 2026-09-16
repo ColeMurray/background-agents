@@ -9,6 +9,7 @@ const providerAccountSchema = z.object({
 
 export interface GitHubAccountSelection {
   readonly subject: string;
+  readonly resolveProfile: () => Promise<unknown>;
 }
 
 export interface ProviderAccountSelection {
@@ -20,6 +21,7 @@ export interface ProviderAccountSelection {
 export interface ProviderAccountClient {
   listUserAccounts(input: { readonly headers: Headers }): Promise<unknown>;
   getAccessToken(input: { readonly body: ProviderAccountSelection }): Promise<unknown>;
+  refreshToken(input: { readonly body: ProviderAccountSelection }): Promise<unknown>;
   accountInfo(input: { readonly query: ProviderAccountSelection }): Promise<unknown>;
 }
 
@@ -77,9 +79,22 @@ export async function resolveGitHubCredentialAuthority(
     if (githubAccounts.length > 1) {
       throw new Error("User resolves to multiple GitHub provider accounts");
     }
+    const githubAccount = githubAccounts[0];
     return {
       kind: "browser_session",
-      githubAccount: githubAccounts[0] ? { subject: githubAccounts[0].accountId } : null,
+      githubAccount: githubAccount
+        ? {
+            subject: githubAccount.accountId,
+            resolveProfile: () =>
+              accountClient.accountInfo({
+                query: {
+                  providerId: "github",
+                  accountId: githubAccount.accountId,
+                  userId,
+                },
+              }),
+          }
+        : null,
     };
   }
 
