@@ -47,8 +47,13 @@ function createMockClient(
   }> = {},
   configOverrides: Partial<DaytonaRestConfig> = {}
 ): DaytonaRestClient {
+  const config = { ...defaultRestConfig, ...configOverrides };
   return {
-    config: { ...defaultRestConfig, ...configOverrides },
+    config,
+    requireBaseSnapshot: vi.fn(() => {
+      if (!config.baseSnapshot) throw new Error("DAYTONA_BASE_SNAPSHOT is required");
+      return config.baseSnapshot;
+    }),
     createSandbox: vi.fn(
       async (): Promise<DaytonaSandboxResponse> => ({
         id: "daytona-sandbox-id",

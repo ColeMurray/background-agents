@@ -80,7 +80,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
       const params: DaytonaCreateSandboxParams = {
         name: config.sandboxId,
-        snapshot: this.client.config.baseSnapshot,
+        snapshot: this.client.requireBaseSnapshot(),
         env: envVars,
         labels,
         autoStopInterval: this.client.config.autoStopIntervalMinutes,

@@ -10,8 +10,13 @@ import {
   DaytonaRestClient,
   DaytonaNotFoundError,
   DaytonaApiError,
+  DAYTONA_SANDBOX_STATES,
+  DAYTONA_SNAPSHOT_STATES,
+  daytonaBuildResourceName,
   daytonaSandboxResponseSchema,
   daytonaSignedPreviewUrlResponseSchema,
+  parseDaytonaSandboxState,
+  parseDaytonaSnapshotState,
   type DaytonaRestConfig,
 } from "./daytona-rest-client";
 
@@ -34,6 +39,17 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function emptyResponse(status = 200): Response {
   return new Response(null, { status });
+}
+
+/** Asserts the call failed with a Daytona API error and hands it back typed. */
+async function rejectedApiError(promise: Promise<unknown>): Promise<DaytonaApiError> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(DaytonaApiError);
+    return error as DaytonaApiError;
+  }
+  return expect.unreachable("expected a DaytonaApiError");
 }
 
 let fetchSpy: ReturnType<typeof vi.fn>;
@@ -63,10 +79,14 @@ describe("DaytonaRestClient", () => {
       );
     });
 
-    it("throws when baseSnapshot is missing", () => {
-      expect(() => new DaytonaRestClient({ ...defaultConfig, baseSnapshot: "" })).toThrow(
-        "requires baseSnapshot"
-      );
+    // A deployment that has switched providers still finalizes and reclaims
+    // the Daytona resources its last configuration created, so credentials
+    // without a current base image must construct.
+    it("constructs without a base snapshot and refuses only creates", () => {
+      const client = new DaytonaRestClient({ ...defaultConfig, baseSnapshot: "" });
+
+      expect(() => client.requireBaseSnapshot()).toThrow("DAYTONA_BASE_SNAPSHOT is required");
+      expect(new DaytonaRestClient(defaultConfig).requireBaseSnapshot()).toBe("base-snapshot-v1");
     });
 
     it("strips trailing slashes from apiUrl", async () => {
@@ -389,5 +409,326 @@ describe("DaytonaRestClient", () => {
       init.signal.dispatchEvent(new Event("abort"));
       await expect(promise).rejects.toThrow();
     });
+  });
+});
+
+describe("DaytonaRestClient snapshots", () => {
+  const client = () => new DaytonaRestClient(defaultConfig);
+
+  it("requests a filesystem-only capture and returns the SOURCE sandbox", async () => {
+    fetchSpy.mockResolvedValue(jsonResponse({ id: "sb-1", state: "snapshotting" }));
+
+    const result = await client().createSandboxSnapshot("sb-1", {
+      name: "oi-image-abc",
+      includeMemory: false,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://daytona.test/api/sandbox/sb-1/snapshot",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ name: "oi-image-abc", includeMemory: false }),
+      })
+    );
+    expect(result.id).toBe("sb-1");
+  });
+
+  it("looks a snapshot up by name and reports the sandbox it came from", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse({
+        id: "snap-1",
+        name: "oi-image-abc",
+        state: "active",
+        sourceSandboxId: "sb-1",
+      })
+    );
+
+    const snapshot = await client().getSnapshot("oi-image-abc");
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://daytona.test/api/snapshots/oi-image-abc",
+      expect.objectContaining({ method: "GET" })
+    );
+    expect(snapshot).toMatchObject({ id: "snap-1", state: "active", sourceSandboxId: "sb-1" });
+  });
+
+  it("reports an absent snapshot as not found rather than an API error", async () => {
+    fetchSpy.mockResolvedValue(new Response("no such snapshot", { status: 404 }));
+
+    await expect(client().getSnapshot("oi-image-abc")).rejects.toBeInstanceOf(DaytonaNotFoundError);
+  });
+
+  it("keeps a lenient optional field from failing the whole snapshot read", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse({ id: "snap-1", name: "oi-image-abc", state: "error", errorReason: 42 })
+    );
+
+    await expect(client().getSnapshot("oi-image-abc")).resolves.toMatchObject({
+      id: "snap-1",
+      state: "error",
+    });
+  });
+
+  it("activates and deletes a snapshot by its immutable id", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse({ id: "snap-1", name: "oi-image-abc", state: "active" })
+    );
+    await client().activateSnapshot("snap-1");
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "https://daytona.test/api/snapshots/snap-1/activate",
+      expect.objectContaining({ method: "POST" })
+    );
+
+    fetchSpy.mockResolvedValue(emptyResponse(204));
+    await client().deleteSnapshot("snap-1");
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "https://daytona.test/api/snapshots/snap-1",
+      expect.objectContaining({ method: "DELETE" })
+    );
+  });
+
+  it("carries a caller signal through capture and snapshot reads", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    fetchSpy.mockResolvedValue(jsonResponse({ id: "sb-1", state: "snapshotting" }));
+
+    await client().createSandboxSnapshot(
+      "sb-1",
+      { name: "oi-image-abc", includeMemory: false },
+      controller.signal
+    );
+
+    expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
+  });
+});
+
+describe("DaytonaRestClient toolbox transport", () => {
+  const target = { sandboxId: "sb-1", baseUrl: "https://runner.test/toolbox" };
+
+  it("prefers the configured toolbox override over any per-sandbox value", async () => {
+    const client = new DaytonaRestClient({
+      ...defaultConfig,
+      toolboxApiUrl: "https://toolbox.internal/",
+    });
+
+    await expect(
+      client.resolveToolboxBaseUrl("sb-1", {
+        sandbox: { id: "sb-1", state: "started", toolboxProxyUrl: "https://ignored.test" },
+      })
+    ).resolves.toBe("https://toolbox.internal");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("uses the proxy URL the sandbox already reported", async () => {
+    await expect(
+      new DaytonaRestClient(defaultConfig).resolveToolboxBaseUrl("sb-1", {
+        sandbox: { id: "sb-1", state: "started", toolboxProxyUrl: "https://runner.test/toolbox/" },
+      })
+    ).resolves.toBe("https://runner.test/toolbox");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the dedicated lookup, never to a hard-coded host", async () => {
+    fetchSpy.mockResolvedValue(jsonResponse({ url: "https://runner-7.test/toolbox" }));
+
+    await expect(new DaytonaRestClient(defaultConfig).resolveToolboxBaseUrl("sb-1")).resolves.toBe(
+      "https://runner-7.test/toolbox"
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://daytona.test/api/sandbox/sb-1/toolbox-proxy-url",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  it("prefixes every toolbox route with the sandbox it addresses", async () => {
+    const client = new DaytonaRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(emptyResponse(200));
+
+    await client.createProcessSession(target, "oi-build");
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://runner.test/toolbox/sb-1/process/session",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ sessionId: "oi-build" }) })
+    );
+  });
+
+  it("starts a command asynchronously with input echo suppressed", async () => {
+    const client = new DaytonaRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(jsonResponse({ cmdId: "cmd-1" }));
+
+    const started = await client.executeSessionCommand(target, "oi-build", "python -m runtime");
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://runner.test/toolbox/sb-1/process/session/oi-build/exec",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          command: "python -m runtime",
+          runAsync: true,
+          suppressInputEcho: true,
+        }),
+      })
+    );
+    expect(started.cmdId).toBe("cmd-1");
+  });
+
+  it("writes stdin to the running command", async () => {
+    const client = new DaytonaRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(emptyResponse(200));
+
+    await client.sendSessionCommandInput(target, "oi-build", "cmd-1", '{"version":1}\n');
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://runner.test/toolbox/sb-1/process/session/oi-build/command/cmd-1/input",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ input: '{"version":1}\n' }),
+      })
+    );
+  });
+
+  it("reads a command's exit status and deletes its session", async () => {
+    const client = new DaytonaRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(jsonResponse({ id: "cmd-1", exitCode: 1 }));
+
+    await expect(client.getSessionCommand(target, "oi-build", "cmd-1")).resolves.toMatchObject({
+      id: "cmd-1",
+      exitCode: 1,
+    });
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "https://runner.test/toolbox/sb-1/process/session/oi-build/command/cmd-1",
+      expect.objectContaining({ method: "GET" })
+    );
+
+    fetchSpy.mockResolvedValue(emptyResponse(204));
+    await client.deleteProcessSession(target, "oi-build");
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "https://runner.test/toolbox/sb-1/process/session/oi-build",
+      expect.objectContaining({ method: "DELETE" })
+    );
+  });
+
+  it("treats a running command's absent exit code as still running", async () => {
+    const client = new DaytonaRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(jsonResponse({ id: "cmd-1", exitCode: null }));
+
+    const command = await client.getSessionCommand(target, "oi-build", "cmd-1");
+
+    expect(command.exitCode ?? null).toBeNull();
+  });
+});
+
+describe("DaytonaRestClient error reporting", () => {
+  const target = { sandboxId: "sb-1", baseUrl: "https://runner.test/toolbox" };
+
+  it("never puts a secret-bearing endpoint's response body on the error", async () => {
+    const client = new DaytonaRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(
+      new Response('{"command":"python -m runtime","input":"super-secret-token"}', { status: 400 })
+    );
+
+    await expect(
+      client.sendSessionCommandInput(target, "oi-build", "cmd-1", "super-secret-token")
+    ).rejects.toMatchObject({
+      name: "DaytonaApiError",
+      status: 400,
+      message: expect.not.stringContaining("super-secret-token"),
+    });
+  });
+
+  it("truncates a long provider body and redacts the API key out of it", async () => {
+    const client = new DaytonaRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(
+      new Response(`bearer test-api-key rejected ${"x".repeat(1000)}`, { status: 500 })
+    );
+
+    const error = await rejectedApiError(client.getSandbox("sb-1"));
+
+    expect(error.message).not.toContain("test-api-key");
+    expect(error.message).toContain("[redacted]");
+    expect(error.message.length).toBeLessThan(400);
+    expect(error.message.endsWith("...")).toBe(true);
+  });
+
+  it("surfaces rate-limit guidance for reads but never as an automatic retry", async () => {
+    const client = new DaytonaRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(
+      new Response("slow down", { status: 429, headers: { "retry-after": "12" } })
+    );
+
+    const error = await rejectedApiError(client.getSandbox("sb-1"));
+
+    expect(error.status).toBe(429);
+    expect(error.retryAfterMs).toBe(12_000);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits retry guidance when the provider sends none", async () => {
+    const client = new DaytonaRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(new Response("slow down", { status: 429 }));
+
+    const error = await rejectedApiError(client.getSandbox("sb-1"));
+
+    expect(error.retryAfterMs).toBeUndefined();
+  });
+});
+
+describe("Daytona lifecycle state parsing", () => {
+  it("maps every documented sandbox state to itself", () => {
+    for (const state of DAYTONA_SANDBOX_STATES) {
+      expect(parseDaytonaSandboxState(state)).toBe(state);
+    }
+  });
+
+  it("maps every documented snapshot state to itself", () => {
+    for (const state of DAYTONA_SNAPSHOT_STATES) {
+      expect(parseDaytonaSnapshotState(state)).toBe(state);
+    }
+  });
+
+  it("reads an unrecognized state as unknown rather than as ready", () => {
+    expect(parseDaytonaSandboxState("warm_pooling")).toBe("unknown");
+    expect(parseDaytonaSnapshotState("publishing")).toBe("unknown");
+    expect(parseDaytonaSnapshotState("")).toBe("unknown");
+  });
+});
+
+describe("daytonaBuildResourceName", () => {
+  it("derives a bounded provider-safe name from the build id alone", async () => {
+    const name = await daytonaBuildResourceName("source", "imgb-acme-repo-1757000000000-ab12");
+
+    expect(name).toMatch(/^oi-source-[0-9a-f]{24}$/);
+    expect(name.length).toBeLessThanOrEqual(40);
+  });
+
+  it("is stable per build and distinct per kind", async () => {
+    const buildId = "imgb-acme-repo-1757000000000-ab12";
+
+    await expect(daytonaBuildResourceName("source", buildId)).resolves.toBe(
+      await daytonaBuildResourceName("source", buildId)
+    );
+    await expect(daytonaBuildResourceName("image", buildId)).resolves.not.toBe(
+      await daytonaBuildResourceName("source", buildId)
+    );
+  });
+
+  it("stays inside the charset for nested owners and long identities", async () => {
+    const nested = await daytonaBuildResourceName(
+      "image",
+      `imgb-${"group/subgroup/deep".repeat(20)}-1757000000000-ab12`
+    );
+
+    expect(nested).toMatch(/^[a-z0-9-]+$/);
+    expect(nested.length).toBeLessThanOrEqual(40);
+  });
+
+  it("gives distinct builds distinct names", async () => {
+    const names = await Promise.all([
+      daytonaBuildResourceName("source", "imgb-acme-repo-1757000000000-ab12"),
+      daytonaBuildResourceName("source", "imgb-acme-repo-1757000000000-ab13"),
+      daytonaBuildResourceName("source", "imgb-acme-other-1757000000000-ab12"),
+    ]);
+
+    expect(new Set(names).size).toBe(3);
   });
 });
