@@ -177,6 +177,14 @@ Create an R2 API Token:
 
 The control plane calls the Daytona REST API directly — no shim service to deploy.
 
+Two optional settings:
+
+- `daytona_toolbox_api_url` overrides the per-sandbox toolbox proxy. Leave it empty on a deployment
+  whose sandboxes report their own.
+- `daytona_prebuilds_enabled` admits new Daytona prebuilt-image builds and lets fresh sessions boot
+  from one. It defaults to `false`; see [Daytona prebuilds](IMAGE_PREBUILD.md#daytona-prebuilds) for
+  the gates an operator should clear against their own organization and target before turning it on.
+
 > **Important**: the Daytona provider has no fleet-wide key of its own. Add the key for the models
 > you plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets
 > after deploying. See [Secrets Management](SECRETS.md) for details.

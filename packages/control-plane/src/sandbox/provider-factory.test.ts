@@ -47,6 +47,34 @@ describe("createSandboxProviderFromEnv", () => {
     );
   });
 
+  it("needs a base snapshot to create Daytona sandboxes, but not to reclaim them", () => {
+    const env = createEnv({
+      DAYTONA_API_URL: "https://daytona.test",
+      DAYTONA_API_KEY: "daytona-key",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "daytona")).toThrow(
+      "DAYTONA_BASE_SNAPSHOT is required to create Daytona sandboxes"
+    );
+    // A deployment that switched providers keeps credentials but stops
+    // building a base image; finalization and cleanup must still construct.
+    expect(
+      createSandboxProviderFromEnv(env, "daytona", { requireBaseSnapshot: false })
+    ).toBeDefined();
+  });
+
+  it("still requires Daytona credentials for every operation", () => {
+    expect(() =>
+      createSandboxProviderFromEnv(
+        createEnv({ DAYTONA_API_URL: "https://daytona.test" }),
+        "daytona",
+        {
+          requireBaseSnapshot: false,
+        }
+      )
+    ).toThrow("DAYTONA_API_URL and DAYTONA_API_KEY are required");
+  });
+
   it("rejects malformed E2B auto-pause configuration", () => {
     const env = createEnv({
       E2B_API_KEY: "e2b-key",

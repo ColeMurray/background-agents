@@ -117,7 +117,7 @@ function createWorkflow(options: {
   resolveTarget?: ReturnType<typeof vi.fn>;
   createCallbackAuth?: ReturnType<typeof vi.fn>;
   env?: Env;
-  provider?: "modal" | "vercel" | "opencomputer" | null;
+  provider?: "modal" | "vercel" | "opencomputer" | "daytona" | null;
 }) {
   const store = options.store ?? createStore();
   const adapter = options.adapter ?? createAdapter();
@@ -850,5 +850,71 @@ describe("ImageBuildWorkflow build source create intent", () => {
     // reserved name, and maintenance is what settles that.
     expect(adapter.cleanupFailedBuild).not.toHaveBeenCalled();
     expect(store.markBuildFailed).toHaveBeenCalled();
+  });
+});
+
+describe("ImageBuildWorkflow admission", () => {
+  const daytonaEnv = (overrides: Partial<Env> = {}) =>
+    createEnv({ SANDBOX_PROVIDER: "daytona", ...overrides });
+
+  it("refuses every trigger path while the deployment is paused", async () => {
+    const store = createStore();
+    const { workflow, adapter } = createWorkflow({
+      store,
+      provider: "daytona",
+      env: daytonaEnv(),
+    });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toMatchObject({
+      code: "admission_closed",
+      reason: "daytona_prebuilds_disabled",
+    });
+    await expect(workflow.triggerBuildIfStale(ENV_SCOPE, ctx)).rejects.toMatchObject({
+      code: "admission_closed",
+    });
+
+    // Nothing is registered and nothing is created: a paused deployment has
+    // no partial build to clean up afterwards.
+    expect(store.registerBuild).not.toHaveBeenCalled();
+    expect(adapter.startBuild).not.toHaveBeenCalled();
+  });
+
+  it("triggers normally once an operator opens admission", async () => {
+    const { workflow, adapter } = createWorkflow({
+      provider: "daytona",
+      env: daytonaEnv({ DAYTONA_PREBUILDS_ENABLED: "true" }),
+    });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).resolves.toMatchObject({
+      type: "triggered",
+    });
+    expect(adapter.startBuild).toHaveBeenCalledTimes(1);
+  });
+
+  it("still accepts and finalizes the callbacks of builds already in flight", async () => {
+    const store = createStore();
+    store.finalization.authorizeCompletionCallback.mockResolvedValue({
+      id: "imgb-env_1-1-abcd",
+      scope: ENV_SCOPE,
+      provider: "daytona",
+      status: "building",
+    });
+    const jobs = { send: vi.fn().mockResolvedValue(undefined) };
+    const { workflow } = createWorkflow({
+      store,
+      provider: "daytona",
+      env: daytonaEnv({ JOBS: jobs }),
+    });
+
+    await workflow.acceptBuildComplete({
+      completion: validCompletion({ providerSessionId: "daytona-session-1" }),
+      callbackToken: MODAL_CALLBACK_TOKEN,
+      context: ctx,
+    });
+
+    // Closing admission stops new work; it must never strand work that is
+    // already running, or its sandbox and snapshot would leak.
+    expect(store.finalization.acceptSuccessfulCompletion).toHaveBeenCalled();
+    expect(jobs.send).toHaveBeenCalled();
   });
 });

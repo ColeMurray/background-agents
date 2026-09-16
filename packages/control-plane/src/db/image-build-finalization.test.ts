@@ -52,7 +52,9 @@ describe("ImageBuildFinalizationStore callback rows", () => {
   });
 
   it.each([
-    ["provider", { provider: "daytona" }],
+    // A provider value no build can run on: the row is data the store
+    // validates, not a provider this deployment happens to have configured.
+    ["provider", { provider: "fly" }],
     ["scope kind", { scope_kind: "workspace" }],
   ])("rejects an otherwise-authorizable callback row with invalid %s", async (_field, override) => {
     const store = new ImageBuildFinalizationStore(database({ ...VALID_CALLBACK_ROW, ...override }));

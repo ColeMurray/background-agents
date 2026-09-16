@@ -1,5 +1,6 @@
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import type { Env } from "../types";
+import { DaytonaImageBuildAdapter } from "./daytona-adapter";
 import { E2BImageBuildAdapter } from "./e2b-adapter";
 import { ModalImageBuildAdapter } from "./modal-adapter";
 import type { ImageBuildProvider } from "./model";
@@ -42,6 +43,12 @@ class EnvImageBuildAdapterFactory implements ImageBuildAdapterFactory {
         );
       case "e2b":
         return new E2BImageBuildAdapter(createSandboxProviderFromEnv(this.env, "e2b"));
+      case "daytona":
+        return new DaytonaImageBuildAdapter(
+          createSandboxProviderFromEnv(this.env, "daytona", {
+            requireBaseSnapshot: operation === "start",
+          })
+        );
     }
   }
 }

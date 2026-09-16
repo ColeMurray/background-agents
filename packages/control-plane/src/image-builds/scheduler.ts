@@ -11,7 +11,7 @@ import { ImageBuildReaper } from "./reaper";
 import { listEnabledScopes, resolveScopeTarget } from "./scope";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
 import { createImageBuildWorkflowFromEnv, type ImageBuildWorkflow } from "./workflow";
-import { resolveImageBuildProvider } from "./provider-policy";
+import { resolveImageBuildAdmission, resolveImageBuildProvider } from "./provider-policy";
 import { runMaintenanceTasks } from "./concurrency";
 import { repositoryIdentityKey } from "./provenance";
 import type { Env } from "../types";
@@ -22,6 +22,12 @@ const logger = createLogger("image-builds:scheduler");
 export const IMAGE_BUILD_SCHEDULER_CRON = "7,37 * * * *";
 
 export interface ImageBuildSchedulerStats {
+  /**
+   * Whether this deployment admits new builds. Everything else in this tick
+   * runs either way: finalization, cleanup and reconciliation of what already
+   * exists are not gated on admission.
+   */
+  admissionOpen: boolean;
   finalizationsRepublished: number;
   staleMarked: number;
   cleanupAttempted: number;
@@ -65,7 +71,9 @@ export class ImageBuildScheduler {
 
   async run(correlation: CorrelationContext): Promise<ImageBuildSchedulerStats> {
     const startedAt = Date.now();
+    const admission = resolveImageBuildAdmission(this.env);
     const stats: ImageBuildSchedulerStats = {
+      admissionOpen: admission.admitted,
       finalizationsRepublished: 0,
       staleMarked: 0,
       cleanupAttempted: 0,
@@ -123,7 +131,7 @@ export class ImageBuildScheduler {
         error: errorMessage(error),
       });
     }
-    if (this.provider && this.sourceControl) {
+    if (this.provider && this.sourceControl && admission.admitted) {
       try {
         await this.reconcileScopes(stats, correlation);
       } catch (error) {
@@ -131,6 +139,13 @@ export class ImageBuildScheduler {
           error: errorMessage(error),
         });
       }
+    } else if (this.provider && !admission.admitted) {
+      logger.info("image_build.scheduler_admission_closed", {
+        provider: this.provider,
+        reason: admission.reason,
+        request_id: correlation.request_id,
+        trace_id: correlation.trace_id,
+      });
     }
 
     // Before the artifact sweep: an operation that resolves here frees its row

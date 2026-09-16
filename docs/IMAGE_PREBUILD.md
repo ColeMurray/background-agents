@@ -34,10 +34,13 @@ few minutes of changes.
 ## Getting Started
 
 Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
-`sandbox_provider = "vercel"`, `sandbox_provider = "opencomputer"`, or `sandbox_provider = "e2b"`.
-The artifact is stored per provider as a Modal image, Vercel snapshot, OpenComputer checkpoint, or
-E2B snapshot. Daytona deployments use persistent sandboxes instead; image settings are disabled for
-that backend.
+`sandbox_provider = "vercel"`, `sandbox_provider = "opencomputer"`, `sandbox_provider = "e2b"`, or
+`sandbox_provider = "daytona"`. The artifact is stored per provider as a Modal image, Vercel
+snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot.
+
+Daytona additionally requires an operator to open admission (`daytona_prebuilds_enabled`, default
+off) — see [Daytona prebuilds](#daytona-prebuilds) below. While admission is closed the settings
+controls stay visible and say so, and nothing starts a build.
 
 ### Enable for a Repository
 
@@ -98,8 +101,10 @@ any of the following holds:
 - **No current image** — the scope was just enabled, its repository set or a base branch was edited
   (fingerprint mismatch), or the previous build failed
 - **New commits** — any repository's branch tip has moved since the ready image was built
-- **Outdated runtime** — the image was built on a sandbox runtime older than the current
-  compatibility floor (such images are also skipped at spawn time)
+- **Outdated runtime** — the image was built on a sandbox runtime older than the current **rebuild
+  floor**. That floor is separate from the **compatibility floor** spawn selection enforces: an
+  image between the two keeps serving sessions while the scheduler rebuilds it, and only one below
+  the compatibility floor is skipped at spawn time.
 
 The provider-neutral control-plane scheduler scans every enabled scope on each tick and starts every
 required rebuild it finds. Maintenance selects every pending terminal provider build session and old
@@ -126,9 +131,9 @@ Only one build runs per scope at a time; a trigger while a build is in flight is
 
 The build process runs the same setup steps that a normal session would:
 
-1. Clones every repository in the scope at its base branch (for an environment, **sequentially, in
-   position order**)
-2. Runs each repository's `.openinspect/setup.sh` script (if present) in the same order
+1. Clones every repository in the scope at its base branch (for an environment, **concurrently**)
+2. Runs each repository's `.openinspect/setup.sh` script (if present) **sequentially, in position
+   order**, so a later repository's setup can rely on an earlier one's
 3. Calls the control plane with the exact bound provider session id
 4. Lets a durable Jobs consumer save the provider image artifact and terminate the build session
 
@@ -201,15 +206,97 @@ session that means the default branch):
 Your setup scripts are **not** re-run since they already ran during the build. This is the main
 source of time savings.
 
-If no matching ready image is available (disabled, first build hasn't finished, the last build
-failed, a non-default branch was selected, or the environment was edited after the session was
-created), the session falls back to the normal startup flow automatically. If the saved artifact
-itself fails to restore, the image is marked failed and the session retries from the base image.
-Either way, you'll never be blocked from starting a session.
+If no matching ready image is available (disabled, first build hasn't finished, no build has ever
+succeeded, a non-default branch was selected, or the environment was edited after the session was
+created), the session falls back to the normal startup flow automatically. A **failed rebuild does
+not retire the image it was replacing**: an older ready image that still matches keeps serving
+sessions until a newer build succeeds. If the saved artifact itself fails to restore, the image is
+marked failed and the session retries from the base image. Either way, you'll never be blocked from
+starting a session.
 
 **Ad-hoc multi-repository sessions never use prebuilt images.** Picking "Multiple repositories" in
 the new-session picker always does a full clone + setup for each repository. If you use the same set
 regularly, save it as an environment and enable prebuilds.
+
+---
+
+## Daytona prebuilds
+
+Daytona builds and boots prebuilt images through the same subsystem as every other provider, with
+two differences that come from how Daytona captures an image.
+
+**Capture is asynchronous, and it reads a stopped sandbox.** Finalization therefore stops the build
+source, waits for it to be stopped, reserves the snapshot's unique name in the build row, submits
+the capture, and then reconciles that name until the snapshot is `active`. Accepting a capture is
+not producing one: a later delivery that finds a reservation only ever reconciles it, so a retry
+cannot produce a second snapshot. The reservation carries a fixed deadline, which no retry extends.
+
+**A capture preserves the container's configuration.** Nothing secret may ride a build sandbox's
+create request, so the source is created dormant and the build is launched afterwards, over the
+sandbox's own stdin, once its id is recorded. Sessions created from the resulting image set every
+boot marker explicitly rather than relying on absence.
+
+### Admission
+
+`daytona_prebuilds_enabled` (Terraform) / `DAYTONA_PREBUILDS_ENABLED` (env) admits **new** Daytona
+build work. Default off. It gates exactly two things:
+
+- starting a build — manual rebuild, save hook, and the reconciliation cron alike
+- selecting a prebuilt image for a fresh session
+
+Everything else keeps working while it is closed: build callbacks are accepted, finalization runs,
+status is readable, and sources and snapshots are reclaimed. Closing admission is therefore the
+rollback control, and it never strands a provider resource. Per-scope toggles are unaffected — they
+record what an operator wants, and admission decides whether the deployment acts on it.
+
+### Verification gates
+
+Nothing here is a claim that Daytona prebuilds are proven against a live deployment. These gates
+must pass against the actual organization, target and container class before an operator opens
+admission:
+
+- **G0 — SDK baseline.** The pinned Daytona SDK builds, verifies and publishes a base snapshot.
+- **G1 — Provider support.** The deployment permits stopped-container capture, snapshot activation
+  and deletion, process-session stdin, and the hard TTL a build source needs.
+- **G2 — Startup and secrets.** A dormant source composes nothing before it is launched; the launch
+  context reaches the build through process memory only — not container metadata, provider logs, or
+  any captureable file; a consumer session runs one ordinary runtime with fresh credentials.
+- **G3 — Durable lifecycle.** Acceptance never publishes ready; uncertain creates and captures
+  retain their identity; retries never recreate; late resources and asynchronous deletion keep their
+  cleanup handles.
+- **G4 — Both scopes.** A repository build and a multi-repository environment build each produce an
+  artifact that launches two independent sessions after the source is deleted.
+- **G5 — Session safety.** Base fallback, partial-create compensation, inactive-snapshot handling,
+  and stop/resume of a prebuilt session all behave.
+- **G6 — Operations.** Permissions, paused-state UI, admission across every trigger path, both web
+  platforms, historical-provider cleanup credentials, migrations and jobs on both hosts.
+- **G7 — Practical benefit.** Measured startup improvement, and capture/storage/concurrency budgets
+  that hold under the expected backlog.
+
+### Credential trust boundary
+
+Open-Inspect's own plumbing never persists build credentials into an image: the callback token stays
+in memory, the clone token and scope secrets reach only the build process and its children, and none
+of them are written to the container's configuration or to a file.
+
+A repository's `.openinspect/setup.sh` is trusted code that runs with those secrets in its
+environment. It can write them into a dependency, a cache, or any file it likes, and no generic
+capture mechanism can find them again. Treat a scope's prebuilt image as no less sensitive than the
+scope's own secrets. See [Secrets Management](SECRETS.md#secrets-and-prebuilt-images).
+
+### Runbook
+
+| Symptom                                               | What it means                                                  | What to do                                                                                                                                                                       |
+| ----------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Callback accepted, build stays `building`             | Finalization has not settled the capture yet.                  | Check for `image_build.finalize` job retries. A pending capture republishes itself with a fresh delivery budget; the reservation's fixed deadline ends it either way.            |
+| Snapshot lookup 404s after capture                    | The snapshot record is not published yet.                      | Nothing. The reserved name is polled until it appears, the deadline passes, or the build fails — no second capture is submitted.                                                 |
+| Snapshot `error` / `build_failed`                     | The capture failed provider-side.                              | The build fails with a sanitized reason and keeps its operation reference; maintenance reclaims whatever the name produced.                                                      |
+| Snapshot `inactive` at spawn                          | Cold storage, not corruption.                                  | The spawn activates it and waits briefly, then falls back to base for that session **without** retiring the image.                                                               |
+| Snapshot `removing`                                   | Deletion is in progress.                                       | The obligation stays pending; the next maintenance pass confirms it is gone.                                                                                                     |
+| Build source lifetime exhausted                       | The source's hard TTL ended before finalization.               | The build fails. Check whether the scope's build timeout plus the finalization reserve fits the account's TTL ceiling.                                                           |
+| `image_build.source_intent_unresolved`                | A create whose response was lost may have left a sandbox.      | Maintenance looks it up by its reserved name each tick. It is only written off once the source's hard lifetime has certainly elapsed.                                            |
+| `image_build.operation_unresolved` older than 6 hours | A reserved capture has not settled and is not being reclaimed. | Investigate provider-side. Verify ownership labels before deleting anything by hand: a resource is this build's only when its labels (or a snapshot's `sourceSandboxId`) say so. |
+| Cleanup backlog after a provider switch               | Rows dispatch cleanup from their own recorded provider.        | Keep `daytona_api_key` and `daytona_api_url` configured until the backlog drains. The base snapshot is not needed for cleanup.                                                   |
 
 ---
 

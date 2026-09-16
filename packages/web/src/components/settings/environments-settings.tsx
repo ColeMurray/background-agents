@@ -44,6 +44,8 @@ export function EnvironmentsSettings() {
   const { data: imageBuildsFeed, error: imageBuildsError } = useImageBuilds(
     canReadImages && environments.some((environment) => environment.prebuildEnabled)
   );
+  // Absent admission means a control plane that predates the control: open.
+  const admissionOpen = imageBuildsFeed?.admission?.open ?? true;
   const [view, setView] = useState<View>({ mode: "list" });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -307,6 +309,13 @@ export function EnvironmentsSettings() {
           {prebuildsSupported ? " and prebuilt images" : ""}.
         </p>
 
+        {prebuildsSupported && !admissionOpen && (
+          <p className="text-sm text-muted-foreground mb-4" role="status">
+            Prebuilds are paused for this deployment. Existing images keep working; new builds start
+            once an operator enables them.
+          </p>
+        )}
+
         {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
         {loading && <p className="text-sm text-muted-foreground">Loading environments...</p>}
@@ -378,7 +387,9 @@ export function EnvironmentsSettings() {
                             variant="ghost"
                             size="icon"
                             onClick={() => handleRebuild(environment)}
-                            disabled={!environment.prebuildEnabled || isTriggering}
+                            disabled={
+                              !environment.prebuildEnabled || !admissionOpen || isTriggering
+                            }
                             title="Rebuild image"
                           >
                             <RefreshIcon

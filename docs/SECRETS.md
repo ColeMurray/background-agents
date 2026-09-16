@@ -195,6 +195,13 @@ from it, even after you rotate the secret. Two guidelines:
   — stale on-disk material persists until the next commit-triggered rebuild, which is another reason
   to keep secrets out of the image filesystem.
 
+Where the trust boundary sits: Open-Inspect's own build plumbing never persists a credential into an
+image. The build's callback token stays in process memory, and the clone token and scope secrets
+reach only the build process and the setup scripts it starts — never the provider's container
+configuration, never a file the image captures. What a setup script does with those values in its
+environment is the script's own decision, and nothing downstream can find them again. Treat a
+scope's prebuilt image as no less sensitive than the scope's secrets.
+
 ---
 
 ## Common Examples

@@ -95,11 +95,20 @@ function createOpenComputerProviderFromEnv(
   });
 }
 
-function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
-  if (!env.DAYTONA_API_URL || !env.DAYTONA_API_KEY || !env.DAYTONA_BASE_SNAPSHOT) {
+function createDaytonaProviderFromEnv(
+  env: Env,
+  options: { requireBaseSnapshot: boolean }
+): DaytonaSandboxProvider {
+  if (!env.DAYTONA_API_URL || !env.DAYTONA_API_KEY) {
     throw new Error(
-      "DAYTONA_API_URL, DAYTONA_API_KEY, and DAYTONA_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=daytona"
+      "DAYTONA_API_URL and DAYTONA_API_KEY are required when SANDBOX_PROVIDER=daytona"
     );
+  }
+  // Only creating a sandbox needs a base image. Finalizing and reclaiming what
+  // an earlier configuration created must stay possible after a provider
+  // switch, when no Daytona base snapshot is built any more.
+  if (options.requireBaseSnapshot && !env.DAYTONA_BASE_SNAPSHOT) {
+    throw new Error("DAYTONA_BASE_SNAPSHOT is required to create Daytona sandboxes");
   }
 
   const client = createDaytonaRestClient({
@@ -107,6 +116,7 @@ function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
     apiKey: env.DAYTONA_API_KEY,
     target: env.DAYTONA_TARGET,
     baseSnapshot: env.DAYTONA_BASE_SNAPSHOT,
+    toolboxApiUrl: env.DAYTONA_TOOLBOX_API_URL,
     autoStopIntervalMinutes: parseNumericEnv(
       "DAYTONA_AUTO_STOP_INTERVAL_MINUTES",
       env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES,
@@ -149,7 +159,11 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
   });
 }
 
-export function createSandboxProviderFromEnv(env: Env, backend: "daytona"): DaytonaSandboxProvider;
+export function createSandboxProviderFromEnv(
+  env: Env,
+  backend: "daytona",
+  options?: { requireBaseSnapshot?: boolean }
+): DaytonaSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "e2b"): E2BSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "modal"): ModalSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "vercel"): VercelSandboxProvider;
@@ -161,16 +175,18 @@ export function createSandboxProviderFromEnv(
 export function createSandboxProviderFromEnv(
   env: Env,
   backend?: SandboxBackendName,
-  options?: { requireOpenComputerTemplate?: boolean }
+  options?: SandboxProviderFactoryOptions
 ): SandboxProvider;
 export function createSandboxProviderFromEnv(
   env: Env,
   backend: SandboxBackendName = resolveSandboxBackendName(env.SANDBOX_PROVIDER),
-  options: { requireOpenComputerTemplate?: boolean } = {}
+  options: SandboxProviderFactoryOptions = {}
 ): SandboxProvider {
   switch (backend) {
     case "daytona":
-      return createDaytonaProviderFromEnv(env);
+      return createDaytonaProviderFromEnv(env, {
+        requireBaseSnapshot: options.requireBaseSnapshot ?? true,
+      });
     case "vercel":
       return createVercelProviderFromEnv(env);
     case "opencomputer":
@@ -182,6 +198,16 @@ export function createSandboxProviderFromEnv(
     case "modal":
       return createModalProviderFromEnv(env);
   }
+}
+
+/**
+ * Configuration a provider needs for the operation at hand, rather than for
+ * every operation it supports. A deployment that has switched providers still
+ * has resources to finalize and reclaim on the old one.
+ */
+interface SandboxProviderFactoryOptions {
+  requireOpenComputerTemplate?: boolean;
+  requireBaseSnapshot?: boolean;
 }
 
 function parseNumericEnv(name: string, value: string | undefined, defaultValue: number): number {

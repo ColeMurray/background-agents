@@ -42,6 +42,8 @@ export function ImagesSettings() {
   }
 
   const loading = reposLoading || imagesLoading;
+  // Absent admission means a control plane that predates the control: open.
+  const admissionOpen = data?.admission?.open ?? true;
 
   // Toggle state reads the persisted flags, not `units` — the units feed
   // resolves scopes through source control and can transiently drop a repo.
@@ -144,6 +146,8 @@ export function ImagesSettings() {
           when the default branch changes.
         </p>
 
+        {!admissionOpen && <PrebuildsPausedNotice />}
+
         {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
         <div className="space-y-2">
@@ -191,7 +195,9 @@ export function ImagesSettings() {
                       variant="ghost"
                       size="icon"
                       onClick={() => handleTrigger(repo.owner, repo.name)}
-                      disabled={!isEnabled || isTriggering || image?.status === "building"}
+                      disabled={
+                        !isEnabled || !admissionOpen || isTriggering || image?.status === "building"
+                      }
                       title="Rebuild image"
                     >
                       <RefreshIcon className={`w-4 h-4 ${isTriggering ? "animate-spin" : ""}`} />
@@ -210,5 +216,19 @@ export function ImagesSettings() {
         )}
       </div>
     </TooltipProvider>
+  );
+}
+
+/**
+ * A paused deployment still shows its toggles: they record intent an operator
+ * can set before admission opens. It stops offering rebuilds, which would be
+ * refused, and says why.
+ */
+function PrebuildsPausedNotice() {
+  return (
+    <p className="text-sm text-muted-foreground mb-4" role="status">
+      Prebuilds are paused for this deployment. Existing images keep working; new builds start once
+      an operator enables them.
+    </p>
   );
 }

@@ -28,7 +28,7 @@ import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { createImageBuildLookup } from "../image-builds/lookup";
-import { resolveImageBuildProvider } from "../image-builds/provider-policy";
+import { resolveImageBuildAdmission } from "../image-builds/provider-policy";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -1018,11 +1018,15 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     sandboxDashboardUrlBuilder,
   };
 
-  // The image lookup exists only for providers that support prebuilt images.
-  const imageBuildProvider = resolveImageBuildProvider(sandboxBackend);
-  const imageBuildLookup: ImageBuildLookup | undefined = imageBuildProvider
-    ? createImageBuildLookup(db, imageBuildProvider)
-    : undefined;
+  // The image lookup exists only for providers that support prebuilt images,
+  // and only while the deployment admits their selection: closing admission
+  // is how a rollback stops handing sessions a prebuilt image, without
+  // touching any scope's own toggle.
+  const imageBuildAdmission = resolveImageBuildAdmission(env);
+  const imageBuildLookup: ImageBuildLookup | undefined =
+    imageBuildAdmission.admitted && imageBuildAdmission.provider
+      ? createImageBuildLookup(db, imageBuildAdmission.provider)
+      : undefined;
 
   return new SandboxLifecycleManager(
     provider,
