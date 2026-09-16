@@ -7,9 +7,13 @@ const providerAccountSchema = z.object({
   userId: z.string().min(1),
 });
 
+const providerAccessTokenSchema = z.object({
+  accessToken: z.string(),
+});
+
 export interface GitHubAccountSelection {
   readonly subject: string;
-  readonly resolveProfile: () => Promise<unknown>;
+  readonly resolveProfile: () => Promise<unknown | null>;
 }
 
 export interface ProviderAccountSelection {
@@ -85,14 +89,18 @@ export async function resolveGitHubCredentialAuthority(
       githubAccount: githubAccount
         ? {
             subject: githubAccount.accountId,
-            resolveProfile: () =>
-              accountClient.accountInfo({
-                query: {
-                  providerId: "github",
-                  accountId: githubAccount.accountId,
-                  userId,
-                },
-              }),
+            resolveProfile: async () => {
+              const selection: ProviderAccountSelection = {
+                providerId: "github",
+                accountId: githubAccount.accountId,
+                userId,
+              };
+              const token = providerAccessTokenSchema.parse(
+                await accountClient.getAccessToken({ body: selection })
+              );
+              if (token.accessToken === "") return null;
+              return accountClient.accountInfo({ query: selection });
+            },
           }
         : null,
     };

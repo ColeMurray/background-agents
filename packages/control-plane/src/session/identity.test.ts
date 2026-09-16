@@ -237,6 +237,27 @@ describe("resolveGitHubEnrichmentForRequest", () => {
     });
   });
 
+  it("keeps canonical metadata when the linked GitHub identity has no OAuth grant", async () => {
+    await expect(
+      resolveGitHubEnrichmentForRequest(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        "user-1",
+        {
+          kind: "browser_session",
+          githubAccount: {
+            subject: "42",
+            resolveProfile: vi.fn(async () => null),
+          },
+        }
+      )
+    ).resolves.toEqual({
+      scmUserId: "42",
+      scmLogin: undefined,
+      displayName: undefined,
+      email: undefined,
+    });
+  });
+
   it("rejects browser authority that differs from the canonical identity", async () => {
     const store = fakeStore([{ provider: "github", providerUserId: "42" }]);
 

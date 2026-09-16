@@ -218,10 +218,9 @@ export async function resolveGitHubEnrichmentForRequest(
   }
   if (enrichment.scmLogin) return enrichment;
 
-  const profile = parseBetterAuthGitHubProfile(
-    await authority.githubAccount.resolveProfile(),
-    authority.githubAccount.subject
-  );
+  const profileResponse = await authority.githubAccount.resolveProfile();
+  if (profileResponse === null) return enrichment;
+  const profile = parseBetterAuthGitHubProfile(profileResponse, authority.githubAccount.subject);
   const displayName = enrichment.displayName ?? profile.displayName ?? profile.login;
   const authorIdentity = resolveGitAuthorIdentity({
     scmProvider: "github",
