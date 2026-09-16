@@ -401,23 +401,61 @@ variables.
 
 ## Adding New Environments
 
+The Cloudflare stack in `environments/production/` is shared across environments. They differ only
+in which secrets they use and which state object they write to, so there is no Terraform to copy.
+(The AWS environments are laid out differently, with a directory each.)
+
 To add a staging environment:
 
+1. Create a GitHub Environment named `staging`.
+
+   **`DEPLOYMENT_NAME` is mandatory on every environment.** It feeds `name_suffix` in
+   `environments/production/locals.tf`, which names every Worker, D1 database and R2 bucket. An
+   environment that does not set it falls back to the repository-level value, so a fresh
+   `staging/terraform.tfstate` would plan to create resources under production's exact names.
+
+   Beyond that, set only the secrets that differ. Anything left unset falls back to the
+   repository-level value.
+
+2. Add a caller workflow that runs `terraform-run.yml` against it:
+
+   ```yaml
+   # .github/workflows/deploy-staging.yml
+   name: Deploy Staging
+
+   on:
+     workflow_dispatch:
+
+   concurrency:
+     group: deploy-staging
+     cancel-in-progress: false
+
+   jobs:
+     terraform:
+       uses: ./.github/workflows/terraform-run.yml
+       secrets: inherit
+       with:
+         mode: apply
+         environment: staging
+         state_key: staging/terraform.tfstate
+   ```
+
+`terraform-run.yml` binds the job to the named GitHub Environment, so every `TF_VAR_*` resolves
+against that environment's secrets. The variable list itself lives in one place and does not need to
+be restated per environment.
+
+To run Terraform against a non-production environment locally, pass the state key at init. A
+directory already initialized against another environment needs `-reconfigure`:
+
 ```bash
-# Copy production config
-cp -r environments/production environments/staging
-
-# Update backend key in staging/backend.tf
-# key = "staging/terraform.tfstate"
-
-# Update environment variable in staging/terraform.tfvars
-# environment = "staging"
-
-# Initialize and apply
-cd environments/staging
-terraform init -backend-config="access_key=..." -backend-config="secret_key=..."
-terraform apply
+cd environments/production
+terraform init -reconfigure \
+  -backend-config="key=staging/terraform.tfstate" \
+  -backend-config="access_key=..." -backend-config="secret_key=..."
 ```
+
+Use `-reconfigure`, not `-migrate-state`. Migrating copies the state you are currently initialized
+against into the new key, which would write production's state to the staging key.
 
 ## Security Considerations
 
