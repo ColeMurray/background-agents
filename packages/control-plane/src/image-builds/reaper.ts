@@ -21,7 +21,7 @@ export const IMAGE_BUILD_CLEANUP_ATTEMPT_MS = 10_000;
  * Well past the cron's own cadence and the longest source lifetime, so a
  * warning means something is genuinely stuck rather than merely in progress.
  */
-export const IMAGE_BUILD_STUCK_OBLIGATION_ALERT_MS = 6 * 60 * 60 * 1000;
+const IMAGE_BUILD_STUCK_OBLIGATION_ALERT_MS = 6 * 60 * 60 * 1000;
 
 /** What one unbound-source recovery pass settled. */
 export interface ImageBuildSourceRecoveryResult {

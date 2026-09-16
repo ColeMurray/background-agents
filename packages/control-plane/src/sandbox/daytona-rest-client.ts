@@ -156,7 +156,7 @@ export const daytonaSandboxResponseSchema = z.object({
 
 export type DaytonaSandboxResponse = z.infer<typeof daytonaSandboxResponseSchema>;
 
-export const daytonaSnapshotResponseSchema = z.object({
+const daytonaSnapshotResponseSchema = z.object({
   id: z.string(),
   name: z.string(),
   state: z.string(),

@@ -64,12 +64,12 @@ export type ImageBuildEnabledRepoView = z.infer<typeof imageBuildEnabledRepoView
  * deployment keeps serving status and cleanup, so the controls stay readable
  * — they just stop promising builds that would be refused.
  */
-export const imageBuildAdmissionSchema = z.object({
+const imageBuildAdmissionSchema = z.object({
   open: z.boolean(),
   reason: z.string().optional(),
 });
 
-export type ImageBuildAdmissionView = z.infer<typeof imageBuildAdmissionSchema>;
+type ImageBuildAdmissionView = z.infer<typeof imageBuildAdmissionSchema>;
 
 export const imageBuildsEnabledResponseSchema = z.object({
   units: z.array(imageBuildUnitViewSchema),
