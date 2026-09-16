@@ -13,6 +13,7 @@ import {
   evaluateHeartbeatHealth,
   evaluateConnectingTimeout,
   evaluateBootBudget,
+  resolveBootBudgetTimeoutMs,
   evaluateWarmDecision,
   evaluateExecutionTimeout,
   isSandboxReconnectBlockedStatus,
@@ -1071,6 +1072,38 @@ describe("evaluateBootBudget", () => {
       DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs
     );
   });
+});
+
+describe("resolveBootBudgetTimeoutMs", () => {
+  const bounds = { connectingTimeoutMs: 240_000, defaultTimeoutMs: 1_800_000 };
+
+  it("uses the default, without complaint, when the knob is unset", () => {
+    expect(resolveBootBudgetTimeoutMs(undefined, bounds)).toEqual({
+      timeoutMs: 1_800_000,
+      rejectedValue: null,
+    });
+    expect(resolveBootBudgetTimeoutMs("", bounds)).toEqual({
+      timeoutMs: 1_800_000,
+      rejectedValue: null,
+    });
+  });
+
+  it("accepts a positive integer above the connect watchdog", () => {
+    expect(resolveBootBudgetTimeoutMs("600000", bounds)).toEqual({
+      timeoutMs: 600_000,
+      rejectedValue: null,
+    });
+  });
+
+  it.each(["abc", "1000junk", "0", "-5", "1.5", "240000", "1e6", "9007199254740993"])(
+    "falls back to the default and names the rejected value for %s",
+    (raw) => {
+      expect(resolveBootBudgetTimeoutMs(raw, bounds)).toEqual({
+        timeoutMs: 1_800_000,
+        rejectedValue: raw,
+      });
+    }
+  );
 });
 
 // ==================== Warm Decision Tests ====================

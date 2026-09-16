@@ -588,15 +588,17 @@ export class SessionMessageQueue {
   }
 
   /**
-   * Fail the prompt at the head of the queue, which a sandbox boot that gave
-   * up was going to run. Only the head: later prompts stay pending and
+   * Fail one pending prompt, the one a sandbox boot that gave up was going to
+   * run. Named by id, not by queue position: the caller identified it before
+   * the lifecycle work that may have yielded, and a prompt cancelled or
+   * dispatched in the meantime is left alone. Later prompts stay pending and
    * dispatch on the user's next spawn, the same way a failed turn leaves the
    * queue today. Does not pump the queue — the caller has just failed the
    * sandbox, and the next spawn is the user's to start.
    */
-  async failHeadPendingMessage(error: string): Promise<void> {
-    const message = this.messageRepository.getNextPendingMessage();
-    if (!message) return;
+  async failPendingMessage(messageId: string, error: string): Promise<void> {
+    const message = this.messageRepository.getMessageById(messageId);
+    if (!message || message.status !== "pending") return;
     if (!this.failMessage(message, error, Date.now(), "pending")) return;
     this.broadcastPromptQueue();
     await this.sessionStatus.reconcileAfterExecution(false);

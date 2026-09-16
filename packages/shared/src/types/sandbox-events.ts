@@ -51,6 +51,32 @@ export const bootPhaseStatusSchema = z.enum(["started", "completed", "failed"]);
 export type BootPhaseStatus = z.infer<typeof bootPhaseStatusSchema>;
 
 /**
+ * The byte budget for a `sandbox-error` report as the public route accepts it.
+ * One contract for the sender, the route cap and the tail bounds below: a
+ * report valid at the schema must fit through the route.
+ */
+export const SANDBOX_ERROR_BODY_MAX_BYTES = 32 * 1024;
+/** Most lines a boot failure's output tail may carry. */
+export const SANDBOX_OUTPUT_TAIL_MAX_LINES = 60;
+/** Most characters an output tail may carry across all its lines. */
+export const SANDBOX_OUTPUT_TAIL_MAX_CHARS = 8 * 1024;
+
+/**
+ * The last lines of a failing boot script, bounded and redacted by the
+ * runtime before they leave the sandbox and bounded again here. Sized so a
+ * full tail, JSON-escaped, fits inside SANDBOX_ERROR_BODY_MAX_BYTES with
+ * room for the rest of the report.
+ */
+export const sandboxOutputTailSchema = z
+  .array(z.string().max(1024))
+  .max(SANDBOX_OUTPUT_TAIL_MAX_LINES)
+  .refine(
+    (lines) =>
+      lines.reduce((total, line) => total + line.length, 0) <= SANDBOX_OUTPUT_TAIL_MAX_CHARS,
+    { message: `output tail exceeds ${SANDBOX_OUTPUT_TAIL_MAX_CHARS} characters` }
+  );
+
+/**
  * The phase a booting sandbox last reported, as the subscribe snapshot
  * carries it. Present only while the sandbox is booting; cleared at ready.
  */
@@ -214,7 +240,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     repoName: z.string().optional(),
     elapsedMs: z.number().optional(),
     /** Last lines of the failing script, bounded and redacted by the runtime. */
-    outputTail: z.array(z.string().max(4096)).max(200).optional(),
+    outputTail: sandboxOutputTailSchema.optional(),
     detail: z.string().optional(),
     sandboxId: z.string().optional(),
     timestamp: z.number(),

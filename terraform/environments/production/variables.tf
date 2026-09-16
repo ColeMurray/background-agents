@@ -663,6 +663,11 @@ variable "sandbox_boot_timeout_ms" {
   description = "Milliseconds a sandbox whose bridge has connected may keep booting (clone, setup.sh, start.sh, agent start) before OpenInspect fails it and the prompt it was for."
   type        = number
   default     = 1800000
+
+  validation {
+    condition     = var.sandbox_boot_timeout_ms > 240000
+    error_message = "sandbox_boot_timeout_ms must exceed the 240000 ms connect watchdog."
+  }
 }
 
 variable "web_platform" {

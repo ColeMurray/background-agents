@@ -1,5 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
+import { createExecutionContext, env } from "cloudflare:test";
+import {
+  SANDBOX_OUTPUT_TAIL_MAX_CHARS,
+  SANDBOX_OUTPUT_TAIL_MAX_LINES,
+} from "@open-inspect/shared/types/sandbox-events";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
+import { cleanD1Tables } from "./cleanup";
 import { runInSessionDO } from "./session-do-access";
 import {
   collectMessages,
@@ -7,9 +13,12 @@ import {
   openClientWs,
   openSandboxWs,
   queryDO,
+  routeRequest,
   seedSandboxAuth,
   waitForSandboxStatus,
 } from "./helpers";
+
+beforeEach(cleanD1Tables);
 
 const SANDBOX_TOKEN = "early-connect-sandbox-token";
 const SANDBOX_ID = "sb-early-connect";
@@ -274,5 +283,55 @@ describe("sandbox early connect (via SELF.fetch)", () => {
     expect(
       await queryDO<{ last_spawn_error: string }>(stub, "SELECT last_spawn_error FROM sandbox")
     ).toEqual([{ last_spawn_error: "start.sh exited 1" }]);
+  });
+
+  it("accepts a structured fatal report with a full output tail through the public route", async () => {
+    // The route's body cap and the report schema share one budget, so the
+    // largest tail the runtime may send must land, not 413 at the door.
+    const name = `ws-early-connect-fatal-public-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    const perLine = Math.floor(SANDBOX_OUTPUT_TAIL_MAX_CHARS / SANDBOX_OUTPUT_TAIL_MAX_LINES);
+    const outputTail = Array.from({ length: SANDBOX_OUTPUT_TAIL_MAX_LINES }, (_, i) =>
+      `${i}: `.padEnd(perLine, "x")
+    );
+
+    const response = await routeRequest(
+      new Request(`http://localhost/sessions/${name}/sandbox-error`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${SANDBOX_TOKEN}`,
+          "X-Sandbox-ID": SANDBOX_ID,
+        },
+        body: JSON.stringify({
+          error: "setup.sh exited 1",
+          fatal: true,
+          phase: "setup",
+          bootSeq: 4,
+          repoOwner: "acme",
+          repoName: "api",
+          outputTail,
+        }),
+      }),
+      env,
+      createExecutionContext()
+    );
+
+    expect(response.status).toBe(200);
+    await waitForSandboxStatus(stub, "failed");
+    const events = await queryDO<{ data: string }>(
+      stub,
+      "SELECT data FROM events WHERE type = ?",
+      "boot_progress"
+    );
+    expect(events).toHaveLength(1);
+    const landed = JSON.parse(events[0].data) as { phase: string; outputTail: string[] };
+    expect(landed.phase).toBe("setup");
+    expect(landed.outputTail).toEqual(outputTail);
   });
 });

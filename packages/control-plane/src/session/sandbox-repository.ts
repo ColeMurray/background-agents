@@ -152,15 +152,20 @@ export class SandboxRepository {
    * reconnect-blocked, and a cancel writes `stopped` without detaching the
    * socket, so a late `ready` must not revive them; a fenced `failed` row had
    * its credentials revoked for good, while an unfenced one is a watchdog
-   * failure whose boot may still arrive. Clears the boot phase in the same
-   * write: the phase describes a boot that is over.
+   * failure whose boot may still arrive. Only the generation that emitted
+   * the event may move the row: a replacement reserved in the meantime is
+   * readied by its own runtime, not by the old one's late report. Clears the
+   * boot phase in the same write: the phase describes a boot that is over.
    */
-  markSandboxReady(): boolean {
+  markSandboxReady(generation: { sandboxId: string | null; createdAt: number }): boolean {
     const result = this.sql.exec(
       `UPDATE sandbox SET status = 'ready', boot_phase = NULL, boot_seq = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?
          AND status NOT IN ('ready', 'stopped', 'stale')
-         AND fenced = 0`
+         AND fenced = 0`,
+      generation.sandboxId,
+      generation.createdAt
     );
     // Consume the result before reading rowsWritten so the count is final.
     result.toArray();

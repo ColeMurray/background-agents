@@ -81,16 +81,14 @@ export class SandboxRuntimeEventHandler {
     persistSandboxEvent(this.eventRepository, event, context);
     this.messenger.broadcast({ type: "sandbox_event", event });
 
-    // The alarm is the one fallible step, so it goes first: a failure leaves
-    // the row booting and a re-sent `ready` retries the whole transition,
-    // whereas a row already marked ready would treat the resend as a no-op
-    // and the queue would never be released. The scheduler keeps the earlier
-    // of two deadlines, so arming again on a repeat `ready` changes nothing.
-    await this.scheduleInactivityCheck();
-    // Transition-only: a bridge resends `ready` on every reconnect, and only
-    // the first one for a generation may stamp activity, publish readiness
-    // and release the queue. The repository decides which rows may move.
-    if (!this.sandboxRepository.markSandboxReady()) return;
+    // Transition-only, and only for the generation that emitted the event: a
+    // bridge resends `ready` on every reconnect, and a replacement reserved
+    // while this event was in flight is readied by its own runtime. The
+    // repository decides which rows may move.
+    const row = this.sandboxRepository.getSandbox();
+    if (!row) return;
+    const generation = { sandboxId: row.modal_sandbox_id, createdAt: row.created_at };
+    if (!this.sandboxRepository.markSandboxReady(generation)) return;
     this.log.info("sandbox.ready", { event: "sandbox.ready", harness: event.harness ?? null });
     // Activity is stamped here, not at attach: the inactivity reaper measures
     // from this value, and a long boot must not count as idle time.
@@ -99,6 +97,12 @@ export class SandboxRuntimeEventHandler {
     this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
       name: "message_queue.process",
     });
+    // Armed last: the bridge does not resend `ready` unless it reconnects, so
+    // the readiness commit and its publication must not sit behind a fallible
+    // step. The arm itself is best-effort — an alarm is always pending while
+    // a bridge is attached (the disconnect check armed at attach, re-armed by
+    // every alarm run), and the scheduler keeps the earlier deadline.
+    await this.scheduleInactivityCheck();
   }
 
   /**

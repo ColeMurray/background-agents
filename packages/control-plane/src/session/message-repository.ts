@@ -192,6 +192,11 @@ export class MessageRepository {
     return rows[0] ?? null;
   }
 
+  getMessageById(messageId: string): MessageRow | null {
+    const result = this.sql.exec(`SELECT * FROM messages WHERE id = ? LIMIT 1`, messageId);
+    return this.rows<MessageRow>(result)[0] ?? null;
+  }
+
   getMessageByClientRequestId(clientRequestId: string): MessageRow | null {
     const result = this.sql.exec(
       `SELECT * FROM messages WHERE client_request_id = ? LIMIT 1`,

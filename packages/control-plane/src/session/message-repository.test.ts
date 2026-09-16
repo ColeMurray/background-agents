@@ -89,6 +89,14 @@ describe("MessageRepository", () => {
     expect(repository.getNextPendingMessage()).toEqual({ id: "msg-pending", created_at: 1 });
   });
 
+  it("reads a message by id", () => {
+    mock.setData(`SELECT * FROM messages WHERE id = ? LIMIT 1`, [
+      { id: "msg-1", status: "pending" },
+    ]);
+    expect(repository.getMessageById("msg-1")).toEqual({ id: "msg-1", status: "pending" });
+    expect(mock.calls.at(-1)?.params).toEqual(["msg-1"]);
+  });
+
   it("reads processing message timestamps", () => {
     mock.setData(`SELECT id, created_at FROM messages WHERE status = 'processing' LIMIT 1`, [
       { id: "msg-1", created_at: 1000 },

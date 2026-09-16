@@ -1519,6 +1519,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.recordSpawnFailure(now, sandbox.created_at);
       this.clearSandboxAccessState();
       if (this.canStopProviderSandbox()) {
+        // Fenced before the stop: a bridge arriving while the stop is in
+        // flight is refused at the door instead of self-healing into a
+        // container being killed. Where the provider cannot be stopped the
+        // row stays unfenced, so a boot that outlives the watchdog (#1905)
+        // can still connect and serve the session.
+        this.storage.fenceSandboxGeneration();
         try {
           await this.stopProviderSandbox("connecting_timeout");
         } catch (error) {
@@ -1700,8 +1706,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * path refuses a failed row); the generation is then fenced so a runtime
    * that ignores the shutdown, or reconnects, is refused at the door and its
    * supervisor exits — which is how a provider with no explicit stop is
-   * stopped; only then is the row failed. Returns the failure text so the
-   * alarm handler can fail the pending prompt with the same words.
+   * stopped; only then is the row failed. The failure is published and
+   * persisted before the provider stop yields, and the spawn guard is held
+   * across it, so a prompt arriving mid-stop neither waits to learn the boot
+   * died nor reserves a replacement that inherits this failure. Returns the
+   * failure text so the alarm handler can fail the pending prompt with the
+   * same words.
    */
   private async failBootBudget(
     sandbox: SandboxRow,
@@ -1723,18 +1733,21 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.storage.updateSandboxStatus("failed");
     this.recordSpawnFailure(now, sandbox.created_at);
     this.clearSandboxAccessState();
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+    this.reportSandboxError(reason);
     this.wsManager.detachSandboxWebSocket(1000, "Boot budget exceeded");
     if (this.canStopProviderSandbox()) {
+      this.isTerminatingSandbox = true;
       try {
         await this.stopProviderSandbox("boot_budget_exceeded");
       } catch (error) {
         this.log.warn("Provider stop failed after boot budget", {
           error: error instanceof Error ? error.message : String(error),
         });
+      } finally {
+        this.isTerminatingSandbox = false;
       }
     }
-    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-    this.reportSandboxError(reason);
     return { kind: "boot_budget_exceeded", reason };
   }
 

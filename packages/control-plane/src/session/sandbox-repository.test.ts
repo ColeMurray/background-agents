@@ -391,13 +391,20 @@ describe("SandboxRepository boot state (SQLite)", () => {
   }
 
   describe("markSandboxReady", () => {
+    const generation = { sandboxId: "sb-1", createdAt: 1000 };
+
     it.each(["spawning", "connecting", "snapshotting", "warming"] as const)(
       "moves a %s row to ready, clears its boot phase, and reports the transition",
       (status) => {
         const { repository, set } = createSqliteRepository();
-        set("status = ?, boot_phase = ?, boot_seq = ?", status, '{"phase":"setup"}', 4);
+        set(
+          "status = ?, modal_sandbox_id = 'sb-1', boot_phase = ?, boot_seq = ?",
+          status,
+          '{"phase":"setup"}',
+          4
+        );
 
-        expect(repository.markSandboxReady()).toBe(true);
+        expect(repository.markSandboxReady(generation)).toBe(true);
 
         const row = repository.getSandbox();
         expect(row?.status).toBe("ready");
@@ -408,29 +415,49 @@ describe("SandboxRepository boot state (SQLite)", () => {
 
     it("is transition-only: a ready row reports no change", () => {
       const { repository, set } = createSqliteRepository();
-      set("status = 'ready'");
+      set("status = 'ready', modal_sandbox_id = 'sb-1'");
 
-      expect(repository.markSandboxReady()).toBe(false);
+      expect(repository.markSandboxReady(generation)).toBe(false);
     });
 
     it.each(["stopped", "stale"] as const)("leaves a %s row alone", (status) => {
       const { repository, set } = createSqliteRepository();
-      set("status = ?", status);
+      set("status = ?, modal_sandbox_id = 'sb-1'", status);
 
-      expect(repository.markSandboxReady()).toBe(false);
+      expect(repository.markSandboxReady(generation)).toBe(false);
       expect(repository.getSandbox()?.status).toBe(status);
     });
 
     it("lets an unfenced failed row self-heal but refuses a fenced one", () => {
       const healed = createSqliteRepository();
-      healed.set("status = 'failed', fenced = 0");
-      expect(healed.repository.markSandboxReady()).toBe(true);
+      healed.set("status = 'failed', modal_sandbox_id = 'sb-1', fenced = 0");
+      expect(healed.repository.markSandboxReady(generation)).toBe(true);
       expect(healed.repository.getSandbox()?.status).toBe("ready");
 
       const fenced = createSqliteRepository();
-      fenced.set("status = 'failed', fenced = 1");
-      expect(fenced.repository.markSandboxReady()).toBe(false);
+      fenced.set("status = 'failed', modal_sandbox_id = 'sb-1', fenced = 1");
+      expect(fenced.repository.markSandboxReady(generation)).toBe(false);
       expect(fenced.repository.getSandbox()?.status).toBe("failed");
+    });
+
+    it("refuses a ready that belongs to a generation the row no longer holds", () => {
+      // A replacement reserved the row while the old runtime's ready was in
+      // flight: the replacement's own ready, not this one, may move it.
+      const { repository, set } = createSqliteRepository();
+      set("status = 'spawning', modal_sandbox_id = 'sb-2', created_at = 2000");
+
+      expect(repository.markSandboxReady(generation)).toBe(false);
+      expect(repository.markSandboxReady({ sandboxId: "sb-1", createdAt: 2000 })).toBe(false);
+      expect(repository.getSandbox()?.status).toBe("spawning");
+
+      expect(repository.markSandboxReady({ sandboxId: "sb-2", createdAt: 2000 })).toBe(true);
+    });
+
+    it("matches a generation that has no sandbox id yet", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'connecting', modal_sandbox_id = NULL");
+
+      expect(repository.markSandboxReady({ sandboxId: null, createdAt: 1000 })).toBe(true);
     });
   });
 

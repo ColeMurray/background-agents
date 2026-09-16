@@ -204,10 +204,13 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
   }
 
   /**
-   * Prepare, then commit. The boot-liveness alarm is the one fallible step,
-   * so it runs first: a failure leaves the previous bridge in place and
-   * nothing published. Everything after the await is synchronous, so the new
-   * socket and the row's move to `connecting` land together.
+   * Prepare, revalidate, commit. The boot-liveness alarm is the one fallible
+   * step, so it runs first: a failure leaves the previous bridge in place and
+   * nothing written, not even the heartbeat. The row is then read again: the
+   * await is a window in which a cancel or a replacement spawn can rotate the
+   * generation, and a socket admitted for the old one must not be adopted by
+   * the new. Everything after that check is synchronous, so the heartbeat,
+   * the socket and the row's move to `connecting` land together.
    *
    * Attach is not readiness. The bridge connects ahead of the repository
    * boot and the harness, so this neither writes `ready`, stamps activity
@@ -228,12 +231,30 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       this.deps;
 
     const now = Date.now();
-    const generation = (() => {
+    const readGeneration = () => {
       const row = sandboxRepository.getSandbox();
       return row ? { sandboxId: row.modal_sandbox_id, createdAt: row.created_at } : null;
-    })();
-    sandboxRepository.updateSandboxHeartbeat(now);
+    };
+    const generation = readGeneration();
     await lifecycleManager.scheduleDisconnectCheck();
+
+    const current = readGeneration();
+    if (
+      current?.sandboxId !== generation?.sandboxId ||
+      current?.createdAt !== generation?.createdAt
+    ) {
+      log.warn("ws.connect", {
+        event: "ws.connect",
+        ws_type: "sandbox",
+        outcome: "generation_replaced",
+        sandbox_id: sandboxId,
+        admitted_sandbox_id: generation?.sandboxId ?? null,
+        current_sandbox_id: current?.sandboxId ?? null,
+      });
+      wsManager.close(ws, 4003, "Sandbox generation replaced");
+      return;
+    }
+    sandboxRepository.updateSandboxHeartbeat(now);
 
     // The lifecycle manager publishes access after any pending provider
     // startup has persisted its URLs and credentials.

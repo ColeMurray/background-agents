@@ -720,6 +720,31 @@ export function evaluateBootBudget(
   };
 }
 
+/**
+ * Resolve the boot budget from its deployment knob. The value must be a whole
+ * positive integer of milliseconds above the connect watchdog: both are
+ * measured from the reservation, and a budget at or below the watchdog would
+ * fail a generation that has not yet had its chance to connect. Anything else
+ * (including `parseInt`-tolerant forms like `1000junk` or `1.5`) resolves to
+ * the default and is reported through `rejectedValue`, so a typo weakens
+ * nothing silently. An unset knob is not a rejection.
+ *
+ * Pure function: no side effects.
+ */
+export function resolveBootBudgetTimeoutMs(
+  raw: string | undefined,
+  bounds: { connectingTimeoutMs: number; defaultTimeoutMs: number }
+): { timeoutMs: number; rejectedValue: string | null } {
+  if (raw === undefined || raw === "") {
+    return { timeoutMs: bounds.defaultTimeoutMs, rejectedValue: null };
+  }
+  const parsed = /^[1-9]\d*$/.test(raw) ? Number(raw) : Number.NaN;
+  if (Number.isSafeInteger(parsed) && parsed > bounds.connectingTimeoutMs) {
+    return { timeoutMs: parsed, rejectedValue: null };
+  }
+  return { timeoutMs: bounds.defaultTimeoutMs, rejectedValue: raw };
+}
+
 // ==================== Warm Decision ====================
 
 /**

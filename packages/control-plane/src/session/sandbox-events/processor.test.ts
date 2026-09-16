@@ -37,6 +37,7 @@ function createProcessor() {
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
     recordReportedSandboxRuntimeVersion: vi.fn(),
+    getSandbox: vi.fn(() => ({ modal_sandbox_id: "sb-1", created_at: 4000 })),
     markSandboxReady: vi.fn(() => true),
     recordBootProgress: vi.fn(() => true),
     getSession: vi.fn(() => null),

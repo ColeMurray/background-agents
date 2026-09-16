@@ -6,6 +6,7 @@ import {
 import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import {
   bootPhaseNameSchema,
+  sandboxOutputTailSchema,
   sandboxEventSchema,
   type SandboxEvent,
 } from "@open-inspect/shared/types/sandbox-events";
@@ -46,7 +47,7 @@ const sandboxErrorRequestSchema = z.object({
   bootSeq: z.number().int().optional(),
   repoOwner: z.string().optional(),
   repoName: z.string().optional(),
-  outputTail: z.array(z.string().max(4096)).max(200).optional(),
+  outputTail: sandboxOutputTailSchema.optional(),
 });
 
 /**

@@ -70,6 +70,7 @@ interface Harness {
     acceptAndSetSandboxSocket: ReturnType<typeof vi.fn>;
     getReadySandboxSocket: ReturnType<typeof vi.fn>;
     enforceAuthTimeout: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
   };
   lifecycleManager: {
     isProviderStartupPending: ReturnType<typeof vi.fn>;
@@ -106,6 +107,7 @@ function createHarness(opts: {
     acceptAndSetSandboxSocket: vi.fn(() => ({ replaced: false })),
     getReadySandboxSocket: vi.fn(() => null as WebSocket | null),
     enforceAuthTimeout: vi.fn(async () => undefined),
+    close: vi.fn(),
   };
   const lifecycleManager = {
     isProviderStartupPending: vi.fn(() => false),
@@ -375,10 +377,58 @@ describe("UpgradeDecision.attach", () => {
     );
 
     expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+    expect(h.sandboxRepository.updateSandboxHeartbeat).not.toHaveBeenCalled();
     expect(h.lifecycleManager.onSandboxConnected).not.toHaveBeenCalled();
     expect(h.lifecycleManager.onSandboxSocketAttached).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.submitted).toEqual([]);
+  });
+
+  it("closes the socket and commits nothing when the generation rotated while the liveness check was arming", async () => {
+    // A cancel or a replacement spawn can rewrite the row while the alarm
+    // write is pending. The socket that was admitted belongs to the old
+    // generation; adopting it would hand the new row a stranger's bridge.
+    const original = await sandboxRow({ status: "spawning" });
+    const h = createHarness({ sandbox: original });
+    const decision = await accepted(h, sandboxUpgrade());
+    h.lifecycleManager.scheduleDisconnectCheck.mockImplementation(async () => {
+      h.sandboxRepository.getSandbox.mockReturnValue({
+        ...original,
+        modal_sandbox_id: "sb-replacement",
+        created_at: 9000,
+      });
+    });
+
+    await decision.attach(socket);
+
+    expect(h.wsManager.close).toHaveBeenCalledWith(socket, 4003, "Sandbox generation replaced");
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+    expect(h.sandboxRepository.updateSandboxHeartbeat).not.toHaveBeenCalled();
+    expect(h.lifecycleManager.onSandboxConnected).not.toHaveBeenCalled();
+    expect(h.lifecycleManager.onSandboxSocketAttached).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.submitted).toEqual([]);
+    expect(h.log.warn).toHaveBeenCalledWith(
+      "ws.connect",
+      expect.objectContaining({ ws_type: "sandbox", outcome: "generation_replaced" })
+    );
+  });
+
+  it("stamps the heartbeat only once the liveness check is armed", async () => {
+    // The heartbeat is the "has connected" mark the connect watchdog stands
+    // down for; a generation whose socket was never adopted must not earn it.
+    const h = createHarness({ sandbox: await sandboxRow({ status: "spawning" }) });
+    const order: string[] = [];
+    h.lifecycleManager.scheduleDisconnectCheck.mockImplementation(async () => {
+      order.push("schedule");
+    });
+    h.sandboxRepository.updateSandboxHeartbeat.mockImplementation(() => {
+      order.push("heartbeat");
+    });
+
+    await (await accepted(h, sandboxUpgrade())).attach(socket);
+
+    expect(order).toEqual(["schedule", "heartbeat"]);
   });
 
   it("withholds the access broadcast while provider startup is still persisting", async () => {

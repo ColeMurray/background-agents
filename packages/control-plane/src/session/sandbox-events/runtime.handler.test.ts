@@ -11,6 +11,7 @@ import type { SessionCoreRepository } from "../session-core-repository";
 
 function createHandler() {
   const sandboxRepository = {
+    getSandbox: vi.fn(() => ({ modal_sandbox_id: "sb-1", created_at: 4000 })),
     updateSandboxHeartbeat: vi.fn(),
     recordReportedSandboxRuntimeVersion: vi.fn(),
     markSandboxReady: vi.fn(() => true),
@@ -71,7 +72,10 @@ describe("SandboxRuntimeEventHandler.handleReady", () => {
 
     await h.handler.handleReady(readyEvent, context);
 
-    expect(h.sandboxRepository.markSandboxReady).toHaveBeenCalledOnce();
+    expect(h.sandboxRepository.markSandboxReady).toHaveBeenCalledWith({
+      sandboxId: "sb-1",
+      createdAt: 4000,
+    });
     expect(h.updateLastActivity).toHaveBeenCalledWith(5000);
     expect(h.scheduleInactivityCheck).toHaveBeenCalledOnce();
     expect(h.broadcast.mock.calls.map(([message]) => message.type)).toEqual([
@@ -93,15 +97,14 @@ describe("SandboxRuntimeEventHandler.handleReady", () => {
     );
   });
 
-  it("is transition-only: a repeat ready from an already-ready, stopped, stale or fenced row changes nothing", async () => {
+  it("is transition-only: a repeat ready from an already-ready, stopped, stale, fenced or replaced row changes nothing", async () => {
     const h = createHandler();
     h.sandboxRepository.markSandboxReady.mockReturnValue(false);
 
     await h.handler.handleReady(readyEvent, context);
 
     expect(h.updateLastActivity).not.toHaveBeenCalled();
-    // Arming the alarm again is harmless (the scheduler keeps the earlier
-    // deadline) and is the price of arming before the status write.
+    expect(h.scheduleInactivityCheck).not.toHaveBeenCalled();
     expect(h.broadcast.mock.calls.map(([message]) => message.type)).toEqual(["sandbox_event"]);
     expect(h.backgroundTasks.submissions).toEqual([]);
     expect(h.processMessageQueue).not.toHaveBeenCalled();
@@ -109,32 +112,54 @@ describe("SandboxRuntimeEventHandler.handleReady", () => {
     expect(h.eventRepository.createEvent).toHaveBeenCalledOnce();
   });
 
-  it("arms the inactivity check before the irreversible status write and the queue release", async () => {
+  it("commits and publishes readiness before arming the inactivity check", async () => {
+    // The bridge does not resend ready unless it reconnects, so the durable
+    // transition and its publication cannot sit behind a fallible step.
     const h = createHandler();
     const order: string[] = [];
-    h.scheduleInactivityCheck.mockImplementation(async () => {
-      order.push("inactivity");
-    });
     h.sandboxRepository.markSandboxReady.mockImplementation(() => {
       order.push("ready");
       return true;
     });
+    h.broadcast.mockImplementation((message) => {
+      if (message.type === "sandbox_status") order.push("broadcast");
+    });
     h.processMessageQueue.mockImplementation(async () => {
       order.push("pump");
+    });
+    h.scheduleInactivityCheck.mockImplementation(async () => {
+      order.push("inactivity");
     });
 
     await h.handler.handleReady(readyEvent, context);
 
-    expect(order).toEqual(["inactivity", "ready", "pump"]);
+    expect(order).toEqual(["ready", "broadcast", "pump", "inactivity"]);
   });
 
-  it("leaves the row booting when the alarm cannot be armed, so a re-sent ready can retry", async () => {
+  it("keeps the sandbox ready, published and pumping when the inactivity check cannot be armed", async () => {
+    // An alarm is always pending while a bridge is attached (the disconnect
+    // check armed at attach, re-armed by every alarm run), so a failed arm
+    // here costs nothing but the error it surfaces.
     const h = createHandler();
     h.scheduleInactivityCheck.mockRejectedValue(new Error("alarm unavailable"));
 
     await expect(h.handler.handleReady(readyEvent, context)).rejects.toThrow("alarm unavailable");
 
+    expect(h.sandboxRepository.markSandboxReady).toHaveBeenCalledOnce();
+    expect(h.updateLastActivity).toHaveBeenCalledWith(5000);
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_status", status: "ready" });
+    expect(h.processMessageQueue).toHaveBeenCalledOnce();
+  });
+
+  it("records the event but moves nothing when there is no sandbox row to own it", async () => {
+    const h = createHandler();
+    h.sandboxRepository.getSandbox.mockReturnValue(null as never);
+
+    await h.handler.handleReady(readyEvent, context);
+
+    expect(h.eventRepository.createEvent).toHaveBeenCalledOnce();
     expect(h.sandboxRepository.markSandboxReady).not.toHaveBeenCalled();
+    expect(h.scheduleInactivityCheck).not.toHaveBeenCalled();
     expect(h.processMessageQueue).not.toHaveBeenCalled();
   });
 });

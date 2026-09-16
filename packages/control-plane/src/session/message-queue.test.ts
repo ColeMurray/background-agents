@@ -174,6 +174,7 @@ function buildQueue() {
       () => null as { id: string; created_at: number } | null
     ),
     getNextPendingMessage: vi.fn(() => null as MessageRow | null),
+    getMessageById: vi.fn(() => null as MessageRow | null),
     startMessageProcessing: vi.fn<MessageRepository["startMessageProcessing"]>(() => true),
     updateMessageToProcessing: vi.fn(),
     updateMessageToPending: vi.fn(),
@@ -1930,17 +1931,23 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("fails only the head pending prompt with the boot failure and leaves the rest queued", async () => {
+  it("fails the named pending prompt with the boot failure and leaves the rest queued", async () => {
     const h = buildQueue();
-    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-head" }));
+    h.repository.getMessageById.mockReturnValue(
+      createMessage({ id: "msg-head", status: "pending" })
+    );
     h.repository.listPendingMessagesWithCreatedAt.mockReturnValue([
       { id: "msg-head", created_at: 700 },
       { id: "msg-next", created_at: 800 },
     ]);
 
-    await h.queue.failHeadPendingMessage("Sandbox boot exceeded 30 minutes while running setup.sh");
+    await h.queue.failPendingMessage(
+      "msg-head",
+      "Sandbox boot exceeded 30 minutes while running setup.sh"
+    );
     await h.backgroundTasks.settle();
 
+    expect(h.repository.getMessageById).toHaveBeenCalledWith("msg-head");
     expect(h.repository.recordMessageCompletion).toHaveBeenCalledOnce();
     expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1957,11 +1964,25 @@ describe("SessionMessageQueue", () => {
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
   });
 
-  it("does nothing when no prompt is pending to fail", async () => {
+  it("leaves a prompt alone once it is no longer pending", async () => {
+    // Cancelled, or dispatched onto a replacement, between the alarm
+    // identifying it and the lifecycle giving up: the failure is not its.
     const h = buildQueue();
-    h.repository.getNextPendingMessage.mockReturnValue(null);
+    h.repository.getMessageById.mockReturnValue(
+      createMessage({ id: "msg-head", status: "processing" })
+    );
 
-    await h.queue.failHeadPendingMessage("boot budget");
+    await h.queue.failPendingMessage("msg-head", "boot budget");
+
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    expect(h.sessionStatus.reconcileAfterExecution).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the named prompt no longer exists", async () => {
+    const h = buildQueue();
+    h.repository.getMessageById.mockReturnValue(null);
+
+    await h.queue.failPendingMessage("msg-gone", "boot budget");
 
     expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
     expect(h.sessionStatus.reconcileAfterExecution).not.toHaveBeenCalled();

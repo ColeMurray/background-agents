@@ -2201,6 +2201,41 @@ describe("SandboxLifecycleManager", () => {
         );
       });
 
+      it("publishes the failure and holds the spawn guard while the provider stop is pending", async () => {
+        // The stop is a network round trip. A prompt that arrives during it
+        // must not reserve a replacement that then inherits this failure,
+        // and the user must not wait out the stop to learn the boot died.
+        const sandbox = expired();
+        let releaseStop!: () => void;
+        const stopSandbox = vi.fn(
+          () =>
+            new Promise<StopResult>((resolve) => {
+              releaseStop = () => resolve({ success: true });
+            })
+        );
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          stopSandbox,
+        });
+        const { manager, broadcaster } = build(sandbox, { provider });
+
+        const pending = manager.handleAlarm();
+        await vi.waitFor(() => expect(stopSandbox).toHaveBeenCalledOnce());
+
+        expect(broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "failed" });
+        expect(
+          broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_error")
+        ).toBe(true);
+        expect(sandbox.last_spawn_error).toContain("Sandbox boot exceeded");
+        expect(manager.isSpawning()).toBe(true);
+
+        releaseStop();
+        await expect(pending).resolves.toEqual(
+          expect.objectContaining({ kind: "boot_budget_exceeded" })
+        );
+        expect(manager.isSpawning()).toBe(false);
+      });
+
       it("names the boot itself when no phase was reported", async () => {
         const sandbox = expired();
         sandbox.boot_phase = null;
@@ -2924,6 +2959,65 @@ describe("SandboxLifecycleManager", () => {
 
       expect(sandbox.spawn_failure_count).toBe(1);
       expect(sandbox.last_spawn_failure).toBeGreaterThanOrEqual(now);
+    });
+
+    it("fences the generation before an explicit provider stop, so a late bridge is refused rather than adopted", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting" as SandboxStatus,
+        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
+        last_heartbeat: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const order: string[] = [];
+      vi.mocked(storage.fenceSandboxGeneration).mockImplementation(() => {
+        order.push("fence");
+        sandbox.fenced = 1;
+      });
+      const stopSandbox = vi.fn(async () => {
+        order.push("stop");
+        return { success: true };
+      });
+      const manager = new SandboxLifecycleManager(
+        createMockProvider({ capabilities: { supportsExplicitStop: true }, stopSandbox }),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(manager.handleAlarm()).resolves.toBe("sandbox_failed");
+
+      expect(order).toEqual(["fence", "stop"]);
+      expect(sandbox.fenced).toBe(1);
+    });
+
+    it("leaves a watchdog-failed generation unfenced when the provider cannot be stopped, so its late bridge may self-heal", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting" as SandboxStatus,
+        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
+        last_heartbeat: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(manager.handleAlarm()).resolves.toBe("sandbox_failed");
+
+      expect(storage.fenceSandboxGeneration).not.toHaveBeenCalled();
+      expect(sandbox.fenced).toBe(0);
     });
 
     it("restarts the streak when this attempt began a full window after the previous failure", async () => {
