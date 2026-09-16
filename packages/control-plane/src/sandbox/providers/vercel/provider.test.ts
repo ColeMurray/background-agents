@@ -534,6 +534,24 @@ describe("VercelSandboxProvider", () => {
     ).rejects.toBe(providerError);
   });
 
+  it("keeps a post-create 404 as a generic permanent error", async () => {
+    const client = createMockClient({
+      startCommand: vi.fn(async () => {
+        throw new VercelSandboxApiError("session not found", 404);
+      }),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    const error = await provider
+      .createSandbox({ ...baseCreateConfig, prebuiltImageId: "snapshot-valid" })
+      .catch((caught: unknown) => caught);
+
+    expect(client.createSandbox).toHaveBeenCalledOnce();
+    expect(error).toBeInstanceOf(SandboxProviderError);
+    expect(error).not.toBeInstanceOf(PrebuiltImageUnavailableError);
+    expect(error).toEqual(expect.objectContaining({ errorType: "permanent" }));
+  });
+
   it("uses configured code-server / terminal ports for exposure and env", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
