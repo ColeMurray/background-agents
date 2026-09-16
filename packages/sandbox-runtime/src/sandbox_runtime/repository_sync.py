@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -101,23 +102,36 @@ class RepositorySynchronizer:
     async def _clone_repo(self, repo: RepoEntry) -> bool:
         self.log.info("git.clone_start", repo_owner=repo.owner, repo_name=repo.name)
         try:
-            result = await asyncio.create_subprocess_exec(
-                "git",
-                "clone",
-                "--depth",
-                str(self.CLONE_DEPTH_COMMITS),
-                "--branch",
-                repo.branch,
-                self._build_repo_url(repo),
-                str(repo.path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
-            _stdout, stderr = await asyncio.wait_for(
-                self._communicate_owned_subprocess(result),
-                timeout=self.clone_timeout_seconds,
-            )
+            with tempfile.TemporaryDirectory(
+                prefix=f".{repo.name}.clone-", dir=repo.path.parent
+            ) as clone_dir:
+                result = await asyncio.create_subprocess_exec(
+                    "git",
+                    "clone",
+                    "--depth",
+                    str(self.CLONE_DEPTH_COMMITS),
+                    "--branch",
+                    repo.branch,
+                    self._build_repo_url(repo),
+                    clone_dir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True,
+                )
+                _stdout, stderr = await asyncio.wait_for(
+                    self._communicate_owned_subprocess(result),
+                    timeout=self.clone_timeout_seconds,
+                )
+                if result.returncode != 0:
+                    self.log.error(
+                        "git.clone_error",
+                        repo_owner=repo.owner,
+                        repo_name=repo.name,
+                        stderr=self._redact_git_stderr(stderr),
+                        exit_code=result.returncode,
+                    )
+                    return False
+                Path(clone_dir).rename(repo.path)
         except TimeoutError as error:
             self.log.error(
                 "git.clone_timeout",
@@ -128,15 +142,6 @@ class RepositorySynchronizer:
             raise RepositorySyncTimeout from error
         except Exception as error:
             self.log.error("git.clone_error", exc=error, repo_owner=repo.owner, repo_name=repo.name)
-            return False
-        if result.returncode != 0:
-            self.log.error(
-                "git.clone_error",
-                repo_owner=repo.owner,
-                repo_name=repo.name,
-                stderr=self._redact_git_stderr(stderr),
-                exit_code=result.returncode,
-            )
             return False
         self.log.info("git.clone_complete", repo_path=str(repo.path))
         return True
