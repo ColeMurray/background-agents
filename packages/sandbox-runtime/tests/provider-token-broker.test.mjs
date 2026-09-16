@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createProviderTokenBroker } from "../src/sandbox_runtime/plugins/provider-token-broker.js";
+import {
+  ProviderTokenBrokerError,
+  createProviderTokenBroker,
+} from "../src/sandbox_runtime/plugins/provider-token-broker.js";
 
 function configureSession() {
   process.env.CONTROL_PLANE_URL = "https://control.test";
@@ -69,4 +72,17 @@ test("clears a failed in-flight refresh so a later request can retry", async () 
   await assert.rejects(broker.getAccessToken(), /Invalid xAI token broker response/);
   assert.equal((await broker.getAccessToken()).accessToken, "recovered");
   assert.equal(requestCount, 2);
+});
+
+test("preserves HTTP status on broker rejections", async () => {
+  configureSession();
+  globalThis.fetch = async () => new Response("temporarily unavailable", { status: 503 });
+  const broker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
+
+  await assert.rejects(broker.getAccessToken(), (error) => {
+    assert.ok(error instanceof ProviderTokenBrokerError);
+    assert.equal(error.kind, "http");
+    assert.equal(error.status, 503);
+    return true;
+  });
 });
