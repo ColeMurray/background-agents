@@ -223,6 +223,17 @@ export interface DaytonaToolboxTarget {
 // Errors
 // ---------------------------------------------------------------------------
 
+/**
+ * Thrown when a multi-request Daytona flow is cancelled: the caller's budget
+ * ran out between two of its requests.
+ */
+export class DaytonaCancelledError extends Error {
+  constructor() {
+    super("Daytona operation cancelled before it completed");
+    this.name = "DaytonaCancelledError";
+  }
+}
+
 /** Thrown when Daytona returns 404 — the resource no longer exists. */
 export class DaytonaNotFoundError extends Error {
   constructor(message: string) {
@@ -725,6 +736,32 @@ export class DaytonaRestClient {
 
 function trimTrailingSlashes(url: string): string {
   return url.replace(/\/+$/, "");
+}
+
+/**
+ * Pace one step of a polling flow, and end the flow the moment the caller's
+ * budget is spent.
+ *
+ * Rejecting rather than resolving on abort is what keeps a cancelled poll
+ * from spinning: a loop whose wait returns instantly, over a transport that
+ * ignores the signal, would never yield to its own deadline again.
+ */
+export function delayUnlessCancelled(delayMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DaytonaCancelledError());
+      return;
+    }
+    const timeoutId = setTimeout(resolve, delayMs);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timeoutId);
+        reject(new DaytonaCancelledError());
+      },
+      { once: true }
+    );
+  });
 }
 
 /**

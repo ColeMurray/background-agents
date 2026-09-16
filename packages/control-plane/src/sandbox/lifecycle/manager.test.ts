@@ -24,6 +24,7 @@ import type { ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import {
+  PrebuiltImageActivationPendingError,
   SandboxProviderError,
   type SandboxProvider,
   type CreateSandboxConfig,
@@ -3274,6 +3275,39 @@ describe("SandboxLifecycleManager", () => {
       expect(retryAttempt.sandboxId).not.toBe(firstAttempt.sandboxId);
       expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
       expect(storage.calls).not.toContain("transitionSandboxStatus:spawning->failed");
+    });
+
+    it("keeps an image the provider is still waking, falling back to base for this spawn", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const createSandbox = vi
+        .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
+        .mockRejectedValueOnce(
+          new PrebuiltImageActivationPendingError("prebuilt snapshot is still inactive")
+        )
+        .mockImplementation(async (config) => ({
+          sandboxId: config.sandboxId,
+          providerObjectId: "provider-obj-123",
+          status: "connecting",
+          createdAt: Date.now(),
+        }));
+      const { manager, storage } = createRepoSessionManager({
+        imageBuildLookup,
+        provider: createMockProvider({ createSandbox }),
+      });
+
+      await manager.spawnSandbox();
+
+      // Cold storage is not a broken image: retiring it here would cost a
+      // rebuild for an image the next spawn can use.
+      expect(imageBuildLookup.markRestoreFailed).not.toHaveBeenCalled();
+      expect(createSandbox).toHaveBeenCalledTimes(2);
+      expect(createSandbox.mock.calls[1][0]).toEqual(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
     });
   });
 

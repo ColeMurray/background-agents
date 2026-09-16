@@ -435,6 +435,22 @@ export class SandboxProviderError extends Error {
 }
 
 /**
+ * A prebuilt image that exists and is not broken, but is not yet usable: the
+ * provider is still bringing it back from cold storage.
+ *
+ * Distinct from every other create failure because the answer is different.
+ * A missing or corrupt image must be failed so the next cron rebuilds it; an
+ * image that is merely waking must not be, or a slow activation would retire
+ * a perfectly good prebuild. Both fall back to the base image for this spawn.
+ */
+export class PrebuiltImageActivationPendingError extends SandboxProviderError {
+  constructor(message: string, cause?: Error) {
+    super(message, "transient", cause);
+    this.name = "PrebuiltImageActivationPendingError";
+  }
+}
+
+/**
  * Sandbox provider interface.
  *
  * Defines the contract for sandbox lifecycle operations.
