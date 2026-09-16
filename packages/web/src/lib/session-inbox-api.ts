@@ -7,7 +7,6 @@ import {
   type SessionInboxCategory,
   type SessionInboxItem,
   type SessionInboxPage,
-  type SessionInboxSession,
   type SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionReadState } from "@open-inspect/shared/types/sessions";
@@ -73,30 +72,6 @@ export function parseSessionInboxSnapshot(data: unknown): SessionInboxSnapshot {
   return sessionInboxSnapshotClientSchema.parse(data);
 }
 
-function applyTitleToSession(
-  session: SessionInboxSession,
-  sessionId: string,
-  title: string | null
-) {
-  return session.id === sessionId ? { ...session, title } : session;
-}
-
-function applyTitleToPage(
-  page: SessionInboxPage,
-  sessionId: string,
-  title: string | null
-): SessionInboxPage {
-  return {
-    ...page,
-    items: page.items.map((item) => ({
-      rootSession: applyTitleToSession(item.rootSession, sessionId, title),
-      descendantSessions: item.descendantSessions.map((session) =>
-        applyTitleToSession(session, sessionId, title)
-      ),
-    })),
-  };
-}
-
 function applyReadStateToPage(
   page: SessionInboxPage,
   sessionId: string,
@@ -144,31 +119,6 @@ export function applySessionInboxItemReadState(
       applySessionReadStateToItem(session, sessionId, readState)
     ),
   };
-}
-
-/**
- * Applies a rename to a cached inbox payload. Inbox keys cache two shapes —
- * the category snapshot and a single paginated page — so the transform
- * dispatches on the presence of `categories`.
- */
-export function applySessionInboxTitleUpdate<T extends SessionInboxSnapshot | SessionInboxPage>(
-  data: T | undefined,
-  sessionId: string,
-  title: string | null
-): T | undefined {
-  if (!data) return data;
-  if ("categories" in data) {
-    return {
-      ...data,
-      categories: Object.fromEntries(
-        Object.entries(data.categories).map(([category, page]) => [
-          category,
-          applyTitleToPage(page, sessionId, title),
-        ])
-      ) as Record<SessionInboxCategory, SessionInboxPage>,
-    };
-  }
-  return applyTitleToPage(data, sessionId, title) as T;
 }
 
 export function applySessionInboxReadStateUpdate<T extends SessionInboxSnapshot | SessionInboxPage>(
