@@ -191,16 +191,20 @@ describe("ImageBuildReaper", () => {
   });
 });
 
+const now = 10_000_000;
+/**
+ * Registered long enough ago that the build's source has certainly outlived
+ * its hard lifetime: an absent resource can no longer be explained by a
+ * create or a capture still in flight.
+ */
+const conclusivelyAbsentAt = now - (DEFAULT_STALE_BUILD_MAX_AGE_MS + 1);
+
 describe("ImageBuildReaper unbound source recovery", () => {
   const intent = (id: string, createdAt: number) => ({
     id,
     provider: "daytona" as const,
     created_at: createdAt,
   });
-  const now = 10_000_000;
-  // The source's hard lifetime has certainly elapsed by here, so an absent
-  // source can no longer be an in-flight create.
-  const conclusivelyAbsentAt = now - (DEFAULT_STALE_BUILD_MAX_AGE_MS + 1);
 
   it("attaches a source found under its reserved name for teardown", async () => {
     const store = createStore();
@@ -268,25 +272,56 @@ describe("ImageBuildReaper unbound source recovery", () => {
 });
 
 describe("ImageBuildReaper orphan operation reconciliation", () => {
-  const operation = (id: string) => ({
+  const operation = (id: string, createdAt: number = conclusivelyAbsentAt) => ({
     id,
     provider: "daytona" as const,
     provider_session_id: "sandbox-7",
     provider_operation_ref: `oi-image-${id}`,
-    created_at: 1_000,
+    created_at: createdAt,
   });
 
-  it.each([["absent"], ["deleted"]] as const)("settles an operation reported %s", async (type) => {
+  it("settles an operation whose artifact was reclaimed", async () => {
+    const store = createStore();
+    store.listUnresolvedOperations.mockResolvedValue([operation("b-1", now - 1000)]);
+    const adapter = createRecoverableAdapter();
+    adapter.reconcileOrphanOperation.mockResolvedValue({ type: "deleted" });
+    const { reaper } = createReaper({ store, adapter });
+
+    const result = await reaper.reconcileUnresolvedOperations(ctx, now);
+
+    // Deletion is conclusive whenever it happens, so the row is freed on the
+    // pass that observes it.
+    expect(result).toEqual({ reconciled: 1, retained: 0 });
+    expect(store.clearProviderOperation).toHaveBeenCalledWith("b-1", "oi-image-b-1");
+  });
+
+  it("settles an absent operation only once a capture can no longer be running", async () => {
     const store = createStore();
     store.listUnresolvedOperations.mockResolvedValue([operation("b-1")]);
     const adapter = createRecoverableAdapter();
-    adapter.reconcileOrphanOperation.mockResolvedValue({ type });
+    adapter.reconcileOrphanOperation.mockResolvedValue({ type: "absent" });
     const { reaper } = createReaper({ store, adapter });
 
-    const result = await reaper.reconcileUnresolvedOperations(ctx, 2_000);
+    const result = await reaper.reconcileUnresolvedOperations(ctx, now);
 
     expect(result).toEqual({ reconciled: 1, retained: 0 });
     expect(store.clearProviderOperation).toHaveBeenCalledWith("b-1", "oi-image-b-1");
+  });
+
+  it("keeps an absent operation whose capture could still produce a snapshot", async () => {
+    const store = createStore();
+    store.listUnresolvedOperations.mockResolvedValue([operation("b-1", now - 1000)]);
+    const adapter = createRecoverableAdapter();
+    adapter.reconcileOrphanOperation.mockResolvedValue({ type: "absent" });
+    const { reaper } = createReaper({ store, adapter });
+
+    const result = await reaper.reconcileUnresolvedOperations(ctx, now);
+
+    // A snapshot record can appear well after its capture was accepted;
+    // clearing the reference on the first 404 would leave that artifact with
+    // nothing on the row naming it.
+    expect(result).toEqual({ reconciled: 0, retained: 1 });
+    expect(store.clearProviderOperation).not.toHaveBeenCalled();
   });
 
   it("keeps an operation that has not settled", async () => {
@@ -296,7 +331,7 @@ describe("ImageBuildReaper orphan operation reconciliation", () => {
     adapter.reconcileOrphanOperation.mockResolvedValue({ type: "pending" });
     const { reaper } = createReaper({ store, adapter });
 
-    const result = await reaper.reconcileUnresolvedOperations(ctx, 2_000);
+    const result = await reaper.reconcileUnresolvedOperations(ctx, now);
 
     expect(result).toEqual({ reconciled: 0, retained: 1 });
     expect(store.clearProviderOperation).not.toHaveBeenCalled();
@@ -309,7 +344,7 @@ describe("ImageBuildReaper orphan operation reconciliation", () => {
     adapter.reconcileOrphanOperation.mockRejectedValue(new Error("provider 503"));
     const { reaper } = createReaper({ store, adapter });
 
-    const result = await reaper.reconcileUnresolvedOperations(ctx, 2_000);
+    const result = await reaper.reconcileUnresolvedOperations(ctx, now);
 
     expect(result).toEqual({ reconciled: 0, retained: 1 });
     expect(store.clearProviderOperation).not.toHaveBeenCalled();
@@ -320,7 +355,7 @@ describe("ImageBuildReaper orphan operation reconciliation", () => {
     store.listUnresolvedOperations.mockResolvedValue([operation("b-1")]);
     const { reaper } = createReaper({ store, adapter: createAdapter() });
 
-    const result = await reaper.reconcileUnresolvedOperations(ctx, 2_000);
+    const result = await reaper.reconcileUnresolvedOperations(ctx, now);
 
     expect(result).toEqual({ reconciled: 0, retained: 0 });
     expect(store.clearProviderOperation).not.toHaveBeenCalled();

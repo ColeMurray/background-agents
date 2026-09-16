@@ -165,7 +165,9 @@ export class ImageBuildReaper {
    * it is terminal, so the reserved name is the only handle to a resource
    * nothing else records. A pending outcome keeps the obligation rather than
    * dropping it — an untracked billable artifact is strictly worse than a row
-   * that keeps asking.
+   * that keeps asking. So does an absent one, until a capture can no longer
+   * be running at all: a lookup that finds nothing is a timing answer until
+   * the source the capture reads has certainly expired.
    */
   async reconcileUnresolvedOperations(
     ctx: ImageBuildWorkflowContext,
@@ -191,6 +193,15 @@ export class ImageBuildReaper {
         });
         if (outcome.type === "pending") {
           this.retainOperation(row, result, ctx, now, "operation_still_settling");
+          return;
+        }
+        // Finding nothing under the reserved name is not yet evidence that
+        // nothing was produced: the record can appear well after the capture
+        // was accepted. Only once the source it reads has certainly outlived
+        // its hard lifetime can a later artifact no longer arrive, which is
+        // the same bound an unbound create intent settles on.
+        if (outcome.type === "absent" && now - row.created_at <= DEFAULT_STALE_BUILD_MAX_AGE_MS) {
+          this.retainOperation(row, result, ctx, now, "capture_may_still_be_running");
           return;
         }
         if (await this.store.clearProviderOperation(row.id, row.provider_operation_ref)) {
