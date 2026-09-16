@@ -1,5 +1,5 @@
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
-import type { SessionExportCursor } from "./session-export-cursor";
+import type { CreatedAtCursor } from "../created-at-cursor";
 import type { SqlDatabase } from "./sql-database";
 
 /**
@@ -62,7 +62,7 @@ function toExportRow(row: SessionExportRowRaw): SessionExportRow {
 
 /** Filters and keyset pagination for an export page. */
 export interface ListSessionsForExportOptions {
-  cursor: SessionExportCursor | null;
+  cursor: CreatedAtCursor | null;
   /** Page size; the store reads one extra row to answer hasMore. */
   limit: number;
   /** Inclusive lower bound on created_at (epoch ms). */
@@ -71,14 +71,14 @@ export interface ListSessionsForExportOptions {
   createdBefore?: number;
 }
 
-export interface ListSessionsForExportResult {
-  sessions: SessionExportRow[];
-  hasMore: boolean;
-}
+export type ListSessionsForExportResult = { sessions: SessionExportRow[] } & (
+  | { hasMore: false; nextCursor: null }
+  | { hasMore: true; nextCursor: CreatedAtCursor }
+);
 
 /**
- * Reads the session index for bulk export, ordered by (created_at, id) so
- * keyset pagination is stable under concurrent inserts.
+ * Reads the session index newest-first so sessions created during a paged
+ * export remain ahead of its cursor rather than extending the export.
  */
 export class SessionExportStore {
   constructor(private readonly db: SqlDatabase) {}
@@ -88,7 +88,7 @@ export class SessionExportStore {
     const bindings: (string | number)[] = [];
 
     if (options.cursor) {
-      conditions.push("(created_at > ? OR (created_at = ? AND id > ?))");
+      conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
       bindings.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
     }
     if (options.createdAfter !== undefined) {
@@ -107,17 +107,22 @@ export class SessionExportStore {
                 automation_id, message_count, total_cost, active_duration_ms, created_at, updated_at
          FROM sessions
          ${where}
-         ORDER BY created_at ASC, id ASC
+         ORDER BY created_at DESC, id DESC
          LIMIT ?`
       )
       .bind(...bindings, options.limit + 1)
       .all<SessionExportRowRaw>();
 
-    const rows = result.results;
+    const rows = result.results ?? [];
     const hasMore = rows.length > options.limit;
+    const sessions = (hasMore ? rows.slice(0, options.limit) : rows).map(toExportRow);
+    if (!hasMore) return { sessions, hasMore: false, nextCursor: null };
+
+    const last = sessions[sessions.length - 1];
     return {
-      sessions: rows.slice(0, options.limit).map(toExportRow),
-      hasMore,
+      sessions,
+      hasMore: true,
+      nextCursor: { createdAt: last.createdAt, id: last.id },
     };
   }
 }

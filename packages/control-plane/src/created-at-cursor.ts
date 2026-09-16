@@ -1,22 +1,17 @@
-/**
- * Keyset cursor for the session-trace export stream.
- *
- * Sessions are exported ordered by (created_at ASC, id ASC); the cursor is
- * the last emitted session's position in that order. Same wire format as the
- * automation list cursor: `<createdAt>:<encodeURIComponent(id)>`.
- */
-export interface SessionExportCursor {
+export interface CreatedAtCursor {
   createdAt: number;
   id: string;
 }
 
-export function encodeSessionExportCursor(cursor: SessionExportCursor): string {
+export type ParseCreatedAtCursorResult =
+  | { ok: true; cursor: CreatedAtCursor | null }
+  | { ok: false; error: "Invalid cursor" };
+
+export function encodeCreatedAtCursor(cursor: CreatedAtCursor): string {
   return `${cursor.createdAt}:${encodeURIComponent(cursor.id)}`;
 }
 
-export function parseSessionExportCursor(
-  raw: string | null | undefined
-): { ok: true; cursor: SessionExportCursor | null } | { ok: false; error: "Invalid cursor" } {
+export function parseCreatedAtCursor(raw: string | null | undefined): ParseCreatedAtCursorResult {
   if (raw === null || raw === undefined) return { ok: true, cursor: null };
 
   const separator = raw.indexOf(":");

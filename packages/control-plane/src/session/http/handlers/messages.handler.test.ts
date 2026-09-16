@@ -181,7 +181,7 @@ describe("MessagesHandler", () => {
           createdAt: 1000,
         },
       ],
-      cursor: "1000",
+      cursor: "1000:m1",
       hasMore: false,
     });
 
@@ -189,7 +189,7 @@ describe("MessagesHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       events: [{ id: "e1", type: "token", data: { x: 1 }, messageId: "m1", createdAt: 1000 }],
-      cursor: "1000",
+      cursor: "1000:m1",
       hasMore: false,
     });
     expect(messageService.listEvents).toHaveBeenCalledWith({
@@ -198,6 +198,40 @@ describe("MessagesHandler", () => {
       type: null,
       messageId: null,
     });
+  });
+
+  it("parses composite and legacy message cursors at the HTTP boundary", () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.listMessages).mockReturnValue({
+      messages: [],
+      hasMore: false,
+    });
+
+    handler.listMessages(new URL("http://internal/internal/messages?cursor=1000%3Am1"));
+    expect(messageService.listMessages).toHaveBeenLastCalledWith({
+      cursor: { createdAt: 1000, id: "m1" },
+      limit: 50,
+      status: null,
+    });
+
+    handler.listMessages(new URL("http://internal/internal/messages?cursor=1000"));
+    expect(messageService.listMessages).toHaveBeenLastCalledWith({
+      cursor: { createdAt: 1000 },
+      limit: 50,
+      status: null,
+    });
+  });
+
+  it("rejects malformed message cursors", async () => {
+    const { handler, messageService } = createHandler();
+
+    const response = handler.listMessages(
+      new URL("http://internal/internal/messages?cursor=not-a-cursor")
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid cursor" });
+    expect(messageService.listMessages).not.toHaveBeenCalled();
   });
 
   it("parses composite event cursors before delegating to the service", async () => {
@@ -316,7 +350,7 @@ describe("MessagesHandler", () => {
           completedAt: 1200,
         },
       ],
-      cursor: "1000",
+      cursor: "1000:m1",
       hasMore: false,
     });
 
@@ -342,7 +376,7 @@ describe("MessagesHandler", () => {
           completedAt: 1200,
         },
       ],
-      cursor: "1000",
+      cursor: "1000:m1",
       hasMore: false,
     });
   });
@@ -363,7 +397,7 @@ describe("MessagesHandler", () => {
           completedAt: null,
         },
       ],
-      cursor: "1000",
+      cursor: "1000:m1",
       hasMore: false,
     });
 

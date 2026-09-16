@@ -1,6 +1,6 @@
 import { harnessIdSchema, type HarnessId } from "../harnesses";
 import { z } from "zod";
-import type { ResolvedSessionAttachment } from "./session-attachments";
+import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 import { sessionListRepositorySchema, type SessionListRepository } from "./repositories";
 
 /**
@@ -46,7 +46,8 @@ export const sandboxStatusSchema = z.enum([
 ]);
 export type SandboxStatus = z.infer<typeof sandboxStatusSchema>;
 
-export type MessageStatus = "pending" | "processing" | "completed" | "failed";
+export const messageStatusSchema = z.enum(["pending", "processing", "completed", "failed"]);
+export type MessageStatus = z.infer<typeof messageStatusSchema>;
 
 export const messageSourceSchema = z.enum([
   "web",
@@ -235,17 +236,18 @@ export interface Session {
   readState?: SessionReadState;
 }
 
-export interface SessionMessage {
-  id: string;
-  authorId: string;
-  content: string;
-  source: MessageSource;
-  attachments: ResolvedSessionAttachment[] | null;
-  status: MessageStatus;
-  createdAt: number;
-  startedAt: number | null;
-  completedAt: number | null;
-}
+export const sessionMessageSchema = z.object({
+  id: z.string(),
+  authorId: z.string(),
+  content: z.string(),
+  source: messageSourceSchema,
+  attachments: resolvedSessionAttachmentsSchema.nullable(),
+  status: messageStatusSchema,
+  createdAt: z.number(),
+  startedAt: z.number().nullable(),
+  completedAt: z.number().nullable(),
+});
+export type SessionMessage = z.infer<typeof sessionMessageSchema>;
 
 export const sessionParticipantProfileSchema = z.object({
   userId: z.string(),
