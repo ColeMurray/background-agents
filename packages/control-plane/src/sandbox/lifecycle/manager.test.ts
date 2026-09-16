@@ -24,6 +24,7 @@ import type { ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import {
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   type SandboxProvider,
   type CreateSandboxConfig,
@@ -3236,7 +3237,7 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("marks the repo image restore-failed and retries from base on a permanent provider error", async () => {
+    it("marks the repo image restore-failed and retries from base when its artifact is unavailable", async () => {
       // Deliberate behavior change: the old repo path failed the spawn
       // outright; repo images now take the same restore fallback the
       // environment side has.
@@ -3246,7 +3247,7 @@ describe("SandboxLifecycleManager", () => {
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValueOnce(new SandboxProviderError("image expired", "permanent"))
+        .mockRejectedValueOnce(new PrebuiltImageUnavailableError("image expired"))
         .mockImplementation(async (config) => ({
           sandboxId: config.sandboxId,
           providerObjectId: "provider-obj-123",
@@ -3312,6 +3313,26 @@ describe("SandboxLifecycleManager", () => {
         })
       );
       warnSpy.mockRestore();
+    });
+
+    it("does not fail the image or retry from base on an unrelated permanent provider error", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const createSandbox = vi.fn(async () => {
+        throw new SandboxProviderError("quota exceeded", "permanent");
+      });
+      const { manager, storage } = createRepoSessionManager({
+        imageBuildLookup,
+        provider: createMockProvider({ createSandbox }),
+      });
+
+      await manager.spawnSandbox();
+
+      expect(createSandbox).toHaveBeenCalledOnce();
+      expect(imageBuildLookup.markRestoreFailed).not.toHaveBeenCalled();
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
     });
   });
 
@@ -3462,14 +3483,14 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("marks the image restore-failed and retries from base on a permanent provider error", async () => {
+    it("marks the image restore-failed and retries from base when its artifact is unavailable", async () => {
       const environmentImageLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () => envImageRow()),
         markRestoreFailed: vi.fn(async () => true),
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValueOnce(new SandboxProviderError("image expired", "permanent"))
+        .mockRejectedValueOnce(new PrebuiltImageUnavailableError("image expired"))
         .mockImplementation(async (config) => ({
           sandboxId: config.sandboxId,
           providerObjectId: "provider-obj-123",
@@ -3522,7 +3543,8 @@ describe("SandboxLifecycleManager", () => {
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValue(new SandboxProviderError("quota exceeded", "permanent"));
+        .mockRejectedValueOnce(new PrebuiltImageUnavailableError("image expired"))
+        .mockRejectedValueOnce(new SandboxProviderError("quota exceeded", "permanent"));
       const { manager, storage } = createEnvironmentSessionManager({
         environmentImageLookup,
         provider: createMockProvider({ createSandbox }),
@@ -3544,7 +3566,7 @@ describe("SandboxLifecycleManager", () => {
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValueOnce(new SandboxProviderError("image expired", "permanent"))
+        .mockRejectedValueOnce(new PrebuiltImageUnavailableError("image expired"))
         .mockImplementation(async (config) => ({
           sandboxId: config.sandboxId,
           providerObjectId: "provider-obj-123",

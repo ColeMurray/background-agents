@@ -434,6 +434,14 @@ export class SandboxProviderError extends Error {
   }
 }
 
+/** The provider confirmed that the selected prebuilt artifact cannot be restored. */
+export class PrebuiltImageUnavailableError extends SandboxProviderError {
+  constructor(message: string, cause?: Error) {
+    super(message, "permanent", cause);
+    this.name = "PrebuiltImageUnavailableError";
+  }
+}
+
 /**
  * Sandbox provider interface.
  *

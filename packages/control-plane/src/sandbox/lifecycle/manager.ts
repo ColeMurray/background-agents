@@ -22,6 +22,7 @@ import {
   type SessionRow,
 } from "../../session/types";
 import {
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   type SandboxProvider,
   type CreateSandboxConfig,
@@ -651,18 +652,19 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         result = await this.provider.createSandbox(createConfig);
       } catch (error) {
         if (!selectedImage) throw error;
-        if (!(error instanceof SandboxProviderError)) throw error;
-        if (error.errorType === "transient") {
-          this.log.warn("Prebuilt-image spawn failed with a transient provider error", {
-            event: "image_build.spawn_error_transient",
-            image_build_id: selectedImage.imageBuildId,
-            error_type: error.errorType,
-            error: error.message,
-          });
+        if (!(error instanceof PrebuiltImageUnavailableError)) {
+          if (error instanceof SandboxProviderError && error.errorType === "transient") {
+            this.log.warn("Prebuilt-image spawn failed with a transient provider error", {
+              event: "image_build.spawn_error_transient",
+              image_build_id: selectedImage.imageBuildId,
+              error_type: error.errorType,
+              error: error.message,
+            });
+          }
           throw error;
         }
-        // A permanent provider restore failure is "no image" (design §7.3):
-        // fail the row so the cron rebuilds it and boot this session from base.
+        // An unavailable prebuilt artifact is "no image" (design §7.3): fail
+        // the row so the cron rebuilds it and boot this session from base.
         this.log.warn("Prebuilt-image spawn failed, retrying from base image", {
           event: "image_build.restore_failed",
           image_build_id: selectedImage.imageBuildId,
