@@ -40,28 +40,49 @@ jobs:
     permissions:
       contents: read
       pull-requests: write # Post Plan Results
-    # Terraform's own state lock is the real guard; this keeps two runs against
-    # the same state from queueing on it and timing out.
+    # Applies serialize per state; plans do not join that group. A group holds
+    # one running job and one pending job, and a third arrival cancels the
+    # pending one -- so a shared group lets a second PR's plan cancel a queued
+    # production apply, with nothing to retry it.
+    #
+    # The plan group has to differ from the caller's workflow-level group:
+    # identical names at workflow and job level are a deadlock GitHub cancels
+    # the job for. It is inert anyway, since the caller already serializes per
+    # ref.
     concurrency:
-      group: terraform-${{ inputs.state_key }}
+      group: ${{ inputs.mode == 'apply' && format('terraform-apply-{0}', inputs.state_key) ||
+        format('terraform-plan-{0}', github.ref) }}
       cancel-in-progress: false
     env:
-      TF_VERSION: "1.14.8"
       TF_WORKING_DIR: terraform/environments/production
     steps:
       # Every step below gates on mode. Without this, a typo skips all of them
-      # and the job reports success having done nothing.
-      - name: Validate mode
+      # and the job reports success having done nothing. state_key is checked
+      # here too because it names both a backend object and a concurrency
+      # group, and a caller is free to source it from a repository variable.
+      - name: Validate inputs
         env:
           MODE: ${{ inputs.mode }}
+          STATE_KEY: ${{ inputs.state_key }}
         run: |
           case "$MODE" in
             plan|apply) ;;
             *) echo "::error::mode must be 'plan' or 'apply', got '$MODE'"; exit 1 ;;
           esac
 
+          case "$STATE_KEY" in
+            *[!A-Za-z0-9./_-]*|/*|*/|"")
+              echo "::error::state_key is not a plain backend object key: '$STATE_KEY'"
+              exit 1
+              ;;
+          esac
+
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # This job holds every deployment credential in the repository; it
+          # has no reason to also hold a git token. Nothing here pushes.
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -89,20 +110,29 @@ jobs:
         run: uv sync --frozen
         working-directory: packages/modal-infra
 
+      # /.terraform-version is the one place the version is written, so validate
+      # here and in terraform.yml cannot drift from what plan and apply run.
+      # tfenv and tfswitch read the same file, so a local checkout matches CI.
+      - name: Read Terraform version
+        id: tfversion
+        run: printf 'version=%s\n' "$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: ${{ steps.tfversion.outputs.version }}
 
       - name: Terraform Init
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
           STATE_KEY: ${{ inputs.state_key }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           terraform init \
             -backend-config="key=${STATE_KEY}" \
-            -backend-config="access_key=${{ secrets.R2_ACCESS_KEY_ID }}" \
-            -backend-config="secret_key=${{ secrets.R2_SECRET_ACCESS_KEY }}" \
+            -backend-config="access_key=${R2_ACCESS_KEY_ID}" \
+            -backend-config="secret_key=${R2_SECRET_ACCESS_KEY}" \
             -backend-config="endpoints={s3=\"https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com\"}"
         working-directory: ${{ env.TF_WORKING_DIR }}
 
@@ -137,8 +167,10 @@ jobs:
           # Capture the status instead of aborting on it: a failed plan still
           # has to reach the PR comment, which is the whole point of posting
           # one. Plan Status turns a non-zero status into a failed check.
+          # -lock=false: a plan writes no state, and taking the lock would let
+          # a PR's plan block, or be blocked by, a production apply.
           status=0
-          terraform plan -no-color -out=tfplan 2>&1 | tee plan_output.txt || status=$?
+          terraform plan -lock=false -no-color -out=tfplan 2>&1 | tee plan_output.txt || status=$?
           {
             echo "plan<<TFPLAN_EOF"
             head -c 60000 plan_output.txt
@@ -238,10 +270,18 @@ jobs:
       - name: Post Plan Results
         if: always() && inputs.mode == 'plan' && github.event_name == 'pull_request'
         uses: actions/github-script@v8
+        env:
+          # Bound, not interpolated. Plan text is derived from the .tf files in
+          # the pull request, so a backtick or ${ in a resource name or a
+          # variable value would otherwise close this template literal and run
+          # as script in a job holding pull-requests: write.
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+          PLAN_OUTPUT: ${{ steps.plan.outputs.plan }}
+          ACTOR: ${{ github.actor }}
         with:
           script: |
-            const planOutcome = '${{ steps.plan.outcome }}';
-            const plan = `${{ steps.plan.outputs.plan }}`;
+            const planOutcome = process.env.PLAN_OUTCOME;
+            const plan = process.env.PLAN_OUTPUT ?? '';
 
             const truncatedPlan = plan.length > 60000
               ? plan.substring(0, 60000) + '\n... (truncated)'
@@ -259,7 +299,7 @@ jobs:
 
             </details>
 
-            *Pushed by: @${{ github.actor }}*`;
+            *Pushed by: @${process.env.ACTOR}*`;
 
             try {
               await github.rest.issues.createComment({
@@ -282,10 +322,16 @@ jobs:
 
       - name: Post Run Results
         if: always()
+        env:
+          MODE: ${{ inputs.mode }}
+          STATUS: ${{ job.status }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          STATE_KEY: ${{ inputs.state_key }}
+          ACTOR: ${{ github.actor }}
         run: |
-          echo "### Terraform ${{ inputs.mode }} Results"
-          echo "Status: ${{ job.status }}"
-          echo "Environment: ${{ inputs.environment }}"
-          echo "State: ${{ inputs.state_key }}"
-          echo "Commit: ${{ github.sha }}"
-          echo "Run by: ${{ github.actor }}"
+          echo "### Terraform $MODE Results"
+          echo "Status: $STATUS"
+          echo "Environment: $ENVIRONMENT"
+          echo "State: $STATE_KEY"
+          echo "Commit: $GITHUB_SHA"
+          echo "Run by: $ACTOR"

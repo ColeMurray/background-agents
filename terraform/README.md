@@ -426,9 +426,12 @@ To add a staging environment:
    on:
      workflow_dispatch:
 
-   concurrency:
-     group: deploy-staging
-     cancel-in-progress: false
+   # terraform-run.yml declares pull-requests: write for its plan comment, and a
+   # called workflow cannot request more than its caller grants. Omitting this
+   # fails the run outright wherever the default token is read-only.
+   permissions:
+     contents: read
+     pull-requests: write
 
    jobs:
      terraform:
@@ -442,7 +445,9 @@ To add a staging environment:
 
 `terraform-run.yml` binds the job to the named GitHub Environment, so every `TF_VAR_*` resolves
 against that environment's secrets. The variable list itself lives in one place and does not need to
-be restated per environment.
+be restated per environment. It also carries its own concurrency group, keyed on `state_key`, so the
+caller does not need one: two applies against the same state serialize, and plans never queue behind
+an apply.
 
 To run Terraform against a non-production environment locally, pass the state key at init. A
 directory already initialized against another environment needs `-reconfigure`:
