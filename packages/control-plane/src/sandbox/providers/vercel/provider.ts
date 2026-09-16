@@ -18,6 +18,7 @@ import {
 } from "../../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   createVncAccess,
   type CreateSandboxConfig,
@@ -153,6 +154,14 @@ export class VercelSandboxProvider implements SandboxProvider {
         tunnelUrls: access.tunnelUrls,
       };
     } catch (error) {
+      if (error instanceof SandboxProviderError) throw error;
+      if (
+        config.prebuiltImageId &&
+        error instanceof VercelSandboxApiError &&
+        error.status === 404
+      ) {
+        throw new PrebuiltImageUnavailableError("Vercel prebuilt snapshot is unavailable", error);
+      }
       throw this.classifyError("Failed to create Vercel sandbox", error);
     }
   }
