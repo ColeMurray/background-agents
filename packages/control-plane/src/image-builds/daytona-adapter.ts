@@ -174,9 +174,20 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
       );
     }
 
+    const now = Date.now();
+    const deadlineAt = captureDeadline(now, source);
+    if (deadlineAt <= now) {
+      // Reserving here would submit a capture and abandon it on the same
+      // pass, leaving a request running against a source about to expire and
+      // an obligation nothing can settle until that lifetime is up. A build
+      // that ran this close to its source's expiry has simply run out of
+      // time.
+      throw new Error("Daytona build source expires before its capture could settle");
+    }
+
     const operation: ImageBuildProviderOperation = {
       ref: await daytonaBuildResourceName("image", input.buildId),
-      deadlineAt: captureDeadline(Date.now(), source),
+      deadlineAt,
     };
     if (!(await input.reserveOperation(operation.ref, operation.deadlineAt))) {
       throw new ImageBuildFinalizationAttemptError(

@@ -150,6 +150,26 @@ describe("DaytonaImageBuildAdapter capture", () => {
     expect(reserveOperation.mock.calls[0][1]).toBe(expiresAt - 60_000);
   });
 
+  it("reserves nothing for a source with no lifetime left to capture from", async () => {
+    const provider = createProvider({
+      getBuildSandbox: vi.fn(async () => ({
+        id: SOURCE_ID,
+        state: "stopped",
+        labels: { openinspect_expires_at: String(Date.now() + 30_000) },
+      })),
+    });
+    const reserveOperation = vi.fn(async (_ref: string, _deadlineAt: number) => true);
+
+    // The headroom already puts the deadline in the past: submitting would
+    // ask for a capture and give up on it in the same pass, leaving an
+    // obligation nothing can settle until the source's lifetime is up.
+    await expect(
+      createAdapter(provider).finalizeSuccessfulBuild(finalizeInput({ reserveOperation }))
+    ).rejects.toThrow(/expires before its capture/);
+    expect(reserveOperation).not.toHaveBeenCalled();
+    expect(provider.captureBuildSnapshot).not.toHaveBeenCalled();
+  });
+
   it("waits for a source that has not finished stopping, capturing nothing", async () => {
     const provider = createProvider({
       stopBuildSandboxForCapture: vi.fn(async () => "stopping"),
