@@ -574,6 +574,8 @@ describe("RepoClassifier", () => {
   });
 
   describe("LLM environment candidates", () => {
+    const DEFAULT_EXPLICIT_NO_REPOSITORY_INTENT = false;
+
     function llmResponse(input: Record<string, unknown>) {
       return {
         content: [
@@ -581,7 +583,7 @@ describe("RepoClassifier", () => {
             type: "tool_use",
             id: "toolu_llm",
             name: "classify_target",
-            input: { explicitNoRepositoryIntent: false, ...input },
+            input: { explicitNoRepositoryIntent: DEFAULT_EXPLICIT_NO_REPOSITORY_INTENT, ...input },
           },
         ],
       };
