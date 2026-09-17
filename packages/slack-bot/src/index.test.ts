@@ -653,15 +653,30 @@ describe("POST /events", () => {
         ]),
       })
     );
+    const clarificationBlocks = clarification?.blocks;
+    if (!Array.isArray(clarificationBlocks)) throw new Error("expected clarification blocks");
+    const pickerBlock = clarificationBlocks.find(
+      (block): block is Record<string, unknown> =>
+        typeof block === "object" &&
+        block !== null &&
+        typeof (block as Record<string, unknown>).block_id === "string" &&
+        String((block as Record<string, unknown>).block_id).startsWith("target_picker:")
+    );
+    if (!pickerBlock) throw new Error("expected request-bound picker block");
+    const pickerBlockId = String(pickerBlock.block_id);
+    const requestId = pickerBlockId.slice("target_picker:".length);
 
     expect(mockGetUserInfo).not.toHaveBeenCalled();
     await expect(
       (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
-        "pending:C123:111.222",
+        `pending:${requestId}`,
         "json"
       )
     ).resolves.toEqual(
       expect.objectContaining({
+        requestId,
+        channel: "C123",
+        threadTs: "111.222",
         message: "frontend backend help",
         userId: "U123",
         unattributedPrompt: { forwardedMessages: [] },
@@ -689,7 +704,13 @@ describe("POST /events", () => {
             user: { id: "U123" },
             channel: { id: "C123" },
             message: { ts: "111.222" },
-            actions: [{ action_id: "select_repo", selected_option: { value: "acme/web" } }],
+            actions: [
+              {
+                action_id: "select_repo",
+                block_id: pickerBlockId,
+                selected_option: { value: "acme/web" },
+              },
+            ],
           }),
         }),
       }),
@@ -2454,6 +2475,7 @@ describe("POST /interactions", () => {
       actions: [
         {
           action_id: "select_repo_quick_pick",
+          block_id: "target_quick_picks:00000000-0000-4000-8000-000000000001",
           value: "acme/app",
         },
       ],
@@ -2474,9 +2496,9 @@ describe("POST /interactions", () => {
 
     await flushWaitUntil(ctx);
 
-    const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
+    const postBodies = slackApiBodies(slackFetch, "chat.postEphemeral");
     expect(
-      postBodies.some((body) => String(body.text).includes("couldn't find your original request"))
+      postBodies.some((body) => String(body.text).includes("target selection has expired"))
     ).toBe(true);
 
     slackFetch.mockRestore();

@@ -269,7 +269,12 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   );
   if (result.needsClarification || !result.target) {
     const catalog = await loadTargetCatalog(env, traceId);
-    await storePendingRequest(env, channel, threadTs || ts, {
+    const clarificationThreadTs = threadTs || ts;
+    const requestId = crypto.randomUUID();
+    await storePendingRequest(env, {
+      requestId,
+      channel,
+      threadTs: clarificationThreadTs,
       message: requestText,
       userId: user,
       unattributedPrompt: { forwardedMessages: forwarded.entries },
@@ -293,13 +298,14 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       channel,
       `I couldn't determine which target to use. ${result.reasoning}${getTargetCatalogNotice(catalog)}`,
       {
-        thread_ts: threadTs || ts,
+        thread_ts: clarificationThreadTs,
         blocks: buildTargetClarificationBlocks(
           result.reasoning,
           result.target?.kind === "none"
             ? [result.target, ...(result.alternatives ?? [])]
             : result.alternatives,
-          catalog
+          catalog,
+          requestId
         ),
       }
     );

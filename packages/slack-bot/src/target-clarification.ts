@@ -49,6 +49,29 @@ export const SELECT_TARGET_ACTION_ID = "select_repo";
  * Wire value kept stable for already-posted messages, like the picker's.
  */
 export const SELECT_TARGET_QUICK_PICK_ACTION_ID = "select_repo_quick_pick";
+const TARGET_PICKER_BLOCK_ID_PREFIX = "target_picker:";
+const TARGET_QUICK_PICK_BLOCK_ID_PREFIX = "target_quick_picks:";
+const REQUEST_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function targetPickerBlockId(requestId: string): string {
+  return `${TARGET_PICKER_BLOCK_ID_PREFIX}${requestId}`;
+}
+
+export function targetQuickPickBlockId(requestId: string): string {
+  return `${TARGET_QUICK_PICK_BLOCK_ID_PREFIX}${requestId}`;
+}
+
+export function parseTargetInteractionRequestId(
+  blockId: string,
+  source: "picker" | "quick_pick"
+): string | null {
+  const prefix =
+    source === "picker" ? TARGET_PICKER_BLOCK_ID_PREFIX : TARGET_QUICK_PICK_BLOCK_ID_PREFIX;
+  if (!blockId.startsWith(prefix)) return null;
+  const requestId = blockId.slice(prefix.length);
+  return REQUEST_ID_PATTERN.test(requestId) ? requestId : null;
+}
 
 /** Unique per-button action_id; Slack requires action_id uniqueness within an actions block. */
 export function quickPickActionId(index: number): string {
@@ -320,7 +343,8 @@ function duplicateDisplayNames(targets: SlackSessionTarget[]): Set<string> {
 export function buildTargetClarificationBlocks(
   reasoning: string,
   alternatives: SlackSessionTarget[] | undefined,
-  catalog: TargetCatalog
+  catalog: TargetCatalog,
+  requestId: string
 ): Array<SlackSectionBlock | SlackActionsBlock> {
   const quickPicks = alternatives?.length ? buildTargetQuickPickButtons(alternatives) : [];
   const total = catalog.repos.length + catalog.environments.length + 1;
@@ -338,11 +362,16 @@ export function buildTargetClarificationBlocks(
   ];
 
   if (quickPicks.length > 0) {
-    blocks.push({ type: "actions", block_id: "repo_quick_picks", elements: quickPicks });
+    blocks.push({
+      type: "actions",
+      block_id: targetQuickPickBlockId(requestId),
+      elements: quickPicks,
+    });
   }
 
   blocks.push({
     type: "section",
+    block_id: targetPickerBlockId(requestId),
     text: {
       type: "mrkdwn",
       text:

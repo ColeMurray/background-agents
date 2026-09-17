@@ -33,9 +33,14 @@ import {
   baseActionId,
   countClarificationOptions,
   getTargetClarificationOptions,
+  parseTargetInteractionRequestId,
   quickPickActionId,
   resolveTargetValue,
+  targetPickerBlockId,
+  targetQuickPickBlockId,
 } from "./target-clarification";
+
+const REQUEST_ID = "00000000-0000-4000-8000-000000000001";
 
 function repo(fullName: string, displayName?: string): RepoConfig {
   const [owner, name] = fullName.split("/");
@@ -228,6 +233,27 @@ describe("baseActionId", () => {
   });
 });
 
+describe("target interaction block ids", () => {
+  it("round-trips picker and quick-pick request ids", () => {
+    expect(parseTargetInteractionRequestId(targetPickerBlockId(REQUEST_ID), "picker")).toBe(
+      REQUEST_ID
+    );
+    expect(parseTargetInteractionRequestId(targetQuickPickBlockId(REQUEST_ID), "quick_pick")).toBe(
+      REQUEST_ID
+    );
+  });
+
+  it("rejects malformed and mismatched block ids", () => {
+    expect(parseTargetInteractionRequestId("target_picker:not-a-uuid", "picker")).toBeNull();
+    expect(
+      parseTargetInteractionRequestId(targetQuickPickBlockId(REQUEST_ID), "picker")
+    ).toBeNull();
+    expect(
+      parseTargetInteractionRequestId(`${targetPickerBlockId(REQUEST_ID)}:extra`, "picker")
+    ).toBeNull();
+  });
+});
+
 describe("getTargetClarificationOptions", () => {
   const env = {} as Env;
 
@@ -341,10 +367,12 @@ describe("getTargetClarificationOptions", () => {
 describe("buildTargetClarificationBlocks", () => {
   it("renders an inline picker when the target list fits in Slack's static option limit", () => {
     const repos = [repo("acme/web"), repo("acme/api")];
-    const blocks = buildTargetClarificationBlocks("could not tell which repo", undefined, {
-      repos,
-      environments: [],
-    });
+    const blocks = buildTargetClarificationBlocks(
+      "could not tell which repo",
+      undefined,
+      { repos, environments: [] },
+      REQUEST_ID
+    );
 
     expect(blocks).toHaveLength(2);
     expect(blocks.some((block) => block.type === "actions")).toBe(false);
@@ -352,6 +380,7 @@ describe("buildTargetClarificationBlocks", () => {
       { type: "section", text: { text: expect.stringContaining("could not tell which repo") } },
       {
         type: "section",
+        block_id: targetPickerBlockId(REQUEST_ID),
         text: { text: "Which target should I use?" },
         accessory: {
           type: "static_select",
@@ -373,12 +402,18 @@ describe("buildTargetClarificationBlocks", () => {
   it("groups the inline picker when environments exist", () => {
     const repos = [repo("acme/web")];
     const environments = [environment("env_abc123", "full-stack")];
-    const blocks = buildTargetClarificationBlocks("unsure", undefined, { repos, environments });
+    const blocks = buildTargetClarificationBlocks(
+      "unsure",
+      undefined,
+      { repos, environments },
+      REQUEST_ID
+    );
 
     expect(blocks).toMatchObject([
       { type: "section", text: { text: expect.stringContaining("which target") } },
       {
         type: "section",
+        block_id: targetPickerBlockId(REQUEST_ID),
         text: { text: "Which target should I use?" },
         accessory: {
           type: "static_select",
@@ -408,7 +443,8 @@ describe("buildTargetClarificationBlocks", () => {
     const blocks = buildTargetClarificationBlocks(
       "maybe one of these",
       [repoTarget("acme/web"), repoTarget("acme/api")],
-      { repos, environments: [] }
+      { repos, environments: [] },
+      REQUEST_ID
     );
 
     expect(blocks).toHaveLength(3);
@@ -416,7 +452,7 @@ describe("buildTargetClarificationBlocks", () => {
       { type: "section" },
       {
         type: "actions",
-        block_id: "repo_quick_picks",
+        block_id: targetQuickPickBlockId(REQUEST_ID),
         elements: [
           { type: "button", action_id: quickPickActionId(0), value: "acme/web" },
           { type: "button", action_id: quickPickActionId(1), value: "acme/api" },
@@ -424,6 +460,7 @@ describe("buildTargetClarificationBlocks", () => {
       },
       {
         type: "section",
+        block_id: targetPickerBlockId(REQUEST_ID),
         text: { text: "Or choose another target:" },
         accessory: { type: "static_select", action_id: SELECT_TARGET_ACTION_ID },
       },
@@ -434,7 +471,8 @@ describe("buildTargetClarificationBlocks", () => {
     const blocks = buildTargetClarificationBlocks(
       "one of these",
       [repoTarget("acme/web"), environmentTarget("env_abc123", "full-stack")],
-      { repos: [repo("acme/web")], environments: [] }
+      { repos: [repo("acme/web")], environments: [] },
+      REQUEST_ID
     );
 
     expect(blocks[0]).toMatchObject({
@@ -451,15 +489,18 @@ describe("buildTargetClarificationBlocks", () => {
     const repos = Array.from({ length: MAX_REPO_SUGGESTION_OPTIONS + 1 }, (_, idx) =>
       repo(`acme/repo-${idx}`)
     );
-    const blocks = buildTargetClarificationBlocks("too many to inline", undefined, {
-      repos,
-      environments: [],
-    });
+    const blocks = buildTargetClarificationBlocks(
+      "too many to inline",
+      undefined,
+      { repos, environments: [] },
+      REQUEST_ID
+    );
 
     expect(blocks).toMatchObject([
       { type: "section" },
       {
         type: "section",
+        block_id: targetPickerBlockId(REQUEST_ID),
         text: { text: "Which target should I use?" },
         accessory: {
           type: "external_select",
@@ -471,10 +512,12 @@ describe("buildTargetClarificationBlocks", () => {
   });
 
   it("offers no repository when the catalog is empty", () => {
-    const blocks = buildTargetClarificationBlocks("no catalog targets", undefined, {
-      repos: [],
-      environments: [],
-    });
+    const blocks = buildTargetClarificationBlocks(
+      "no catalog targets",
+      undefined,
+      { repos: [], environments: [] },
+      REQUEST_ID
+    );
 
     expect(blocks[1]).toMatchObject({
       accessory: {

@@ -29,25 +29,10 @@ import {
   type SlackSessionTarget,
 } from "../targets";
 import { createLogger } from "../logger";
+import { parseNoRepositoryIntent } from "./no-repository-intent";
 
 const log = createLogger("classifier");
 const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
-const EXPLICIT_NO_REPOSITORY_PATTERNS = [
-  /\b(?:use|choose|select)\s+no\s+(?:repos?|repositor(?:y|ies))\b/i,
-  /\bi\s+(?:want|need)\s+no\s+(?:repos?|repositor(?:y|ies))(?=\s*(?:$|[,\n.!?]|\b(?:please|and|for|to)\b))/i,
-  /(?:^|\n)[ \t]*no[ \t]+(?:repos?|repositor(?:y|ies))[ \t]*(?:,[ \t]*please\b|[.!?]?[ \t]*(?:$|\n))/i,
-  /\b(?:start|run|work)(?:\s+\w+){0,5}\s+with\s+no\s+(?:repos?|repositor(?:y|ies))\b/i,
-  /\bno\s+(?:repos?|repositor(?:y|ies))\s+(?:is\s+)?(?:needed|required|necessary)\b/i,
-  /\b(?:start|run|work)(?:\s+\w+){0,5}\s+without\s+(?:a\s+|any\s+)?(?:repos?|repositor(?:y|ies))\b/i,
-  /\bwithout\s+(?:cloning|using|checking out)(?:\s+(?:a|any|the))?(?:\s+(?:repos?|repositor(?:y|ies)|code))?\b/i,
-  /\b(?:do not|don't|avoid)\s+(?:use|clon(?:e|ing)|check(?:ing)? out|checkout)(?:\s+(?:a|any|the))?(?:\s+(?:repos?|repositor(?:y|ies)|code|anything))?\b/i,
-  /\b(?:use|choose|select)\s+(?:an?\s+)?empty sandbox\b/i,
-  /\b(?:start|run|work)(?:\s+\w+){0,5}\s+(?:in|with)\s+(?:an?\s+)?empty sandbox\b/i,
-  /\b(?:use|choose|select)\s+(?:a\s+)?(?:repo|repository)[ -]?less\b/i,
-  /\b(?:start|run|work)(?:\s+\w+){0,5}\s+(?:repo|repository)[ -]?less\b/i,
-];
-const NEGATED_NO_REPOSITORY_PATTERN =
-  /\b(?:do not|don't|must not|mustn't|should not|shouldn't)\s+(?:start|run|work)(?:\s+\w+){0,5}\s+without\s+(?:(?:a|any|the)\s+)?(?:repos?|repositor(?:y|ies)|cloning(?:\s+(?:(?:a|any|the)\s+)?(?:repos?|repositor(?:y|ies)|code|anything))?)\b/gi;
 const CONFIDENCE_LEVELS = [
   "high",
   "medium",
@@ -191,12 +176,6 @@ const llmResponseSchema = z.object({
 });
 
 type LLMResponse = z.infer<typeof llmResponseSchema>;
-
-function mayExplicitlyRequestNoRepository(message: string, context?: ThreadContext): boolean {
-  const text = [message, ...(context?.previousMessages ?? [])].join("\n");
-  const positiveText = text.replace(NEGATED_NO_REPOSITORY_PATTERN, "");
-  return EXPLICIT_NO_REPOSITORY_PATTERNS.some((pattern) => pattern.test(positiveText));
-}
 
 function normalizeModelResponse(raw: unknown): LLMResponse {
   const parsed = llmResponseSchema.safeParse(raw);
@@ -397,7 +376,10 @@ export class RepoClassifier {
     // to []: an environments-fetch problem degrades the catalog — and with it
     // classification — to repository-only.
     const catalog = await loadTargetCatalog(this.env, traceId);
-    const explicitNoRepositoryLanguage = mayExplicitlyRequestNoRepository(message, context);
+    const noRepositoryIntent = parseNoRepositoryIntent(
+      [message, ...(context?.previousMessages ?? [])].join("\n")
+    );
+    const explicitNoRepositoryLanguage = noRepositoryIntent === "explicit";
 
     // Deterministic routing rules (explicit keyword → repo or environment) take
     // precedence over everything below, but never override an active thread

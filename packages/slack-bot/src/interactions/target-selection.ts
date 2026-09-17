@@ -13,7 +13,12 @@ import {
   type BackgroundTaskScheduler,
 } from "../messages/blocks";
 import { formatAttributedRequest } from "../messages/context";
-import { deletePendingRequest, getPendingRequest } from "../pending-requests/pending-request-store";
+import {
+  deleteLegacyPendingRequest,
+  deletePendingRequest,
+  getLegacyPendingRequest,
+  getPendingRequest,
+} from "../pending-requests/pending-request-store";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { targetId } from "../targets";
@@ -23,6 +28,7 @@ import { resolveSlackActorIdentity } from "../user-identity";
 const log = createLogger("target-selection");
 
 interface TargetSelectionRequest {
+  requestId?: string;
   selectedValue: string;
   channel: string;
   messageTs: string;
@@ -37,14 +43,36 @@ export async function handleTargetSelection(
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
-  const { selectedValue, channel, messageTs, threadTs, selectedBy, selectionSource } = request;
+  const { requestId, selectedValue, channel, messageTs, threadTs, selectedBy, selectionSource } =
+    request;
   const threadKey = threadTs || messageTs;
-  const pendingData = await getPendingRequest(env, channel, threadKey);
+  let pendingData;
+  if (requestId) {
+    const boundPendingData = await getPendingRequest(env, requestId);
+    if (
+      boundPendingData &&
+      (boundPendingData.channel !== channel || boundPendingData.threadTs !== threadKey)
+    ) {
+      await postEphemeral(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        selectedBy,
+        "Sorry, this target selection no longer matches its original request.",
+        { thread_ts: threadKey }
+      );
+      return;
+    }
+    pendingData = boundPendingData;
+  } else {
+    pendingData = await getLegacyPendingRequest(env, channel, threadKey);
+  }
+
   if (!pendingData) {
-    await postMessage(
+    await postEphemeral(
       env.SLACK_BOT_TOKEN,
       channel,
-      "Sorry, I couldn't find your original request. Please try again.",
+      selectedBy,
+      "Sorry, this target selection has expired. Please try your request again.",
       { thread_ts: threadKey }
     );
     return;
@@ -119,6 +147,7 @@ export async function handleTargetSelection(
 
   log.info("target.decision", {
     trace_id: traceId,
+    request_id: requestId,
     channel,
     thread_ts: threadKey,
     decision_path: "clarified",
@@ -162,7 +191,11 @@ export async function handleTargetSelection(
   });
   if (!sessionResult) return;
 
-  await deletePendingRequest(env, channel, threadKey);
+  if (requestId) {
+    await deletePendingRequest(env, requestId);
+  } else {
+    await deleteLegacyPendingRequest(env, channel, threadKey);
+  }
   if (ackTs) {
     await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, "Starting work...", {
       blocks: buildWorkingMessageBlocks({

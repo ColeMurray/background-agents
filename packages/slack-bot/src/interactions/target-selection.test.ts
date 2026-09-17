@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getMessageDetails, postEphemeral, postMessage } from "@open-inspect/shared/slack";
 import type { Env } from "../types";
 import { handleTargetSelection } from "./target-selection";
-import { getPendingRequest, deletePendingRequest } from "../pending-requests/pending-request-store";
+import {
+  getPendingRequest,
+  deletePendingRequest,
+  type PendingRequest,
+} from "../pending-requests/pending-request-store";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { resolveSlackActorIdentity } from "../user-identity";
@@ -24,6 +28,8 @@ vi.mock("../messages/blocks", () => ({
 vi.mock("../pending-requests/pending-request-store", () => ({
   getPendingRequest: vi.fn(),
   deletePendingRequest: vi.fn(async () => {}),
+  getLegacyPendingRequest: vi.fn(),
+  deleteLegacyPendingRequest: vi.fn(async () => {}),
 }));
 
 vi.mock("../sessions/session-launcher", () => ({
@@ -39,6 +45,18 @@ vi.mock("../user-identity", () => ({
 }));
 
 const DEFAULT_SELECTED_VALUE = "acme/app";
+const REQUEST_ID = "00000000-0000-4000-8000-000000000001";
+
+function pendingRequest(overrides: Partial<PendingRequest> = {}): PendingRequest {
+  return {
+    requestId: REQUEST_ID,
+    channel: "C123",
+    threadTs: "111.222",
+    message: "Fix the deploy",
+    userId: "U123",
+    ...overrides,
+  };
+}
 
 const repositoryTarget = {
   kind: "repository" as const,
@@ -64,6 +82,7 @@ function makeEnv(): Env {
 
 function selectionRequest(selectedValue = DEFAULT_SELECTED_VALUE) {
   return {
+    requestId: REQUEST_ID,
     selectedValue,
     channel: "C123",
     messageTs: "111.222",
@@ -84,12 +103,13 @@ beforeEach(() => {
 
 describe("handleTargetSelection", () => {
   it("re-fetches the source message's files and forwards them into the launch", async () => {
-    vi.mocked(getPendingRequest).mockResolvedValue({
-      message: "What is wrong in this screenshot?",
-      userId: "U123",
-      unattributedPrompt: { forwardedMessages: ["Forwarded body"] },
-      sourceMessage: { ts: "111.222" },
-    });
+    vi.mocked(getPendingRequest).mockResolvedValue(
+      pendingRequest({
+        message: "What is wrong in this screenshot?",
+        unattributedPrompt: { forwardedMessages: ["Forwarded body"] },
+        sourceMessage: { ts: "111.222" },
+      })
+    );
     vi.mocked(getMessageDetails).mockResolvedValue({
       ok: true,
       files: [
@@ -130,14 +150,11 @@ describe("handleTargetSelection", () => {
         ],
       })
     );
-    expect(deletePendingRequest).toHaveBeenCalledWith(env, "C123", "111.222");
+    expect(deletePendingRequest).toHaveBeenCalledWith(env, REQUEST_ID);
   });
 
   it("launches without images when the pending request has no source message", async () => {
-    vi.mocked(getPendingRequest).mockResolvedValue({
-      message: "Fix the deploy",
-      userId: "U123",
-    });
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
 
     await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
 
@@ -149,10 +166,11 @@ describe("handleTargetSelection", () => {
   });
 
   it("launches a selected no-repository target", async () => {
-    vi.mocked(getPendingRequest).mockResolvedValue({
-      message: "Research this topic",
-      userId: "U123",
-    });
+    vi.mocked(getPendingRequest).mockResolvedValue(
+      pendingRequest({
+        message: "Research this topic",
+      })
+    );
     vi.mocked(resolveTargetValue).mockResolvedValue({ kind: "none" });
 
     await handleTargetSelection(
@@ -175,11 +193,12 @@ describe("handleTargetSelection", () => {
   });
 
   it("still launches a text request when the file re-fetch fails", async () => {
-    vi.mocked(getPendingRequest).mockResolvedValue({
-      message: "Fix what's in the screenshot",
-      userId: "U123",
-      sourceMessage: { ts: "111.222", threadTs: "100.000" },
-    });
+    vi.mocked(getPendingRequest).mockResolvedValue(
+      pendingRequest({
+        message: "Fix what's in the screenshot",
+        sourceMessage: { ts: "111.222", threadTs: "100.000" },
+      })
+    );
     vi.mocked(getMessageDetails).mockResolvedValue({ ok: false, error: "ratelimited" });
 
     await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
@@ -192,12 +211,13 @@ describe("handleTargetSelection", () => {
   });
 
   it("aborts an image-only request when its images cannot be recovered", async () => {
-    vi.mocked(getPendingRequest).mockResolvedValue({
-      message: "See the attached image(s).",
-      userId: "U123",
-      imageOnly: true,
-      sourceMessage: { ts: "111.222" },
-    });
+    vi.mocked(getPendingRequest).mockResolvedValue(
+      pendingRequest({
+        message: "See the attached image(s).",
+        imageOnly: true,
+        sourceMessage: { ts: "111.222" },
+      })
+    );
     vi.mocked(getMessageDetails).mockResolvedValue({ ok: false, error: "message_not_found" });
     const env = makeEnv();
 
@@ -213,10 +233,7 @@ describe("handleTargetSelection", () => {
   });
 
   it("rejects a selection from someone other than the original requester", async () => {
-    vi.mocked(getPendingRequest).mockResolvedValue({
-      message: "Fix the deploy",
-      userId: "U123",
-    });
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
 
     await handleTargetSelection(
       { ...selectionRequest(), selectedBy: "U999" },
@@ -235,5 +252,49 @@ describe("handleTargetSelection", () => {
       { thread_ts: "111.222" }
     );
     expect(postMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a request whose stored channel or thread does not match the interaction", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue(
+      pendingRequest({ channel: "C999", threadTs: "999.000" })
+    );
+
+    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
+
+    expect(resolveTargetValue).not.toHaveBeenCalled();
+    expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
+    expect(postEphemeral).toHaveBeenCalledWith(
+      "xoxb-test",
+      "C123",
+      "U123",
+      expect.stringContaining("no longer matches"),
+      { thread_ts: "111.222" }
+    );
+  });
+
+  it("launches the request bound to the clicked picker when another request shares its thread", async () => {
+    const newerRequestId = "00000000-0000-4000-8000-000000000002";
+    const pendingById = new Map([
+      [REQUEST_ID, pendingRequest({ message: "Alice's original request" })],
+      [
+        newerRequestId,
+        pendingRequest({
+          requestId: newerRequestId,
+          message: "Bob's newer request",
+          userId: "U999",
+        }),
+      ],
+    ]);
+    vi.mocked(getPendingRequest).mockImplementation(
+      async (_env, requestId) => pendingById.get(requestId) ?? null
+    );
+
+    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
+
+    expect(getPendingRequest).toHaveBeenCalledWith(expect.anything(), REQUEST_ID);
+    expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ messageText: "Alice's original request" })
+    );
   });
 });

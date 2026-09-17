@@ -32,7 +32,7 @@ const classificationSchema = z.object({
   reportedExplicitNoRepositoryIntent: z.boolean(),
 });
 
-const pendingRequestSchema = z.object({
+const pendingRequestDataSchema = z.object({
   message: z.string().min(1),
   userId: z.string().min(1),
   /** Present when `message` still needs sender attribution before delivery. */
@@ -47,20 +47,26 @@ const pendingRequestSchema = z.object({
   classification: classificationSchema.optional(),
 });
 
-export type PendingRequest = z.infer<typeof pendingRequestSchema>;
+const pendingRequestSchema = pendingRequestDataSchema.extend({
+  requestId: z.string().uuid(),
+  channel: z.string().min(1),
+  threadTs: z.string().min(1),
+});
 
-function pendingRequestKey(channel: string, threadTs: string): string {
+export type PendingRequest = z.infer<typeof pendingRequestSchema>;
+export type LegacyPendingRequest = z.infer<typeof pendingRequestDataSchema>;
+
+function pendingRequestKey(requestId: string): string {
+  return `pending:${requestId}`;
+}
+
+function legacyPendingRequestKey(channel: string, threadTs: string): string {
   return `pending:${channel}:${threadTs}`;
 }
 
-export async function storePendingRequest(
-  env: Env,
-  channel: string,
-  threadTs: string,
-  request: PendingRequest
-): Promise<void> {
+export async function storePendingRequest(env: Env, request: PendingRequest): Promise<void> {
   await createKvCacheStore(env.SLACK_KV).put(
-    pendingRequestKey(channel, threadTs),
+    pendingRequestKey(request.requestId),
     // Parse before persisting so only schema-known fields reach KV.
     JSON.stringify(pendingRequestSchema.parse(request)),
     { expirationTtl: PENDING_REQUEST_TTL_MS / 1000 }
@@ -69,21 +75,34 @@ export async function storePendingRequest(
 
 export async function getPendingRequest(
   env: Env,
+  requestId: string
+): Promise<PendingRequest | null> {
+  const data = await createKvCacheStore(env.SLACK_KV).get(pendingRequestKey(requestId), "json");
+  const result = pendingRequestSchema.safeParse(data);
+  return result.success && result.data.requestId === requestId ? result.data : null;
+}
+
+export async function deletePendingRequest(env: Env, requestId: string): Promise<void> {
+  await createKvCacheStore(env.SLACK_KV).delete(pendingRequestKey(requestId));
+}
+
+export async function getLegacyPendingRequest(
+  env: Env,
   channel: string,
   threadTs: string
-): Promise<PendingRequest | null> {
+): Promise<LegacyPendingRequest | null> {
   const data = await createKvCacheStore(env.SLACK_KV).get(
-    pendingRequestKey(channel, threadTs),
+    legacyPendingRequestKey(channel, threadTs),
     "json"
   );
-  const result = pendingRequestSchema.safeParse(data);
+  const result = pendingRequestDataSchema.safeParse(data);
   return result.success ? result.data : null;
 }
 
-export async function deletePendingRequest(
+export async function deleteLegacyPendingRequest(
   env: Env,
   channel: string,
   threadTs: string
 ): Promise<void> {
-  await createKvCacheStore(env.SLACK_KV).delete(pendingRequestKey(channel, threadTs));
+  await createKvCacheStore(env.SLACK_KV).delete(legacyPendingRequestKey(channel, threadTs));
 }
