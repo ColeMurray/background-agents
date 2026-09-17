@@ -17,7 +17,10 @@ export function parseCreatedAtCursor(raw: string | null | undefined): ParseCreat
   const separator = raw.indexOf(":");
   if (separator <= 0) return { ok: false, error: "Invalid cursor" };
 
-  const createdAt = Number(raw.slice(0, separator));
+  const createdAtRaw = raw.slice(0, separator);
+  if (!/^\d+$/.test(createdAtRaw)) return { ok: false, error: "Invalid cursor" };
+
+  const createdAt = Number(createdAtRaw);
   if (!Number.isSafeInteger(createdAt) || createdAt < 0) {
     return { ok: false, error: "Invalid cursor" };
   }

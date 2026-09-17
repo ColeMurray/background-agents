@@ -431,6 +431,54 @@ describe("GET /sessions/export", () => {
     ]);
   });
 
+  it("cancels a runtime response before parsing when it exceeds the byte budget", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_MESSAGE_BYTES_PER_SESSION + 1));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    mocks.runtimeFetch.mockResolvedValueOnce(new Response(body));
+
+    const lines = await readLines(await callExport({ include: "messages" }));
+
+    expect(lines).toEqual([
+      {
+        schemaVersion: 1,
+        type: "session_error",
+        sessionId: "session-1",
+        reason: "message_budget_exceeded",
+      },
+    ]);
+    expect(cancelled).toBe(true);
+  });
+
+  it("applies the response byte budget across all message pages", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
+    const padding = "x".repeat(MAX_MESSAGE_BYTES_PER_SESSION / 2);
+    mocks.runtimeFetch
+      .mockResolvedValueOnce(
+        Response.json({ messages: [], hasMore: true, cursor: "next", padding })
+      )
+      .mockResolvedValueOnce(Response.json({ messages: [], hasMore: false, padding }));
+
+    const lines = await readLines(await callExport({ include: "messages" }));
+
+    expect(lines).toEqual([
+      {
+        schemaVersion: 1,
+        type: "session_error",
+        sessionId: "session-1",
+        reason: "message_budget_exceeded",
+      },
+    ]);
+    expect(mocks.runtimeFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("does not serialize truncated messages when the page cap is reached", async () => {
     mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
     let page = 0;

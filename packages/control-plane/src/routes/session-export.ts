@@ -71,6 +71,7 @@ type MessageFetchFailure =
       reason: "runtime_failure" | "page_cap_reached" | "message_budget_exceeded";
     };
 type MessageFetchResult = { ok: true; messages: SessionMessage[] } | MessageFetchFailure;
+type BoundedJson = { value: unknown; byteLength: number } | null;
 
 type SessionExportLine = {
   schemaVersion: typeof EXPORT_SCHEMA_VERSION;
@@ -121,6 +122,38 @@ function sessionErrorLine(sessionId: string, failure: MessageFetchFailure): Sess
     : { ...line, reason: failure.reason };
 }
 
+async function readBoundedJson(response: Response, maxBytes: number): Promise<BoundedJson> {
+  if (!response.body) {
+    return { value: JSON.parse(await response.text()) as unknown, byteLength: 0 };
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { value: JSON.parse(new TextDecoder().decode(body)) as unknown, byteLength };
+}
+
 async function fetchAllMessages(
   runtime: SessionRuntimeClient,
   sessionId: string,
@@ -130,6 +163,7 @@ async function fetchAllMessages(
   const messages: SessionMessage[] = [];
   const seenCursors = new Set<string>();
   let messageBytes = 0;
+  let responseBytes = 0;
   let cursor: string | undefined;
 
   try {
@@ -150,7 +184,17 @@ async function fetchAllMessages(
         return { ok: false, reason: "http_error", status: response.status };
       }
 
-      const parsed = sessionMessagePageSchema.safeParse(await response.json());
+      const pageBody = await readBoundedJson(
+        response,
+        MAX_MESSAGE_BYTES_PER_SESSION - responseBytes
+      );
+      if (!pageBody) {
+        log.warn("session_export.message_budget_exceeded", { session_id: sessionId });
+        return { ok: false, reason: "message_budget_exceeded" };
+      }
+      responseBytes += pageBody.byteLength;
+
+      const parsed = sessionMessagePageSchema.safeParse(pageBody.value);
       if (!parsed.success) {
         log.warn("session_export.message_page_invalid", {
           session_id: sessionId,

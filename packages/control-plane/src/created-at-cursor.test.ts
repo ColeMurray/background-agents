@@ -11,7 +11,10 @@ describe("created-at cursors", () => {
     });
   });
 
-  it.each(["invalid", "-1:item", "1:", "1:%E0%A4%A"])("rejects malformed cursor %s", (raw) => {
-    expect(parseCreatedAtCursor(raw)).toEqual({ ok: false, error: "Invalid cursor" });
-  });
+  it.each(["invalid", "-1:item", "1e3:item", "0x10:item", "1:", "1:%E0%A4%A"])(
+    "rejects malformed cursor %s",
+    (raw) => {
+      expect(parseCreatedAtCursor(raw)).toEqual({ ok: false, error: "Invalid cursor" });
+    }
+  );
 });
