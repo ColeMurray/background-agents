@@ -14,6 +14,7 @@ import type { CreateSandboxConfig, ResumeConfig, StopConfig } from "../provider"
 import {
   DaytonaNotFoundError,
   DaytonaApiError,
+  DaytonaCancelledError,
   type DaytonaRestClient,
   type DaytonaSandboxResponse,
   type DaytonaSignedPreviewUrlResponse,
@@ -1071,6 +1072,60 @@ describe("DaytonaSandboxProvider image builds", () => {
   });
 });
 
+/** Mirrors PREBUILT_ACTIVATION_TIMEOUT_MS in daytona-provider.ts. */
+const ACTIVATION_BUDGET_MS = 45_000;
+/** Mirrors LIFECYCLE_POLL_INTERVAL_MS in daytona-provider.ts. */
+const ACTIVATION_POLL_INTERVAL_MS = 2_000;
+/** Fine enough that an assertion on elapsed virtual time measures the budget. */
+const CLOCK_STEP_MS = 250;
+
+/**
+ * Run `operation` on the fake clock and hand back whatever it settles with.
+ *
+ * The clock is advanced in fine slices so the elapsed virtual time an
+ * assertion reads is the flow's own budget rather than the granularity of
+ * the advance, and so a flow that arms its next wait only after a resolved
+ * request still gets its timer fired.
+ */
+async function settleOnFakeClock(operation: Promise<unknown>, clockBudgetMs: number) {
+  let done = false;
+  let outcome: unknown;
+  const tracked = operation.then(
+    (value) => {
+      done = true;
+      outcome = value;
+    },
+    (error: unknown) => {
+      done = true;
+      outcome = error;
+    }
+  );
+  for (let elapsed = 0; elapsed < clockBudgetMs && !done; elapsed += CLOCK_STEP_MS) {
+    await vi.advanceTimersByTimeAsync(CLOCK_STEP_MS);
+  }
+  await tracked;
+  return outcome;
+}
+
+/**
+ * A request that outlasts the activation budget unless the caller's signal
+ * ends it — the shape that tells one shared deadline from a per-request one.
+ */
+function slowUnlessAborted<T>(value: T, durationMs: number) {
+  return (_id: string, signal?: AbortSignal) =>
+    new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(value), durationMs);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new DOMException("This operation was aborted", "AbortError"));
+        },
+        { once: true }
+      );
+    });
+}
+
 describe("DaytonaSandboxProvider prebuilt images", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -1141,7 +1196,7 @@ describe("DaytonaSandboxProvider prebuilt images", () => {
 
     await buildProvider(client).createSandbox(prebuiltConfig);
 
-    expect(client.activateSnapshot).toHaveBeenCalledWith("snapshot-1", undefined);
+    expect(client.activateSnapshot).toHaveBeenCalledWith("snapshot-1", expect.any(AbortSignal));
     expect(client.createSandbox).toHaveBeenCalled();
   });
 
@@ -1192,17 +1247,160 @@ describe("DaytonaSandboxProvider prebuilt images", () => {
     expect(client.createSandbox).not.toHaveBeenCalled();
   });
 
-  it("deletes the sandbox it just created when its preview URLs cannot be issued", async () => {
+  it.each([
+    ["disappears", null] as const,
+    [
+      "starts being removed",
+      { id: "snapshot-1", name: "oi-image-abc", state: "removing" },
+    ] as const,
+  ])("refuses a prebuilt image that %s during the activation wait", async (_name, secondRead) => {
+    vi.useFakeTimers();
+    try {
+      const getSnapshot = vi.fn(async () => {
+        if (getSnapshot.mock.calls.length === 1) {
+          return { id: "snapshot-1", name: "oi-image-abc", state: "inactive" };
+        }
+        if (!secondRead) throw new DaytonaNotFoundError("gone");
+        return secondRead;
+      });
+      const client = createBuildClient({ getSnapshot });
+
+      const error = await buildProvider(client)
+        .createSandbox(prebuiltConfig)
+        .catch((thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      expect(error).not.toBeInstanceOf(PrebuiltImageActivationPendingError);
+      expect((error as SandboxProviderError).errorType).toBe("permanent");
+      // The read that saw it go is the last one: no polling out the budget.
+      expect(getSnapshot).toHaveBeenCalledTimes(2);
+      expect(client.createSandbox).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds the whole activation flow by one budget, not each request", async () => {
+    vi.useFakeTimers();
+    try {
+      const slowMs = ACTIVATION_BUDGET_MS - 5_000;
+      const client = createBuildClient({
+        getSnapshot: vi.fn(
+          slowUnlessAborted({ id: "snapshot-1", name: "oi-image-abc", state: "inactive" }, slowMs)
+        ),
+        activateSnapshot: vi.fn(
+          slowUnlessAborted({ id: "snapshot-1", name: "oi-image-abc", state: "pulling" }, slowMs)
+        ),
+      });
+
+      const startedAt = Date.now();
+      const error = await settleOnFakeClock(
+        buildProvider(client).createSandbox(prebuiltConfig),
+        ACTIVATION_BUDGET_MS * 8
+      );
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(error).toMatchObject({
+        name: "PrebuiltImageActivationPendingError",
+        errorType: "transient",
+      });
+      expect(elapsedMs).toBeLessThanOrEqual(ACTIVATION_BUDGET_MS + ACTIVATION_POLL_INTERVAL_MS);
+      expect(client.createSandbox).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    [
+      "a rate-limited read",
+      new DaytonaApiError("Daytona API error 429 on GET /snapshots: slow down", 429),
+    ],
+    [
+      "an unavailable read",
+      new DaytonaApiError("Daytona API error 503 on GET /snapshots: upstream gone", 503),
+    ],
+    ["a network failure", new TypeError("fetch failed")],
+    ["a read that timed out", new DOMException("This operation was aborted", "AbortError")],
+    ["a cancelled read", new DaytonaCancelledError()],
+  ])("keeps the image in rotation when the snapshot read hits %s", async (_name, thrown) => {
+    const client = createBuildClient({
+      getSnapshot: vi.fn(async () => {
+        throw thrown;
+      }),
+    });
+
+    const error = await buildProvider(client)
+      .createSandbox(prebuiltConfig)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PrebuiltImageActivationPendingError);
+    // Status and nothing else: a provider body never rides the message.
+    expect((error as Error).message).not.toMatch(/slow down|upstream gone/);
+    expect(client.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("keeps the image in rotation when activation is rate-limited", async () => {
+    const client = createBuildClient({
+      getSnapshot: vi.fn(async () => ({
+        id: "snapshot-1",
+        name: "oi-image-abc",
+        state: "inactive",
+      })),
+      activateSnapshot: vi.fn(async () => {
+        throw new DaytonaApiError("Daytona API error 429 on POST /snapshots/activate", 429);
+      }),
+    });
+
+    const error = await buildProvider(client)
+      .createSandbox(prebuiltConfig)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PrebuiltImageActivationPendingError);
+    expect(client.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("still fails permanently when the snapshot read is refused", async () => {
+    const client = createBuildClient({
+      getSnapshot: vi.fn(async () => {
+        throw new DaytonaApiError("Daytona API error 401 on GET /snapshots", 401);
+      }),
+    });
+
+    const error = await buildProvider(client)
+      .createSandbox(prebuiltConfig)
+      .catch((caught: unknown) => caught);
+
+    // A rejected call says the deployment is wrong, not that the image is
+    // cold: softening it would hide the fault behind slow spawns.
+    expect(error).toBeInstanceOf(SandboxProviderError);
+    expect(error).not.toBeInstanceOf(PrebuiltImageActivationPendingError);
+    expect((error as SandboxProviderError).errorType).toBe("permanent");
+    expect(client.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("keeps a created sandbox whose preview URLs cannot be issued", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const client = createBuildClient();
     client.createSandbox.mockResolvedValue({ id: "daytona-session-1", state: "started" });
     (client as unknown as Record<string, unknown>).getSignedPreviewUrl = vi.fn(async () => {
       throw new DaytonaApiError("preview unavailable", 500);
     });
 
-    await expect(
-      buildProvider(client).createSandbox({ ...prebuiltConfig, codeServerEnabled: true })
-    ).rejects.toThrow(/Failed to create Daytona sandbox/);
+    const result = await buildProvider(client).createSandbox({
+      ...prebuiltConfig,
+      codeServerEnabled: true,
+      vncEnabled: true,
+    });
 
-    expect(client.deleteSandbox).toHaveBeenCalledWith("daytona-session-1");
+    // The id is the only handle to a sandbox with no hard TTL: it is returned
+    // rather than dropped, and the sandbox is left running.
+    expect(result.providerObjectId).toBe("daytona-session-1");
+    expect(result.codeServerUrl).toBeUndefined();
+    expect(result.codeServerPassword).toBeUndefined();
+    expect(result.vncAccess).toBeUndefined();
+    expect(result.tunnelUrls).toBeUndefined();
+    expect(client.deleteSandbox).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("daytona.create_tunnel_urls_failed"));
   });
 });

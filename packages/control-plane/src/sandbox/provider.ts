@@ -435,13 +435,16 @@ export class SandboxProviderError extends Error {
 }
 
 /**
- * A prebuilt image that exists and is not broken, but is not yet usable: the
- * provider is still bringing it back from cold storage.
+ * A prebuilt image the provider could not confirm as usable right now: it is
+ * still being brought back from cold storage, or the provider could not be
+ * reached to say.
  *
  * Distinct from every other create failure because the answer is different.
- * A missing or corrupt image must be failed so the next cron rebuilds it; an
- * image that is merely waking must not be, or a slow activation would retire
- * a perfectly good prebuild. Both fall back to the base image for this spawn.
+ * Only an answer about the artifact itself — that it is missing, or in a
+ * state it never leaves — may retire an image, so a slow activation or an
+ * unreachable API does not throw away a perfectly good prebuild. An image
+ * reported this way must be left in rotation for the next spawn; this spawn
+ * falls back to the base image either way.
  */
 export class PrebuiltImageActivationPendingError extends SandboxProviderError {
   constructor(message: string, cause?: Error) {

@@ -188,9 +188,17 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
       const sandbox = await this.client.createSandbox(params);
 
-      let tunnels;
+      // Preview URLs are user-facing extras, not how a session runs: the
+      // runtime dials the control plane itself. Failing the create here would
+      // throw away the only handle to a live sandbox that has no hard TTL, so
+      // the create reports the id it was given and the access fields stay
+      // empty until the next resume issues them.
+      let codeServerUrl: string | undefined;
+      let codeServerPassword: string | undefined;
+      let vncAccess: VncAccess | undefined;
+      let tunnelUrls: Record<string, string> | undefined;
       try {
-        tunnels = await this.buildTunnelUrls(
+        const tunnels = await this.buildTunnelUrls(
           sandbox.id,
           config.sandboxId,
           config.timeoutSeconds,
@@ -198,22 +206,25 @@ export class DaytonaSandboxProvider implements SandboxProvider {
           config.vncEnabled,
           config.sandboxSettings
         );
-      } catch (error) {
-        // The sandbox exists but the session can never reach it. Delete that
-        // exact sandbox so a base-image retry does not leave a second
-        // authenticated instance running, and report the original failure.
-        await this.deleteSessionSandboxBestEffort(sandbox.id, config.sandboxId);
-        throw error;
+        codeServerUrl = tunnels.codeServerUrl;
+        codeServerPassword = tunnels.codeServerPassword;
+        vncAccess = tunnels.vncAccess;
+        tunnelUrls = tunnels.tunnelUrls;
+      } catch (tunnelError) {
+        log.warn("daytona.create_tunnel_urls_failed", {
+          sandbox_id: config.sandboxId,
+          error: tunnelError instanceof Error ? tunnelError.message : String(tunnelError),
+        });
       }
 
       return {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.id,
         createdAt: Date.now(),
-        codeServerUrl: tunnels.codeServerUrl,
-        codeServerPassword: tunnels.codeServerPassword,
-        vncAccess: tunnels.vncAccess,
-        tunnelUrls: tunnels.tunnelUrls,
+        codeServerUrl,
+        codeServerPassword,
+        vncAccess,
+        tunnelUrls,
       };
     } catch (error) {
       // Already classified (the prebuilt-image guards) — rethrow so the
@@ -351,23 +362,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       envVars.REPO_IMAGE_SHA = config.prebuiltImageSha ?? "";
     }
     return envVars;
-  }
-
-  /** Best-effort teardown of a session sandbox the caller is abandoning. */
-  private async deleteSessionSandboxBestEffort(
-    providerObjectId: string,
-    sandboxId: string
-  ): Promise<void> {
-    try {
-      await this.client.deleteSandbox(providerObjectId);
-    } catch (error) {
-      if (error instanceof DaytonaNotFoundError) return;
-      log.warn("daytona.create_cleanup_delete_failed", {
-        sandbox_id: sandboxId,
-        provider_object_id: providerObjectId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
   }
 
   // -----------------------------------------------------------------------
@@ -870,46 +864,98 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   /**
    * Make a selected prebuilt snapshot usable, or say why it cannot be.
    *
+   * `PREBUILT_ACTIVATION_TIMEOUT_MS` is the budget for the whole flow, not
+   * for one of its requests: the deadline is fixed before the first call, and
+   * the read, the activation, every poll and every wait run under the signal
+   * that expires with it. A spawn therefore waits the advertised time for a
+   * cold image, whatever each individual request costs.
+   *
    * An inactive snapshot is cold storage, not corruption: it is activated and
-   * waited for. An activation that outlasts the spawn budget is reported as
-   * pending so the session falls back to base WITHOUT retiring the image —
-   * unlike a missing or failed snapshot, which must be failed so the next
+   * waited for. An activation that outlasts the budget is reported as pending
+   * so the session falls back to base WITHOUT retiring the image — unlike a
+   * missing or terminal snapshot, which must be failed so the next
    * reconciliation rebuilds it.
    */
   private async ensurePrebuiltImageUsable(prebuiltImageId: string): Promise<void> {
-    const snapshot = await this.getBuildSnapshot(prebuiltImageId);
-    if (!snapshot) {
-      throw new SandboxProviderError("Daytona prebuilt snapshot no longer exists", "permanent");
-    }
-    const state = parseDaytonaSnapshotState(snapshot.state);
-    if (state === "active") return;
-    if (state === "error" || state === "build_failed" || state === "removing") {
-      throw new SandboxProviderError(
-        `Daytona prebuilt snapshot is ${state} and cannot be used`,
-        "permanent"
-      );
-    }
-
-    if (state === "inactive") {
-      await this.activateBuildSnapshot(snapshot.id);
-    }
     const deadline = Date.now() + PREBUILT_ACTIVATION_TIMEOUT_MS;
-    for (;;) {
-      const current = await this.getBuildSnapshot(snapshot.id);
-      const currentState = current ? parseDaytonaSnapshotState(current.state) : "unknown";
-      if (currentState === "active") return;
-      if (currentState === "error" || currentState === "build_failed") {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PREBUILT_ACTIVATION_TIMEOUT_MS);
+    const signal = controller.signal;
+    try {
+      const snapshot = await this.getBuildSnapshot(prebuiltImageId, signal);
+      if (!snapshot) {
+        throw new SandboxProviderError("Daytona prebuilt snapshot no longer exists", "permanent");
+      }
+      const state = parseDaytonaSnapshotState(snapshot.state);
+      if (state === "active") return;
+      if (state === "error" || state === "build_failed" || state === "removing") {
         throw new SandboxProviderError(
-          `Daytona prebuilt snapshot is ${currentState} and cannot be used`,
+          `Daytona prebuilt snapshot is ${state} and cannot be used`,
           "permanent"
         );
       }
-      if (Date.now() >= deadline) {
+
+      if (state === "inactive") {
+        await this.activateBuildSnapshot(snapshot.id, signal);
+      }
+      for (;;) {
+        const current = await this.getBuildSnapshot(snapshot.id, signal);
+        // A snapshot that is gone, or on its way out, is gone for the same
+        // reason the pre-activation read gives: waiting it out would spend
+        // the budget and then report an artifact worth keeping.
+        if (!current) {
+          throw new SandboxProviderError("Daytona prebuilt snapshot no longer exists", "permanent");
+        }
+        const currentState = parseDaytonaSnapshotState(current.state);
+        if (currentState === "active") return;
+        if (
+          currentState === "error" ||
+          currentState === "build_failed" ||
+          currentState === "removing"
+        ) {
+          throw new SandboxProviderError(
+            `Daytona prebuilt snapshot is ${currentState} and cannot be used`,
+            "permanent"
+          );
+        }
+        if (Date.now() >= deadline) {
+          throw new PrebuiltImageActivationPendingError(
+            `Daytona prebuilt snapshot is still ${currentState}`
+          );
+        }
+        await delayUnlessCancelled(LIFECYCLE_POLL_INTERVAL_MS, signal);
+      }
+    } catch (error) {
+      // Only an answer about this artifact may retire it. A classification
+      // already made inside the flow stands; a budget that ran out and a
+      // provider that could not be reached are facts about the transport, so
+      // the spawn falls back to base and the image stays in rotation. An
+      // auth or request error still fails hard: it says the call was wrong,
+      // and softening it would hide a broken deployment behind slow spawns.
+      if (error instanceof SandboxProviderError) throw error;
+      if (signal.aborted) {
         throw new PrebuiltImageActivationPendingError(
-          `Daytona prebuilt snapshot is still ${currentState}`
+          "Daytona prebuilt snapshot did not become usable within the activation budget",
+          error instanceof Error ? error : undefined
         );
       }
-      await delayUnlessCancelled(LIFECYCLE_POLL_INTERVAL_MS);
+      if (error instanceof DaytonaNotFoundError) {
+        throw new SandboxProviderError(
+          "Daytona prebuilt snapshot no longer exists",
+          "permanent",
+          error
+        );
+      }
+      const unreachable = daytonaUnreachableReason(error);
+      if (unreachable) {
+        throw new PrebuiltImageActivationPendingError(
+          `Daytona could not confirm the prebuilt snapshot (${unreachable})`,
+          error instanceof Error ? error : undefined
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -940,6 +986,27 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 function resolvePreviewExpirySeconds(timeoutSeconds: number | undefined): number {
   if (!timeoutSeconds) return DEFAULT_PREVIEW_EXPIRY_SECONDS;
   return Math.min(86400, Math.max(900, timeoutSeconds + 300));
+}
+
+/**
+ * Why Daytona could not answer for an artifact right now, or null when the
+ * failure is an answer.
+ *
+ * A rate-limited or unavailable API, and a request that never completed, say
+ * nothing about the snapshot they were asked about; a rejected or malformed
+ * request does. Only the second kind may retire an image, so only the first
+ * is named here. The reason carries the status and nothing else: response
+ * bodies never travel in it.
+ */
+function daytonaUnreachableReason(error: unknown): string | null {
+  if (error instanceof DaytonaApiError) {
+    return error.status === 429 || error.status >= 500 ? `HTTP ${error.status}` : null;
+  }
+  if (error instanceof DaytonaCancelledError) return "the request was cancelled";
+  if (error instanceof Error && error.name === "AbortError") return "the request timed out";
+  return SandboxProviderError.isTransientNetworkError(error)
+    ? "the request did not complete"
+    : null;
 }
 
 /**
