@@ -45,12 +45,17 @@ export function CommitSigningSettings() {
   const [committerEmail, setCommitterEmail] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [saving, setSaving] = useState(false);
+  const [updatedAtLabel, setUpdatedAtLabel] = useState("");
 
   useEffect(() => {
     if (!data?.enabled) return;
     setCommitterName(data.committerName);
     setCommitterEmail(data.committerEmail);
   }, [data]);
+
+  useEffect(() => {
+    setUpdatedAtLabel(data?.updatedAt ? new Date(data.updatedAt).toLocaleString() : "");
+  }, [data?.updatedAt]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -141,7 +146,7 @@ export function CommitSigningSettings() {
           </div>
           <div>
             <dt className="inline text-muted-foreground">Updated: </dt>
-            <dd className="inline">{new Date(data.updatedAt).toLocaleString()}</dd>
+            <dd className="inline">{updatedAtLabel}</dd>
           </div>
         </dl>
       )}

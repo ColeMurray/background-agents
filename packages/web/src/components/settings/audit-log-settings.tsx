@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AuditEvent, AuditOperationResult } from "@open-inspect/shared/types/audit-events";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,7 +45,11 @@ function resourceSummary(event: AuditEvent): string {
 
 function AuditEventCard({ event }: { event: AuditEvent }) {
   const outcome = OUTCOMES[event.operationResult];
-  const localTimestamp = new Date(event.occurredAt).toLocaleString();
+  const [localTimestamp, setLocalTimestamp] = useState("");
+
+  useEffect(() => {
+    setLocalTimestamp(new Date(event.occurredAt).toLocaleString());
+  }, [event.occurredAt]);
 
   return (
     <li className="min-w-0 px-4 py-4 sm:px-5">
