@@ -1061,6 +1061,8 @@ APP_ICON_URL
 DAYTONA_API_URL
 DAYTONA_BASE_SNAPSHOT
 DAYTONA_TARGET
+DAYTONA_TOOLBOX_API_URL
+DAYTONA_PREBUILDS_ENABLED
 
 # Vercel Sandbox
 VERCEL_SANDBOX_PROJECT_ID
@@ -1119,6 +1121,8 @@ Secrets for credentials:
 | `DAYTONA_API_KEY`                  | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_BASE_SNAPSHOT`            | Daytona base snapshot name _(only if `sandbox_provider = "daytona"`)_                       |
 | `DAYTONA_TARGET`                   | Optional Daytona target name                                                                |
+| `DAYTONA_TOOLBOX_API_URL`          | Optional Daytona toolbox proxy override; empty uses the proxy each sandbox reports          |
+| `DAYTONA_PREBUILDS_ENABLED`        | `true` to admit new Daytona prebuilt-image builds and boot from them (default: `false`)     |
 | `VERCEL_SANDBOX_TOKEN`             | Vercel API token _(only if `sandbox_provider = "vercel"`)_                                  |
 | `VERCEL_SANDBOX_PROJECT_ID`        | Vercel project ID for sandbox sessions _(only if `sandbox_provider = "vercel"`)_            |
 | `VERCEL_SANDBOX_TEAM_ID`           | Optional Vercel team/account ID for sandbox sessions                                        |

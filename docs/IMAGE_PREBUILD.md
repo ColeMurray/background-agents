@@ -177,13 +177,13 @@ secrets for a repository scope, global + environment secrets for an environment 
 
 Everything your setup scripts install — dependencies, build artifacts, caches — is captured in the
 image artifact. Depending on the active sandbox provider, this is stored as a Modal image, Vercel
-snapshot, or OpenComputer checkpoint.
+snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot.
 
 The configured build timeout covers clone and setup execution. Build sandboxes receive an additional
 ten minutes for callback delivery and snapshot/checkpoint finalization. Because Vercel limits
 sandbox lifetime to 45 minutes, Vercel image-build execution is capped at 35 minutes so that reserve
-is never lost; Modal and OpenComputer continue to honor the configured execution timeout up to the
-shared one-hour limit.
+is never lost; Modal, OpenComputer, E2B and Daytona continue to honor the configured execution
+timeout up to the shared one-hour limit.
 
 Modal follows the same lifecycle as the other providers: the control plane creates a dormant
 sandbox, records its id, starts the runtime, and snapshots it only after the callback has been
@@ -280,9 +280,9 @@ in memory, the clone token and scope secrets reach only the build process and it
 of them are written to the container's configuration or to a file.
 
 A repository's `.openinspect/setup.sh` is trusted code that runs with those secrets in its
-environment. It can write them into a dependency, a cache, or any file it likes, and no generic
-capture mechanism can find them again. Treat a scope's prebuilt image as no less sensitive than the
-scope's own secrets. See [Secrets Management](SECRETS.md#secrets-and-prebuilt-images).
+environment. It can write them into a dependency, a cache, or any file it likes, and the capture has
+no way to detect or strip them. Treat a scope's prebuilt image as no less sensitive than the scope's
+own secrets. See [Secrets Management](SECRETS.md#secrets-and-prebuilt-images).
 
 ### Runbook
 
