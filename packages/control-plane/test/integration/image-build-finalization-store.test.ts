@@ -753,6 +753,64 @@ describe("ImageBuildStore asynchronous provider operations", () => {
     ]);
   });
 
+  it("keeps the teardown obligation when a recovered source races the intent's settlement", async () => {
+    const environmentId = await seedEnvironment();
+    const store = new ImageBuildStore(env.DB);
+    await store.registerBuild({
+      id: "build-1",
+      scope: environmentScope(environmentId),
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-1",
+    });
+    await store.markSourceCreateIntent("build-1", "modal");
+    await store.markBuildFailed("build-1", "modal", "create timed out");
+    await env.DB.prepare("UPDATE image_builds SET created_at = 1 WHERE id = ?")
+      .bind("build-1")
+      .run();
+
+    // One maintenance pass settles the intent on a stale absence while
+    // another, which already found the source under its reserved name,
+    // attaches it afterwards.
+    expect(await store.clearUnboundSourceIntent("build-1")).toBe(true);
+    expect(await store.attachRecoveredProviderSession("build-1", "modal", "session-9")).toBe(true);
+
+    const row = await getRow("build-1");
+    expect(row?.provider_session_id).toBe("session-9");
+    expect(row?.provider_session_cleanup_pending).toBe(1);
+    // A bound source the sweep never reads and a row free to be deleted is
+    // exactly how a live sandbox loses the only record naming it.
+    expect(await store.listSessionCleanup()).toEqual([
+      expect.objectContaining({ id: "build-1", provider_session_id: "session-9" }),
+    ]);
+    expect(await store.deleteOldFailedBuilds(1000)).toBe(0);
+  });
+
+  it("refuses to settle an intent whose source has already been attached", async () => {
+    const environmentId = await seedEnvironment();
+    const store = new ImageBuildStore(env.DB);
+    await store.registerBuild({
+      id: "build-1",
+      scope: environmentScope(environmentId),
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-1",
+    });
+    await store.markSourceCreateIntent("build-1", "modal");
+    await store.markBuildFailed("build-1", "modal", "create timed out");
+    await env.DB.prepare("UPDATE image_builds SET created_at = 1 WHERE id = ?")
+      .bind("build-1")
+      .run();
+
+    expect(await store.attachRecoveredProviderSession("build-1", "modal", "session-9")).toBe(true);
+    // The settle requires an unbound row, so the other interleaving cannot
+    // drop the obligation the attach just recorded.
+    expect(await store.clearUnboundSourceIntent("build-1")).toBe(false);
+
+    const row = await getRow("build-1");
+    expect(row?.provider_session_id).toBe("session-9");
+    expect(row?.provider_session_cleanup_pending).toBe(1);
+    expect(await store.deleteOldFailedBuilds(1000)).toBe(0);
+  });
+
   it("never lets a recovered source revive a build or authorize a callback", async () => {
     const environmentId = await seedEnvironment();
     const store = new ImageBuildStore(env.DB);

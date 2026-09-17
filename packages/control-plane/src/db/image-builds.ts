@@ -372,6 +372,14 @@ export class ImageBuildStore {
    * building row, authorize a launch, or let a callback be accepted: the
    * normal bind-before-launch path still requires a building row and runs
    * before any repository work.
+   *
+   * The id and the cleanup obligation are written in one statement, and the
+   * obligation is asserted rather than required: a source that exists under
+   * the reserved name must be torn down even if a concurrent pass settled the
+   * intent on a stale absence first. A bound id with a settled obligation is
+   * the one shape no sweep acts on — the session sweep skips it and row
+   * deletion reads it as owing nothing — so the source would outlive the only
+   * record naming it.
    */
   async attachRecoveredProviderSession(
     buildId: string,
@@ -380,7 +388,8 @@ export class ImageBuildStore {
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE image_builds SET provider_session_id = ?
+        `UPDATE image_builds
+         SET provider_session_id = ?, provider_session_cleanup_pending = 1
          WHERE id = ? AND provider = ? AND status IN ('failed', 'superseded')
            AND provider_session_id IS NULL`
       )
