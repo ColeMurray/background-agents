@@ -742,6 +742,9 @@ describe("RepoClassifier", () => {
       "Run in an empty sandbox",
       "Work repository-less for this request",
       "No repository is needed for this request",
+      "I want no repository",
+      "I need no repo",
+      "No repository, please",
     ])("sends documented explicit wording through the model: %s", async (message) => {
       mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
       mockMessagesCreate.mockResolvedValue(
@@ -813,6 +816,24 @@ describe("RepoClassifier", () => {
 
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
       expect(result.explicitNoRepositoryIntent).toBe(false);
+      expect(result.needsClarification).toBe(true);
+    });
+
+    it("clarifies when explicit user wording conflicts with a repository target", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "The model missed the explicit no-repository request.",
+          alternatives: [],
+          explicitNoRepositoryIntent: false,
+        })
+      );
+
+      const result = await new RepoClassifier(TEST_ENV).classify("Use no repository");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(result.reportedExplicitNoRepositoryIntent).toBe(false);
       expect(result.needsClarification).toBe(true);
     });
 

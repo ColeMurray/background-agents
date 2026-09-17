@@ -34,6 +34,8 @@ const log = createLogger("classifier");
 const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
 const EXPLICIT_NO_REPOSITORY_PATTERNS = [
   /\b(?:use|choose|select)\s+no\s+(?:repos?|repositor(?:y|ies))\b/i,
+  /\bi\s+(?:want|need)\s+no\s+(?:repos?|repositor(?:y|ies))(?=\s*(?:$|[,\n.!?]|\b(?:please|and|for|to)\b))/i,
+  /(?:^|\n)[ \t]*no[ \t]+(?:repos?|repositor(?:y|ies))[ \t]*(?:,[ \t]*please\b|[.!?]?[ \t]*(?:$|\n))/i,
   /\b(?:start|run|work)(?:\s+\w+){0,5}\s+with\s+no\s+(?:repos?|repositor(?:y|ies))\b/i,
   /\bno\s+(?:repos?|repositor(?:y|ies))\s+(?:is\s+)?(?:needed|required|necessary)\b/i,
   /\b(?:start|run|work)(?:\s+\w+){0,5}\s+without\s+(?:a\s+|any\s+)?(?:repos?|repositor(?:y|ies))\b/i,
@@ -473,7 +475,8 @@ export class RepoClassifier {
         reportedExplicitNoRepositoryIntent &&
         explicitNoRepositoryLanguage;
       const inconsistentNoRepositoryIntent =
-        reportedExplicitNoRepositoryIntent && matchedTarget?.kind !== "none";
+        matchedTarget?.kind !== "none" &&
+        (reportedExplicitNoRepositoryIntent || explicitNoRepositoryLanguage);
       const noRepositoryNeedsClarification =
         matchedTarget?.kind === "none" &&
         (llmResult.confidence !== "high" || !explicitNoRepositoryIntent);

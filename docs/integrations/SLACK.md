@@ -411,10 +411,10 @@ If setup was just changed, confirm the Slack app event subscriptions and interac
 The Slack app needs the direct message event subscription configured. Once that is set up, send the
 bot a plain DM with your request. No `@mention` is required.
 
-### Open-Inspect asks which repository to use
+### Open-Inspect asks which target to use
 
-Choose a repository from the dropdown, or resend the request with the repository name included. The
-dropdown expires after one hour.
+Choose a repository, environment, or **No repository** from the dropdown, or resend the request with
+the intended target included. The dropdown expires after one hour.
 
 ### A follow-up started a new session
 

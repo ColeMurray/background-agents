@@ -1,4 +1,9 @@
-import { getMessageDetails, postMessage, updateMessage } from "@open-inspect/shared/slack";
+import {
+  getMessageDetails,
+  postEphemeral,
+  postMessage,
+  updateMessage,
+} from "@open-inspect/shared/slack";
 import { toImageAttachments, type SlackImageAttachment } from "../attachments";
 import { collectForwardedMessages } from "../forwarded-messages";
 import { createLogger } from "../logger";
@@ -57,9 +62,10 @@ export async function handleTargetSelection(
     classification,
   } = pendingData;
   if (selectedBy !== userId) {
-    await postMessage(
+    await postEphemeral(
       env.SLACK_BOT_TOKEN,
       channel,
+      selectedBy,
       "Only the person who made the original request can choose its target.",
       { thread_ts: threadKey }
     );

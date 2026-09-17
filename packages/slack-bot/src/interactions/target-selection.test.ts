@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getMessageDetails, postMessage } from "@open-inspect/shared/slack";
+import { getMessageDetails, postEphemeral, postMessage } from "@open-inspect/shared/slack";
 import type { Env } from "../types";
 import { handleTargetSelection } from "./target-selection";
 import { getPendingRequest, deletePendingRequest } from "../pending-requests/pending-request-store";
@@ -11,6 +11,7 @@ vi.mock(import("@open-inspect/shared/slack"), async (importOriginal) => ({
   ...(await importOriginal()),
   escapeMrkdwnText: (text: string) => text,
   getMessageDetails: vi.fn(),
+  postEphemeral: vi.fn(async () => ({ ok: true as const, message_ts: "222.333" })),
   postMessage: vi.fn(async () => ({ ok: true as const, channel: "C123", ts: "222.333" })),
   updateMessage: vi.fn(async () => ({ ok: true as const })),
 }));
@@ -224,11 +225,13 @@ describe("handleTargetSelection", () => {
 
     expect(resolveTargetValue).not.toHaveBeenCalled();
     expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
-    expect(postMessage).toHaveBeenCalledWith(
+    expect(postEphemeral).toHaveBeenCalledWith(
       "xoxb-test",
       "C123",
+      "U999",
       "Only the person who made the original request can choose its target.",
       { thread_ts: "111.222" }
     );
+    expect(postMessage).not.toHaveBeenCalled();
   });
 });
