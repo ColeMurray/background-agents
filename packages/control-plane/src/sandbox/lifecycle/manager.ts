@@ -330,6 +330,8 @@ export interface SlackAgentNotifyLookup {
  */
 export interface SandboxLifecycle {
   spawnSandbox(): Promise<void>;
+  /** Whether a snapshot in progress has stopped, or will stop, the source sandbox. */
+  isSnapshotStoppingSandbox(): boolean;
   updateLastActivity(timestamp: number): void;
   onPromptDispatched(): void;
   terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
@@ -1224,6 +1226,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       createdAt: sandbox.created_at,
     };
     const runtimeVersion = sandbox.runtime_version;
+    // Only the provider's response can confirm the source stopped. A rejected
+    // request (rate limit, network) leaves it running, and retiring it here
+    // would destroy unsnapshotted work.
+    let sourceStopped = false;
 
     if (!isTerminalState) {
       this.storage.updateSandboxStatus("snapshotting");
@@ -1242,6 +1248,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         sessionId: session.session_name || session.id,
         reason,
       });
+      sourceStopped = result.sourceStopped === true;
 
       if (result.success && result.imageId) {
         // Stamp the snapshot with the runtime that produced it: the image
@@ -1282,17 +1289,24 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       });
     }
 
-    // Restore the previous status only while the row is still this sandbox's
-    // and still says `snapshotting`: a cancel, a stale heartbeat, or an
+    // Preserve provider snapshot semantics: Vercel stops the source, while
+    // providers such as Modal leave it running. Change status only while the
+    // row is still this sandbox's and still says `snapshotting`: a cancel, a
+    // stale heartbeat, or an
     // unresponsive-sandbox termination during the provider call has already
     // retired the sandbox (status written, access cleared, socket detached),
     // and restoring `ready` over that would make the spawn decision wait for
     // a reconnect that cannot come; a replacement that is itself snapshotting
     // keeps its own status.
     if (!isTerminalState && reason !== "heartbeat_timeout") {
-      if (this.storage.transitionSandboxStatus(generation, "snapshotting", previousStatus)) {
-        this.broadcaster.broadcast({ type: "sandbox_status", status: previousStatus });
-        if (previousStatus === "ready") {
+      const nextStatus = sourceStopped ? "stopped" : previousStatus;
+      if (this.storage.transitionSandboxStatus(generation, "snapshotting", nextStatus)) {
+        if (sourceStopped) {
+          this.clearSandboxAccessState();
+          this.wsManager.detachSandboxWebSocket(1000, "Sandbox stopped after snapshot");
+        }
+        this.broadcaster.broadcast({ type: "sandbox_status", status: nextStatus });
+        if (nextStatus === "ready") {
           this.broadcaster.broadcast({ type: "sandbox_access_changed" });
         }
       } else {
@@ -1485,9 +1499,15 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.clearSandboxAccessState();
       this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
 
+      // Scope the teardown to this sandbox: a snapshot completing during the
+      // awaits below pumps the queue, which can restore a replacement.
+      const staleProviderObjectId = sandbox.modal_object_id ?? undefined;
+      const staleSandboxId = sandbox.modal_sandbox_id;
+      const isStaleSandbox = () => this.storage.getSandbox()?.modal_sandbox_id === staleSandboxId;
+
       if (this.usesProviderManagedStop()) {
         try {
-          await this.stopProviderSandbox("heartbeat_timeout");
+          await this.stopProviderSandbox("heartbeat_timeout", undefined, staleProviderObjectId);
         } catch (error) {
           this.log.warn("Provider stop failed after heartbeat timeout", {
             error: error instanceof Error ? error.message : String(error),
@@ -1497,7 +1517,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         if (this.canStopProviderSandbox()) {
           await this.triggerSnapshot("heartbeat_timeout");
           try {
-            await this.stopProviderSandbox("heartbeat_timeout");
+            await this.stopProviderSandbox("heartbeat_timeout", undefined, staleProviderObjectId);
           } catch (error) {
             this.log.warn("Provider stop failed after heartbeat timeout", {
               error: error instanceof Error ? error.message : String(error),
@@ -1511,10 +1531,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
             })
           );
         }
-        this.wsManager.sendToSandbox({ type: "shutdown" });
+        if (isStaleSandbox()) this.wsManager.sendToSandbox({ type: "shutdown" });
       }
 
-      this.wsManager.detachSandboxWebSocket(1000, "Heartbeat stale");
+      if (isStaleSandbox()) this.wsManager.detachSandboxWebSocket(1000, "Heartbeat stale");
       return "sandbox_terminated";
     }
 
@@ -1859,6 +1879,13 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    */
   isSpawning(): boolean {
     return this.isSpawningSandbox || this.isTerminatingSandbox;
+  }
+
+  isSnapshotStoppingSandbox(): boolean {
+    return (
+      this.provider.capabilities.snapshotStopsSandbox === true &&
+      this.storage.getSandbox()?.status === "snapshotting"
+    );
   }
 
   isProviderStartupPending(): boolean {

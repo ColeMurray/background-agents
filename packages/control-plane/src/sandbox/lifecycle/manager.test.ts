@@ -1920,6 +1920,193 @@ describe("SandboxLifecycleManager", () => {
   });
 
   describe("triggerSnapshot", () => {
+    it.each([5000, 2025_000])(
+      "restores after a stopping snapshot at sandbox age %i ms",
+      async (ageMs) => {
+        const sandbox = createMockSandbox({ status: "ready", created_at: Date.now() - ageMs });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        const broadcaster = createMockBroadcaster();
+        const wsManager = createMockWebSocketManager();
+        let finishSnapshot!: (result: SnapshotResult) => void;
+        const provider = createMockProvider({
+          capabilities: { snapshotStopsSandbox: true },
+          takeSnapshot: vi.fn(
+            () =>
+              new Promise<SnapshotResult>((resolve) => {
+                finishSnapshot = resolve;
+              })
+          ),
+        });
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          storage,
+          broadcaster,
+          wsManager,
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        const snapshot = manager.triggerSnapshot("execution_complete");
+        expect(manager.isSnapshotStoppingSandbox()).toBe(true);
+        // Vercel closes the source socket before the snapshot response returns.
+        await manager.spawnSandbox();
+        expect(provider.createSandbox).not.toHaveBeenCalled();
+        expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+
+        finishSnapshot({
+          success: true,
+          imageId: "saved-conversation-and-worktree",
+          sourceStopped: true,
+        });
+        await snapshot;
+
+        expect(sandbox.status).toBe("stopped");
+        expect(manager.isSnapshotStoppingSandbox()).toBe(false);
+        expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledOnce();
+        expect(storage.calls).toContain("clearSandboxAccess:codeServer");
+        expect(broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "stopped" });
+
+        await manager.spawnSandbox();
+
+        expect(provider.createSandbox).not.toHaveBeenCalled();
+        expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+          expect.objectContaining({
+            snapshotImageId: "saved-conversation-and-worktree",
+          })
+        );
+      }
+    );
+
+    it("does not retire a replacement when a stopping snapshot finishes late", async () => {
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager();
+      const provider = createMockProvider({
+        capabilities: { snapshotStopsSandbox: true },
+        takeSnapshot: vi.fn(async () => {
+          sandbox.modal_sandbox_id = "replacement";
+          sandbox.created_at += 1;
+          sandbox.status = "ready";
+          return { success: true, imageId: "old-snapshot", sourceStopped: true };
+        }),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        broadcaster,
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.triggerSnapshot("execution_complete");
+
+      expect(sandbox.status).toBe("ready");
+      expect(sandbox.snapshot_image_id).toBeNull();
+      expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+      expect(storage.calls).not.toContain("clearSandboxAccess:codeServer");
+    });
+
+    it("marks the source stopped when the provider reports it, even without an image", async () => {
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager();
+      const provider = createMockProvider({
+        capabilities: { snapshotStopsSandbox: true },
+        takeSnapshot: vi.fn(async () => ({
+          success: false,
+          error: "Snapshot status was failed",
+          sourceStopped: true,
+        })),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        broadcaster,
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.triggerSnapshot("execution_complete");
+
+      // A `ready` row here would send follow-ups to a dead sandbox until
+      // heartbeat reconciliation.
+      expect(sandbox.status).toBe("stopped");
+      expect(sandbox.snapshot_image_id).toBeNull();
+      expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledOnce();
+      expect(broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "stopped" });
+    });
+
+    it("keeps a healthy source when the snapshot request is rejected", async () => {
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const wsManager = createMockWebSocketManager();
+      const provider = createMockProvider({
+        capabilities: { snapshotStopsSandbox: true },
+        takeSnapshot: vi.fn(async () => {
+          throw new Error("429 Too Many Requests");
+        }),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.triggerSnapshot("execution_complete");
+
+      // Nothing confirmed the source stopped, so retiring it would destroy
+      // a live sandbox and its unsnapshotted work.
+      expect(sandbox.status).toBe("ready");
+      expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+    });
+
+    it("does not hold dispatch while a non-stopping provider snapshots", async () => {
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      let finishSnapshot!: (result: SnapshotResult) => void;
+      const provider = createMockProvider({
+        takeSnapshot: vi.fn(
+          () =>
+            new Promise<SnapshotResult>((resolve) => {
+              finishSnapshot = resolve;
+            })
+        ),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      const snapshot = manager.triggerSnapshot("execution_complete");
+      expect(sandbox.status).toBe("snapshotting");
+      expect(manager.isSnapshotStoppingSandbox()).toBe(false);
+
+      finishSnapshot({ success: true, imageId: "img" });
+      await snapshot;
+      expect(sandbox.status).toBe("ready");
+    });
+
     it("takes snapshot when provider supports it", async () => {
       const sandbox = createMockSandbox({ status: "ready" });
       const storage = createMockStorage(createMockSession(), sandbox);
@@ -2191,6 +2378,42 @@ describe("SandboxLifecycleManager", () => {
       );
       expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
       expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(1000, "Heartbeat stale");
+    });
+
+    it("does not tear down a replacement restored during heartbeat retirement", async () => {
+      const sandbox = createMockSandbox({ status: "ready", last_heartbeat: Date.now() - 100000 });
+      const originalProviderObjectId = sandbox.modal_object_id;
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const wsManager = createMockWebSocketManager(true);
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true },
+        stopSandbox,
+        takeSnapshot: vi.fn(async () => {
+          // The completion pump restores a replacement while the alarm awaits.
+          sandbox.modal_sandbox_id = "replacement";
+          sandbox.modal_object_id = "replacement-object";
+          return { success: true, imageId: "img" };
+        }),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ providerObjectId: originalProviderObjectId })
+      );
+      expect(wsManager.sendToSandbox).not.toHaveBeenCalled();
+      expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
     });
 
     it("handles inactivity timeout", async () => {
