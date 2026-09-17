@@ -1,4 +1,4 @@
-import type { DaytonaSandboxProvider } from "../sandbox/providers/daytona-provider";
+import { BUILD_EXPIRES_AT_LABEL, type DaytonaImageBuildResources } from "./daytona-build-resources";
 import {
   daytonaBuildResourceName,
   delayUnlessCancelled,
@@ -39,9 +39,6 @@ const CAPTURE_OBSERVATION_MS = 90_000;
 
 const CAPTURE_POLL_INTERVAL_MS = 3_000;
 
-/** Label carrying the wall-clock end of the build source's hard TTL. */
-const BUILD_EXPIRES_AT_LABEL = "openinspect_expires_at";
-
 /**
  * Daytona adapter for provider-session image builds.
  *
@@ -63,10 +60,10 @@ const BUILD_EXPIRES_AT_LABEL = "openinspect_expires_at";
  * sandbox as the one it was captured from.
  */
 export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
-  constructor(private readonly provider: DaytonaSandboxProvider) {}
+  constructor(private readonly resources: DaytonaImageBuildResources) {}
 
   async startBuild(plan: ImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
-    await this.provider.triggerImageBuild({
+    await this.resources.triggerImageBuild({
       scopeKind: plan.scope.kind,
       scopeId: plan.scope.id,
       repositories: plan.repositories,
@@ -98,28 +95,28 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
   }
 
   async cleanupCompletedBuild(input: CompletedImageBuildInput): Promise<void> {
-    await this.provider.deleteBuildSandbox(input.providerSessionId, input.buildId, input.signal);
+    await this.resources.deleteBuildSandbox(input.providerSessionId, input.buildId, input.signal);
   }
 
   async cleanupFailedBuild(input: FailedImageBuildInput): Promise<void> {
-    await this.provider.deleteBuildSandbox(input.providerSessionId, input.buildId, input.signal);
+    await this.resources.deleteBuildSandbox(input.providerSessionId, input.buildId, input.signal);
   }
 
   async deleteImage(input: DeleteImageInput): Promise<void> {
-    await this.provider.deleteProviderImage(input.image.providerImageId, input.signal);
+    await this.resources.deleteProviderImage(input.image.providerImageId, input.signal);
   }
 
   async recoverUnboundSource(
     input: RecoverUnboundSourceInput
   ): Promise<{ providerSessionId: string } | null> {
-    const sandbox = await this.provider.findBuildSandboxByName(input.buildId, input.signal);
+    const sandbox = await this.resources.findBuildSandboxByName(input.buildId, input.signal);
     return sandbox ? { providerSessionId: sandbox.id } : null;
   }
 
   async reconcileOrphanOperation(
     input: ReconcileOrphanOperationInput
   ): Promise<ReconcileOrphanOperationOutcome> {
-    const snapshot = await this.provider.getBuildSnapshot(input.operationRef, input.signal);
+    const snapshot = await this.resources.getBuildSnapshot(input.operationRef, input.signal);
     if (!snapshot) return { type: "absent" };
     // A snapshot under our reserved name that names another source is not
     // ours, and deleting it would destroy someone else's artifact.
@@ -135,7 +132,7 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
       state === "error" ||
       state === "build_failed"
     ) {
-      await this.provider.deleteProviderImage(snapshot.id, input.signal);
+      await this.resources.deleteProviderImage(snapshot.id, input.signal);
       return { type: "deleted" };
     }
     // Still being produced: an artifact that becomes visible after this pass
@@ -155,7 +152,7 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
   private async submitCapture(input: FinalizeImageBuildInput): Promise<ImageBuildProviderImageRef> {
     // Reads the source's labels before anything destructive: ownership, and
     // the expiry that bounds how long the capture may be waited for.
-    const source = await this.provider.getBuildSandbox(
+    const source = await this.resources.getBuildSandbox(
       input.providerSessionId,
       input.buildId,
       input.signal
@@ -165,7 +162,7 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
     }
 
     if (
-      (await this.provider.stopBuildSandboxForCapture(input.providerSessionId, input.signal)) !==
+      (await this.resources.stopBuildSandboxForCapture(input.providerSessionId, input.signal)) !==
       "stopped"
     ) {
       throw new ImageBuildFinalizationAttemptError(
@@ -196,7 +193,7 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
       );
     }
 
-    await this.provider.captureBuildSnapshot(input.providerSessionId, operation.ref, input.signal);
+    await this.resources.captureBuildSnapshot(input.providerSessionId, operation.ref, input.signal);
     return await this.awaitCapturedSnapshot(input, operation);
   }
 
@@ -219,7 +216,7 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
   ): Promise<ImageBuildProviderImageRef> {
     const attemptDeadline = Date.now() + CAPTURE_OBSERVATION_MS;
     for (;;) {
-      const snapshot = await this.provider.getBuildSnapshot(operation.ref, input.signal);
+      const snapshot = await this.resources.getBuildSnapshot(operation.ref, input.signal);
       if (snapshot && !ownsCapture(snapshot.sourceSandboxId, input.providerSessionId)) {
         throw new Error("Daytona snapshot under this build's reserved name has another source");
       }

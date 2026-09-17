@@ -47,7 +47,7 @@ describe("createSandboxProviderFromEnv", () => {
     );
   });
 
-  it("needs a base snapshot to create Daytona sandboxes, but not to reclaim them", () => {
+  it("needs a base snapshot to create Daytona sandboxes", () => {
     const env = createEnv({
       DAYTONA_API_URL: "https://daytona.test",
       DAYTONA_API_KEY: "daytona-key",
@@ -56,21 +56,13 @@ describe("createSandboxProviderFromEnv", () => {
     expect(() => createSandboxProviderFromEnv(env, "daytona")).toThrow(
       "DAYTONA_BASE_SNAPSHOT is required to create Daytona sandboxes"
     );
-    // A deployment that switched providers keeps credentials but stops
-    // building a base image; finalization and cleanup must still construct.
-    expect(
-      createSandboxProviderFromEnv(env, "daytona", { requireBaseSnapshot: false })
-    ).toBeDefined();
   });
 
-  it("still requires Daytona credentials for every operation", () => {
+  it("still requires Daytona credentials", () => {
     expect(() =>
       createSandboxProviderFromEnv(
         createEnv({ DAYTONA_API_URL: "https://daytona.test" }),
-        "daytona",
-        {
-          requireBaseSnapshot: false,
-        }
+        "daytona"
       )
     ).toThrow("DAYTONA_API_URL and DAYTONA_API_KEY are required");
   });

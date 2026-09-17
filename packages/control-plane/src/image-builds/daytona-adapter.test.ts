@@ -4,7 +4,7 @@ import type {
   DaytonaSnapshotResponse,
 } from "../sandbox/daytona-rest-client";
 import type { ImageBuildProviderTriggerConfig } from "../sandbox/provider";
-import type { DaytonaSandboxProvider } from "../sandbox/providers/daytona-provider";
+import type { DaytonaImageBuildResources } from "./daytona-build-resources";
 import { DaytonaImageBuildAdapter } from "./daytona-adapter";
 import { ImageBuildFinalizationAttemptError } from "./finalization-error";
 import type { ImageBuildPlan, FinalizeImageBuildInput } from "./types";
@@ -13,7 +13,7 @@ const BUILD_ID = "imgb-acme-web-1757000000000-ab12";
 const SOURCE_ID = "sandbox-abc123";
 const correlation = { request_id: "request-1", trace_id: "trace-1" };
 
-function baseProvider() {
+function baseResources() {
   return {
     triggerImageBuild: vi.fn(async (_config: ImageBuildProviderTriggerConfig) => undefined),
     getBuildSandbox: vi.fn(
@@ -39,14 +39,14 @@ function baseProvider() {
   };
 }
 
-type ProviderMock = ReturnType<typeof baseProvider>;
+type ResourcesMock = ReturnType<typeof baseResources>;
 
-function createProvider(overrides: Partial<ProviderMock> = {}): ProviderMock {
-  return { ...baseProvider(), ...overrides };
+function createResources(overrides: Partial<ResourcesMock> = {}): ResourcesMock {
+  return { ...baseResources(), ...overrides };
 }
 
-function createAdapter(provider: ProviderMock) {
-  return new DaytonaImageBuildAdapter(provider as unknown as DaytonaSandboxProvider);
+function createAdapter(resources: ResourcesMock) {
+  return new DaytonaImageBuildAdapter(resources as unknown as DaytonaImageBuildResources);
 }
 
 function plan(overrides: Partial<ImageBuildPlan> = {}): ImageBuildPlan {
@@ -78,12 +78,12 @@ function finalizeInput(overrides: Partial<FinalizeImageBuildInput> = {}): Finali
 
 describe("DaytonaImageBuildAdapter start", () => {
   it("passes the resolved plan through, with the clone token only when one was brokered", async () => {
-    const provider = createProvider();
+    const resources = createResources();
     const bindProviderSession = vi.fn(async () => undefined);
 
-    await createAdapter(provider).startBuild(plan(), { bindProviderSession });
+    await createAdapter(resources).startBuild(plan(), { bindProviderSession });
 
-    expect(provider.triggerImageBuild).toHaveBeenCalledWith(
+    expect(resources.triggerImageBuild).toHaveBeenCalledWith(
       expect.objectContaining({
         buildId: BUILD_ID,
         scopeKind: "repo",
@@ -97,18 +97,18 @@ describe("DaytonaImageBuildAdapter start", () => {
       })
     );
 
-    await createAdapter(provider).startBuild(plan({ cloneAuth: { type: "unavailable" } }), {
+    await createAdapter(resources).startBuild(plan({ cloneAuth: { type: "unavailable" } }), {
       bindProviderSession,
     });
-    expect(provider.triggerImageBuild.mock.calls[1][0]).toMatchObject({ cloneToken: undefined });
+    expect(resources.triggerImageBuild.mock.calls[1][0]).toMatchObject({ cloneToken: undefined });
   });
 });
 
 describe("DaytonaImageBuildAdapter capture", () => {
   it("reserves the capture's name before submitting it", async () => {
-    const provider = createProvider();
+    const resources = createResources();
     const order: string[] = [];
-    provider.captureBuildSnapshot.mockImplementation(async () => {
+    resources.captureBuildSnapshot.mockImplementation(async () => {
       order.push("capture");
     });
     const reserveOperation = vi.fn(async (_ref: string, _deadlineAt: number) => {
@@ -116,7 +116,7 @@ describe("DaytonaImageBuildAdapter capture", () => {
       return true;
     });
 
-    const image = await createAdapter(provider).finalizeSuccessfulBuild(
+    const image = await createAdapter(resources).finalizeSuccessfulBuild(
       finalizeInput({ reserveOperation })
     );
 
@@ -125,7 +125,7 @@ describe("DaytonaImageBuildAdapter capture", () => {
     // The reserved name is derived from the build id alone, so a later
     // delivery can reconcile it without any record of this call.
     expect(reserveOperation.mock.calls[0][0]).toMatch(/^oi-image-[0-9a-f]{24}$/);
-    expect(provider.captureBuildSnapshot).toHaveBeenCalledWith(
+    expect(resources.captureBuildSnapshot).toHaveBeenCalledWith(
       SOURCE_ID,
       reserveOperation.mock.calls[0][0],
       undefined
@@ -134,7 +134,7 @@ describe("DaytonaImageBuildAdapter capture", () => {
 
   it("bounds the capture by the source's own expiry", async () => {
     const expiresAt = Date.now() + 5 * 60_000;
-    const provider = createProvider({
+    const resources = createResources({
       getBuildSandbox: vi.fn(async () => ({
         id: SOURCE_ID,
         state: "stopped",
@@ -143,7 +143,7 @@ describe("DaytonaImageBuildAdapter capture", () => {
     });
     const reserveOperation = vi.fn(async (_ref: string, _deadlineAt: number) => true);
 
-    await createAdapter(provider).finalizeSuccessfulBuild(finalizeInput({ reserveOperation }));
+    await createAdapter(resources).finalizeSuccessfulBuild(finalizeInput({ reserveOperation }));
 
     // Headroom before the source disappears, so the operation is abandoned
     // while there is still time to clean up after it.
@@ -151,7 +151,7 @@ describe("DaytonaImageBuildAdapter capture", () => {
   });
 
   it("reserves nothing for a source with no lifetime left to capture from", async () => {
-    const provider = createProvider({
+    const resources = createResources({
       getBuildSandbox: vi.fn(async () => ({
         id: SOURCE_ID,
         state: "stopped",
@@ -164,43 +164,43 @@ describe("DaytonaImageBuildAdapter capture", () => {
     // ask for a capture and give up on it in the same pass, leaving an
     // obligation nothing can settle until the source's lifetime is up.
     await expect(
-      createAdapter(provider).finalizeSuccessfulBuild(finalizeInput({ reserveOperation }))
+      createAdapter(resources).finalizeSuccessfulBuild(finalizeInput({ reserveOperation }))
     ).rejects.toThrow(/expires before its capture/);
     expect(reserveOperation).not.toHaveBeenCalled();
-    expect(provider.captureBuildSnapshot).not.toHaveBeenCalled();
+    expect(resources.captureBuildSnapshot).not.toHaveBeenCalled();
   });
 
   it("waits for a source that has not finished stopping, capturing nothing", async () => {
-    const provider = createProvider({
+    const resources = createResources({
       stopBuildSandboxForCapture: vi.fn(async () => "stopping"),
     });
     const reserveOperation = vi.fn(async (_ref: string, _deadlineAt: number) => true);
 
     await expect(
-      createAdapter(provider).finalizeSuccessfulBuild(finalizeInput({ reserveOperation }))
+      createAdapter(resources).finalizeSuccessfulBuild(finalizeInput({ reserveOperation }))
     ).rejects.toMatchObject({ outcome: "pending" });
     expect(reserveOperation).not.toHaveBeenCalled();
-    expect(provider.captureBuildSnapshot).not.toHaveBeenCalled();
+    expect(resources.captureBuildSnapshot).not.toHaveBeenCalled();
   });
 
   it("submits nothing when another delivery holds the reservation", async () => {
-    const provider = createProvider();
+    const resources = createResources();
 
     await expect(
-      createAdapter(provider).finalizeSuccessfulBuild(
+      createAdapter(resources).finalizeSuccessfulBuild(
         finalizeInput({
           reserveOperation: vi.fn(async (_ref: string, _deadlineAt: number) => false),
         })
       )
     ).rejects.toMatchObject({ outcome: "pending" });
-    expect(provider.captureBuildSnapshot).not.toHaveBeenCalled();
+    expect(resources.captureBuildSnapshot).not.toHaveBeenCalled();
   });
 
   it("only reconciles a recorded operation, never stopping or capturing again", async () => {
-    const provider = createProvider();
+    const resources = createResources();
     const reserveOperation = vi.fn(async (_ref: string, _deadlineAt: number) => true);
 
-    const image = await createAdapter(provider).finalizeSuccessfulBuild(
+    const image = await createAdapter(resources).finalizeSuccessfulBuild(
       finalizeInput({
         operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 60_000 },
         reserveOperation,
@@ -208,17 +208,17 @@ describe("DaytonaImageBuildAdapter capture", () => {
     );
 
     expect(image.providerImageId).toBe("snapshot-1");
-    expect(provider.stopBuildSandboxForCapture).not.toHaveBeenCalled();
-    expect(provider.captureBuildSnapshot).not.toHaveBeenCalled();
+    expect(resources.stopBuildSandboxForCapture).not.toHaveBeenCalled();
+    expect(resources.captureBuildSnapshot).not.toHaveBeenCalled();
     expect(reserveOperation).not.toHaveBeenCalled();
-    expect(provider.getBuildSnapshot).toHaveBeenCalledWith("oi-image-abc", undefined);
+    expect(resources.getBuildSnapshot).toHaveBeenCalledWith("oi-image-abc", undefined);
   });
 
   // Both completed states settle the build. An inactive snapshot is cold
   // storage the spawn path activates under its own budget, so finalization
   // records it rather than polling it to the operation's deadline.
   it.each(["active", "inactive"])("completes a build whose capture is %s", async (state) => {
-    const provider = createProvider({
+    const resources = createResources({
       getBuildSnapshot: vi.fn(async () => ({
         id: "snapshot-1",
         name: "oi-image-abc",
@@ -228,16 +228,16 @@ describe("DaytonaImageBuildAdapter capture", () => {
     });
 
     await expect(
-      createAdapter(provider).finalizeSuccessfulBuild(
+      createAdapter(resources).finalizeSuccessfulBuild(
         finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
       )
     ).resolves.toEqual({ providerImageId: "snapshot-1", providerSessionId: SOURCE_ID });
     // Activation belongs to the consumer, which has its own budget for it.
-    expect(provider.getBuildSnapshot).toHaveBeenCalledTimes(1);
+    expect(resources.getBuildSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("refuses an inactive snapshot under its reserved name from another source", async () => {
-    const provider = createProvider({
+    const resources = createResources({
       getBuildSnapshot: vi.fn(async () => ({
         id: "snapshot-1",
         name: "oi-image-abc",
@@ -247,14 +247,14 @@ describe("DaytonaImageBuildAdapter capture", () => {
     });
 
     await expect(
-      createAdapter(provider).finalizeSuccessfulBuild(
+      createAdapter(resources).finalizeSuccessfulBuild(
         finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
       )
     ).rejects.toThrow(/another source/);
   });
 
   it("completes a first-delivery capture that settles inactive", async () => {
-    const provider = createProvider({
+    const resources = createResources({
       getBuildSnapshot: vi.fn(async () => ({
         id: "snapshot-1",
         name: "oi-image-abc",
@@ -263,17 +263,17 @@ describe("DaytonaImageBuildAdapter capture", () => {
       })),
     });
 
-    await expect(createAdapter(provider).finalizeSuccessfulBuild(finalizeInput())).resolves.toEqual(
-      { providerImageId: "snapshot-1", providerSessionId: SOURCE_ID }
-    );
-    expect(provider.captureBuildSnapshot).toHaveBeenCalledTimes(1);
+    await expect(
+      createAdapter(resources).finalizeSuccessfulBuild(finalizeInput())
+    ).resolves.toEqual({ providerImageId: "snapshot-1", providerSessionId: SOURCE_ID });
+    expect(resources.captureBuildSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("keeps polling a snapshot record that is not published yet", async () => {
     vi.useFakeTimers();
     try {
-      const provider = createProvider();
-      provider.getBuildSnapshot
+      const resources = createResources();
+      resources.getBuildSnapshot
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce({
           id: "snapshot-1",
@@ -288,7 +288,7 @@ describe("DaytonaImageBuildAdapter capture", () => {
           sourceSandboxId: SOURCE_ID,
         });
 
-      const finalizing = createAdapter(provider).finalizeSuccessfulBuild(
+      const finalizing = createAdapter(resources).finalizeSuccessfulBuild(
         finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
       );
       await vi.advanceTimersByTimeAsync(10_000);
@@ -302,9 +302,9 @@ describe("DaytonaImageBuildAdapter capture", () => {
   it("reports a still-unpublished capture as pending when the attempt runs out", async () => {
     vi.useFakeTimers();
     try {
-      const provider = createProvider({ getBuildSnapshot: vi.fn(async () => null) });
+      const resources = createResources({ getBuildSnapshot: vi.fn(async () => null) });
 
-      const finalizing = createAdapter(provider).finalizeSuccessfulBuild(
+      const finalizing = createAdapter(resources).finalizeSuccessfulBuild(
         finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
       );
       const outcome = finalizing.catch((error: unknown) => error);
@@ -320,10 +320,10 @@ describe("DaytonaImageBuildAdapter capture", () => {
   });
 
   it("gives up once the operation's own deadline has passed", async () => {
-    const provider = createProvider({ getBuildSnapshot: vi.fn(async () => null) });
+    const resources = createResources({ getBuildSnapshot: vi.fn(async () => null) });
 
     await expect(
-      createAdapter(provider).finalizeSuccessfulBuild(
+      createAdapter(resources).finalizeSuccessfulBuild(
         finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() - 1 } })
       )
     ).rejects.toMatchObject({
@@ -335,7 +335,7 @@ describe("DaytonaImageBuildAdapter capture", () => {
   it.each(["error", "build_failed", "removing"])(
     "fails a capture that ended as %s rather than waiting it out",
     async (state) => {
-      const provider = createProvider({
+      const resources = createResources({
         getBuildSnapshot: vi.fn(async () => ({
           id: "snapshot-1",
           name: "oi-image-abc",
@@ -344,7 +344,7 @@ describe("DaytonaImageBuildAdapter capture", () => {
         })),
       });
 
-      const error = await createAdapter(provider)
+      const error = await createAdapter(resources)
         .finalizeSuccessfulBuild(
           finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
         )
@@ -356,7 +356,7 @@ describe("DaytonaImageBuildAdapter capture", () => {
   );
 
   it("refuses a snapshot under its reserved name that another sandbox produced", async () => {
-    const provider = createProvider({
+    const resources = createResources({
       getBuildSnapshot: vi.fn(async () => ({
         id: "snapshot-1",
         name: "oi-image-abc",
@@ -366,26 +366,26 @@ describe("DaytonaImageBuildAdapter capture", () => {
     });
 
     await expect(
-      createAdapter(provider).finalizeSuccessfulBuild(
+      createAdapter(resources).finalizeSuccessfulBuild(
         finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
       )
     ).rejects.toThrow(/another source/);
   });
 
   it("fails a build whose source is already gone", async () => {
-    const provider = createProvider({ getBuildSandbox: vi.fn(async () => null) });
+    const resources = createResources({ getBuildSandbox: vi.fn(async () => null) });
 
-    await expect(createAdapter(provider).finalizeSuccessfulBuild(finalizeInput())).rejects.toThrow(
+    await expect(createAdapter(resources).finalizeSuccessfulBuild(finalizeInput())).rejects.toThrow(
       /no longer exists/
     );
-    expect(provider.stopBuildSandboxForCapture).not.toHaveBeenCalled();
+    expect(resources.stopBuildSandboxForCapture).not.toHaveBeenCalled();
   });
 });
 
 describe("DaytonaImageBuildAdapter cleanup", () => {
   it("deletes the exact source of the build it is tearing down", async () => {
-    const provider = createProvider();
-    const adapter = createAdapter(provider);
+    const resources = createResources();
+    const adapter = createAdapter(resources);
     const signal = new AbortController().signal;
 
     await adapter.cleanupCompletedBuild({
@@ -402,31 +402,31 @@ describe("DaytonaImageBuildAdapter cleanup", () => {
       signal,
     });
 
-    expect(provider.deleteBuildSandbox).toHaveBeenNthCalledWith(1, SOURCE_ID, BUILD_ID, signal);
-    expect(provider.deleteBuildSandbox).toHaveBeenNthCalledWith(2, SOURCE_ID, BUILD_ID, signal);
+    expect(resources.deleteBuildSandbox).toHaveBeenNthCalledWith(1, SOURCE_ID, BUILD_ID, signal);
+    expect(resources.deleteBuildSandbox).toHaveBeenNthCalledWith(2, SOURCE_ID, BUILD_ID, signal);
   });
 
   it("deletes a captured snapshot by its artifact id", async () => {
-    const provider = createProvider();
+    const resources = createResources();
 
-    await createAdapter(provider).deleteImage({
+    await createAdapter(resources).deleteImage({
       image: { providerImageId: "snapshot-1", providerSessionId: SOURCE_ID },
       correlation,
     });
 
-    expect(provider.deleteProviderImage).toHaveBeenCalledWith("snapshot-1", undefined);
+    expect(resources.deleteProviderImage).toHaveBeenCalledWith("snapshot-1", undefined);
   });
 
   it("recovers a source by its reserved name", async () => {
-    const provider = createProvider({
+    const resources = createResources({
       findBuildSandboxByName: vi.fn(async () => ({ id: SOURCE_ID, state: "started" })),
     });
 
     await expect(
-      createAdapter(provider).recoverUnboundSource({ buildId: BUILD_ID, correlation })
+      createAdapter(resources).recoverUnboundSource({ buildId: BUILD_ID, correlation })
     ).resolves.toEqual({ providerSessionId: SOURCE_ID });
 
-    const missing = createProvider();
+    const missing = createResources();
     await expect(
       createAdapter(missing).recoverUnboundSource({ buildId: BUILD_ID, correlation })
     ).resolves.toBeNull();
@@ -442,16 +442,16 @@ describe("DaytonaImageBuildAdapter orphan operations", () => {
   };
 
   it("settles an operation that produced nothing", async () => {
-    const provider = createProvider({ getBuildSnapshot: vi.fn(async () => null) });
+    const resources = createResources({ getBuildSnapshot: vi.fn(async () => null) });
 
-    await expect(createAdapter(provider).reconcileOrphanOperation(orphan)).resolves.toEqual({
+    await expect(createAdapter(resources).reconcileOrphanOperation(orphan)).resolves.toEqual({
       type: "absent",
     });
-    expect(provider.deleteProviderImage).not.toHaveBeenCalled();
+    expect(resources.deleteProviderImage).not.toHaveBeenCalled();
   });
 
   it("leaves a snapshot another sandbox produced alone", async () => {
-    const provider = createProvider({
+    const resources = createResources({
       getBuildSnapshot: vi.fn(async () => ({
         id: "snapshot-1",
         name: "oi-image-abc",
@@ -460,16 +460,16 @@ describe("DaytonaImageBuildAdapter orphan operations", () => {
       })),
     });
 
-    await expect(createAdapter(provider).reconcileOrphanOperation(orphan)).resolves.toEqual({
+    await expect(createAdapter(resources).reconcileOrphanOperation(orphan)).resolves.toEqual({
       type: "absent",
     });
-    expect(provider.deleteProviderImage).not.toHaveBeenCalled();
+    expect(resources.deleteProviderImage).not.toHaveBeenCalled();
   });
 
   it.each(["active", "inactive", "error", "build_failed"])(
     "reclaims a %s artifact the build no longer has a use for",
     async (state) => {
-      const provider = createProvider({
+      const resources = createResources({
         getBuildSnapshot: vi.fn(async () => ({
           id: "snapshot-1",
           name: "oi-image-abc",
@@ -478,17 +478,17 @@ describe("DaytonaImageBuildAdapter orphan operations", () => {
         })),
       });
 
-      await expect(createAdapter(provider).reconcileOrphanOperation(orphan)).resolves.toEqual({
+      await expect(createAdapter(resources).reconcileOrphanOperation(orphan)).resolves.toEqual({
         type: "deleted",
       });
-      expect(provider.deleteProviderImage).toHaveBeenCalledWith("snapshot-1", undefined);
+      expect(resources.deleteProviderImage).toHaveBeenCalledWith("snapshot-1", undefined);
     }
   );
 
   it.each(["removing", "building", "pulling"])(
     "keeps an obligation whose artifact is still %s",
     async (state) => {
-      const provider = createProvider({
+      const resources = createResources({
         getBuildSnapshot: vi.fn(async () => ({
           id: "snapshot-1",
           name: "oi-image-abc",
@@ -497,10 +497,10 @@ describe("DaytonaImageBuildAdapter orphan operations", () => {
         })),
       });
 
-      await expect(createAdapter(provider).reconcileOrphanOperation(orphan)).resolves.toEqual({
+      await expect(createAdapter(resources).reconcileOrphanOperation(orphan)).resolves.toEqual({
         type: "pending",
       });
-      expect(provider.deleteProviderImage).not.toHaveBeenCalled();
+      expect(resources.deleteProviderImage).not.toHaveBeenCalled();
     }
   );
 });

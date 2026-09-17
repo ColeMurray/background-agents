@@ -1,5 +1,5 @@
 import { createModalClient } from "./client";
-import { createDaytonaRestClient } from "./daytona-rest-client";
+import { createDaytonaRestClient, type DaytonaRestClient } from "./daytona-rest-client";
 import { createE2BRestClient } from "./e2b-rest-client";
 import { createOpenComputerRestClient } from "./opencomputer-rest-client";
 import { resolveSandboxBackendName, type SandboxBackendName } from "./provider-name";
@@ -95,23 +95,28 @@ function createOpenComputerProviderFromEnv(
   });
 }
 
-function createDaytonaProviderFromEnv(
+/**
+ * The Daytona transport for one operation, shared by the session provider and
+ * the image-build resources.
+ *
+ * Only creating a sandbox needs a base image. Finalizing and reclaiming what
+ * an earlier configuration created must stay possible after a provider
+ * switch, when no Daytona base snapshot is built any more.
+ */
+export function createDaytonaRestClientFromEnv(
   env: Env,
   options: { requireBaseSnapshot: boolean }
-): DaytonaSandboxProvider {
+): DaytonaRestClient {
   if (!env.DAYTONA_API_URL || !env.DAYTONA_API_KEY) {
     throw new Error(
       "DAYTONA_API_URL and DAYTONA_API_KEY are required when SANDBOX_PROVIDER=daytona"
     );
   }
-  // Only creating a sandbox needs a base image. Finalizing and reclaiming what
-  // an earlier configuration created must stay possible after a provider
-  // switch, when no Daytona base snapshot is built any more.
   if (options.requireBaseSnapshot && !env.DAYTONA_BASE_SNAPSHOT) {
     throw new Error("DAYTONA_BASE_SNAPSHOT is required to create Daytona sandboxes");
   }
 
-  const client = createDaytonaRestClient({
+  return createDaytonaRestClient({
     apiUrl: env.DAYTONA_API_URL,
     apiKey: env.DAYTONA_API_KEY,
     target: env.DAYTONA_TARGET,
@@ -128,11 +133,15 @@ function createDaytonaProviderFromEnv(
       10080
     ),
   });
+}
+
+function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
+  const client = createDaytonaRestClientFromEnv(env, { requireBaseSnapshot: true });
 
   return createDaytonaProvider(client, {
     scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
     gitlabAccessToken: env.GITLAB_ACCESS_TOKEN,
-    sandboxAccessPasswordSecret: env.DAYTONA_API_KEY,
+    sandboxAccessPasswordSecret: client.config.apiKey,
   });
 }
 
@@ -159,11 +168,7 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
   });
 }
 
-export function createSandboxProviderFromEnv(
-  env: Env,
-  backend: "daytona",
-  options?: { requireBaseSnapshot?: boolean }
-): DaytonaSandboxProvider;
+export function createSandboxProviderFromEnv(env: Env, backend: "daytona"): DaytonaSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "e2b"): E2BSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "modal"): ModalSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "vercel"): VercelSandboxProvider;
@@ -184,9 +189,7 @@ export function createSandboxProviderFromEnv(
 ): SandboxProvider {
   switch (backend) {
     case "daytona":
-      return createDaytonaProviderFromEnv(env, {
-        requireBaseSnapshot: options.requireBaseSnapshot ?? true,
-      });
+      return createDaytonaProviderFromEnv(env);
     case "vercel":
       return createVercelProviderFromEnv(env);
     case "opencomputer":
@@ -207,7 +210,6 @@ export function createSandboxProviderFromEnv(
  */
 interface SandboxProviderFactoryOptions {
   requireOpenComputerTemplate?: boolean;
-  requireBaseSnapshot?: boolean;
 }
 
 function parseNumericEnv(name: string, value: string | undefined, defaultValue: number): number {
