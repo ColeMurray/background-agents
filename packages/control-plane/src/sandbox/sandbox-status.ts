@@ -35,7 +35,7 @@ export const DEFAULT_SANDBOX_STATUS: SandboxStatus = "pending";
  * `failed` is the only value that both refuses to reuse the sandbox and still
  * permits a clean spawn.
  */
-export function coerceSandboxStatus(raw: string | null | undefined, log: Logger): SandboxStatus {
+export function coerceSandboxStatus(raw: unknown, log: Logger): SandboxStatus {
   // Absent is the documented pre-spawn state, not corruption.
   if (raw == null || raw === "") return DEFAULT_SANDBOX_STATUS;
 

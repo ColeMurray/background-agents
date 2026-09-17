@@ -2,18 +2,17 @@
  * Session-specific type definitions.
  */
 
-import type { HarnessId } from "@open-inspect/shared/harnesses";
+import { harnessIdSchema } from "@open-inspect/shared/harnesses";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
-import type {
-  SessionStatus,
-  SandboxStatus,
-  MessageStatus,
-  MessageSource,
-  ParticipantRole,
-  SpawnSource,
+import {
+  messageSourceSchema,
+  sandboxStatusSchema,
+  sessionStatusSchema,
+  spawnSourceSchema,
+  type ParticipantRole,
 } from "@open-inspect/shared/types/sessions";
 import { artifactTypeSchema } from "@open-inspect/shared/types/artifacts";
-import type { EventType, GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
+import type { EventType } from "@open-inspect/shared/types/sandbox-events";
 import type { GitPushSpec } from "../source-control";
 import { z } from "zod";
 
@@ -34,36 +33,38 @@ export type PromptGitIdentity =
     }
   | { mode: "agent-only" };
 
-export interface SessionRow {
-  id: string;
-  session_name: string | null; // External session name for WebSocket routing
-  title: string | null;
-  repo_owner: string | null;
-  repo_name: string | null;
-  repo_id: number | null;
-  base_branch: string | null;
-  branch_name: string | null;
-  base_sha: string | null;
-  current_sha: string | null;
-  agent_session_id: string | null; // The agent's own conversation id
-  harness: HarnessId; // Agent harness the session runs on; fixed at create
-  model: string; // LLM model to use (e.g., "anthropic/claude-haiku-4-5")
-  reasoning_effort: string | null; // Reasoning effort level (e.g., "high", "max")
-  status: SessionStatus;
-  status_revision: number;
-  parent_session_id: string | null;
-  spawn_source: SpawnSource;
-  spawn_depth: number;
-  code_server_enabled: number; // 0 = disabled (default), 1 = enabled
-  vnc_enabled: number; // 0 = disabled (default), 1 = enabled
-  total_cost: number; // Running aggregate of step_finish event costs
-  sandbox_settings: string | null; // JSON blob of SandboxSettings
-  max_cost_usd: number | null; // Mutable effective session cost limit; NULL = unlimited
-  budget_exhausted: number; // 0 = promptable by budget, 1 = paused
-  environment_id: string | null; // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
-  created_at: number;
-  updated_at: number;
-}
+export const sessionRowSchema = z.object({
+  id: z.string(),
+  session_name: z.string().nullable(), // External session name for WebSocket routing
+  title: z.string().nullable(),
+  repo_owner: z.string().nullable(),
+  repo_name: z.string().nullable(),
+  repo_id: z.number().nullable(),
+  base_branch: z.string().nullable(),
+  branch_name: z.string().nullable(),
+  base_sha: z.string().nullable(),
+  current_sha: z.string().nullable(),
+  agent_session_id: z.string().nullable(), // The agent's own conversation id
+  harness: harnessIdSchema, // Agent harness the session runs on; fixed at create
+  model: z.string(), // LLM model to use (e.g., "anthropic/claude-haiku-4-5")
+  reasoning_effort: z.string().nullable(), // Reasoning effort level (e.g., "high", "max")
+  status: sessionStatusSchema,
+  status_revision: z.number(),
+  parent_session_id: z.string().nullable(),
+  spawn_source: spawnSourceSchema,
+  spawn_depth: z.number(),
+  code_server_enabled: z.number(), // 0 = disabled (default), 1 = enabled
+  vnc_enabled: z.number(), // 0 = disabled (default), 1 = enabled
+  total_cost: z.number(), // Running aggregate of step_finish event costs
+  sandbox_settings: z.string().nullable(), // JSON blob of SandboxSettings
+  max_cost_usd: z.number().nullable(), // Mutable effective session cost limit; NULL = unlimited
+  budget_exhausted: z.number(), // 0 = promptable by budget, 1 = paused
+  environment_id: z.string().nullable(), // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+
+export type SessionRow = z.infer<typeof sessionRowSchema>;
 
 export type RepositorySessionRow = SessionRow & {
   repo_owner: string;
@@ -73,16 +74,18 @@ export type RepositorySessionRow = SessionRow & {
 /**
  * One member repository row, in position order (position 0 = primary).
  */
-export interface SessionRepositoryRow {
-  position: number;
-  repo_owner: string;
-  repo_name: string;
-  repo_id: number | null;
-  base_branch: string;
-  branch_name: string | null;
-  base_sha: string | null;
-  current_sha: string | null;
-}
+export const sessionRepositoryRowSchema = z.object({
+  position: z.number(),
+  repo_owner: z.string(),
+  repo_name: z.string(),
+  repo_id: z.number().nullable(),
+  base_branch: z.string(),
+  branch_name: z.string().nullable(),
+  base_sha: z.string().nullable(),
+  current_sha: z.string().nullable(),
+});
+
+export type SessionRepositoryRow = z.infer<typeof sessionRepositoryRowSchema>;
 
 export function sessionHasRepository(session: SessionRow): session is RepositorySessionRow {
   return Boolean(session.repo_owner && session.repo_name);
@@ -110,27 +113,31 @@ export const participantRowSchema = z.object({
 
 export type ParticipantRow = z.infer<typeof participantRowSchema>;
 
-export interface MessageRow {
-  id: string;
-  author_id: string;
-  content: string;
-  source: MessageSource;
-  model: string | null; // LLM model for per-message override
-  reasoning_effort: string | null; // Reasoning effort for per-message override
-  attachments: string | null; // JSON
-  callback_context: string | null; // JSON: { channel, threadTs, repoFullName, model }
-  client_request_id: string | null;
-  request_fingerprint: string | null;
-  autofix_feedback_key: string | null;
-  autofix_pr_key: string | null;
-  origin_context: string | null;
-  status: MessageStatus;
-  error_message: string | null;
-  stop_confirmation_deadline: number | null;
-  created_at: number;
-  started_at: number | null;
-  completed_at: number | null;
-}
+const messageStatusSchema = z.enum(["pending", "processing", "completed", "failed"]);
+
+export const messageRowSchema = z.object({
+  id: z.string(),
+  author_id: z.string(),
+  content: z.string(),
+  source: messageSourceSchema,
+  model: z.string().nullable(), // LLM model for per-message override
+  reasoning_effort: z.string().nullable(), // Reasoning effort for per-message override
+  attachments: z.string().nullable(), // JSON
+  callback_context: z.string().nullable(), // JSON: { channel, threadTs, repoFullName, model }
+  client_request_id: z.string().nullable(),
+  request_fingerprint: z.string().nullable(),
+  autofix_feedback_key: z.string().nullable(),
+  autofix_pr_key: z.string().nullable(),
+  origin_context: z.string().nullable(),
+  status: messageStatusSchema,
+  error_message: z.string().nullable(),
+  stop_confirmation_deadline: z.number().nullable(),
+  created_at: z.number(),
+  started_at: z.number().nullable(),
+  completed_at: z.number().nullable(),
+});
+
+export type MessageRow = z.infer<typeof messageRowSchema>;
 
 export const sessionAttachmentRowSchema = z.object({
   id: z.string(),
@@ -165,36 +172,40 @@ export const artifactRowSchema = z.object({
 
 export type ArtifactRow = z.infer<typeof artifactRowSchema>;
 
-export interface SandboxRow {
-  id: string;
-  modal_sandbox_id: string | null; // Our generated sandbox ID
-  modal_object_id: string | null; // Legacy column: provider object ID (Modal object ID or Daytona handle)
-  snapshot_id: string | null;
-  snapshot_image_id: string | null; // Modal Image ID for filesystem snapshot restoration
-  snapshot_runtime_version: string | null; // SANDBOX_VERSION that produced snapshot_image_id
-  runtime_version: string | null; // SANDBOX_VERSION reported by the running sandbox
-  auth_token: string | null;
-  auth_token_hash: string | null; // SHA-256 hash of sandbox auth token
-  status: SandboxStatus;
-  git_sync_status: GitSyncStatus;
-  last_heartbeat: number | null;
-  last_activity: number | null; // Last activity timestamp for inactivity-based snapshot
-  last_spawn_error: string | null;
-  last_spawn_error_at: number | null;
-  code_server_url: string | null;
-  code_server_password: string | null;
-  vnc_url: string | null;
-  vnc_password: string | null;
-  tunnel_urls: string | null; // JSON mapping of port -> tunnel URL
-  ttyd_url: string | null;
-  ttyd_token: string | null;
+const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+
+export const sandboxRowSchema = z.object({
+  id: z.string(),
+  modal_sandbox_id: z.string().nullable(), // Our generated sandbox ID
+  modal_object_id: z.string().nullable(), // Legacy column: provider object ID (Modal object ID or Daytona handle)
+  snapshot_id: z.string().nullable(),
+  snapshot_image_id: z.string().nullable(), // Modal Image ID for filesystem snapshot restoration
+  snapshot_runtime_version: z.string().nullable(), // SANDBOX_VERSION that produced snapshot_image_id
+  runtime_version: z.string().nullable(), // SANDBOX_VERSION reported by the running sandbox
+  auth_token: z.string().nullable(),
+  auth_token_hash: z.string().nullable(), // SHA-256 hash of sandbox auth token
+  status: sandboxStatusSchema,
+  git_sync_status: gitSyncStatusSchema,
+  last_heartbeat: z.number().nullable(),
+  last_activity: z.number().nullable(), // Last activity timestamp for inactivity-based snapshot
+  last_spawn_error: z.string().nullable(),
+  last_spawn_error_at: z.number().nullable(),
+  code_server_url: z.string().nullable(),
+  code_server_password: z.string().nullable(),
+  vnc_url: z.string().nullable(),
+  vnc_password: z.string().nullable(),
+  tunnel_urls: z.string().nullable(), // JSON mapping of port -> tunnel URL
+  ttyd_url: z.string().nullable(),
+  ttyd_token: z.string().nullable(),
   /**
    * The `socket:<id>` tag of the bridge socket the session dispatches to;
    * `''` once revoked, NULL only on rows that predate persisted identities.
    */
-  active_socket_id: string | null;
-  created_at: number;
-}
+  active_socket_id: z.string().nullable(),
+  created_at: z.number(),
+});
+
+export type SandboxRow = z.infer<typeof sandboxRowSchema>;
 
 /**
  * The sandbox access artifacts that pair a URL with an encrypted secret:
