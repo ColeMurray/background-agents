@@ -38,14 +38,16 @@ vi.mock("../user-identity", () => ({
   resolveSlackActorIdentity: vi.fn(),
 }));
 
+const DEFAULT_SELECTED_VALUE = "acme/app";
+
 const repositoryTarget = {
   kind: "repository" as const,
   repo: {
-    id: "acme/app",
+    id: DEFAULT_SELECTED_VALUE,
     owner: "acme",
     name: "app",
-    fullName: "acme/app",
-    displayName: "acme/app",
+    fullName: DEFAULT_SELECTED_VALUE,
+    displayName: DEFAULT_SELECTED_VALUE,
     description: "",
     defaultBranch: "main",
     private: true,
@@ -60,7 +62,7 @@ function makeEnv(): Env {
   } as Env;
 }
 
-function selectionRequest(selectedValue = "acme/app") {
+function selectionRequest(selectedValue = DEFAULT_SELECTED_VALUE) {
   return {
     selectedValue,
     channel: "C123",
