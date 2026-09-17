@@ -1101,7 +1101,7 @@ Secrets for credentials:
 | `CLOUDFLARE_ACCOUNT_ID`            | Your Cloudflare account ID                                                                  |
 | `CLOUDFLARE_WORKER_SUBDOMAIN`      | Your workers.dev subdomain                                                                  |
 | `R2_MEDIA_LOCATION`                | R2 location hint for the media bucket (defaults to `ENAM`)                                  |
-| `R2_MEDIA_BUCKET_NAME`             | Optional media bucket name override for a pre-created bucket                                |
+| `R2_MEDIA_BUCKET_NAME`             | Optional name for the media bucket Terraform creates (import an existing bucket first)      |
 | `DEPLOYMENT_NAME`                  | Your deployment name                                                                        |
 | `R2_ACCESS_KEY_ID`                 | R2 access key ID                                                                            |
 | `R2_SECRET_ACCESS_KEY`             | R2 secret access key                                                                        |
