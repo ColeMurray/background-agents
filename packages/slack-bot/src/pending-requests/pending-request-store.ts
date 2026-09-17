@@ -18,6 +18,14 @@ const unattributedPromptSchema = z.object({
   forwardedMessages: z.array(z.string()),
 });
 
+const classificationSchema = z.object({
+  targetId: z.string().min(1).optional(),
+  confidence: z.enum(["high", "medium", "low"]),
+  source: z.enum(["routing_rule", "channel_association", "single_repository", "llm"]),
+  explicitNoRepositoryIntent: z.boolean(),
+  reportedExplicitNoRepositoryIntent: z.boolean(),
+});
+
 const pendingRequestSchema = z.object({
   message: z.string().min(1),
   userId: z.string().min(1),
@@ -29,6 +37,8 @@ const pendingRequestSchema = z.object({
   /** True when the original message had no user text, only images. */
   imageOnly: z.boolean().optional(),
   sourceMessage: sourceMessageSchema.optional(),
+  /** Classifier provenance retained until the user resolves clarification. */
+  classification: classificationSchema.optional(),
 });
 
 export type PendingRequest = z.infer<typeof pendingRequestSchema>;

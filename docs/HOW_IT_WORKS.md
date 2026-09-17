@@ -69,9 +69,11 @@ Slack sessions can target an environment three ways: a routing rule (Settings �
 Slack) launches it from a keyword; a channel association (`channelAssociations` on the environments
 API, like repository metadata) routes messages in that channel to it automatically; and the LLM
 classifier considers environments alongside repositories, using their names and descriptions as
-signals — its clarification picker lists both kinds when it has to ask. Linear sessions can target
-an environment through the team and project mappings (`{"environmentId": "env_…"}` entries alongside
-repository entries).
+signals. The classifier can also select no repository when the user explicitly asks for an empty
+sandbox; inferred repository-less work requires confirmation. Its clarification picker always
+includes **No repository** alongside accessible repositories and environments. Linear sessions can
+target an environment through the team and project mappings (`{"environmentId": "env_…"}` entries
+alongside repository entries).
 
 ### Session Lifecycle
 

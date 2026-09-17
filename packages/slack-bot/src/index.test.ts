@@ -532,7 +532,7 @@ describe("POST /events", () => {
         expect.objectContaining({
           channel: "C123",
           ts: "222.333",
-          text: "Working on *acme/app*...",
+          text: "Starting work...",
           blocks: expect.arrayContaining([
             expect.objectContaining({
               type: "actions",
@@ -632,7 +632,7 @@ describe("POST /events", () => {
 
     const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
     const clarification = postBodies.find((body) =>
-      String(body.text).includes("I couldn't determine which repository")
+      String(body.text).includes("I couldn't determine which target")
     );
 
     expect(clarification).toEqual(
@@ -665,6 +665,12 @@ describe("POST /events", () => {
         message: "frontend backend help",
         userId: "U123",
         unattributedPrompt: { forwardedMessages: [] },
+        classification: {
+          confidence: "medium",
+          source: "routing_rule",
+          explicitNoRepositoryIntent: false,
+          reportedExplicitNoRepositoryIntent: false,
+        },
       })
     );
 
@@ -1638,7 +1644,7 @@ describe("POST /interactions", () => {
       expect.objectContaining({
         channel: "C123",
         ts: "222.333",
-        text: "Working on *acme/app*...",
+        text: "Starting work...",
         blocks: expect.arrayContaining([
           expect.objectContaining({
             type: "actions",
@@ -2511,9 +2517,9 @@ describe("POST /interactions", () => {
     // Slack's per-response ceiling.
     expect(body.options).toHaveLength(100);
     expect(body.options[0]).toEqual({
-      text: { type: "plain_text", text: "repo-001" },
-      description: { type: "plain_text", text: "repo-001" },
-      value: "acme/repo-001",
+      text: { type: "plain_text", text: "No repository" },
+      description: { type: "plain_text", text: "Start without cloning a repository" },
+      value: "__no_repository__",
     });
   });
 
@@ -2548,6 +2554,11 @@ describe("POST /interactions", () => {
       options: Array<{ text: { type: string; text: string }; value: string }>;
     };
     expect(body.options).toEqual([
+      {
+        text: { type: "plain_text", text: "No repository" },
+        description: { type: "plain_text", text: "Start without cloning a repository" },
+        value: "__no_repository__",
+      },
       {
         text: { type: "plain_text", text: "repo-150" },
         description: { type: "plain_text", text: "repo-150" },

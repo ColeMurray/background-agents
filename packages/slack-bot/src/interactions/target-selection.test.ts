@@ -59,6 +59,16 @@ function makeEnv(): Env {
   } as Env;
 }
 
+function selectionRequest(selectedValue = "acme/app") {
+  return {
+    selectedValue,
+    channel: "C123",
+    messageTs: "111.222",
+    selectedBy: "U123",
+    selectionSource: "picker" as const,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(resolveTargetValue).mockResolvedValue(repositoryTarget);
@@ -92,7 +102,7 @@ describe("handleTargetSelection", () => {
     });
     const env = makeEnv();
 
-    await handleTargetSelection("acme/app", "C123", "111.222", undefined, env, "trace-1", vi.fn());
+    await handleTargetSelection(selectionRequest(), env, "trace-1", vi.fn());
 
     expect(getMessageDetails).toHaveBeenCalledWith("xoxb-test", "C123", "111.222", undefined);
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
@@ -126,20 +136,38 @@ describe("handleTargetSelection", () => {
       userId: "U123",
     });
 
-    await handleTargetSelection(
-      "acme/app",
-      "C123",
-      "111.222",
-      undefined,
-      makeEnv(),
-      "trace-1",
-      vi.fn()
-    );
+    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
 
     expect(getMessageDetails).not.toHaveBeenCalled();
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ messageText: "Fix the deploy", images: [] })
+    );
+  });
+
+  it("launches a selected no-repository target", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue({
+      message: "Research this topic",
+      userId: "U123",
+    });
+    vi.mocked(resolveTargetValue).mockResolvedValue({ kind: "none" });
+
+    await handleTargetSelection(
+      selectionRequest("__no_repository__"),
+      makeEnv(),
+      "trace-1",
+      vi.fn()
+    );
+
+    expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ target: { kind: "none" } })
+    );
+    expect(postMessage).toHaveBeenCalledWith(
+      "xoxb-test",
+      "C123",
+      "Starting work...",
+      expect.objectContaining({ thread_ts: "111.222" })
     );
   });
 
@@ -151,15 +179,7 @@ describe("handleTargetSelection", () => {
     });
     vi.mocked(getMessageDetails).mockResolvedValue({ ok: false, error: "ratelimited" });
 
-    await handleTargetSelection(
-      "acme/app",
-      "C123",
-      "111.222",
-      undefined,
-      makeEnv(),
-      "trace-1",
-      vi.fn()
-    );
+    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
 
     expect(getMessageDetails).toHaveBeenCalledWith("xoxb-test", "C123", "111.222", "100.000");
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
@@ -178,13 +198,36 @@ describe("handleTargetSelection", () => {
     vi.mocked(getMessageDetails).mockResolvedValue({ ok: false, error: "message_not_found" });
     const env = makeEnv();
 
-    await handleTargetSelection("acme/app", "C123", "111.222", undefined, env, "trace-1", vi.fn());
+    await handleTargetSelection(selectionRequest(), env, "trace-1", vi.fn());
 
     expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
     expect(vi.mocked(postMessage)).toHaveBeenCalledWith(
       "xoxb-test",
       "C123",
       expect.stringContaining("couldn't retrieve the attached image(s)"),
+      { thread_ts: "111.222" }
+    );
+  });
+
+  it("rejects a selection from someone other than the original requester", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue({
+      message: "Fix the deploy",
+      userId: "U123",
+    });
+
+    await handleTargetSelection(
+      { ...selectionRequest(), selectedBy: "U999" },
+      makeEnv(),
+      "trace-1",
+      vi.fn()
+    );
+
+    expect(resolveTargetValue).not.toHaveBeenCalled();
+    expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      "xoxb-test",
+      "C123",
+      "Only the person who made the original request can choose its target.",
       { thread_ts: "111.222" }
     );
   });

@@ -21,11 +21,29 @@ import {
   requireClassificationProviderKey,
   resolveClassificationProvider,
 } from "@open-inspect/shared/classification";
-import { targetId, targetLabel, targetValue, type SlackSessionTarget } from "../targets";
+import {
+  NO_REPOSITORY_TARGET_VALUE,
+  targetId,
+  targetLabel,
+  targetValue,
+  type SlackSessionTarget,
+} from "../targets";
 import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
 const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
+const EXPLICIT_NO_REPOSITORY_PATTERNS = [
+  /\b(?:use|choose|select)\s+no\s+(?:repos?|repositor(?:y|ies))\b/i,
+  /\b(?:start|run|work)(?:\s+\w+){0,5}\s+with\s+no\s+(?:repos?|repositor(?:y|ies))\b/i,
+  /\bno\s+(?:repos?|repositor(?:y|ies))\s+(?:is\s+)?(?:needed|required|necessary)\b/i,
+  /\b(?:start|run|work)(?:\s+\w+){0,5}\s+without\s+(?:a\s+|any\s+)?(?:repos?|repositor(?:y|ies))\b/i,
+  /\bwithout\s+(?:cloning|using|checking out)(?:\s+(?:a|any|the))?(?:\s+(?:repos?|repositor(?:y|ies)|code))?\b/i,
+  /\b(?:do not|don't|avoid)\s+(?:use|clon(?:e|ing)|check(?:ing)? out|checkout)(?:\s+(?:a|any|the))?(?:\s+(?:repos?|repositor(?:y|ies)|code|anything))?\b/i,
+  /\b(?:use|choose|select)\s+(?:an?\s+)?empty sandbox\b/i,
+  /\b(?:start|run|work)(?:\s+\w+){0,5}\s+(?:in|with)\s+(?:an?\s+)?empty sandbox\b/i,
+  /\b(?:use|choose|select)\s+(?:a\s+)?(?:repo|repository)[ -]?less\b/i,
+  /\b(?:start|run|work)(?:\s+\w+){0,5}\s+(?:repo|repository)[ -]?less\b/i,
+];
 const CONFIDENCE_LEVELS = [
   "high",
   "medium",
@@ -35,15 +53,14 @@ const CONFIDENCE_LEVELS = [
 const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
   name: CLASSIFY_TARGET_TOOL_NAME,
   description:
-    "Classify which repository or environment a Slack message refers to. " +
+    "Classify which repository, environment, or repository-less sandbox a Slack message needs. " +
     "Use targetId as null when uncertain.",
   input_schema: {
     type: "object",
     properties: {
       targetId: {
         type: ["string", "null"],
-        description:
-          'A repository "owner/name" or an environment id ("env_…") if confident enough to choose one, otherwise null.',
+        description: `A repository "owner/name", an environment id ("env_…"), or "${NO_REPOSITORY_TARGET_VALUE}". Use null when unclear.`,
       },
       confidence: {
         type: "string",
@@ -56,11 +73,15 @@ const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
       alternatives: {
         type: "array",
         items: { type: "string" },
+        description: `Other reasonable repository fullNames, environment ids, or "${NO_REPOSITORY_TARGET_VALUE}", especially whenever clarification may be required.`,
+      },
+      explicitNoRepositoryIntent: {
+        type: "boolean",
         description:
-          "Alternative repository fullNames / environment ids when confidence is not high.",
+          "True only when the user explicitly asks to use no repository, avoid cloning, or start with an empty sandbox.",
       },
     },
-    required: ["targetId", "confidence", "reasoning", "alternatives"],
+    required: ["targetId", "confidence", "reasoning", "alternatives", "explicitNoRepositoryIntent"],
     additionalProperties: false,
   },
 };
@@ -104,11 +125,17 @@ ${context.previousMessages.map((m) => `- ${m}`).join("\n")}`
 }`;
   }
 
-  return `You are a target classifier for a coding agent. Your job is to determine which code repository or environment a Slack message is referring to.
+  return `You are a target classifier for a coding agent. Your job is to determine which repository, environment, or repository-less sandbox a Slack message needs.
 
 ## Available Repositories
 ${repoDescriptions}
 ${environmentSection}
+
+## No Repository Target
+
+Use targetId "${NO_REPOSITORY_TARGET_VALUE}" when the task should run in an empty sandbox without cloning a repository.
+Set explicitNoRepositoryIntent to true only when the user directly requests no repository, asks not to clone anything, or asks for an empty sandbox.
+For work that merely appears repository-independent, explicitNoRepositoryIntent must be false. Include likely repository targets as alternatives when applicable.
 ${contextSection}
 
 ## User's Message
@@ -116,7 +143,7 @@ ${message}
 
 ## Your Task
 
-Analyze the message and context to determine which repository or environment the user is referring to.
+Analyze the message and context to determine which target the user needs.
 
 Consider:
 1. Explicit mentions of repository or environment names or aliases
@@ -124,14 +151,16 @@ Consider:
 3. File paths or code patterns mentioned
 4. Channel associations (some channels are associated with specific repos)
 5. Context from previous messages in the thread
+6. Explicit requests to use no repository, avoid cloning, or start with an empty sandbox
 
 ## Response Format
 
 Respond with a JSON object with these fields:
-- targetId: a repository "owner/name", an environment id ("env_…"), or null if unclear
+- targetId: a repository "owner/name", an environment id ("env_…"), "${NO_REPOSITORY_TARGET_VALUE}", or null if unclear
 - confidence: "high" | "medium" | "low"
 - reasoning: brief explanation
-- alternatives: other possible targets when confidence is not high`;
+- alternatives: other reasonable targets, especially whenever clarification may be required
+- explicitNoRepositoryIntent: true only for a direct user request to work without a repository`;
 }
 
 const llmResponseSchema = z.object({
@@ -154,9 +183,15 @@ const llmResponseSchema = z.object({
         .pipe(z.string().min(1))
     )
     .transform((values) => [...new Set(values)]),
+  explicitNoRepositoryIntent: z.boolean(),
 });
 
 type LLMResponse = z.infer<typeof llmResponseSchema>;
+
+function mayExplicitlyRequestNoRepository(message: string, context?: ThreadContext): boolean {
+  const text = [message, ...(context?.previousMessages ?? [])].join("\n");
+  return EXPLICIT_NO_REPOSITORY_PATTERNS.some((pattern) => pattern.test(text));
+}
 
 function normalizeModelResponse(raw: unknown): LLMResponse {
   const parsed = llmResponseSchema.safeParse(raw);
@@ -274,6 +309,9 @@ export class RepoClassifier {
         // Reasoning renders as mrkdwn; keyword and label are both user text.
         reasoning: `Matched routing rule "${escapeMrkdwnText(keyword)}" → ${escapeMrkdwnText(targetLabel(target))}`,
         needsClarification: false,
+        source: "routing_rule",
+        explicitNoRepositoryIntent: false,
+        reportedExplicitNoRepositoryIntent: false,
       };
     }
 
@@ -283,6 +321,9 @@ export class RepoClassifier {
       reasoning: "Multiple routing rules matched; asking which one to use.",
       alternatives: resolved.map((t) => t.target),
       needsClarification: true,
+      source: "routing_rule",
+      explicitNoRepositoryIntent: false,
+      reportedExplicitNoRepositoryIntent: false,
     };
   }
 
@@ -317,6 +358,9 @@ export class RepoClassifier {
         // Reasoning renders as mrkdwn; the label is user text.
         reasoning: `Channel is associated with ${target.kind} ${escapeMrkdwnText(targetLabel(target))}`,
         needsClarification: false,
+        source: "channel_association",
+        explicitNoRepositoryIntent: false,
+        reportedExplicitNoRepositoryIntent: false,
       };
     }
 
@@ -327,6 +371,9 @@ export class RepoClassifier {
         reasoning: "This channel is associated with several targets; asking which one to use.",
         alternatives: targets,
         needsClarification: true,
+        source: "channel_association",
+        explicitNoRepositoryIntent: false,
+        reportedExplicitNoRepositoryIntent: false,
       };
     }
 
@@ -345,32 +392,17 @@ export class RepoClassifier {
     // to []: an environments-fetch problem degrades the catalog — and with it
     // classification — to repository-only.
     const catalog = await loadTargetCatalog(this.env, traceId);
-
-    // Only a fully empty catalog is unclassifiable — environments launch by id
-    // without consulting the repo list, so they stay reachable when the repo
-    // fetch degrades to [].
-    if (catalog.repos.length === 0 && catalog.environments.length === 0) {
-      return {
-        target: null,
-        confidence: "low",
-        reasoning: "No repositories or environments are currently available.",
-        needsClarification: true,
-      };
-    }
+    const explicitNoRepositoryLanguage = mayExplicitlyRequestNoRepository(message, context);
 
     // Deterministic routing rules (explicit keyword → repo or environment) take
-    // precedence over everything below — including the single-repo shortcut,
-    // which would otherwise make environment-targeted rules unreachable in
-    // one-repo workspaces — but never override an active thread (handled before
-    // classify is called).
+    // precedence over everything below, but never override an active thread
+    // (handled before classify is called).
     const routed = await this.classifyByRoutingRules(message, catalog, traceId);
     if (routed) {
       return routed;
     }
 
-    // Channel associations are the second deterministic stage. Like routing
-    // rules, they run before the single-repo shortcut so a channel associated
-    // with an environment stays reachable in one-repo workspaces.
+    // Channel associations are the second deterministic stage.
     const channelRouted = context?.channelId
       ? this.classifyByChannelAssociations(context.channelId, catalog, traceId)
       : null;
@@ -378,13 +410,22 @@ export class RepoClassifier {
       return channelRouted;
     }
 
-    // With a single repository and no environments there is nothing to choose.
-    if (catalog.repos.length === 1 && catalog.environments.length === 0) {
+    // Preserve the zero-cost single-repository path unless the message or its
+    // thread context may explicitly ask for an empty sandbox. The model makes
+    // the final intent decision when that narrow exception applies.
+    if (
+      catalog.repos.length === 1 &&
+      catalog.environments.length === 0 &&
+      !explicitNoRepositoryLanguage
+    ) {
       return {
         target: { kind: "repository", repo: catalog.repos[0] },
         confidence: "high",
         reasoning: "Only one repository is available.",
         needsClarification: false,
+        source: "single_repository",
+        explicitNoRepositoryIntent: false,
+        reportedExplicitNoRepositoryIntent: false,
       };
     }
 
@@ -426,6 +467,17 @@ export class RepoClassifier {
         }
       }
 
+      const reportedExplicitNoRepositoryIntent = llmResult.explicitNoRepositoryIntent;
+      const explicitNoRepositoryIntent =
+        matchedTarget?.kind === "none" &&
+        reportedExplicitNoRepositoryIntent &&
+        explicitNoRepositoryLanguage;
+      const inconsistentNoRepositoryIntent =
+        reportedExplicitNoRepositoryIntent && matchedTarget?.kind !== "none";
+      const noRepositoryNeedsClarification =
+        matchedTarget?.kind === "none" &&
+        (llmResult.confidence !== "high" || !explicitNoRepositoryIntent);
+
       return {
         target: matchedTarget,
         confidence: llmResult.confidence,
@@ -436,7 +488,12 @@ export class RepoClassifier {
         needsClarification:
           !matchedTarget ||
           llmResult.confidence === "low" ||
+          inconsistentNoRepositoryIntent ||
+          noRepositoryNeedsClarification ||
           (llmResult.confidence === "medium" && alternatives.length > 0),
+        source: "llm",
+        explicitNoRepositoryIntent,
+        reportedExplicitNoRepositoryIntent,
       };
     } catch (e) {
       log.error("classifier.classify", {
@@ -456,6 +513,9 @@ export class RepoClassifier {
         // the picker lets the user search the full list.
         alternatives: undefined,
         needsClarification: true,
+        source: "llm",
+        explicitNoRepositoryIntent: false,
+        reportedExplicitNoRepositoryIntent: false,
       };
     }
   }

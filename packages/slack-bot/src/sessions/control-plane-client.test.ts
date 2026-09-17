@@ -38,6 +38,8 @@ const environmentTarget = {
   } satisfies Environment,
 };
 
+const noRepositoryTarget = { kind: "none" as const };
+
 function okJson(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
@@ -169,6 +171,24 @@ describe("control plane client request payloads", () => {
 
     expect(parseRequestBody(fetch)).toEqual({
       environmentId: "env-1",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+  });
+
+  it("creates no-repository sessions with explicit null repository fields", async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      okJson({ sessionId: "session-1", status: "created" })
+    );
+
+    await createSession(makeEnv(fetch), {
+      target: noRepositoryTarget,
+      model: "anthropic/claude-sonnet-4-6",
+      branch: "ignored-without-a-repository",
+    });
+
+    expect(parseRequestBody(fetch)).toEqual({
+      repoOwner: null,
+      repoName: null,
       model: "anthropic/claude-sonnet-4-6",
     });
   });

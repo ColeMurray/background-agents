@@ -93,6 +93,20 @@ describe("thread session store", () => {
     });
   });
 
+  it("builds no-repository session metadata", () => {
+    vi.spyOn(Date, "now").mockReturnValue(456);
+
+    expect(buildThreadSession("session-1", { kind: "none" }, "openai/gpt-5.4")).toEqual({
+      sessionId: "session-1",
+      repoId: "__no_repository__",
+      repoFullName: "No repository",
+      model: "openai/gpt-5.4",
+      reasoningEffort: undefined,
+      createdAt: 456,
+      lastPromptTs: undefined,
+    });
+  });
+
   it("treats invalid values and KV failures as cache misses", async () => {
     mocks.get.mockResolvedValueOnce("invalid").mockRejectedValueOnce(new Error("KV unavailable"));
 

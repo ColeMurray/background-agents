@@ -124,6 +124,7 @@ describe("RepoClassifier", () => {
             confidence: "high",
             reasoning: "The message explicitly mentions prod.",
             alternatives: [],
+            explicitNoRepositoryIntent: false,
           },
         },
       ],
@@ -162,6 +163,7 @@ describe("RepoClassifier", () => {
             confidence: "certain",
             reasoning: "Totally sure",
             alternatives: [],
+            explicitNoRepositoryIntent: false,
           },
         },
       ],
@@ -209,6 +211,7 @@ describe("RepoClassifier", () => {
             confidence: "medium",
             reasoning: "The request could refer to either repo.",
             alternatives: ["acme/prod", "acme/web"],
+            explicitNoRepositoryIntent: false,
           },
         },
       ],
@@ -308,6 +311,7 @@ describe("RepoClassifier", () => {
               confidence: "high",
               reasoning: "Mentions frontend.",
               alternatives: [],
+              explicitNoRepositoryIntent: false,
             },
           },
         ],
@@ -333,6 +337,7 @@ describe("RepoClassifier", () => {
               confidence: "high",
               reasoning: "Mentions prod.",
               alternatives: [],
+              explicitNoRepositoryIntent: false,
             },
           },
         ],
@@ -451,6 +456,7 @@ describe("RepoClassifier", () => {
               confidence: "high",
               reasoning: "Mentions the web app.",
               alternatives: [],
+              explicitNoRepositoryIntent: false,
             },
           },
         ],
@@ -553,6 +559,7 @@ describe("RepoClassifier", () => {
               confidence: "high",
               reasoning: "Mentions the web app.",
               alternatives: [],
+              explicitNoRepositoryIntent: false,
             },
           },
         ],
@@ -569,7 +576,14 @@ describe("RepoClassifier", () => {
   describe("LLM environment candidates", () => {
     function llmResponse(input: Record<string, unknown>) {
       return {
-        content: [{ type: "tool_use", id: "toolu_llm", name: "classify_target", input }],
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_llm",
+            name: "classify_target",
+            input: { explicitNoRepositoryIntent: false, ...input },
+          },
+        ],
       };
     }
 
@@ -661,6 +675,147 @@ describe("RepoClassifier", () => {
       expect(mockMessagesCreate).not.toHaveBeenCalled();
     });
 
+    it("bypasses the single-repo shortcut for explicit no-repository wording", async () => {
+      mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "high",
+          reasoning: "The user explicitly requested an empty sandbox.",
+          alternatives: ["acme/prod"],
+          explicitNoRepositoryIntent: true,
+        })
+      );
+
+      const result = await new RepoClassifier(TEST_ENV).classify(
+        "Use no repository and research this topic"
+      );
+
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.explicitNoRepositoryIntent).toBe(true);
+      expect(result.needsClarification).toBe(false);
+      expect(mockMessagesCreate).toHaveBeenCalledOnce();
+    });
+
+    it("clarifies an inferred no-repository target even at high confidence", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "high",
+          reasoning: "This research appears independent of the codebase.",
+          alternatives: ["acme/web"],
+          explicitNoRepositoryIntent: false,
+        })
+      );
+
+      const result = await new RepoClassifier(TEST_ENV).classify("Research deployment patterns");
+
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.explicitNoRepositoryIntent).toBe(false);
+      expect(result.reportedExplicitNoRepositoryIntent).toBe(false);
+      expect(result.needsClarification).toBe(true);
+    });
+
+    it("does not trust model-reported explicit intent without explicit user language", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "high",
+          reasoning: "The model overstates the user's intent.",
+          alternatives: [],
+          explicitNoRepositoryIntent: true,
+        })
+      );
+
+      const result = await new RepoClassifier(TEST_ENV).classify("Research authentication options");
+
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.explicitNoRepositoryIntent).toBe(false);
+      expect(result.reportedExplicitNoRepositoryIntent).toBe(true);
+      expect(result.needsClarification).toBe(true);
+    });
+
+    it.each([
+      "Start without cloning a repository and research this",
+      "Please avoid cloning anything",
+      "Work without checking out code",
+      "Run in an empty sandbox",
+      "Work repository-less for this request",
+      "No repository is needed for this request",
+    ])("sends documented explicit wording through the model: %s", async (message) => {
+      mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "high",
+          reasoning: "The user explicitly requested no repository.",
+          alternatives: [],
+          explicitNoRepositoryIntent: true,
+        })
+      );
+
+      const result = await new RepoClassifier(TEST_ENV).classify(message);
+
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.needsClarification).toBe(false);
+      expect(mockMessagesCreate).toHaveBeenCalledOnce();
+    });
+
+    it("does not treat a mention of the no-repository feature as explicit intent", async () => {
+      mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+
+      const result = await new RepoClassifier(TEST_ENV).classify("Fix the no repository picker");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
+
+    it("does not treat a session behavior description as explicit intent", async () => {
+      mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+
+      const result = await new RepoClassifier(TEST_ENV).classify(
+        "Fix session creation with no repository"
+      );
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
+
+    it("clarifies explicit no-repository intent below high confidence", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "medium",
+          reasoning: "The wording may request an empty sandbox.",
+          alternatives: [],
+          explicitNoRepositoryIntent: true,
+        })
+      );
+
+      const result = await new RepoClassifier(TEST_ENV).classify("Use an empty sandbox maybe");
+
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.needsClarification).toBe(true);
+    });
+
+    it("clarifies inconsistent explicit intent attached to a repository target", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "The output is internally inconsistent.",
+          alternatives: [],
+          explicitNoRepositoryIntent: true,
+        })
+      );
+
+      const result = await new RepoClassifier(TEST_ENV).classify("Use no repository");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(result.explicitNoRepositoryIntent).toBe(false);
+      expect(result.needsClarification).toBe(true);
+    });
+
     it("resolves mixed alternatives, deduplicated and excluding the match", async () => {
       mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
       mockMessagesCreate.mockResolvedValue(
@@ -702,15 +857,24 @@ describe("RepoClassifier", () => {
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
     });
 
-    it("asks for clarification when neither repos nor environments exist", async () => {
+    it("can classify explicit no-repository intent with an empty catalog", async () => {
       mockGetAvailableRepos.mockResolvedValue([]);
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "high",
+          reasoning: "The user explicitly requested no repository.",
+          alternatives: [],
+          explicitNoRepositoryIntent: true,
+        })
+      );
 
       const classifier = new RepoClassifier(TEST_ENV);
-      const result = await classifier.classify("anything");
+      const result = await classifier.classify("Use no repository");
 
-      expect(result.target).toBeNull();
-      expect(result.reasoning).toBe("No repositories or environments are currently available.");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.needsClarification).toBe(false);
+      expect(mockMessagesCreate).toHaveBeenCalledOnce();
     });
 
     it("escapes the LLM reasoning for mrkdwn rendering", async () => {
@@ -760,6 +924,7 @@ describe("RepoClassifier", () => {
           confidence: "high",
           reasoning: "Mentions prod.",
           alternatives: [],
+          explicitNoRepositoryIntent: false,
         })
       );
       vi.stubGlobal("fetch", fetchMock);
@@ -797,6 +962,7 @@ describe("RepoClassifier", () => {
         "confidence",
         "reasoning",
         "alternatives",
+        "explicitNoRepositoryIntent",
       ]);
       expect(jsonSchema.schema.properties.targetId.type).toEqual(["string", "null"]);
     });

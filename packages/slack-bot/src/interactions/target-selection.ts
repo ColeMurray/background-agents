@@ -1,9 +1,4 @@
-import {
-  escapeMrkdwnText,
-  getMessageDetails,
-  postMessage,
-  updateMessage,
-} from "@open-inspect/shared/slack";
+import { getMessageDetails, postMessage, updateMessage } from "@open-inspect/shared/slack";
 import { toImageAttachments, type SlackImageAttachment } from "../attachments";
 import { collectForwardedMessages } from "../forwarded-messages";
 import { createLogger } from "../logger";
@@ -16,21 +11,28 @@ import { formatAttributedRequest } from "../messages/context";
 import { deletePendingRequest, getPendingRequest } from "../pending-requests/pending-request-store";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
-import { targetLabel } from "../targets";
+import { targetId } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
 
 const log = createLogger("target-selection");
 
+interface TargetSelectionRequest {
+  selectedValue: string;
+  channel: string;
+  messageTs: string;
+  threadTs?: string;
+  selectedBy: string;
+  selectionSource: "picker" | "quick_pick";
+}
+
 export async function handleTargetSelection(
-  selectedValue: string,
-  channel: string,
-  messageTs: string,
-  threadTs: string | undefined,
+  request: TargetSelectionRequest,
   env: Env,
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
+  const { selectedValue, channel, messageTs, threadTs, selectedBy, selectionSource } = request;
   const threadKey = threadTs || messageTs;
   const pendingData = await getPendingRequest(env, channel, threadKey);
   if (!pendingData) {
@@ -52,13 +54,23 @@ export async function handleTargetSelection(
     imageOnly,
     sourceMessage,
     unattributedPrompt,
+    classification,
   } = pendingData;
+  if (selectedBy !== userId) {
+    await postMessage(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      "Only the person who made the original request can choose its target.",
+      { thread_ts: threadKey }
+    );
+    return;
+  }
   const target = await resolveTargetValue(env, selectedValue, traceId);
   if (!target) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
-      "Sorry, that repository or environment is no longer available. Please try again.",
+      "Sorry, that target is no longer available. Please try again.",
       { thread_ts: threadKey }
     );
     return;
@@ -99,11 +111,25 @@ export async function handleTargetSelection(
     }
   }
 
-  const label = escapeMrkdwnText(targetLabel(target));
-  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
-  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, `Working on *${label}*...`, {
+  log.info("target.decision", {
+    trace_id: traceId,
+    channel,
     thread_ts: threadKey,
-    blocks: buildWorkingMessageBlocks(label),
+    decision_path: "clarified",
+    classification_source: classification?.source,
+    classifier_target_id: classification?.targetId,
+    classifier_confidence: classification?.confidence,
+    explicit_no_repository_intent: classification?.explicitNoRepositoryIntent,
+    reported_explicit_no_repository_intent: classification?.reportedExplicitNoRepositoryIntent,
+    selected_by: selectedBy,
+    selection_source: selectionSource,
+    target_kind: target.kind,
+    target_id: targetId(target),
+  });
+  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
+  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, "Starting work...", {
+    thread_ts: threadKey,
+    blocks: buildWorkingMessageBlocks(),
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
   const actor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, userId);
@@ -132,8 +158,8 @@ export async function handleTargetSelection(
 
   await deletePendingRequest(env, channel, threadKey);
   if (ackTs) {
-    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, `Working on *${label}*...`, {
-      blocks: buildWorkingMessageBlocks(label, {
+    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, "Starting work...", {
+      blocks: buildWorkingMessageBlocks({
         sessionId: sessionResult.sessionId,
         webAppUrl: env.WEB_APP_URL,
       }),
