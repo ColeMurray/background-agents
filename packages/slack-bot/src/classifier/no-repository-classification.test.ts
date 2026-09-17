@@ -61,6 +61,10 @@ const TEST_ENV = {
   ANTHROPIC_API_KEY: "test-api-key",
   CLASSIFICATION_MODEL: "claude-haiku-4-5",
 } as Env;
+const DEFAULT_LLM_RESPONSE_FIELDS = {
+  alternatives: [],
+  explicitNoRepositoryIntent: false,
+};
 
 function llmResponse(input: Record<string, unknown>) {
   return {
@@ -69,7 +73,7 @@ function llmResponse(input: Record<string, unknown>) {
         type: "tool_use",
         id: "toolu_no_repo",
         name: "classify_target",
-        input: { alternatives: [], explicitNoRepositoryIntent: false, ...input },
+        input: { ...DEFAULT_LLM_RESPONSE_FIELDS, ...input },
       },
     ],
   };
