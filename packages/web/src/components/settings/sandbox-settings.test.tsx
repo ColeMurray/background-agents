@@ -12,7 +12,14 @@ import {
   DEFAULT_VNC_PORT,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared/types/integrations";
-import { SandboxSettingsEditor, SandboxSettingsPage } from "./sandbox-settings";
+import {
+  parseSandboxGlobalSettingsResponse,
+  sandboxEnvironmentSettingsResponseSchema,
+  sandboxGlobalSettingsResponseSchema,
+  sandboxRepoSettingsResponseSchema,
+  SandboxSettingsEditor,
+  SandboxSettingsPage,
+} from "./sandbox-settings";
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
@@ -82,6 +89,57 @@ afterEach(() => {
   vi.restoreAllMocks();
   reposMock.repos = [];
   reposMock.loading = false;
+});
+
+describe("sandbox settings response schemas", () => {
+  it("parses valid global responses including nullable fields", () => {
+    const parsed = sandboxGlobalSettingsResponseSchema.safeParse({
+      integrationId: "sandbox",
+      settings: { defaults: { tunnelPorts: [3000] }, enabledRepos: null },
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success ? parsed.data.settings?.enabledRepos : undefined).toBeNull();
+    expect(
+      parseSandboxGlobalSettingsResponse({ integrationId: "sandbox", settings: null })
+    ).toEqual({
+      integrationId: "sandbox",
+      settings: null,
+    });
+  });
+
+  it("rejects malformed global responses", () => {
+    expect(
+      sandboxGlobalSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        settings: { defaults: { tunnelPorts: ["3000"] } },
+      }).success
+    ).toBe(false);
+    expect(parseSandboxGlobalSettingsResponse({ integrationId: "github", settings: null })).toBe(
+      undefined
+    );
+  });
+
+  it("parses valid scoped responses and rejects partial scoped responses", () => {
+    expect(
+      sandboxRepoSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        repo: "acme/app",
+        settings: null,
+      }).success
+    ).toBe(true);
+    expect(
+      sandboxEnvironmentSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        environmentId: "env_123",
+        settings: { sandboxTimeoutMs: 7_200_000 },
+      }).success
+    ).toBe(true);
+    expect(
+      sandboxRepoSettingsResponseSchema.safeParse({ integrationId: "sandbox", settings: null })
+        .success
+    ).toBe(false);
+  });
 });
 
 describe("SandboxSettingsPage — tunnel ports editor", () => {
