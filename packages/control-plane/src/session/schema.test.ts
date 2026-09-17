@@ -477,10 +477,15 @@ describe("applyMigrations", () => {
         expect.arrayContaining([
           "idx_messages_status",
           "idx_messages_author",
+          "idx_messages_created_at_id",
           "idx_messages_client_request_id",
           "idx_messages_one_processing",
         ])
       );
+      expect(db.prepare("PRAGMA index_info(idx_messages_created_at_id)").all()).toEqual([
+        expect.objectContaining({ name: "created_at" }),
+        expect.objectContaining({ name: "id" }),
+      ]);
       expectClientRequestIdIndex(db);
     } finally {
       db.close();

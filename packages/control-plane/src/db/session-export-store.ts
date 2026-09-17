@@ -1,5 +1,5 @@
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
-import type { CreatedAtCursor } from "../created-at-cursor";
+import type { SessionExportCursor } from "./session-export-cursor";
 import type { SqlDatabase } from "./sql-database";
 
 /**
@@ -39,6 +39,7 @@ interface SessionExportRowRaw {
   active_duration_ms: number;
   created_at: number;
   updated_at: number;
+  snapshot_max_row_id?: number;
 }
 
 function toExportRow(row: SessionExportRowRaw): SessionExportRow {
@@ -62,7 +63,7 @@ function toExportRow(row: SessionExportRowRaw): SessionExportRow {
 
 /** Filters and keyset pagination for an export page. */
 export interface ListSessionsForExportOptions {
-  cursor: CreatedAtCursor | null;
+  cursor: SessionExportCursor | null;
   /** Page size; the store reads one extra row to answer hasMore. */
   limit: number;
   /** Inclusive lower bound on created_at (epoch ms). */
@@ -73,12 +74,12 @@ export interface ListSessionsForExportOptions {
 
 export type ListSessionsForExportResult = { sessions: SessionExportRow[] } & (
   | { hasMore: false; nextCursor: null }
-  | { hasMore: true; nextCursor: CreatedAtCursor }
+  | { hasMore: true; nextCursor: SessionExportCursor }
 );
 
 /**
- * Reads the session index newest-first so sessions created during a paged
- * export remain ahead of its cursor rather than extending the export.
+ * Reads the session index newest-first behind an insertion fence so sessions
+ * created during a paged export cannot extend it.
  */
 export class SessionExportStore {
   constructor(private readonly db: SqlDatabase) {}
@@ -86,10 +87,15 @@ export class SessionExportStore {
   async list(options: ListSessionsForExportOptions): Promise<ListSessionsForExportResult> {
     const conditions: string[] = [];
     const bindings: (string | number)[] = [];
+    const firstPage = options.cursor === null;
 
     if (options.cursor) {
+      conditions.push("sessions.rowid <= ?");
+      bindings.push(options.cursor.snapshotMaxRowId);
       conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
       bindings.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
+    } else {
+      conditions.push("sessions.rowid <= export_fence.max_row_id");
     }
     if (options.createdAfter !== undefined) {
       conditions.push("created_at >= ?");
@@ -101,11 +107,16 @@ export class SessionExportStore {
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const snapshotColumn = firstPage ? ", export_fence.max_row_id AS snapshot_max_row_id" : "";
+    const snapshotJoin = firstPage
+      ? "CROSS JOIN (SELECT COALESCE(MAX(rowid), 0) AS max_row_id FROM sessions) export_fence"
+      : "";
     const result = await this.db
       .prepare(
         `SELECT id, title, status, spawn_source, repo_owner, repo_name, model, user_id,
-                automation_id, message_count, total_cost, active_duration_ms, created_at, updated_at
+                automation_id, message_count, total_cost, active_duration_ms, created_at, updated_at${snapshotColumn}
          FROM sessions
+         ${snapshotJoin}
          ${where}
          ORDER BY created_at DESC, id DESC
          LIMIT ?`
@@ -119,10 +130,12 @@ export class SessionExportStore {
     if (!hasMore) return { sessions, hasMore: false, nextCursor: null };
 
     const last = sessions[sessions.length - 1];
+    const snapshotMaxRowId = options.cursor?.snapshotMaxRowId ?? rows[0]?.snapshot_max_row_id;
+    if (snapshotMaxRowId === undefined) throw new Error("Session export page is missing its fence");
     return {
       sessions,
       hasMore: true,
-      nextCursor: { createdAt: last.createdAt, id: last.id },
+      nextCursor: { createdAt: last.createdAt, id: last.id, snapshotMaxRowId },
     };
   }
 }

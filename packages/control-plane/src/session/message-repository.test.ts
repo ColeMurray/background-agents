@@ -1,4 +1,6 @@
+import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { EventRepository } from "./event-repository";
 import { MessageRepository } from "./message-repository";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
@@ -7,6 +9,7 @@ import {
   SessionAttachmentRepository,
 } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import { initSchema } from "./schema";
 
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
@@ -574,6 +577,49 @@ describe("MessageRepository", () => {
     repository.listMessages({ limit: 10, cursor: { createdAt: 5000 } });
     expect(mock.calls[0].query).toContain("created_at < ?");
     expect(mock.calls[0].params).toEqual([5000, 11]);
+  });
+
+  it("paginates tied message timestamps without gaps against SQLite", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = createNodeSqlStorage(db).sql;
+    try {
+      initSchema(sql);
+      sql.exec(
+        "INSERT INTO participants (id, user_id, role, joined_at) VALUES ('author', 'user', 'owner', 1)"
+      );
+      for (const id of ["msg-a", "msg-b", "msg-c"]) {
+        sql.exec(
+          `INSERT INTO messages (id, author_id, content, source, status, created_at)
+           VALUES (?, 'author', ?, 'web', 'completed', 5000)`,
+          id,
+          id
+        );
+      }
+      const transaction = <T>(closure: () => T) => closure();
+      const realRepository = new MessageRepository(
+        sql,
+        transaction,
+        new SessionAttachmentRepository(sql),
+        new EventRepository(sql, transaction)
+      );
+
+      expect(
+        realRepository
+          .listMessages({ limit: 1, cursor: null, status: null })
+          .map((message) => message.id)
+      ).toEqual(["msg-c", "msg-b"]);
+      expect(
+        realRepository
+          .listMessages({
+            limit: 1,
+            cursor: { createdAt: 5000, id: "msg-c" },
+            status: null,
+          })
+          .map((message) => message.id)
+      ).toEqual(["msg-b", "msg-a"]);
+    } finally {
+      db.close();
+    }
   });
 
   it("selects the latest terminal message", () => {

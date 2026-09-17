@@ -106,7 +106,14 @@ export class MessagesHandler {
 
   listMessages(url: URL): Response {
     const cursorResult = parseMessageListCursor(url.searchParams.get("cursor"));
-    const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 100);
+    const rawLimit = url.searchParams.get("limit") ?? "50";
+    if (!/^[1-9]\d*$/.test(rawLimit)) {
+      return Response.json({ error: "Invalid limit" }, { status: 400 });
+    }
+    const limit = Number(rawLimit);
+    if (!Number.isSafeInteger(limit) || limit > 100) {
+      return Response.json({ error: "Invalid limit" }, { status: 400 });
+    }
     const status = url.searchParams.get("status");
 
     if (status && !messageStatusSchema.safeParse(status).success) {

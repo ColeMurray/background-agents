@@ -233,6 +233,7 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
 const INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_author ON messages(author_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created_at_id ON messages(created_at DESC, id DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id
 ON messages(client_request_id) WHERE client_request_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing

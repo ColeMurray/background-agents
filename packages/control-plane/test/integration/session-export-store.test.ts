@@ -23,9 +23,14 @@ describe("SessionExportStore integration", () => {
 
     const first = await store.list({ cursor: null, limit: 2 });
     expect(first.sessions.map(({ id }) => id)).toEqual(["session-newest", "session-c"]);
-    expect(first.nextCursor).toEqual({ createdAt: 200, id: "session-c" });
+    expect(first.nextCursor).toEqual({
+      createdAt: 200,
+      id: "session-c",
+      snapshotMaxRowId: expect.any(Number),
+    });
 
     await insertSession("session-created-during-export", 400);
+    await insertSession("session-bb-created-during-export", 200);
     const second = await store.list({ cursor: first.nextCursor, limit: 2 });
     expect(second.sessions.map(({ id }) => id)).toEqual(["session-b", "session-a"]);
     expect(second).toMatchObject({ hasMore: false, nextCursor: null });

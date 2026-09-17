@@ -9,7 +9,7 @@
 import type { SessionMessage } from "@open-inspect/shared/types/sessions";
 import { Hono } from "hono";
 import { z } from "zod";
-import { encodeCreatedAtCursor, parseCreatedAtCursor } from "../created-at-cursor";
+import { encodeSessionExportCursor, parseSessionExportCursor } from "../db/session-export-cursor";
 import { SessionExportStore, type SessionExportRow } from "../db/session-export-store";
 import { createLogger, type Logger } from "../logger";
 import { admit } from "../routing/admit";
@@ -44,7 +44,7 @@ const exportQuerySchema = z.object({
     .string()
     .optional()
     .transform((raw, context) => {
-      const parsed = parseCreatedAtCursor(raw);
+      const parsed = parseSessionExportCursor(raw);
       if (!parsed.ok) {
         context.addIssue({ code: "custom", message: parsed.error });
         return z.NEVER;
@@ -300,7 +300,7 @@ async function handleExport(
             encodeLine({
               schemaVersion: EXPORT_SCHEMA_VERSION,
               type: "cursor",
-              nextCursor: encodeCreatedAtCursor(page.nextCursor),
+              nextCursor: encodeSessionExportCursor(page.nextCursor),
             })
           );
           close(controller);

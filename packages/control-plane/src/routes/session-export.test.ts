@@ -181,19 +181,23 @@ describe("GET /sessions/export", () => {
     mocks.list.mockResolvedValue({
       sessions: [sampleRow],
       hasMore: true,
-      nextCursor: { createdAt: 1_000, id: "session-1" },
+      nextCursor: { createdAt: 1_000, id: "session-1", snapshotMaxRowId: 42 },
     });
 
     const response = await callExport();
     const lines = await readLines(response);
     expect(lines).toHaveLength(2);
-    expect(lines[1]).toEqual({ schemaVersion: 1, type: "cursor", nextCursor: "1000:session-1" });
+    expect(lines[1]).toEqual({
+      schemaVersion: 1,
+      type: "cursor",
+      nextCursor: "1000:session-1:42",
+    });
 
     // The emitted cursor round-trips into the next page's keyset filter.
     mocks.list.mockResolvedValue({ sessions: [], hasMore: false, nextCursor: null });
-    await callExport({ cursor: "1000:session-1" });
+    await callExport({ cursor: "1000:session-1:42" });
     expect(mocks.list).toHaveBeenLastCalledWith({
-      cursor: { createdAt: 1_000, id: "session-1" },
+      cursor: { createdAt: 1_000, id: "session-1", snapshotMaxRowId: 42 },
       limit: 100,
     });
   });

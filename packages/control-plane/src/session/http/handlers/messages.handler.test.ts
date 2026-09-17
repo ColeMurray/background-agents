@@ -234,6 +234,21 @@ describe("MessagesHandler", () => {
     expect(messageService.listMessages).not.toHaveBeenCalled();
   });
 
+  it.each(["0", "-1", "1.5", "10junk", "101"])(
+    "rejects invalid message limit %s",
+    async (limit) => {
+      const { handler, messageService } = createHandler();
+
+      const response = handler.listMessages(
+        new URL(`http://internal/internal/messages?limit=${limit}`)
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid limit" });
+      expect(messageService.listMessages).not.toHaveBeenCalled();
+    }
+  );
+
   it("parses composite event cursors before delegating to the service", async () => {
     const { handler, messageService } = createHandler();
     vi.mocked(messageService.listEvents).mockReturnValue({
