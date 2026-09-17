@@ -421,6 +421,7 @@ export class DaytonaRestClient {
     });
   }
 
+  /** The expiry rides in `expiresInSeconds`; under any other name the API signs its own default. */
   async getSignedPreviewUrl(
     id: string,
     port: number,
@@ -429,7 +430,7 @@ export class DaytonaRestClient {
   ): Promise<DaytonaSignedPreviewUrlResponse> {
     return this.requestJson(daytonaSignedPreviewUrlResponseSchema, {
       method: "GET",
-      path: `/sandbox/${encodeURIComponent(id)}/ports/${port}/signed-preview-url?expires_in_seconds=${expirySeconds}`,
+      path: `/sandbox/${encodeURIComponent(id)}/ports/${port}/signed-preview-url?expiresInSeconds=${expirySeconds}`,
       timeoutMs: TIMEOUT_PREVIEW_URL_MS,
       signal,
     });

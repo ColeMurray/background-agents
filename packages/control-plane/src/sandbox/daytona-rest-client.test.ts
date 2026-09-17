@@ -275,6 +275,8 @@ describe("DaytonaRestClient", () => {
   });
 
   describe("getSignedPreviewUrl", () => {
+    // The API reads the expiry from `expiresInSeconds`; sent under any other
+    // name it is dropped and the URL is signed with the API's own default.
     it("sends GET with port and expiry query param", async () => {
       const client = new DaytonaRestClient(defaultConfig);
       fetchSpy.mockResolvedValue(jsonResponse({ url: "https://preview.test/abc" }));
@@ -282,7 +284,7 @@ describe("DaytonaRestClient", () => {
       const result = await client.getSignedPreviewUrl("sb-1", 8080, 3900);
 
       expect(fetchSpy).toHaveBeenCalledWith(
-        "https://daytona.test/api/sandbox/sb-1/ports/8080/signed-preview-url?expires_in_seconds=3900",
+        "https://daytona.test/api/sandbox/sb-1/ports/8080/signed-preview-url?expiresInSeconds=3900",
         expect.objectContaining({ method: "GET" })
       );
       expect(result.url).toBe("https://preview.test/abc");
