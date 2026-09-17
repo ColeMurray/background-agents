@@ -103,7 +103,10 @@ export const DAYTONA_SANDBOX_STATES = [
 
 export type DaytonaSandboxState = (typeof DAYTONA_SANDBOX_STATES)[number];
 
-/** Snapshot states of the tested API version; `active` is the only usable one. */
+/**
+ * Snapshot states of the tested API version. `active` is the only state a
+ * create can use; `inactive` is cold storage an activation brings back.
+ */
 export const DAYTONA_SNAPSHOT_STATES = [
   "building",
   "pending",
@@ -216,6 +219,7 @@ export interface DaytonaCreateSandboxParams {
 /** One sandbox's toolbox endpoint: its proxy base URL and its own id. */
 export interface DaytonaToolboxTarget {
   sandboxId: string;
+  /** A base URL `resolveToolboxBaseUrl` returned, and only that. */
   baseUrl: string;
 }
 
@@ -491,21 +495,30 @@ export class DaytonaRestClient {
   /**
    * The toolbox base URL for one sandbox: the configured override, else the
    * sandbox's own `toolboxProxyUrl`, else the dedicated lookup.
+   *
+   * Every source is checked before it is returned, and this is the only place
+   * a toolbox target's base URL comes from: the API key rides in the
+   * Authorization header of every toolbox request, so a base URL that would
+   * carry it in cleartext is refused before the first one is issued.
    */
   async resolveToolboxBaseUrl(
     sandboxId: string,
     options?: { sandbox?: DaytonaSandboxResponse; signal?: AbortSignal }
   ): Promise<string> {
-    if (this.toolboxBaseUrl) return this.toolboxBaseUrl;
+    if (this.toolboxBaseUrl) {
+      return requireSecureToolboxUrl(this.toolboxBaseUrl, "configured toolbox URL");
+    }
     const reported = options?.sandbox?.toolboxProxyUrl;
-    if (reported) return trimTrailingSlashes(reported);
+    if (reported) {
+      return requireSecureToolboxUrl(reported, "sandbox-reported toolbox proxy URL");
+    }
     const resolved = await this.requestJson(daytonaToolboxProxyUrlResponseSchema, {
       method: "GET",
       path: `/sandbox/${encodeURIComponent(sandboxId)}/toolbox-proxy-url`,
       timeoutMs: TIMEOUT_GET_MS,
       signal: options?.signal,
     });
-    return trimTrailingSlashes(resolved.url);
+    return requireSecureToolboxUrl(resolved.url, "toolbox proxy lookup");
   }
 
   async createProcessSession(
@@ -548,7 +561,12 @@ export class DaytonaRestClient {
     });
   }
 
-  /** Write to a running command's stdin. The one secret-bearing request. */
+  /**
+   * Write to a running command's stdin. The one secret-bearing request.
+   *
+   * The toolbox delivers the payload the body carries under `data`, and
+   * nothing else in the body reaches the command.
+   */
   async sendSessionCommandInput(
     target: DaytonaToolboxTarget,
     sessionId: string,
@@ -562,7 +580,7 @@ export class DaytonaRestClient {
         sessionId
       )}/command/${encodeURIComponent(commandId)}/input`,
       timeoutMs: TIMEOUT_TOOLBOX_MS,
-      body: { input },
+      body: { data: input },
       baseUrl: target.baseUrl,
       redactBody: true,
       signal,
@@ -736,6 +754,43 @@ export class DaytonaRestClient {
 
 function trimTrailingSlashes(url: string): string {
   return url.replace(/\/+$/, "");
+}
+
+/** Which of the three toolbox URL sources a refusal is about. */
+type ToolboxUrlSource =
+  | "configured toolbox URL"
+  | "sandbox-reported toolbox proxy URL"
+  | "toolbox proxy lookup";
+
+/** Hosts a toolbox URL may address over plain HTTP: a runner on this machine. */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/**
+ * A toolbox base URL the API key may be sent to.
+ *
+ * Every toolbox request carries the key in its Authorization header, so a
+ * base URL that is not HTTPS is refused here rather than after a request has
+ * already disclosed it. Plain HTTP is accepted only for a loopback host,
+ * where nothing leaves the machine.
+ *
+ * The refusal names the source and the scheme and nothing else: a proxy URL
+ * can itself carry a signed token, and this message reaches logs.
+ */
+function requireSecureToolboxUrl(url: string, source: ToolboxUrlSource): string {
+  const trimmed = url.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`Daytona ${source} is not a valid URL`);
+  }
+  const secure =
+    parsed.protocol === "https:" ||
+    (parsed.protocol === "http:" && LOOPBACK_HOSTNAMES.has(parsed.hostname));
+  if (!secure) {
+    throw new Error(`Daytona ${source} must use https, not ${parsed.protocol.slice(0, -1)}`);
+  }
+  return trimTrailingSlashes(trimmed);
 }
 
 /**

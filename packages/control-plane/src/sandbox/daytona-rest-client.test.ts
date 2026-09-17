@@ -52,7 +52,46 @@ async function rejectedApiError(promise: Promise<unknown>): Promise<DaytonaApiEr
   return expect.unreachable("expected a DaytonaApiError");
 }
 
+/**
+ * Wire shapes of the generated Daytona toolbox request models, read from
+ * `daytona-toolbox-api-client` 0.211.2: each entry is a model's `__properties`
+ * list and the subset that model marks required. A toolbox body is asserted
+ * against the model its endpoint declares, so an SDK bump that renames a field
+ * has one place to re-check rather than an ad-hoc shape per test.
+ */
+const TOOLBOX_REQUEST_MODELS = {
+  // POST /process/session
+  CreateSessionRequest: { properties: ["sessionId"], required: ["sessionId"] },
+  // POST /process/session/{sessionId}/exec. "async" is the deprecated alias of
+  // "runAsync" and is not sent.
+  SessionExecuteRequest: {
+    properties: ["async", "command", "runAsync", "suppressInputEcho"],
+    required: ["command"],
+  },
+  // POST /process/session/{sessionId}/command/{commandId}/input
+  SessionSendInputRequest: { properties: ["data"], required: ["data"] },
+} as const;
+
 let fetchSpy: ReturnType<typeof vi.fn>;
+
+/** The body of the most recent request, as the transport serialized it. */
+function lastRequestBody(): Record<string, unknown> {
+  const calls = fetchSpy.mock.calls;
+  const [, init] = calls[calls.length - 1];
+  return JSON.parse(init.body as string) as Record<string, unknown>;
+}
+
+/**
+ * Assert the last request body satisfies the generated model it is sent as:
+ * no field that model does not declare, and every field it requires.
+ */
+function expectLastBodyMatchesModel(model: keyof typeof TOOLBOX_REQUEST_MODELS): void {
+  const { properties, required } = TOOLBOX_REQUEST_MODELS[model];
+  const body = lastRequestBody();
+  const fields = Object.keys(body);
+  expect(fields.filter((field) => !(properties as readonly string[]).includes(field))).toEqual([]);
+  expect(fields).toEqual(expect.arrayContaining([...required]));
+}
 
 beforeEach(() => {
   fetchSpy = vi.fn();
@@ -540,6 +579,87 @@ describe("DaytonaRestClient toolbox transport", () => {
     );
   });
 
+  // Every toolbox request carries the API key in its Authorization header, so
+  // a base URL that would carry it in cleartext must be refused before any
+  // request reaches that host.
+  it("refuses a plaintext configured toolbox URL before any request", async () => {
+    const client = new DaytonaRestClient({
+      ...defaultConfig,
+      toolboxApiUrl: "http://toolbox.internal",
+    });
+
+    await expect(client.resolveToolboxBaseUrl("sb-1")).rejects.toThrow(
+      /configured toolbox URL must use https, not http/
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses a plaintext proxy URL the sandbox reported", async () => {
+    await expect(
+      new DaytonaRestClient(defaultConfig).resolveToolboxBaseUrl("sb-1", {
+        sandbox: { id: "sb-1", state: "started", toolboxProxyUrl: "http://runner.test/toolbox" },
+      })
+    ).rejects.toThrow(/sandbox-reported toolbox proxy URL must use https, not http/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses a plaintext proxy URL the lookup returned, without addressing it", async () => {
+    fetchSpy.mockResolvedValue(jsonResponse({ url: "http://runner-7.test/toolbox" }));
+
+    await expect(
+      new DaytonaRestClient(defaultConfig).resolveToolboxBaseUrl("sb-1")
+    ).rejects.toThrow(/toolbox proxy lookup must use https, not http/);
+
+    // Only the lookup itself, against the configured API: nothing was sent to
+    // the host it named.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://daytona.test/api/sandbox/sb-1/toolbox-proxy-url",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  it.each(["ftp://toolbox.internal", "toolbox.internal", "https://"])(
+    "refuses a toolbox URL it cannot use (%s)",
+    async (toolboxApiUrl) => {
+      const client = new DaytonaRestClient({ ...defaultConfig, toolboxApiUrl });
+
+      await expect(client.resolveToolboxBaseUrl("sb-1")).rejects.toThrow(
+        /configured toolbox URL (must use https|is not a valid URL)/
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["localhost:3986", "127.0.0.1:3986", "[::1]:3986"])(
+    "keeps a loopback runner reachable over plain http (%s)",
+    async (host) => {
+      const client = new DaytonaRestClient({
+        ...defaultConfig,
+        toolboxApiUrl: `http://${host}/`,
+      });
+
+      await expect(client.resolveToolboxBaseUrl("sb-1")).resolves.toBe(`http://${host}`);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  // A refusal reaches structured logs, and a proxy URL can itself carry a
+  // signed token: the message names the source and the scheme only.
+  it("never puts the rejected URL or the API key in the refusal", async () => {
+    const client = new DaytonaRestClient({
+      ...defaultConfig,
+      toolboxApiUrl: "http://toolbox.internal/tok-abcdef",
+    });
+
+    const error = await client.resolveToolboxBaseUrl("sb-1").catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toContain("tok-abcdef");
+    expect((error as Error).message).not.toContain("toolbox.internal");
+    expect((error as Error).message).not.toContain(defaultConfig.apiKey);
+  });
+
   it("prefixes every toolbox route with the sandbox it addresses", async () => {
     const client = new DaytonaRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(emptyResponse(200));
@@ -550,6 +670,7 @@ describe("DaytonaRestClient toolbox transport", () => {
       "https://runner.test/toolbox/sb-1/process/session",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ sessionId: "oi-build" }) })
     );
+    expectLastBodyMatchesModel("CreateSessionRequest");
   });
 
   it("starts a command asynchronously with input echo suppressed", async () => {
@@ -569,10 +690,13 @@ describe("DaytonaRestClient toolbox transport", () => {
         }),
       })
     );
+    expectLastBodyMatchesModel("SessionExecuteRequest");
     expect(started.cmdId).toBe("cmd-1");
   });
 
-  it("writes stdin to the running command", async () => {
+  // The toolbox delivers stdin from `data`: under any other field name the
+  // payload never reaches the command, and a build launches with no context.
+  it("writes stdin under the field the toolbox delivers", async () => {
     const client = new DaytonaRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(emptyResponse(200));
 
@@ -582,11 +706,14 @@ describe("DaytonaRestClient toolbox transport", () => {
       "https://runner.test/toolbox/sb-1/process/session/oi-build/command/cmd-1/input",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ input: '{"version":1}\n' }),
+        body: JSON.stringify({ data: '{"version":1}\n' }),
       })
     );
+    expectLastBodyMatchesModel("SessionSendInputRequest");
   });
 
+  // Fields read from the generated response models of the same client 0.211.2:
+  // `Command` carries `id` and `exitCode`, `SessionExecuteResponse` `cmdId`.
   it("reads a command's exit status and deletes its session", async () => {
     const client = new DaytonaRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(jsonResponse({ id: "cmd-1", exitCode: 1 }));

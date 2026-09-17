@@ -214,6 +214,61 @@ describe("DaytonaImageBuildAdapter capture", () => {
     expect(provider.getBuildSnapshot).toHaveBeenCalledWith("oi-image-abc", undefined);
   });
 
+  // Both completed states settle the build. An inactive snapshot is cold
+  // storage the spawn path activates under its own budget, so finalization
+  // records it rather than polling it to the operation's deadline.
+  it.each(["active", "inactive"])("completes a build whose capture is %s", async (state) => {
+    const provider = createProvider({
+      getBuildSnapshot: vi.fn(async () => ({
+        id: "snapshot-1",
+        name: "oi-image-abc",
+        state,
+        sourceSandboxId: SOURCE_ID,
+      })),
+    });
+
+    await expect(
+      createAdapter(provider).finalizeSuccessfulBuild(
+        finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
+      )
+    ).resolves.toEqual({ providerImageId: "snapshot-1", providerSessionId: SOURCE_ID });
+    // Activation belongs to the consumer, which has its own budget for it.
+    expect(provider.getBuildSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an inactive snapshot under its reserved name from another source", async () => {
+    const provider = createProvider({
+      getBuildSnapshot: vi.fn(async () => ({
+        id: "snapshot-1",
+        name: "oi-image-abc",
+        state: "inactive",
+        sourceSandboxId: "someone-elses-sandbox",
+      })),
+    });
+
+    await expect(
+      createAdapter(provider).finalizeSuccessfulBuild(
+        finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
+      )
+    ).rejects.toThrow(/another source/);
+  });
+
+  it("completes a first-delivery capture that settles inactive", async () => {
+    const provider = createProvider({
+      getBuildSnapshot: vi.fn(async () => ({
+        id: "snapshot-1",
+        name: "oi-image-abc",
+        state: "inactive",
+        sourceSandboxId: SOURCE_ID,
+      })),
+    });
+
+    await expect(createAdapter(provider).finalizeSuccessfulBuild(finalizeInput())).resolves.toEqual(
+      { providerImageId: "snapshot-1", providerSessionId: SOURCE_ID }
+    );
+    expect(provider.captureBuildSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps polling a snapshot record that is not published yet", async () => {
     vi.useFakeTimers();
     try {

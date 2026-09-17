@@ -54,8 +54,8 @@ const BUILD_EXPIRES_AT_LABEL = "openinspect_expires_at";
  * Finalization is therefore resumable rather than single-shot. Each delivery
  * does the next step it can prove is safe: stop the source and wait for it;
  * reserve the snapshot's unique name under the build's lease; submit the
- * capture; then reconcile that name until the snapshot is active, failed, or
- * past the operation's fixed deadline. A delivery that finds a reservation
+ * capture; then reconcile that name until the snapshot is complete, failed,
+ * or past the operation's fixed deadline. A delivery that finds a reservation
  * already recorded ONLY reconciles it.
  *
  * Ownership is checked before anything destructive: a snapshot found under a
@@ -201,7 +201,11 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
   }
 
   /**
-   * Poll the reserved name until it names an active snapshot this build owns.
+   * Poll the reserved name until it names a completed snapshot this build owns.
+   *
+   * `active` and `inactive` are both completed artifacts: an inactive
+   * snapshot is cold storage, which the spawn path activates under its own
+   * budget before it uses the image. Finalization records it and stops.
    *
    * Absence is not failure: the snapshot record can appear well after the
    * capture is accepted. It becomes failure only once the operation's own
@@ -220,7 +224,7 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
         throw new Error("Daytona snapshot under this build's reserved name has another source");
       }
       const state = snapshot ? parseDaytonaSnapshotState(snapshot.state) : null;
-      if (snapshot && state === "active") {
+      if (snapshot && (state === "active" || state === "inactive")) {
         return { providerImageId: snapshot.id, providerSessionId: input.providerSessionId };
       }
       if (state === "error" || state === "build_failed" || state === "removing") {
