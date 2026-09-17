@@ -198,6 +198,20 @@ function extractStructuredResponse(response: Anthropic.Messages.Message): LLMRes
   return normalizeModelResponse(toolUseBlock.input);
 }
 
+function clarifyExplicitNoRepositoryConflict(
+  result: ClassificationResult,
+  explicitNoRepositoryLanguage: boolean
+): ClassificationResult {
+  if (!explicitNoRepositoryLanguage || !result.target || result.target.kind === "none")
+    return result;
+
+  return {
+    ...result,
+    reasoning: `${result.reasoning} This conflicts with the explicit request to use no repository.`,
+    needsClarification: true,
+  };
+}
+
 /**
  * Call OpenAI's Chat Completions API with strict JSON-schema structured
  * output, then funnel the parsed object through the same
@@ -386,7 +400,7 @@ export class RepoClassifier {
     // (handled before classify is called).
     const routed = await this.classifyByRoutingRules(message, catalog, traceId);
     if (routed) {
-      return routed;
+      return clarifyExplicitNoRepositoryConflict(routed, explicitNoRepositoryLanguage);
     }
 
     // Channel associations are the second deterministic stage.
@@ -394,7 +408,7 @@ export class RepoClassifier {
       ? this.classifyByChannelAssociations(context.channelId, catalog, traceId)
       : null;
     if (channelRouted) {
-      return channelRouted;
+      return clarifyExplicitNoRepositoryConflict(channelRouted, explicitNoRepositoryLanguage);
     }
 
     if (

@@ -115,6 +115,35 @@ describe("RepoClassifier no-repository policy", () => {
     expect(mockMessagesCreate).toHaveBeenCalledOnce();
   });
 
+  it("clarifies when explicit no-repository intent conflicts with a routing rule", async () => {
+    mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
+
+    const result = await new RepoClassifier(TEST_ENV).classify(
+      "Use no repository for the frontend task"
+    );
+
+    expect(classifiedRepoFullName(result)).toBe("acme/web");
+    expect(result.needsClarification).toBe(true);
+    expect(result.reasoning).toContain("conflicts with the explicit request");
+    expect(mockMessagesCreate).not.toHaveBeenCalled();
+  });
+
+  it("clarifies when explicit no-repository intent conflicts with a channel association", async () => {
+    mockGetAvailableRepos.mockResolvedValue([
+      { ...TEST_REPOS[0], channelAssociations: ["C123"] },
+      TEST_REPOS[1],
+    ]);
+
+    const result = await new RepoClassifier(TEST_ENV).classify("Run this without a repository", {
+      channelId: "C123",
+    });
+
+    expect(classifiedRepoFullName(result)).toBe("acme/prod");
+    expect(result.needsClarification).toBe(true);
+    expect(result.reasoning).toContain("conflicts with the explicit request");
+    expect(mockMessagesCreate).not.toHaveBeenCalled();
+  });
+
   it("clarifies an inferred no-repository target even at high confidence", async () => {
     mockMessagesCreate.mockResolvedValue(
       llmResponse({
