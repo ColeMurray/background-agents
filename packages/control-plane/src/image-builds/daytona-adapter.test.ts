@@ -373,10 +373,14 @@ describe("DaytonaImageBuildAdapter capture", () => {
   });
 
   // Finalization is the other side of the same rule: reconciliation keeps an
-  // unprovable artifact, finalization refuses to adopt one.
-  it.each([null, ""])(
-    "refuses to adopt a snapshot whose source the provider does not name (%p)",
-    async (sourceSandboxId) => {
+  // unprovable artifact, finalization refuses to adopt one. Which half applies
+  // depends on whether the capture has settled.
+  it.each([
+    ["null", null],
+    ["empty", ""],
+  ])(
+    "refuses to adopt a settled snapshot whose source the provider reports as %s",
+    async (_label, sourceSandboxId) => {
       const resources = createResources({
         getBuildSnapshot: vi.fn(async () => ({
           id: "snapshot-1",
@@ -393,6 +397,88 @@ describe("DaytonaImageBuildAdapter capture", () => {
       ).rejects.toThrow(/no provable source/);
     }
   );
+
+  it.each(["error", "build_failed", "removing"])(
+    "refuses a capture that failed without ever naming a source (%s)",
+    async (state) => {
+      const resources = createResources({
+        getBuildSnapshot: vi.fn(async () => ({
+          id: "snapshot-1",
+          name: "oi-image-abc",
+          state,
+          sourceSandboxId: null,
+        })),
+      });
+
+      await expect(
+        createAdapter(resources).finalizeSuccessfulBuild(
+          finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
+        )
+      ).rejects.toThrow(/no provable source/);
+    }
+  );
+
+  // Provenance can lag the record, so a capture still being produced without
+  // one is watched rather than failed.
+  it.each([
+    ["null", null],
+    ["empty", ""],
+  ])(
+    "waits out a capture whose source the provider reports as %s until it names ours",
+    async (_label, sourceSandboxId) => {
+      vi.useFakeTimers();
+      try {
+        const resources = createResources();
+        resources.getBuildSnapshot
+          .mockResolvedValueOnce({
+            id: "snapshot-1",
+            name: "oi-image-abc",
+            state: "snapshotting",
+            sourceSandboxId,
+          })
+          .mockResolvedValue({
+            id: "snapshot-1",
+            name: "oi-image-abc",
+            state: "active",
+            sourceSandboxId: SOURCE_ID,
+          });
+
+        const finalizing = createAdapter(resources).finalizeSuccessfulBuild(
+          finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
+        );
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        await expect(finalizing).resolves.toEqual({
+          providerImageId: "snapshot-1",
+          providerSessionId: SOURCE_ID,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  // Same ending as a record that never appears: the operation stays on the row
+  // for maintenance to reconcile, rather than the build failing outright.
+  it("gives up on a capture that never names a source, keeping the operation", async () => {
+    const resources = createResources({
+      getBuildSnapshot: vi.fn(async () => ({
+        id: "snapshot-1",
+        name: "oi-image-abc",
+        state: "snapshotting",
+        sourceSandboxId: null,
+      })),
+    });
+
+    await expect(
+      createAdapter(resources).finalizeSuccessfulBuild(
+        finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() - 1 } })
+      )
+    ).rejects.toMatchObject({
+      name: "ImageBuildFinalizationAttemptError",
+      outcome: "ambiguous",
+    });
+  });
 
   it("fails a build whose source is already gone", async () => {
     const resources = createResources({ getBuildSandbox: vi.fn(async () => null) });

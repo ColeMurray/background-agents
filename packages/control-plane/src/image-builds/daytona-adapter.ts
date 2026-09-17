@@ -4,6 +4,7 @@ import {
   delayUnlessCancelled,
   parseDaytonaSnapshotState,
   type DaytonaSandboxResponse,
+  type DaytonaSnapshotState,
 } from "../sandbox/daytona-rest-client";
 import type { ImageBuildProviderImageRef } from "./model";
 import type {
@@ -38,6 +39,19 @@ const CAPTURE_DEADLINE_HEADROOM_MS = 60_000;
 const CAPTURE_OBSERVATION_MS = 90_000;
 
 const CAPTURE_POLL_INTERVAL_MS = 3_000;
+
+/**
+ * Snapshot states a capture has stopped moving out of: a complete artifact or
+ * a failed one. Anything else is still being produced, including a state this
+ * version of the API does not name.
+ */
+const SETTLED_SNAPSHOT_STATES: ReadonlySet<DaytonaSnapshotState> = new Set([
+  "active",
+  "inactive",
+  "error",
+  "build_failed",
+  "removing",
+]);
 
 /**
  * Daytona adapter for provider-session image builds.
@@ -209,10 +223,17 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
    * budget before it uses the image. Finalization records it and stops.
    *
    * Absence is not failure: the snapshot record can appear well after the
-   * capture is accepted. It becomes failure only once the operation's own
-   * deadline has passed — the point past which the source it reads may no
-   * longer exist. The deadline is the row's, fixed when the reservation was
-   * taken, so redeliveries cannot extend it.
+   * capture is accepted, and so can the provenance that names the source it
+   * was captured from. A record that is still being produced without one is
+   * watched exactly like a record that has not appeared at all. It becomes
+   * failure only once the operation's own deadline has passed — the point
+   * past which the source it reads may no longer exist. The deadline is the
+   * row's, fixed when the reservation was taken, so redeliveries cannot
+   * extend it.
+   *
+   * What is never waited out is a settled capture this build cannot claim: a
+   * record naming another source, or one that stopped moving without naming
+   * any.
    */
   private async awaitCapturedSnapshot(
     input: FinalizeImageBuildInput,
@@ -221,23 +242,27 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
     const attemptDeadline = Date.now() + CAPTURE_OBSERVATION_MS;
     for (;;) {
       const snapshot = await this.resources.getBuildSnapshot(operation.ref, input.signal);
+      const state = snapshot ? parseDaytonaSnapshotState(snapshot.state) : null;
       if (snapshot) {
         const ownership = captureOwnership(snapshot.sourceSandboxId, input.providerSessionId);
         if (ownership === "another") {
           throw new Error("Daytona snapshot under this build's reserved name has another source");
         }
-        if (ownership === "unknown") {
+        if (ownership === "ours") {
+          if (state === "active" || state === "inactive") {
+            return { providerImageId: snapshot.id, providerSessionId: input.providerSessionId };
+          }
+          if (state === "error" || state === "build_failed" || state === "removing") {
+            throw new Error(`Daytona snapshot capture ended as ${state}`);
+          }
+        } else if (state !== null && SETTLED_SNAPSHOT_STATES.has(state)) {
+          // A capture that has stopped moving and still names no source is
+          // one this build can never claim. Until then the record is only
+          // incomplete, and is waited for like one that has not appeared.
           throw new Error(
             "Daytona snapshot under this build's reserved name has no provable source"
           );
         }
-      }
-      const state = snapshot ? parseDaytonaSnapshotState(snapshot.state) : null;
-      if (snapshot && (state === "active" || state === "inactive")) {
-        return { providerImageId: snapshot.id, providerSessionId: input.providerSessionId };
-      }
-      if (state === "error" || state === "build_failed" || state === "removing") {
-        throw new Error(`Daytona snapshot capture ended as ${state}`);
       }
 
       const now = Date.now();
