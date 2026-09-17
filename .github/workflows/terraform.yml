@@ -65,7 +65,18 @@ jobs:
       - name: Check if secrets are configured
         id: check
         run: |
-          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] && [ -n "${{ secrets.R2_ACCESS_KEY_ID }}" ]; then
+          # Gate on every credential the plan and apply jobs consume to reach a
+          # backend, not just two of them. A partial configuration used to report
+          # has-secrets=true and then fail inside `terraform init` with an empty
+          # access/secret key or an endpoint URL of "https://.r2.cloudflarestorage.com",
+          # instead of skipping with the notice below. CLOUDFLARE_ACCOUNT_ID is read
+          # with the same `vars || secrets` precedence the init steps use, so a
+          # variable-configured deployment is not mistaken for an unconfigured one.
+          account_id="${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}"
+          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] &&
+            [ -n "${{ secrets.R2_ACCESS_KEY_ID }}" ] &&
+            [ -n "${{ secrets.R2_SECRET_ACCESS_KEY }}" ] &&
+            [ -n "$account_id" ]; then
             echo "has-secrets=true" >> $GITHUB_OUTPUT
           else
             echo "has-secrets=false" >> $GITHUB_OUTPUT
