@@ -12,6 +12,7 @@ import { z } from "zod";
 import { encodeSessionExportCursor, parseSessionExportCursor } from "../db/session-export-cursor";
 import { SessionExportStore, type SessionExportRow } from "../db/session-export-store";
 import { createLogger, type Logger } from "../logger";
+import { readBoundedBytes } from "../http/bounded-body";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { SessionInternalPaths, sessionMessagePageSchema } from "../session/contracts";
@@ -123,35 +124,17 @@ function sessionErrorLine(sessionId: string, failure: MessageFetchFailure): Sess
 }
 
 async function readBoundedJson(response: Response, maxBytes: number): Promise<BoundedJson> {
-  if (!response.body) {
-    return { value: JSON.parse(await response.text()) as unknown, byteLength: 0 };
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      byteLength += value.byteLength;
-      if (byteLength > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        return null;
+  const result = await readBoundedBytes(
+    response.body,
+    maxBytes,
+    response.headers.get("content-length")
+  );
+  return result.ok
+    ? {
+        value: JSON.parse(new TextDecoder().decode(result.bytes)) as unknown,
+        byteLength: result.bytes.byteLength,
       }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = new Uint8Array(byteLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return { value: JSON.parse(new TextDecoder().decode(body)) as unknown, byteLength };
+    : null;
 }
 
 async function fetchAllMessages(

@@ -24,6 +24,7 @@ import {
   type HeadObjectCommandOutput,
 } from "@aws-sdk/client-s3";
 import { VIDEO_MAX_BYTES } from "../media";
+import { readBoundedBytes } from "../http/bounded-body";
 import { pickVariables, type ConfigSource } from "./config";
 import type { ObjectStorage, ObjectStorageMetadata } from "../storage/object-storage";
 
@@ -253,26 +254,9 @@ async function bodyBytes(value: PutValue, maxBytes: number): Promise<Uint8Array 
   if (ArrayBuffer.isView(value)) {
     return withinLimit(new Uint8Array(value.buffer, value.byteOffset, value.byteLength), maxBytes);
   }
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  const reader = value.getReader();
-  for (;;) {
-    const { done, value: chunk } = await reader.read();
-    if (done) break;
-    total += chunk.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      throw new RangeError(`S3 put refused: the object exceeds ${maxBytes} bytes`);
-    }
-    chunks.push(chunk);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  const result = await readBoundedBytes(value, maxBytes);
+  if (!result.ok) throw new RangeError(`S3 put refused: the object exceeds ${maxBytes} bytes`);
+  return result.bytes;
 }
 
 function withinLimit(bytes: Uint8Array, maxBytes: number): Uint8Array {

@@ -5,6 +5,7 @@
  */
 
 import type { z } from "zod";
+import { readBoundedBytes } from "../http/bounded-body";
 
 /**
  * Error classification for source control operations.
@@ -113,39 +114,13 @@ export async function readResponseBytesWithinLimit(
   maxBytes: number,
   blobId: string
 ): Promise<Uint8Array> {
-  const contentLength = response.headers.get("content-length");
-  const declared = contentLength === null ? null : Number(contentLength);
-  if (declared !== null && Number.isFinite(declared) && declared > maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    throw blobLimitError(blobId, declared, maxBytes);
-  }
-  if (!response.body) return new Uint8Array();
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        throw blobLimitError(blobId, totalBytes, maxBytes);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  const result = await readBoundedBytes(
+    response.body,
+    maxBytes,
+    response.headers.get("content-length")
+  );
+  if (!result.ok) throw blobLimitError(blobId, result.byteLength, maxBytes);
+  return result.bytes;
 }
 
 /**
