@@ -42,6 +42,8 @@ import {
   handleReviewRequested,
   handleIssueComment,
   handleReviewComment,
+  isReviewRequestedForBot,
+  reviewRequestLogins,
 } from "../src/handlers";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "../src/github-auth";
 import { getGitHubConfig } from "../src/utils/integration-config";
@@ -479,6 +481,30 @@ describe("handlePullRequestOpened", () => {
   });
 });
 
+describe("isReviewRequestedForBot", () => {
+  const requestFor = (login: string) => ({ requested_reviewer: { login } });
+
+  it("accepts the bot login and the configured reviewer App login", () => {
+    const env = { ...createMockEnv(), GITHUB_REVIEWER_USERNAME: " test-reviewer[bot] " } as Env;
+    const logins = reviewRequestLogins(env);
+
+    expect(isReviewRequestedForBot(requestFor("test-bot[bot]"), logins)).toBe(true);
+    expect(isReviewRequestedForBot(requestFor("test-reviewer[bot]"), logins)).toBe(true);
+    expect(isReviewRequestedForBot(requestFor("someone-else"), logins)).toBe(false);
+  });
+
+  it("accepts only the bot login when no reviewer App login is configured", () => {
+    for (const reviewer of [undefined, "", "   "]) {
+      const env = { ...createMockEnv(), GITHUB_REVIEWER_USERNAME: reviewer } as Env;
+      const logins = reviewRequestLogins(env);
+
+      expect(isReviewRequestedForBot(requestFor("test-bot[bot]"), logins)).toBe(true);
+      expect(isReviewRequestedForBot(requestFor("test-reviewer[bot]"), logins)).toBe(false);
+      expect(isReviewRequestedForBot(requestFor(""), logins)).toBe(false);
+    }
+  });
+});
+
 describe("handleReviewRequested", () => {
   it("creates session, posts reaction, and sends prompt", async () => {
     const env = createMockEnv();
@@ -577,6 +603,33 @@ describe("handleReviewRequested", () => {
     expect(generateInstallationToken).not.toHaveBeenCalled();
     expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
     expect(log.debug).toHaveBeenCalledWith("handler.review_not_for_bot", expect.anything());
+  });
+
+  it("accepts a request aimed at the reviewer App's login when one is configured", async () => {
+    const env = { ...createMockEnv(), GITHUB_REVIEWER_USERNAME: "test-reviewer[bot]" } as Env;
+    const log = createMockLogger();
+    const payload = {
+      ...reviewRequestedPayload,
+      requested_reviewer: { login: "test-reviewer[bot]" },
+    };
+
+    const result = await handleReviewRequested(env, log, payload, "trace-reviewer-login");
+
+    expect(result).not.toEqual({ outcome: "skipped", skip_reason: "review_not_for_bot" });
+    expect(generateInstallationToken).toHaveBeenCalled();
+  });
+
+  it("still rejects the reviewer App's login when none is configured", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload = {
+      ...reviewRequestedPayload,
+      requested_reviewer: { login: "test-reviewer[bot]" },
+    };
+
+    const result = await handleReviewRequested(env, log, payload, "trace-no-reviewer-login");
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "review_not_for_bot" });
   });
 
   it("returns early if no reviewer specified", async () => {

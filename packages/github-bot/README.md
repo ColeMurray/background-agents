@@ -159,10 +159,12 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 
 **Review Requested (compatibility path):**
 
-This handler is retained for webhook compatibility. The user-facing GitHub workflow does not ask
-people to request the GitHub App bot through the PR reviewer picker.
+This is how a person asks for a fresh review without pushing: GitHub's re-request button on a PR the
+bot reviewed. When a second App submits the reviews (`GITHUB_REVIEWER_USERNAME`), GitHub lists that
+App as the reviewer, so the button names it rather than the webhook App; both logins are accepted.
 
-1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` — return early if not
+1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` or `GITHUB_REVIEWER_USERNAME` —
+   return early if not
 2. Post eyes reaction on the PR (fire-and-forget)
 3. Create session via control plane
 4. Send code review prompt (includes PR metadata + `gh` CLI instructions)
