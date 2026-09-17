@@ -24,9 +24,6 @@ export const enqueuePromptRequestSchema = z
         login: z.string().nullable(),
         name: z.string().nullable(),
         email: z.string().nullable(),
-        accessTokenEncrypted: z.string().nullable(),
-        refreshTokenEncrypted: z.string().nullable(),
-        tokenExpiresAt: z.number().nullable(),
       })
       .optional(),
   })

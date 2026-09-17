@@ -138,9 +138,10 @@ that fails. That model is reachable as `opencode/minimax-m2.5` on Zen.
 | `opencode-go/hy4-preview`                  | Hy4 Preview                  | Tencent Hunyuan               | Not supported     | N/A            |
 | `opencode-go/hy3`                          | Hy3                          | Tencent Hunyuan               | Not supported     | N/A            |
 
-Some of these models are reachable through more than one provider — `opencode-go/grok-4.6`,
-`xai/grok-4.6` and `opencode/glm-5.2` are the same model behind different gateways, billed against
-different credentials. Pick the entry whose billing you want.
+Some of these models are reachable through more than one provider, billed against different
+credentials. `opencode-go/grok-4.6` and `xai/grok-4.6` are the same Grok model behind different
+gateways; `opencode-go/glm-5.2`, `opencode/glm-5.2` and `zai-coding-plan/glm-5.2` are the same GLM
+model behind three. Pick the entry whose billing you want.
 
 These models run on the OpenCode harness only — the Claude Agent harness runs Anthropic models
 exclusively.

@@ -40,6 +40,7 @@ import {
 } from "../sandbox-env";
 import {
   PrebuiltImageActivationPendingError,
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -405,10 +406,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
    * cold image, whatever each individual request costs.
    *
    * An inactive snapshot is cold storage, not corruption: it is activated and
-   * waited for. An activation that outlasts the budget is reported as pending
-   * so the session falls back to base WITHOUT retiring the image — unlike a
-   * missing or terminal snapshot, which must be failed so the next
-   * reconciliation rebuilds it.
+   * waited for. An activation that outlasts the budget is reported as pending,
+   * which fails this spawn WITHOUT retiring the image — unlike a missing or
+   * terminal snapshot, which is reported as unavailable so the row is failed
+   * and the next reconciliation rebuilds it.
    */
   private async ensurePrebuiltImageUsable(prebuiltImageId: string): Promise<void> {
     const deadline = Date.now() + PREBUILT_ACTIVATION_TIMEOUT_MS;
@@ -418,14 +419,13 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     try {
       const snapshot = await getDaytonaSnapshot(this.client, prebuiltImageId, signal);
       if (!snapshot) {
-        throw new SandboxProviderError("Daytona prebuilt snapshot no longer exists", "permanent");
+        throw new PrebuiltImageUnavailableError("Daytona prebuilt snapshot no longer exists");
       }
       const state = parseDaytonaSnapshotState(snapshot.state);
       if (state === "active") return;
       if (state === "error" || state === "build_failed" || state === "removing") {
-        throw new SandboxProviderError(
-          `Daytona prebuilt snapshot is ${state} and cannot be used`,
-          "permanent"
+        throw new PrebuiltImageUnavailableError(
+          `Daytona prebuilt snapshot is ${state} and cannot be used`
         );
       }
 
@@ -438,7 +438,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         // reason the pre-activation read gives: waiting it out would spend
         // the budget and then report an artifact worth keeping.
         if (!current) {
-          throw new SandboxProviderError("Daytona prebuilt snapshot no longer exists", "permanent");
+          throw new PrebuiltImageUnavailableError("Daytona prebuilt snapshot no longer exists");
         }
         const currentState = parseDaytonaSnapshotState(current.state);
         if (currentState === "active") return;
@@ -447,9 +447,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
           currentState === "build_failed" ||
           currentState === "removing"
         ) {
-          throw new SandboxProviderError(
-            `Daytona prebuilt snapshot is ${currentState} and cannot be used`,
-            "permanent"
+          throw new PrebuiltImageUnavailableError(
+            `Daytona prebuilt snapshot is ${currentState} and cannot be used`
           );
         }
         if (Date.now() >= deadline) {
@@ -463,9 +462,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       // Only an answer about this artifact may retire it. A classification
       // already made inside the flow stands; a budget that ran out and a
       // provider that could not be reached are facts about the transport, so
-      // the spawn falls back to base and the image stays in rotation. An
-      // auth or request error still fails hard: it says the call was wrong,
-      // and softening it would hide a broken deployment behind slow spawns.
+      // the spawn fails transiently and the image stays in rotation. An auth
+      // or request error still fails hard as a permanent error that leaves
+      // the image alone: it says the call was wrong, and softening it would
+      // hide a broken deployment behind slow spawns.
       if (error instanceof SandboxProviderError) throw error;
       if (signal.aborted) {
         throw new PrebuiltImageActivationPendingError(
@@ -474,9 +474,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         );
       }
       if (error instanceof DaytonaNotFoundError) {
-        throw new SandboxProviderError(
+        throw new PrebuiltImageUnavailableError(
           "Daytona prebuilt snapshot no longer exists",
-          "permanent",
           error
         );
       }

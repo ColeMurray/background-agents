@@ -27,9 +27,6 @@ describe("initializeSession", () => {
     scmName: "Acme Dev",
     scmEmail: "dev@acme.test",
     scmUserId: "scm-1",
-    scmTokenEncrypted: "enc-token",
-    scmRefreshTokenEncrypted: "enc-refresh",
-    scmTokenExpiresAt: 1700000000000,
     parentSessionId: null,
     spawnSource: "user",
     spawnDepth: 0,
@@ -270,9 +267,9 @@ describe("initializeSession", () => {
     expect(body.scmLogin).toBe("acmedev");
     expect(body.scmName).toBe("Acme Dev");
     expect(body.scmEmail).toBe("dev@acme.test");
-    expect(body.scmTokenEncrypted).toBe("enc-token");
-    expect(body.scmRefreshTokenEncrypted).toBe("enc-refresh");
-    expect(body.scmTokenExpiresAt).toBe(1700000000000);
+    expect(body).not.toHaveProperty("scmTokenEncrypted");
+    expect(body).not.toHaveProperty("scmRefreshTokenEncrypted");
+    expect(body).not.toHaveProperty("scmTokenExpiresAt");
     expect(body.scmUserId).toBe("scm-1");
     expect(body.codeServerEnabled).toBe(false);
     expect(body.vncEnabled).toBe(true);

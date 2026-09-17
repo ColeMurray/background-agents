@@ -22,7 +22,7 @@ import {
   type SessionRow,
 } from "../../session/types";
 import {
-  PrebuiltImageActivationPendingError,
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   type SandboxProvider,
   type CreateSandboxConfig,
@@ -652,26 +652,26 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         result = await this.provider.createSandbox(createConfig);
       } catch (error) {
         if (!selectedImage) throw error;
-        // A provider restore failure is "no image" (design §7.3): fail the
-        // row so the cron rebuilds it and boot this session from base rather
-        // than failing the spawn. Unrelated create failures (quota, network)
-        // can false-positive here — the cost is one rebuild, and the base
-        // retry surfaces them through the normal failure path anyway.
-        //
-        // The one exception is an image that is merely cold: the provider is
-        // still bringing it back, so this session falls back to base without
-        // retiring an image the next spawn may well be able to use.
-        const activationPending = error instanceof PrebuiltImageActivationPendingError;
-        this.log.warn("Prebuilt-image spawn failed, retrying from base image", {
-          event: activationPending
-            ? "image_build.activation_pending"
-            : "image_build.restore_failed",
-          image_build_id: selectedImage.imageBuildId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        if (!activationPending) {
-          await this.markImageBuildRestoreFailed(selectedImage, error);
+        if (!(error instanceof PrebuiltImageUnavailableError)) {
+          if (error instanceof SandboxProviderError && error.errorType === "transient") {
+            this.log.warn("Prebuilt-image spawn failed with a transient provider error", {
+              event: "image_build.spawn_error_transient",
+              image_build_id: selectedImage.imageBuildId,
+              error_type: error.errorType,
+              error: error.message,
+            });
+          }
+          throw error;
         }
+        // An unavailable prebuilt artifact is "no image" (design §7.3): fail
+        // the row so the cron rebuilds it and boot this session from base.
+        this.log.warn("Prebuilt-image spawn failed, retrying from base image", {
+          event: "image_build.restore_failed",
+          image_build_id: selectedImage.imageBuildId,
+          error_type: error.errorType,
+          error: error.message,
+        });
+        await this.markImageBuildRestoreFailed(selectedImage, error);
         // The retry gets a fresh spawn identity: the failed attempt may have
         // actually created a sandbox provider-side (post-create errors are
         // indistinguishable here), and rotating the token hash and sandbox id

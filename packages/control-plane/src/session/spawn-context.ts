@@ -20,9 +20,6 @@ const promptAuthorSchema = z.object({
   scmLogin: z.string().nullable(),
   scmName: z.string().nullable(),
   scmEmail: z.string().nullable(),
-  scmAccessTokenEncrypted: z.string().nullable(),
-  scmRefreshTokenEncrypted: z.string().nullable(),
-  scmTokenExpiresAt: z.number().nullable(),
 });
 
 export const spawnContextSchema = z.object({

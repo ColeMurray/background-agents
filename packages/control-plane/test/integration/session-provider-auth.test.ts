@@ -53,8 +53,6 @@ describe("session provider auth persistence", () => {
         reasoningEffort: null,
         participantUserId: "user-1",
         platformUserId: null,
-        scmTokenEncrypted: null,
-        scmRefreshTokenEncrypted: null,
         managedSkillsManifest: {
           selection: { mode: "all" },
           resolverVersion: 1,

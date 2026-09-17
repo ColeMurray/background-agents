@@ -9,7 +9,11 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { deriveVncPassword } from "../sandbox-env";
 import { DaytonaSandboxProvider, type DaytonaProviderConfig } from "./daytona-provider";
-import { PrebuiltImageActivationPendingError, SandboxProviderError } from "../provider";
+import {
+  PrebuiltImageActivationPendingError,
+  PrebuiltImageUnavailableError,
+  SandboxProviderError,
+} from "../provider";
 import type { CreateSandboxConfig, ResumeConfig, StopConfig } from "../provider";
 import {
   DaytonaNotFoundError,
@@ -819,9 +823,10 @@ describe("DaytonaSandboxProvider prebuilt images", () => {
       .createSandbox(prebuiltConfig)
       .catch((thrown: unknown) => thrown);
 
-    expect(error).toBeInstanceOf(SandboxProviderError);
+    // Unavailable is the classification that retires the image: the row is
+    // failed and the next reconciliation rebuilds it.
+    expect(error).toBeInstanceOf(PrebuiltImageUnavailableError);
     expect((error as SandboxProviderError).errorType).toBe("permanent");
-    expect(error).not.toBeInstanceOf(PrebuiltImageActivationPendingError);
     expect(client.createSandbox).not.toHaveBeenCalled();
   });
 
@@ -847,8 +852,7 @@ describe("DaytonaSandboxProvider prebuilt images", () => {
         .createSandbox(prebuiltConfig)
         .catch((thrown: unknown) => thrown);
 
-      expect(error).toBeInstanceOf(SandboxProviderError);
-      expect(error).not.toBeInstanceOf(PrebuiltImageActivationPendingError);
+      expect(error).toBeInstanceOf(PrebuiltImageUnavailableError);
       expect((error as SandboxProviderError).errorType).toBe("permanent");
       // The read that saw it go is the last one: no polling out the budget.
       expect(getSnapshot).toHaveBeenCalledTimes(2);
@@ -950,9 +954,11 @@ describe("DaytonaSandboxProvider prebuilt images", () => {
       .catch((caught: unknown) => caught);
 
     // A rejected call says the deployment is wrong, not that the image is
-    // cold: softening it would hide the fault behind slow spawns.
+    // cold: softening it would hide the fault behind slow spawns. It says
+    // nothing about the artifact either, so it must not retire the image.
     expect(error).toBeInstanceOf(SandboxProviderError);
     expect(error).not.toBeInstanceOf(PrebuiltImageActivationPendingError);
+    expect(error).not.toBeInstanceOf(PrebuiltImageUnavailableError);
     expect((error as SandboxProviderError).errorType).toBe("permanent");
     expect(client.createSandbox).not.toHaveBeenCalled();
   });

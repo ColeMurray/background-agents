@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { ModalSandboxProvider } from "./modal-provider";
-import { SandboxProviderError } from "../provider";
+import { PrebuiltImageUnavailableError, SandboxProviderError } from "../provider";
 import { ModalApiError } from "../client";
 import { RequestDeadlineError } from "../request-deadline";
 import type {
@@ -491,6 +491,43 @@ describe("ModalSandboxProvider", () => {
         expect.objectContaining({ vncEnabled: true }),
         undefined
       );
+    });
+
+    it("reports a missing prebuilt image explicitly", async () => {
+      const error = new ModalApiError("Repository image unavailable", 410);
+      const client = createMockModalClient({
+        createSandbox: vi.fn(async () => {
+          throw error;
+        }),
+      });
+
+      await expect(
+        new ModalSandboxProvider(client).createSandbox({
+          ...testConfig,
+          prebuiltImageId: "im-missing",
+        })
+      ).rejects.toEqual(
+        expect.objectContaining({
+          name: "PrebuiltImageUnavailableError",
+          errorType: "permanent",
+          cause: error,
+        })
+      );
+    });
+
+    it("keeps unrelated prebuilt spawn failures as generic provider errors", async () => {
+      const client = createMockModalClient({
+        createSandbox: vi.fn(async () => {
+          throw new ModalApiError("Quota exceeded", 429);
+        }),
+      });
+
+      const error = await new ModalSandboxProvider(client)
+        .createSandbox({ ...testConfig, prebuiltImageId: "im-valid" })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      expect(error).not.toBeInstanceOf(PrebuiltImageUnavailableError);
     });
   });
 

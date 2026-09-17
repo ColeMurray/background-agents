@@ -208,7 +208,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
         user_id: "slack:U2",
         canonical_user_id: "canonical-user-2",
         scm_login: "second-user",
-        scm_access_token_encrypted: "second-access",
+        scm_access_token_encrypted: null,
       },
     ]);
   });
