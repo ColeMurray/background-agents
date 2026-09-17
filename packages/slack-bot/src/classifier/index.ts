@@ -46,6 +46,8 @@ const EXPLICIT_NO_REPOSITORY_PATTERNS = [
   /\b(?:use|choose|select)\s+(?:a\s+)?(?:repo|repository)[ -]?less\b/i,
   /\b(?:start|run|work)(?:\s+\w+){0,5}\s+(?:repo|repository)[ -]?less\b/i,
 ];
+const NEGATED_NO_REPOSITORY_PATTERN =
+  /\b(?:do not|don't|must not|mustn't|should not|shouldn't)\s+(?:start|run|work)(?:\s+\w+){0,5}\s+without\s+(?:(?:a|any|the)\s+)?(?:repos?|repositor(?:y|ies)|cloning(?:\s+(?:(?:a|any|the)\s+)?(?:repos?|repositor(?:y|ies)|code|anything))?)\b/gi;
 const CONFIDENCE_LEVELS = [
   "high",
   "medium",
@@ -192,7 +194,8 @@ type LLMResponse = z.infer<typeof llmResponseSchema>;
 
 function mayExplicitlyRequestNoRepository(message: string, context?: ThreadContext): boolean {
   const text = [message, ...(context?.previousMessages ?? [])].join("\n");
-  return EXPLICIT_NO_REPOSITORY_PATTERNS.some((pattern) => pattern.test(text));
+  const positiveText = text.replace(NEGATED_NO_REPOSITORY_PATTERN, "");
+  return EXPLICIT_NO_REPOSITORY_PATTERNS.some((pattern) => pattern.test(positiveText));
 }
 
 function normalizeModelResponse(raw: unknown): LLMResponse {
@@ -410,6 +413,22 @@ export class RepoClassifier {
       : null;
     if (channelRouted) {
       return channelRouted;
+    }
+
+    if (
+      catalog.repos.length === 0 &&
+      catalog.environments.length === 0 &&
+      !explicitNoRepositoryLanguage
+    ) {
+      return {
+        target: null,
+        confidence: "low",
+        reasoning: "No repositories or environments are available; asking which target to use.",
+        needsClarification: true,
+        source: "empty_catalog",
+        explicitNoRepositoryIntent: false,
+        reportedExplicitNoRepositoryIntent: false,
+      };
     }
 
     // Preserve the zero-cost single-repository path unless the message or its

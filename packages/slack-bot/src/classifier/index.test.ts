@@ -784,6 +784,18 @@ describe("RepoClassifier", () => {
       expect(mockMessagesCreate).not.toHaveBeenCalled();
     });
 
+    it.each(["Do not work without a repository", "This must not run without cloning"])(
+      "does not treat a negated no-repository phrase as explicit intent: %s",
+      async (message) => {
+        mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+
+        const result = await new RepoClassifier(TEST_ENV).classify(message);
+
+        expect(classifiedRepoFullName(result)).toBe("acme/prod");
+        expect(mockMessagesCreate).not.toHaveBeenCalled();
+      }
+    );
+
     it("clarifies explicit no-repository intent below high confidence", async () => {
       mockMessagesCreate.mockResolvedValue(
         llmResponse({
@@ -896,6 +908,17 @@ describe("RepoClassifier", () => {
       expect(result.target).toEqual({ kind: "none" });
       expect(result.needsClarification).toBe(false);
       expect(mockMessagesCreate).toHaveBeenCalledOnce();
+    });
+
+    it("clarifies an empty catalog without calling the model", async () => {
+      mockGetAvailableRepos.mockResolvedValue([]);
+
+      const result = await new RepoClassifier(TEST_ENV).classify("Research authentication options");
+
+      expect(result.target).toBeNull();
+      expect(result.source).toBe("empty_catalog");
+      expect(result.needsClarification).toBe(true);
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
     });
 
     it("escapes the LLM reasoning for mrkdwn rendering", async () => {
