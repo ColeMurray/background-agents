@@ -4,7 +4,7 @@ import type {
   ChildSessionFinalResponse,
   ChildSessionTrajectory,
 } from "@open-inspect/shared/types/session-api";
-import type { EventResponse } from "@open-inspect/shared/types/sandbox-events";
+import { eventResponseSchema, type EventResponse } from "@open-inspect/shared/types/sandbox-events";
 import {
   buildAgentResponseFromEvents,
   getArtifactLabelFromArtifact,
@@ -263,13 +263,13 @@ function parseJsonRecord(raw: string): Record<string, unknown> {
 }
 
 function toEventResponse(event: EventRow): EventResponse {
-  return {
+  return eventResponseSchema.parse({
     id: event.id,
     type: event.type,
     data: parseJsonRecord(event.data),
     messageId: event.message_id,
     createdAt: event.created_at,
-  };
+  });
 }
 
 function buildArtifactInfo(
