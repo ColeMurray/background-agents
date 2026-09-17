@@ -6,7 +6,7 @@ import { INTEGRATION_DEFINITIONS } from "@open-inspect/shared/types/integrations
 import { BackIcon } from "@/components/ui/icons";
 import { integrationSettingsComponents } from "@/components/settings/integrations/integration-settings-registry";
 import { SettingsMobileHeader } from "@/components/settings/settings-mobile-header";
-import { useIsMobile } from "@/hooks/use-media-query";
+import { useSettingsIsMobile } from "@/components/settings/settings-viewport-context";
 
 function getIntegration(id: string) {
   return INTEGRATION_DEFINITIONS.find((d) => d.id === id);
@@ -14,7 +14,7 @@ function getIntegration(id: string) {
 
 export default function IntegrationDetailPage() {
   const params = useParams<{ id: string }>();
-  const isMobile = useIsMobile();
+  const isMobile = useSettingsIsMobile();
 
   const integration = getIntegration(params.id);
   const IntegrationDetail = integration ? integrationSettingsComponents[integration.id] : undefined;

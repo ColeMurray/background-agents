@@ -25,14 +25,20 @@ export type {
 } from "./session-attachments";
 
 export {
+  MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS,
+  MAX_GITHUB_AUTOFIX_PROMPT_BYTES,
+  MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS,
   githubAutofixEnvelopeSchema,
+  githubAutofixFeedbackSchema,
   githubAutofixOriginSchema,
   githubAutofixSessionCommandSchema,
   githubAutofixSessionResponseSchema,
 } from "./github-autofix";
 export type {
   GitHubAutofixEnvelope,
+  GitHubAutofixFeedback,
   GitHubAutofixOrigin,
+  GitHubAutofixReviewComment,
   GitHubAutofixSessionCommand,
   GitHubAutofixSessionResponse,
 } from "./github-autofix";
@@ -43,6 +49,7 @@ export type { ClientMessage } from "./websocket";
 export {
   MAX_TARGET_REPOSITORIES,
   MAX_SESSION_REPOSITORIES,
+  sessionListRepositorySchema,
   sessionRepositoryStateSchema,
   prArtifactBelongsToRepo,
   repositoryPairInputSchema,
@@ -54,6 +61,7 @@ export {
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
   parseRepositoryFullName,
+  validateRepositoryPathSegments,
   normalizeOptionalRepositoryPair,
 } from "./repositories";
 export type {
@@ -63,6 +71,46 @@ export type {
   RepositoryInput,
   RepositoryPair,
 } from "./repositories";
+
+export {
+  sessionStatusSchema,
+  spawnSourceSchema,
+  pullRequestSummarySchema,
+  INITIAL_SESSION_READ_STATE_VERSION,
+  sessionReadStateSchema,
+  sessionSummaryBaseSchema,
+  childSessionSummarySchema,
+  childSessionListResponseSchema,
+  sessionListSummarySchema,
+  sessionListResponseSchema,
+} from "./sessions";
+export type {
+  SessionStatus,
+  SpawnSource,
+  PullRequestSummary,
+  SessionReadState,
+  SessionSummaryBase,
+  ChildSessionSummary,
+  ChildSessionListResponse,
+  SessionListSummary,
+  SessionListResponse,
+} from "./sessions";
+
+export {
+  SESSION_INBOX_CATEGORIES,
+  sessionInboxCategorySchema,
+  sessionInboxSessionSchema,
+  sessionInboxItemSchema,
+  sessionInboxPageSchema,
+  sessionInboxSnapshotSchema,
+} from "./session-inbox";
+export type {
+  SessionInboxCategory,
+  SessionInboxSession,
+  SessionInboxItem,
+  SessionInboxPage,
+  SessionInboxSnapshot,
+} from "./session-inbox";
 
 export {
   installationRepositorySchema,
@@ -170,10 +218,30 @@ export type {
 export type { AutomationTriggerType } from "../triggers/types";
 
 export {
+  MAX_AUDIT_EVENT_TIMESTAMP_MS,
+  auditEventTimestampSchema,
+  auditOperationResultSchema,
+  auditPrincipalKindSchema,
+  auditEventMetadataSchema,
+  auditEventSchema,
+  auditEventListResponseSchema,
+} from "./audit-events";
+export type {
+  AuditOperationResult,
+  AuditPrincipalKind,
+  AuditEventMetadata,
+  AuditEvent,
+  AuditEventListResponse,
+} from "./audit-events";
+
+export {
+  MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
   MAX_AUTOMATION_REPOSITORIES,
+  MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
+  validateAutomationTargetCounts,
   sentryClientSecretSchema,
   createAutomationRequestSchema,
   updateAutomationRequestSchema,
@@ -218,9 +286,18 @@ export {
   legacyProviderCredentialsResponseSchema,
   connectOpenAIModelProviderAccountRequestSchema,
   connectXaiModelProviderAccountRequestSchema,
+  connectAnthropicModelProviderAccountRequestSchema,
   connectModelProviderAccountRequestSchema,
   reconnectOpenAIModelProviderAccountRequestSchema,
   reconnectXaiModelProviderAccountRequestSchema,
+  reconnectAnthropicModelProviderAccountRequestSchema,
+  startProviderAuthorizationCodeRequestSchema,
+  startProviderAuthorizationCodeResponseSchema,
+  completeProviderAuthorizationCodeRequestSchema,
+  providerAuthorizationCodeStatusResponseSchema,
+  MODEL_PROVIDER_ACCOUNT_CONNECTION_METHOD,
+  STATIC_CREDENTIAL_PROVIDER_IDS,
+  modelProviderAccountConnectionMethod,
   reconnectModelProviderAccountRequestSchema,
 } from "./provider-accounts";
 export type {
@@ -228,6 +305,11 @@ export type {
   ProviderAuthSelection,
   ProviderAuthMode,
   SessionProviderAuthMode,
+  ModelProviderAccountConnectionMethod,
+  StartProviderAuthorizationCodeRequest,
+  StartProviderAuthorizationCodeResponse,
+  CompleteProviderAuthorizationCodeRequest,
+  ProviderAuthorizationCodeStatusResponse,
   ModelProviderSelections,
   ModelProviderAccountStatus,
   ModelProviderAccount,
@@ -267,6 +349,7 @@ export type {
   AnalyticsPullRequestRepoEntry,
   AnalyticsPullRequestSourceEntry,
   AnalyticsPullRequestsResponse,
+  AnalyticsDashboardResponse,
 } from "./analytics";
 
 export {

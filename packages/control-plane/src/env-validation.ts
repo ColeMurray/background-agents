@@ -7,7 +7,7 @@
  * absence always means a broken deployment.
  */
 
-import type { Env } from "./types";
+import type { EnvConfig } from "./types";
 
 /** Strict base64 — rejects whitespace and stray characters `atob` may accept. */
 const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -45,7 +45,9 @@ function requireEncryptionKey(key: string | undefined, name: string, protects: s
   return key;
 }
 
-export function requireRepoSecretsEncryptionKey(env: Env): string {
+export function requireRepoSecretsEncryptionKey(
+  env: Pick<EnvConfig, "REPO_SECRETS_ENCRYPTION_KEY">
+): string {
   return requireEncryptionKey(
     env.REPO_SECRETS_ENCRYPTION_KEY,
     "REPO_SECRETS_ENCRYPTION_KEY",
@@ -53,6 +55,6 @@ export function requireRepoSecretsEncryptionKey(env: Env): string {
   );
 }
 
-export function requireTokenEncryptionKey(env: Env): string {
+export function requireTokenEncryptionKey(env: Pick<EnvConfig, "TOKEN_ENCRYPTION_KEY">): string {
   return requireEncryptionKey(env.TOKEN_ENCRYPTION_KEY, "TOKEN_ENCRYPTION_KEY", "OAuth tokens");
 }

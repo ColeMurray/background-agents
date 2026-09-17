@@ -34,7 +34,6 @@ describe("buildTimelineVirtualRows", () => {
         ],
         new Set(["pending"])
       ),
-      terminalMessageId: null,
       loadingHistory: false,
       isProcessing: false,
     });
@@ -43,7 +42,7 @@ describe("buildTimelineVirtualRows", () => {
     expect(rows[0]).toMatchObject({ type: "item", item: { id: "warning:session:4" } });
   });
 
-  it("coalesces the terminal output and completion into one row", () => {
+  it("frames the items with loading and thinking rows", () => {
     const items = [
       single({
         type: "token",
@@ -60,16 +59,11 @@ describe("buildTimelineVirtualRows", () => {
         success: true,
       }),
     ];
-    const rows = buildTimelineVirtualRows({
-      items,
-      terminalMessageId: "message",
-      loadingHistory: true,
-      isProcessing: true,
-    });
+    const rows = buildTimelineVirtualRows({ items, loadingHistory: true, isProcessing: true });
 
-    expect(rows.map((row) => row.type)).toEqual(["loading", "terminal", "thinking"]);
-    expect(rows[1]).toMatchObject({ type: "terminal", items });
-    expect(estimateTimelineRowSize(rows[1])).toBe(TIMELINE_ROW_SIZE_ESTIMATES.terminal);
+    expect(rows.map((row) => row.type)).toEqual(["loading", "item", "item", "thinking"]);
+    expect(estimateTimelineRowSize(rows[0])).toBe(TIMELINE_ROW_SIZE_ESTIMATES.status);
+    expect(estimateTimelineRowSize(rows[1])).toBe(TIMELINE_ROW_SIZE_ESTIMATES.assistantMessage);
   });
 });
 

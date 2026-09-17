@@ -38,9 +38,19 @@ import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
-import { TerminalMessageReadObserver } from "./terminal-message-read-observer";
-import type { SessionReadAttemptDisposition } from "@/lib/session-read-state";
+import { cn } from "@/lib/utils";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
+import { GitHubAutofixFeedbackCard } from "@/components/github-autofix-feedback";
+import {
+  formatGitHubAutofixFeedbackMarkdown,
+  parseGitHubAutofixFeedback,
+} from "@/lib/github-autofix-feedback";
+import { getSafeExternalUrl } from "@/lib/urls";
+
+const EMPTY_PROMPT_QUEUE: PromptQueueItem[] = [];
+const EMPTY_EXPANDED_SECTIONS: ReadonlySet<string> = new Set();
+const NOOP_TOGGLE_SECTION = () => {};
+const MAX_AUTOFIX_RAW_FALLBACK_CHARS = 4_000;
 
 export function SessionTimeline({
   events,
@@ -48,13 +58,11 @@ export function SessionTimeline({
   currentParticipantId,
   participantProfiles,
   isProcessing,
-  promptQueue = [],
+  promptQueue = EMPTY_PROMPT_QUEUE,
   loadingHistory,
   showSkeleton,
   onLoadOlder,
   onOpenMedia,
-  terminalMessageReadObservationEnabled = false,
-  onMarkMessageRead,
 }: {
   events: SandboxEvent[];
   sessionId: string;
@@ -66,8 +74,6 @@ export function SessionTimeline({
   showSkeleton: boolean;
   onLoadOlder: () => void;
   onOpenMedia: (artifactId: string) => void;
-  terminalMessageReadObservationEnabled?: boolean;
-  onMarkMessageRead?: (messageId: string) => Promise<SessionReadAttemptDisposition>;
 }) {
   const pendingMessageIds = useMemo(
     () =>
@@ -84,13 +90,9 @@ export function SessionTimeline({
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Set<string>>(new Set());
   const [expandedTaskSections, setExpandedTaskSections] = useState<Set<string>>(new Set());
-  const latestTerminalMessageId = useMemo(() => {
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const event = events[index];
-      if (event?.type === "execution_complete" && event.messageId) return event.messageId;
-    }
-    return null;
-  }, [events]);
+  const [expandedAutofixSections, setExpandedAutofixSections] = useState<
+    Map<string, ReadonlySet<string>>
+  >(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
@@ -99,11 +101,10 @@ export function SessionTimeline({
     () =>
       buildTimelineVirtualRows({
         items: timelineItems,
-        terminalMessageId: onMarkMessageRead ? latestTerminalMessageId : null,
         loadingHistory,
         isProcessing,
       }),
-    [isProcessing, latestTerminalMessageId, loadingHistory, onMarkMessageRead, timelineItems]
+    [isProcessing, loadingHistory, timelineItems]
   );
   const getVirtualRowKey = useCallback(
     (index: number) => virtualRows[index]?.id ?? index,
@@ -120,6 +121,7 @@ export function SessionTimeline({
     getItemKey: getVirtualRowKey,
     estimateSize: estimateVirtualRowSize,
   });
+  const totalSize = rowVirtualizer.getTotalSize();
 
   const handleScroll = useCallback(() => {
     hasScrolledRef.current = true;
@@ -154,11 +156,22 @@ export function SessionTimeline({
   }, [onLoadOlder]);
 
   useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(() => {
+      if (isNearBottomRef.current) container.scrollTop = container.scrollHeight;
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
     if (isNearBottomRef.current) {
       const container = scrollContainerRef.current;
       if (container) container.scrollTop = container.scrollHeight;
     }
-  }, [events, isProcessing]);
+  }, [totalSize]);
 
   const toggleToolCall = useCallback((event: ToolCallEvent) => {
     const key = toolCallKey(event);
@@ -201,6 +214,17 @@ export function SessionTimeline({
     });
   }, []);
 
+  const toggleAutofixSection = useCallback((messageId: string, key: string) => {
+    setExpandedAutofixSections((expanded) => {
+      const next = new Map(expanded);
+      const messageSections = new Set(expanded.get(messageId));
+      if (messageSections.has(key)) messageSections.delete(key);
+      else messageSections.add(key);
+      next.set(messageId, messageSections);
+      return next;
+    });
+  }, []);
+
   const renderFlatItem = (item: FlatTimelineItem): ReactNode => {
     if (item.type === "tool_group") {
       return (
@@ -221,6 +245,12 @@ export function SessionTimeline({
         sessionId={sessionId}
         currentParticipantId={currentParticipantId}
         participantProfiles={participantProfiles}
+        expandedAutofixSections={
+          item.event.type === "user_message"
+            ? (expandedAutofixSections.get(item.event.messageId) ?? EMPTY_EXPANDED_SECTIONS)
+            : EMPTY_EXPANDED_SECTIONS
+        }
+        onToggleAutofixSection={toggleAutofixSection}
         onOpenMedia={onOpenMedia}
       />
     );
@@ -262,17 +292,6 @@ export function SessionTimeline({
         return <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>;
       case "thinking":
         return <ThinkingIndicator />;
-      case "terminal":
-        if (!onMarkMessageRead) return row.items.map(renderTimelineItem);
-        return (
-          <TerminalMessageReadObserver
-            messageId={row.messageId}
-            enabled={terminalMessageReadObservationEnabled}
-            onMarkMessageRead={onMarkMessageRead}
-          >
-            {row.items.map(renderTimelineItem)}
-          </TerminalMessageReadObserver>
-        );
       case "item":
         return renderTimelineItem(row.item);
     }
@@ -293,7 +312,7 @@ export function SessionTimeline({
         {showSkeleton ? (
           <TimelineSkeleton />
         ) : (
-          <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+          <div className="relative w-full" style={{ height: `${totalSize}px` }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = virtualRows[virtualRow.index];
               return (
@@ -351,6 +370,8 @@ type EventRendererProps = {
   participantProfiles: Record<string, SessionParticipantProfile>;
   copied: boolean;
   onCopyContent: (content: string) => void;
+  expandedAutofixSections: ReadonlySet<string>;
+  onToggleAutofixSection: (messageId: string, key: string) => void;
   onOpenMedia: (artifactId: string) => void;
 };
 
@@ -485,6 +506,8 @@ function UserMessageEvent({
   participantProfiles,
   copied,
   onCopyContent,
+  expandedAutofixSections,
+  onToggleAutofixSection,
 }: EventRendererProps) {
   if (event.type !== "user_message") return null;
   const attachments = event.attachments ?? [];
@@ -503,6 +526,17 @@ function UserMessageEvent({
   );
   const authorName = isCurrentUser ? "You" : display.name;
   const avatar = display.avatar;
+  const autofixFeedback =
+    event.origin?.feedback ??
+    (event.origin ? parseGitHubAutofixFeedback(event.content, event.origin.kind) : null);
+  const feedbackUrl = getSafeExternalUrl(event.origin?.feedbackUrl);
+  const boundedRawAutofix = Boolean(event.origin && !autofixFeedback);
+  const rawContentTruncated = Boolean(
+    boundedRawAutofix && event.content.length > MAX_AUTOFIX_RAW_FALLBACK_CHARS
+  );
+  const rawContent = rawContentTruncated
+    ? `${event.content.slice(0, MAX_AUTOFIX_RAW_FALLBACK_CHARS)}\n\n[Raw Autofix prompt truncated]`
+    : event.content;
 
   return (
     <MessageFrame
@@ -516,7 +550,7 @@ function UserMessageEvent({
       }
       time={formatEventTime(event)}
       copied={copied}
-      content={event.content}
+      content={autofixFeedback ? formatGitHubAutofixFeedbackMarkdown(autofixFeedback) : rawContent}
       className="group bg-accent-muted p-3 sm:ml-8 sm:p-4"
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
@@ -528,21 +562,44 @@ function UserMessageEvent({
             {event.origin.kind === "pr_comment" ? "PR comment" : "Review"} ·{" "}
             {event.origin.authorType === "bot" ? "Bot" : "Human"}
           </span>
-          <a
-            href={event.origin.feedbackUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="text-accent hover:underline"
-          >
-            Open feedback
-          </a>
+          {feedbackUrl && (
+            <a
+              href={feedbackUrl}
+              target="_blank"
+              rel="noopener noreferrer nofollow"
+              className="text-accent hover:underline"
+            >
+              Open feedback
+            </a>
+          )}
         </div>
       )}
-      {event.content && (
-        <pre className="whitespace-pre-wrap text-sm text-foreground [overflow-wrap:anywhere]">
-          {event.content}
-        </pre>
-      )}
+      {autofixFeedback ? (
+        <GitHubAutofixFeedbackCard
+          feedback={autofixFeedback}
+          messageId={event.messageId}
+          expandedSections={expandedAutofixSections}
+          onToggleSection={(key) => onToggleAutofixSection(event.messageId, key)}
+        />
+      ) : event.content ? (
+        <div>
+          {rawContentTruncated && (
+            <p className="mb-2 text-xs font-medium text-warning">
+              This feedback could not be formatted. Showing a truncated raw prompt.
+            </p>
+          )}
+          <pre
+            tabIndex={boundedRawAutofix ? 0 : undefined}
+            className={cn(
+              "whitespace-pre-wrap text-sm text-foreground [overflow-wrap:anywhere]",
+              boundedRawAutofix &&
+                "max-h-96 overflow-auto focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            )}
+          >
+            {rawContent}
+          </pre>
+        </div>
+      ) : null}
       {attachments.length > 0 && (
         <UserMessageAttachments attachments={attachments} sessionId={sessionId} />
       )}
@@ -682,12 +739,16 @@ export const EventItem = memo(function EventItem({
   sessionId,
   currentParticipantId,
   participantProfiles,
+  expandedAutofixSections = EMPTY_EXPANDED_SECTIONS,
+  onToggleAutofixSection = NOOP_TOGGLE_SECTION,
   onOpenMedia,
 }: {
   event: SandboxEvent;
   sessionId: string;
   currentParticipantId: string | null;
   participantProfiles: Record<string, SessionParticipantProfile>;
+  expandedAutofixSections?: ReadonlySet<string>;
+  onToggleAutofixSection?: (messageId: string, key: string) => void;
   onOpenMedia: (artifactId: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -725,6 +786,8 @@ export const EventItem = memo(function EventItem({
     participantProfiles,
     copied,
     onCopyContent: handleCopyContent,
+    expandedAutofixSections,
+    onToggleAutofixSection,
     onOpenMedia,
   });
 });

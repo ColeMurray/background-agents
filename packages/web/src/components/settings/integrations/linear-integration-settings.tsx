@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
@@ -21,6 +21,7 @@ import {
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
+import { SettingsCardSection } from "../settings-card-section";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
@@ -45,6 +46,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ModelReasoningDefaultsFields } from "./model-reasoning-defaults-fields";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/linear";
 const REPO_SETTINGS_KEY = "/api/integration-settings/linear/repos";
@@ -66,7 +68,13 @@ interface ReposResponse {
   repos: EnrichedRepository[];
 }
 
+/**
+ * Displays Linear integration settings with global and repository edits gated by their respective permissions.
+ */
 export function LinearIntegrationSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManageGlobal = hasPermission("integrations.manage");
+  const canManageRepos = hasPermission("repositories.settings.manage");
   const { data: globalData, isLoading: globalLoading } =
     useSWR<GlobalResponse>(GLOBAL_SETTINGS_KEY);
   const { data: repoSettingsData, isLoading: repoSettingsLoading } =
@@ -84,13 +92,16 @@ export function LinearIntegrationSettings() {
 
   return (
     <div>
-      <h3 className="text-lg font-semibold text-foreground mb-1">Linear Agent</h3>
+      <h2 className="text-lg font-semibold text-foreground mb-1">Linear Agent</h2>
       <p className="text-sm text-muted-foreground mb-6">
         Configure model defaults, repository scope, and runtime behavior for Linear-triggered
         sessions.
       </p>
 
-      <Section title="Connection" description="Linear uses control-plane repository access.">
+      <SettingsCardSection
+        title="Connection"
+        description="Linear uses control-plane repository access."
+      >
         {availableRepos.length > 0 ? (
           <p className="text-sm text-muted-foreground">
             Repository access is available. You can target all repos or limit the integration to a
@@ -102,24 +113,28 @@ export function LinearIntegrationSettings() {
             unavailable until repository access is configured.
           </p>
         )}
-      </Section>
+      </SettingsCardSection>
 
-      <GlobalSettingsSection
-        settings={settings}
-        availableRepos={availableRepos}
-        enabledModelOptions={enabledModelOptions}
-      />
-
-      <Section
-        title="Repository Overrides"
-        description="Override model selection and behavior for specific repositories."
-      >
-        <RepoOverridesSection
-          overrides={repoOverrides}
+      <fieldset disabled={!canManageGlobal} className="min-w-0">
+        <GlobalSettingsSection
+          settings={settings}
           availableRepos={availableRepos}
           enabledModelOptions={enabledModelOptions}
         />
-      </Section>
+      </fieldset>
+
+      <SettingsCardSection
+        title="Repository Overrides"
+        description="Override model selection and behavior for specific repositories."
+      >
+        <fieldset disabled={!canManageRepos} className="min-w-0">
+          <RepoOverridesSection
+            overrides={repoOverrides}
+            availableRepos={availableRepos}
+            enabledModelOptions={enabledModelOptions}
+          />
+        </fieldset>
+      </SettingsCardSection>
     </div>
   );
 }
@@ -262,7 +277,7 @@ function GlobalSettingsSection({
   };
 
   return (
-    <Section
+    <SettingsCardSection
       title="Defaults & Scope"
       description="Global model, fallback behavior, and repository scope."
     >
@@ -433,7 +448,7 @@ function GlobalSettingsSection({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Section>
+    </SettingsCardSection>
   );
 }
 
@@ -701,26 +716,6 @@ function RepoOverrideRow({
         </Button>
       </div>
     </div>
-  );
-}
-
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="border border-border-muted rounded-md p-5 mb-5">
-      <h4 className="text-sm font-semibold uppercase tracking-wider text-foreground mb-1">
-        {title}
-      </h4>
-      <p className="text-sm text-muted-foreground mb-4">{description}</p>
-      {children}
-    </section>
   );
 }
 

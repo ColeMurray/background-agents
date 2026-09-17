@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { MetadataSection } from "./metadata-section";
+import { MetadataSection as MetadataSectionComponent } from "./metadata-section";
 
 expect.extend(matchers);
 
@@ -12,6 +13,15 @@ expect.extend(matchers);
 // cleanup, so unmount between cases to keep queries (e.g. PR state badges) from
 // matching leftover DOM from earlier renders.
 afterEach(cleanup);
+
+function MetadataSection({
+  canManageLifecycle = true,
+  ...props
+}: Omit<ComponentProps<typeof MetadataSectionComponent>, "canManageLifecycle"> & {
+  canManageLifecycle?: boolean;
+}) {
+  return <MetadataSectionComponent {...props} canManageLifecycle={canManageLifecycle} />;
+}
 
 vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: React.ComponentProps<"a">) => (

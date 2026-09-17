@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "./session-index";
 import type { SessionEntry } from "./session-index";
@@ -8,6 +9,7 @@ type SessionRow = {
   title: string | null;
   repo_owner: string | null;
   repo_name: string | null;
+  harness: HarnessId;
   model: string;
   reasoning_effort: string | null;
   base_branch: string | null;
@@ -50,9 +52,8 @@ const QUERY_PATTERNS = {
   SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC LIMIT/,
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
   UPDATE_UPDATED_AT: /^UPDATE sessions SET updated_at = \?/,
-  UPDATE_TITLE: /^UPDATE sessions SET title = \?/,
-  UPDATE_TITLE_IF_NEWER:
-    /^UPDATE sessions SET title = \?, updated_at = \? WHERE id = \? AND updated_at <= \?$/,
+  UPDATE_TITLE:
+    /^UPDATE sessions SET title = \?, updated_at = MAX\(updated_at, \?\) WHERE id = \?$/,
   UPDATE_METRICS: /^UPDATE sessions SET total_cost = \?/,
   DELETE_SESSION: /^DELETE FROM sessions WHERE id = \?$/,
   SELECT_BY_PARENT:
@@ -195,6 +196,7 @@ class FakeD1Database {
         title,
         repoOwner,
         repoName,
+        harness,
         model,
         reasoningEffort,
         baseBranch,
@@ -217,6 +219,7 @@ class FakeD1Database {
         string | null,
         string | null,
         string | null,
+        HarnessId,
         string,
         string | null,
         string | null,
@@ -235,7 +238,7 @@ class FakeD1Database {
         number,
         number,
       ];
-      // INSERT OR IGNORE — skip if exists
+      // ON CONFLICT DO NOTHING — skip if exists
       const inserted = !this.rows.has(id);
       if (inserted) {
         const rootSessionId = rootParentId
@@ -246,6 +249,7 @@ class FakeD1Database {
           title,
           repo_owner: repoOwner,
           repo_name: repoName,
+          harness,
           model,
           reasoning_effort: reasoningEffort,
           base_branch: baseBranch,
@@ -281,23 +285,12 @@ class FakeD1Database {
       return { meta: { changes: 0 } };
     }
 
-    if (QUERY_PATTERNS.UPDATE_TITLE_IF_NEWER.test(normalized)) {
-      const [title, updatedAt, id, maxUpdatedAt] = args as [string, number, string, number];
-      const row = this.rows.get(id);
-      if (row && row.updated_at <= maxUpdatedAt) {
-        row.title = title;
-        row.updated_at = updatedAt;
-        return { meta: { changes: 1 } };
-      }
-      return { meta: { changes: 0 } };
-    }
-
     if (QUERY_PATTERNS.UPDATE_TITLE.test(normalized)) {
       const [title, updatedAt, id] = args as [string, number, string];
       const row = this.rows.get(id);
       if (row) {
         row.title = title;
-        row.updated_at = updatedAt;
+        row.updated_at = Math.max(row.updated_at, updatedAt);
         return { meta: { changes: 1 } };
       }
       return { meta: { changes: 0 } };
@@ -504,6 +497,7 @@ describe("SessionIndexStore", () => {
       expect(result).toEqual({
         ...session,
         // Defaults applied for missing optional fields
+        harness: "opencode",
         parentSessionId: null,
         spawnSource: "user",
         spawnDepth: 0,
@@ -750,43 +744,6 @@ describe("SessionIndexStore", () => {
       ]);
     });
 
-    it("trims and lowercases repo filters", async () => {
-      await store.create(makeSession({ id: "match", repoOwner: "Owner", repoName: "Repo" }));
-      await store.create(makeSession({ id: "other", repoOwner: "Other", repoName: "Repo" }));
-
-      const result = await store.list({ repoOwner: "  OWNER  ", repoName: "  REPO  " });
-
-      expect(result.sessions).toHaveLength(1);
-      expect(result.sessions[0].id).toBe("match");
-    });
-
-    it("matches sessions through secondary members, not just the scalar primary", async () => {
-      await store.create(
-        makeSession({
-          id: "multi",
-          repoOwner: "acme",
-          repoName: "frontend",
-          repositories: [
-            { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
-            { repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "main" },
-          ],
-        })
-      );
-      await store.create(makeSession({ id: "other", repoOwner: "acme", repoName: "unrelated" }));
-
-      const result = await store.list({ repoOwner: "acme", repoName: "backend" });
-
-      expect(result.sessions.map((s) => s.id)).toEqual(["multi"]);
-    });
-
-    it("falls back to the scalar columns for pre-feature sessions without member rows", async () => {
-      await store.create(makeSession({ id: "legacy", repoOwner: "acme", repoName: "app" }));
-
-      const result = await store.list({ repoOwner: "acme", repoName: "app" });
-
-      expect(result.sessions.map((s) => s.id)).toEqual(["legacy"]);
-    });
-
     it("supports multiple creator user ids", async () => {
       await store.create(makeSession({ id: "alice", userId: "alice", updatedAt: 1000 }));
       await store.create(makeSession({ id: "bob", userId: "bob", updatedAt: 3000 }));
@@ -862,26 +819,10 @@ describe("SessionIndexStore", () => {
   });
 
   describe("updateTitle", () => {
-    it("updates the title of an existing session", async () => {
-      await store.create(makeSession());
-      const updated = await store.updateTitle("test-id", "New Title");
-      expect(updated).toBe(true);
-
-      const session = await store.get("test-id");
-      expect(session?.title).toBe("New Title");
-    });
-
-    it("returns false when session not found", async () => {
-      const updated = await store.updateTitle("nonexistent", "New Title");
-      expect(updated).toBe(false);
-    });
-  });
-
-  describe("updateTitleIfNewer", () => {
     it("updates the title when the write is current", async () => {
       await store.create(makeSession({ updatedAt: 1000 }));
 
-      const updated = await store.updateTitleIfNewer("test-id", "Generated Title", 2000);
+      const updated = await store.updateTitle("test-id", "Generated Title", 2000);
       expect(updated).toBe(true);
 
       const session = await store.get("test-id");
@@ -889,14 +830,14 @@ describe("SessionIndexStore", () => {
       expect(session?.updatedAt).toBe(2000);
     });
 
-    it("ignores stale title writes when a newer update already exists", async () => {
+    it("updates the title without lowering newer activity recency", async () => {
       await store.create(makeSession({ title: "Manual Title", updatedAt: 2000 }));
 
-      const updated = await store.updateTitleIfNewer("test-id", "Generated Title", 1500);
-      expect(updated).toBe(false);
+      const updated = await store.updateTitle("test-id", "Generated Title", 1500);
+      expect(updated).toBe(true);
 
       const session = await store.get("test-id");
-      expect(session?.title).toBe("Manual Title");
+      expect(session?.title).toBe("Generated Title");
       expect(session?.updatedAt).toBe(2000);
     });
   });

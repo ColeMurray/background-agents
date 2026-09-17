@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState, type ComponentType } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   DEFAULT_SETTINGS_CATEGORY,
@@ -10,57 +10,31 @@ import {
   type SettingsCategory,
 } from "@/components/settings/settings-nav";
 import { SettingsMobileHeader } from "@/components/settings/settings-mobile-header";
-import { SecretsSettings } from "@/components/settings/secrets-settings";
-import { EnvironmentsSettings } from "@/components/settings/environments-settings";
-import { ModelsSettings } from "@/components/settings/models-settings";
-import { DataControlsSettings } from "@/components/settings/data-controls-settings";
-import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
-import { IntegrationsSettings } from "@/components/settings/integrations-settings";
-import { SandboxSettingsPage } from "@/components/settings/sandbox-settings";
-import { ScmSettingsPage } from "@/components/settings/scm-settings";
-import { ImagesSettings } from "@/components/settings/images-settings";
-import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
-import { AppearanceSettings } from "@/components/settings/appearance-settings";
-import { ProviderAccountsSettings } from "@/components/settings/provider-accounts-settings";
-import { SkillsSettings } from "@/components/settings/skills-settings";
-import { useIsMobile } from "@/hooks/use-media-query";
+import { useSettingsIsMobile } from "@/components/settings/settings-viewport-context";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
-
-const SETTINGS_PANELS: Record<SettingsCategory, ComponentType> = {
-  appearance: AppearanceSettings,
-  "keyboard-shortcuts": KeyboardShortcutsSettings,
-  models: ModelsSettings,
-  "provider-accounts": ProviderAccountsSettings,
-  skills: SkillsSettings,
-  environments: EnvironmentsSettings,
-  secrets: SecretsSettings,
-  scm: ScmSettingsPage,
-  sandbox: SandboxSettingsPage,
-  images: ImagesSettings,
-  integrations: IntegrationsSettings,
-  "mcp-servers": McpServersSettings,
-  "data-controls": DataControlsSettings,
-};
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { getSettingsPanel, resolveSettingsCategory } from "@/components/settings/settings-registry";
 
 function SettingsPageContent() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
   const repoImagesEnabled = supportsRepoImages();
-  const isMobile = useIsMobile();
-  const initialCategory = isSettingsCategory(tabParam, repoImagesEnabled)
-    ? tabParam
-    : DEFAULT_SETTINGS_CATEGORY;
+  const isMobile = useSettingsIsMobile();
+  const { hasPermission, loading } = useCurrentUserAuthorization();
+  const initialCategory = resolveSettingsCategory(tabParam, repoImagesEnabled, hasPermission);
   const [activeCategory, setActiveCategoryRaw] = useState<SettingsCategory>(initialCategory);
 
-  function setActiveCategory(category: SettingsCategory) {
+  function selectCategory(category: SettingsCategory, trigger: HTMLButtonElement) {
     setActiveCategoryRaw(category);
     const url = `/settings?tab=${category}`;
     if (isMobile) {
+      mobileTriggerRef.current = trigger;
       window.history.pushState(
         { ...window.history.state, openInspectSettingsDetail: true },
         "",
         url
       );
+      showMobileView("detail");
     } else {
       window.history.replaceState(window.history.state, "", url);
     }
@@ -68,11 +42,19 @@ function SettingsPageContent() {
   const [mobileView, setMobileView] = useState<"list" | "detail">(
     isSettingsCategory(tabParam, repoImagesEnabled) ? "detail" : "list"
   );
-  const mobileHeadingRef = useRef<HTMLHeadingElement>(null);
+  const mobileListHeadingRef = useRef<HTMLHeadingElement>(null);
+  const mobileDetailHeadingRef = useRef<HTMLHeadingElement>(null);
+  const mobileTriggerRef = useRef<HTMLButtonElement>(null);
 
   function showMobileView(view: "list" | "detail") {
     setMobileView(view);
-    requestAnimationFrame(() => mobileHeadingRef.current?.focus());
+    requestAnimationFrame(() => {
+      if (view === "list" && mobileTriggerRef.current) {
+        mobileTriggerRef.current.focus();
+      } else {
+        (view === "list" ? mobileListHeadingRef : mobileDetailHeadingRef).current?.focus();
+      }
+    });
   }
 
   function showMobileList() {
@@ -81,6 +63,7 @@ function SettingsPageContent() {
       return;
     }
     window.history.replaceState(window.history.state, "", "/settings");
+    setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
     showMobileView("list");
   }
 
@@ -88,65 +71,82 @@ function SettingsPageContent() {
     if (!isMobile) return;
 
     const syncFromHistory = () => {
-      const category = new URLSearchParams(window.location.search).get("tab");
-      if (isSettingsCategory(category, repoImagesEnabled)) {
-        setActiveCategoryRaw(category);
+      const requestedCategory = new URLSearchParams(window.location.search).get("tab");
+      const nextCategory = isSettingsCategory(requestedCategory, repoImagesEnabled)
+        ? resolveSettingsCategory(requestedCategory, repoImagesEnabled, hasPermission)
+        : null;
+      if (nextCategory) {
+        setActiveCategoryRaw(nextCategory);
         setMobileView("detail");
       } else {
-        setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
+        if (!mobileTriggerRef.current) setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
         setMobileView("list");
       }
-      requestAnimationFrame(() => mobileHeadingRef.current?.focus());
+      requestAnimationFrame(() => {
+        if (!nextCategory && mobileTriggerRef.current) {
+          mobileTriggerRef.current.focus();
+        } else {
+          (nextCategory ? mobileDetailHeadingRef : mobileListHeadingRef).current?.focus();
+        }
+      });
     };
 
     window.addEventListener("popstate", syncFromHistory);
     return () => window.removeEventListener("popstate", syncFromHistory);
-  }, [isMobile, repoImagesEnabled]);
+  }, [hasPermission, isMobile, repoImagesEnabled]);
 
   // Sync state when searchParams change via client-side navigation
   useEffect(() => {
     if (isSettingsCategory(tabParam, repoImagesEnabled)) {
-      setActiveCategoryRaw(tabParam);
+      setActiveCategoryRaw(resolveSettingsCategory(tabParam, repoImagesEnabled, hasPermission));
       setMobileView("detail");
       return;
     }
 
-    setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
+    if (!isMobile || !mobileTriggerRef.current) {
+      setActiveCategoryRaw(resolveSettingsCategory(null, repoImagesEnabled, hasPermission));
+    }
     setMobileView("list");
-  }, [repoImagesEnabled, tabParam]);
+  }, [hasPermission, isMobile, repoImagesEnabled, tabParam]);
 
-  const renderedCategory = isSettingsCategory(activeCategory, repoImagesEnabled)
-    ? activeCategory
-    : DEFAULT_SETTINGS_CATEGORY;
-  const ActivePanel = SETTINGS_PANELS[renderedCategory];
-  const content = <ActivePanel />;
+  if (loading) return null;
+  const renderedCategory = resolveSettingsCategory(
+    activeCategory,
+    repoImagesEnabled,
+    hasPermission
+  );
+  const ActivePanel = getSettingsPanel(renderedCategory);
+  const content = (
+    <Suspense fallback={null}>
+      <ActivePanel />
+    </Suspense>
+  );
 
   if (isMobile) {
     return (
-      <div className="flex h-full flex-col bg-background">
-        {mobileView === "list" ? (
-          <>
-            <SettingsMobileHeader title="Settings" headingRef={mobileHeadingRef} />
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <SettingsNav
-                activeCategory={activeCategory}
-                onSelect={setActiveCategory}
-                onNavigate={() => showMobileView("detail")}
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            <SettingsMobileHeader
-              title={getSettingsCategoryLabel(activeCategory)}
-              headingRef={mobileHeadingRef}
-              onBack={showMobileList}
-            />
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
-              <div className="mx-auto max-w-3xl">{content}</div>
-            </div>
-          </>
-        )}
+      <div className="h-full bg-background">
+        <div
+          hidden={mobileView !== "list"}
+          className={mobileView === "list" ? "flex h-full flex-col" : "hidden"}
+        >
+          <SettingsMobileHeader title="Settings" headingRef={mobileListHeadingRef} />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <SettingsNav activeCategory={activeCategory} onSelect={selectCategory} />
+          </div>
+        </div>
+        <div
+          hidden={mobileView !== "detail"}
+          className={mobileView === "detail" ? "flex h-full flex-col" : "hidden"}
+        >
+          <SettingsMobileHeader
+            title={getSettingsCategoryLabel(activeCategory)}
+            headingRef={mobileDetailHeadingRef}
+            onBack={showMobileList}
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
+            <div className="mx-auto max-w-3xl">{mobileView === "detail" ? content : null}</div>
+          </div>
+        </div>
       </div>
     );
   }

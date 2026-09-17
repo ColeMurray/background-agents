@@ -1,17 +1,21 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { sqlDatabase } from "./helpers";
+import { seedActiveUser, sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import type { AutomationRunStatus } from "@open-inspect/shared/types/automations";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
-import { Scheduler, resolveAutomationProviderAuth } from "../../src/scheduler/scheduler";
+import {
+  AutomationExecutionUnauthorizedError,
+  Scheduler,
+  resolveAutomationProviderAuth,
+} from "../../src/scheduler/scheduler";
 import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
-function createScheduler(schedulerEnv = env as Env) {
+function createScheduler(schedulerEnv = createCloudflareEnv(env)) {
   return new Scheduler(env.DB, schedulerEnv, { submit() {} });
 }
 
@@ -24,13 +28,14 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
     schedule_tz: "UTC",
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
     next_run_at: now + 86400000,
     consecutive_failures: 0,
     created_by: "user-1",
-    user_id: null,
+    user_id: "user-1",
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -44,6 +49,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
 describe("Scheduler (integration)", () => {
   beforeEach(async () => {
     await cleanD1Tables();
+    await seedActiveUser("user-1");
     await env.DB.exec(
       "DELETE FROM model_provider_account_defaults; DELETE FROM model_provider_accounts;"
     );
@@ -186,6 +192,76 @@ describe("Scheduler (integration)", () => {
       expect(automation!.consecutive_failures).toBe(0);
     });
 
+    it("corrects a sweep-declared timeout when the real success callback arrives", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      // The sweep already struck this invocation on its way to auto-pause.
+      await store.create(makeAutomation({ id: "auto-rc-late", consecutive_failures: 2 }));
+
+      const sweptRun = makeRunRow("auto-rc-late", {
+        id: "run-rc-late",
+        session_id: "sess-late",
+        status: "failed",
+        failure_reason: "execution_timeout",
+        started_at: now - 60_000,
+        completed_at: now - 1000,
+      });
+      await seedRun(sweptRun);
+      const struck = await env.DB.prepare(
+        `UPDATE automation_invocations SET failure_counted_at = ? WHERE id = ?`
+      )
+        .bind(now - 1000, sweptRun.invocation_id)
+        .run();
+      expect(struck.meta.changes).toBe(1);
+
+      await createScheduler().runComplete({
+        automationId: "auto-rc-late",
+        runId: "run-rc-late",
+        sessionId: "sess-late",
+        messageId: "msg-late",
+        success: true,
+      });
+
+      const run = await store.getRunById("auto-rc-late", "run-rc-late");
+      expect(run!.status).toBe("completed");
+      expect(run!.failure_reason).toBeNull();
+      // The correction stops at the run row: invocation accounting is
+      // unordered, so the sweep's strike stands until the next fully
+      // successful firing resets the streak.
+      expect((await store.getById("auto-rc-late"))!.consecutive_failures).toBe(2);
+      const invocation = await store.getInvocationById(sweptRun.invocation_id);
+      expect(invocation!.failure_counted_at).toBe(now - 1000);
+    });
+
+    it("leaves an observed failure final when a late success callback arrives", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-rc-obs", consecutive_failures: 1 }));
+
+      await seedRun(
+        makeRunRow("auto-rc-obs", {
+          id: "run-rc-obs",
+          session_id: "sess-obs",
+          status: "failed",
+          failure_reason: "Sandbox crashed",
+          started_at: now - 60_000,
+          completed_at: now - 1000,
+        })
+      );
+
+      await createScheduler().runComplete({
+        automationId: "auto-rc-obs",
+        runId: "run-rc-obs",
+        sessionId: "sess-obs",
+        messageId: "msg-obs",
+        success: true,
+      });
+
+      const run = await store.getRunById("auto-rc-obs", "run-rc-obs");
+      expect(run!.status).toBe("failed");
+      expect(run!.failure_reason).toBe("Sandbox crashed");
+    });
+
     it("marks run as failed and increments failures on failure", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
@@ -326,14 +402,13 @@ describe("Scheduler (integration)", () => {
       expect(automation!.consecutive_failures).toBe(1);
     });
 
-    it("recovers timed-out running runs during sweep", async () => {
+    it("recovers running runs whose execution deadline has passed", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(
         makeAutomation({ id: "auto-t2", next_run_at: now + 86400000, enabled: 1 })
       );
 
-      // Default EXECUTION_TIMEOUT_MS is 90 minutes
       const twoHoursAgo = now - 2 * 60 * 60 * 1000;
       await seedRun(
         makeRunRow("auto-t2", {
@@ -342,6 +417,7 @@ describe("Scheduler (integration)", () => {
           session_id: "sess-timeout",
           scheduled_at: twoHoursAgo,
           started_at: twoHoursAgo,
+          execution_deadline_at: now - 1000,
           created_at: twoHoursAgo,
         })
       );
@@ -352,6 +428,36 @@ describe("Scheduler (integration)", () => {
       const run = await store.getRunById("auto-t2", "run-timeout-t2");
       expect(run!.status).toBe("failed");
       expect(run!.failure_reason).toBe("execution_timeout");
+    });
+
+    it("leaves a run alone past the old 90-minute mark while its deadline is in the future", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(
+        makeAutomation({ id: "auto-t2b", next_run_at: now + 86400000, enabled: 1 })
+      );
+
+      // Three hours of real work under an eight-hour sandbox timeout: the old
+      // sweep failed this at 90 minutes while the session was still producing.
+      const threeHoursAgo = now - 3 * 60 * 60 * 1000;
+      await seedRun(
+        makeRunRow("auto-t2b", {
+          id: "run-long-t2b",
+          status: "running",
+          session_id: "sess-long",
+          scheduled_at: threeHoursAgo,
+          started_at: threeHoursAgo,
+          execution_deadline_at: threeHoursAgo + 8 * 60 * 60 * 1000,
+          created_at: threeHoursAgo,
+        })
+      );
+
+      await createScheduler().tick();
+
+      const run = await store.getRunById("auto-t2b", "run-long-t2b");
+      expect(run!.status).toBe("running");
+      expect(run!.failure_reason).toBeNull();
+      expect((await store.getById("auto-t2b"))!.consecutive_failures).toBe(0);
     });
 
     it("skips overdue automations with active runs (concurrency guard)", async () => {
@@ -421,6 +527,41 @@ describe("Scheduler (integration)", () => {
       const automation = await store.getById("auto-t4");
       expect(automation!.next_run_at).not.toBeNull();
       expect(automation!.next_run_at!).toBeGreaterThan(now);
+    });
+
+    it("records and pauses an authorization-denied schedule so it is not repeatedly overdue", async () => {
+      const store = new AutomationStore(env.DB);
+      const scheduledAt = Date.now() - 60_000;
+      await store.create(
+        makeAutomation({ id: "auto-denied-schedule", next_run_at: scheduledAt, enabled: 1 })
+      );
+      await env.DB.prepare(
+        "UPDATE user_role_assignments SET role_id = 'role_builtin_viewer' WHERE user_id = ?"
+      )
+        .bind("user-1")
+        .run();
+
+      expect(await createScheduler().tick()).toMatchObject({ skipped: 1, failed: 0 });
+      const denied = await store.getById("auto-denied-schedule");
+      expect(denied).toMatchObject({ enabled: 0, next_run_at: null });
+      const firstInvocations = await store.listInvocations("auto-denied-schedule", {
+        limit: 20,
+        offset: 0,
+      });
+      expect(firstInvocations.invocations).toEqual([
+        expect.objectContaining({
+          status: "skipped",
+          skipReason: "execution_authorization_denied",
+          scheduledAt,
+        }),
+      ]);
+
+      expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 0 });
+      const secondInvocations = await store.listInvocations("auto-denied-schedule", {
+        limit: 20,
+        offset: 0,
+      });
+      expect(secondInvocations.invocations).toHaveLength(1);
     });
 
     it("auto-pauses after recovery sweep detects 3rd consecutive failure", async () => {
@@ -512,13 +653,13 @@ describe("Scheduler (integration)", () => {
         }
         return new Response("Not Found", { status: 404 });
       });
-      const schedulerEnv = {
-        ...(env as Env),
+      const schedulerEnv = createCloudflareEnv({
+        ...env,
         SESSION: {
           idFromName: vi.fn((name: string) => name),
           get: vi.fn(() => ({ fetch: sessionFetch })),
         } as unknown as DurableObjectNamespace,
-      };
+      });
 
       const schedulers = [
         createScheduler(schedulerEnv),
@@ -527,8 +668,8 @@ describe("Scheduler (integration)", () => {
       ];
 
       const [triggerA, triggerB, tick] = await Promise.allSettled([
-        schedulers[0]!.trigger("auto-concurrent-admission"),
-        schedulers[1]!.trigger("auto-concurrent-admission"),
+        schedulers[0]!.trigger("auto-concurrent-admission", "user-1"),
+        schedulers[1]!.trigger("auto-concurrent-admission", "user-1"),
         schedulers[2]!.tick(),
       ]);
 
@@ -629,7 +770,7 @@ describe("Scheduler (integration)", () => {
     });
 
     it("rejects when automation is not found", async () => {
-      await expect(createScheduler().trigger("nonexistent")).rejects.toThrow(
+      await expect(createScheduler().trigger("nonexistent", "user-1")).rejects.toThrow(
         "Automation not found"
       );
     });
@@ -648,14 +789,85 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      await expect(createScheduler().trigger("auto-trig1")).rejects.toThrow(
+      await expect(createScheduler().trigger("auto-trig1", "user-1")).rejects.toThrow(
         "An active run already exists"
       );
     });
 
-    it("creates a run record when triggered", async () => {
+    it("requires the requester to have session execution authority", async () => {
+      const requesterId = "manual-trigger-requester";
+      await seedActiveUser(requesterId);
+      const roleId = "role_manual_trigger_only";
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO roles (id, key, name, normalized_name, description, is_system)
+           VALUES (?, NULL, 'Manual Trigger Only', 'manual trigger only', NULL, 0)`
+        ).bind(roleId),
+        env.DB.prepare(
+          `INSERT INTO role_permissions (role_id, permission_id)
+           VALUES (?, 'automations.trigger.any')`
+        ).bind(roleId),
+        env.DB.prepare(`UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?`).bind(
+          roleId,
+          requesterId
+        ),
+      ]);
       const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-trig2" }));
+      await store.create(makeAutomation({ id: "auto-trigger-only" }));
+
+      await expect(
+        createScheduler().trigger("auto-trigger-only", requesterId)
+      ).rejects.toBeInstanceOf(AutomationExecutionUnauthorizedError);
+      expect(await fetchRuns("auto-trigger-only")).toEqual([]);
+    });
+
+    it("creates manual-trigger sessions as the requester", async () => {
+      const requesterId = "manual-trigger-requester";
+      await seedActiveUser(requesterId);
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-requester-principal" }));
+      const promptBodies: Array<Record<string, unknown>> = [];
+      const sessionFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(input, init);
+        const path = new URL(request.url).pathname;
+        if (path === "/internal/init") return Response.json({ status: "ok" });
+        if (path === "/internal/prompt") {
+          promptBodies.push(await request.json<Record<string, unknown>>());
+          return Response.json({ messageId: "msg-requester", status: "queued" });
+        }
+        return new Response("Not Found", { status: 404 });
+      });
+      const schedulerEnv = createCloudflareEnv({
+        ...env,
+        SESSION: {
+          idFromName: vi.fn((name: string) => name),
+          get: vi.fn(() => ({ fetch: sessionFetch })),
+        } as unknown as DurableObjectNamespace,
+      });
+
+      await createScheduler(schedulerEnv).trigger("auto-requester-principal", requesterId);
+
+      expect(
+        await env.DB.prepare(
+          `SELECT user_id FROM sessions WHERE automation_id = 'auto-requester-principal'`
+        ).first()
+      ).toEqual({ user_id: requesterId });
+      expect(promptBodies).toContainEqual(
+        expect.objectContaining({ authorId: requesterId, canonicalUserId: requesterId })
+      );
+    });
+
+    it("repairs a legacy owner before creating a triggered run", async () => {
+      const store = new AutomationStore(env.DB);
+      await env.DB.prepare(
+        `INSERT INTO user_identities
+          (id, user_id, provider, provider_user_id, provider_issuer, created_at, updated_at)
+         VALUES ('legacy-identity', 'user-1', 'github', 'legacy-github-id',
+           'https://github.com', 1, 1)`
+      ).run();
+      await store.create(
+        makeAutomation({ id: "auto-trig2", created_by: "legacy-github-id", user_id: null })
+      );
 
       const sessionFetch = vi.fn(async (input: RequestInfo | URL) => {
         const path = new URL(
@@ -667,15 +879,15 @@ describe("Scheduler (integration)", () => {
         }
         return new Response("Not Found", { status: 404 });
       });
-      const schedulerEnv = {
-        ...(env as Env),
+      const schedulerEnv = createCloudflareEnv({
+        ...env,
         SESSION: {
           idFromName: vi.fn((name: string) => name),
           get: vi.fn(() => ({ fetch: sessionFetch })),
         } as unknown as DurableObjectNamespace,
-      };
+      });
 
-      const result = await createScheduler(schedulerEnv).trigger("auto-trig2");
+      const result = await createScheduler(schedulerEnv).trigger("auto-trig2", "user-1");
       expect(result).toEqual({
         invocationId: expect.any(String),
         runs: [expect.objectContaining({ status: "running" })],
@@ -684,13 +896,14 @@ describe("Scheduler (integration)", () => {
       const runs = await fetchRuns("auto-trig2");
       expect(runs).toHaveLength(1);
       expect(runs[0]!.invocation_id).not.toBeNull();
+      expect((await store.getById("auto-trig2"))!.user_id).toBe("user-1");
     });
   });
 
   // ─── Invocation finalization (D2) ─────────────────────────────────────────
 
   describe("invocation finalization", () => {
-    /** Seed an invocation with N children in the given statuses via the real guarded insert. */
+    /** Seed an invocation with N children in the given statuses via the real conditional insert. */
     async function seedInvocation(
       store: AutomationStore,
       automationId: string,
@@ -722,6 +935,7 @@ describe("Scheduler (integration)", () => {
           failure_reason: child.status === "failed" ? "seeded failure" : null,
           scheduled_at: now,
           started_at: child.status === "starting" ? null : now,
+          execution_deadline_at: child.status === "running" ? now + 60_000 : null,
           completed_at: child.status === "failed" || child.status === "completed" ? now : null,
           created_at: now + index,
           repo_owner: null,

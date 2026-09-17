@@ -3,10 +3,8 @@
  * (e.g. `/internal/github-event`, `/internal/slack-event`). Each bot
  * pre-normalizes its source's events and POSTs them here; this layer
  * authenticates, validates the event envelope, and invokes the scheduler for
- * matching and dispatch. Sources with no extra behavior use
- * `createAutomationEventRoute`; sources that piggyback additional processing
- * (github's PR lifecycle tracking) compose the exported steps in their own
- * named handler.
+ * matching and dispatch. Each source registers its own route with its own
+ * service policy and composes the exported steps in its handler.
  */
 
 import {
@@ -14,16 +12,9 @@ import {
   type AutomationEvent,
   type AutomationEventSource,
 } from "@open-inspect/shared/triggers";
-import { requireEventPoster } from "../auth/identity-enforcement";
 import { createLogger } from "../logger";
-import type { Route, RequestContext } from "../routes/shared";
-import {
-  defineRoute,
-  error,
-  GITHUB_USER_OR_SERVICE_ROUTE,
-  json,
-  parsePattern,
-} from "../routes/shared";
+import type { RequestContext } from "../routes/shared";
+import { error, json } from "../routes/shared";
 import type { Env } from "../types";
 import { Scheduler } from "../scheduler/scheduler";
 
@@ -122,41 +113,4 @@ export async function forwardAutomationEventToScheduler(
   }
 
   return json({ ok: true, ...result });
-}
-
-export function createAutomationEventRoute(opts: {
-  path: string;
-  source: AutomationEventSource;
-}): Route {
-  async function handler(
-    request: Request,
-    env: Env,
-    _match: RegExpMatchArray,
-    ctx: RequestContext
-  ): Promise<Response> {
-    const authFailure = requireEventPoster(ctx, opts.source);
-    if (authFailure) return authFailure;
-
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      logAutomationEventRejection(undefined, opts.source, ["body"], ctx);
-      return error("Invalid JSON", 400);
-    }
-
-    const validated = validateAutomationEventEnvelope(body, opts.source);
-    if (validated.response) {
-      logAutomationEventRejection(body, opts.source, validated.issuePaths, ctx);
-      return validated.response;
-    }
-
-    return forwardAutomationEventToScheduler(env, validated.event, ctx);
-  }
-
-  return defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "POST",
-    pattern: parsePattern(opts.path),
-    handler,
-  });
 }

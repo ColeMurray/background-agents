@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sandbox_runtime.types import SandboxStatus
 from src import web_api
 from src.sandbox import manager as manager_module
-from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS
+from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, RepositoryImageUnavailableError
 
 
 def _patch_auth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -249,7 +249,15 @@ async def test_sandbox_generic_failures_raise_500_and_log_request(monkeypatch, c
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.detail == "Internal server error"
-    error.assert_called_once()
+    error.assert_called_once_with(
+        "api.error",
+        exc=ANY,
+        endpoint_name=endpoint,
+        trace_id="trace-1",
+        request_id="request-1",
+        session_id="sess-1",
+        sandbox_id="sandbox-1",
+    )
     info.assert_called_once_with(
         "modal.http_request",
         http_method="POST",
@@ -263,6 +271,23 @@ async def test_sandbox_generic_failures_raise_500_and_log_request(monkeypatch, c
         session_id="sess-1",
         sandbox_id="sandbox-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_missing_repository_image_raises_410(monkeypatch):
+    _patch_auth(monkeypatch)
+
+    class MissingImageManager:
+        async def create_sandbox(self, _config):
+            raise RepositoryImageUnavailableError("repository image is unavailable")
+
+    monkeypatch.setattr(manager_module, "SandboxManager", MissingImageManager)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_create_sandbox(CREATE_REQUEST)
+
+    assert exc_info.value.status_code == 410
+    assert exc_info.value.detail == "Repository image unavailable"
 
 
 @pytest.mark.asyncio

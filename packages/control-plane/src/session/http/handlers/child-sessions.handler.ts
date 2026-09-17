@@ -1,3 +1,4 @@
+import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import { childFollowUpPromptRequestSchema } from "@open-inspect/shared/types/session-api";
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
 import { z } from "zod";
@@ -87,6 +88,7 @@ export class ChildSessionsHandler {
       repoOwner: session.repo_owner,
       repoName: session.repo_name,
       repoId: session.repo_id,
+      harness: getValidHarnessOrDefault(session.harness),
       model: session.model,
       reasoningEffort: session.reasoning_effort ?? null,
       baseBranch: session.base_branch,
@@ -100,9 +102,6 @@ export class ChildSessionsHandler {
         scmLogin: promptAuthor.scm_login,
         scmName: promptAuthor.scm_name,
         scmEmail: promptAuthor.scm_email,
-        scmAccessTokenEncrypted: promptAuthor.scm_access_token_encrypted,
-        scmRefreshTokenEncrypted: promptAuthor.scm_refresh_token_encrypted,
-        scmTokenExpiresAt: promptAuthor.scm_token_expires_at,
       },
     };
 
@@ -155,9 +154,6 @@ export class ChildSessionsHandler {
             login: parsed.data.author.scmLogin,
             name: parsed.data.author.scmName,
             email: parsed.data.author.scmEmail,
-            accessTokenEncrypted: null,
-            refreshTokenEncrypted: null,
-            tokenExpiresAt: null,
           },
         })
       );

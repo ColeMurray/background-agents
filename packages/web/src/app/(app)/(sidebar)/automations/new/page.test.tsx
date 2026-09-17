@@ -14,10 +14,19 @@ afterEach(cleanup);
 // Mutable per-test inputs (vi.mock factories are hoisted, so they close over these).
 let search = "";
 let enabledModelsValue: string[] = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
+let canCreate = true;
+const replace = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(search),
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace }),
+}));
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) => permission === "automations.create" && canCreate,
+    loading: false,
+  }),
 }));
 
 vi.mock("@/components/sidebar-layout", () => ({
@@ -58,9 +67,19 @@ vi.mock("@/components/ui/combobox", () => ({
 beforeEach(() => {
   search = "";
   enabledModelsValue = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
+  canCreate = true;
+  replace.mockReset();
 });
 
 describe("NewAutomationPage template pre-fill", () => {
+  it("redirects a direct create link without automations.create", () => {
+    canCreate = false;
+    render(<NewAutomationPage />);
+
+    expect(replace).toHaveBeenCalledWith("/automations");
+    expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
+  });
+
   it("pre-fills the form from a known template and leaves the repository empty", () => {
     search = "template=find-bugs";
     render(<NewAutomationPage />);

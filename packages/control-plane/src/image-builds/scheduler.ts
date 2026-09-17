@@ -135,14 +135,15 @@ export class ImageBuildScheduler {
   }
 
   private async republishRecoverableFinalizations(): Promise<number> {
-    const queue = this.env.IMAGE_BUILD_FINALIZATION_QUEUE;
-    if (!queue) return 0;
     const rows = await this.store.listRecoverableFinalizations(Date.now());
 
     let published = 0;
     for (const row of rows) {
       try {
-        await queue.send(imageBuildFinalizationJob(row.id, row.completion_hash));
+        await this.env.JOBS.send({
+          kind: "image_build.finalize",
+          payload: imageBuildFinalizationJob(row.id, row.completion_hash),
+        });
         published += 1;
       } catch (error) {
         logger.warn("image_build.scheduler_finalization_republish_row_failed", {

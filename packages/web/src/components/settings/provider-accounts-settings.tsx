@@ -4,12 +4,14 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   modelProviderAccountReconnectMethod,
+  STATIC_CREDENTIAL_PROVIDER_IDS,
   SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
   type ModelProviderAccount,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
 import {
   archiveProviderAccount,
+  connectProviderAccount,
   reconnectProviderAccount,
   renameProviderAccount,
   runProviderAccountAction,
@@ -22,6 +24,11 @@ import {
   ProviderDeviceAuthorizationDialog,
   type ProviderDeviceAuthorizationTarget,
 } from "@/components/settings/provider-device-authorization-dialog";
+import {
+  ANTHROPIC_CREDENTIAL_ROTATION_WARNING,
+  ProviderAuthorizationCodeDialog,
+  type ProviderAuthorizationCodeTarget,
+} from "@/components/settings/provider-authorization-code-dialog";
 import { formatRelativeTime } from "@/lib/time";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,10 +61,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 type Confirm = { account: ModelProviderAccount; action: "disable" | "archive" } | null;
 type Connection =
   | { kind: "device"; target: ProviderDeviceAuthorizationTarget }
+  | { kind: "authorization-code"; target: ProviderAuthorizationCodeTarget }
   | { kind: "legacy-xai"; account: ModelProviderAccount };
 
 type ConnectionStrategy = {
@@ -93,7 +102,36 @@ const CONNECTION_STRATEGIES: Record<SubscriptionProviderId, ConnectionStrategy> 
           }
         : { kind: "legacy-xai", account },
   },
+  anthropic: {
+    add: () => ({
+      kind: "authorization-code",
+      target: { provider: "anthropic", operation: "create" },
+    }),
+    reconnect: (account) => ({
+      kind: "authorization-code",
+      target: {
+        provider: "anthropic",
+        operation: "reconnect",
+        providerAccountId: account.id,
+        displayName: account.displayName,
+        externalAccountId: account.externalAccountId,
+      },
+    }),
+  },
 };
+
+function connectionKey(
+  target: ProviderDeviceAuthorizationTarget | ProviderAuthorizationCodeTarget
+) {
+  return target.operation === "create"
+    ? `${target.provider}:create`
+    : `${target.provider}:reconnect:${target.providerAccountId}`;
+}
+
+/** Static credentials (a Claude setup token) cannot be verified against the provider. */
+function supportsVerify(provider: SubscriptionProviderId) {
+  return !STATIC_CREDENTIAL_PROVIDER_IDS.includes(provider);
+}
 
 function dateLabel(timestamp: number | null) {
   return timestamp ? new Date(timestamp).toLocaleString() : "Never";
@@ -122,7 +160,7 @@ function legacyKeyLocationLabel(location: LegacyProviderKeyLocation): string {
 function connectionToastMessage(
   provider: SubscriptionProviderId,
   reconnectedExisting: boolean,
-  operation: ProviderDeviceAuthorizationTarget["operation"]
+  operation: "create" | "reconnect"
 ): string {
   if (!reconnectedExisting) {
     return `${SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName} account connected`;
@@ -174,7 +212,12 @@ function LegacyReconnectForm({
   );
 }
 
+/**
+ * Displays provider accounts while restricting connection and account-management actions by permission.
+ */
 export function ProviderAccountsSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManage = hasPermission("provider_accounts.manage");
   const { providers, accounts, defaults, loading, error, refresh } = useProviderAccounts();
   const legacyCredentials = useLegacyProviderCredentials();
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -188,15 +231,24 @@ export function ProviderAccountsSettings() {
     setSaving(true);
     try {
       await operation();
-      await refresh();
-      setConnection(null);
-      setConfirm(null);
-      toast.success(success);
     } catch (caught) {
       toast.error(caught instanceof Error ? caught.message : "Provider account request failed");
+      return;
     } finally {
       operationInFlightRef.current = false;
       setSaving(false);
+    }
+    // The write is durable once the request succeeds, so the form closes
+    // before the list refreshes: a refresh failure must not leave a form that
+    // would repeat the write (an identity-less setup-token account has no
+    // uniqueness backstop).
+    setConnection(null);
+    setConfirm(null);
+    toast.success(success);
+    try {
+      await refresh();
+    } catch {
+      toast.error("Saved, but the account list could not be refreshed. Reload the page to see it.");
     }
   }
 
@@ -256,32 +308,34 @@ export function ProviderAccountsSettings() {
           <section className="overflow-hidden rounded-md border border-border-muted">
             <div className="flex items-center justify-between gap-3 border-b border-border-muted p-4">
               <h3 className="font-medium text-foreground">Connected accounts</h3>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="subtle" disabled={saving}>
-                    <PlusIcon className="size-4" />
-                    Add account
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-64">
-                  <DropdownMenuLabel>Subscriptions</DropdownMenuLabel>
-                  {providers.map((provider) => (
-                    <DropdownMenuItem
-                      key={provider.provider}
-                      disabled={saving}
-                      onSelect={() =>
-                        beginConnection(CONNECTION_STRATEGIES[provider.provider].add())
-                      }
-                    >
-                      <SubscriptionProviderIcon
-                        provider={provider.provider}
-                        className="size-5 text-primary"
-                      />
-                      <span>{provider.subscriptionName}</span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {canManage && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="subtle" disabled={saving}>
+                      <PlusIcon className="size-4" />
+                      Add account
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-64">
+                    <DropdownMenuLabel>Subscriptions</DropdownMenuLabel>
+                    {providers.map((provider) => (
+                      <DropdownMenuItem
+                        key={provider.provider}
+                        disabled={saving}
+                        onSelect={() =>
+                          beginConnection(CONNECTION_STRATEGIES[provider.provider].add())
+                        }
+                      >
+                        <SubscriptionProviderIcon
+                          provider={provider.provider}
+                          className="size-5 text-primary"
+                        />
+                        <span>{provider.subscriptionName}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
 
             {accounts.length === 0 ? (
@@ -356,135 +410,141 @@ export function ProviderAccountsSettings() {
                             </div>
                           </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-1.5">
-                          {account.status === "reconnect_required" && (
-                            <Button
-                              size="xs"
-                              disabled={saving}
-                              onClick={() =>
-                                beginConnection(
-                                  CONNECTION_STRATEGIES[account.provider].reconnect(account)
-                                )
-                              }
-                            >
-                              Reconnect
-                            </Button>
-                          )}
-                          {account.status === "disabled" && (
-                            <Button
-                              size="xs"
-                              disabled={saving}
-                              onClick={() =>
-                                void run(
-                                  () => runProviderAccountAction(account.id, "enable"),
-                                  "Account enabled"
-                                )
-                              }
-                            >
-                              Enable
-                            </Button>
-                          )}
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
+                        {canManage && (
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            {account.status === "reconnect_required" && (
                               <Button
-                                size="icon"
-                                variant="subtle"
-                                className="size-7"
-                                aria-label={`More actions for ${account.displayName}`}
+                                size="xs"
                                 disabled={saving}
-                              >
-                                <MoreIcon className="size-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              {account.status !== "reconnect_required" && (
-                                <DropdownMenuItem
-                                  disabled={saving}
-                                  onSelect={() =>
-                                    beginConnection(
-                                      CONNECTION_STRATEGIES[account.provider].reconnect(account)
-                                    )
-                                  }
-                                >
-                                  Reconnect
-                                </DropdownMenuItem>
-                              )}
-                              <DropdownMenuItem
-                                disabled={saving || account.status !== "active"}
-                                onSelect={() =>
-                                  void run(
-                                    () => runProviderAccountAction(account.id, "verify"),
-                                    "Account verified"
+                                onClick={() =>
+                                  beginConnection(
+                                    CONNECTION_STRATEGIES[account.provider].reconnect(account)
                                   )
                                 }
                               >
-                                Verify
-                              </DropdownMenuItem>
-                              {account.status === "active" && !isDefault && (
+                                Reconnect
+                              </Button>
+                            )}
+                            {account.status === "disabled" && (
+                              <Button
+                                size="xs"
+                                disabled={saving}
+                                onClick={() =>
+                                  void run(
+                                    () => runProviderAccountAction(account.id, "enable"),
+                                    "Account enabled"
+                                  )
+                                }
+                              >
+                                Enable
+                              </Button>
+                            )}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="subtle"
+                                  className="size-7"
+                                  aria-label={`More actions for ${account.displayName}`}
+                                  disabled={saving}
+                                >
+                                  <MoreIcon className="size-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                {account.status !== "reconnect_required" && (
+                                  <DropdownMenuItem
+                                    disabled={saving}
+                                    onSelect={() =>
+                                      beginConnection(
+                                        CONNECTION_STRATEGIES[account.provider].reconnect(account)
+                                      )
+                                    }
+                                  >
+                                    Reconnect
+                                  </DropdownMenuItem>
+                                )}
+                                {supportsVerify(account.provider) && (
+                                  <DropdownMenuItem
+                                    disabled={saving || account.status !== "active"}
+                                    onSelect={() =>
+                                      void run(
+                                        () => runProviderAccountAction(account.id, "verify"),
+                                        "Account verified"
+                                      )
+                                    }
+                                  >
+                                    Verify
+                                  </DropdownMenuItem>
+                                )}
+                                {account.status === "active" && !isDefault && (
+                                  <DropdownMenuItem
+                                    disabled={saving}
+                                    onSelect={() =>
+                                      void run(
+                                        () =>
+                                          setProviderAccountDefault(
+                                            account.provider,
+                                            account.id,
+                                            providerDefault?.unattendedMode ?? "provider_account"
+                                          ),
+                                        "Default updated"
+                                      )
+                                    }
+                                  >
+                                    Make default
+                                  </DropdownMenuItem>
+                                )}
                                 <DropdownMenuItem
                                   disabled={saving}
-                                  onSelect={() =>
-                                    void run(
-                                      () =>
-                                        setProviderAccountDefault(
-                                          account.provider,
-                                          account.id,
-                                          providerDefault?.unattendedMode ?? "provider_account"
-                                        ),
-                                      "Default updated"
-                                    )
-                                  }
+                                  onSelect={() => {
+                                    if (operationInFlightRef.current) return;
+                                    const displayName = window
+                                      .prompt("Account name", account.displayName)
+                                      ?.trim();
+                                    if (displayName)
+                                      void run(
+                                        () => renameProviderAccount(account.id, displayName),
+                                        "Account renamed"
+                                      );
+                                  }}
                                 >
-                                  Make default
+                                  Rename
                                 </DropdownMenuItem>
-                              )}
-                              <DropdownMenuItem
-                                disabled={saving}
-                                onSelect={() => {
-                                  if (operationInFlightRef.current) return;
-                                  const displayName = window
-                                    .prompt("Account name", account.displayName)
-                                    ?.trim();
-                                  if (displayName)
-                                    void run(
-                                      () => renameProviderAccount(account.id, displayName),
-                                      "Account renamed"
-                                    );
-                                }}
-                              >
-                                Rename
-                              </DropdownMenuItem>
-                              {externalAccountId && (
+                                {externalAccountId && (
+                                  <DropdownMenuItem
+                                    onSelect={() =>
+                                      void navigator.clipboard
+                                        .writeText(externalAccountId)
+                                        .then(() => toast.success("Account ID copied"))
+                                        .catch(() => toast.error("Failed to copy account ID"))
+                                    }
+                                  >
+                                    Copy account ID
+                                  </DropdownMenuItem>
+                                )}
+                                <DropdownMenuSeparator />
+                                {account.status === "active" && (
+                                  <DropdownMenuItem
+                                    disabled={saving}
+                                    onSelect={() =>
+                                      beginConfirmation({ account, action: "disable" })
+                                    }
+                                  >
+                                    Disable
+                                  </DropdownMenuItem>
+                                )}
                                 <DropdownMenuItem
-                                  onSelect={() =>
-                                    void navigator.clipboard
-                                      .writeText(externalAccountId)
-                                      .then(() => toast.success("Account ID copied"))
-                                      .catch(() => toast.error("Failed to copy account ID"))
-                                  }
-                                >
-                                  Copy account ID
-                                </DropdownMenuItem>
-                              )}
-                              <DropdownMenuSeparator />
-                              {account.status === "active" && (
-                                <DropdownMenuItem
+                                  className="text-destructive focus:text-destructive"
                                   disabled={saving}
-                                  onSelect={() => beginConfirmation({ account, action: "disable" })}
+                                  onSelect={() => beginConfirmation({ account, action: "archive" })}
                                 >
-                                  Disable
+                                  Archive
                                 </DropdownMenuItem>
-                              )}
-                              <DropdownMenuItem
-                                className="text-destructive focus:text-destructive"
-                                disabled={saving}
-                                onSelect={() => beginConfirmation({ account, action: "archive" })}
-                              >
-                                Archive
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        )}
                       </div>
                       {account.status !== "active" && (
                         <p
@@ -540,7 +600,7 @@ export function ProviderAccountsSettings() {
                             Automated authentication
                           </Label>
                           <Select
-                            disabled={saving}
+                            disabled={!canManage || saving}
                             value={providerDefault.unattendedMode}
                             onValueChange={(value: "provider_account" | "api_key") => {
                               if (!operationInFlightRef.current)
@@ -586,13 +646,9 @@ export function ProviderAccountsSettings() {
         </>
       )}
 
-      {connection?.kind === "device" && (
+      {canManage && connection?.kind === "device" && (
         <ProviderDeviceAuthorizationDialog
-          key={
-            connection.target.operation === "create"
-              ? `${connection.target.provider}:create`
-              : `${connection.target.provider}:reconnect:${connection.target.providerAccountId}`
-          }
+          key={connectionKey(connection.target)}
           target={connection.target}
           onClose={() => setConnection(null)}
           onConnected={(result) => {
@@ -606,7 +662,42 @@ export function ProviderAccountsSettings() {
         />
       )}
 
-      {connection?.kind === "legacy-xai" && (
+      {canManage && connection?.kind === "authorization-code" && (
+        <ProviderAuthorizationCodeDialog
+          key={connectionKey(connection.target)}
+          target={connection.target}
+          saving={saving}
+          onClose={() => setConnection(null)}
+          onConnected={(result) => {
+            const target = connection.target;
+            setConnection(null);
+            void refresh();
+            toast.success(
+              connectionToastMessage(target.provider, result.reconnectedExisting, target.operation)
+            );
+          }}
+          onSubmitSetupToken={(submission) =>
+            void run(
+              () =>
+                submission.operation === "create"
+                  ? connectProviderAccount({
+                      provider: "anthropic",
+                      displayName: submission.displayName,
+                      setupToken: submission.setupToken,
+                    })
+                  : reconnectProviderAccount(submission.providerAccountId, {
+                      provider: "anthropic",
+                      setupToken: submission.setupToken,
+                    }),
+              submission.operation === "create"
+                ? connectionToastMessage("anthropic", false, "create")
+                : "Account reconnected"
+            )
+          }
+        />
+      )}
+
+      {canManage && connection?.kind === "legacy-xai" && (
         <LegacyReconnectForm
           key={connection.account.id}
           account={connection.account}
@@ -625,15 +716,17 @@ export function ProviderAccountsSettings() {
         />
       )}
 
-      <AlertDialog open={!!confirm} onOpenChange={(open) => !open && setConfirm(null)}>
+      <AlertDialog open={canManage && !!confirm} onOpenChange={(open) => !open && setConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
               {confirm?.action === "archive" ? "Archive" : "Disable"} this account?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Running sessions may retain issued access until it expires. Defaults and pinned
-              automations can cause a conflict and must be updated first.
+              {confirm?.account.provider === "anthropic"
+                ? ANTHROPIC_CREDENTIAL_ROTATION_WARNING
+                : "Running sessions may retain issued access until it expires."}{" "}
+              Defaults and pinned automations can cause a conflict and must be updated first.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

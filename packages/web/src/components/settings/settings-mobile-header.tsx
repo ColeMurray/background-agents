@@ -3,6 +3,7 @@
 import type { RefObject } from "react";
 import Link from "next/link";
 import { BackIcon, XIcon } from "@/components/ui/icons";
+import { Button } from "@/components/ui/button";
 
 type SettingsMobileHeaderProps = {
   title: string;
@@ -17,24 +18,31 @@ export function SettingsMobileHeader({
   backHref,
   onBack,
 }: SettingsMobileHeaderProps) {
-  const backClassName =
-    "flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground";
+  const actionClassName = "h-11 w-11 rounded-md";
 
   return (
-    <header className="grid h-14 shrink-0 grid-cols-[2.5rem_1fr_2.5rem] items-center border-b border-border-muted px-3">
+    <header className="grid h-14 shrink-0 grid-cols-[2.75rem_1fr_2.75rem] items-center border-b border-border-muted px-3">
       {onBack ? (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           onClick={onBack}
-          className={backClassName}
+          className={actionClassName}
           aria-label="Back to settings"
         >
-          <BackIcon className="h-4 w-4" />
-        </button>
+          <span aria-hidden="true">
+            <BackIcon className="h-4 w-4" />
+          </span>
+        </Button>
       ) : backHref ? (
-        <Link href={backHref} className={backClassName} aria-label="Back to integrations">
-          <BackIcon className="h-4 w-4" />
-        </Link>
+        <Button asChild variant="ghost" size="icon" className={actionClassName}>
+          <Link href={backHref} aria-label="Back to integrations">
+            <span aria-hidden="true">
+              <BackIcon className="h-4 w-4" />
+            </span>
+          </Link>
+        </Button>
       ) : (
         <span aria-hidden="true" />
       )}
@@ -45,13 +53,13 @@ export function SettingsMobileHeader({
       >
         {title}
       </h1>
-      <Link
-        href="/"
-        className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
-        aria-label="Close settings"
-      >
-        <XIcon className="h-4 w-4" />
-      </Link>
+      <Button asChild variant="ghost" size="icon" className={actionClassName}>
+        <Link href="/" aria-label="Close settings">
+          <span aria-hidden="true">
+            <XIcon className="h-4 w-4" />
+          </span>
+        </Link>
+      </Button>
     </header>
   );
 }

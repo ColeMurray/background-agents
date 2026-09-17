@@ -18,6 +18,7 @@ import {
 } from "../../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   createVncAccess,
   type CreateSandboxConfig,
@@ -117,19 +118,31 @@ export class VercelSandboxProvider implements SandboxProvider {
         );
       }
 
-      const created = await this.client.createSandbox(
-        {
-          name: config.sandboxId,
-          runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
-          timeoutMs,
-          resources: resolveVercelResources(config.sandboxSettings),
-          ports,
-          env,
-          tags: this.buildTags(config),
-          sourceSnapshotId,
-        },
-        config.correlation
-      );
+      let created: VercelCreateSandboxResponse;
+      try {
+        created = await this.client.createSandbox(
+          {
+            name: config.sandboxId,
+            runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
+            timeoutMs,
+            resources: resolveVercelResources(config.sandboxSettings),
+            ports,
+            env,
+            tags: this.buildTags(config),
+            sourceSnapshotId,
+          },
+          config.correlation
+        );
+      } catch (error) {
+        if (
+          config.prebuiltImageId &&
+          error instanceof VercelSandboxApiError &&
+          error.status === 404
+        ) {
+          throw new PrebuiltImageUnavailableError("Vercel prebuilt snapshot is unavailable", error);
+        }
+        throw error;
+      }
 
       const access = await this.prepareSandboxAccess(
         created,
@@ -153,6 +166,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         tunnelUrls: access.tunnelUrls,
       };
     } catch (error) {
+      if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to create Vercel sandbox", error);
     }
   }
@@ -268,10 +282,11 @@ export class VercelSandboxProvider implements SandboxProvider {
       }
 
       const identity = imageBuildSandboxIdentity(config, Date.now());
+      const sandboxName = identity.sandboxName.replace(/[^a-zA-Z0-9_-]+/g, "-");
       const env = this.buildBuildEnvVars(config, identity.sandboxId);
       const created = await this.client.createSandbox(
         {
-          name: identity.sandboxName,
+          name: sandboxName,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
           timeoutMs: resolveVercelTimeoutMs(config.providerSessionTimeoutSeconds),
           env,
@@ -298,7 +313,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         scope_id: config.scopeId,
         session_id: created.session.id,
         command_id: command.commandId,
-        sandbox_name: identity.sandboxName,
+        sandbox_name: sandboxName,
       });
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;

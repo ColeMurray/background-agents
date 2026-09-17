@@ -9,9 +9,45 @@
  * selection, condition evaluation, and dedup all happen in the scheduler.
  */
 
-import { createAutomationEventRoute } from "./automation-event";
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { RequestContext } from "../routes/shared";
+import { error, GITHUB_SERVICE_ROUTE, serviceAuthorized } from "../routes/shared";
+import type { Env } from "../types";
+import {
+  forwardAutomationEventToScheduler,
+  logAutomationEventRejection,
+  validateAutomationEventEnvelope,
+} from "./automation-event";
 
-export const slackAutomationEventRoute = createAutomationEventRoute({
-  path: "/internal/slack-event",
-  source: "slack",
-});
+async function handleSlackAutomationEvent(
+  request: Request,
+  env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    logAutomationEventRejection(undefined, "slack", ["body"], ctx);
+    return error("Invalid JSON", 400);
+  }
+
+  const validated = validateAutomationEventEnvelope(body, "slack");
+  if (validated.response) {
+    logAutomationEventRejection(body, "slack", validated.issuePaths, ctx);
+    return validated.response;
+  }
+
+  return forwardAutomationEventToScheduler(env, validated.event, ctx);
+}
+
+export const slackAutomationEventRoutes = new Hono<ControlPlaneHonoEnv>();
+
+slackAutomationEventRoutes.post(
+  "/internal/slack-event",
+  admit({ ...GITHUB_SERVICE_ROUTE, authorization: serviceAuthorized("slack-bot") }),
+  (c) => dispatch(c, handleSlackAutomationEvent)
+);

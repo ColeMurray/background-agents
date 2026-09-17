@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
@@ -10,6 +10,7 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import { IntegrationSettingsSkeleton } from "./integrations/integration-settings-skeleton";
+import { SettingsCardSection } from "./settings-card-section";
 import {
   getScmRepoSettingsPath,
   SCM_GLOBAL_SETTINGS_KEY,
@@ -35,6 +36,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const DEFAULT_ALWAYS_USE_DRAFT_MODE = false;
 const DEFAULT_PULL_REQUEST_LABEL = "";
@@ -97,7 +99,12 @@ function isRepoListResponse(value: unknown): value is RepoListResponse {
   );
 }
 
+/**
+ * Displays source-control defaults and disables editing for users without SCM settings management permission.
+ */
 export function ScmSettingsPage() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManage = hasPermission("scm_settings.manage");
   const {
     data: globalData,
     error: globalError,
@@ -140,19 +147,23 @@ export function ScmSettingsPage() {
         Defaults for pull and merge requests opened by coding sessions.
       </p>
 
-      <GlobalSettingsSection settings={settings} />
+      <fieldset disabled={!canManage} className="min-w-0">
+        <GlobalSettingsSection settings={settings} />
+      </fieldset>
 
-      <Section
+      <SettingsCardSection
         title="Repository Overrides"
         description="Override pull and merge request defaults for specific repositories."
       >
-        <RepoOverridesSection
-          overrides={repoOverrides}
-          availableRepos={availableRepos}
-          globalDefault={settings?.defaults?.alwaysUseDraftMode ?? DEFAULT_ALWAYS_USE_DRAFT_MODE}
-          globalLabel={settings?.defaults?.pullRequestLabel}
-        />
-      </Section>
+        <fieldset disabled={!canManage} className="min-w-0">
+          <RepoOverridesSection
+            overrides={repoOverrides}
+            availableRepos={availableRepos}
+            globalDefault={settings?.defaults?.alwaysUseDraftMode ?? DEFAULT_ALWAYS_USE_DRAFT_MODE}
+            globalLabel={settings?.defaults?.pullRequestLabel}
+          />
+        </fieldset>
+      </SettingsCardSection>
     </div>
   );
 }
@@ -236,7 +247,7 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
   };
 
   return (
-    <Section
+    <SettingsCardSection
       title="Defaults"
       description="Apply to pull and merge requests created by sessions across all repositories."
     >
@@ -305,7 +316,7 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Section>
+    </SettingsCardSection>
   );
 }
 
@@ -532,25 +543,5 @@ function RepoOverrideRow({
         </label>
       </div>
     </div>
-  );
-}
-
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="border border-border-muted rounded-md p-5 mb-5">
-      <h4 className="text-sm font-semibold uppercase tracking-wider text-foreground mb-1">
-        {title}
-      </h4>
-      <p className="text-sm text-muted-foreground mb-4">{description}</p>
-      {children}
-    </section>
   );
 }

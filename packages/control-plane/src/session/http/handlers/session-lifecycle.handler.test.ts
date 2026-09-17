@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
+import type { SandboxRow, SessionRow } from "../../types";
 import { SessionLifecycleHandler } from "./session-lifecycle.handler";
 import type { SessionTitleService } from "../../title-service";
 import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
 import type { SessionStatusService } from "../../session-status-service";
-import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageRepository } from "../../message-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
@@ -21,16 +20,20 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     branch_name: "feature/test",
     base_sha: "base-sha",
     current_sha: "head-sha",
-    opencode_session_id: "oc-1",
+    agent_session_id: "oc-1",
+    harness: "opencode",
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: "high",
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user",
     spawn_depth: 0,
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1000,
@@ -63,39 +66,18 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,
+    active_socket_id: null,
     created_at: 1,
-    ...overrides,
-  };
-}
-
-function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
-  return {
-    id: "participant-1",
-    user_id: "user-1",
-    scm_user_id: null,
-    scm_login: "octocat",
-    scm_email: "octocat@example.com",
-    scm_name: "The Octocat",
-    auth_name: null,
-    role: "member",
-    scm_access_token_encrypted: null,
-    scm_refresh_token_encrypted: null,
-    scm_token_expires_at: null,
-    ws_auth_token: null,
-    ws_token_created_at: null,
-    joined_at: 1,
     ...overrides,
   };
 }
 
 function createHandler() {
   const getSession = vi.fn<() => SessionRow | null>();
-  const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const repository = {
     getPendingOrProcessingCount: vi.fn(() => 0),
     getMessageCount: vi.fn(() => 0),
     getSession,
-    getParticipantByUserId,
   };
   const getSandbox = vi.fn<() => SandboxRow | null>();
   const updateSandboxStatus = vi.fn();
@@ -104,11 +86,13 @@ function createHandler() {
     updateSandboxStatus,
   } as unknown as SandboxRepository;
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
+  const confirmIndexStatus = vi.fn<() => Promise<void>>();
   const repairIndexStatus = vi.fn<() => Promise<void>>();
   const settleFromMessageState = vi.fn<() => Promise<SessionRow["status"]>>();
   const statusService = {
     transition,
     repairIndexStatus,
+    confirmIndexStatus,
     settleFromMessageState,
   } as unknown as SessionStatusService;
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
@@ -120,7 +104,6 @@ function createHandler() {
     repository as unknown as SessionCoreRepository,
     sandboxRepository,
     repository as unknown as MessageRepository,
-    repository as unknown as ParticipantRepository,
     statusService,
     { applySessionTitleUpdate } as unknown as SessionTitleService,
     {
@@ -136,8 +119,8 @@ function createHandler() {
   const handler = {
     getState: () => lifecycleHandler.getState(),
     updateTitle: (request: Request) => lifecycleHandler.updateTitle(request),
-    archive: (request: Request) => lifecycleHandler.archive(request),
-    unarchive: (request: Request) => lifecycleHandler.unarchive(request),
+    archive: (_request?: Request) => lifecycleHandler.archive(),
+    unarchive: (_request?: Request) => lifecycleHandler.unarchive(),
     expireDraft: () => lifecycleHandler.expireDraft(),
     cancel: () => lifecycleHandler.cancel(),
   };
@@ -148,9 +131,9 @@ function createHandler() {
     sandboxRepository,
     getSession,
     getSandbox,
-    getParticipantByUserId,
     transition,
     repairIndexStatus,
+    confirmIndexStatus,
     settleFromMessageState,
     applySessionTitleUpdate,
     cancelSession,
@@ -188,7 +171,8 @@ describe("SessionLifecycleHandler", () => {
       branchName: "feature/test",
       baseSha: "base-sha",
       currentSha: "head-sha",
-      opencodeSessionId: "oc-1",
+      harness: "opencode",
+      agentSessionId: "oc-1",
       status: "active",
       model: "anthropic/claude-haiku-4-5",
       reasoningEffort: "high",
@@ -283,33 +267,15 @@ describe("SessionLifecycleHandler", () => {
     expect(await response.json()).toEqual({ error: "title must be 200 characters or fewer" });
   });
 
-  it("returns 403 when non-participant tries to update title", async () => {
-    const { handler, getSession, getParticipantByUserId } = createHandler();
-    getSession.mockReturnValue(createSession());
-    getParticipantByUserId.mockReturnValue(null);
-
-    const response = await handler.updateTitle(
-      new Request("http://internal/internal/update-title", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userId: "user-1", title: "New Title" }),
-      })
-    );
-
-    expect(response.status).toBe(403);
-  });
-
   it("applies a manual title update and returns the normalized title", async () => {
-    const { handler, getSession, getParticipantByUserId, applySessionTitleUpdate } =
-      createHandler();
+    const { handler, getSession, applySessionTitleUpdate } = createHandler();
     getSession.mockReturnValue(createSession());
-    getParticipantByUserId.mockReturnValue(createParticipant());
 
     const response = await handler.updateTitle(
       new Request("http://internal/internal/update-title", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userId: "user-1", title: " New Title " }),
+        body: JSON.stringify({ title: " New Title " }),
       })
     );
 
@@ -318,60 +284,9 @@ describe("SessionLifecycleHandler", () => {
     expect(applySessionTitleUpdate).toHaveBeenCalledWith("New Title", { onlyIfUnset: false });
   });
 
-  it("returns 400 for invalid archive body", async () => {
-    const { handler, getSession } = createHandler();
+  it("archives successfully without participant authorization", async () => {
+    const { handler, getSession, transition } = createHandler();
     getSession.mockReturnValue(createSession());
-
-    const response = await handler.archive(
-      new Request("http://internal/internal/archive", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{invalid",
-      })
-    );
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Invalid request body" });
-  });
-
-  it("returns 400 for malformed archive fields", async () => {
-    const { handler, getSession, getParticipantByUserId } = createHandler();
-    getSession.mockReturnValue(createSession());
-
-    const response = await handler.archive(
-      new Request("http://internal/internal/archive", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userId: 123 }),
-      })
-    );
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Invalid request body" });
-    expect(getParticipantByUserId).not.toHaveBeenCalled();
-  });
-
-  it("returns 403 when archive user is not a participant", async () => {
-    const { handler, getSession, getParticipantByUserId } = createHandler();
-    getSession.mockReturnValue(createSession());
-    getParticipantByUserId.mockReturnValue(null);
-
-    const response = await handler.archive(
-      new Request("http://internal/internal/archive", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userId: "user-1" }),
-      })
-    );
-
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ error: "Not authorized to archive this session" });
-  });
-
-  it("archives successfully for participant", async () => {
-    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
-    getSession.mockReturnValue(createSession());
-    getParticipantByUserId.mockReturnValue(createParticipant());
     transition.mockResolvedValue(true);
 
     const response = await handler.archive(
@@ -383,7 +298,7 @@ describe("SessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "archived" });
+    expect(await response.json()).toEqual({ status: "archived", outcome: "archived" });
     expect(transition).toHaveBeenCalledWith("archived");
   });
 
@@ -490,9 +405,8 @@ describe("SessionLifecycleHandler", () => {
   });
 
   it("returns 409 when archiving a session with queued work", async () => {
-    const { handler, getSession, getParticipantByUserId, repository, transition } = createHandler();
+    const { handler, getSession, repository, transition } = createHandler();
     getSession.mockReturnValue(createSession());
-    getParticipantByUserId.mockReturnValue(createParticipant());
     repository.getPendingOrProcessingCount.mockReturnValue(1);
 
     const response = await handler.archive(
@@ -507,9 +421,8 @@ describe("SessionLifecycleHandler", () => {
   });
 
   it("returns 409 when archiving a cancelled session", async () => {
-    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
+    const { handler, getSession, transition } = createHandler();
     getSession.mockReturnValue(createSession({ status: "cancelled" }));
-    getParticipantByUserId.mockReturnValue(createParticipant());
 
     const response = await handler.archive(
       new Request("http://internal/internal/archive", {
@@ -533,10 +446,8 @@ describe("SessionLifecycleHandler", () => {
   // state actually produces is covered against real DO storage in
   // test/integration/session-lifecycle.test.ts.
   it("delegates to the settle service and returns whatever it decides", async () => {
-    const { handler, getSession, getParticipantByUserId, transition, settleFromMessageState } =
-      createHandler();
+    const { handler, getSession, transition, settleFromMessageState } = createHandler();
     getSession.mockReturnValue(createSession({ status: "archived" }));
-    getParticipantByUserId.mockReturnValue(createParticipant());
     settleFromMessageState.mockResolvedValue("completed");
 
     const response = await handler.unarchive(
@@ -554,9 +465,8 @@ describe("SessionLifecycleHandler", () => {
   });
 
   it("returns 409 when unarchiving a session that is not archived", async () => {
-    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
+    const { handler, getSession, transition } = createHandler();
     getSession.mockReturnValue(createSession({ status: "cancelled" }));
-    getParticipantByUserId.mockReturnValue(createParticipant());
 
     const response = await handler.unarchive(
       new Request("http://internal/internal/unarchive", {
@@ -602,5 +512,35 @@ describe("SessionLifecycleHandler", () => {
     expect(cancelSession).toHaveBeenCalledOnce();
     expect(sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
     expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");
+  });
+});
+
+describe("canonical archive outcomes", () => {
+  it.each(["cancelled", "active", "archived"] as const)(
+    "does not bypass eligibility for %s sessions",
+    async (status) => {
+      const h = createHandler();
+      h.getSession.mockReturnValue(createSession({ status }));
+      if (status !== "cancelled") h.repository.getPendingOrProcessingCount.mockReturnValue(1);
+      const response = await h.handler.archive();
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        outcome: status === "cancelled" ? "skipped_cancelled" : "skipped_queued_work",
+      });
+      expect(h.transition).not.toHaveBeenCalled();
+    }
+  );
+  it("returns retryable failure when the projection cannot be confirmed", async () => {
+    const h = createHandler();
+    h.getSession.mockReturnValue(createSession());
+    h.confirmIndexStatus.mockRejectedValue(new Error("projection conflict"));
+    expect((await h.handler.archive()).status).toBe(503);
+  });
+  it("confirms index agreement even for an already archived session", async () => {
+    const h = createHandler();
+    h.getSession.mockReturnValue(createSession({ status: "archived" }));
+    const response = await h.handler.archive();
+    expect(await response.json()).toEqual({ outcome: "already_archived", status: "archived" });
+    expect(h.confirmIndexStatus).toHaveBeenCalledOnce();
   });
 });

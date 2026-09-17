@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS } from "@open-inspect/shared/types/github-autofix";
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { PullRequestStatus } from "@open-inspect/shared/types/artifacts";
 import type {
@@ -149,13 +150,16 @@ const githubPullRequestReviewSchema = z.object({
 
 const githubReviewCommentSchema = z.object({
   id: z.number(),
+  in_reply_to_id: z.number().nullable().optional(),
   body: z.string(),
   html_url: z.url(),
   path: z.string(),
   line: z.number().nullable().optional(),
   start_line: z.number().nullable().optional(),
-  side: z.string().nullable().optional(),
-  start_side: z.string().nullable().optional(),
+  original_line: z.number().nullable().optional(),
+  original_start_line: z.number().nullable().optional(),
+  side: z.enum(["LEFT", "RIGHT"]).nullable().optional(),
+  start_side: z.enum(["LEFT", "RIGHT"]).nullable().optional(),
   diff_hunk: z.string(),
 });
 
@@ -175,7 +179,7 @@ export type GetGitHubPullRequestFeedbackConfig = GitHubPullRequestFeedbackLocati
     | { providerObject: { kind: "review"; id: string } }
   );
 
-export interface GitHubFeedbackAuthor {
+interface GitHubFeedbackAuthor {
   id: string;
   login: string;
   type: string;
@@ -199,19 +203,21 @@ export type GitHubPullRequestFeedback =
       comments: GitHubReviewComment[];
     };
 
-export interface GitHubReviewComment {
+interface GitHubReviewComment {
   id: string;
+  inReplyToId: string | null;
   body: string;
   url: string;
   path: string;
   line: number | null;
   startLine: number | null;
-  side: string | null;
-  startSide: string | null;
+  originalLine: number | null;
+  originalStartLine: number | null;
+  side: "LEFT" | "RIGHT" | null;
+  startSide: "LEFT" | "RIGHT" | null;
   diffHunk: string;
 }
 
-export const MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS = 100;
 const GITHUB_REVIEW_COMMENTS_PER_PAGE = 100;
 
 /** Wire shape of GET /repos/{owner}/{repo}/git/trees/{sha}?recursive=1. */
@@ -360,11 +366,14 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       comments.push(
         ...pageComments.map((comment) => ({
           id: String(comment.id),
+          inReplyToId: comment.in_reply_to_id?.toString() ?? null,
           body: comment.body,
           url: comment.html_url,
           path: comment.path,
           line: comment.line ?? null,
           startLine: comment.start_line ?? null,
+          originalLine: comment.original_line ?? null,
+          originalStartLine: comment.original_start_line ?? null,
           side: comment.side ?? null,
           startSide: comment.start_side ?? null,
           diffHunk: comment.diff_hunk,

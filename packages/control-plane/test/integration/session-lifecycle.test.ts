@@ -1,6 +1,8 @@
+import { env } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
-import { describe, it, expect } from "vitest";
-import type { SessionDO } from "../../src/session/durable-object";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
+import { cleanD1Tables } from "./cleanup";
 import {
   initSession,
   queryDO,
@@ -8,6 +10,8 @@ import {
   seedSandboxAuthHash,
   waitForSandboxStatus,
 } from "./helpers";
+
+beforeEach(cleanD1Tables);
 
 describe("GET /internal/state", () => {
   it("state includes sandbox after init", async () => {
@@ -59,7 +63,7 @@ describe("POST /internal/archive", () => {
     expect(state.status).toBe("archived");
   });
 
-  it("archive rejects non-participant", async () => {
+  it("archive does not use participant identity for authorization", async () => {
     const { stub } = await initSession({ userId: "user-1" });
 
     const res = await stub.fetch("http://internal/internal/archive", {
@@ -68,7 +72,7 @@ describe("POST /internal/archive", () => {
       body: JSON.stringify({ userId: "stranger" }),
     });
 
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
   });
 });
 
@@ -242,6 +246,36 @@ describe("POST /internal/update-title", () => {
     const stateRes = await stub.fetch("http://internal/internal/state");
     const state = (await stateRes.json()) as { title: string };
     expect(state.title).toBe("new title");
+  });
+
+  it("projects a renamed title despite newer index activity without reducing recency", async () => {
+    const { stub, sessionName } = await initSession({ title: "Original" });
+    const activityUpdatedAt = Date.now() + 60_000;
+    await env.DB.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?")
+      .bind(activityUpdatedAt, sessionName)
+      .run();
+
+    const response = await stub.fetch("http://internal/internal/update-title", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Renamed" }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ title: "Renamed" });
+
+    // The index is asynchronous: wait for convergence rather than requiring
+    // its write to complete before the authoritative HTTP response.
+    await vi.waitFor(
+      async () => {
+        const projected = await env.DB.prepare(
+          "SELECT title, updated_at FROM sessions WHERE id = ?"
+        )
+          .bind(sessionName)
+          .first();
+        expect(projected).toEqual({ title: "Renamed", updated_at: activityUpdatedAt });
+      },
+      { timeout: 3_000 }
+    );
   });
 
   it("rejects empty title", async () => {

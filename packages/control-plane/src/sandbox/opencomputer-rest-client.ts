@@ -209,6 +209,7 @@ const SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
 const OPENSANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/opensandbox-proxy.crt";
 const PYTHON_VENV = "/home/sandbox/.venv";
 const USER_BIN = "/home/sandbox/.local/bin";
+const MANAGED_PYTHON_BIN = "/opt/openinspect/python/bin/python";
 const RUNTIME_CA_EXPORTS =
   `SSL_CERT_FILE=${SYSTEM_CA_BUNDLE} ` +
   `CURL_CA_BUNDLE=${SYSTEM_CA_BUNDLE} ` +
@@ -422,7 +423,7 @@ export class OpenComputerRestClient {
         cmd: "sh",
         args: [
           "-c",
-          `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports}nohup python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
+          `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports}nohup ${MANAGED_PYTHON_BIN} -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
         ],
         timeout: RUNTIME_ENTRYPOINT_EXEC_TIMEOUT_MS / 1000,
       },
@@ -445,7 +446,7 @@ export class OpenComputerRestClient {
           cmd: "sh",
           args: [
             "-c",
-            `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports} python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1`,
+            `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports} ${MANAGED_PYTHON_BIN} -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1`,
           ],
           timeout: timeoutSeconds,
         },

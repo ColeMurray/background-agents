@@ -117,7 +117,9 @@ class CreateSandboxRequest(_RepositoryContextModel):
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
     sandbox_auth_token: NonEmptyString
+    agent_session_id: str | None = None
     opencode_session_id: str | None = None
+    harness: str | None = None
     provider: str | None = None
     model: str | None = None
     branch: str | None = None
@@ -143,7 +145,9 @@ class RestoreSessionConfigRequest(_RepositoryContextModel):
     session_id: str | None = None
     branch: str | None = None
     base_sha: str | None = None
+    agent_session_id: str | None = None
     opencode_session_id: str | None = None
+    harness: str | None = None
     provider: str | None = None
     model: str | None = None
     mcp_servers: list[dict[str, Any]] | None = None
@@ -206,7 +210,14 @@ async def _execute_endpoint(
     except Exception as e:
         execution.http_status = 500
         execution.outcome = "error"
-        log.error("api.error", exc=e, endpoint_name=endpoint_name)
+        log.error(
+            "api.error",
+            exc=e,
+            endpoint_name=execution.endpoint_name,
+            trace_id=execution.trace_id,
+            request_id=execution.request_id,
+            **execution.log_fields,
+        )
         raise HTTPException(status_code=500, detail="Internal server error") from e
     finally:
         log.info(
@@ -387,6 +398,7 @@ async def api_create_sandbox(
         from .sandbox.manager import (
             DEFAULT_SANDBOX_TIMEOUT_SECONDS,
             DEFAULT_VNC_ENABLED,
+            RepositoryImageUnavailableError,
             SandboxConfig,
             SandboxManager,
         )
@@ -423,7 +435,10 @@ async def api_create_sandbox(
             ),
         )
 
-        handle = await manager.create_sandbox(config)
+        try:
+            handle = await manager.create_sandbox(config)
+        except RepositoryImageUnavailableError as e:
+            raise HTTPException(status_code=410, detail="Repository image unavailable") from e
 
         return {
             "success": True,

@@ -1,9 +1,9 @@
 import type { RepoMetadata } from "@open-inspect/shared/types/repository-catalog";
 import { parseJsonStringArray } from "./json-columns";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase } from "./sql-database";
 
-/** D1 batch() supports at most 100 statements per call. */
-const D1_BATCH_LIMIT = 100;
+const REPOS_PER_QUERY = Math.floor(MAX_D1_QUERY_PARAMETERS / 2);
 
 interface RepoMetadataRow {
   repo_owner: string;
@@ -86,25 +86,24 @@ export class RepoMetadataStore {
     if (repos.length === 0) return new Map();
 
     const map = new Map<string, RepoMetadata>();
+    const uniqueRepos = new Map<string, { owner: string; name: string }>();
+    for (const repo of repos) {
+      const owner = repo.owner.toLowerCase();
+      const name = repo.name.toLowerCase();
+      uniqueRepos.set(`${owner}/${name}`, { owner, name });
+    }
+    const normalizedRepos = [...uniqueRepos.values()];
 
-    // D1 batch() has a per-call statement limit; chunk to stay within it.
-    for (let start = 0; start < repos.length; start += D1_BATCH_LIMIT) {
-      const chunk = repos.slice(start, start + D1_BATCH_LIMIT);
+    for (let start = 0; start < normalizedRepos.length; start += REPOS_PER_QUERY) {
+      const chunk = normalizedRepos.slice(start, start + REPOS_PER_QUERY);
+      const predicates = chunk.map(() => "(repo_owner = ? AND repo_name = ?)").join(" OR ");
+      const result = await this.db
+        .prepare(`SELECT * FROM repo_metadata WHERE ${predicates}`)
+        .bind(...chunk.flatMap((repo) => [repo.owner, repo.name]))
+        .all<RepoMetadataRow>();
 
-      const statements = chunk.map((repo) =>
-        this.db
-          .prepare("SELECT * FROM repo_metadata WHERE repo_owner = ? AND repo_name = ?")
-          .bind(repo.owner.toLowerCase(), repo.name.toLowerCase())
-      );
-
-      const results = await this.db.batch<RepoMetadataRow>(statements);
-
-      for (let i = 0; i < chunk.length; i++) {
-        const rows = results[i]?.results;
-        if (rows && rows.length > 0) {
-          const key = `${chunk[i].owner.toLowerCase()}/${chunk[i].name.toLowerCase()}`;
-          map.set(key, toMetadata(rows[0]));
-        }
+      for (const row of result.results) {
+        map.set(`${row.repo_owner.toLowerCase()}/${row.repo_name.toLowerCase()}`, toMetadata(row));
       }
     }
 

@@ -1,3 +1,4 @@
+import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelProviderAccount } from "../db/model-provider-accounts";
 import type { ProviderDefault } from "../db/provider-account-defaults";
@@ -6,10 +7,11 @@ import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/
 
 const OPENAI_ACCOUNT_ID = "1".repeat(32);
 const XAI_ACCOUNT_ID = "2".repeat(32);
+const ANTHROPIC_ACCOUNT_ID = "3".repeat(32);
 
 function account(
   id: string,
-  provider: "openai" | "xai",
+  provider: SubscriptionProviderId,
   overrides: Partial<ModelProviderAccount> = {}
 ): ModelProviderAccount {
   return {
@@ -30,7 +32,7 @@ function account(
 }
 
 function providerDefault(
-  provider: "openai" | "xai",
+  provider: SubscriptionProviderId,
   providerAccountId: string,
   unattendedMode: "provider_account" | "api_key" = "provider_account"
 ): ProviderDefault {
@@ -63,11 +65,38 @@ function stores(
 describe("resolveProviderAccountSelections", () => {
   it("uses legacy scoped OAuth when no explicit choice or default exists", async () => {
     await expect(
-      resolveProviderAccountSelections({ unattended: false }, stores())
+      resolveProviderAccountSelections({ unattended: false, harness: "opencode" }, stores())
     ).resolves.toEqual([
       { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
       { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+      { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
     ]);
+  });
+
+  it("binds an Anthropic default only on a harness that can use it", async () => {
+    const deps = stores({
+      defaults: [providerDefault("anthropic", ANTHROPIC_ACCOUNT_ID)],
+      accounts: [account(ANTHROPIC_ACCOUNT_ID, "anthropic")],
+    });
+    const onOpenCode = await resolveProviderAccountSelections(
+      { unattended: false, harness: "opencode" },
+      deps
+    );
+    expect(onOpenCode[2]).toEqual({
+      provider: "anthropic",
+      authMode: "api_key",
+      selectionSource: "harness_fallback",
+    });
+    const onClaude = await resolveProviderAccountSelections(
+      { unattended: false, harness: "claude" },
+      deps
+    );
+    expect(onClaude[2]).toEqual({
+      provider: "anthropic",
+      authMode: "provider_account",
+      providerAccountId: ANTHROPIC_ACCOUNT_ID,
+      selectionSource: "installation_default",
+    });
   });
 
   it("resolves every provider using explicit choices before defaults", async () => {
@@ -78,6 +107,7 @@ describe("resolveProviderAccountSelections", () => {
           xai: { mode: "api_key" },
         },
         unattended: false,
+        harness: "opencode",
       },
       stores({
         defaults: [
@@ -96,12 +126,13 @@ describe("resolveProviderAccountSelections", () => {
         selectionSource: "explicit",
       },
       { provider: "xai", authMode: "api_key", selectionSource: "explicit" },
+      { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
     ]);
   });
 
   it("applies unattended API-key policy before an active default", async () => {
     const result = await resolveProviderAccountSelections(
-      { unattended: true },
+      { unattended: true, harness: "opencode" },
       stores({
         defaults: [providerDefault("openai", OPENAI_ACCOUNT_ID, "api_key")],
         accounts: [account(OPENAI_ACCOUNT_ID, "openai")],
@@ -123,7 +154,10 @@ describe("resolveProviderAccountSelections", () => {
   it("snapshots the active default account selection", async () => {
     const defaults = [providerDefault("openai", OPENAI_ACCOUNT_ID)];
     const deps = stores({ defaults, accounts: [account(OPENAI_ACCOUNT_ID, "openai")] });
-    const result = await resolveProviderAccountSelections({ unattended: false }, deps);
+    const result = await resolveProviderAccountSelections(
+      { unattended: false, harness: "opencode" },
+      deps
+    );
 
     defaults[0] = providerDefault("openai", XAI_ACCOUNT_ID);
 
@@ -147,6 +181,7 @@ describe("resolveProviderAccountSelections", () => {
           openai: { mode: "provider_account", accountId: OPENAI_ACCOUNT_ID },
         },
         unattended: false,
+        harness: "opencode",
       },
       stores({ accounts: selectedAccount ? [selectedAccount] : [] })
     ).catch((cause: unknown) => cause);
@@ -158,9 +193,30 @@ describe("resolveProviderAccountSelections", () => {
   it("treats a default selected by policy as a configuration error when unusable", async () => {
     await expect(
       resolveProviderAccountSelections(
-        { unattended: false },
+        { unattended: false, harness: "opencode" },
         stores({ defaults: [providerDefault("openai", OPENAI_ACCOUNT_ID)] })
       )
     ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("takes the API-key fallback for providers the harness has no auth row for", async () => {
+    const deps = stores({
+      // The xai default points at an account that no longer exists. A Claude
+      // session never runs xai, so that stale default must not reject it.
+      defaults: [
+        providerDefault("openai", OPENAI_ACCOUNT_ID),
+        providerDefault("xai", "9".repeat(32)),
+      ],
+      accounts: [account(OPENAI_ACCOUNT_ID, "openai")],
+    });
+
+    await expect(
+      resolveProviderAccountSelections({ unattended: false, harness: "claude" }, deps)
+    ).resolves.toEqual([
+      { provider: "openai", authMode: "api_key", selectionSource: "harness_fallback" },
+      { provider: "xai", authMode: "api_key", selectionSource: "harness_fallback" },
+      { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
+    ]);
+    expect(deps.accounts.getById).not.toHaveBeenCalled();
   });
 });

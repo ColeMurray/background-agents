@@ -7,6 +7,11 @@ import type {
   SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
 import { SUBSCRIPTION_PROVIDER_DISPLAY_METADATA } from "@open-inspect/shared/types/provider-accounts";
+import {
+  getHarnessLabel,
+  harnessSupportsProviderAuth,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { Label } from "@/components/ui/label";
 import { SubscriptionProviderIcon } from "@/components/subscription-provider-icon";
 import {
@@ -47,6 +52,7 @@ export function ProviderAuthControls({
   unattended = DEFAULT_UNATTENDED,
   variant = DEFAULT_VARIANT,
   disabled = DEFAULT_DISABLED,
+  harness,
 }: {
   provider: SubscriptionProviderId;
   accounts: ModelProviderAccount[];
@@ -57,10 +63,17 @@ export function ProviderAuthControls({
   unattended?: boolean;
   variant?: "select" | "menu";
   disabled?: boolean;
+  /** Harness the selection is for; a harness that cannot select an account for this provider offers none. */
+  harness?: HarnessId;
 }) {
-  const available = accounts.filter(
-    (account) => account.provider === provider && account.status === "active" && !account.archivedAt
-  );
+  const accountsSelectable =
+    harness === undefined || harnessSupportsProviderAuth(harness, provider, "provider_account");
+  const available = accountsSelectable
+    ? accounts.filter(
+        (account) =>
+          account.provider === provider && account.status === "active" && !account.archivedAt
+      )
+    : [];
   const selected = value
     ? value.mode === "api_key"
       ? API_KEY
@@ -70,7 +83,7 @@ export function ProviderAuthControls({
     (account) => account.id === defaultValue?.providerAccountId
   );
   const effectiveDefaultLabel =
-    unattended && defaultValue?.unattendedMode === "api_key"
+    !accountsSelectable || (unattended && defaultValue?.unattendedMode === "api_key")
       ? "No account"
       : defaultValue
         ? (defaultAccount?.displayName ?? "Unavailable account")
@@ -178,7 +191,9 @@ export function ProviderAuthControls({
         </SelectContent>
       </Select>
       <p className="text-xs text-muted-foreground">
-        Provider-account mode overrides this provider&apos;s API key for the session.
+        {accountsSelectable
+          ? "Provider-account mode overrides this provider's API key for the session."
+          : `${getHarnessLabel(harness!)} runs ${providerName} on its API key; connected accounts are not offered.`}
       </p>
     </div>
   );

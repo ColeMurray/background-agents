@@ -14,6 +14,27 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { SlackIntegrationSettings } from "./slack-integration-settings";
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+}));
+
+vi.mock("@/hooks/use-enabled-models", () => ({
+  useEnabledModels: () => ({
+    enabledModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
+    enabledModelOptions: [
+      {
+        category: "Anthropic",
+        models: [{ id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+      },
+      {
+        category: "OpenAI",
+        models: [{ id: "openai/gpt-5.4", name: "GPT 5.4" }],
+      },
+    ],
+    loading: false,
+  }),
+}));
+
 expect.extend(matchers);
 
 interface RepoSettingsEntry {
@@ -26,7 +47,8 @@ const { useSWRMock, mutateMock } = vi.hoisted(() => ({
   mutateMock: vi.fn(),
 }));
 
-vi.mock("swr", () => ({
+vi.mock(import("swr"), async (importOriginal) => ({
+  ...(await importOriginal()),
   default: useSWRMock,
   mutate: mutateMock,
 }));
@@ -536,7 +558,9 @@ describe("SlackIntegrationSettings", () => {
       render(<SlackIntegrationSettings />);
 
       const section = routingSection();
-      expect(within(section).getByDisplayValue("frontend")).toBeInTheDocument();
+      const keyword = within(section).getByDisplayValue("frontend");
+      expect(keyword).toHaveClass("w-full", "sm:w-48");
+      expect(keyword.parentElement).toHaveClass("flex-col", "sm:flex-row");
       expect(within(section).getByText("acme/web")).toBeInTheDocument();
     });
 

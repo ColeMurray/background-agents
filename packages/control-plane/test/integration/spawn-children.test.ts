@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
-import type { SessionDO } from "../../src/session/durable-object";
-import { ModelPreferencesStore } from "../../src/db/model-preferences";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, queryDO, seedMessage, seedSandboxAuth } from "./helpers";
@@ -47,6 +46,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       providerAuth: [
         { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
         { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+        { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
       ],
       createdAt: now,
       updatedAt: now,
@@ -96,6 +96,14 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
         message.id
       );
     });
+  }
+
+  async function seedEnabledModels(enabledModels: string[]): Promise<void> {
+    await env.DB.prepare(
+      "INSERT INTO model_preferences (id, enabled_models, updated_at) VALUES ('global', ?, ?)"
+    )
+      .bind(JSON.stringify(enabledModels), Date.now())
+      .run();
   }
 
   it("spawns a child session with sandbox auth (201)", async () => {
@@ -200,7 +208,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
         user_id: "slack:U2",
         canonical_user_id: "canonical-user-2",
         scm_login: "second-user",
-        scm_access_token_encrypted: "second-access",
+        scm_access_token_encrypted: null,
       },
     ]);
   });
@@ -379,7 +387,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
   it("rejects a disabled model override for grandchildren", async () => {
     const { parentName, sandboxToken } = await setupParent();
 
-    await new ModelPreferencesStore(env.DB).setEnabledModels(["anthropic/claude-sonnet-4-6"]);
+    await seedEnabledModels(["anthropic/claude-sonnet-4-6"]);
 
     const childRes = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
       method: "POST",
@@ -428,7 +436,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       reasoningEffort: "xhigh",
     });
 
-    await new ModelPreferencesStore(env.DB).setEnabledModels(["anthropic/claude-haiku-4-5"]);
+    await seedEnabledModels(["anthropic/claude-haiku-4-5"]);
 
     const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
       method: "POST",

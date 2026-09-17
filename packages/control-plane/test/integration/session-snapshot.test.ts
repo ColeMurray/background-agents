@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import type { SessionSnapshot } from "@open-inspect/shared/types/server-messages";
 import { beforeEach, describe, expect, it } from "vitest";
 import { encryptToken } from "../../src/auth/crypto";
 import { cleanD1Tables } from "./cleanup";
@@ -47,7 +48,7 @@ describe("session snapshot synchronization", () => {
     const response = await stub.fetch("http://internal/internal/snapshot");
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    const snapshot = await response.json<Record<string, any>>();
+    const snapshot = await response.json<SessionSnapshot>();
 
     expect(snapshot.session).toMatchObject({
       id: name,
@@ -73,6 +74,8 @@ describe("session snapshot synchronization", () => {
       codeServer: { url: "https://code.example.test", password: "code-secret" },
       vnc: { url: "https://desktop.example.test", password: "vnc-secret" },
       ttyd: { url: "https://terminal.example.test", token: "terminal-secret" },
+      tunnelUrls: null,
+      sandboxDashboardUrl: null,
     });
 
     const { ws, messages } = await openClientWs(name, { subscribe: true });
@@ -81,6 +84,7 @@ describe("session snapshot synchronization", () => {
     expect(messages![0].session).not.toHaveProperty("codeServerPassword");
     expect(messages![0].session).not.toHaveProperty("vncPassword");
     expect(messages![0].session).not.toHaveProperty("ttydToken");
+    expect(messages![0].canManageBudget).toBe(true);
     expect(messages![0].timeline).toHaveProperty("events");
     expect(JSON.stringify(messages![0])).not.toContain("code-secret");
     expect(JSON.stringify(messages![0])).not.toContain("vnc-secret");

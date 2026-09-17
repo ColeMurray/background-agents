@@ -10,6 +10,7 @@ const UPDATE_FIELDS = [
   "scheduleTz",
   "model",
   "reasoningEffort",
+  "harness",
   "eventType",
   "triggerConfig",
   "repositories",

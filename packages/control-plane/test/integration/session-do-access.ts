@@ -1,5 +1,5 @@
 import { runInDurableObject } from "cloudflare:test";
-import type { SessionDO } from "../../src/session/durable-object";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import type { SessionRuntime } from "../../src/session/components";
 
 /**

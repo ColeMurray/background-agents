@@ -1,5 +1,10 @@
+import { harnessIdSchema } from "../harnesses";
 import { z } from "zod";
-import { automationTriggerTypeSchema, triggerConfigSchema } from "../triggers/types";
+import {
+  type AutomationTriggerType,
+  automationTriggerTypeSchema,
+  triggerConfigSchema,
+} from "../triggers/types";
 import {
   MAX_TARGET_REPOSITORIES,
   repositoriesInputSchema,
@@ -8,6 +13,7 @@ import {
 import type { RepositoryInput, RepositoryRef } from "./repositories";
 import { modelProviderSelectionsSchema } from "./provider-accounts";
 import { isEnvironmentId } from "./environments";
+import { isCanonicalUserId } from "../user-id";
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
 
@@ -31,6 +37,36 @@ export type AutomationInvocationStatus = z.infer<typeof automationInvocationStat
 
 /** Maximum repositories an automation can fan out across per invocation. */
 export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
+
+/** Maximum length of an automation's instruction prompt. */
+export const MAX_AUTOMATION_INSTRUCTIONS_LENGTH = 15_000;
+
+/**
+ * Validate target-count rules shared by automation clients and the API.
+ * Repository-scoped triggers bind to exactly one repository and no
+ * environments; fan-out is schedule-only; both target kinds share one cap.
+ */
+export function validateAutomationTargetCounts(
+  triggerType: AutomationTriggerType,
+  repositoryCount: number,
+  environmentCount: number
+): string | null {
+  if ((triggerType === "github_event" || triggerType === "linear_event") && repositoryCount === 0) {
+    return "Repository-scoped triggers require exactly one repository";
+  }
+  if ((triggerType === "github_event" || triggerType === "linear_event") && environmentCount > 0) {
+    return "Repository-scoped triggers cannot target environments";
+  }
+  if (repositoryCount + environmentCount > 1 && triggerType !== "schedule") {
+    return "Multi-target selections require a schedule trigger";
+  }
+  if (repositoryCount + environmentCount > MAX_AUTOMATION_REPOSITORIES) {
+    return `At most ${MAX_AUTOMATION_REPOSITORIES} repositories and environments combined`;
+  }
+  return null;
+}
+/** Largest page `GET /automations/:id/invocations` serves; larger limits are refused. */
+export const MAX_AUTOMATION_INVOCATION_LIST_LIMIT = 100;
 
 /** A repository selected on an automation (response shape, resolved). */
 const automationRepositorySchema = z.object({
@@ -74,12 +110,14 @@ const automationSchema = z.object({
   triggerType: automationTriggerTypeSchema,
   scheduleCron: z.string().nullable(),
   scheduleTz: z.string(),
+  harness: harnessIdSchema,
   model: z.string(),
   reasoningEffort: z.string().nullable(),
   enabled: z.boolean(),
   nextRunAt: z.number().nullable(),
   consecutiveFailures: z.number(),
   createdBy: z.string(),
+  userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID").nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),
   deletedAt: z.number().nullable(),
@@ -137,6 +175,8 @@ export const createAutomationRequestSchema = z.object({
   triggerType: automationTriggerTypeSchema.optional(),
   scheduleCron: z.string().optional(),
   scheduleTz: z.string().optional(),
+  /** Agent harness for the sessions this automation creates. Omission means the built-in harness. */
+  harness: harnessIdSchema.optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().nullable().optional(),
   eventType: z.string().optional(),
@@ -156,6 +196,7 @@ export const updateAutomationRequestSchema = z.object({
   instructions: z.string().optional(),
   scheduleCron: z.string().optional(),
   scheduleTz: z.string().optional(),
+  harness: harnessIdSchema.optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().nullable().optional(),
   eventType: z.string().optional(),

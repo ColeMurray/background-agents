@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { GITHUB_AUTOFIX_DEFAULTS, type GitHubAutofixEnvelope } from "@open-inspect/shared";
+import {
+  GITHUB_AUTOFIX_DEFAULTS,
+  type GitHubAutofixEnvelope,
+  type GitHubAutofixSessionCommand,
+} from "@open-inspect/shared";
 import { AutofixService } from "./service";
 import type { GitHubPullRequestFeedback } from "../source-control/providers/github-provider";
 import { SourceControlProviderError } from "../source-control/errors";
@@ -311,6 +315,22 @@ describe("AutofixService", () => {
         body: expect.stringContaining('"authorType":"bot"'),
       })
     );
+    const [, , request] = h.sessions.fetch.mock.calls[0] as unknown as [
+      string,
+      string,
+      RequestInit,
+    ];
+    const command = JSON.parse(String(request.body)) as Extract<
+      GitHubAutofixSessionCommand,
+      { type: "enqueue_feedback" }
+    >;
+    expect(command.origin.feedback).toEqual({
+      version: 1,
+      kind: "review",
+      url: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+      body: "Please address this.",
+      comments: [],
+    });
   });
 
   it("does not let the Open Inspect review setting admit another bot", async () => {
@@ -343,11 +363,14 @@ describe("AutofixService", () => {
       comments: [
         {
           id: "9001",
+          inReplyToId: null,
           body: "Preserve this complete comment.",
           url: "https://github.com/acme/widgets/pull/42#discussion_r9001",
           path: "src/input.ts",
           line: 12,
           startLine: null,
+          originalLine: 12,
+          originalStartLine: null,
           side: "RIGHT",
           startSide: null,
           diffHunk: "x".repeat(5_000),
@@ -375,6 +398,8 @@ describe("AutofixService", () => {
     expect(command.prompt).toContain("Preserve this complete comment.");
     expect(command.prompt).toContain("x".repeat(4_000));
     expect(command.prompt).not.toContain("x".repeat(4_001));
+    expect(command.prompt).toContain('"side": "RIGHT"');
+    expect(command.prompt).toContain('"diffHunkTruncated": true');
   });
 
   it("escapes feedback that could close the untrusted-data delimiter", async () => {
@@ -419,11 +444,14 @@ describe("AutofixService", () => {
       author: { id: "8", login: "alice", type: "User" },
       comments: Array.from({ length: 101 }, (_, index) => ({
         id: String(index),
+        inReplyToId: null,
         body: `Comment ${index}`,
         url: `https://github.com/acme/widgets/pull/42#discussion_r${index}`,
         path: "src/input.ts",
         line: index + 1,
         startLine: null,
+        originalLine: index + 1,
+        originalStartLine: null,
         side: "RIGHT",
         startSide: null,
         diffHunk: "@@ -1 +1 @@",
@@ -580,11 +608,14 @@ describe("AutofixService", () => {
         comments: [
           {
             id: "9001",
+            inReplyToId: null,
             body: "Handle the nullable value.",
             url: "https://github.com/acme/widgets/pull/42#discussion_r9001",
             path: "src/input.ts",
             line: 12,
             startLine: null,
+            originalLine: 12,
+            originalStartLine: null,
             side: "RIGHT",
             startSide: null,
             diffHunk: "@@ -10,3 +10,3 @@",
@@ -601,6 +632,68 @@ describe("AutofixService", () => {
       expect.any(String),
       expect.objectContaining({ body: expect.stringContaining("Handle the nullable value.") })
     );
+  });
+
+  it("does not dispatch an Open Inspect App review containing only thread replies", async () => {
+    const h = buildService();
+    h.github.getPullRequestFeedback.mockResolvedValueOnce(
+      openInspectReview({
+        body: "",
+        state: "COMMENTED",
+        comments: [
+          {
+            id: "9002",
+            inReplyToId: "8001",
+            body: "Fixed in 49716d0.",
+            url: "https://github.com/acme/widgets/pull/42#discussion_r9002",
+            path: "src/input.ts",
+            line: null,
+            startLine: null,
+            originalLine: 12,
+            originalStartLine: null,
+            side: "RIGHT",
+            startSide: null,
+            diffHunk: "@@ -10,3 +10,3 @@",
+          },
+        ],
+      })
+    );
+
+    const result = await h.service.process(OPEN_INSPECT_REVIEW_ENVELOPE);
+
+    expect(result).toMatchObject({ decision: "skipped", reason: "own_review_replies" });
+    expect(h.sessions.fetch).not.toHaveBeenCalled();
+  });
+
+  it("dispatches an Open Inspect App review with a body and only thread replies", async () => {
+    const h = buildService();
+    h.github.getPullRequestFeedback.mockResolvedValueOnce(
+      openInspectReview({
+        body: "Please address the remaining issue.",
+        state: "COMMENTED",
+        comments: [
+          {
+            id: "9002",
+            inReplyToId: "8001",
+            body: "Fixed in 49716d0.",
+            url: "https://github.com/acme/widgets/pull/42#discussion_r9002",
+            path: "src/other.ts",
+            line: null,
+            startLine: null,
+            originalLine: 20,
+            originalStartLine: null,
+            side: "RIGHT",
+            startSide: null,
+            diffHunk: "@@ -20,3 +20,3 @@",
+          },
+        ],
+      })
+    );
+
+    const result = await h.service.process(OPEN_INSPECT_REVIEW_ENVELOPE);
+
+    expect(result).toMatchObject({ decision: "queued", messageId: "message-1" });
+    expect(h.sessions.fetch).toHaveBeenCalledOnce();
   });
 
   it("does not dispatch an approved Open Inspect App review", async () => {

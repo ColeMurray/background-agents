@@ -7,12 +7,14 @@ import { verifySentrySignature, normalizeSentryEvent } from "@open-inspect/share
 import { AutomationStore } from "../db/automation-store";
 import { decryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
-import type { Route, RequestContext } from "../routes/shared";
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { RequestContext } from "../routes/shared";
 import {
-  defineRoute,
   error,
   json,
-  parsePattern,
+  NO_AUTHORIZATION,
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
 } from "../routes/shared";
 import type { Env } from "../types";
@@ -34,11 +36,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 async function handleSentryWebhook(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const automationId = match.groups?.id;
-  if (!automationId) return error("Automation ID required", 400);
+  const automationId = params.id;
 
   // 1. Look up the automation
   const store = new AutomationStore(ctx.db);
@@ -119,8 +120,10 @@ async function handleSentryWebhook(
   return json({ ok: true, ...result });
 }
 
-export const sentryWebhookRoute: Route = defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
-  method: "POST",
-  pattern: parsePattern("/webhooks/sentry/:id"),
-  handler: handleSentryWebhook,
-});
+export const sentryWebhookRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sentryWebhookRoutes.post(
+  "/webhooks/sentry/:id",
+  admit({ ...SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, authorization: NO_AUTHORIZATION }),
+  (c) => dispatch(c, handleSentryWebhook)
+);

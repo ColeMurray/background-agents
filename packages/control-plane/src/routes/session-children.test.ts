@@ -4,19 +4,19 @@ import { resolveSandboxSettings } from "../session/integration-settings-resoluti
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { ActivePromptAuthor } from "../session/active-prompt-author";
 import type { Env } from "../types";
-import { handleCancelChild, handlePromptChild } from "./session-children";
+import { handleCancelChild, handleListChildren, handlePromptChild } from "./session-children";
 import type { SessionRouteContext } from "./session-route";
-import { parsePattern } from "./shared";
+import { routePathPattern } from "../router.test-support";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 vi.mock("../session/integration-settings-resolution", () => ({
   resolveSandboxSettings: vi.fn(),
 }));
 
-function routeMatch(path: string, pattern: string): RegExpMatchArray {
-  const match = path.match(parsePattern(pattern));
-  if (!match) throw new Error("Expected route match");
-  return match;
+function routeMatch(path: string, pattern: string): { id: string; childId: string } {
+  const match = path.match(routePathPattern(pattern));
+  if (!match?.groups?.id || !match.groups.childId) throw new Error("Expected route match");
+  return { id: match.groups.id, childId: match.groups.childId };
 }
 
 const defaultPromptAuthor: ActivePromptAuthor = {
@@ -48,6 +48,77 @@ function routeContext(
     },
   };
 }
+
+describe("handleListChildren", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("projects viewer-neutral child summaries through the shared schema", async () => {
+    vi.spyOn(SessionIndexStore.prototype, "listByParent").mockResolvedValue([
+      {
+        id: "child",
+        title: "Child",
+        repoOwner: "acme",
+        repoName: "web",
+        harness: "opencode",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: "main",
+        status: "active",
+        parentSessionId: "parent",
+        spawnSource: "agent",
+        spawnDepth: 1,
+        automationId: null,
+        automationRunId: null,
+        scmLogin: null,
+        userId: "user-1",
+        totalCost: 0,
+        activeDurationMs: 0,
+        messageCount: 1,
+        prCount: 0,
+        environmentId: null,
+        createdAt: 100,
+        updatedAt: 200,
+        readState: { latestMessageId: "message-1", unread: true, version: 200 },
+      },
+    ]);
+
+    const response = await handleListChildren(
+      new Request("https://test.local/sessions/parent/children"),
+      {} as Env,
+      { id: "parent" },
+      routeContext(vi.fn())
+    );
+    await expect(response.json()).resolves.toEqual({
+      children: [
+        {
+          id: "child",
+          title: "Child",
+          repoOwner: "acme",
+          repoName: "web",
+          harness: "opencode",
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: null,
+          baseBranch: "main",
+          status: "active",
+          parentSessionId: "parent",
+          spawnSource: "agent",
+          spawnDepth: 1,
+          automationId: null,
+          automationRunId: null,
+          scmLogin: null,
+          userId: "user-1",
+          totalCost: 0,
+          activeDurationMs: 0,
+          messageCount: 1,
+          prCount: 0,
+          environmentId: null,
+          createdAt: 100,
+          updatedAt: 200,
+        },
+      ],
+    });
+  });
+});
 
 describe("handlePromptChild", () => {
   afterEach(() => {

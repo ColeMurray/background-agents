@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { matchGlobalShortcut, shouldIgnoreGlobalShortcutForAction } from "@/lib/keyboard-shortcuts";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 interface UseGlobalShortcutsOptions {
   enabled?: boolean;
@@ -18,6 +19,8 @@ export function useGlobalShortcuts({
   onToggleSidebar,
 }: UseGlobalShortcutsOptions) {
   const { shortcuts } = useKeyboardShortcuts();
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canCreateSession = hasPermission("sessions.create");
   useEffect(() => {
     if (!enabled) return;
 
@@ -25,6 +28,7 @@ export function useGlobalShortcuts({
       const action = matchGlobalShortcut(event, shortcuts);
       if (!action) return;
       if (shouldIgnoreGlobalShortcutForAction(event, action)) return;
+      if (action === "new-session" && !canCreateSession) return;
 
       event.preventDefault();
 
@@ -35,5 +39,5 @@ export function useGlobalShortcuts({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [enabled, onNewSession, onOpenCommandMenu, onToggleSidebar, shortcuts]);
+  }, [canCreateSession, enabled, onNewSession, onOpenCommandMenu, onToggleSidebar, shortcuts]);
 }

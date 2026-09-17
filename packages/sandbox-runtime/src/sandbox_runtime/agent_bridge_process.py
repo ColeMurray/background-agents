@@ -21,6 +21,7 @@ class AgentBridgeProcess:
         self.control_plane_url = config.control_plane_url
         self.sandbox_token = config.sandbox_token
         self.session_id = config.session_id
+        self.harness = config.harness
         self._process: asyncio.subprocess.Process | None = None
 
     async def start(self) -> None:
@@ -46,6 +47,8 @@ class AgentBridgeProcess:
             self.sandbox_token,
             "--opencode-port",
             str(OPENCODE_PORT),
+            "--harness",
+            self.harness.value,
             env=os.environ,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,

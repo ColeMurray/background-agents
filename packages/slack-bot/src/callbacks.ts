@@ -4,14 +4,27 @@
 
 import { postEphemeral } from "@open-inspect/shared/slack";
 import { verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
+import { SLACK_ACTIVITY_REFRESH_KIND } from "@open-inspect/shared/types/session-api";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { Env } from "./types";
 import { createSlackCompletionJob, type SlackCompletionJob } from "./completion/job";
 import { createLogger } from "./logger";
-import { formatToolStatus, setAssistantThreadStatusBestEffort } from "./activity-status";
+import {
+  ASSISTANT_WORKING_STATUS,
+  formatToolStatus,
+  setAssistantThreadStatusBestEffort,
+} from "./activity-status";
 
 const log = createLogger("callback");
+
+/**
+ * How far an activity refresh's signed timestamp may sit from now. A refresh
+ * only asserts "still working" for the two minutes Slack keeps the indicator
+ * up, so bounding the window to the same two minutes bounds what a captured
+ * one can replay to a single extra display period.
+ */
+const ACTIVITY_CALLBACK_MAX_AGE_MS = 2 * 60 * 1000;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -44,6 +57,20 @@ const toolCallCallbackSchema = z.looseObject({
   tool: z.string(),
   args: z.record(z.string(), z.unknown()),
   callId: z.string(),
+  timestamp: z.number(),
+  signature: z.string(),
+  context: slackCallbackContextSchema,
+});
+
+/**
+ * `kind` is the domain separator. Without it a body signed for another callback
+ * route satisfies this shape too — the HMAC covers only the body, so a valid
+ * `/callbacks/complete` payload would verify here and re-assert `Working...`.
+ */
+const activityCallbackSchema = z.looseObject({
+  kind: z.literal(SLACK_ACTIVITY_REFRESH_KIND),
+  sessionId: z.string(),
+  messageId: z.string(),
   timestamp: z.number(),
   signature: z.string(),
   context: slackCallbackContextSchema,
@@ -228,6 +255,72 @@ callbacksRouter.post("/complete", async (c) => {
     "/callbacks/complete",
     startTime
   );
+});
+
+/**
+ * Re-assert the assistant-thread activity indicator for a turn that is still
+ * in flight. Slack clears the indicator two minutes after the last update, and
+ * a turn can spend longer than that inside one quiet tool call.
+ */
+callbacksRouter.post("/activity", async (c) => {
+  const startTime = Date.now();
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
+  let payload: unknown;
+
+  try {
+    payload = await c.req.json();
+  } catch {
+    return rejectInvalidPayload(c, "/callbacks/activity", traceId, startTime);
+  }
+
+  const parsed = activityCallbackSchema.safeParse(payload);
+  if (!parsed.success || !isSignedCallbackPayload(payload)) {
+    return rejectInvalidPayload(c, "/callbacks/activity", traceId, startTime);
+  }
+  const valid = parsed.data;
+
+  const rejection = await rejectInvalidCallback(c, payload, {
+    path: "/callbacks/activity",
+    traceId,
+    startTime,
+  });
+  if (rejection) return rejection;
+
+  if (Math.abs(startTime - valid.timestamp) > ACTIVITY_CALLBACK_MAX_AGE_MS) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/activity",
+      http_status: 401,
+      outcome: "rejected",
+      reject_reason: "stale_timestamp",
+      session_id: valid.sessionId,
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  c.executionCtx.waitUntil(
+    setAssistantThreadStatusBestEffort(
+      c.env,
+      valid.context.channel,
+      valid.context.threadTs,
+      ASSISTANT_WORKING_STATUS,
+      { event: "refresh", traceId, sessionId: valid.sessionId }
+    )
+  );
+
+  log.info("http.request", {
+    trace_id: traceId,
+    http_method: "POST",
+    http_path: "/callbacks/activity",
+    http_status: 200,
+    session_id: valid.sessionId,
+    message_id: valid.messageId,
+    duration_ms: Date.now() - startTime,
+  });
+
+  return c.json({ ok: true });
 });
 
 /**

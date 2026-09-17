@@ -11,7 +11,7 @@ import {
   OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
   OpenComputerNotFoundError,
 } from "../opencomputer-rest-client";
-import type { CreateSandboxConfig } from "../provider";
+import { PrebuiltImageUnavailableError, type CreateSandboxConfig } from "../provider";
 
 function createMockClient(overrides: Partial<OpenComputerRestClient> = {}): OpenComputerRestClient {
   const client = {
@@ -78,6 +78,7 @@ const baseConfig: CreateSandboxConfig = {
   repoName: "repo",
   controlPlaneUrl: "https://control.example",
   sandboxAuthToken: "sandbox-token",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "claude-sonnet-4-6",
   branch: "main",
@@ -525,6 +526,23 @@ describe("OpenComputerSandboxProvider", () => {
     expect(forkCall).not.toHaveProperty("timeoutSeconds");
     expect(client.setSandboxTimeout).not.toHaveBeenCalled();
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
+  });
+
+  it("reports a missing prebuilt checkpoint explicitly", async () => {
+    const client = createMockClient({
+      forkFromCheckpoint: vi.fn(async () => {
+        throw new OpenComputerNotFoundError("checkpoint not found");
+      }),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+
+    await expect(
+      provider.createSandbox({ ...baseConfig, prebuiltImageId: "checkpoint-missing" })
+    ).rejects.toBeInstanceOf(PrebuiltImageUnavailableError);
+    expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-1");
   });
 
   it("keeps explicit session clone tokens when forking from a repo image", async () => {

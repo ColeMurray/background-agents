@@ -9,6 +9,15 @@ import type { EnrichedRepository } from "@open-inspect/shared/types/repository-c
 import { CodeServerIntegrationSettings } from "./code-server-integration-settings";
 import { VncIntegrationSettings } from "./vnc-integration-settings";
 
+const allowedPermissions = vi.hoisted(() => ({ value: null as Set<string> | null }));
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      allowedPermissions.value === null || allowedPermissions.value.has(permission),
+  }),
+}));
+
 expect.extend(matchers);
 
 const { useSWRMock, mutateMock } = vi.hoisted(() => ({
@@ -103,6 +112,7 @@ beforeEach(() => {
   toastError.mockReset();
   mutateMock.mockReset();
   useSWRMock.mockReset();
+  allowedPermissions.value = null;
   vi.stubGlobal("fetch", fetchMock);
 });
 
@@ -133,6 +143,21 @@ describe("code-server enablement integration settings", () => {
         body: JSON.stringify({ settings: { defaults: { enabled: true } } }),
       })
     );
+  });
+
+  it("separates global and repository mutation permissions", () => {
+    setupSWR(id, {
+      global: { defaults: { enabled: true } },
+      repos: [{ repo: nestedRepo, settings: { enabled: true } }],
+    });
+    allowedPermissions.value = new Set(["integrations.read", "repositories.settings.manage"]);
+
+    render(<Component />);
+
+    expect(screen.getByRole("checkbox", { name: new RegExp(`^${enableLabel}`) })).toBeDisabled();
+    expect(
+      within(overrideRow(nestedRepo)).getByRole("checkbox", { name: /enabled/i })
+    ).toBeEnabled();
   });
 
   it("resets global settings", async () => {

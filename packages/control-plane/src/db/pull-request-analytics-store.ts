@@ -11,8 +11,9 @@
  */
 
 import type { AnalyticsPullRequestsResponse } from "@open-inspect/shared/types/analytics";
-import type { SpawnSource } from "@open-inspect/shared/types/sessions";
-import type { SqlDatabase, SqlResult } from "./sql-database";
+import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
+import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
+import { z } from "zod";
 
 /** `now` anchors the open-inventory age computation. */
 export interface PullRequestAnalyticsFilters {
@@ -21,46 +22,46 @@ export interface PullRequestAnalyticsFilters {
   now: number;
 }
 
-interface FunnelRow {
-  created: number;
-  open: number;
-  draft: number;
-  merged: number;
-  closed: number;
-}
+const funnelRowSchema = z.object({
+  created: z.number(),
+  open: z.number(),
+  draft: z.number(),
+  merged: z.number(),
+  closed: z.number(),
+});
 
-interface CostRow {
-  cost: number;
-}
+const costRowSchema = z.object({
+  cost: z.number(),
+});
 
-interface MergeRow {
-  merged: number;
-  avg_time_to_merge_ms: number | null;
-}
+const mergeRowSchema = z.object({
+  merged: z.number(),
+  avg_time_to_merge_ms: z.number().nullable(),
+});
 
-interface InventoryRow {
-  total: number;
-  avg_age_ms: number | null;
-}
+const inventoryRowSchema = z.object({
+  total: z.number(),
+  avg_age_ms: z.number().nullable(),
+});
 
-interface DailyCountRow {
-  date: string;
-  count: number;
-}
+const dailyCountRowSchema = z.object({
+  day_index: z.number(),
+  count: z.number(),
+});
 
-interface RepoRow {
-  key: string;
-  created: number;
-  merged: number;
-  closed: number;
-  avg_time_to_merge_ms: number | null;
-}
+const repoRowSchema = z.object({
+  key: z.string(),
+  created: z.number(),
+  merged: z.number(),
+  closed: z.number(),
+  avg_time_to_merge_ms: z.number().nullable(),
+});
 
-interface SourceRow {
-  source: SpawnSource;
-  created: number;
-  merged: number;
-}
+const sourceRowSchema = z.object({
+  source: z.enum(["user", "agent", "automation", "github-bot", "linear-bot", "slack-bot"]),
+  created: z.number(),
+  merged: z.number(),
+});
 
 /**
  * When a PR entered the world, for windowing and cycle time. The row's own
@@ -71,14 +72,6 @@ interface SourceRow {
 function prCreatedAtExpr(alias = ""): string {
   const prefix = alias ? `${alias}.` : "";
   return `COALESCE(${prefix}provider_created_at, ${prefix}created_at)`;
-}
-
-function rows<T>(result: SqlResult): T[] {
-  return (result.results ?? []) as T[];
-}
-
-function firstRow<T>(result: SqlResult): T | undefined {
-  return rows<T>(result)[0];
 }
 
 export class PullRequestAnalyticsStore {
@@ -96,20 +89,15 @@ export class PullRequestAnalyticsStore {
    * in the cohort funnel.
    */
   async get(filters: PullRequestAnalyticsFilters): Promise<AnalyticsPullRequestsResponse> {
+    return this.decode(await this.db.batch(this.prepare(filters)));
+  }
+
+  prepare(filters: PullRequestAnalyticsFilters): SqlStatement[] {
     const prCreatedAt = prCreatedAtExpr();
     const cohortWindow = `${prCreatedAt} >= ? AND ${prCreatedAt} < ?`;
     const cohortBinds = [filters.startAt, filters.endAt];
 
-    const [
-      funnelResult,
-      costResult,
-      mergesResult,
-      inventoryResult,
-      createdResult,
-      mergedResult,
-      reposResult,
-      sourcesResult,
-    ] = await this.db.batch([
+    return [
       this.db
         .prepare(
           `SELECT
@@ -151,20 +139,20 @@ export class PullRequestAnalyticsStore {
         .bind(filters.now),
       this.db
         .prepare(
-          `SELECT date(${prCreatedAt} / 1000, 'unixepoch') AS date, COUNT(*) AS count
+          `SELECT ${prCreatedAt} / ${MS_PER_DAY} AS day_index, COUNT(*) AS count
              FROM session_pull_requests
              WHERE ${cohortWindow}
-             GROUP BY date
-             ORDER BY date ASC`
+             GROUP BY day_index
+             ORDER BY day_index ASC`
         )
         .bind(...cohortBinds),
       this.db
         .prepare(
-          `SELECT date(merged_at / 1000, 'unixepoch') AS date, COUNT(*) AS count
+          `SELECT merged_at / ${MS_PER_DAY} AS day_index, COUNT(*) AS count
              FROM session_pull_requests
              WHERE lifecycle_state = 'merged' AND merged_at >= ? AND merged_at < ?
-             GROUP BY date
-             ORDER BY date ASC`
+             GROUP BY day_index
+             ORDER BY day_index ASC`
         )
         .bind(filters.startAt, filters.endAt),
       this.db
@@ -195,23 +183,40 @@ export class PullRequestAnalyticsStore {
              ORDER BY created DESC, source ASC`
         )
         .bind(...cohortBinds),
-    ]);
+    ];
+  }
 
-    const funnel = firstRow<FunnelRow>(funnelResult);
-    const cost = firstRow<CostRow>(costResult);
-    const merges = firstRow<MergeRow>(mergesResult);
-    const inventory = firstRow<InventoryRow>(inventoryResult);
+  decode(results: SqlResult[]): AnalyticsPullRequestsResponse {
+    const [
+      funnelResult,
+      costResult,
+      mergesResult,
+      inventoryResult,
+      createdResult,
+      mergedResult,
+      reposResult,
+      sourcesResult,
+    ] = results;
 
-    const timeseries = new Map<string, { created: number; merged: number }>();
-    for (const row of rows<DailyCountRow>(createdResult)) {
-      timeseries.set(row.date, { created: row.count, merged: 0 });
+    const funnel = parseOptionalRow(funnelResult.results?.[0], funnelRowSchema, "PR funnel row");
+    const cost = parseOptionalRow(costResult.results?.[0], costRowSchema, "PR cost row");
+    const merges = parseOptionalRow(mergesResult.results?.[0], mergeRowSchema, "PR merge row");
+    const inventory = parseOptionalRow(
+      inventoryResult.results?.[0],
+      inventoryRowSchema,
+      "PR inventory row"
+    );
+
+    const timeseries = new Map<number, { created: number; merged: number }>();
+    for (const row of parseRows(createdResult.results, dailyCountRowSchema, "PR created row")) {
+      timeseries.set(row.day_index, { created: row.count, merged: 0 });
     }
-    for (const row of rows<DailyCountRow>(mergedResult)) {
-      const point = timeseries.get(row.date);
+    for (const row of parseRows(mergedResult.results, dailyCountRowSchema, "PR merged row")) {
+      const point = timeseries.get(row.day_index);
       if (point) {
         point.merged = row.count;
       } else {
-        timeseries.set(row.date, { created: 0, merged: row.count });
+        timeseries.set(row.day_index, { created: 0, merged: row.count });
       }
     }
 
@@ -231,20 +236,43 @@ export class PullRequestAnalyticsStore {
         avgAgeMs: inventory?.avg_age_ms ?? null,
       },
       timeseries: Array.from(timeseries.entries())
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, counts]) => ({ date, ...counts })),
-      repos: rows<RepoRow>(reposResult).map((row) => ({
+        .sort(([a], [b]) => a - b)
+        .map(([dayIndex, counts]) => ({ date: utcDateFromDayIndex(dayIndex), ...counts })),
+      repos: parseRows(reposResult.results, repoRowSchema, "PR repo row").map((row) => ({
         key: row.key,
         created: row.created,
         merged: row.merged,
         closed: row.closed,
         avgTimeToMergeMs: row.avg_time_to_merge_ms,
       })),
-      sources: rows<SourceRow>(sourcesResult).map((row) => ({
+      sources: parseRows(sourcesResult.results, sourceRowSchema, "PR source row").map((row) => ({
         source: row.source,
         created: row.created,
         merged: row.merged,
       })),
     };
   }
+}
+
+function parseOptionalRow<Schema extends z.ZodType>(
+  row: unknown,
+  schema: Schema,
+  name: string
+): z.infer<Schema> | undefined {
+  if (row === undefined) return undefined;
+  const parsed = schema.safeParse(row);
+  if (!parsed.success) throw new Error(`Invalid ${name}`);
+  return parsed.data;
+}
+
+function parseRows<Schema extends z.ZodType>(
+  rows: unknown[] | undefined,
+  schema: Schema,
+  name: string
+): Array<z.infer<Schema>> {
+  return (rows ?? []).map((row) => {
+    const parsed = schema.safeParse(row);
+    if (!parsed.success) throw new Error(`Invalid ${name}`);
+    return parsed.data;
+  });
 }

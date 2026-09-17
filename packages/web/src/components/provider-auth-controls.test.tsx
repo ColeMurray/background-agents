@@ -228,3 +228,53 @@ describe("ProviderAuthControls menu", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+describe("ProviderAuthControls harness capabilities", () => {
+  const anthropicAccount = {
+    ...account,
+    id: "b".repeat(32),
+    provider: "anthropic" as const,
+    displayName: "Owner Claude",
+  };
+
+  it("offers no accounts for a provider the harness runs on its API key alone", () => {
+    render(
+      <ProviderAuthControls
+        provider="anthropic"
+        harness="opencode"
+        accounts={[anthropicAccount]}
+        defaultValue={{
+          provider: "anthropic",
+          providerAccountId: anthropicAccount.id,
+          unattendedMode: "provider_account",
+          createdBy: null,
+          updatedBy: null,
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("Use default: No account");
+    expect(
+      screen.getByText(
+        "OpenCode runs Anthropic on its API key; connected accounts are not offered."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the account choices where the harness can select them", () => {
+    render(
+      <ProviderAuthControls
+        provider="anthropic"
+        harness="claude"
+        accounts={[anthropicAccount]}
+        value={{ mode: "provider_account", accountId: anthropicAccount.id }}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("Owner Claude");
+  });
+});

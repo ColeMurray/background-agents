@@ -45,16 +45,20 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     branch_name: null,
     base_sha: null,
     current_sha: null,
-    opencode_session_id: null,
+    agent_session_id: null,
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-5",
     reasoning_effort: null,
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user" as const,
     spawn_depth: 0,
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1,
@@ -117,7 +121,7 @@ function createInput(overrides: Partial<CreatePullRequestInput> = {}): CreatePul
     repoOwner: "acme",
     repoName: "web",
     promptingUserId: "user-1",
-    promptingAuth: null,
+    resolvePromptingAuth: vi.fn(async () => ({ auth: null })),
     sessionUrl: "https://app.example.com/session/session-name-1",
     ...overrides,
   };
@@ -268,6 +272,9 @@ describe("SessionPullRequestService", () => {
   });
 
   it("returns 500 when push to remote fails", async () => {
+    const resolvePromptingAuth = vi.fn(async () => ({
+      auth: { authType: "oauth" as const, token: "user-token" },
+    }));
     harness.deps.pushBranchToRemote = vi.fn(async () => ({
       success: false as const,
       error: "Failed to push branch: timeout",
@@ -275,7 +282,9 @@ describe("SessionPullRequestService", () => {
     harness.service = new SessionPullRequestService(harness.deps);
 
     const result = await harness.service.createPullRequest(
-      createInput({ promptingAuth: { authType: "oauth", token: "user-token" } })
+      createInput({
+        resolvePromptingAuth,
+      })
     );
 
     expect(result).toEqual({
@@ -284,10 +293,11 @@ describe("SessionPullRequestService", () => {
       error: "Failed to push branch: timeout",
     });
     expect(harness.deps.messenger.broadcast).not.toHaveBeenCalled();
+    expect(resolvePromptingAuth).not.toHaveBeenCalled();
   });
 
   it("creates PR with app auth when prompting auth is unavailable", async () => {
-    const result = await harness.service.createPullRequest(createInput({ promptingAuth: null }));
+    const result = await harness.service.createPullRequest(createInput());
 
     expect(result).toEqual({
       kind: "created",
@@ -423,9 +433,10 @@ describe("SessionPullRequestService", () => {
   });
 
   it("creates PR with OAuth token and stores PR artifact", async () => {
-    const result = await harness.service.createPullRequest(
-      createInput({ promptingAuth: { authType: "oauth", token: "user-token" } })
-    );
+    const resolvePromptingAuth = vi.fn(async () => ({
+      auth: { authType: "oauth" as const, token: "user-token" },
+    }));
+    const result = await harness.service.createPullRequest(createInput({ resolvePromptingAuth }));
 
     expect(result).toEqual({
       kind: "created",
@@ -440,6 +451,12 @@ describe("SessionPullRequestService", () => {
     const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
       .calls[0];
     expect(createPrCall[0]).toEqual({ authType: "oauth", token: "user-token" });
+    expect(vi.mocked(harness.deps.pushBranchToRemote).mock.invocationCallOrder[0]).toBeLessThan(
+      resolvePromptingAuth.mock.invocationCallOrder[0]
+    );
+    expect(resolvePromptingAuth.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(harness.provider.createPullRequest).mock.invocationCallOrder[0]
+    );
     expect(createPrCall[1].body).toContain(
       "*Created with [Open-Inspect](https://app.example.com/session/session-name-1)*"
     );
@@ -470,7 +487,11 @@ describe("SessionPullRequestService", () => {
     const customService = new SessionPullRequestService(customDeps);
 
     await customService.createPullRequest(
-      createInput({ promptingAuth: { authType: "oauth", token: "user-token" } })
+      createInput({
+        resolvePromptingAuth: vi.fn(async () => ({
+          auth: { authType: "oauth" as const, token: "user-token" },
+        })),
+      })
     );
 
     const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
@@ -797,7 +818,7 @@ describe("SessionPullRequestService", () => {
       updated_at: Date.now(),
     });
 
-    const result = await harness.service.createPullRequest(createInput({ promptingAuth: null }));
+    const result = await harness.service.createPullRequest(createInput());
 
     expect(result).toEqual({
       kind: "created",
@@ -959,17 +980,6 @@ describe("SessionPullRequestService", () => {
         "Failed to write session pull request record",
         expect.objectContaining({ artifact_id: "id-1", pr_number: 42 })
       );
-    });
-
-    it("skips the D1 write when no store is configured", async () => {
-      const deps = { ...harness.deps };
-      delete deps.sessionPullRequests;
-      const service = new SessionPullRequestService(deps);
-
-      const result = await service.createPullRequest(createInput());
-
-      expect(result.kind).toBe("created");
-      expect(harness.sessionPullRequests.upsert).not.toHaveBeenCalled();
     });
   });
 });

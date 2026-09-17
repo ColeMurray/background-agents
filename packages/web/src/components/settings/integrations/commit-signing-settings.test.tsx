@@ -8,6 +8,10 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 
 import { CommitSigningSettings } from "./commit-signing-settings";
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+}));
+
 expect.extend(matchers);
 
 const { useSWRMock, mutateMock } = vi.hoisted(() => ({

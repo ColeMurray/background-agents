@@ -34,10 +34,10 @@ few minutes of changes.
 ## Getting Started
 
 Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
-`sandbox_provider = "vercel"`, or `sandbox_provider = "opencomputer"`. The artifact is stored per
-provider as a Modal image, Vercel snapshot, or OpenComputer checkpoint. Daytona deployments use
-persistent sandboxes instead. E2B deployments use persistent pause/resume. Image settings are
-disabled for both backends.
+`sandbox_provider = "vercel"`, `sandbox_provider = "opencomputer"`, or `sandbox_provider = "e2b"`.
+The artifact is stored per provider as a Modal image, Vercel snapshot, OpenComputer checkpoint, or
+E2B snapshot. Daytona deployments use persistent sandboxes instead; image settings are disabled for
+that backend.
 
 ### Enable for a Repository
 
@@ -130,7 +130,7 @@ The build process runs the same setup steps that a normal session would:
    position order**)
 2. Runs each repository's `.openinspect/setup.sh` script (if present) in the same order
 3. Calls the control plane with the exact bound provider session id
-4. Lets a durable Queue consumer save the provider image artifact and terminate the build session
+4. Lets a durable Jobs consumer save the provider image artifact and terminate the build session
 
 ```mermaid
 flowchart TD
@@ -141,17 +141,17 @@ flowchart TD
 
     run -->|success callback| accept[Authenticate and persist completion metadata]
     run -->|failure callback| fail[Authenticate and persist failed state]
-    accept --> publish[Publish secret-free Queue command]
+    accept --> publish[Publish secret-free Jobs command]
     fail --> publish
 
     publish --> state{Accepted build state}
-    state -->|success: building| lease{D1 finalization lease available?}
+    state -->|success: building| lease{Finalization lease available?}
     state -->|failure: failed| cleanup[Terminate provider session]
     lease -->|no| retry[Retry after the active lease]
     retry --> lease
     lease -->|yes| artifact[Snapshot or checkpoint provider session]
 
-    artifact --> fence[Fence provider artifact id in D1]
+    artifact --> fence[Fence provider artifact id in build store]
     fence --> ready[Mark image ready or superseded]
     ready --> cleanup
     cleanup --> done[Clear cleanup obligation]
@@ -160,6 +160,10 @@ flowchart TD
     artifact -->|outcome ambiguous| terminal[Mark failed; do not create again]
     terminal --> cleanup
 ```
+
+The control plane publishes finalization through its `Jobs` port. Cloudflare delivers it with a
+Queue and stores build state in D1; Node delivers it with the `jobs.db` poller and stores build
+state in `global.db`. Both hosts run the same finalization handler and retry contract.
 
 A failing setup script fails the whole build, and for environment builds the error names the
 repository. Build-time secrets are exactly what the scope's sessions get: global + repository
@@ -267,6 +271,10 @@ For an **environment** session, verify that:
   repositories exists
 
 ### Image seems stale
+
+Updating the shared sandbox toolchain does not automatically refresh prepared repository or
+environment images. Use the refresh button below after a dependency-only update when those images
+must pick up the new tools. Existing compatible saved sessions remain usable.
 
 Pre-built images are rebuilt every 30 minutes when new commits are detected. If you just pushed code
 and want the image updated immediately, trigger a manual rebuild — the refresh button next to the

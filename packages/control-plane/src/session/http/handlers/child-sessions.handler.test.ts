@@ -19,16 +19,20 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     branch_name: "feature/test",
     base_sha: null,
     current_sha: null,
-    opencode_session_id: null,
+    agent_session_id: null,
+    harness: "opencode",
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: null,
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user",
     spawn_depth: 0,
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1000,
@@ -141,9 +145,6 @@ describe("ChildSessionsHandler", () => {
           login: null,
           name: null,
           email: null,
-          accessTokenEncrypted: null,
-          refreshTokenEncrypted: null,
-          tokenExpiresAt: null,
         },
       });
     });
@@ -295,15 +296,16 @@ describe("ChildSessionsHandler", () => {
     const response = handler.getSpawnContext();
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    const body = await response.json<{ promptAuthor: Record<string, unknown> }>();
+    expect(body).toMatchObject({
       promptAuthor: {
         userId: "slack:U2",
         canonicalUserId: "canonical-2",
         scmUserId: "222",
         scmLogin: "second-user",
-        scmAccessTokenEncrypted: "second-access",
       },
     });
+    expect(body.promptAuthor).not.toHaveProperty("scmAccessTokenEncrypted");
   });
 
   it("returns a narrow active prompt author without encrypted credentials", async () => {
@@ -362,6 +364,7 @@ describe("ChildSessionsHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       repoOwner: "acme",
+      harness: "opencode",
       repoName: "repo",
       repoId: 123,
       model: "anthropic/claude-haiku-4-5",
@@ -374,9 +377,6 @@ describe("ChildSessionsHandler", () => {
         scmLogin: "octocat",
         scmName: "The Octocat",
         scmEmail: "octocat@example.com",
-        scmAccessTokenEncrypted: "enc-access",
-        scmRefreshTokenEncrypted: "enc-refresh",
-        scmTokenExpiresAt: 1234,
       },
     });
   });

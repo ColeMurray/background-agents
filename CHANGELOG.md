@@ -2,11 +2,64 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 14, 2026
+
+**OpenCode Go models.** Adds 27 opt-in `opencode-go/*` models to Settings > Models for OpenCode
+sessions. Configure `OPENCODE_API_KEY` in Settings > Secrets with an active Go subscription. See
+[Available models](docs/AVAILABLE_MODELS.md#opencode-go).
+
+## September 9, 2026
+
+**Claude Fable 5.1.** Adds `claude-fable-5-1` to the model picker and integrations, with adaptive
+thinking controls from low through max.
+
+**Claude Agent harness.** Sessions can run on the Claude Agent SDK as a second harness beside
+OpenCode, chosen in the composer and inherited by child sessions and automations. Claude Agent
+sessions can use a **connected Claude subscription** from Settings > Provider Accounts instead of an
+API key. See [Using the Claude Agent Harness](docs/CLAUDE_AGENT.md).
+
+## September 1, 2026
+
+**Workspace audit log.** Owners, Administrators, and authorized custom roles can review paginated
+authorization activity from Settings, including allowed, denied, rejected, and no-op decisions with
+actor and resource snapshots, reasons, request context, and structured before-and-after details.
+
+**Safer event-triggered automations.** Slack, Sentry, and other event-driven automations now keep
+untrusted event content separate from authoritative workspace and automation instructions, reducing
+the risk that event payloads override unattended-run behavior.
+
+**Complete GitHub review feedback for Autofix.** Automated pull request reviews now submit their
+summary and inline findings together, ensuring Autofix receives all actionable feedback in one
+attempt while preserving comment-only reviews for bot-authored pull requests.
+
+**Larger follow-up queues.** Sessions can now retain up to 50 unfinished prompts, increased from 10,
+while preserving durable ordering and queue-full safeguards.
+
+## August 31, 2026
+
+**Workspace roles and access controls.** Every admitted user now has an Owner, Administrator,
+Member, or Viewer role, with permissions enforced across sessions, automations, settings,
+repositories, environments, and integrations. Owners and Administrators can manage member roles and
+suspensions from Settings; automation ownership and execution authority are enforced, and live
+session connections are revoked after access changes.
+
+## August 30, 2026
+
+**Dedicated, searchable settings.** Settings now use a responsive navigation surface with grouped
+category search instead of the session sidebar. The global command menu links directly to settings,
+automations, and analytics, with descriptions, keyboard guidance, and matching mobile navigation.
+
 ## August 28, 2026
 
 **Faster long session timelines.** Session timelines now render only visible rows, keeping histories
 with tens of thousands of events responsive while preserving scroll position, older-history loading,
 unread observation, and expanded task details.
+
+**Simpler Slack app setup.** Self-hosted deployments now include a reusable Slack app manifest for
+the supported bot features, plus Terraform outputs for the generated event and interaction URLs.
+
+**Flexible Autofix attempt limits.** Pull request Autofix can now allow any positive per-PR attempt
+limit or no limit, with global and repository-specific settings preserved consistently.
 
 ## August 27, 2026
 

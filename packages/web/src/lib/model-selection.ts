@@ -19,7 +19,7 @@ export interface ResolvedModelPreference {
 
 export function resolveModelPreference(
   preference: ModelPreference,
-  enabledModels: string[] | undefined
+  enabledModels?: readonly string[]
 ): ResolvedModelPreference {
   const model = enabledModels
     ? resolveEnabledModel({

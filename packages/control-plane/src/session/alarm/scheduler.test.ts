@@ -1,4 +1,4 @@
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import {
   createEarliestAlarmScheduler,
@@ -7,21 +7,12 @@ import {
   type AlarmDeadlineStore,
 } from "./scheduler";
 import { initSchema } from "../schema";
-import type { SqlResult, SqlStorage } from "../sql-storage";
+import type { SqlStorage } from "../sql-storage";
+import { createNodeSqlStorage } from "../../node/sqlite-storage";
+import { SessionStorageIntegrityError } from "../types";
 
 function createDatabaseSql(db: DatabaseSync): SqlStorage {
-  return {
-    exec(query: string, ...params: unknown[]): SqlResult {
-      const sqliteParams = params as SQLInputValue[];
-      if (/^\s*(?:PRAGMA|SELECT)\b/i.test(query)) {
-        const rows = db.prepare(query).all(...sqliteParams);
-        return { toArray: () => rows, one: () => rows[0] ?? null };
-      }
-      if (params.length > 0) db.prepare(query).run(...sqliteParams);
-      else db.exec(query);
-      return { toArray: () => [], one: () => null };
-    },
-  };
+  return createNodeSqlStorage(db).sql;
 }
 
 function createDeadlineStore(
@@ -40,6 +31,9 @@ function createDeadlineStore(
     cancelled: vi.fn(() => cancelled),
     setPending: vi.fn((value: number) => {
       pending = value;
+    }),
+    setPendingEarliest: vi.fn((value: number) => {
+      pending = pending === null ? value : Math.min(pending, value);
     }),
     activate: vi.fn(() => {
       cancelled = false;
@@ -358,6 +352,11 @@ describe("PersistedAlarmDeadlineStore", () => {
     const deadlines = new PersistedAlarmDeadlineStore(sql);
 
     deadlines.setPending(2_000);
+    deadlines.setPendingEarliest(3_000);
+    expect(deadlines.pending()).toBe(2_000);
+    deadlines.setPendingEarliest(1_000);
+    expect(deadlines.pending()).toBe(1_000);
+    deadlines.setPending(2_000);
     expect(deadlines.beginDelivery()).toBe(2_000);
     deadlines.setPending(3_000);
 
@@ -372,6 +371,28 @@ describe("PersistedAlarmDeadlineStore", () => {
     expect(deadlines.beginDelivery()).toBe("cancelled");
     deadlines.activate();
     expect(deadlines.beginDelivery()).toBe(4_000);
+
+    db.close();
+  });
+
+  it("parses nullable alarm state and throws on malformed persisted rows", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    initSchema(sql);
+    const deadlines = new PersistedAlarmDeadlineStore(sql);
+
+    deadlines.clear();
+    expect(deadlines.pending()).toBeNull();
+    expect(deadlines.cancelled()).toBe(true);
+
+    db.exec("UPDATE session_alarm_state SET cancelled = 'bad' WHERE singleton = 1");
+
+    expect(() => deadlines.cancelled()).toThrow(SessionStorageIntegrityError);
+    expect(() => deadlines.beginDelivery()).toThrow(SessionStorageIntegrityError);
+
+    db.exec("UPDATE session_alarm_state SET cancelled = 2 WHERE singleton = 1");
+
+    expect(() => deadlines.earliest()).toThrow(SessionStorageIntegrityError);
 
     db.close();
   });

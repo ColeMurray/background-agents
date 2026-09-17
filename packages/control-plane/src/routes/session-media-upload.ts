@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type {
   ScreenshotArtifactMetadata,
   VideoArtifactMetadata,
@@ -18,18 +21,11 @@ import {
   VIDEO_UPLOAD_LIMIT_PER_SESSION,
   type MultipartFieldValue,
 } from "../media";
-import { createMediaObjectStorage, type ObjectStorage } from "../storage/object-storage";
+import type { ObjectStorage } from "../storage/object-storage";
 import type { Env } from "../types";
 import { listSessionArtifactsFromRuntime, persistMediaArtifact } from "./session-media-artifacts";
-import {
-  defineRoutes,
-  error,
-  GITHUB_SANDBOX_FALLBACK_ROUTE,
-  json,
-  parsePattern,
-  type Route,
-} from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { error, GITHUB_SANDBOX_FALLBACK_ROUTE, json, requirePermission } from "./shared";
+import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 function getRequiredFormString(value: MultipartFieldValue | null, name: string): string | Response {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -45,15 +41,14 @@ function getOptionalFormString(value: MultipartFieldValue | null): string | unde
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-async function handleMediaUpload(
+export async function handleMediaUpload(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  if (!sessionId) return error("Session ID required");
-  const storage = createMediaObjectStorage(env);
+  const sessionId = params.id;
+  const storage = env.MEDIA_BUCKET;
 
   let formData: FormData;
   try {
@@ -246,10 +241,13 @@ async function handleVideoUpload(input: {
   return json({ artifactId, objectKey }, 201);
 }
 
-export const sessionMediaUploadRoutes: Route[] = defineRoutes(GITHUB_SANDBOX_FALLBACK_ROUTE, [
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/media"),
-    handler: handleMediaUpload,
+export const sessionMediaUploadRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionMediaUploadRoutes.post(
+  "/sessions/:id/media",
+  admit({
+    ...GITHUB_SANDBOX_FALLBACK_ROUTE,
+    authorization: requirePermission("sessions.collaborate"),
   }),
-]);
+  (c) => dispatchSession(c, handleMediaUpload)
+);

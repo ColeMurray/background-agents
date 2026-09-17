@@ -1037,17 +1037,21 @@ describe("getPullRequestFeedback", () => {
         makeJsonResponse([
           {
             id: 9001,
+            in_reply_to_id: null,
             body: "Handle null here.",
             html_url: "https://github.com/acme/web/pull/7#discussion_r9001",
             path: "src/input.ts",
             line: 12,
             start_line: null,
+            original_line: 11,
+            original_start_line: null,
             side: "RIGHT",
             start_side: null,
             diff_hunk: "@@ -10,2 +10,3 @@",
           },
           {
             id: 9002,
+            in_reply_to_id: 8002,
             body: "Add a regression test.",
             html_url: "https://github.com/acme/web/pull/7#discussion_r9002",
             path: "test/input.test.ts",
@@ -1077,12 +1081,16 @@ describe("getPullRequestFeedback", () => {
       comments: [
         {
           id: "9001",
+          inReplyToId: null,
           body: "Handle null here.",
           path: "src/input.ts",
           line: 12,
+          originalLine: 11,
+          originalStartLine: null,
         },
         {
           id: "9002",
+          inReplyToId: "8002",
           body: "Add a regression test.",
           path: "test/input.test.ts",
           startLine: 20,

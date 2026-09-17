@@ -26,6 +26,7 @@ const baseInput = {
   sessionId: "session-123",
   repoOwner: "testowner",
   repoName: "testrepo",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "anthropic/claude-sonnet-4-5",
 };
@@ -38,6 +39,7 @@ describe("buildSessionConfig", () => {
       session_id: "session-123",
       repo_owner: "testowner",
       repo_name: "testrepo",
+      harness: "opencode",
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4-5",
       mcp_servers: mcpServers,
@@ -108,6 +110,7 @@ describe("buildSessionConfig", () => {
       session_id: "session-123",
       repo_owner: "testowner",
       repo_name: "testrepo",
+      harness: "opencode",
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4-5",
     });
@@ -158,6 +161,7 @@ describe("buildSandboxEnvVars", () => {
     repoName: "testrepo",
     controlPlaneUrl: "https://control-plane.test",
     sandboxAuthToken: "auth-token-abc",
+    harness: "opencode" as const,
     provider: "anthropic",
     model: "anthropic/claude-sonnet-4-5",
   };
@@ -185,6 +189,7 @@ describe("buildSandboxEnvVars", () => {
       session_id: "session-123",
       repo_owner: "testowner",
       repo_name: "testrepo",
+      harness: "opencode",
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4-5",
     });

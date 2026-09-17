@@ -13,6 +13,10 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { GitHubIntegrationSettings } from "./github-integration-settings";
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+}));
+
 expect.extend(matchers);
 
 interface RepoSettingsEntry {
@@ -140,6 +144,15 @@ afterEach(() => {
 });
 
 describe("GitHubIntegrationSettings", () => {
+  it("starts integration content at heading level two", () => {
+    setupSWR({ global: null });
+
+    render(<GitHubIntegrationSettings />);
+
+    expect(screen.getByRole("heading", { name: "GitHub Bot", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Connection", level: 3 })).toBeInTheDocument();
+  });
+
   it("renders the default-off Autofix block and persists one complete global policy", async () => {
     const user = userEvent.setup();
     setupSWR({ global: { defaults: { autoReviewOnOpen: true } } });

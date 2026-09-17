@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import type { TriggerCondition } from "@open-inspect/shared/triggers";
+import { getConditionSemanticKey, type TriggerCondition } from "@open-inspect/shared/triggers";
 import { useSlackChannels } from "@/hooks/use-slack-channels";
 
 /**
@@ -50,8 +50,11 @@ export function ConditionSummary({ conditions }: { conditions: TriggerCondition[
     <div className="sm:col-span-2">
       <dt className="text-muted-foreground">Conditions</dt>
       <dd className="text-foreground">
-        {conditions.map((c, i) => (
-          <span key={i} className="inline-block mr-2 mb-1 px-2 py-0.5 bg-muted rounded text-xs">
+        {conditions.map((c) => (
+          <span
+            key={getConditionSemanticKey(c.type)}
+            className="inline-block mr-2 mb-1 px-2 py-0.5 bg-muted rounded text-xs"
+          >
             {c.type}: {c.operator} {formatConditionValue(c, channelNameById)}
           </span>
         ))}

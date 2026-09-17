@@ -8,6 +8,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   SandboxLifecycleManager,
   DEFAULT_LIFECYCLE_CONFIG,
+  type SandboxGeneration,
   type SandboxStorage,
   type SessionContextReader,
   type SandboxBroadcaster,
@@ -23,6 +24,7 @@ import type { ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import {
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   type SandboxProvider,
   type CreateSandboxConfig,
@@ -77,16 +79,20 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     branch_name: null,
     base_sha: null,
     current_sha: null,
-    opencode_session_id: null,
+    agent_session_id: null,
+    harness: "opencode" as const,
     model: "anthropic/claude-sonnet-4-5",
     reasoning_effort: null,
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user" as const,
     spawn_depth: 0,
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: Date.now() - 60000,
@@ -121,6 +127,7 @@ function createMockSandbox(
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,
+    active_socket_id: null,
     created_at: Date.now() - 60000,
     spawn_failure_count: 0,
     last_spawn_failure: 0,
@@ -170,6 +177,21 @@ function createMockStorage(
       calls.push(`updateSandboxStatus:${status}`);
       if (sandbox) sandbox.status = status;
     }),
+    transitionSandboxStatus: vi.fn(
+      (generation: SandboxGeneration, from: SandboxStatus, to: SandboxStatus) => {
+        calls.push(`transitionSandboxStatus:${from}->${to}`);
+        if (
+          !sandbox ||
+          sandbox.modal_sandbox_id !== generation.sandboxId ||
+          sandbox.created_at !== generation.createdAt ||
+          sandbox.status !== from
+        ) {
+          return false;
+        }
+        sandbox.status = to;
+        return true;
+      }
+    ),
     updateSandboxForSpawn: vi.fn((data) => {
       calls.push("updateSandboxForSpawn");
       if (sandbox) {
@@ -177,6 +199,7 @@ function createMockStorage(
         sandbox.created_at = data.createdAt;
         sandbox.auth_token_hash = "";
         sandbox.auth_token = null;
+        sandbox.last_heartbeat = null;
         sandbox.modal_sandbox_id = data.modalSandboxId;
         sandbox.runtime_version = null;
         if (!data.preserveProviderObjectId) sandbox.modal_object_id = null;
@@ -184,7 +207,13 @@ function createMockStorage(
     }),
     updateSandboxAuthTokenHash: vi.fn((modalSandboxId: string, authTokenHash: string) => {
       calls.push("updateSandboxAuthTokenHash");
-      if (!sandbox || sandbox.modal_sandbox_id !== modalSandboxId) return false;
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== modalSandboxId ||
+        sandbox.status !== "spawning"
+      ) {
+        return false;
+      }
       sandbox.auth_token_hash = authTokenHash;
       return true;
     }),
@@ -203,13 +232,13 @@ function createMockStorage(
       calls.push(`updateSandboxRuntimeVersion:${runtimeVersion}`);
       if (sandbox) sandbox.runtime_version = runtimeVersion;
     }),
-    updateSandboxSnapshotImageId: vi.fn(
-      (sandboxId: string, imageId: string, runtimeVersion: string | null) => {
-        calls.push(`updateSandboxSnapshotImageId:${imageId}:${runtimeVersion}`);
-        if (sandbox) {
-          sandbox.snapshot_image_id = imageId;
-          sandbox.snapshot_runtime_version = runtimeVersion;
-        }
+    recordSandboxSnapshot: vi.fn(
+      (sandboxId: string | null, imageId: string, runtimeVersion: string | null) => {
+        calls.push(`recordSandboxSnapshot:${imageId}:${runtimeVersion}`);
+        if (!sandbox || sandbox.modal_sandbox_id !== sandboxId) return false;
+        sandbox.snapshot_image_id = imageId;
+        sandbox.snapshot_runtime_version = runtimeVersion;
+        return true;
       }
     ),
     updateSandboxLastActivity: vi.fn((timestamp: number) => {
@@ -458,7 +487,7 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
   await manager.spawnSandbox();
 
   expect(sandbox.status).toBe("ready");
-  expect(storage.calls).not.toContain("updateSandboxStatus:connecting");
+  expect(storage.calls).not.toContain("transitionSandboxStatus:spawning->connecting");
   expect(storage.calls.filter((call) => call === "updateSandboxForResume:connecting")).toHaveLength(
     kind === "resume" ? 1 : 0
   );
@@ -477,16 +506,14 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
     broadcaster.messages.filter(
       (message) => (message as { type: string }).type === "sandbox_access_changed"
     )
-  ).toHaveLength(1);
-  expect(accessAtBroadcast).toEqual([
-    {
-      code_server_url: access.codeServerUrl,
-      code_server_password: access.codeServerPassword,
-      vnc_url: access.vncAccess.url,
-      vnc_password: access.vncAccess.password,
-      tunnel_urls: JSON.stringify(access.tunnelUrls),
-    },
-  ]);
+  ).not.toHaveLength(0);
+  expect(accessAtBroadcast.at(-1)).toEqual({
+    code_server_url: access.codeServerUrl,
+    code_server_password: access.codeServerPassword,
+    vnc_url: access.vncAccess.url,
+    vnc_password: access.vncAccess.password,
+    tunnel_urls: JSON.stringify(access.tunnelUrls),
+  });
 }
 
 // ==================== Tests ====================
@@ -517,7 +544,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.createSandbox).toHaveBeenCalled();
       expect(storage.calls).toContain("updateSandboxForSpawn");
-      expect(storage.calls).toContain("updateSandboxStatus:connecting");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_status")
       ).toBe(true);
@@ -623,7 +650,11 @@ describe("SandboxLifecycleManager", () => {
         expect(
           kind === "spawn" ? provider.createSandbox : provider.restoreFromSnapshot
         ).toHaveBeenCalledOnce();
-        expect(storage.updateSandboxStatus).toHaveBeenCalledWith("connecting");
+        expect(storage.transitionSandboxStatus).toHaveBeenCalledWith(
+          expect.objectContaining({ sandboxId: expect.any(String) }),
+          "spawning",
+          "connecting"
+        );
         expect(parseStructuredLogs(warnSpy)).toContainEqual(
           expect.objectContaining({
             msg: "Provider stop failed before sandbox replacement",
@@ -666,7 +697,11 @@ describe("SandboxLifecycleManager", () => {
         await spawning;
 
         expect(provider.createSandbox).toHaveBeenCalledOnce();
-        expect(storage.updateSandboxStatus).toHaveBeenCalledWith("connecting");
+        expect(storage.transitionSandboxStatus).toHaveBeenCalledWith(
+          expect.objectContaining({ sandboxId: expect.any(String) }),
+          "spawning",
+          "connecting"
+        );
         expect(sandbox.modal_object_id).toBe("modal-obj-123");
         expect(parseStructuredLogs(warnSpy)).toContainEqual(
           expect.objectContaining({
@@ -844,13 +879,10 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).toContain("updateSandboxModalObjectId:provider-obj-123");
       expect(
-        broadcaster.messages.filter((m) => (m as { type: string }).type === "sandbox_dashboard_url")
-      ).toEqual([
-        {
-          type: "sandbox_dashboard_url",
-          url: "https://provider.example/provider-obj-123",
-        },
-      ]);
+        broadcaster.messages.filter(
+          (m) => (m as { type: string }).type === "sandbox_access_changed"
+        )
+      ).toContainEqual({ type: "sandbox_access_changed" });
     });
 
     it("does not broadcast sandbox_dashboard_url when no builder is configured", async () => {
@@ -873,7 +905,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).toContain("updateSandboxModalObjectId:provider-obj-123");
       expect(
-        broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_dashboard_url")
+        broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_access_changed")
       ).toBe(false);
     });
 
@@ -1360,13 +1392,10 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).toContain("updateSandboxModalObjectId:restored-obj-456");
       expect(
-        broadcaster.messages.filter((m) => (m as { type: string }).type === "sandbox_dashboard_url")
-      ).toEqual([
-        {
-          type: "sandbox_dashboard_url",
-          url: "https://provider.example/restored-obj-456",
-        },
-      ]);
+        broadcaster.messages.filter(
+          (m) => (m as { type: string }).type === "sandbox_access_changed"
+        )
+      ).toContainEqual({ type: "sandbox_access_changed" });
     });
 
     it("broadcasts sandbox_dashboard_url after resume when provider object id changes", async () => {
@@ -1405,13 +1434,10 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.resumeSandbox).toHaveBeenCalled();
       expect(storage.calls).toContain("updateSandboxModalObjectId:new-provider-obj");
       expect(
-        broadcaster.messages.filter((m) => (m as { type: string }).type === "sandbox_dashboard_url")
-      ).toEqual([
-        {
-          type: "sandbox_dashboard_url",
-          url: "https://provider.example/new-provider-obj",
-        },
-      ]);
+        broadcaster.messages.filter(
+          (m) => (m as { type: string }).type === "sandbox_access_changed"
+        )
+      ).toContainEqual({ type: "sandbox_access_changed" });
     });
 
     it("broadcasts sandbox_dashboard_url after resume when provider object id is unchanged", async () => {
@@ -1450,13 +1476,10 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.resumeSandbox).toHaveBeenCalled();
       expect(storage.calls).not.toContain("updateSandboxModalObjectId:same-provider-obj");
       expect(
-        broadcaster.messages.filter((m) => (m as { type: string }).type === "sandbox_dashboard_url")
-      ).toEqual([
-        {
-          type: "sandbox_dashboard_url",
-          url: "https://provider.example/same-provider-obj",
-        },
-      ]);
+        broadcaster.messages.filter(
+          (m) => (m as { type: string }).type === "sandbox_access_changed"
+        )
+      ).toContainEqual({ type: "sandbox_access_changed" });
     });
 
     it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {
@@ -1484,7 +1507,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.triggerSnapshot("execution_complete");
 
       expect(sandbox.runtime_version).toBeNull();
-      expect(storage.calls).toContain("updateSandboxSnapshotImageId:snapshot-img-123:null");
+      expect(storage.calls).toContain("recordSandboxSnapshot:snapshot-img-123:null");
     });
 
     it("seeds the restored sandbox's runtime version from the snapshot", async () => {
@@ -1599,7 +1622,7 @@ describe("SandboxLifecycleManager", () => {
 
       // After failed restore, isSpawning should be reset to false
       expect(manager.isSpawning()).toBe(false);
-      expect(storage.calls).toContain("updateSandboxStatus:failed");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
     });
 
     it("resets isSpawningSandbox flag after restore returns failure", async () => {
@@ -1638,7 +1661,7 @@ describe("SandboxLifecycleManager", () => {
 
       // After failed restore (success=false), isSpawning should be reset to false
       expect(manager.isSpawning()).toBe(false);
-      expect(storage.calls).toContain("updateSandboxStatus:failed");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
       expect(
         broadcaster.messages.some(
           (m) => (m as { type: string; error?: string }).error === "Snapshot not found"
@@ -1669,7 +1692,123 @@ describe("SandboxLifecycleManager", () => {
       // Should go: pending -> spawning -> connecting
       const statusCalls = storage.calls.filter((c) => c.startsWith("updateSandbox"));
       expect(statusCalls).toContain("updateSandboxForSpawn");
-      expect(statusCalls).toContain("updateSandboxStatus:connecting");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
+    });
+
+    it("keeps earlier boot failures counted when the provider merely accepts a spawn", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "failed" as SandboxStatus,
+        created_at: now - 60000,
+        spawn_failure_count: 2,
+        last_spawn_failure: now - 60000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledOnce();
+      // The provider accepting the request says nothing about whether this
+      // boot will connect; only a connected bridge clears the streak.
+      expect(sandbox.spawn_failure_count).toBe(2);
+    });
+
+    it("leaves the boot-failure streak in place when the bridge connects", async () => {
+      // A connected bridge has not yet consumed anything: the pending prompt
+      // is claimed only after a further await, and a fatal report in that
+      // gap re-drives the same prompt. Clearing here would let a sandbox
+      // that connects and dies before taking a prompt loop unbounded.
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting" as SandboxStatus,
+        spawn_failure_count: 2,
+        last_spawn_failure: now - 60000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      manager.onSandboxConnected();
+
+      expect(sandbox.spawn_failure_count).toBe(2);
+    });
+
+    it("clears the boot-failure streak once a prompt is dispatched to the sandbox", async () => {
+      // Dispatch is the first point where a failure costs something: from
+      // here a fatal report fails the prompt the sandbox was running, so
+      // every replacement after this consumes a queued prompt.
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready" as SandboxStatus,
+        spawn_failure_count: 2,
+        last_spawn_failure: now - 60000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      manager.onPromptDispatched();
+
+      expect(sandbox.spawn_failure_count).toBe(0);
+    });
+
+    it("fails and counts an attempt whose reservation broke after persisting it", async () => {
+      // Reservation persists `spawning` and then awaits the connect alarm.
+      // If that await throws, no watchdog was armed and no provider call was
+      // made, so nothing else will ever fail or count this attempt.
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const alarmScheduler = createMockAlarmScheduler();
+      alarmScheduler.schedule = vi.fn(async () => {
+        throw new Error("alarm storage unavailable");
+      });
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        alarmScheduler,
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(sandbox.spawn_failure_count).toBe(1);
+      // Phase 1 already persisted `spawning` for this identity, and no
+      // watchdog was armed to fail it later, so this catch must: a row left
+      // in `spawning` would make the next prompt wait on an attempt that
+      // has already ended.
+      expect(sandbox.status).toBe("failed");
+      expect(sandbox.last_spawn_error).toContain("alarm storage unavailable");
     });
 
     it("handles provider errors and increments failure count for permanent errors", async () => {
@@ -1697,7 +1836,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(storage.calls).toContain("incrementCircuitBreakerFailure");
-      expect(storage.calls).toContain("updateSandboxStatus:failed");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
     });
 
     it("does not increment circuit breaker for transient errors", async () => {
@@ -1725,7 +1864,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(storage.calls).not.toContain("incrementCircuitBreakerFailure");
-      expect(storage.calls).toContain("updateSandboxStatus:failed");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
     });
 
     it("fails spawn when getUserEnvVars rejects", async () => {
@@ -1752,7 +1891,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).not.toHaveBeenCalled();
-      expect(storage.calls).toContain("updateSandboxStatus:failed");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
       expect(manager.isSpawning()).toBe(false);
     });
 
@@ -1802,7 +1941,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.takeSnapshot).toHaveBeenCalled();
       expect(storage.calls).toContain(
-        `updateSandboxSnapshotImageId:snapshot-img-123:${COMPATIBLE_RUNTIME_VERSION}`
+        `recordSandboxSnapshot:snapshot-img-123:${COMPATIBLE_RUNTIME_VERSION}`
       );
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "snapshot_saved")
@@ -1842,7 +1981,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.triggerSnapshot("test_reason");
 
       // Should not crash, just skip
-      expect(storage.calls).not.toContain("updateSandboxSnapshotImageId");
+      expect(storage.calls).not.toContain("recordSandboxSnapshot");
     });
 
     it("stores returned imageId", async () => {
@@ -1870,7 +2009,74 @@ describe("SandboxLifecycleManager", () => {
       await manager.triggerSnapshot("execution_complete");
 
       expect(storage.calls).toContain(
-        `updateSandboxSnapshotImageId:custom-snapshot-id:${COMPATIBLE_RUNTIME_VERSION}`
+        `recordSandboxSnapshot:custom-snapshot-id:${COMPATIBLE_RUNTIME_VERSION}`
+      );
+    });
+
+    it("leaves a status written during the snapshot in place", async () => {
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider({
+        takeSnapshot: vi.fn(async () => {
+          // The heartbeat-stale alarm (or a cancel) lands while the provider
+          // call is in flight: status written, access cleared, socket detached.
+          sandbox.status = "stale";
+          return { success: true, imageId: "snapshot-img-123" };
+        }),
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.triggerSnapshot("execution_complete");
+
+      expect(sandbox.status).toBe("stale");
+      expect(storage.calls).toContain("transitionSandboxStatus:snapshotting->ready");
+      expect(broadcaster.messages).not.toContainEqual({ type: "sandbox_status", status: "ready" });
+      expect(broadcaster.messages).not.toContainEqual({ type: "sandbox_access_changed" });
+      // The image itself is still recorded: it describes the filesystem, not the row.
+      expect(sandbox.snapshot_image_id).toBe("snapshot-img-123");
+    });
+
+    it("drops a snapshot of a sandbox that was replaced during the provider call", async () => {
+      const sandbox = createMockSandbox({ status: "ready", modal_sandbox_id: "sb-old" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider({
+        takeSnapshot: vi.fn(async () => {
+          // Terminated and re-reserved while the snapshot was in flight.
+          sandbox.status = "spawning";
+          sandbox.modal_sandbox_id = "sb-new";
+          return { success: true, imageId: "snapshot-of-old" };
+        }),
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.triggerSnapshot("execution_complete");
+
+      expect(sandbox.snapshot_image_id).toBeNull();
+      expect(sandbox.status).toBe("spawning");
+      expect(broadcaster.messages.map((m) => (m as { type: string }).type)).not.toContain(
+        "snapshot_saved"
       );
     });
 
@@ -1899,11 +2105,61 @@ describe("SandboxLifecycleManager", () => {
       // Should not throw
       await manager.triggerSnapshot("test");
 
-      expect(storage.calls).not.toContain("updateSandboxSnapshotImageId");
+      expect(storage.calls).not.toContain("recordSandboxSnapshot");
     });
   });
 
   describe("handleAlarm", () => {
+    it.each(["spawn", "restore"] as const)(
+      "%s does not inherit a stopped sandbox's heartbeat when an alarm fires during startup",
+      async (kind) => {
+        const sandbox = createMockSandbox({
+          status: "stopped",
+          created_at: Date.now() - 4_000_000,
+          last_heartbeat: Date.now() - 4_000_000,
+          snapshot_image_id: kind === "restore" ? "snapshot-old" : null,
+          snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
+        });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        const wsManager = createMockWebSocketManager(false);
+        const checkStartup = async () => {
+          expect(sandbox.status).toBe("spawning");
+          expect(await manager.handleAlarm()).toBe("no_action");
+          expect(sandbox.status).toBe("spawning");
+        };
+        const provider = createMockProvider({
+          createSandbox: vi.fn(async (config) => {
+            await checkStartup();
+            return { sandboxId: config.sandboxId, status: "connecting", createdAt: Date.now() };
+          }),
+          restoreFromSnapshot: vi.fn(async (config) => {
+            await checkStartup();
+            return { success: true, sandboxId: config.sandboxId };
+          }),
+        });
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          storage,
+          createMockBroadcaster(),
+          wsManager,
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        await manager.spawnSandbox();
+
+        expect(
+          kind === "restore" ? provider.restoreFromSnapshot : provider.createSandbox
+        ).toHaveBeenCalledOnce();
+        expect(sandbox.status).toBe("connecting");
+        expect(sandbox.last_heartbeat).toBeNull();
+        expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+        expect(provider.takeSnapshot).not.toHaveBeenCalled();
+      }
+    );
+
     it("detects heartbeat timeout and sets stale", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
@@ -2225,7 +2481,7 @@ describe("SandboxLifecycleManager", () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
         status: "connecting" as SandboxStatus,
-        created_at: now - 130_000, // 130s ago, past 120s timeout
+        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
         last_heartbeat: null,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
@@ -2261,11 +2517,65 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.takeSnapshot).not.toHaveBeenCalled();
     });
 
+    it("counts a connecting timeout toward the circuit breaker", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting" as SandboxStatus,
+        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
+        last_heartbeat: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(manager.handleAlarm()).resolves.toBe("sandbox_failed");
+
+      expect(sandbox.spawn_failure_count).toBe(1);
+      expect(sandbox.last_spawn_failure).toBeGreaterThanOrEqual(now);
+    });
+
+    it("restarts the streak when the previous failure is older than the breaker window", async () => {
+      // The window is measured from the latest failure. A failure that lands
+      // after the previous one expired starts a new streak of one; it must
+      // not resurrect and extend a streak the breaker would already ignore.
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting" as SandboxStatus,
+        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
+        last_heartbeat: null,
+        spawn_failure_count: 2,
+        last_spawn_failure: now - (DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.windowMs + 60_000),
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(manager.handleAlarm()).resolves.toBe("sandbox_failed");
+
+      expect(sandbox.spawn_failure_count).toBe(1);
+    });
+
     it("does not timeout connecting sandbox within timeout window", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
         status: "connecting" as SandboxStatus,
-        created_at: now - 30_000, // 30s ago, well within 120s timeout
+        created_at: now - DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs / 2,
         last_heartbeat: null,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
@@ -2403,7 +2713,142 @@ describe("SandboxLifecycleManager", () => {
       expect(manager.isSpawning()).toBe(false);
     });
 
-    it.each(["stopped", "stale"] as const)(
+    it("counts a fatal runtime termination toward the circuit breaker", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({ status: "ready" as SandboxStatus });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(manager.terminateFailedSandbox("OpenCode repeatedly crashed")).resolves.toBe(
+        true
+      );
+
+      expect(sandbox.spawn_failure_count).toBe(1);
+      expect(sandbox.last_spawn_failure).toBeGreaterThanOrEqual(now);
+    });
+
+    it("opens the circuit breaker after repeated fatal boots so the re-drive stops spawning", async () => {
+      // A boot that reports fatal before its bridge connects (setup.sh exits
+      // non-zero, the harness never comes up) re-drives the pending prompt
+      // onto a fresh sandbox that dies the same way. Nothing connects, so
+      // nothing clears the streak, and the breaker has to end it.
+      const sandbox = createMockSandbox({ status: "failed" as SandboxStatus });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      for (
+        let attempt = 0;
+        attempt < DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.threshold;
+        attempt++
+      ) {
+        await manager.spawnSandbox();
+        expect(sandbox.status).toBe("connecting");
+        await expect(manager.terminateFailedSandbox("setup.sh exited 1")).resolves.toBe(true);
+      }
+      const spawnsBeforeOpen = vi.mocked(provider.createSandbox).mock.calls.length;
+
+      await manager.spawnSandbox();
+
+      expect(vi.mocked(provider.createSandbox).mock.calls.length).toBe(spawnsBeforeOpen);
+      expect(sandbox.last_spawn_error).toContain("temporarily disabled");
+    });
+
+    it("opens the circuit breaker when replacements connect but die before taking a prompt", async () => {
+      // The bridge connecting consumes nothing: the pending prompt is
+      // claimed only after a further await, and a fatal report in that gap
+      // re-drives the same prompt. So connect must not clear the streak, or
+      // this sequence would replace the sandbox forever.
+      const sandbox = createMockSandbox({ status: "failed" as SandboxStatus });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      for (
+        let attempt = 0;
+        attempt < DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.threshold;
+        attempt++
+      ) {
+        await manager.spawnSandbox();
+        // The production connection path calls this before publishing ready.
+        manager.onSandboxConnected();
+        sandbox.status = "ready";
+        await expect(manager.terminateFailedSandbox("OpenCode crashed")).resolves.toBe(true);
+      }
+      const spawnsBeforeOpen = vi.mocked(provider.createSandbox).mock.calls.length;
+
+      await manager.spawnSandbox();
+
+      expect(vi.mocked(provider.createSandbox).mock.calls.length).toBe(spawnsBeforeOpen);
+      expect(sandbox.last_spawn_error).toContain("temporarily disabled");
+    });
+
+    it("keeps replacing a sandbox that took a prompt before each fatal report", async () => {
+      // Once a prompt is dispatched, a fatal report fails that prompt, so
+      // each replacement costs a queued prompt and the queue bounds the
+      // sequence without the breaker.
+      const sandbox = createMockSandbox({ status: "failed" as SandboxStatus });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      for (
+        let attempt = 0;
+        attempt < DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.threshold;
+        attempt++
+      ) {
+        await manager.spawnSandbox();
+        manager.onSandboxConnected();
+        sandbox.status = "ready";
+        manager.onPromptDispatched();
+        await expect(manager.terminateFailedSandbox("OpenCode crashed")).resolves.toBe(true);
+        expect(sandbox.spawn_failure_count).toBe(1);
+      }
+      const spawnsBeforeLast = vi.mocked(provider.createSandbox).mock.calls.length;
+
+      await manager.spawnSandbox();
+
+      expect(vi.mocked(provider.createSandbox).mock.calls.length).toBe(spawnsBeforeLast + 1);
+    });
+
+    it.each(["stopped", "stale", "failed"] as const)(
       "does not overwrite or detach a %s sandbox",
       async (status) => {
         const storage = createMockStorage(createMockSession(), createMockSandbox({ status }));
@@ -2425,6 +2870,44 @@ describe("SandboxLifecycleManager", () => {
         expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
       }
     );
+
+    it("reports nothing to terminate for a boot the connect watchdog already failed", async () => {
+      // A provider without explicit stop cannot kill the boot the watchdog
+      // gave up on, so it runs on and eventually reports a fatal error of its
+      // own. That report must not read as a fresh termination, or the caller
+      // re-drives the pending prompt onto yet another sandbox.
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting" as SandboxStatus,
+        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
+        last_heartbeat: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const wsManager = createMockWebSocketManager();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider({ capabilities: { supportsExplicitStop: false } }),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(manager.handleAlarm()).resolves.toBe("sandbox_failed");
+      expect(sandbox.status).toBe("failed");
+
+      await expect(
+        manager.terminateFailedSandbox("failed to fetch managed skills: 401 Unauthorized")
+      ).resolves.toBe(false);
+
+      expect(storage.calls.filter((c) => c === "updateSandboxStatus:failed")).toHaveLength(1);
+      expect(storage.calls).not.toContain(
+        "setLastSpawnError:failed to fetch managed skills: 401 Unauthorized"
+      );
+      expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+    });
   });
 
   describe("scheduleDisconnectCheck", () => {
@@ -2754,7 +3237,7 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("marks the repo image restore-failed and retries from base when the provider rejects it", async () => {
+    it("marks the repo image restore-failed and retries from base when its artifact is unavailable", async () => {
       // Deliberate behavior change: the old repo path failed the spawn
       // outright; repo images now take the same restore fallback the
       // environment side has.
@@ -2764,7 +3247,7 @@ describe("SandboxLifecycleManager", () => {
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValueOnce(new Error("image expired"))
+        .mockRejectedValueOnce(new PrebuiltImageUnavailableError("image expired"))
         .mockImplementation(async (config) => ({
           sandboxId: config.sandboxId,
           providerObjectId: "provider-obj-123",
@@ -2775,6 +3258,7 @@ describe("SandboxLifecycleManager", () => {
         imageBuildLookup,
         provider: createMockProvider({ createSandbox }),
       });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
       await manager.spawnSandbox();
 
@@ -2790,8 +3274,65 @@ describe("SandboxLifecycleManager", () => {
       const [firstAttempt, retryAttempt] = createSandbox.mock.calls.map(([config]) => config);
       expect(retryAttempt.sandboxAuthToken).not.toBe(firstAttempt.sandboxAuthToken);
       expect(retryAttempt.sandboxId).not.toBe(firstAttempt.sandboxId);
-      expect(storage.calls).toContain("updateSandboxStatus:connecting");
-      expect(storage.calls).not.toContain("updateSandboxStatus:failed");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
+      expect(storage.calls).not.toContain("transitionSandboxStatus:spawning->failed");
+      expect(parseStructuredLogs(warnSpy)).toContainEqual(
+        expect.objectContaining({
+          event: "image_build.restore_failed",
+          error_type: "permanent",
+        })
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("does not fail the image or retry from base on a transient provider error", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const createSandbox = vi.fn(async () => {
+        throw new SandboxProviderError("request timed out", "transient");
+      });
+      const { manager, storage } = createRepoSessionManager({
+        imageBuildLookup,
+        provider: createMockProvider({ createSandbox }),
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+      await manager.spawnSandbox();
+
+      expect(createSandbox).toHaveBeenCalledOnce();
+      expect(imageBuildLookup.markRestoreFailed).not.toHaveBeenCalled();
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
+      expect(parseStructuredLogs(warnSpy)).toContainEqual(
+        expect.objectContaining({
+          event: "image_build.spawn_error_transient",
+          image_build_id: "imgb-repo-1",
+          error_type: "transient",
+          error: "request timed out",
+        })
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("does not fail the image or retry from base on an unrelated permanent provider error", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const createSandbox = vi.fn(async () => {
+        throw new SandboxProviderError("quota exceeded", "permanent");
+      });
+      const { manager, storage } = createRepoSessionManager({
+        imageBuildLookup,
+        provider: createMockProvider({ createSandbox }),
+      });
+
+      await manager.spawnSandbox();
+
+      expect(createSandbox).toHaveBeenCalledOnce();
+      expect(imageBuildLookup.markRestoreFailed).not.toHaveBeenCalled();
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
     });
   });
 
@@ -2929,7 +3470,7 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
-      expect(storage.calls).toContain("updateSandboxStatus:connecting");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
     });
 
     it("boots from base when no environment image lookup is bound", async () => {
@@ -2942,14 +3483,14 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("marks the image restore-failed and retries from base when the provider rejects it", async () => {
+    it("marks the image restore-failed and retries from base when its artifact is unavailable", async () => {
       const environmentImageLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () => envImageRow()),
         markRestoreFailed: vi.fn(async () => true),
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValueOnce(new Error("image expired"))
+        .mockRejectedValueOnce(new PrebuiltImageUnavailableError("image expired"))
         .mockImplementation(async (config) => ({
           sandboxId: config.sandboxId,
           providerObjectId: "provider-obj-123",
@@ -2991,8 +3532,8 @@ describe("SandboxLifecycleManager", () => {
             ([data]) => data.createdAt + DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs
           )
       );
-      expect(storage.calls).toContain("updateSandboxStatus:connecting");
-      expect(storage.calls).not.toContain("updateSandboxStatus:failed");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
+      expect(storage.calls).not.toContain("transitionSandboxStatus:spawning->failed");
     });
 
     it("fails the spawn when the base-image retry also fails", async () => {
@@ -3002,7 +3543,8 @@ describe("SandboxLifecycleManager", () => {
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValue(new Error("quota exceeded"));
+        .mockRejectedValueOnce(new PrebuiltImageUnavailableError("image expired"))
+        .mockRejectedValueOnce(new SandboxProviderError("quota exceeded", "permanent"));
       const { manager, storage } = createEnvironmentSessionManager({
         environmentImageLookup,
         provider: createMockProvider({ createSandbox }),
@@ -3012,7 +3554,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(createSandbox).toHaveBeenCalledTimes(2);
       expect(environmentImageLookup.markRestoreFailed).toHaveBeenCalledTimes(1);
-      expect(storage.calls).toContain("updateSandboxStatus:failed");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
     });
 
     it("still retries from base when marking the row restore-failed fails", async () => {
@@ -3024,7 +3566,7 @@ describe("SandboxLifecycleManager", () => {
       };
       const createSandbox = vi
         .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
-        .mockRejectedValueOnce(new Error("image expired"))
+        .mockRejectedValueOnce(new PrebuiltImageUnavailableError("image expired"))
         .mockImplementation(async (config) => ({
           sandboxId: config.sandboxId,
           providerObjectId: "provider-obj-123",
@@ -3039,7 +3581,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(createSandbox).toHaveBeenCalledTimes(2);
-      expect(storage.calls).toContain("updateSandboxStatus:connecting");
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
     });
   });
 
@@ -3540,11 +4082,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).toContain("updateSandboxTunnelUrls");
       expect(
-        broadcaster.messages.some(
-          (m) =>
-            (m as { type: string }).type === "tunnel_urls" &&
-            (m as { urls: Record<string, string> }).urls["3000"] === "https://tunnel.example.com"
-        )
+        broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_access_changed")
       ).toBe(true);
     });
 
@@ -3644,11 +4182,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).toContain("updateSandboxTunnelUrls");
       expect(
-        broadcaster.messages.some(
-          (m) =>
-            (m as { type: string }).type === "tunnel_urls" &&
-            (m as { urls: Record<string, string> }).urls["3000"] === "https://tunnel.example.com"
-        )
+        broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_access_changed")
       ).toBe(true);
     });
   });
@@ -3835,6 +4369,228 @@ describe("SandboxLifecycleManager", () => {
   });
 });
 
+describe("status writes after a provider await (COL-99)", () => {
+  // The provider call is a non-storage await: the alarm, a bridge connect, or
+  // a cancel can move the sandbox row while it is in flight, and that verdict
+  // stands over the attempt's own late write.
+  function harness(
+    sandbox: ReturnType<typeof createMockSandbox>,
+    createSandbox: (config: CreateSandboxConfig) => Promise<CreateSandboxResult>
+  ) {
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const broadcaster = createMockBroadcaster();
+    const manager = new SandboxLifecycleManager(
+      createMockProvider({ createSandbox }),
+      storage,
+      storage,
+      broadcaster,
+      createMockWebSocketManager(false),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      createTestConfig()
+    );
+    return { storage, broadcaster, manager };
+  }
+
+  it("does not resurrect an attempt the alarm failed while the provider call was in flight", async () => {
+    const sandbox = createMockSandbox({ status: "failed" });
+    const { storage, broadcaster, manager } = harness(sandbox, async (config) => {
+      // Connecting timeout fired: the alarm failed the attempt and told the user.
+      sandbox.status = "failed";
+      return {
+        sandboxId: config.sandboxId,
+        providerObjectId: "provider-obj-late",
+        status: "connecting",
+        createdAt: Date.now(),
+      };
+    });
+
+    await manager.spawnSandbox();
+
+    expect(sandbox.status).toBe("failed");
+    expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
+    expect(broadcaster.messages).not.toContainEqual({
+      type: "sandbox_status",
+      status: "connecting",
+    });
+    // The provider-side sandbox exists and a later stop needs its handle.
+    expect(sandbox.modal_object_id).toBe("provider-obj-late");
+  });
+
+  it("counts an attempt once when the watchdog fails it before the provider rejects it", async () => {
+    // The connect alarm is armed at reservation, before the provider call,
+    // so it can fail the attempt while createSandbox() is still pending. The
+    // provider's later rejection is the same attempt, not a second failure.
+    vi.useFakeTimers();
+    try {
+      const sandbox = createMockSandbox({ status: "failed" });
+      const h = harness(sandbox, async () => {
+        vi.advanceTimersByTime(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1000);
+        await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_failed");
+        throw new SandboxProviderError("quota exceeded", "permanent");
+      });
+
+      await h.manager.spawnSandbox();
+
+      expect(sandbox.status).toBe("failed");
+      expect(sandbox.spawn_failure_count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a sandbox that connected during the provider call ready when the call then fails", async () => {
+    const sandbox = createMockSandbox({ status: "failed" });
+    const { storage, broadcaster, manager } = harness(sandbox, async () => {
+      // The bridge authenticated and published ready before the provider's
+      // response (a post-create timeout) came back as an error.
+      sandbox.status = "ready";
+      throw new SandboxProviderError("read timed out", "transient");
+    });
+
+    await manager.spawnSandbox();
+
+    expect(sandbox.status).toBe("ready");
+    expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
+    expect(storage.setLastSpawnError).not.toHaveBeenCalledWith("read timed out", expect.anything());
+    expect(broadcaster.messages).not.toContainEqual({
+      type: "sandbox_error",
+      error: "read timed out",
+    });
+  });
+
+  it("abandons a reservation that a cancel stopped while its hash was being published", async () => {
+    const sandbox = createMockSandbox({ status: "failed" });
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const broadcaster = createMockBroadcaster();
+    const provider = createMockProvider();
+    const alarmScheduler = createMockAlarmScheduler();
+    vi.mocked(alarmScheduler.schedule).mockImplementation(async () => {
+      // The reservation's alarm await: the cancel handler lands here and
+      // stops the sandbox without changing its reserved identity.
+      sandbox.status = "stopped";
+    });
+    const manager = new SandboxLifecycleManager(
+      provider,
+      storage,
+      storage,
+      broadcaster,
+      createMockWebSocketManager(false),
+      alarmScheduler,
+      createMockIdGenerator(),
+      createTestConfig()
+    );
+
+    await manager.spawnSandbox();
+
+    expect(provider.createSandbox).not.toHaveBeenCalled();
+    expect(sandbox.status).toBe("stopped");
+    expect(sandbox.auth_token_hash).toBe("");
+    expect(storage.calls).not.toContain("transitionSandboxStatus:spawning->failed");
+    expect(storage.incrementCircuitBreakerFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not let a late completion touch a newer reservation that re-entered spawning", async () => {
+    // Attempt A's provider call is slow. Its bridge connects early (clearing
+    // the in-memory flag), goes stale, and attempt B reserves a new identity,
+    // so the row is `spawning` again when A's call returns.
+    const sandbox = createMockSandbox({ status: "failed" });
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const broadcaster = createMockBroadcaster();
+    let attempts = 0;
+    const provider = createMockProvider({
+      createSandbox: vi.fn(async (config) => {
+        attempts += 1;
+        if (attempts === 1) {
+          sandbox.status = "spawning";
+          sandbox.modal_sandbox_id = "sb-B";
+          sandbox.created_at = config.sandboxId.length + Date.now() + 1;
+          throw new SandboxProviderError("late failure of A", "transient");
+        }
+        return {
+          sandboxId: config.sandboxId,
+          providerObjectId: "provider-obj-B",
+          status: "connecting",
+          createdAt: Date.now(),
+        };
+      }),
+    });
+    const manager = new SandboxLifecycleManager(
+      provider,
+      storage,
+      storage,
+      broadcaster,
+      createMockWebSocketManager(false),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      createTestConfig()
+    );
+
+    await manager.spawnSandbox();
+
+    // B's row is untouched by A's failure: still spawning, no error reported.
+    expect(sandbox.status).toBe("spawning");
+    expect(sandbox.modal_sandbox_id).toBe("sb-B");
+    expect(storage.setLastSpawnError).not.toHaveBeenCalledWith(
+      "late failure of A",
+      expect.anything()
+    );
+    expect(broadcaster.messages).not.toContainEqual({
+      type: "sandbox_error",
+      error: "late failure of A",
+    });
+  });
+
+  it("does not let a late completion touch a newer generation that re-entered snapshotting", async () => {
+    const sandbox = createMockSandbox({
+      status: "ready",
+      modal_sandbox_id: "sb-A",
+      created_at: 1000,
+    });
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const broadcaster = createMockBroadcaster();
+    const provider = createMockProvider({
+      takeSnapshot: vi.fn(async () => {
+        // A terminated and was replaced; the replacement is itself snapshotting.
+        sandbox.modal_sandbox_id = "sb-B";
+        sandbox.created_at = 2000;
+        sandbox.status = "snapshotting";
+        return { success: true, imageId: "snapshot-of-A" };
+      }),
+    });
+    const manager = new SandboxLifecycleManager(
+      provider,
+      storage,
+      storage,
+      broadcaster,
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      createTestConfig()
+    );
+
+    await manager.triggerSnapshot("execution_complete");
+
+    expect(sandbox.status).toBe("snapshotting");
+    expect(sandbox.snapshot_image_id).toBeNull();
+    expect(broadcaster.messages).not.toContainEqual({ type: "sandbox_status", status: "ready" });
+  });
+
+  it("still fails and reports an attempt nothing else touched", async () => {
+    const sandbox = createMockSandbox({ status: "failed" });
+    const { storage, broadcaster, manager } = harness(sandbox, async () => {
+      throw new SandboxProviderError("quota exceeded", "permanent");
+    });
+
+    await manager.spawnSandbox();
+
+    expect(sandbox.status).toBe("failed");
+    expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
+    expect(storage.setLastSpawnError).toHaveBeenCalledWith("quota exceeded", expect.anything());
+    expect(broadcaster.messages).toContainEqual({ type: "sandbox_error", error: "quota exceeded" });
+  });
+});
+
 describe("SandboxLifecycleManager log context", () => {
   it("derives session_id from getSessionId per use, upgrading once the id changes", async () => {
     let currentId = "do-fallback-id";
@@ -3998,7 +4754,7 @@ describe("spawn admission race (#1589)", () => {
     // The row and circuit breaker describe the newer reservation now — the
     // superseded attempt must not mark them failed on its way out.
     expect(sandbox.status).toBe("spawning");
-    expect(storage.calls).not.toContain("updateSandboxStatus:failed");
+    expect(storage.calls).not.toContain("transitionSandboxStatus:spawning->failed");
     expect(storage.incrementCircuitBreakerFailure).not.toHaveBeenCalled();
     expect(storage.setLastSpawnError).not.toHaveBeenCalledWith(
       expect.stringContaining("superseded"),

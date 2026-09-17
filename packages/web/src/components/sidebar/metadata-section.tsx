@@ -3,7 +3,6 @@
 import { useState } from "react";
 import Link from "next/link";
 import { formatModelName, truncateBranch, copyToClipboard } from "@/lib/format";
-import { formatSessionCost } from "@/lib/session-cost";
 import { formatRelativeTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
@@ -51,7 +50,7 @@ interface MetadataSectionProps {
   /** Non-fatal boot/runtime warnings surfaced to the user. */
   warnings?: WarningEvent[];
   parentSessionId?: string | null;
-  totalCost?: number;
+  canManageLifecycle: boolean;
 }
 
 /**
@@ -107,13 +106,13 @@ export function MetadataSection({
   environmentName,
   warnings = [],
   parentSessionId,
-  totalCost,
+  canManageLifecycle,
 }: MetadataSectionProps) {
   const [copied, setCopied] = useState(false);
 
   const isMultiRepo = (repositories?.length ?? 0) > 1;
   const hasPrArtifact = artifacts.some((a) => a.type === "pr");
-  const showSyncButton = Boolean(sessionId) && hasPrArtifact;
+  const showSyncButton = canManageLifecycle && Boolean(sessionId) && hasPrArtifact;
 
   // Sessions can hold several PRs (one open PR per head branch); list them
   // all, oldest first — creation order matches PR-number order.
@@ -165,12 +164,6 @@ export function MetadataSection({
             {formatModelName(model)}
             {reasoningEffort && <span> · {reasoningEffort}</span>}
           </span>
-        </div>
-      )}
-
-      {typeof totalCost === "number" && totalCost > 0 && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>Session cost: {formatSessionCost(totalCost)}</span>
         </div>
       )}
 

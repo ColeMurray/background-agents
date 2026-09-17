@@ -1,10 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { sandboxStatusSchema, sessionReadActionSchema, sessionReadResultSchema } from "./sessions";
+import {
+  sandboxStatusSchema,
+  sessionReadActionSchema,
+  sessionReadResultSchema,
+  sessionReadStateSchema,
+} from "./sessions";
 import { createSessionRequestSchema } from "./session-api";
 
 const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
 
 describe("session read contracts", () => {
+  it("requires producers to provide a read-state version", () => {
+    expect(
+      sessionReadStateSchema.safeParse({
+        latestMessageId: "message-1",
+        unread: true,
+      }).success
+    ).toBe(false);
+  });
+
   it("accepts only explicit exact and latest read actions", () => {
     expect(
       sessionReadActionSchema.safeParse({
@@ -23,6 +37,24 @@ describe("session read contracts", () => {
         messageId: "message-1",
       }).success
     ).toBe(false);
+  });
+
+  it("reads a result without a version as version 0 and ignores additive fields", () => {
+    expect(
+      sessionReadResultSchema.parse({
+        sessionId: "session-1",
+        outcome: "marked_read",
+        unread: false,
+        latestMessageId: "message-1",
+        extra: true,
+      })
+    ).toEqual({
+      sessionId: "session-1",
+      outcome: "marked_read",
+      unread: false,
+      latestMessageId: "message-1",
+      version: 0,
+    });
   });
 
   it("rejects unread state without a terminal message", () => {
@@ -54,7 +86,7 @@ describe("createSessionRequestSchema provider selections", () => {
   it("rejects malformed provider selections", () => {
     expect(
       createSessionRequestSchema.safeParse({
-        providerSelections: { anthropic: { mode: "api_key" } },
+        providerSelections: { gemini: { mode: "api_key" } },
       }).success
     ).toBe(false);
   });

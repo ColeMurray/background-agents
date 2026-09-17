@@ -74,14 +74,14 @@ function resolveRefreshTarget(
  * The D1 write is the authority step: a snapshot the monotonic guard rejects
  * as stale (a newer webhook write won while this read was in flight) never
  * reaches the mirror. It is otherwise best-effort — the mirror still updates
- * when D1 is absent (`sessionPullRequests` null) or errors, and the upsert
- * repairs records whose creation write failed.
+ * when the upsert errors, and the upsert repairs records whose creation write
+ * failed.
  */
 export async function refreshSessionPullRequests(
   repository: PullRequestRefreshRepository,
   artifactRepository: ArtifactRepository,
   sourceControlProvider: Pick<SourceControlProvider, "getPullRequest">,
-  sessionPullRequests: Pick<SessionPullRequestStore, "upsert"> | null
+  sessionPullRequests: Pick<SessionPullRequestStore, "upsert">
 ): Promise<PullRequestRefreshResult> {
   const updated: SessionArtifact[] = [];
   const failures: PullRequestRefreshFailure[] = [];

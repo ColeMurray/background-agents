@@ -1,10 +1,12 @@
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore } from "../db/session-index";
-import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
+import { SessionInternalPaths } from "./contracts";
+import { createSessionRuntimeClient } from "./runtime-client";
 import { createLogger } from "../logger";
 import type { SessionSkillManifestInput } from "./skill-resolution";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
@@ -44,6 +46,8 @@ export interface SessionInitInput {
 
   // Session config
   title?: string;
+  /** Agent harness; validated against model and provider auth by the caller. */
+  harness: HarnessId;
   model: string;
   reasoningEffort: string | null;
   codeServerEnabled?: boolean;
@@ -56,14 +60,11 @@ export interface SessionInitInput {
   /** Canonical platform user ID for D1 analytics attribution. Null when unresolved. */
   platformUserId: string | null;
 
-  // SCM credentials
+  // SCM identity
   scmLogin?: string | null;
   scmName?: string | null;
   scmEmail?: string | null;
   scmUserId?: string | null;
-  scmTokenEncrypted: string | null;
-  scmRefreshTokenEncrypted: string | null;
-  scmTokenExpiresAt?: number | null;
 
   // Lineage
   parentSessionId?: string | null;
@@ -90,6 +91,12 @@ export async function initializeSession(
   input: SessionInitInput,
   ctx: RequestContext
 ): Promise<{ sessionId: string; status: string }> {
+  if (
+    (input.managedSkillsManifest === undefined) ===
+    (input.managedSkillsSourceSessionId === undefined)
+  ) {
+    throw new Error("Session must resolve or inherit exactly one managed skills manifest");
+  }
   const hasRepoOwner = input.repoOwner !== null;
   const hasRepoName = input.repoName !== null;
   const hasRepoId = input.repoId != null;
@@ -140,6 +147,7 @@ export async function initializeSession(
     title: input.title || null,
     repoOwner: input.repoOwner,
     repoName: input.repoName,
+    harness: input.harness,
     model: input.model,
     reasoningEffort: input.reasoningEffort,
     baseBranch,
@@ -160,22 +168,15 @@ export async function initializeSession(
     providerAuth: input.providerAuth,
   });
 
-  // Step 2: DO init
-  const doId = env.SESSION.idFromName(input.sessionId);
-  const stub = env.SESSION.get(doId);
-
-  const headers = new Headers({
-    "Content-Type": "application/json",
-  });
-  headers.set("x-trace-id", ctx.trace_id);
-  headers.set("x-request-id", ctx.request_id);
-
+  // Step 2: runtime init
   let initResponse: Response;
   try {
-    initResponse = await stub.fetch(
-      new Request(buildSessionInternalUrl(SessionInternalPaths.init), {
+    initResponse = await createSessionRuntimeClient(env, ctx).fetch(
+      input.sessionId,
+      SessionInternalPaths.init,
+      {
         method: "POST",
-        headers,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionName: input.sessionId,
           repoOwner: input.repoOwner,
@@ -186,6 +187,7 @@ export async function initializeSession(
           repositories,
           environmentId: input.environmentId ?? null,
           title: input.title,
+          harness: input.harness,
           model: input.model,
           reasoningEffort: input.reasoningEffort,
           userId: input.participantUserId,
@@ -193,9 +195,6 @@ export async function initializeSession(
           scmLogin: input.scmLogin,
           scmName: input.scmName,
           scmEmail: input.scmEmail,
-          scmTokenEncrypted: input.scmTokenEncrypted,
-          scmRefreshTokenEncrypted: input.scmRefreshTokenEncrypted,
-          scmTokenExpiresAt: input.scmTokenExpiresAt,
           scmUserId: input.scmUserId,
           codeServerEnabled: input.codeServerEnabled,
           vncEnabled: input.vncEnabled,
@@ -204,7 +203,7 @@ export async function initializeSession(
           spawnSource: input.spawnSource,
           spawnDepth: input.spawnDepth,
         }),
-      })
+      }
     );
   } catch (transportError) {
     await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);

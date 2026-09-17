@@ -31,6 +31,7 @@ resource "null_resource" "vercel_base_snapshot" {
       VERCEL_RUNTIME                      = var.runtime
       VERCEL_SANDBOX_API_BASE_URL         = var.api_base_url
       VERCEL_BASE_SNAPSHOT_NAME           = local.snapshot_name
+      OPENINSPECT_IMAGE_CANDIDATE         = local.snapshot_name
       VERCEL_BASE_SNAPSHOT_SOURCE_VERSION = var.source_hash
     }
   }

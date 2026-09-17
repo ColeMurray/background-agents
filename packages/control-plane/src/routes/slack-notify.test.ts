@@ -5,7 +5,7 @@ import { handleSlackNotify } from "./slack-notify";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { fakeSessionRuntimeDispatch, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const sessionStoreMock = {
   get: vi.fn(),
@@ -50,7 +50,7 @@ function createCtx(): RequestContext {
     db: {} as SqlDatabase,
     executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
-      d1Queries: [],
+      sqlQueries: [],
       spans: {},
       time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
       summarize: () => ({}),
@@ -60,11 +60,8 @@ function createCtx(): RequestContext {
 
 function createEnv(overrides?: Partial<Env>): Env {
   return {
-    DB: {} as D1Database,
-    SESSION: {
-      idFromName: vi.fn().mockReturnValue("fake-do-id"),
-      get: vi.fn().mockReturnValue({ fetch: sessionFetchMock }),
-    } as unknown as DurableObjectNamespace,
+    DB: {} as SqlDatabase,
+    SESSION: fakeSessionRuntimeDispatch((request) => sessionFetchMock(request)),
     DEPLOYMENT_NAME: "test",
     TOKEN_ENCRYPTION_KEY: "test-key",
     SLACK_BOT_TOKEN: "xoxb-test",
@@ -75,7 +72,7 @@ function createEnv(overrides?: Partial<Env>): Env {
 }
 
 async function callHandler(body: unknown, envOverrides?: Partial<Env>): Promise<Response> {
-  const match = PATH.match(PATTERN)!;
+  const params = { id: PATH.match(PATTERN)!.groups!.id };
   const init: RequestInit = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -84,7 +81,7 @@ async function callHandler(body: unknown, envOverrides?: Partial<Env>): Promise<
   return handleSlackNotify(
     new Request(`https://test.local${PATH}`, init),
     createEnv(envOverrides),
-    match,
+    params,
     createCtx()
   );
 }

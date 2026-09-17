@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { serverMessageSchema, sessionSnapshotSchema } from "./server-messages";
+import {
+  redactSessionSnapshotSandboxAccess,
+  serverMessageSchema,
+  sessionSnapshotSchema,
+} from "./server-messages";
 
 describe("artifact_updated server message", () => {
   const artifact = {
@@ -113,6 +117,31 @@ describe("session view contracts", () => {
     expect(parsed.timeline.events.map((item) => item.eventId)).toEqual(["event-1"]);
   });
 
+  it("redacts sandbox locations without mutating the source snapshot", () => {
+    const snapshot = sessionSnapshotSchema.parse({
+      session: {
+        ...snapshotState,
+        codeServerUrl: "https://code.example",
+        vncUrl: "https://vnc.example",
+        ttydUrl: "https://terminal.example",
+        tunnelUrls: { "3000": "https://app.example" },
+        sandboxDashboardUrl: "https://provider.example",
+      },
+      artifacts: [],
+      promptQueue: [],
+      timeline: { events: [], hasMore: false, cursor: null },
+    });
+
+    const redacted = redactSessionSnapshotSandboxAccess(snapshot);
+
+    expect(redacted.session).not.toHaveProperty("codeServerUrl");
+    expect(redacted.session).not.toHaveProperty("vncUrl");
+    expect(redacted.session).not.toHaveProperty("ttydUrl");
+    expect(redacted.session).not.toHaveProperty("tunnelUrls");
+    expect(redacted.session).not.toHaveProperty("sandboxDashboardUrl");
+    expect(snapshot.session.codeServerUrl).toBe("https://code.example");
+  });
+
   it("rejects malformed stable event envelopes", () => {
     const snapshot = {
       session: snapshotState,
@@ -201,5 +230,47 @@ describe("session view contracts", () => {
         clientRequestId: "request-1",
       })
     ).toMatchObject({ clientRequestId: "request-1" });
+  });
+
+  it("parses budget state in snapshots and subscriptions", () => {
+    const parsed = serverMessageSchema.parse({
+      type: "subscribed",
+      session: {
+        ...snapshotState,
+        totalCost: 8.25,
+        maxSessionCostUsd: 10,
+        budgetExhausted: false,
+      },
+      artifacts: [],
+      promptQueue: [],
+      participantId: "participant-1",
+      canManageBudget: true,
+      timeline: { events: [], hasMore: false, cursor: null },
+    });
+
+    expect(parsed).toMatchObject({
+      canManageBudget: true,
+      session: {
+        totalCost: 8.25,
+        maxSessionCostUsd: 10,
+        budgetExhausted: false,
+      },
+    });
+  });
+
+  it("parses authoritative budget status updates", () => {
+    expect(
+      serverMessageSchema.parse({
+        type: "budget_status",
+        totalCost: 10.25,
+        maxSessionCostUsd: 10,
+        budgetExhausted: true,
+      })
+    ).toEqual({
+      type: "budget_status",
+      totalCost: 10.25,
+      maxSessionCostUsd: 10,
+      budgetExhausted: true,
+    });
   });
 });

@@ -1,6 +1,7 @@
+import { harnessIdSchema, type HarnessId } from "../harnesses";
 import { z } from "zod";
 import type { ResolvedSessionAttachment } from "./session-attachments";
-import type { SessionListRepository } from "./repositories";
+import { sessionListRepositorySchema, type SessionListRepository } from "./repositories";
 
 /**
  * A session's conversation lifecycle: durable, user-visible, and independent
@@ -60,45 +61,106 @@ export type MessageSource = z.infer<typeof messageSourceSchema>;
 
 export type ParticipantRole = "owner" | "member";
 
-export type SpawnSource =
-  | "user"
-  | "agent"
-  | "automation"
-  | "github-bot"
-  | "linear-bot"
-  | "slack-bot";
-
-export interface SessionParticipant {
-  id: string;
-  userId: string;
-  scmLogin: string | null;
-  scmName: string | null;
-  scmEmail: string | null;
-  role: ParticipantRole;
-}
+export const spawnSourceSchema = z.enum([
+  "user",
+  "agent",
+  "automation",
+  "github-bot",
+  "linear-bot",
+  "slack-bot",
+]);
+export type SpawnSource = z.infer<typeof spawnSourceSchema>;
 
 /**
  * Aggregate PR counts for a session, grouped by display status. Computed from
  * the D1 session_pull_requests table for the session list; total = open +
  * draft + merged + closed.
  */
-export interface PullRequestSummary {
-  total: number;
-  open: number;
-  draft: number;
-  merged: number;
-  closed: number;
-}
+export const pullRequestSummarySchema = z.object({
+  total: z.number(),
+  open: z.number(),
+  draft: z.number(),
+  merged: z.number(),
+  closed: z.number(),
+});
+export type PullRequestSummary = z.infer<typeof pullRequestSummarySchema>;
 
-export type SessionReadState =
-  | {
-      latestMessageId: null;
-      unread: false;
-    }
-  | {
-      latestMessageId: string;
-      unread: boolean;
-    };
+export const INITIAL_SESSION_READ_STATE_VERSION = 0;
+
+/**
+ * Viewer-specific read state for a session's latest terminal message.
+ *
+ * `version` orders terminal messages: it is the projected creation time of
+ * the latest one and 0 before any turn completes. A read state with a higher
+ * version supersedes one with a lower version. Messages that share a version
+ * are ordered by message ID, as the projection orders them. For one message,
+ * read is final.
+ */
+export const sessionReadStateSchema = z.union([
+  z.object({
+    latestMessageId: z.null(),
+    unread: z.literal(false),
+    version: z.number(),
+  }),
+  z.object({
+    latestMessageId: z.string(),
+    unread: z.boolean(),
+    version: z.number(),
+  }),
+]);
+export type SessionReadState = z.infer<typeof sessionReadStateSchema>;
+
+/** Fields shared only by the list, inbox, and direct-child response projections. */
+export const sessionSummaryBaseSchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  repoOwner: z.string().nullable(),
+  repoName: z.string().nullable(),
+  baseBranch: z.string().nullable(),
+  status: sessionStatusSchema,
+  parentSessionId: z.string().nullable(),
+  spawnSource: spawnSourceSchema,
+  environmentId: z.string().nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  repositories: z.array(sessionListRepositorySchema).optional(),
+  pullRequestSummary: pullRequestSummarySchema.optional(),
+});
+export type SessionSummaryBase = z.infer<typeof sessionSummaryBaseSchema>;
+
+/** Direct-child list item. Viewer-specific read state is intentionally absent. */
+export const childSessionSummarySchema = sessionSummaryBaseSchema.extend({
+  harness: harnessIdSchema,
+  model: z.string(),
+  reasoningEffort: z.string().nullable(),
+  spawnDepth: z.number(),
+  automationId: z.string().nullable(),
+  automationRunId: z.string().nullable(),
+  scmLogin: z.string().nullable(),
+  userId: z.string().nullable(),
+  totalCost: z.number(),
+  activeDurationMs: z.number(),
+  messageCount: z.number(),
+  prCount: z.number(),
+});
+export type ChildSessionSummary = z.infer<typeof childSessionSummarySchema>;
+
+export const childSessionListResponseSchema = z.object({
+  children: z.array(childSessionSummarySchema),
+});
+export type ChildSessionListResponse = z.infer<typeof childSessionListResponseSchema>;
+
+/** Flat session-list item. Read state is absent for callers without a viewer identity. */
+export const sessionListSummarySchema = childSessionSummarySchema.extend({
+  readState: sessionReadStateSchema.optional(),
+});
+export type SessionListSummary = z.infer<typeof sessionListSummarySchema>;
+
+export const sessionListResponseSchema = z.object({
+  sessions: z.array(sessionListSummarySchema),
+  hasMore: z.boolean(),
+});
+export type SessionListResponse = z.infer<typeof sessionListResponseSchema>;
 
 export const sessionReadActionSchema = z.discriminatedUnion("action", [
   z
@@ -111,23 +173,24 @@ export const sessionReadActionSchema = z.discriminatedUnion("action", [
 ]);
 export type SessionReadAction = z.infer<typeof sessionReadActionSchema>;
 
+// Parsed from responses, so additive server fields must not fail an older
+// client. A control plane that predates `version` reads as version 0, which
+// never supersedes cached state.
 export const sessionReadResultSchema = z.union([
-  z
-    .object({
-      sessionId: z.string(),
-      outcome: z.literal("no_terminal_message"),
-      unread: z.literal(false),
-      latestMessageId: z.null(),
-    })
-    .strict(),
-  z
-    .object({
-      sessionId: z.string(),
-      outcome: z.enum(["marked_read", "already_read", "not_latest"]),
-      unread: z.boolean(),
-      latestMessageId: z.string(),
-    })
-    .strict(),
+  z.object({
+    sessionId: z.string(),
+    outcome: z.literal("no_terminal_message"),
+    unread: z.literal(false),
+    latestMessageId: z.null(),
+    version: z.number().default(INITIAL_SESSION_READ_STATE_VERSION),
+  }),
+  z.object({
+    sessionId: z.string(),
+    outcome: z.enum(["marked_read", "already_read", "not_latest"]),
+    unread: z.boolean(),
+    latestMessageId: z.string(),
+    version: z.number().default(INITIAL_SESSION_READ_STATE_VERSION),
+  }),
 ]);
 export type SessionReadResult = z.infer<typeof sessionReadResultSchema>;
 
@@ -140,7 +203,10 @@ export interface Session {
   branchName: string | null;
   baseSha: string | null;
   currentSha: string | null;
-  opencodeSessionId: string | null;
+  /** The agent's own conversation id (formerly opencodeSessionId). */
+  agentSessionId: string | null;
+  /** Agent harness the session runs on. */
+  harness: HarnessId;
   status: SessionStatus;
   parentSessionId: string | null;
   spawnSource: SpawnSource;

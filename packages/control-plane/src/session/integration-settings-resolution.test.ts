@@ -37,7 +37,10 @@ describe("resolveSessionScopedSettings", () => {
   it("resolves both settings from the primary (position 0) member", async () => {
     mockState.resolved["code-server"] = { enabledRepos: null, settings: { enabled: true } };
     mockState.resolved["vnc"] = { enabledRepos: null, settings: { enabled: true } };
-    mockState.resolved["sandbox"] = { enabledRepos: null, settings: { tunnelPorts: [8080] } };
+    mockState.resolved["sandbox"] = {
+      enabledRepos: null,
+      settings: { tunnelPorts: [8080], cpuCores: null },
+    };
 
     const result = await resolveSessionScopedSettings(DB, [
       { repoOwner: "acme", repoName: "web" },
@@ -47,7 +50,7 @@ describe("resolveSessionScopedSettings", () => {
     expect(result).toEqual({
       codeServerEnabled: true,
       vncEnabled: true,
-      sandboxSettings: { tunnelPorts: [8080] },
+      sandboxSettings: { tunnelPorts: [8080], cpuCores: null },
     });
     // Every resolution targets the primary member; the secondary is never asked about.
     expect(mockState.resolvedCalls.map((c) => c.repo)).toEqual([
@@ -98,5 +101,19 @@ describe("resolveSessionScopedSettings", () => {
     // No per-repo resolution happens without a primary member.
     expect(mockState.resolvedCalls).toEqual([]);
     expect(mockState.globalCalls).toContain("sandbox");
+  });
+
+  it("rejects malformed persisted settings and falls back to disabled/defaults", async () => {
+    mockState.resolved["code-server"] = { enabledRepos: null, settings: { enabled: "true" } };
+    mockState.resolved["vnc"] = { enabledRepos: null, settings: { enabled: "true" } };
+    mockState.resolved["sandbox"] = { enabledRepos: null, settings: { tunnelPorts: ["8080"] } };
+
+    const result = await resolveSessionScopedSettings(DB, [{ repoOwner: "acme", repoName: "web" }]);
+
+    expect(result).toEqual({
+      codeServerEnabled: false,
+      vncEnabled: false,
+      sandboxSettings: {},
+    });
   });
 });

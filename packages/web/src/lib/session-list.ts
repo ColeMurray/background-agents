@@ -5,12 +5,26 @@ import {
   SESSION_LIST_CURRENT_USER,
   type SessionListQuery,
 } from "@open-inspect/shared/session-list-query";
-import { sessionStatusSchema, type SessionReadState } from "@open-inspect/shared/types/sessions";
+import {
+  sessionListResponseSchema,
+  sessionListSummarySchema,
+  type SessionListResponse,
+  type SessionListSummary,
+} from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
+import { sessionReadStateClientSchema } from "./session-read-state";
 
-export const SESSIONS_PAGE_SIZE = DEFAULT_SESSION_LIST_LIMIT;
+const sessionListClientResponseSchema = sessionListResponseSchema.extend({
+  sessions: z.array(
+    sessionListSummarySchema.extend({
+      readState: sessionReadStateClientSchema.optional(),
+    })
+  ),
+});
+
+const SESSIONS_PAGE_SIZE = DEFAULT_SESSION_LIST_LIMIT;
 const COMMAND_MENU_SESSIONS_LIMIT = 100;
 const SESSIONS_API_PATH = "/api/sessions";
 export const CURRENT_USER_CREATED_BY = SESSION_LIST_CURRENT_USER;
@@ -24,45 +38,13 @@ export const COMMAND_MENU_SESSIONS_KEY = buildSessionsPageKey({
   limit: COMMAND_MENU_SESSIONS_LIMIT,
 });
 
-const sessionListItemSchema = z.object({
-  id: z.string(),
-  title: z.string().nullable(),
-  repoOwner: z.string().nullable(),
-  repoName: z.string().nullable(),
-  status: sessionStatusSchema,
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  repositories: z
-    .array(
-      z.object({
-        repoOwner: z.string(),
-        repoName: z.string(),
-        repoId: z.number().nullable(),
-        baseBranch: z.string(),
-      })
-    )
-    .optional(),
-  readState: z
-    .union([
-      z.object({ latestMessageId: z.null(), unread: z.literal(false) }),
-      z.object({ latestMessageId: z.string(), unread: z.boolean() }),
-    ])
-    .optional(),
-});
-
-export type SessionListItem = z.infer<typeof sessionListItemSchema>;
-
-export const sessionListResponseSchema = z.object({
-  sessions: z.array(sessionListItemSchema),
-  hasMore: z.boolean(),
-});
-
-export type SessionListResponse = z.infer<typeof sessionListResponseSchema>;
+export type SessionListItem = SessionListSummary;
+export type { SessionListResponse };
 
 export async function fetchSessionListPage(path: BrowserApiPath): Promise<SessionListResponse> {
   const response = await browserApiFetch(path);
   if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
-  return sessionListResponseSchema.parse(await response.json());
+  return sessionListClientResponseSchema.parse(await response.json());
 }
 
 export function buildSessionsPageKey(options: SessionListQuery = {}): BrowserApiPath {
@@ -94,45 +76,6 @@ export function isArchivedSessionListKey(key: unknown): key is string {
 
   const url = new URL(key, "http://localhost");
   return url.searchParams.get("status") === "archived";
-}
-
-// Extracted from session-sidebar so the cache-shape transformation can be unit
-// tested without rendering the component or going through Radix/SWR.
-export function applyTitleUpdate(
-  data: SessionListResponse | undefined,
-  sessionId: string,
-  title: string | null
-): SessionListResponse | undefined {
-  if (!data) return data;
-  return {
-    ...data,
-    sessions: data.sessions.map((session) =>
-      session.id === sessionId ? { ...session, title } : session
-    ),
-  };
-}
-
-export function applySessionReadState(
-  data: SessionListResponse | undefined,
-  sessionId: string,
-  readState: SessionReadState | undefined
-): SessionListResponse | undefined {
-  if (!data) return data;
-  return {
-    ...data,
-    sessions: data.sessions.map((session) => {
-      if (session.id !== sessionId) return session;
-      if (!readState) return session;
-      const currentMessageId = session.readState?.latestMessageId;
-      if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId) {
-        return session;
-      }
-      return {
-        ...session,
-        readState,
-      };
-    }),
-  };
 }
 
 export function removeSessionFromList(sessions: SessionListItem[], sessionId: string) {

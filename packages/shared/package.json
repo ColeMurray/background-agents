@@ -22,6 +22,10 @@
       "import": "./dist/models.js",
       "types": "./dist/models.d.ts"
     },
+    "./harnesses": {
+      "import": "./dist/harnesses.js",
+      "types": "./dist/harnesses.d.ts"
+    },
     "./classification": {
       "import": "./dist/classification.js",
       "types": "./dist/classification.d.ts"
@@ -49,6 +53,10 @@
     "./user-id": {
       "import": "./dist/user-id.js",
       "types": "./dist/user-id.d.ts"
+    },
+    "./rbac": {
+      "import": "./dist/rbac.js",
+      "types": "./dist/rbac.d.ts"
     },
     "./browser-auth-routes": {
       "import": "./dist/browser-auth-routes.js",
@@ -154,6 +162,10 @@
       "import": "./dist/types/artifacts.js",
       "types": "./dist/types/artifacts.d.ts"
     },
+    "./types/session-archive": {
+      "import": "./dist/types/session-archive.js",
+      "types": "./dist/types/session-archive.d.ts"
+    },
     "./types/session-api": {
       "import": "./dist/types/session-api.js",
       "types": "./dist/types/session-api.d.ts"
@@ -181,6 +193,10 @@
     "./types/analytics": {
       "import": "./dist/types/analytics.js",
       "types": "./dist/types/analytics.d.ts"
+    },
+    "./types/audit-events": {
+      "import": "./dist/types/audit-events.js",
+      "types": "./dist/types/audit-events.d.ts"
     }
   },
   "scripts": {
@@ -193,7 +209,7 @@
   },
   "devDependencies": {
     "typescript": "^5.7.2",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.11"
   },
   "dependencies": {
     "@octokit/webhooks-types": "^7.6.1",

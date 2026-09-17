@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { analyticsRoutes } from "./analytics";
+import type * as AuthenticateModule from "../auth/authenticate";
 import { HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
-import type { RequestContext } from "./shared";
-import type { SqlDatabase } from "../db/sql-database";
+import {
+  createTestRequestHandler,
+  ownerAuthorizationDatabase,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "../router.test-support";
 import type { Env } from "../types";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { analyticsRoutes, DEFAULT_ANALYTICS_DAYS } from "./analytics";
 
 const FIXED_NOW = 1_700_000_000_000;
 
@@ -13,6 +17,17 @@ const mockStore = {
   getTimeseries: vi.fn(),
   getBreakdown: vi.fn(),
 };
+
+const mockDashboardStore = {
+  get: vi.fn(),
+};
+
+const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
+
+vi.mock("../auth/authenticate", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthenticateModule>()),
+  authenticate: mocks.authenticate,
+}));
 
 vi.mock("../db/analytics-store", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -24,46 +39,20 @@ vi.mock("../db/analytics-store", async (importOriginal) => {
   };
 });
 
-function getHandler(method: string, path: string) {
-  const pathname = new URL(`https://test.local${path}`).pathname;
-  for (const route of analyticsRoutes) {
-    if (route.method === method && route.pattern.test(pathname)) {
-      const match = pathname.match(route.pattern)!;
-      return { handler: route.handler, match };
-    }
-  }
+vi.mock("../db/analytics-dashboard-store", () => ({
+  AnalyticsDashboardStore: vi.fn().mockImplementation(function () {
+    return mockDashboardStore;
+  }),
+}));
 
-  throw new Error(`No route found for ${method} ${path}`);
-}
-
-function createEnv(): Env {
-  return {
-    DB: {} as D1Database,
-  } as Env;
-}
-
-function createCtx(): RequestContext {
-  return {
-    trace_id: "trace-1",
-    request_id: "req-1",
-    db: {} as SqlDatabase,
-    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
-    metrics: {
-      d1Queries: [],
-      spans: {},
-      time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
-      summarize: () => ({}),
-    },
-  };
-}
+const handleRequest = createTestRequestHandler([analyticsRoutes]);
+const env = { ...TEST_SERVICE_SECRETS, DB: ownerAuthorizationDatabase() } as unknown as Env;
 
 async function callRoute(method: string, path: string): Promise<Response> {
-  const { handler, match } = getHandler(method, path);
-  return handler(
+  return handleRequest(
     new Request(`https://test.local${path}`, { method }),
-    createEnv(),
-    match,
-    createCtx()
+    env,
+    TEST_BACKGROUND_TASK_CONTEXT
   );
 }
 
@@ -72,34 +61,60 @@ describe("analytics route handlers", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(FIXED_NOW);
+    mocks.authenticate.mockImplementation(async (request: Request) => ({
+      principal: { kind: "user", userId: "user-1" },
+      request,
+    }));
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  describe("GET /analytics/summary", () => {
+  describe("dashboard", () => {
+    it("anchors one shared dashboard window", async () => {
+      mockDashboardStore.get.mockResolvedValue({ generatedAt: FIXED_NOW });
+
+      const response = await callRoute("GET", "/analytics/dashboard?days=14");
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ generatedAt: FIXED_NOW });
+      expect(mockDashboardStore.get).toHaveBeenCalledWith({
+        days: 14,
+        startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
+        endAt: FIXED_NOW,
+      });
+    });
+
+    it("rejects invalid ranges before querying", async () => {
+      const response = await callRoute("GET", "/analytics/dashboard?days=31");
+
+      expect(response.status).toBe(400);
+      expect(mockDashboardStore.get).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("summary", () => {
     it("defaults days to 30", async () => {
       mockStore.getSummary.mockResolvedValue({
-        totalSessions: 12,
-        activeUsers: 4,
-        totalCost: 1.5,
-        avgCost: 0.125,
-        totalPrs: 2,
-        statusBreakdown: {
-          created: 1,
-          active: 2,
-          completed: 5,
-          failed: 2,
-          archived: 1,
-          cancelled: 1,
-        },
+        totalSessions: 0,
+        activeUsers: 0,
+        prsOpened: 0,
+        prsMerged: 0,
+        mergeRate: 0,
+        avgSessionDurationMs: 0,
+        sessionsByStatus: [],
+        sessionsByRepo: [],
+        sessionsByUser: [],
+        sessionsByModel: [],
+        prBreakdown: [],
+        recentSessions: [],
       });
 
       const response = await callRoute("GET", "/analytics/summary");
       expect(response.status).toBe(200);
       expect(mockStore.getSummary).toHaveBeenCalledWith({
-        startAt: FIXED_NOW - 30 * 24 * 60 * 60 * 1000,
+        startAt: FIXED_NOW - DEFAULT_ANALYTICS_DAYS * 24 * 60 * 60 * 1000,
         endAt: FIXED_NOW,
         spawnSources: HUMAN_SPAWN_SOURCES,
       });
@@ -115,9 +130,9 @@ describe("analytics route handlers", () => {
     });
   });
 
-  describe("GET /analytics/timeseries", () => {
+  describe("timeseries", () => {
     it("passes the requested range to the store", async () => {
-      mockStore.getTimeseries.mockResolvedValue({ series: [] });
+      mockStore.getTimeseries.mockResolvedValue([]);
 
       const response = await callRoute("GET", "/analytics/timeseries?days=14");
       expect(response.status).toBe(200);
@@ -129,7 +144,7 @@ describe("analytics route handlers", () => {
     });
   });
 
-  describe("GET /analytics/breakdown", () => {
+  describe("breakdown", () => {
     it("requires a valid by parameter", async () => {
       const response = await callRoute("GET", "/analytics/breakdown?days=30");
       expect(response.status).toBe(400);
@@ -146,5 +161,83 @@ describe("analytics route handlers", () => {
       });
       expect(mockStore.getBreakdown).not.toHaveBeenCalled();
     });
+
+    it("passes the breakdown dimension to the store", async () => {
+      mockStore.getBreakdown.mockResolvedValue([]);
+
+      const response = await callRoute("GET", "/analytics/breakdown?days=7&by=repo");
+      expect(response.status).toBe(200);
+      expect(mockStore.getBreakdown).toHaveBeenCalledWith(
+        {
+          startAt: FIXED_NOW - 7 * 24 * 60 * 60 * 1000,
+          endAt: FIXED_NOW,
+          spawnSources: HUMAN_SPAWN_SOURCES,
+        },
+        "repo"
+      );
+    });
+  });
+
+  describe("query strings", () => {
+    it.each(["7", "14", "30", "90"])("accepts days=%s", async (days) => {
+      mockStore.getSummary.mockResolvedValue({ ok: true });
+
+      const response = await callRoute("GET", `/analytics/summary?days=${days}`);
+
+      expect(response.status).toBe(200);
+      expect(mockStore.getSummary).toHaveBeenCalledWith(
+        expect.objectContaining({
+          startAt: FIXED_NOW - Number(days) * 24 * 60 * 60 * 1000,
+          endAt: FIXED_NOW,
+        })
+      );
+    });
+
+    it.each(["", "0", "8", "abc", "1e1"])("rejects days=%s", async (days) => {
+      const response = await callRoute("GET", `/analytics/summary?days=${days}`);
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "days must be one of: 7, 14, 30, 90",
+      });
+      expect(mockStore.getSummary).not.toHaveBeenCalled();
+    });
+
+    it("rejects a repeated days key", async () => {
+      const response = await callRoute("GET", "/analytics/summary?days=7&days=14");
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid days" });
+    });
+
+    it("rejects an empty or repeated by key", async () => {
+      const empty = await callRoute("GET", "/analytics/breakdown?days=30&by=");
+      expect(empty.status).toBe(400);
+      await expect(empty.json()).resolves.toEqual({ error: "by must be one of: user, repo" });
+
+      const repeated = await callRoute("GET", "/analytics/breakdown?days=30&by=user&by=repo");
+      expect(repeated.status).toBe(400);
+      await expect(repeated.json()).resolves.toEqual({ error: "Invalid by" });
+    });
+
+    it("reports days before by when both are invalid", async () => {
+      const response = await callRoute("GET", "/analytics/breakdown?days=1&by=nope");
+
+      await expect(response.json()).resolves.toEqual({
+        error: "days must be one of: 7, 14, 30, 90",
+      });
+    });
+  });
+
+  it("denies a request without analytics permission before touching a store", async () => {
+    mocks.authenticate.mockImplementation(async () => ({
+      reason: "Unauthorized",
+      status: 401,
+      failedScheme: "none",
+    }));
+
+    const response = await callRoute("GET", "/analytics/summary");
+    expect(response.status).toBe(401);
+    expect(mockStore.getSummary).not.toHaveBeenCalled();
   });
 });

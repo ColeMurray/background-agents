@@ -1,12 +1,24 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { TemplateGallery } from "@/components/automations/template-gallery";
 import { BackIcon } from "@/components/ui/icons";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 export default function AutomationTemplatesPage() {
   const { isOpen } = useSidebarContext();
+  const router = useRouter();
+  const { hasPermission, loading } = useCurrentUserAuthorization();
+  const canCreate = hasPermission("automations.create");
+
+  useEffect(() => {
+    if (!loading && !canCreate) router.replace("/automations");
+  }, [canCreate, loading, router]);
+
+  if (loading || !canCreate) return null;
 
   return (
     <div className="h-full flex flex-col">

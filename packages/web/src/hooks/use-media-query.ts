@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 export const MOBILE_BREAKPOINT = "(max-width: 767px)";
 
@@ -9,18 +9,24 @@ export const MOBILE_BREAKPOINT = "(max-width: 767px)";
  * Returns `false` during SSR / before hydration to avoid mismatch.
  */
 export function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(false);
+  return useMediaQuerySnapshot(query) ?? false;
+}
 
-  useEffect(() => {
-    const mql = window.matchMedia(query);
-    setMatches(mql.matches);
+const getServerSnapshot = () => undefined;
 
-    const handler = (e: MediaQueryListEvent) => setMatches(e.matches);
-    mql.addEventListener("change", handler);
-    return () => mql.removeEventListener("change", handler);
-  }, [query]);
+/** The viewport is unknown during SSR and hydration; client mounts read it immediately. */
+export function useMediaQuerySnapshot(query: string): boolean | undefined {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const mql = window.matchMedia(query);
+      mql.addEventListener("change", onChange);
+      return () => mql.removeEventListener("change", onChange);
+    },
+    [query]
+  );
+  const getSnapshot = useCallback(() => window.matchMedia(query).matches, [query]);
 
-  return matches;
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
 
 /** Convenience wrapper: true when viewport width ≤ 767px. */

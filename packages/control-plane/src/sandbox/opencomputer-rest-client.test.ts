@@ -33,11 +33,11 @@ afterEach(() => {
 });
 
 // OpenComputer launches the runtime via `exec`, whose shell does NOT inherit the
-// image's baked env. SANDBOX_VERSION therefore has to be re-exported in the exec
-// command — otherwise the runtime reports an empty version and the image-build
-// build-complete callback is rejected by the runtime-version floor check.
-describe("OpenComputerRestClient runtime SANDBOX_VERSION export", () => {
-  it("startRuntime exports SANDBOX_VERSION to the exec shell", async () => {
+// image's baked env. Pin both the runtime version and the managed interpreter:
+// relying on the provider shell's python alias can select a Python without the
+// installed sandbox_runtime package while the detached shell still exits zero.
+describe("OpenComputerRestClient runtime launch contract", () => {
+  it("startRuntime exports SANDBOX_VERSION and uses managed Python", async () => {
     const client = new OpenComputerRestClient(config);
     fetchSpy.mockResolvedValue(jsonResponse({ exitCode: 0, stdout: "123", stderr: "" }));
 
@@ -47,9 +47,12 @@ describe("OpenComputerRestClient runtime SANDBOX_VERSION export", () => {
     expect(String(url)).toContain("/sandboxes/sb-1/exec/run");
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.args[1]).toContain(`SANDBOX_VERSION=${SANDBOX_RUNTIME_VERSION}`);
+    expect(body.args[1]).toContain(
+      "nohup /opt/openinspect/python/bin/python -m sandbox_runtime.entrypoint"
+    );
   });
 
-  it("runRuntimeForeground (image build path) exports SANDBOX_VERSION", async () => {
+  it("runRuntimeForeground exports SANDBOX_VERSION and uses managed Python", async () => {
     const client = new OpenComputerRestClient(config);
     fetchSpy.mockResolvedValue(jsonResponse({ exitCode: 0, stdout: "", stderr: "" }));
 
@@ -57,6 +60,9 @@ describe("OpenComputerRestClient runtime SANDBOX_VERSION export", () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body as string);
     expect(body.args[1]).toContain(`SANDBOX_VERSION=${SANDBOX_RUNTIME_VERSION}`);
+    expect(body.args[1]).toContain(
+      "/opt/openinspect/python/bin/python -m sandbox_runtime.entrypoint"
+    );
   });
 });
 

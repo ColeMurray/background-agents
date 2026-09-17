@@ -3,17 +3,19 @@ import { evaluateExecutionTimeout } from "../../sandbox/lifecycle/decisions";
 import type { SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
 import type { AlarmScheduler } from "../../platform-ports";
 import type { SessionMessageQueue } from "../message-queue";
+import type { ExecutionStopCoordinator } from "../execution-stop-coordinator";
 import type { MessageRepository } from "../message-repository";
+import type { SessionTerminalMessageProjection } from "../terminal-message-projection";
 
 export interface AlarmHandlerDeps {
   repository: MessageRepository;
-  messageQueue: Pick<
-    SessionMessageQueue,
-    | "failStuckProcessingMessage"
-    | "recoverStopConfirmationTimeout"
-    | "resumeAfterSandboxTermination"
+  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage">;
+  executionStop: Pick<
+    ExecutionStopCoordinator,
+    "recoverStopConfirmationTimeout" | "resumeAfterSandboxTermination"
   >;
   lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
+  terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
   /** Resolved per use so it honors settings persisted after construction. */
   getExecutionTimeoutMs: () => number;
@@ -29,13 +31,22 @@ export interface AlarmHandler {
 /**
  * Durable Object alarm handler.
  *
- * Checks for stuck processing messages (defense-in-depth execution timeout)
- * before delegating to lifecycle alarm processing.
+ * Retries a deferred terminal message projection and checks for stuck
+ * processing messages (defense-in-depth execution timeout) before delegating
+ * to lifecycle alarm processing.
  */
 export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
   return {
     async handle(): Promise<void> {
-      await deps.messageQueue.recoverStopConfirmationTimeout();
+      let projectionFailure: { error: unknown } | undefined;
+      try {
+        await deps.terminalMessageProjection.flushPending();
+      } catch (error) {
+        // A malformed unread projection must not prevent lifecycle recovery.
+        // Rethrow after recovery so transient storage failures still retry.
+        projectionFailure = { error };
+      }
+      await deps.executionStop.recoverStopConfirmationTimeout();
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was
       // already failed (by lifecycle recovery or a prior alarm),
@@ -70,8 +81,9 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         await deps.messageQueue.failStuckProcessingMessage();
       }
       if (lifecycleResult === "sandbox_terminated") {
-        await deps.messageQueue.resumeAfterSandboxTermination();
+        await deps.executionStop.resumeAfterSandboxTermination();
       }
+      if (projectionFailure) throw projectionFailure.error;
     },
   };
 }

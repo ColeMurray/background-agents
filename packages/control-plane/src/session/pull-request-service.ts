@@ -21,6 +21,7 @@ import {
   type PullRequestSnapshot,
 } from "../source-control";
 import type { SessionMessenger } from "./messenger";
+import type { PromptingAuthResolution } from "./participant-service";
 import type { ArtifactRepository } from "./artifact-repository";
 import { listPrArtifactsForHead, type PrArtifactHeadMatch } from "./pr-artifacts";
 import {
@@ -38,7 +39,8 @@ import {
 import type { ArtifactRow, SessionRow } from "./types";
 
 /**
- * Inputs required to create a PR once caller identity/auth are already resolved.
+ * Inputs required to create a PR once caller identity is selected. User auth
+ * remains lazy until the final provider call.
  */
 export interface CreatePullRequestInput {
   title: string;
@@ -52,7 +54,7 @@ export interface CreatePullRequestInput {
   repoOwner: string;
   repoName: string;
   promptingUserId: string;
-  promptingAuth: SourceControlAuthContext | null;
+  resolvePromptingAuth: () => Promise<PromptingAuthResolution>;
   sessionUrl: string;
   /**
    * Whether to open the PR in draft mode. When configured, the SCM setting
@@ -85,7 +87,7 @@ export type PushBranchResult = { success: true } | { success: false; error: stri
  * A PR-creation failure with a caller-facing HTTP status. Thrown by internal
  * steps; createPullRequest's boundary catch maps it into the error result.
  */
-export class PullRequestCreationError extends Error {
+class PullRequestCreationError extends Error {
   constructor(
     readonly status: number,
     message: string
@@ -158,10 +160,10 @@ export interface PullRequestServiceDeps {
   /** Display name used in the PR body footer (e.g. "Created with [name](url)"). */
   appName: string;
   /**
-   * D1 authority store for session PR records (design §4). Absent when the
-   * deployment has no D1 binding; the write is best-effort either way.
+   * D1 authority store for session PR records (design §4). The write is
+   * best-effort: an upsert failure still leaves the mirror updated.
    */
-  sessionPullRequests?: Pick<SessionPullRequestStore, "upsert">;
+  sessionPullRequests: Pick<SessionPullRequestStore, "upsert">;
   /** Resolves SCM policy for the pull request's target repository. */
   resolveScmSettings: (repo: RepoIdentity) => Promise<ScmSettings>;
 }
@@ -360,9 +362,13 @@ export class SessionPullRequestService {
         };
       }
 
-      // Use user OAuth if available, otherwise fall back to GitHub App token
-      // (e.g. sessions triggered from Linear or other integrations without user GitHub OAuth)
-      const prAuth = input.promptingAuth ?? appAuth;
+      // Resolve user OAuth at the last possible moment so branch work cannot
+      // consume most of a short-lived token's remaining lifetime.
+      const authResolution = await input.resolvePromptingAuth();
+      if ("error" in authResolution) {
+        return { kind: "error", status: authResolution.status, error: authResolution.error };
+      }
+      const prAuth = authResolution.auth ?? appAuth;
 
       const fullBody =
         input.body + `\n\n---\n*Created with [${this.deps.appName}](${input.sessionUrl})*`;
@@ -464,10 +470,8 @@ export class SessionPullRequestService {
    * webhook or read-through repairs a missing record (design §5).
    */
   private async writeSessionPullRequestRecord(record: SessionPullRequestRecord): Promise<void> {
-    const store = this.deps.sessionPullRequests;
-    if (!store) return;
     try {
-      await store.upsert(record);
+      await this.deps.sessionPullRequests.upsert(record);
     } catch (error) {
       this.deps.log.error("Failed to write session pull request record", {
         artifact_id: record.artifactId,
@@ -610,7 +614,7 @@ export class SessionPullRequestService {
     const applied = await applyPullRequestSnapshot(
       {
         artifactRepository: this.deps.artifactRepository,
-        sessionPullRequests: this.deps.sessionPullRequests ?? null,
+        sessionPullRequests: this.deps.sessionPullRequests,
       },
       { artifactId: artifact.id, sessionId, artifactCreatedAt: artifact.created_at },
       live

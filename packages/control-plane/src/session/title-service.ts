@@ -15,8 +15,7 @@ export interface SessionTitleServiceDeps {
   messenger: SessionMessenger;
   statusService: Pick<SessionStatusService, "notifyParentOfChildUpdate">;
   backgroundTasks: BackgroundTasks;
-  /** Null when the deployment has no D1 binding — the index sync is skipped. */
-  sessionIndexStore: SessionIndexStore | null;
+  sessionIndexStore: Pick<SessionIndexStore, "updateTitle">;
   durableObjectId: string;
   now: () => number;
 }
@@ -27,6 +26,10 @@ export interface SessionTitleServiceDeps {
  * sessions.
  */
 export class SessionTitleService {
+  // D1 activity recency is not a title version. Preserve call order within this
+  // runtime activation, while each raw projection remains a logged background task.
+  private sessionIndexSync = Promise.resolve();
+
   constructor(private readonly deps: SessionTitleServiceDeps) {}
 
   applySessionTitleUpdate(
@@ -75,13 +78,16 @@ export class SessionTitleService {
 
   private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {
     const { sessionIndexStore, backgroundTasks } = this.deps;
-    if (!sessionIndexStore) return;
-    backgroundTasks.submit(
-      () => sessionIndexStore.updateTitleIfNewer(sessionId, title, updatedAt),
-      {
-        name: "session_index.update_title",
-        context: { session_id: sessionId, updated_at: updatedAt },
-      }
+    const projection = this.sessionIndexSync.then(() =>
+      sessionIndexStore.updateTitle(sessionId, title, updatedAt)
     );
+    this.sessionIndexSync = projection.then(
+      () => undefined,
+      () => undefined
+    );
+    backgroundTasks.submit(() => projection, {
+      name: "session_index.update_title",
+      context: { session_id: sessionId, updated_at: updatedAt },
+    });
   }
 }

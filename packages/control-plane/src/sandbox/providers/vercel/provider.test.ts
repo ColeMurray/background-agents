@@ -4,7 +4,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { VercelSandboxProvider, type VercelProviderConfig } from "./provider";
-import type { CreateSandboxConfig, RestoreConfig } from "../../provider";
+import {
+  PrebuiltImageUnavailableError,
+  SandboxProviderError,
+  type CreateSandboxConfig,
+  type RestoreConfig,
+} from "../../provider";
 import type {
   VercelCreateSandboxRequest,
   VercelCreateSandboxResponse,
@@ -107,6 +112,7 @@ const baseCreateConfig: CreateSandboxConfig = {
   repoName: "testrepo",
   controlPlaneUrl: "https://control-plane.test",
   sandboxAuthToken: "auth-token",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "anthropic/claude-sonnet-4-5",
 };
@@ -119,6 +125,7 @@ const baseRestoreConfig: RestoreConfig = {
   repoName: "testrepo",
   controlPlaneUrl: "https://control-plane.test",
   sandboxAuthToken: "auth-token",
+  harness: "opencode" as const,
   provider: "anthropic",
   model: "anthropic/claude-sonnet-4-5",
 };
@@ -220,6 +227,7 @@ describe("VercelSandboxProvider", () => {
     );
     expect(JSON.parse(createCall.env?.SESSION_CONFIG as string)).toEqual({
       session_id: "session-123",
+      harness: "opencode",
       repo_owner: "testowner",
       repo_name: "testrepo",
       provider: "anthropic",
@@ -232,7 +240,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "sudo",
-        args: ["-E", "/usr/bin/python3.12", "-m", "sandbox_runtime.entrypoint"],
+        args: ["-E", "/opt/openinspect/python/bin/python", "-m", "sandbox_runtime.entrypoint"],
         cwd: "/workspace",
       }),
       undefined
@@ -471,7 +479,7 @@ describe("VercelSandboxProvider", () => {
         sessionId: "vercel-session-1",
         command: "sudo",
         args: expect.arrayContaining([
-          "/usr/bin/python3.12",
+          "/opt/openinspect/python/bin/python",
           "-c",
           // Tagged with the logical sandbox ID (first line) so the supervisor's
           // stale-file cleanup keeps this write, then the port URLs.
@@ -483,6 +491,65 @@ describe("VercelSandboxProvider", () => {
     expect(result.tunnelUrls).toEqual({
       "3000": "https://app.test",
     });
+  });
+
+  it("reports a missing prebuilt snapshot explicitly", async () => {
+    const client = createMockClient({
+      createSandbox: vi.fn(async () => {
+        throw new VercelSandboxApiError("snapshot not found", 404);
+      }),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await expect(
+      provider.createSandbox({ ...baseCreateConfig, prebuiltImageId: "snapshot-missing" })
+    ).rejects.toBeInstanceOf(PrebuiltImageUnavailableError);
+  });
+
+  it("keeps a base-image create 404 as a generic permanent error", async () => {
+    const client = createMockClient({
+      createSandbox: vi.fn(async () => {
+        throw new VercelSandboxApiError("not found", 404);
+      }),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    const error = await provider.createSandbox(baseCreateConfig).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SandboxProviderError);
+    expect(error).not.toBeInstanceOf(PrebuiltImageUnavailableError);
+    expect(error).toEqual(expect.objectContaining({ errorType: "permanent" }));
+  });
+
+  it("preserves provider errors raised during create", async () => {
+    const providerError = new SandboxProviderError("invalid resources", "permanent");
+    const client = createMockClient({
+      createSandbox: vi.fn(async () => {
+        throw providerError;
+      }),
+    });
+
+    await expect(
+      new VercelSandboxProvider(client, providerConfig).createSandbox(baseCreateConfig)
+    ).rejects.toBe(providerError);
+  });
+
+  it("keeps a post-create 404 as a generic permanent error", async () => {
+    const client = createMockClient({
+      startCommand: vi.fn(async () => {
+        throw new VercelSandboxApiError("session not found", 404);
+      }),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    const error = await provider
+      .createSandbox({ ...baseCreateConfig, prebuiltImageId: "snapshot-valid" })
+      .catch((caught: unknown) => caught);
+
+    expect(client.createSandbox).toHaveBeenCalledOnce();
+    expect(error).toBeInstanceOf(SandboxProviderError);
+    expect(error).not.toBeInstanceOf(PrebuiltImageUnavailableError);
+    expect(error).toEqual(expect.objectContaining({ errorType: "permanent" }));
   });
 
   it("uses configured code-server / terminal ports for exposure and env", async () => {
@@ -689,7 +756,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "sudo",
-        args: ["-E", "/usr/bin/python3.12", "-m", "sandbox_runtime.entrypoint"],
+        args: ["-E", "/opt/openinspect/python/bin/python", "-m", "sandbox_runtime.entrypoint"],
         cwd: "/workspace",
         env: {
           OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS: "1800",
@@ -767,6 +834,29 @@ describe("VercelSandboxProvider", () => {
         },
       }),
       { trace_id: "trace-1", request_id: "request-1" }
+    );
+  });
+
+  it("sanitizes repo scope ids for Vercel sandbox names", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.triggerImageBuild({
+      ...environmentBuildConfig(),
+      scopeKind: "repo",
+      scopeId: "acme/web.app",
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.name).toMatch(/^build-env-acme-web-app-\d+$/);
+    expect(createCall.env).toEqual(
+      expect.objectContaining({ SANDBOX_ID: "build-env-acme/web.app" })
+    );
+    expect(createCall.tags).toEqual(
+      expect.objectContaining({
+        openinspect_scope_kind: "repo",
+        openinspect_scope_id: "acme/web.app",
+      })
     );
   });
 

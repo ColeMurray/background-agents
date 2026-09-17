@@ -5,6 +5,11 @@
  * snake_case rows in the database, camelCase types at the API boundary.
  */
 
+import {
+  DEFAULT_HARNESS,
+  getValidHarnessOrDefault,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import type {
   Automation,
   AutomationExecutionSummary,
@@ -15,13 +20,21 @@ import type {
   AutomationRun,
   AutomationRunStatus,
 } from "@open-inspect/shared/types/automations";
-import type { TriggerConfig } from "@open-inspect/shared/triggers";
+import { automationInvocationStatusSchema } from "@open-inspect/shared/types/automations";
+import {
+  automationTriggerTypeSchema,
+  triggerConfigSchema,
+  type AutomationTriggerType,
+  type TriggerConfig,
+} from "@open-inspect/shared/triggers";
 import {
   toProviderSelections,
   type AutomationModelProviderAuthRow,
 } from "./automation-model-provider-auth";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { AutomationListCursor } from "./automation-list-cursor";
+import { z } from "zod";
+import { UserStore } from "./user-store";
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
@@ -59,6 +72,7 @@ export interface AutomationRow {
   trigger_type: string;
   schedule_cron: string | null;
   schedule_tz: string;
+  harness: HarnessId;
   model: string;
   reasoning_effort: string | null;
   enabled: number; // SQLite integer boolean
@@ -79,6 +93,14 @@ type AutomationListResult = { automations: AutomationRow[] } & (
   | { hasMore: true; nextCursor: AutomationListCursor }
 );
 
+/**
+ * Failure reason the recovery sweep writes when a run outlives its execution
+ * deadline with no completion callback. Unlike every other terminal state this
+ * one is inferred from silence, which is why a late success callback is allowed
+ * to overturn it.
+ */
+export const EXECUTION_TIMEOUT_FAILURE_REASON = "execution_timeout";
+
 export interface AutomationRunRow {
   id: string;
   automation_id: string;
@@ -91,6 +113,12 @@ export interface AutomationRunRow {
   scheduled_at: number;
   started_at: number | null;
   completed_at: number | null;
+  /**
+   * When the recovery sweep may declare this run lost, stamped at launch from
+   * the execution budget its session was created with. Null until the run
+   * claims a session, and on rows that predate the column.
+   */
+  execution_deadline_at: number | null;
   created_at: number;
   /** Repository snapshot taken at firing time (null for repo-less runs). */
   repo_owner: string | null;
@@ -143,6 +171,38 @@ export interface AutomationInvocationRow {
   updated_at: number;
 }
 
+export interface AutomationTriggerFields {
+  triggerType: AutomationTriggerType;
+  triggerConfig: TriggerConfig | null;
+}
+
+export function parseAutomationTriggerFields(
+  row: Pick<AutomationRow, "trigger_type" | "trigger_config">
+): AutomationTriggerFields {
+  return {
+    triggerType: automationTriggerTypeSchema.parse(row.trigger_type),
+    triggerConfig:
+      row.trigger_config === null
+        ? null
+        : triggerConfigSchema.parse(JSON.parse(row.trigger_config)),
+  };
+}
+
+const enrichedAutomationInvocationRowSchema = z.object({
+  id: z.string(),
+  automation_id: z.string(),
+  source: z.enum(["schedule", "manual", "event"]),
+  scheduled_at: z.number().nullable(),
+  skip_reason: z.string().nullable(),
+  created_at: z.number(),
+  derived_status: automationInvocationStatusSchema,
+  derived_completed_at: z.number().nullable(),
+});
+
+type EnrichedAutomationInvocationRow = z.infer<typeof enrichedAutomationInvocationRowSchema>;
+
+const countRowSchema = z.object({ count: z.number() });
+
 /**
  * Overlap scope for a new invocation: schedule/manual firings block on any
  * active run of the automation; event firings block per concurrency key.
@@ -189,23 +249,23 @@ export function toAutomation(
   environmentRows: AutomationEnvironmentRow[],
   providerAuthRows: AutomationModelProviderAuthRow[]
 ): Automation {
-  const triggerConfig: TriggerConfig | null = row.trigger_config
-    ? JSON.parse(row.trigger_config)
-    : null;
+  const { triggerType, triggerConfig } = parseAutomationTriggerFields(row);
 
   return {
     id: row.id,
     name: row.name,
     instructions: row.instructions,
-    triggerType: row.trigger_type as Automation["triggerType"],
+    triggerType,
     scheduleCron: row.schedule_cron,
     scheduleTz: row.schedule_tz,
+    harness: getValidHarnessOrDefault(row.harness),
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     enabled: row.enabled === 1,
     nextRunAt: row.next_run_at,
     consecutiveFailures: row.consecutive_failures,
     createdBy: row.created_by,
+    userId: row.user_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -294,14 +354,14 @@ export function deriveInvocationStatus(counts: {
 }
 
 function toAutomationInvocation(
-  row: AutomationInvocationRow & { derived_status: string; derived_completed_at: number | null },
+  row: EnrichedAutomationInvocationRow,
   runs: AutomationRun[]
 ): AutomationInvocation {
   const skipped = row.skip_reason !== null;
   return {
     id: row.id,
     automationId: row.automation_id,
-    status: row.derived_status as AutomationInvocationStatus,
+    status: row.derived_status,
     source: row.source,
     scheduledAt: row.scheduled_at,
     skipReason: row.skip_reason,
@@ -314,6 +374,7 @@ function toAutomationInvocation(
 
 // ─── Store ───────────────────────────────────────────────────────────────────
 
+/** Persists automations, invocations, runs, and composable lifecycle mutations. */
 export class AutomationStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -328,10 +389,10 @@ export class AutomationStore {
       .prepare(
         `INSERT INTO automations
          (id, name, instructions,
-          trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
+          trigger_type, schedule_cron, schedule_tz, harness, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
           event_type, trigger_config, trigger_auth_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -340,6 +401,7 @@ export class AutomationStore {
         row.trigger_type,
         row.schedule_cron,
         row.schedule_tz,
+        row.harness ?? DEFAULT_HARNESS,
         row.model,
         row.reasoning_effort,
         row.enabled,
@@ -365,6 +427,29 @@ export class AutomationStore {
       .prepare("SELECT * FROM automations WHERE id = ? AND deleted_at IS NULL")
       .bind(id)
       .first<AutomationRow>();
+  }
+
+  /**
+   * Repair a legacy SCM-only owner with a compare-and-set and return the canonical row.
+   * Every ownership admission path calls this before comparing `user_id`, so repair is
+   * a storage invariant rather than a side effect of starting an invocation.
+   */
+  async resolveCanonicalOwner(automation: AutomationRow): Promise<AutomationRow> {
+    if (automation.user_id || !automation.created_by || automation.created_by === "anonymous") {
+      return automation;
+    }
+
+    const identity = await new UserStore(this.db).getIdentity("github", automation.created_by);
+    if (!identity) return automation;
+
+    const result = await this.db
+      .prepare("UPDATE automations SET user_id = ? WHERE id = ? AND user_id IS NULL")
+      .bind(identity.userId, automation.id)
+      .run();
+    if ((result.meta?.changes ?? 0) > 0) {
+      return { ...automation, user_id: identity.userId };
+    }
+    return (await this.getById(automation.id)) ?? automation;
   }
 
   async list(options: {
@@ -476,6 +561,7 @@ export class AutomationStore {
       "instructions",
       "schedule_cron",
       "schedule_tz",
+      "harness",
       "model",
       "reasoning_effort",
       "next_run_at",
@@ -512,36 +598,48 @@ export class AutomationStore {
     return this.getById(id);
   }
 
-  async softDelete(id: string): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  /** Build a soft-delete statement for composition in an atomic batch. */
+  bindSoftDelete(id: string, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET deleted_at = ?, next_run_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(now, now, id)
-      .run();
+      .bind(now, now, id);
+  }
+
+  /** Soft-delete an automation and report whether a live row changed. */
+  async softDelete(id: string): Promise<boolean> {
+    const result = await this.bindSoftDelete(id).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async pause(id: string): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  /** Build a pause statement for composition in an atomic batch. */
+  bindPause(id: string, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET enabled = 0, next_run_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(now, id)
-      .run();
+      .bind(now, id);
+  }
+
+  /** Pause an automation and report whether a live row changed. */
+  async pause(id: string): Promise<boolean> {
+    const result = await this.bindPause(id).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async resume(id: string, nextRunAt: number | null): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  /** Build a resume statement for composition in an atomic batch. */
+  bindResume(id: string, nextRunAt: number | null, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET enabled = 1, next_run_at = ?, consecutive_failures = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(nextRunAt, now, id)
-      .run();
+      .bind(nextRunAt, now, id);
+  }
+
+  /** Resume an automation and report whether a live row changed. */
+  async resume(id: string, nextRunAt: number | null): Promise<boolean> {
+    const result = await this.bindResume(id, nextRunAt).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
@@ -786,15 +884,58 @@ export class AutomationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  /** Atomically assign a session only while a run still awaits launch. */
-  async claimRunSession(id: string, sessionId: string, startedAt: number): Promise<boolean> {
+  /**
+   * Atomically assign a session only while a run still awaits launch. The
+   * deadline lands in the same statement that makes the run sweepable, so a
+   * 'running' row never exists without one.
+   */
+  async claimRunSession(
+    id: string,
+    sessionId: string,
+    startedAt: number,
+    executionDeadlineAt: number
+  ): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE automation_runs
-         SET status = 'running', session_id = ?, started_at = ?
+         SET status = 'running', session_id = ?, started_at = ?, execution_deadline_at = ?
          WHERE id = ? AND status = 'starting'`
       )
-      .bind(sessionId, startedAt, id)
+      .bind(sessionId, startedAt, executionDeadlineAt, id)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /**
+   * Replace the deadline claimed with the deployment-wide budget once the
+   * session's own settings are known. Guarded on 'running' so it cannot revive
+   * the sweep's interest in a run that already finished.
+   */
+  async setRunExecutionDeadline(id: string, executionDeadlineAt: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE automation_runs SET execution_deadline_at = ?
+         WHERE id = ? AND status = 'running'`
+      )
+      .bind(executionDeadlineAt, id)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /**
+   * Overturn a sweep-declared timeout with the completion callback that
+   * eventually arrived. `execution_timeout` is the only terminal state the
+   * scheduler infers rather than observes, so it is the only one a later
+   * success may correct — every other terminal state stays final.
+   */
+  async completeTimedOutRun(id: string, completedAt: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE automation_runs
+         SET status = 'completed', failure_reason = NULL, completed_at = ?
+         WHERE id = ? AND status = 'failed' AND failure_reason = ?`
+      )
+      .bind(completedAt, id, EXECUTION_TIMEOUT_FAILURE_REASON)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -855,7 +996,7 @@ export class AutomationStore {
 
   /**
    * Per-source overlap predicate, used both as the cheap pre-check and inside
-   * the guarded insert (same SQL, one definition). Schedule/manual firings
+   * the conditional insert (same SQL, one definition). Schedule/manual firings
    * block on ANY active run of the automation (main parity with
    * getActiveRunForAutomation); event firings block per concurrency key only —
    * an automation-wide guard would serialize unrelated events.
@@ -911,7 +1052,6 @@ export class AutomationStore {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
     const statements: SqlStatement[] = [];
-
     statements.push(
       this.db
         .prepare(
@@ -993,7 +1133,7 @@ export class AutomationStore {
   /**
    * Record a skipped firing: a childless invocation carrying skip_reason,
    * atomically paired with the schedule advance when the skip serves a cron
-   * slot. INSERT OR IGNORE tolerates an idempotency-index race without
+   * slot. The conflict-tolerant insert absorbs an idempotency-index race without
    * blocking the advance — a skip recorded without the advance would
    * re-collide on (automation_id, scheduled_at) every tick thereafter. The
    * advance is a compare-and-set on the claimed slot, so a firing that lost
@@ -1006,10 +1146,11 @@ export class AutomationStore {
     const statements: SqlStatement[] = [
       this.db
         .prepare(
-          `INSERT OR IGNORE INTO automation_invocations
+          `INSERT INTO automation_invocations
            (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT DO NOTHING`
         )
         .bind(
           invocation.id,
@@ -1044,6 +1185,47 @@ export class AutomationStore {
 
     const results = await this.db.batch(statements);
     return { inserted: (results[0]?.meta?.changes ?? 0) > 0 };
+  }
+
+  /** Atomically record a denied cron slot and pause it so overdue denial cannot starve the queue. */
+  async recordAuthorizationDenied(
+    invocation: AutomationInvocationRow,
+    fromSlot: number
+  ): Promise<{ inserted: boolean; paused: boolean }> {
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT INTO automation_invocations
+           (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
+            trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT DO NOTHING`
+        )
+        .bind(
+          invocation.id,
+          invocation.automation_id,
+          invocation.source,
+          invocation.scheduled_at,
+          invocation.trigger_key,
+          invocation.concurrency_key,
+          invocation.trigger_metadata,
+          invocation.skip_reason,
+          invocation.failure_counted_at,
+          invocation.created_at,
+          invocation.updated_at
+        ),
+      this.db
+        .prepare(
+          `UPDATE automations
+           SET enabled = 0, next_run_at = NULL, updated_at = ?
+           WHERE id = ? AND deleted_at IS NULL AND enabled = 1 AND next_run_at = ?`
+        )
+        .bind(Date.now(), invocation.automation_id, fromSlot),
+    ]);
+    return {
+      inserted: (results[0]?.meta?.changes ?? 0) > 0,
+      paused: (results[1]?.meta?.changes ?? 0) > 0,
+    };
   }
 
   async getInvocationById(invocationId: string): Promise<AutomationInvocationRow | null> {
@@ -1125,11 +1307,10 @@ export class AutomationStore {
         .bind(automationId, options.limit, options.offset),
     ]);
 
-    const total = (countResult.results?.[0] as { count: number } | undefined)?.count ?? 0;
-    const rows = (pageResult.results ?? []) as (AutomationInvocationRow & {
-      derived_status: string;
-      derived_completed_at: number | null;
-    })[];
+    const total = countRowSchema.parse(countResult.results?.[0]).count;
+    // A malformed stored row is an integrity error, not a missing invocation.
+    // Reject the page instead of silently returning incomplete history.
+    const rows = enrichedAutomationInvocationRowSchema.array().parse(pageResult.results ?? []);
     if (rows.length === 0) return { invocations: [], total };
 
     const placeholders = rows.map(() => "?").join(", ");
@@ -1288,12 +1469,18 @@ export class AutomationStore {
   }
 
   // --- Recovery sweep queries ---
-  // Backed by partial indexes (migration 0024); `status` must stay a literal, not
-  // a bound param, or the planner skips the index and full-scans automation_runs.
+  // Backed by partial indexes (migrations 0024 and 0079); `status` must stay a
+  // literal, not a bound param, or the planner skips the index and full-scans
+  // automation_runs.
   static readonly ORPHANED_STARTING_RUNS_SQL =
     "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
-  static readonly TIMED_OUT_RUNNING_RUNS_SQL =
-    "SELECT * FROM automation_runs WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?";
+  // A 'running' row without a deadline predates migration 0079, or was claimed
+  // by a worker that does (the migration applies before that worker is
+  // replaced). Those rows are held to the deployment-default deadline measured
+  // from started_at; leaving them out would let one lost callback keep the run
+  // 'running', and its automation blocked, forever.
+  static readonly RUNS_PAST_EXECUTION_DEADLINE_SQL =
+    "SELECT * FROM automation_runs WHERE status = 'running' AND (execution_deadline_at < ? OR (execution_deadline_at IS NULL AND started_at < ?))";
 
   async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
@@ -1304,14 +1491,23 @@ export class AutomationStore {
     return result.results || [];
   }
 
-  async getTimedOutRunningRuns(
-    executionTimeoutMs: number,
+  /**
+   * Runs whose session should have reported in by now. The deadline is the
+   * run's own, stamped at launch, so this asks "has this run's budget been
+   * spent?" rather than "has it been running a long time?". A run with no
+   * deadline of its own is due `defaultDeadlineMs` after it started.
+   */
+  async getRunsPastExecutionDeadline(
+    now: number,
+    defaultDeadlineMs: number,
     limit: number
   ): Promise<AutomationRunRow[]> {
-    const cutoff = Date.now() - executionTimeoutMs;
     const result = await this.db
-      .prepare(`${AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL} ORDER BY started_at ASC LIMIT ?`)
-      .bind(cutoff, limit)
+      .prepare(
+        `${AutomationStore.RUNS_PAST_EXECUTION_DEADLINE_SQL}
+         ORDER BY COALESCE(execution_deadline_at, started_at) ASC LIMIT ?`
+      )
+      .bind(now, now - defaultDeadlineMs, limit)
       .all<AutomationRunRow>();
     return result.results || [];
   }

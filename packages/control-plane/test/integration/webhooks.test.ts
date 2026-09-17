@@ -5,6 +5,7 @@ import { hashApiKey } from "../../src/auth/webhook-key";
 import { encryptToken } from "../../src/auth/crypto";
 import { cleanD1Tables } from "./cleanup";
 import { fetchRuns } from "./run-helpers";
+import { seedActiveUser } from "./helpers";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -30,13 +31,14 @@ function makeAutomation(overrides: Partial<AutomationRow> = {}): AutomationRow {
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
     schedule_tz: "UTC",
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
     next_run_at: null,
     consecutive_failures: 0,
     created_by: "test-user",
-    user_id: null,
+    user_id: "test-user",
     created_at: Date.now(),
     updated_at: Date.now(),
     deleted_at: null,
@@ -134,7 +136,10 @@ const sentryMetricWarningPayload = {
 // ─── Sentry webhook tests (per-automation) ───────────────────────────────────
 
 describe("POST /webhooks/sentry/:id", () => {
-  beforeEach(cleanD1Tables);
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await seedActiveUser("test-user");
+  });
 
   it("creates an automation run for a current Sentry issue.created webhook", async () => {
     const automation = await createSentryAutomation();
@@ -382,7 +387,10 @@ describe("POST /webhooks/sentry/:id", () => {
 // ─── Automation webhook tests ─────────────────────────────────────────────────
 
 describe("POST /webhooks/automation/:id", () => {
-  beforeEach(cleanD1Tables);
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await seedActiveUser("test-user");
+  });
 
   const TEST_API_KEY = "test-webhook-api-key-abc123";
 

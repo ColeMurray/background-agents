@@ -5,12 +5,13 @@ import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/t
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
 import type { SessionActionProps } from "@/components/session-actions";
-import { BoxIcon, RightSidebarIcon } from "@/components/ui/icons";
+import { BoxIcon, RightSidebarIcon, RightSidebarOpenIcon } from "@/components/ui/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
 import { getSafeExternalUrl } from "@/lib/urls";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
 
@@ -89,6 +90,8 @@ export type SessionHeaderProps = {
   };
   connected: boolean;
   connecting: boolean;
+  /** A reconnect is scheduled and has not started yet. */
+  reconnecting: boolean;
   isDetailsOpen: boolean;
   isDesktopDetailsOpen: boolean;
   showDesktopDetailsToggle: boolean;
@@ -100,6 +103,7 @@ export type SessionHeaderProps = {
   actions: SessionActionProps;
   optimisticTitle?: string;
   renameSession: (title: string) => Promise<boolean>;
+  capabilities: SessionCapabilities;
 };
 
 export function SessionHeader({
@@ -108,6 +112,7 @@ export function SessionHeader({
   fallbackSessionInfo,
   connected,
   connecting,
+  reconnecting,
   isDetailsOpen,
   isDesktopDetailsOpen,
   showDesktopDetailsToggle,
@@ -119,6 +124,7 @@ export function SessionHeader({
   actions,
   optimisticTitle,
   renameSession,
+  capabilities,
 }: SessionHeaderProps) {
   const { isOpen } = useSidebarContext();
   const hasFallbackSessionInfo =
@@ -138,6 +144,7 @@ export function SessionHeader({
     optimisticTitle ?? sessionState?.title ?? fallbackSessionInfo.title ?? repoLabel;
 
   const handleStartRename = () => {
+    if (!capabilities.lifecycle) return;
     setTitle(resolvedTitle);
     setIsRenaming(true);
   };
@@ -196,9 +203,10 @@ export function SessionHeader({
               <h1 className="max-w-40 truncate text-sm font-medium text-foreground">
                 <button
                   type="button"
-                  className="max-w-full truncate cursor-text text-left"
+                  className={`max-w-full truncate text-left ${capabilities.lifecycle ? "cursor-text" : "cursor-default"}`}
                   onClick={handleStartRename}
-                  title="Click to rename"
+                  title={capabilities.lifecycle ? "Click to rename" : undefined}
+                  disabled={!capabilities.lifecycle}
                 >
                   {resolvedTitle}
                 </button>
@@ -226,10 +234,18 @@ export function SessionHeader({
             onOpenMedia={onOpenMobileDetails}
           />
           <div className="flex items-center gap-1">
-            <ConnectionStatusIcon connected={connected} connecting={connecting} />
+            {capabilities.read && (
+              <ConnectionStatusIcon
+                connected={connected}
+                connecting={connecting}
+                reconnecting={reconnecting}
+              />
+            )}
             <SandboxStatusIcon
               status={sessionState?.sandboxStatus}
-              dashboardUrl={sessionState?.sandboxDashboardUrl}
+              dashboardUrl={
+                capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined
+              }
               error={sandboxError}
             />
           </div>
@@ -242,7 +258,11 @@ export function SessionHeader({
               aria-controls="session-details-sidebar"
               aria-expanded={isDesktopDetailsOpen}
             >
-              <RightSidebarIcon className="h-4 w-4" />
+              {isDesktopDetailsOpen ? (
+                <RightSidebarOpenIcon className="h-4 w-4" />
+              ) : (
+                <RightSidebarIcon className="h-4 w-4" />
+              )}
             </button>
           )}
         </div>
@@ -254,12 +274,23 @@ export function SessionHeader({
 function ConnectionStatusIcon({
   connected,
   connecting,
+  reconnecting,
 }: {
   connected: boolean;
   connecting: boolean;
+  reconnecting: boolean;
 }) {
-  const label = connecting ? "Connecting..." : connected ? "Connected" : "Disconnected";
-  const color = connecting ? "bg-warning" : connected ? "bg-success" : "bg-destructive";
+  // A pending reconnect is a wait, not a dead connection: say so rather than
+  // showing "Disconnected" while the backoff timer runs.
+  const pending = connecting || reconnecting;
+  const label = reconnecting
+    ? "Reconnecting..."
+    : connecting
+      ? "Connecting..."
+      : connected
+        ? "Connected"
+        : "Disconnected";
+  const color = pending ? "bg-warning" : connected ? "bg-success" : "bg-destructive";
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -273,7 +304,7 @@ function ConnectionStatusIcon({
           >
             <span
               aria-hidden="true"
-              className={`h-2.5 w-2.5 rounded-full ${color}${connecting ? " animate-pulse motion-reduce:animate-none" : ""}`}
+              className={`h-2.5 w-2.5 rounded-full ${color}${pending ? " animate-pulse motion-reduce:animate-none" : ""}`}
             />
           </span>
         </TooltipTrigger>

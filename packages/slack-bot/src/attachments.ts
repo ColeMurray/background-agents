@@ -253,6 +253,7 @@ async function uploadToSession(
   env: Env,
   sessionId: string,
   file: PreparedImageAttachments["files"][number],
+  authorId: string,
   traceId?: string
 ): Promise<{ reference: SessionAttachmentReference } | { sessionMissing: boolean }> {
   const { attachment, bytes } = file;
@@ -275,6 +276,7 @@ async function uploadToSession(
         method: "POST",
         url: `https://internal/sessions/${sessionId}/attachments`,
         body: { bytes: multipartBytes, contentType },
+        actor: authorId.startsWith("slack:") ? authorId : undefined,
         traceId,
       },
       { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
@@ -320,10 +322,11 @@ export async function uploadPreparedAttachments(
   env: Env,
   sessionId: string,
   prepared: PreparedImageAttachments,
+  authorId: string,
   traceId?: string
 ): Promise<SlackAttachmentUploadResult> {
   const outcomes = await Promise.all(
-    prepared.files.map((file) => uploadToSession(env, sessionId, file, traceId))
+    prepared.files.map((file) => uploadToSession(env, sessionId, file, authorId, traceId))
   );
   const references: SessionAttachmentReference[] = [];
   const dropped: SlackAttachmentDropReason[] = [...prepared.dropped];

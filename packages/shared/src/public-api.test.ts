@@ -10,6 +10,13 @@ describe("package root compatibility", () => {
     expect(shared.MAX_SESSION_REPOSITORIES).toBe(shared.MAX_TARGET_REPOSITORIES);
   });
 
+  it("exports session summary response schemas", () => {
+    expect(shared.sessionSummaryBaseSchema).toBeDefined();
+    expect(shared.sessionListResponseSchema).toBeDefined();
+    expect(shared.childSessionListResponseSchema).toBeDefined();
+    expect(shared.sessionInboxSnapshotSchema).toBeDefined();
+  });
+
   it("uses the public RepositoryPairValidationError constructor", () => {
     expect(() => shared.normalizeOptionalRepositoryPair({ repoOwner: "acme" })).toThrow(
       shared.RepositoryPairValidationError
@@ -17,7 +24,7 @@ describe("package root compatibility", () => {
   });
 
   it("exports provider account contracts from the package root", () => {
-    expect(shared.SUBSCRIPTION_PROVIDER_IDS).toEqual(["openai", "xai"]);
+    expect(shared.SUBSCRIPTION_PROVIDER_IDS).toEqual(["openai", "xai", "anthropic"]);
     expect(
       shared.modelProviderSelectionsSchema.safeParse({ xai: { mode: "api_key" } }).success
     ).toBe(true);

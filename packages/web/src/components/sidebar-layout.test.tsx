@@ -11,6 +11,7 @@ expect.extend(matchers);
 
 const mocks = vi.hoisted(() => ({
   isMobile: false,
+  canCreateSession: true,
   sidebar: {
     isOpen: true,
     toggle: vi.fn(),
@@ -32,10 +33,18 @@ vi.mock("@/hooks/use-sidebar", () => ({
   useSidebar: () => mocks.sidebar,
 }));
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      permission === "sessions.create" && mocks.canCreateSession,
+  }),
+}));
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   mocks.isMobile = false;
+  mocks.canCreateSession = true;
   mocks.sidebar.isOpen = true;
 });
 
@@ -62,6 +71,19 @@ describe("CollapsedSidebarControls", () => {
 
     fireEvent.click(buttons![2]);
     expect(push).toHaveBeenCalledWith("/");
+  });
+
+  it("hides the new session action without session creation permission", () => {
+    mocks.canCreateSession = false;
+    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
+
+    render(
+      <SidebarLayout>
+        <CollapsedSidebarControls />
+      </SidebarLayout>
+    );
+
+    expect(screen.queryByRole("button", { name: /New session/ })).not.toBeInTheDocument();
   });
 });
 
