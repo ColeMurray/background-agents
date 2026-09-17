@@ -57,7 +57,8 @@ const CAPTURE_POLL_INTERVAL_MS = 3_000;
  *
  * Ownership is checked before anything destructive: a snapshot found under a
  * reserved name belongs to this build only if it names the bound source
- * sandbox as the one it was captured from.
+ * sandbox as the one it was captured from. Ownership that cannot be
+ * established either way settles nothing and adopts nothing.
  */
 export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
   constructor(private readonly resources: DaytonaImageBuildResources) {}
@@ -118,11 +119,14 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
   ): Promise<ReconcileOrphanOperationOutcome> {
     const snapshot = await this.resources.getBuildSnapshot(input.operationRef, input.signal);
     if (!snapshot) return { type: "absent" };
+    const ownership = captureOwnership(snapshot.sourceSandboxId, input.providerSessionId);
     // A snapshot under our reserved name that names another source is not
     // ours, and deleting it would destroy someone else's artifact.
-    if (!ownsCapture(snapshot.sourceSandboxId, input.providerSessionId)) {
-      return { type: "absent" };
-    }
+    if (ownership === "another") return { type: "absent" };
+    // Nothing to compare it against. Settling here would drop the only record
+    // of a snapshot that may well be this build's, so the obligation is kept
+    // for a pass that can decide.
+    if (ownership === "unknown") return { type: "pending" };
 
     const state = parseDaytonaSnapshotState(snapshot.state);
     if (state === "removing") return { type: "pending" };
@@ -217,8 +221,16 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
     const attemptDeadline = Date.now() + CAPTURE_OBSERVATION_MS;
     for (;;) {
       const snapshot = await this.resources.getBuildSnapshot(operation.ref, input.signal);
-      if (snapshot && !ownsCapture(snapshot.sourceSandboxId, input.providerSessionId)) {
-        throw new Error("Daytona snapshot under this build's reserved name has another source");
+      if (snapshot) {
+        const ownership = captureOwnership(snapshot.sourceSandboxId, input.providerSessionId);
+        if (ownership === "another") {
+          throw new Error("Daytona snapshot under this build's reserved name has another source");
+        }
+        if (ownership === "unknown") {
+          throw new Error(
+            "Daytona snapshot under this build's reserved name has no provable source"
+          );
+        }
       }
       const state = snapshot ? parseDaytonaSnapshotState(snapshot.state) : null;
       if (snapshot && (state === "active" || state === "inactive")) {
@@ -275,10 +287,22 @@ function sourceExpiry(source: DaytonaSandboxResponse): number | null {
   return Number.isFinite(reported) ? reported : null;
 }
 
-/** A capture is this build's only when it names the bound source sandbox. */
-function ownsCapture(
+/** What a snapshot found under a build's reserved name can be proven to be. */
+type CaptureOwnership = "ours" | "another" | "unknown";
+
+/**
+ * A capture is this build's only when it names the bound source sandbox.
+ *
+ * `unknown` is a third answer, not a synonym for either: with no source on
+ * the snapshot or no bound sandbox on the row there is nothing to compare, so
+ * the artifact can be neither claimed nor disowned. A caller that would
+ * settle an obligation must leave it outstanding; a caller that would adopt
+ * the artifact must refuse it.
+ */
+function captureOwnership(
   sourceSandboxId: string | null | undefined,
   providerSessionId: string | null
-): boolean {
-  return Boolean(sourceSandboxId) && sourceSandboxId === providerSessionId;
+): CaptureOwnership {
+  if (!sourceSandboxId || !providerSessionId) return "unknown";
+  return sourceSandboxId === providerSessionId ? "ours" : "another";
 }

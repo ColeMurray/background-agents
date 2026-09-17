@@ -372,6 +372,28 @@ describe("DaytonaImageBuildAdapter capture", () => {
     ).rejects.toThrow(/another source/);
   });
 
+  // Finalization is the other side of the same rule: reconciliation keeps an
+  // unprovable artifact, finalization refuses to adopt one.
+  it.each([null, ""])(
+    "refuses to adopt a snapshot whose source the provider does not name (%p)",
+    async (sourceSandboxId) => {
+      const resources = createResources({
+        getBuildSnapshot: vi.fn(async () => ({
+          id: "snapshot-1",
+          name: "oi-image-abc",
+          state: "active",
+          sourceSandboxId,
+        })),
+      });
+
+      await expect(
+        createAdapter(resources).finalizeSuccessfulBuild(
+          finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
+        )
+      ).rejects.toThrow(/no provable source/);
+    }
+  );
+
   it("fails a build whose source is already gone", async () => {
     const resources = createResources({ getBuildSandbox: vi.fn(async () => null) });
 
@@ -462,6 +484,50 @@ describe("DaytonaImageBuildAdapter orphan operations", () => {
 
     await expect(createAdapter(resources).reconcileOrphanOperation(orphan)).resolves.toEqual({
       type: "absent",
+    });
+    expect(resources.deleteProviderImage).not.toHaveBeenCalled();
+  });
+
+  // Settling on an ownership question nobody answered would clear the row's
+  // only record of a snapshot that may be this build's, and the artifact
+  // would outlive everything that knows about it.
+  it("keeps an obligation whose snapshot names no source", async () => {
+    const resources = createResources({
+      getBuildSnapshot: vi.fn(async () => ({
+        id: "snapshot-1",
+        name: "oi-image-abc",
+        state: "active",
+        sourceSandboxId: null,
+      })),
+    });
+
+    await expect(createAdapter(resources).reconcileOrphanOperation(orphan)).resolves.toEqual({
+      type: "pending",
+    });
+    expect(resources.deleteProviderImage).not.toHaveBeenCalled();
+  });
+
+  it("keeps an obligation whose row no longer names a source sandbox", async () => {
+    const resources = createResources();
+
+    await expect(
+      createAdapter(resources).reconcileOrphanOperation({ ...orphan, providerSessionId: null })
+    ).resolves.toEqual({ type: "pending" });
+    expect(resources.deleteProviderImage).not.toHaveBeenCalled();
+  });
+
+  it("settles nothing on an unprovable snapshot even once it is terminal", async () => {
+    const resources = createResources({
+      getBuildSnapshot: vi.fn(async () => ({
+        id: "snapshot-1",
+        name: "oi-image-abc",
+        state: "build_failed",
+        sourceSandboxId: "",
+      })),
+    });
+
+    await expect(createAdapter(resources).reconcileOrphanOperation(orphan)).resolves.toEqual({
+      type: "pending",
     });
     expect(resources.deleteProviderImage).not.toHaveBeenCalled();
   });
