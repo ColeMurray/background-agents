@@ -179,3 +179,15 @@ async def test_newline_aligned_tail_drops_a_multiline_secret_suffix():
     await collector.wait()
 
     assert bounded_output_tail(collector.tail_lines(secrets=secrets), secrets=secrets) == []
+
+
+async def test_newline_aligned_tail_drops_an_interior_multiline_secret_suffix():
+    stream = asyncio.StreamReader()
+    collector = BoundedOutputCollector(stream, max_tail_bytes=4)
+    secrets = secret_values({"API_TOKEN": "abcdefgh\nx\ny"})
+    stream.feed_data(b"abcdefgh\nx\ny\n")
+    stream.feed_eof()
+
+    await collector.wait()
+
+    assert bounded_output_tail(collector.tail_lines(secrets=secrets), secrets=secrets) == []

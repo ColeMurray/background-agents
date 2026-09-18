@@ -75,19 +75,17 @@ class BoundedOutputCollector:
         A window trimmed mid-line opens on a fragment cut at an arbitrary
         byte, which is dropped: a fragment of a secret would no longer match
         the value it is redacted by. A newline-aligned window can keep its
-        first line unless it is the final line of a multiline secret.
+        first lines unless they are a suffix of a multiline secret.
         """
         lines = bytes(self._tail).decode(errors="replace").splitlines()
-        head_is_secret_suffix = (
-            any(
-                len(secret_lines := secret.splitlines()) > 1 and secret_lines[-1] == lines[0]
-                for secret in secrets
-            )
-            if lines
-            else False
-        )
-        if self._head_is_fragment or head_is_secret_suffix:
-            lines = lines[1:]
+        drop_count = 1 if self._head_is_fragment else 0
+        for secret in secrets:
+            secret_lines = [line for line in secret.splitlines() if line]
+            for start in range(len(secret_lines)):
+                suffix = secret_lines[start:]
+                if lines[: len(suffix)] == suffix:
+                    drop_count = max(drop_count, len(suffix))
+        lines = lines[drop_count:]
         return "\n".join(lines[-max_lines:])
 
 

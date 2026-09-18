@@ -229,16 +229,16 @@ class TestHookFailureTail:
         logged = json.dumps(sup.hooks.log.error.call_args.kwargs)
         assert all(secret[i:] not in logged for i in range(1, len(secret) - 3))
 
-    async def test_newline_aligned_window_drops_a_short_multiline_secret_suffix(
+    async def test_newline_aligned_window_drops_a_short_interior_secret_suffix(
         self, tmp_path, monkeypatch
     ):
         sup = self._boot(tmp_path)
         repo = sup.repositories[0]
         script_dir = repo.path / ".openinspect"
         script_dir.mkdir(parents=True)
-        secret = "a" * 100 + "\nx"
-        # The byte window starts exactly at the short final line of the secret.
-        trailing = PROCESS_OUTPUT_TAIL_BYTES - 9
+        secret = "a" * 100 + "\nx\ny"
+        # The byte window starts exactly at the short interior secret line.
+        trailing = PROCESS_OUTPUT_TAIL_BYTES - 11
         (script_dir / "start.sh").write_text(
             "#!/bin/bash\n"
             'printf "%s\\n" "$NPM_TOKEN"\n'
@@ -254,6 +254,7 @@ class TestHookFailureTail:
         tail = sup.hooks.failure_tail(repo, "start")
         assert tail[-1] == "after"
         assert "x" not in tail
+        assert "y" not in tail
 
     async def test_tail_is_empty_without_a_failure(self, tmp_path):
         sup = self._boot(tmp_path)
