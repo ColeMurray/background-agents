@@ -96,4 +96,18 @@ describe("resolveInlinePromptOptions", () => {
         'Reasoning effort "max" is not valid for "openai/gpt-5.6-sol". Supported values: none, low, medium, high, xhigh.',
     });
   });
+
+  it("escapes Slack control tokens in validation errors", () => {
+    expect(resolveInlinePromptOptions({ model: "<!channel>" }, defaults, enabledModels)).toEqual({
+      ok: false,
+      error: 'Unknown model "&lt;!channel&gt;".',
+    });
+    expect(
+      resolveInlinePromptOptions({ reasoningEffort: "<@U123>" }, defaults, enabledModels)
+    ).toEqual({
+      ok: false,
+      error:
+        'Reasoning effort "&lt;@U123&gt;" is not valid for "anthropic/claude-sonnet-4-6". Supported values: low, medium, high, max.',
+    });
+  });
 });

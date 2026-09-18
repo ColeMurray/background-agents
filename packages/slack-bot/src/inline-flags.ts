@@ -5,6 +5,7 @@ import {
   isValidReasoningEffort,
   normalizeModelId,
 } from "@open-inspect/shared/models";
+import { escapeMrkdwnText } from "@open-inspect/shared/slack";
 
 export interface InlinePromptOptions {
   model?: string;
@@ -88,7 +89,7 @@ export function resolveInlinePromptOptions(
   let modelOverride: string | undefined;
   if (options.model) {
     if (!isValidModel(options.model)) {
-      return { ok: false, error: `Unknown model "${options.model}".` };
+      return { ok: false, error: `Unknown model "${escapeMrkdwnText(options.model)}".` };
     }
     modelOverride = normalizeModelId(options.model);
     if (!enabledModels.some((model) => normalizeModelId(model) === modelOverride)) {
@@ -104,7 +105,7 @@ export function resolveInlinePromptOptions(
       : " This model does not support reasoning controls.";
     return {
       ok: false,
-      error: `Reasoning effort "${options.reasoningEffort}" is not valid for "${effectiveModel}".${suffix}`,
+      error: `Reasoning effort "${escapeMrkdwnText(options.reasoningEffort)}" is not valid for "${effectiveModel}".${suffix}`,
     };
   }
 
