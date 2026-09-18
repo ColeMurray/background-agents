@@ -276,6 +276,139 @@ describe("sessionSocketReducer", () => {
     });
   });
 
+  describe("bootPhase", () => {
+    const bootProgress = (
+      overrides: Partial<Extract<SandboxEvent, { type: "boot_progress" }>> = {}
+    ): Extract<SandboxEvent, { type: "boot_progress" }> => ({
+      type: "boot_progress",
+      bootSeq: 1,
+      phase: "sync",
+      status: "started",
+      sandboxId: "sb-1",
+      timestamp: 1,
+      ...overrides,
+    });
+    const booting = () =>
+      subscribedState({
+        session: createSessionState({ sandboxStatus: "connecting" }),
+        bootPhase: { phase: "sync", status: "started" },
+      });
+
+    it("seeds the phase from the snapshot and from subscribed", () => {
+      expect(
+        createSessionSocketState(
+          createSnapshot({ bootPhase: { phase: "setup", status: "started" } })
+        ).bootPhase
+      ).toEqual({ phase: "setup", status: "started" });
+      expect(booting().bootPhase).toEqual({ phase: "sync", status: "started" });
+      expect(subscribedState().bootPhase).toBeNull();
+    });
+
+    it("seeds a failed phase with the tail its timeline line carries", () => {
+      const state = subscribedState({
+        session: createSessionState({ sandboxStatus: "failed" }),
+        spawnError: "start hook failed for acme/web-app",
+        bootPhase: { phase: "start", status: "failed", repoOwner: "acme", repoName: "web-app" },
+        timeline: {
+          events: [
+            {
+              eventId: "event-9",
+              timelineSequence: 9,
+              event: bootProgress({
+                bootSeq: 6,
+                phase: "start",
+                status: "failed",
+                repoOwner: "acme",
+                repoName: "web-app",
+                outputTail: ["npm ERR! missing script: dev"],
+                detail: "start hook failed for acme/web-app",
+              }),
+            },
+          ],
+          hasMore: false,
+          cursor: null,
+        },
+      });
+
+      expect(state.bootPhase?.outputTail).toEqual(["npm ERR! missing script: dev"]);
+      expect(state.sandboxError).toBe("start hook failed for acme/web-app");
+    });
+
+    it("advances with each live boot_progress event", () => {
+      const state = reduce(booting(), {
+        type: "events_appended",
+        events: [
+          bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          bootProgress({
+            bootSeq: 3,
+            phase: "setup",
+            status: "started",
+            repoOwner: "acme",
+            repoName: "web-app",
+          }),
+        ],
+      });
+
+      expect(state.bootPhase).toEqual({
+        phase: "setup",
+        status: "started",
+        bootSeq: 3,
+        repoOwner: "acme",
+        repoName: "web-app",
+      });
+      expect(state.events).toHaveLength(2);
+    });
+
+    it("clears the phase once the sandbox is ready", () => {
+      const state = reduce(booting(), serverMessage({ type: "sandbox_status", status: "ready" }));
+
+      expect(state.bootPhase).toBeNull();
+      expect(state.sessionState?.sandboxStatus).toBe("ready");
+    });
+
+    it("keeps the phase through connecting and into a failure so it can be named", () => {
+      const failed = reduce(
+        booting(),
+        serverMessage({ type: "sandbox_status", status: "connecting" }),
+        {
+          type: "events_appended",
+          events: [
+            bootProgress({ bootSeq: 4, phase: "setup", status: "failed", outputTail: ["boom"] }),
+          ],
+        },
+        serverMessage({ type: "sandbox_error", error: "setup hook failed" }),
+        serverMessage({ type: "sandbox_status", status: "failed" })
+      );
+
+      expect(failed.bootPhase).toEqual({
+        phase: "setup",
+        status: "failed",
+        bootSeq: 4,
+        outputTail: ["boom"],
+      });
+      expect(failed.sandboxError).toBe("setup hook failed");
+    });
+
+    it("clears the phase when a fresh attempt starts or the sandbox ends", () => {
+      const failed = reduce(booting(), {
+        type: "events_appended",
+        events: [bootProgress({ bootSeq: 4, phase: "setup", status: "failed" })],
+      });
+
+      expect(reduce(failed, serverMessage({ type: "sandbox_spawning" })).bootPhase).toBeNull();
+      expect(reduce(failed, serverMessage({ type: "sandbox_warming" })).bootPhase).toBeNull();
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "spawning" })).bootPhase
+      ).toBeNull();
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "stale" })).bootPhase
+      ).toBeNull();
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "stopped" })).bootPhase
+      ).toBeNull();
+    });
+  });
+
   describe("subscribed", () => {
     it("hydrates budget management capability and applies authoritative budget updates", () => {
       const subscribed = subscribedState({ canManageBudget: true });

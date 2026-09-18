@@ -13,6 +13,7 @@ import { TunnelUrlsSection } from "./sidebar/tunnel-urls-section";
 import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
 import { buildAuthenticatedUrl } from "@/lib/urls";
+import { collectBootPhaseTimings } from "@/lib/session-socket/boot-phase";
 import { extractLatestTasks } from "@/lib/tasks";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { ParticipantPresence, SessionState } from "@open-inspect/shared/types/server-messages";
@@ -76,6 +77,7 @@ export function SessionRightSidebarContent({
       ),
     [events]
   );
+  const bootPhases = useMemo(() => collectBootPhaseTimings(events), [events]);
   const mediaArtifacts = useMemo(
     () =>
       artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
@@ -129,6 +131,7 @@ export function SessionRightSidebarContent({
           repositories={sessionState.repositories}
           environmentId={sessionState.environmentId}
           environmentName={sessionState.environmentName}
+          bootPhases={bootPhases}
           warnings={warnings}
           parentSessionId={sessionState.parentSessionId}
           canManageLifecycle={capabilities.lifecycle}

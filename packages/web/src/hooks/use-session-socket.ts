@@ -11,7 +11,11 @@ import {
   toUiSandboxEvent,
   type PendingAssistantText,
 } from "@/lib/session-socket/event-log";
-import { createSessionSocketState, sessionSocketReducer } from "@/lib/session-socket/reducer";
+import {
+  createSessionSocketState,
+  sessionSocketReducer,
+  type SessionSocketState,
+} from "@/lib/session-socket/reducer";
 import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
@@ -51,6 +55,8 @@ interface UseSessionSocketReturn {
   sessionState: SessionState | null;
   /** Why the sandbox last failed, when the control plane reported a reason. */
   sandboxError: string | null;
+  /** The boot phase a booting (or just-failed) sandbox last reported. */
+  bootPhase: SessionSocketState["bootPhase"];
   messages: Message[];
   events: SandboxEvent[];
   participants: ParticipantPresence[];
@@ -424,6 +430,7 @@ export function useSessionSocket(
     connectionError: transport.connectionError,
     sessionState,
     sandboxError: state.sandboxError,
+    bootPhase: state.bootPhase,
     messages: NO_MESSAGES,
     events: state.events,
     participants: state.participants,

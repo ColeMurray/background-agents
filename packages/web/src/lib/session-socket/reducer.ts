@@ -8,6 +8,7 @@ import type {
   SessionTimelineEvent,
 } from "@open-inspect/shared/types/server-messages";
 import { toUiArtifact } from "./artifact-metadata";
+import { bootProgressFromEvent, seedBootProgress, type SandboxBootProgress } from "./boot-phase";
 import { collapseReplayTokenEvents, toUiSandboxEvent } from "./event-log";
 
 interface HistoryCursor {
@@ -42,6 +43,13 @@ export interface SessionSocketState {
    * it never outlives the failure it explains.
    */
   sandboxError: string | null;
+  /**
+   * The boot phase a spawning or connecting sandbox last reported, seeded by
+   * the snapshot and advanced by live `boot_progress` events. Kept through
+   * `failed` so the failure can name the phase and show the script's output
+   * tail; cleared once the sandbox is ready or a fresh attempt starts.
+   */
+  bootPhase: SandboxBootProgress | null;
 }
 
 export const initialSessionSocketState: SessionSocketState = {
@@ -58,6 +66,7 @@ export const initialSessionSocketState: SessionSocketState = {
   cursor: null,
   promptQueue: [],
   sandboxError: null,
+  bootPhase: null,
 };
 
 export type SessionSocketAction =
@@ -105,6 +114,7 @@ export function createSessionSocketState(snapshot: SessionSnapshot): SessionSock
     cursor: snapshot.timeline.cursor,
     promptQueue: snapshot.promptQueue,
     sandboxError: snapshot.spawnError ?? null,
+    bootPhase: seedBootProgress(snapshot),
   };
 }
 
@@ -201,6 +211,7 @@ function reduceServerMessage(
         loadingHistory: false,
         promptQueue: message.promptQueue,
         sandboxError: message.spawnError ?? null,
+        bootPhase: seedBootProgress(message),
       };
     }
 
@@ -227,14 +238,14 @@ function reduceServerMessage(
       };
 
     case "sandbox_warming":
-      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
+      return updateSessionState({ ...state, sandboxError: null, bootPhase: null }, (prev) => ({
         ...prev,
         sandboxStatus: "warming",
       }));
 
     case "sandbox_spawning":
       // A new attempt supersedes whatever the last one failed with.
-      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
+      return updateSessionState({ ...state, sandboxError: null, bootPhase: null }, (prev) => ({
         ...prev,
         sandboxStatus: "spawning",
         ...CLEARED_SANDBOX_RUNTIME_STATE,
@@ -247,8 +258,15 @@ function reduceServerMessage(
         message.status === "stale" ||
         message.status === "stopped" ||
         message.status === "failed";
+      // The phase outlives the boot only into `failed`, where it names what
+      // broke. `connecting` is the boot itself; anything else ends it.
+      const keepsBootPhase = message.status === "connecting" || message.status === "failed";
       return updateSessionState(
-        message.status === "failed" ? state : { ...state, sandboxError: null },
+        {
+          ...state,
+          ...(message.status === "failed" ? {} : { sandboxError: null }),
+          ...(keepsBootPhase ? {} : { bootPhase: null }),
+        },
         (prev) => ({
           ...prev,
           sandboxStatus: message.status,
@@ -329,8 +347,13 @@ export function sessionSocketReducer(
     case "server_message":
       return reduceServerMessage(state, action.message);
 
-    case "events_appended":
-      return { ...state, events: [...state.events, ...action.events] };
+    case "events_appended": {
+      let bootPhase = state.bootPhase;
+      for (const event of action.events) {
+        if (event.type === "boot_progress") bootPhase = bootProgressFromEvent(event);
+      }
+      return { ...state, events: [...state.events, ...action.events], bootPhase };
+    }
 
     case "history_requested":
       return { ...state, loadingHistory: true };
