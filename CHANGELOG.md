@@ -2,6 +2,16 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 17, 2026
+
+**Sandbox boot progress.** The sandbox runtime now connects to the control plane before it clones
+the repository, so a session shows each boot step as it runs: Cloning repository, Running setup.sh,
+Starting services, Installing skills, Starting agent, with the repository named in multi-repository
+sessions. Completed steps and their durations are listed in the session details panel, and a script
+that fails shows its last lines of output in the session header. Long setup scripts no longer trip
+the four-minute connect timeout; a boot may take up to `SANDBOX_BOOT_TIMEOUT_MS` (30 minutes by
+default). See [How Open-Inspect Works](docs/HOW_IT_WORKS.md#fresh-start-no-snapshot).
+
 ## September 14, 2026
 
 **OpenCode Go models.** Adds 27 opt-in `opencode-go/*` models to Settings > Models for OpenCode
