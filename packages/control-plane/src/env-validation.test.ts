@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { generateEncryptionKey } from "./auth/crypto";
-import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "./env-validation";
+import {
+  parseRepoAclConfig,
+  requireRepoSecretsEncryptionKey,
+  requireTokenEncryptionKey,
+} from "./env-validation";
 import type { Env } from "./types";
 
 function envWith(key: string | undefined): Env {
@@ -59,5 +63,50 @@ describe("requireTokenEncryptionKey", () => {
     expect(() =>
       requireTokenEncryptionKey({ TOKEN_ENCRYPTION_KEY: "dG9vc2hvcnQ=" } as Env)
     ).toThrow(/TOKEN_ENCRYPTION_KEY must decode to 32 bytes/);
+  });
+});
+
+describe("parseRepoAclConfig", () => {
+  it("defaults to enforcement off with an empty allowlist", () => {
+    expect(parseRepoAclConfig({} as Env)).toEqual({ enforce: false, allowlist: [] });
+  });
+
+  it("does not parse the allowlist while the gate is off", () => {
+    expect(parseRepoAclConfig({ REPO_ACL_ALLOWLIST: "acme/api" } as Env)).toEqual({
+      enforce: false,
+      allowlist: [],
+    });
+  });
+
+  it.each(["true", "1"])("enables enforcement for ENFORCE_REPO_ACL=%s", (flag) => {
+    expect(parseRepoAclConfig({ ENFORCE_REPO_ACL: flag, REPO_ACL_ALLOWLIST: "*" } as Env)).toEqual({
+      enforce: true,
+      allowlist: [{ owner: "*", name: "*" }],
+    });
+  });
+
+  it("treats other ENFORCE_REPO_ACL values as off", () => {
+    expect(parseRepoAclConfig({ ENFORCE_REPO_ACL: "yes", REPO_ACL_ALLOWLIST: "*" } as Env)).toEqual({
+      enforce: false,
+      allowlist: [],
+    });
+  });
+
+  it("ignores a malformed allowlist while the gate is off", () => {
+    expect(
+      parseRepoAclConfig({ ENFORCE_REPO_ACL: "false", REPO_ACL_ALLOWLIST: "acme/not-a-pattern" } as Env)
+    ).toEqual({ enforce: false, allowlist: [] });
+  });
+
+  it("refuses to enforce with an empty allowlist", () => {
+    expect(() => parseRepoAclConfig({ ENFORCE_REPO_ACL: "true" } as Env)).toThrow(
+      /ENFORCE_REPO_ACL is enabled but REPO_ACL_ALLOWLIST is not configured/
+    );
+  });
+
+  it("propagates malformed allowlist entries", () => {
+    expect(() =>
+      parseRepoAclConfig({ ENFORCE_REPO_ACL: "true", REPO_ACL_ALLOWLIST: "acme" } as Env)
+    ).toThrow(/malformed/);
   });
 });

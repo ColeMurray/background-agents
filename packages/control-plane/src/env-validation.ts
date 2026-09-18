@@ -8,6 +8,7 @@
  */
 
 import type { EnvConfig } from "./types";
+import { parseRepoAclAllowlist, type RepoAclPattern } from "./repos/repo-acl";
 
 /** Strict base64 — rejects whitespace and stray characters `atob` may accept. */
 const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -57,4 +58,35 @@ export function requireRepoSecretsEncryptionKey(
 
 export function requireTokenEncryptionKey(env: Pick<EnvConfig, "TOKEN_ENCRYPTION_KEY">): string {
   return requireEncryptionKey(env.TOKEN_ENCRYPTION_KEY, "TOKEN_ENCRYPTION_KEY", "OAuth tokens");
+}
+
+/** Resolved repository access gate configuration. */
+export interface RepoAclConfig {
+  /** True when ENFORCE_REPO_ACL opts the deployment into the gate. */
+  enforce: boolean;
+  /** Parsed REPO_ACL_ALLOWLIST patterns; empty when the variable is unset. */
+  allowlist: readonly RepoAclPattern[];
+}
+
+/**
+ * Reads the opt-in repository access gate (ENFORCE_REPO_ACL +
+ * REPO_ACL_ALLOWLIST). With both variables unset the gate is off and sessions
+ * behave exactly as before. Enabling the gate with no allowlist would deny
+ * every repository session — a misconfiguration, so it fails loudly here
+ * instead of at the first session creation.
+ */
+export function parseRepoAclConfig(
+  env: Pick<EnvConfig, "ENFORCE_REPO_ACL" | "REPO_ACL_ALLOWLIST">
+): RepoAclConfig {
+  const enforce = env.ENFORCE_REPO_ACL === "true" || env.ENFORCE_REPO_ACL === "1";
+  // The allowlist only matters when the gate is enabled — a stale or
+  // malformed value must not block startup while enforcement is off.
+  if (!enforce) return { enforce: false, allowlist: [] };
+  const allowlist = parseRepoAclAllowlist(env.REPO_ACL_ALLOWLIST);
+  if (enforce && allowlist.length === 0) {
+    throw new Error(
+      "ENFORCE_REPO_ACL is enabled but REPO_ACL_ALLOWLIST is not configured; refusing to start with a repository gate that denies every session"
+    );
+  }
+  return { enforce, allowlist };
 }
