@@ -161,14 +161,12 @@ export interface SandboxState {
   createdAt: number;
   /** Provider object ID if the sandbox exists remotely */
   providerObjectId?: string | null;
-  /** Runtime version installed in the provider object, when recorded. */
-  runtimeVersion?: string | null;
   /** Snapshot image ID if available for restore */
   snapshotImageId: string | null;
   /**
    * SANDBOX_VERSION of the runtime that produced `snapshotImageId`, or null
    * when the snapshot predates version recording. Gates restore — see
-   * {@link isRuntimeVersionCompatible}.
+   * {@link isSnapshotRuntimeCompatible}.
    */
   snapshotRuntimeVersion: string | null;
   /** Whether an active WebSocket connection exists */
@@ -235,20 +233,24 @@ export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
 };
 
 /**
- * Whether a filesystem-backed runtime may be booted again.
+ * Whether a filesystem snapshot may be booted again.
  *
- * Snapshots and persistent provider objects carry the whole sandbox
- * filesystem, including the pinned agent binary. Restoring or resuming one
- * silently resurrects its runtime, so both fail closed below the same floor
- * used by prebuilt images.
+ * A snapshot carries the whole sandbox filesystem, including the pinned agent
+ * binary, so restoring one silently resurrects the runtime that took it. A
+ * runtime fix therefore never reaches a session that keeps restoring — the
+ * failure mode that stranded every pre-existing session on the OpenCode
+ * message-ID wraparound. Bumping MIN_COMPATIBLE_RUNTIME_VERSION now retires
+ * those snapshots the same way it retires prebuilt images.
  *
- * A runtime version that was never recorded or does not parse is treated as
- * below the floor. The cost is one fresh spawn, after which later snapshots
- * and persistent resumes use the current runtime.
+ * Fails closed, matching image selection: a snapshot whose runtime version was
+ * never recorded (taken before this column existed) or does not parse is
+ * treated as below the floor. The cost is one fresh spawn — the sandbox's
+ * uncommitted filesystem state — after which the next snapshot records its
+ * version and restores resume as normal.
  */
-export function isRuntimeVersionCompatible(runtimeVersion: string | null | undefined): boolean {
-  if (!runtimeVersion) return false;
-  const version = parseRuntimeVersionNumber(runtimeVersion);
+export function isSnapshotRuntimeCompatible(snapshotRuntimeVersion: string | null): boolean {
+  if (!snapshotRuntimeVersion) return false;
+  const version = parseRuntimeVersionNumber(snapshotRuntimeVersion);
   return version !== null && version >= MIN_COMPATIBLE_RUNTIME_VERSION;
 }
 
@@ -322,15 +324,7 @@ export function evaluateSpawnDecision(
     state.providerObjectId &&
     (state.status === "stopped" || state.status === "stale")
   ) {
-    if (isRuntimeVersionCompatible(state.runtimeVersion)) {
-      return { action: "resume", providerObjectId: state.providerObjectId };
-    }
-    if (!state.snapshotImageId) {
-      return {
-        action: "spawn",
-        reason: `persistent sandbox runtime ${state.runtimeVersion ?? "unknown"} is below the v${MIN_COMPATIBLE_RUNTIME_VERSION} floor`,
-      };
-    }
+    return { action: "resume", providerObjectId: state.providerObjectId };
   }
 
   // Check if we have a snapshot to restore from
@@ -339,7 +333,7 @@ export function evaluateSpawnDecision(
     state.snapshotImageId &&
     (state.status === "stopped" || state.status === "stale" || state.status === "failed")
   ) {
-    if (isRuntimeVersionCompatible(state.snapshotRuntimeVersion)) {
+    if (isSnapshotRuntimeCompatible(state.snapshotRuntimeVersion)) {
       return {
         action: "restore",
         snapshotImageId: state.snapshotImageId,

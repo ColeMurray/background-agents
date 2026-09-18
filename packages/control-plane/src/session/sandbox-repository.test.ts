@@ -559,12 +559,10 @@ describe("SandboxRepository boot state (SQLite)", () => {
     });
   });
 
-  it("exposes liveness and runtime compatibility to the spawn decision", () => {
+  it("exposes last_heartbeat to the spawn decision", () => {
     const { repository, set } = createSqliteRepository();
-    set("status = 'connecting', last_heartbeat = 4242, runtime_version = 'v69-test'");
+    set("status = 'connecting', last_heartbeat = 4242");
 
-    expect(repository.getSandboxWithCircuitBreaker()).toEqual(
-      expect.objectContaining({ last_heartbeat: 4242, runtime_version: "v69-test" })
-    );
+    expect(repository.getSandboxWithCircuitBreaker()?.last_heartbeat).toBe(4242);
   });
 });

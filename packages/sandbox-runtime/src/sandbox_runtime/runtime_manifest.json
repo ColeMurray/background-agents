@@ -1,9 +1,9 @@
 {
   "runtimeVersion": "v69-discard-hook-output",
   "generation": 69,
-  "minimumCompatibleGeneration": 69,
-  "minimumRebuildGeneration": 69,
+  "minimumCompatibleGeneration": 62,
+  "minimumRebuildGeneration": 67,
   "harnessMinimumGeneration": {
-    "claude": 69
+    "claude": 64
   }
 }
