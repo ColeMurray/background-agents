@@ -229,6 +229,40 @@ describe("SandboxHandler", () => {
     expect(failSandbox).toHaveBeenCalledWith("start.sh exited 1");
   });
 
+  it("fails the sandbox even when landing the fatal report on the timeline throws", async () => {
+    const { handler, getSandbox, isValidSandboxToken, failSandbox, processSandboxEvent, log } =
+      createHandler();
+    getSandbox.mockReturnValue({
+      id: "sandbox-row-1",
+      modal_sandbox_id: "sandbox-1",
+      auth_token_hash: "token-hash-1",
+      auth_token: null,
+      status: "connecting",
+    } as SandboxRow);
+    isValidSandboxToken.mockResolvedValue(true);
+    processSandboxEvent.mockRejectedValue(new Error("storage write failed"));
+
+    const response = await handler.sandboxError(
+      new Request("http://internal/internal/sandbox-error", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: "Bearer sandbox-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
+        body: JSON.stringify({ error: "start.sh exited 1", phase: "start", bootSeq: 7 }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "ok" });
+    expect(failSandbox).toHaveBeenCalledWith("start.sh exited 1");
+    expect(log.warn).toHaveBeenCalledWith("Failed to land the fatal report on the timeline", {
+      event: "sandbox.error_timeline_failed",
+      error: "storage write failed",
+    });
+  });
+
   it("accepts a fatal report without phase fields from an older runtime", async () => {
     const { handler, getSandbox, isValidSandboxToken, failSandbox, processSandboxEvent } =
       createHandler();
