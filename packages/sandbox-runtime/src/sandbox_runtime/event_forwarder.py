@@ -16,7 +16,8 @@ if TYPE_CHECKING:
     from .log_config import StructuredLogger
 
 # Critical events are retained until the control plane acknowledges them and
-# are re-sent on reconnect; everything else is delivered at most once.
+# are re-sent on reconnect. A timed-out write may already have reached the
+# peer, so replay can duplicate a non-critical event across connections.
 CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
     {
         "execution_complete",
@@ -28,9 +29,8 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
 )
 MAX_EVENT_BUFFER_SIZE: Final = 1000
 
-# Bound on each individual send inside recovery (bind / drain) paths. Those
-# paths hold the recovery lock, so an unbounded wedged send would turn into a
-# wedged reconnect: the next bind() could never recover.
+# Bound each write and retirement close. Live sends must not stall heartbeats
+# or harness emits; recovery sends must not hold the recovery lock forever.
 SEND_TIMEOUT_SECONDS: Final = 30.0
 
 
@@ -135,7 +135,8 @@ class BufferedEventForwarder:
             return False
 
         try:
-            await ws.send(json.dumps(event))
+            async with asyncio.timeout(self._send_timeout_seconds):
+                await ws.send(json.dumps(event))
             if is_critical:
                 self._pending_acks[event["ackId"]] = event
         except asyncio.CancelledError:
@@ -144,18 +145,41 @@ class BufferedEventForwarder:
             # event is dropped here too — a replay would only be stale.
             if buffered:
                 self._buffer_event(event)
+                await self._drain_if_rebound(failed_ws=ws)
             else:
                 self._log.debug("bridge.event_dropped_cancelled", event_type=event_type)
             raise
         except Exception as e:
             self._log.warn("bridge.send_error", event_type=event_type, exc=e)
-            if not buffered:
+            if buffered:
+                # Preserve the event before socket cleanup can suspend or be cancelled.
+                self._buffer_event(event)
+            else:
                 self._log.debug("bridge.event_dropped_send_failed", event_type=event_type)
-                return False
-            self._buffer_event(event)
-            await self._drain_if_rebound(failed_ws=ws)
+            try:
+                if isinstance(e, TimeoutError):
+                    await self._retire_timed_out_connection(ws)
+            finally:
+                # A replacement may have finished bind before this event was
+                # buffered. Even cancellation during close must not strand it.
+                if buffered:
+                    await self._drain_if_rebound(failed_ws=ws)
             return False
         return True
+
+    async def _retire_timed_out_connection(self, ws: ClientConnection) -> None:
+        """Wake the bridge's reconnect loop without retiring a newer binding."""
+        if self._ws is ws:
+            self._ws = None
+        try:
+            async with asyncio.timeout(self._send_timeout_seconds):
+                await ws.close()
+        except asyncio.CancelledError:
+            ws.transport.abort()
+            raise
+        except Exception as e:
+            self._log.warn("bridge.close_after_send_timeout_error", exc=e)
+            ws.transport.abort()
 
     def acknowledge(self, ack_id: str) -> bool:
         """Drop a pending critical event the control plane confirmed.
