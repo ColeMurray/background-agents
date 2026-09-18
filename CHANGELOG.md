@@ -4,9 +4,9 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## September 17, 2026
 
-**Repository-less Slack sessions.** Interactive Slack requests can explicitly start in an empty
-sandbox, while uncertain or inferred repository-less work is confirmed through a target picker that
-also exposes **No repository**. Session startup messages now use concise target-neutral copy.
+**Repository-less Slack sessions.** The Slack target classifier can start suitable work in an empty
+sandbox, while uncertain requests use a target picker that also exposes **No repository**. Session
+startup messages now use concise target-neutral copy.
 
 **Sandbox boot progress.** The sandbox runtime now connects to the control plane before it clones
 the repository, so a session shows each boot step as it runs: Cloning repository, Running setup.sh,

@@ -21,15 +21,7 @@ const unattributedPromptSchema = z.object({
 const classificationSchema = z.object({
   targetId: z.string().min(1).optional(),
   confidence: z.enum(["high", "medium", "low"]),
-  source: z.enum([
-    "routing_rule",
-    "channel_association",
-    "single_repository",
-    "empty_catalog",
-    "llm",
-  ]),
-  explicitNoRepositoryIntent: z.boolean(),
-  reportedExplicitNoRepositoryIntent: z.boolean(),
+  source: z.enum(["routing_rule", "channel_association", "llm"]),
 });
 
 const pendingRequestDataSchema = z.object({

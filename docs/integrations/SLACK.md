@@ -75,20 +75,9 @@ repository name when the request could apply to more than one repo:
 Open-Inspect chooses from repositories and environments available to this deployment, using the
 message, Slack channel context, and recent thread context. A configured
 [routing-rule keyword](#routing-rules) takes precedence, followed by a single channel association.
-If exactly one repository and no environments are available, Open-Inspect normally uses that
-repository directly unless the request may explicitly ask for an empty sandbox. Otherwise it
-classifies the target from the request. When the match is unclear, Open-Inspect asks you to choose a
+Otherwise the classifier chooses the best target for the request, including **No repository** when
+the task does not require a codebase. When the match is unclear, Open-Inspect asks you to choose a
 repository, environment, or **No repository** in the Slack thread.
-
-To start with an empty sandbox, say so explicitly:
-
-```text
-@Open-Inspect use no repository and research the authentication options
-```
-
-Open-Inspect starts directly without a repository only when that intent is explicit and classified
-with high confidence. If repository-less work merely appears suitable, it asks before starting.
-Configured routing rules and channel associations retain precedence.
 
 ### From a DM
 

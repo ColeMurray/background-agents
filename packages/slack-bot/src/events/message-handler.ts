@@ -289,8 +289,6 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         targetId: result.target ? targetId(result.target) : undefined,
         confidence: result.confidence,
         source: result.source,
-        explicitNoRepositoryIntent: result.explicitNoRepositoryIntent,
-        reportedExplicitNoRepositoryIntent: result.reportedExplicitNoRepositoryIntent,
       },
     });
     await postMessage(
@@ -320,8 +318,6 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     decision_path: "direct",
     classification_source: result.source,
     confidence: result.confidence,
-    explicit_no_repository_intent: result.explicitNoRepositoryIntent,
-    reported_explicit_no_repository_intent: result.reportedExplicitNoRepositoryIntent,
     target_kind: result.target.kind,
     target_id: targetId(result.target),
   });

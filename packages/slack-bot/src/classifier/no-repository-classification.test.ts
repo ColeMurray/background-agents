@@ -61,10 +61,6 @@ const TEST_ENV = {
   ANTHROPIC_API_KEY: "test-api-key",
   CLASSIFICATION_MODEL: "claude-haiku-4-5",
 } as Env;
-const DEFAULT_LLM_RESPONSE_FIELDS = {
-  alternatives: [],
-  explicitNoRepositoryIntent: false,
-};
 
 function llmResponse(input: Record<string, unknown>) {
   return {
@@ -73,16 +69,10 @@ function llmResponse(input: Record<string, unknown>) {
         type: "tool_use",
         id: "toolu_no_repo",
         name: "classify_target",
-        input: { ...DEFAULT_LLM_RESPONSE_FIELDS, ...input },
+        input,
       },
     ],
   };
-}
-
-function classifiedRepoFullName(result: {
-  target: { kind: string; repo?: { fullName: string } } | null;
-}): string | undefined {
-  return result.target?.kind === "repository" ? result.target.repo?.fullName : undefined;
 }
 
 describe("RepoClassifier no-repository policy", () => {
@@ -93,63 +83,12 @@ describe("RepoClassifier no-repository policy", () => {
     mockGetAvailableEnvironments.mockResolvedValue([]);
   });
 
-  it("bypasses the single-repo shortcut for explicit no-repository intent", async () => {
-    mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+  it("accepts a high-confidence inferred no-repository target", async () => {
     mockMessagesCreate.mockResolvedValue(
       llmResponse({
         targetId: "__no_repository__",
         confidence: "high",
-        reasoning: "The user explicitly requested an empty sandbox.",
-        alternatives: ["acme/prod"],
-        explicitNoRepositoryIntent: true,
-      })
-    );
-
-    const result = await new RepoClassifier(TEST_ENV).classify(
-      "Use no repository and research this topic"
-    );
-
-    expect(result.target).toEqual({ kind: "none" });
-    expect(result.explicitNoRepositoryIntent).toBe(true);
-    expect(result.needsClarification).toBe(false);
-    expect(mockMessagesCreate).toHaveBeenCalledOnce();
-  });
-
-  it("clarifies when explicit no-repository intent conflicts with a routing rule", async () => {
-    mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
-
-    const result = await new RepoClassifier(TEST_ENV).classify(
-      "Use no repository for the frontend task"
-    );
-
-    expect(classifiedRepoFullName(result)).toBe("acme/web");
-    expect(result.needsClarification).toBe(true);
-    expect(result.reasoning).toContain("conflicts with the explicit request");
-    expect(mockMessagesCreate).not.toHaveBeenCalled();
-  });
-
-  it("clarifies when explicit no-repository intent conflicts with a channel association", async () => {
-    mockGetAvailableRepos.mockResolvedValue([
-      { ...TEST_REPOS[0], channelAssociations: ["C123"] },
-      TEST_REPOS[1],
-    ]);
-
-    const result = await new RepoClassifier(TEST_ENV).classify("Run this without a repository", {
-      channelId: "C123",
-    });
-
-    expect(classifiedRepoFullName(result)).toBe("acme/prod");
-    expect(result.needsClarification).toBe(true);
-    expect(result.reasoning).toContain("conflicts with the explicit request");
-    expect(mockMessagesCreate).not.toHaveBeenCalled();
-  });
-
-  it("clarifies an inferred no-repository target even at high confidence", async () => {
-    mockMessagesCreate.mockResolvedValue(
-      llmResponse({
-        targetId: "__no_repository__",
-        confidence: "high",
-        reasoning: "This research appears independent of the codebase.",
+        reasoning: "This research does not require the codebase.",
         alternatives: ["acme/web"],
       })
     );
@@ -157,97 +96,57 @@ describe("RepoClassifier no-repository policy", () => {
     const result = await new RepoClassifier(TEST_ENV).classify("Research deployment patterns");
 
     expect(result.target).toEqual({ kind: "none" });
-    expect(result.explicitNoRepositoryIntent).toBe(false);
-    expect(result.needsClarification).toBe(true);
+    expect(result.needsClarification).toBe(false);
   });
 
-  it("does not trust model-reported explicit intent without explicit user language", async () => {
+  it("clarifies a low-confidence no-repository target", async () => {
     mockMessagesCreate.mockResolvedValue(
       llmResponse({
         targetId: "__no_repository__",
-        confidence: "high",
-        reasoning: "The model overstates the user's intent.",
-        explicitNoRepositoryIntent: true,
+        confidence: "low",
+        reasoning: "The target is unclear.",
+        alternatives: ["acme/web"],
       })
     );
 
     const result = await new RepoClassifier(TEST_ENV).classify("Research authentication options");
 
-    expect(result.explicitNoRepositoryIntent).toBe(false);
-    expect(result.reportedExplicitNoRepositoryIntent).toBe(true);
-    expect(result.needsClarification).toBe(true);
-  });
-
-  it("clarifies explicit no-repository intent below high confidence", async () => {
-    mockMessagesCreate.mockResolvedValue(
-      llmResponse({
-        targetId: "__no_repository__",
-        confidence: "medium",
-        reasoning: "The wording may request an empty sandbox.",
-        explicitNoRepositoryIntent: true,
-      })
-    );
-
-    const result = await new RepoClassifier(TEST_ENV).classify("Use an empty sandbox");
-
     expect(result.target).toEqual({ kind: "none" });
     expect(result.needsClarification).toBe(true);
   });
 
-  it.each([true, false])(
-    "clarifies a repository target that conflicts with explicit language (reported=%s)",
-    async (reportedIntent) => {
-      mockMessagesCreate.mockResolvedValue(
-        llmResponse({
-          targetId: "acme/prod",
-          confidence: "high",
-          reasoning: "The model selected a repository.",
-          explicitNoRepositoryIntent: reportedIntent,
-        })
-      );
-
-      const result = await new RepoClassifier(TEST_ENV).classify("Use no repository");
-
-      expect(classifiedRepoFullName(result)).toBe("acme/prod");
-      expect(result.needsClarification).toBe(true);
-    }
-  );
-
-  it("keeps the single-repo shortcut for negated no-repository intent", async () => {
+  it("uses the classifier when only one repository is available", async () => {
     mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+    mockMessagesCreate.mockResolvedValue(
+      llmResponse({
+        targetId: "__no_repository__",
+        confidence: "high",
+        reasoning: "The task does not require the available repository.",
+        alternatives: [],
+      })
+    );
 
-    const result = await new RepoClassifier(TEST_ENV).classify("Do not work without a repository");
+    const result = await new RepoClassifier(TEST_ENV).classify("Research authentication options");
 
-    expect(classifiedRepoFullName(result)).toBe("acme/prod");
-    expect(mockMessagesCreate).not.toHaveBeenCalled();
+    expect(result.target).toEqual({ kind: "none" });
+    expect(mockMessagesCreate).toHaveBeenCalledOnce();
   });
 
-  it("classifies explicit no-repository intent with an empty catalog", async () => {
+  it("uses the classifier when the target catalog is empty", async () => {
     mockGetAvailableRepos.mockResolvedValue([]);
     mockMessagesCreate.mockResolvedValue(
       llmResponse({
         targetId: "__no_repository__",
         confidence: "high",
-        reasoning: "The user explicitly requested no repository.",
-        explicitNoRepositoryIntent: true,
+        reasoning: "The task can run in an empty sandbox.",
+        alternatives: [],
       })
     );
 
-    const result = await new RepoClassifier(TEST_ENV).classify("Use no repository");
+    const result = await new RepoClassifier(TEST_ENV).classify("Research authentication options");
 
     expect(result.target).toEqual({ kind: "none" });
     expect(result.needsClarification).toBe(false);
     expect(mockMessagesCreate).toHaveBeenCalledOnce();
-  });
-
-  it("clarifies an empty catalog without calling the model", async () => {
-    mockGetAvailableRepos.mockResolvedValue([]);
-
-    const result = await new RepoClassifier(TEST_ENV).classify("Research authentication options");
-
-    expect(result.target).toBeNull();
-    expect(result.source).toBe("empty_catalog");
-    expect(result.needsClarification).toBe(true);
-    expect(mockMessagesCreate).not.toHaveBeenCalled();
   });
 });

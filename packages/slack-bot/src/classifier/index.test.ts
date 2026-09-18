@@ -124,7 +124,6 @@ describe("RepoClassifier", () => {
             confidence: "high",
             reasoning: "The message explicitly mentions prod.",
             alternatives: [],
-            explicitNoRepositoryIntent: false,
           },
         },
       ],
@@ -163,7 +162,6 @@ describe("RepoClassifier", () => {
             confidence: "certain",
             reasoning: "Totally sure",
             alternatives: [],
-            explicitNoRepositoryIntent: false,
           },
         },
       ],
@@ -211,7 +209,6 @@ describe("RepoClassifier", () => {
             confidence: "medium",
             reasoning: "The request could refer to either repo.",
             alternatives: ["acme/prod", "acme/web"],
-            explicitNoRepositoryIntent: false,
           },
         },
       ],
@@ -311,7 +308,6 @@ describe("RepoClassifier", () => {
               confidence: "high",
               reasoning: "Mentions frontend.",
               alternatives: [],
-              explicitNoRepositoryIntent: false,
             },
           },
         ],
@@ -337,7 +333,6 @@ describe("RepoClassifier", () => {
               confidence: "high",
               reasoning: "Mentions prod.",
               alternatives: [],
-              explicitNoRepositoryIntent: false,
             },
           },
         ],
@@ -456,7 +451,6 @@ describe("RepoClassifier", () => {
               confidence: "high",
               reasoning: "Mentions the web app.",
               alternatives: [],
-              explicitNoRepositoryIntent: false,
             },
           },
         ],
@@ -559,7 +553,6 @@ describe("RepoClassifier", () => {
               confidence: "high",
               reasoning: "Mentions the web app.",
               alternatives: [],
-              explicitNoRepositoryIntent: false,
             },
           },
         ],
@@ -574,8 +567,6 @@ describe("RepoClassifier", () => {
   });
 
   describe("LLM environment candidates", () => {
-    const DEFAULT_EXPLICIT_NO_REPOSITORY_INTENT = false;
-
     function llmResponse(input: Record<string, unknown>) {
       return {
         content: [
@@ -583,7 +574,7 @@ describe("RepoClassifier", () => {
             type: "tool_use",
             id: "toolu_llm",
             name: "classify_target",
-            input: { explicitNoRepositoryIntent: DEFAULT_EXPLICIT_NO_REPOSITORY_INTENT, ...input },
+            input,
           },
         ],
       };
@@ -666,15 +657,22 @@ describe("RepoClassifier", () => {
       expect(mockMessagesCreate).toHaveBeenCalledOnce();
     });
 
-    it("keeps the single-repo shortcut when no environments exist", async () => {
+    it("classifies when only one repository is available", async () => {
       mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "The task applies to the available repository.",
+          alternatives: [],
+        })
+      );
 
       const classifier = new RepoClassifier(TEST_ENV);
       const result = await classifier.classify("anything at all");
 
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
-      expect(result.reasoning).toBe("Only one repository is available.");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockMessagesCreate).toHaveBeenCalledOnce();
     });
 
     it("resolves mixed alternatives, deduplicated and excluding the match", async () => {
@@ -765,7 +763,6 @@ describe("RepoClassifier", () => {
           confidence: "high",
           reasoning: "Mentions prod.",
           alternatives: [],
-          explicitNoRepositoryIntent: false,
         })
       );
       vi.stubGlobal("fetch", fetchMock);
@@ -803,7 +800,6 @@ describe("RepoClassifier", () => {
         "confidence",
         "reasoning",
         "alternatives",
-        "explicitNoRepositoryIntent",
       ]);
       expect(jsonSchema.schema.properties.targetId.type).toEqual(["string", "null"]);
     });

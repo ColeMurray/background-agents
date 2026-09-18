@@ -29,7 +29,6 @@ import {
   type SlackSessionTarget,
 } from "../targets";
 import { createLogger } from "../logger";
-import { parseNoRepositoryIntent } from "./no-repository-intent";
 
 const log = createLogger("classifier");
 const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
@@ -64,13 +63,8 @@ const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
         items: { type: "string" },
         description: `Other reasonable repository fullNames, environment ids, or "${NO_REPOSITORY_TARGET_VALUE}", especially whenever clarification may be required.`,
       },
-      explicitNoRepositoryIntent: {
-        type: "boolean",
-        description:
-          "True only when the user explicitly asks to use no repository, avoid cloning, or start with an empty sandbox.",
-      },
     },
-    required: ["targetId", "confidence", "reasoning", "alternatives", "explicitNoRepositoryIntent"],
+    required: ["targetId", "confidence", "reasoning", "alternatives"],
     additionalProperties: false,
   },
 };
@@ -123,8 +117,7 @@ ${environmentSection}
 ## No Repository Target
 
 Use targetId "${NO_REPOSITORY_TARGET_VALUE}" when the task should run in an empty sandbox without cloning a repository.
-Set explicitNoRepositoryIntent to true only when the user directly requests no repository, asks not to clone anything, or asks for an empty sandbox.
-For work that merely appears repository-independent, explicitNoRepositoryIntent must be false. Include likely repository targets as alternatives when applicable.
+Choose this target when the task does not require any available repository or environment. Include likely repository targets as alternatives when applicable.
 ${contextSection}
 
 ## User's Message
@@ -140,7 +133,7 @@ Consider:
 3. File paths or code patterns mentioned
 4. Channel associations (some channels are associated with specific repos)
 5. Context from previous messages in the thread
-6. Explicit requests to use no repository, avoid cloning, or start with an empty sandbox
+6. Whether the task requires any repository at all
 
 ## Response Format
 
@@ -148,8 +141,7 @@ Respond with a JSON object with these fields:
 - targetId: a repository "owner/name", an environment id ("env_…"), "${NO_REPOSITORY_TARGET_VALUE}", or null if unclear
 - confidence: "high" | "medium" | "low"
 - reasoning: brief explanation
-- alternatives: other reasonable targets, especially whenever clarification may be required
-- explicitNoRepositoryIntent: true only for a direct user request to work without a repository`;
+- alternatives: other reasonable targets, especially whenever clarification may be required`;
 }
 
 const llmResponseSchema = z.object({
@@ -172,7 +164,6 @@ const llmResponseSchema = z.object({
         .pipe(z.string().min(1))
     )
     .transform((values) => [...new Set(values)]),
-  explicitNoRepositoryIntent: z.boolean(),
 });
 
 type LLMResponse = z.infer<typeof llmResponseSchema>;
@@ -196,20 +187,6 @@ function extractStructuredResponse(response: Anthropic.Messages.Message): LLMRes
   }
 
   return normalizeModelResponse(toolUseBlock.input);
-}
-
-function clarifyExplicitNoRepositoryConflict(
-  result: ClassificationResult,
-  explicitNoRepositoryLanguage: boolean
-): ClassificationResult {
-  if (!explicitNoRepositoryLanguage || !result.target || result.target.kind === "none")
-    return result;
-
-  return {
-    ...result,
-    reasoning: `${result.reasoning} This conflicts with the explicit request to use no repository.`,
-    needsClarification: true,
-  };
 }
 
 /**
@@ -308,8 +285,6 @@ export class RepoClassifier {
         reasoning: `Matched routing rule "${escapeMrkdwnText(keyword)}" → ${escapeMrkdwnText(targetLabel(target))}`,
         needsClarification: false,
         source: "routing_rule",
-        explicitNoRepositoryIntent: false,
-        reportedExplicitNoRepositoryIntent: false,
       };
     }
 
@@ -320,8 +295,6 @@ export class RepoClassifier {
       alternatives: resolved.map((t) => t.target),
       needsClarification: true,
       source: "routing_rule",
-      explicitNoRepositoryIntent: false,
-      reportedExplicitNoRepositoryIntent: false,
     };
   }
 
@@ -357,8 +330,6 @@ export class RepoClassifier {
         reasoning: `Channel is associated with ${target.kind} ${escapeMrkdwnText(targetLabel(target))}`,
         needsClarification: false,
         source: "channel_association",
-        explicitNoRepositoryIntent: false,
-        reportedExplicitNoRepositoryIntent: false,
       };
     }
 
@@ -370,8 +341,6 @@ export class RepoClassifier {
         alternatives: targets,
         needsClarification: true,
         source: "channel_association",
-        explicitNoRepositoryIntent: false,
-        reportedExplicitNoRepositoryIntent: false,
       };
     }
 
@@ -390,17 +359,13 @@ export class RepoClassifier {
     // to []: an environments-fetch problem degrades the catalog — and with it
     // classification — to repository-only.
     const catalog = await loadTargetCatalog(this.env, traceId);
-    const noRepositoryIntent = parseNoRepositoryIntent(
-      [message, ...(context?.previousMessages ?? [])].join("\n")
-    );
-    const explicitNoRepositoryLanguage = noRepositoryIntent === "explicit";
 
     // Deterministic routing rules (explicit keyword → repo or environment) take
     // precedence over everything below, but never override an active thread
     // (handled before classify is called).
     const routed = await this.classifyByRoutingRules(message, catalog, traceId);
     if (routed) {
-      return clarifyExplicitNoRepositoryConflict(routed, explicitNoRepositoryLanguage);
+      return routed;
     }
 
     // Channel associations are the second deterministic stage.
@@ -408,42 +373,7 @@ export class RepoClassifier {
       ? this.classifyByChannelAssociations(context.channelId, catalog, traceId)
       : null;
     if (channelRouted) {
-      return clarifyExplicitNoRepositoryConflict(channelRouted, explicitNoRepositoryLanguage);
-    }
-
-    if (
-      catalog.repos.length === 0 &&
-      catalog.environments.length === 0 &&
-      !explicitNoRepositoryLanguage
-    ) {
-      return {
-        target: null,
-        confidence: "low",
-        reasoning: "No repositories or environments are available; asking which target to use.",
-        needsClarification: true,
-        source: "empty_catalog",
-        explicitNoRepositoryIntent: false,
-        reportedExplicitNoRepositoryIntent: false,
-      };
-    }
-
-    // Preserve the zero-cost single-repository path unless the message or its
-    // thread context may explicitly ask for an empty sandbox. The model makes
-    // the final intent decision when that narrow exception applies.
-    if (
-      catalog.repos.length === 1 &&
-      catalog.environments.length === 0 &&
-      !explicitNoRepositoryLanguage
-    ) {
-      return {
-        target: { kind: "repository", repo: catalog.repos[0] },
-        confidence: "high",
-        reasoning: "Only one repository is available.",
-        needsClarification: false,
-        source: "single_repository",
-        explicitNoRepositoryIntent: false,
-        reportedExplicitNoRepositoryIntent: false,
-      };
+      return channelRouted;
     }
 
     // Use LLM for classification
@@ -484,18 +414,6 @@ export class RepoClassifier {
         }
       }
 
-      const reportedExplicitNoRepositoryIntent = llmResult.explicitNoRepositoryIntent;
-      const explicitNoRepositoryIntent =
-        matchedTarget?.kind === "none" &&
-        reportedExplicitNoRepositoryIntent &&
-        explicitNoRepositoryLanguage;
-      const inconsistentNoRepositoryIntent =
-        matchedTarget?.kind !== "none" &&
-        (reportedExplicitNoRepositoryIntent || explicitNoRepositoryLanguage);
-      const noRepositoryNeedsClarification =
-        matchedTarget?.kind === "none" &&
-        (llmResult.confidence !== "high" || !explicitNoRepositoryIntent);
-
       return {
         target: matchedTarget,
         confidence: llmResult.confidence,
@@ -506,12 +424,8 @@ export class RepoClassifier {
         needsClarification:
           !matchedTarget ||
           llmResult.confidence === "low" ||
-          inconsistentNoRepositoryIntent ||
-          noRepositoryNeedsClarification ||
           (llmResult.confidence === "medium" && alternatives.length > 0),
         source: "llm",
-        explicitNoRepositoryIntent,
-        reportedExplicitNoRepositoryIntent,
       };
     } catch (e) {
       log.error("classifier.classify", {
@@ -532,8 +446,6 @@ export class RepoClassifier {
         alternatives: undefined,
         needsClarification: true,
         source: "llm",
-        explicitNoRepositoryIntent: false,
-        reportedExplicitNoRepositoryIntent: false,
       };
     }
   }

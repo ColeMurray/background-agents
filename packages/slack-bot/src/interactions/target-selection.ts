@@ -154,8 +154,6 @@ export async function handleTargetSelection(
     classification_source: classification?.source,
     classifier_target_id: classification?.targetId,
     classifier_confidence: classification?.confidence,
-    explicit_no_repository_intent: classification?.explicitNoRepositoryIntent,
-    reported_explicit_no_repository_intent: classification?.reportedExplicitNoRepositoryIntent,
     selected_by: selectedBy,
     selection_source: selectionSource,
     target_kind: target.kind,

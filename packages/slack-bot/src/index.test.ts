@@ -4,14 +4,25 @@ import { makeExecutionContext as makeCtx } from "./test-helpers";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import type * as SlackModule from "@open-inspect/shared/slack";
 
-const { mockVerifySlackSignature, mockPublishView, mockOpenView, mockGetUserInfo } = vi.hoisted(
-  () => ({
-    mockVerifySlackSignature: vi.fn(),
-    mockPublishView: vi.fn(),
-    mockOpenView: vi.fn(),
-    mockGetUserInfo: vi.fn(),
-  })
-);
+const {
+  mockVerifySlackSignature,
+  mockPublishView,
+  mockOpenView,
+  mockGetUserInfo,
+  mockMessagesCreate,
+} = vi.hoisted(() => ({
+  mockVerifySlackSignature: vi.fn(),
+  mockPublishView: vi.fn(),
+  mockOpenView: vi.fn(),
+  mockGetUserInfo: vi.fn(),
+  mockMessagesCreate: vi.fn(),
+}));
+
+vi.mock("@anthropic-ai/sdk", () => ({
+  default: vi.fn().mockImplementation(function () {
+    return { messages: { create: mockMessagesCreate } };
+  }),
+}));
 
 vi.mock("@open-inspect/shared/slack", async () => {
   const actual = await vi.importActual<typeof SlackModule>("@open-inspect/shared/slack");
@@ -400,6 +411,21 @@ describe("POST /events", () => {
     clearLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
+    mockMessagesCreate.mockResolvedValue({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_test",
+          name: "classify_target",
+          input: {
+            targetId: "acme/app",
+            confidence: "high",
+            reasoning: "The request applies to the available repository.",
+            alternatives: [],
+          },
+        },
+      ],
+    });
   });
 
   it("publishes App Home when the home tab is opened", async () => {
@@ -683,8 +709,6 @@ describe("POST /events", () => {
         classification: {
           confidence: "medium",
           source: "routing_rule",
-          explicitNoRepositoryIntent: false,
-          reportedExplicitNoRepositoryIntent: false,
         },
       })
     );

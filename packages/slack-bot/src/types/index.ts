@@ -74,9 +74,7 @@ export interface ClassificationResult {
   reasoning: string;
   alternatives?: SlackSessionTarget[];
   needsClarification: boolean;
-  source: "routing_rule" | "channel_association" | "single_repository" | "empty_catalog" | "llm";
-  explicitNoRepositoryIntent: boolean;
-  reportedExplicitNoRepositoryIntent: boolean;
+  source: "routing_rule" | "channel_association" | "llm";
 }
 
 export type { SlackSessionTarget } from "../targets";
