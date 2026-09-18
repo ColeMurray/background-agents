@@ -293,16 +293,10 @@ The session header names the phase while it runs: "Cloning repository", "Running
 repository, as in "Running setup.sh for acme/api". Between phases, its status popover can say what
 just finished, but it does not display a list of completed phases or their durations. When a script
 fails, the header's status popover says which phase failed and names its repository when available.
-It can show a redacted output tail only for a fatal `start.sh` failure in the session's first
-repository. Clone and harness failures carry no output tail. A `setup.sh` failure, and a `start.sh`
-failure in a later repository, are tolerated instead: the boot continues, the phase completes
-carrying a warning, and no output is attached.
-
-Before a tail leaves the sandbox the runtime redacts environment values whose variable names look
-like credentials — names containing `TOKEN`, `SECRET`, `KEY`, `PASS`, `CREDENTIAL`, `PRIVATE`,
-`AUTH`, `COOKIE` or `DSN`, holding at least eight characters. Treat that as a best-effort filter
-rather than a guarantee: a secret stored under a name like `DATABASE_URL` is not recognised, so
-hooks should not print secrets in the first place.
+Failure reports retain phase, repository, and error or warning metadata, but hook stdout and stderr
+are discarded rather than collected or shown. A fatal `start.sh` failure in the session's first
+repository ends the boot. A `setup.sh` failure, and a `start.sh` failure in a later repository, are
+tolerated instead: the boot continues and the phase completes carrying a warning.
 
 #### How long a boot may take
 

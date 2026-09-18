@@ -22,7 +22,7 @@ BOOT_PHASE_NAMES: Final[frozenset[str]] = frozenset(
     {"starting", "sync", "setup", "start", "skills", "harness"}
 )
 BOOT_PHASE_STATUSES: Final[frozenset[str]] = frozenset({"started", "completed", "failed"})
-_PHASE_FIELDS: Final = ("warning", "repoOwner", "repoName", "elapsedMs", "outputTail", "detail")
+_PHASE_FIELDS: Final = ("warning", "repoOwner", "repoName", "elapsedMs", "detail")
 _WARNING_FIELDS: Final = ("repoOwner", "repoName")
 
 # What the bridge reports the moment its socket opens, before the supervisor

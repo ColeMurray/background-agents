@@ -115,22 +115,22 @@ describe("evaluateImageBuildForSpawn", () => {
     }
   });
 
-  it("applies the session harness's own floor without raising everyone else's", async () => {
-    // The Claude harness arrived after the global floor: its sessions skip
-    // images from before it, while OpenCode sessions keep using them.
+  it("applies the global floor when it supersedes a harness's original floor", async () => {
     const claudeFloor = minCompatibleRuntimeVersionFor("claude");
-    expect(claudeFloor).toBeGreaterThan(MIN_COMPATIBLE_RUNTIME_VERSION);
-    const image = await readyImage({ runtime_version: `v${claudeFloor - 1}-before-claude` });
+    expect(claudeFloor).toBe(MIN_COMPATIBLE_RUNTIME_VERSION);
+    const image = await readyImage({ runtime_version: `v${claudeFloor - 1}-retired` });
 
     expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, "claude")).toEqual({
       outcome: "miss",
       reason: "runtime_below_floor",
       imageBuildId: "imgb-1",
     });
-    expect(
-      (await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, "opencode")).outcome
-    ).toBe("selected");
-    const current = await readyImage({ runtime_version: `v${claudeFloor}-claude` });
+    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, "opencode")).toEqual({
+      outcome: "miss",
+      reason: "runtime_below_floor",
+      imageBuildId: "imgb-1",
+    });
+    const current = await readyImage({ runtime_version: `v${claudeFloor}-current` });
     expect(
       (await evaluateImageBuildForSpawn(current, SESSION_REPOSITORIES, "claude")).outcome
     ).toBe("selected");

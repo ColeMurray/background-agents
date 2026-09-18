@@ -99,6 +99,7 @@ interface SandboxCircuitBreakerInfo {
   created_at: number;
   last_heartbeat: number | null;
   modal_object_id: string | null;
+  runtime_version: string | null;
   snapshot_image_id: string | null;
   snapshot_runtime_version: string | null;
   spawn_failure_count: number | null;
@@ -507,6 +508,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       status: sandboxState?.status ?? DEFAULT_SANDBOX_STATUS,
       createdAt: sandboxState?.created_at || 0,
       providerObjectId: sandboxState?.modal_object_id || null,
+      runtimeVersion: sandboxState?.runtime_version || null,
       snapshotImageId: sandboxState?.snapshot_image_id || null,
       snapshotRuntimeVersion: sandboxState?.snapshot_runtime_version || null,
       hasActiveWebSocket: this.wsManager.getSandboxWebSocket() !== null,
@@ -557,9 +559,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       case "spawn":
         if (spawnDecision.reason) {
           this.log.info("Spawn decision: spawn", {
-            event: "sandbox.snapshot_rejected",
+            event: "sandbox.runtime_rejected",
             reason: spawnDecision.reason,
+            runtime_version: spawnState.runtimeVersion,
             snapshot_image_id: spawnState.snapshotImageId,
+            snapshot_runtime_version: spawnState.snapshotRuntimeVersion,
           });
         }
         await this.doSpawn();

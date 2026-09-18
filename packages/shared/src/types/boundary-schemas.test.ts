@@ -387,6 +387,36 @@ describe("boundary schemas", () => {
       ).toBe(true);
     });
 
+    it("strips legacy output tails from raw event responses", () => {
+      const parsed = listEventsResponseSchema.parse({
+        events: [
+          {
+            id: "event-1",
+            type: "boot_progress",
+            data: {
+              type: "boot_progress",
+              bootSeq: 3,
+              phase: "setup",
+              status: "failed",
+              detail: "setup hook failed",
+              outputTail: ["legacy secret output"],
+            },
+            messageId: null,
+            createdAt: 123,
+          },
+        ],
+        hasMore: false,
+      });
+
+      expect(parsed.events[0].data).toEqual({
+        type: "boot_progress",
+        bootSeq: 3,
+        phase: "setup",
+        status: "failed",
+        detail: "setup hook failed",
+      });
+    });
+
     it("rejects malformed or partial completion responses", () => {
       expect(
         listEventsResponseSchema.safeParse({

@@ -26,6 +26,7 @@ export interface SandboxCircuitBreakerState {
   /** Null until this generation's bridge first connected (cleared per generation). */
   last_heartbeat: number | null;
   modal_object_id: string | null;
+  runtime_version: string | null;
   snapshot_image_id: string | null;
   snapshot_runtime_version: string | null;
   spawn_failure_count: number | null;
@@ -93,7 +94,7 @@ export class SandboxRepository {
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
     const result = this.sql.exec(
-      `SELECT status, created_at, last_heartbeat, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
+      `SELECT status, created_at, last_heartbeat, modal_object_id, runtime_version, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
     const rows = this.rows<Omit<SandboxCircuitBreakerState, "status"> & { status: string }>(result);
     const row = rows[0];

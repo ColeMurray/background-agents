@@ -11,9 +11,9 @@ startup messages now use concise target-neutral copy.
 **Sandbox boot progress.** The sandbox runtime now connects to the control plane before it clones
 the repository, so a session shows each boot step as it runs: Cloning repository, Running setup.sh,
 Starting services, Installing skills, Starting agent, with the repository named in multi-repository
-sessions. A script whose failure ends the boot shows its last lines of output in the session header.
-Long setup scripts no longer trip the four-minute connect timeout; a boot may take up to
-`SANDBOX_BOOT_TIMEOUT_MS` (30 minutes by default). See
+sessions. Failure reports retain phase, repository, and error metadata, while hook stdout and stderr
+are discarded rather than collected or shown. Long setup scripts no longer trip the four-minute
+connect timeout; a boot may take up to `SANDBOX_BOOT_TIMEOUT_MS` (30 minutes by default). See
 [How Open-Inspect Works](docs/HOW_IT_WORKS.md#fresh-start-no-snapshot).
 
 ## September 14, 2026

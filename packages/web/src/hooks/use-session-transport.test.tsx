@@ -169,6 +169,41 @@ describe("useSessionTransport", () => {
     expect(onMessage).toHaveBeenCalledWith({ type: "pong", timestamp: 5 });
   });
 
+  it("strips a legacy output tail before forwarding a live boot phase", async () => {
+    const { socket } = await openSocket();
+
+    act(() => {
+      socket.receiveRaw(
+        JSON.stringify({
+          type: "sandbox_event",
+          event: {
+            type: "boot_progress",
+            bootSeq: 3,
+            phase: "setup",
+            status: "failed",
+            detail: "setup hook failed",
+            outputTail: ["legacy secret output"],
+            sandboxId: "sandbox-1",
+            timestamp: 123,
+          },
+        })
+      );
+    });
+
+    expect(onMessage).toHaveBeenCalledWith({
+      type: "sandbox_event",
+      event: {
+        type: "boot_progress",
+        bootSeq: 3,
+        phase: "setup",
+        status: "failed",
+        detail: "setup hook failed",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+      },
+    });
+  });
+
   it.each([JSON.stringify({ type: "not_a_message" }), "not json"])(
     "reconnects after an invalid server message: %s",
     async (payload) => {

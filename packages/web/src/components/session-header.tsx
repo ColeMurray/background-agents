@@ -376,7 +376,7 @@ function SandboxStatusIcon({
   /**
    * The runtime's last boot phase. While the sandbox boots it names the step
    * in progress instead of a generic "Starting..."; after a failure it names
-   * the step that broke and carries the failing script's output tail.
+   * the step that broke.
    */
   bootPhase?: SandboxBootPhase | null;
   /** Members of the session; phases name their repository only when there are several. */
@@ -394,7 +394,6 @@ function SandboxStatusIcon({
     ? { ...SANDBOX_STATUS_PRESENTATION[status], ...booting }
     : SANDBOX_STATUS_PRESENTATION[status];
   const reason = error ?? failedPhase?.detail;
-  const outputTail = failedPhase?.outputTail;
   const safeDashboardUrl = getSafeExternalUrl(dashboardUrl);
 
   return (
@@ -432,16 +431,6 @@ function SandboxStatusIcon({
             <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-destructive">
               {reason}
             </p>
-          )}
-          {outputTail && outputTail.length > 0 && (
-            <pre
-              role="region"
-              aria-label="Boot output"
-              tabIndex={0}
-              className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-            >
-              {outputTail.join("\n")}
-            </pre>
           )}
         </div>
         {safeDashboardUrl && (

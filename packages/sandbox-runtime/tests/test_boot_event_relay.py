@@ -149,7 +149,7 @@ class TestEventMapping:
             "timestamp": 1789420751.4,
         }
 
-    def test_failed_phase_carries_tail_and_detail(self):
+    def test_failed_phase_carries_detail_but_strips_legacy_output_tail(self):
         event = BootEventRelay.to_event(
             {
                 "seq": 9,
@@ -162,8 +162,8 @@ class TestEventMapping:
             }
         )
 
-        assert event["outputTail"] == ["boom"]
         assert event["detail"] == "start hook failed for acme/api"
+        assert "outputTail" not in event
         assert "warning" not in event
 
     def test_warning_line_becomes_warning_event(self):

@@ -442,7 +442,7 @@ describe("SessionHeader", () => {
     expect(screen.getByRole("button", { name: "Sandbox status: Ready" })).toBeInTheDocument();
   });
 
-  it("shows the failed phase and the script's output tail inside the failed popover", async () => {
+  it("shows the failed phase metadata without a boot output region", async () => {
     render(
       <SessionHeader
         sessionState={createSessionState({ sandboxStatus: "failed" })}
@@ -452,7 +452,6 @@ describe("SessionHeader", () => {
           status: "failed",
           repoOwner: "acme",
           repoName: "web",
-          outputTail: ["> web@1.0.0 dev", "npm ERR! missing script: dev"],
           detail: "start hook failed for acme/web",
         }}
         fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Failed boot" }}
@@ -475,10 +474,7 @@ describe("SessionHeader", () => {
 
     expect(await screen.findByText("Failed while starting services.")).toBeInTheDocument();
     expect(screen.getByText("start hook failed for acme/web")).toBeInTheDocument();
-    const output = screen.getByRole("region", { name: "Boot output" });
-    expect(output).toHaveTextContent("> web@1.0.0 dev npm ERR! missing script: dev");
-    // The block scrolls, so keyboard users must be able to reach it.
-    expect(output).toHaveAttribute("tabindex", "0");
+    expect(screen.queryByRole("region", { name: "Boot output" })).not.toBeInTheDocument();
   });
 
   it("does not attribute a failure to a phase that had not failed", async () => {

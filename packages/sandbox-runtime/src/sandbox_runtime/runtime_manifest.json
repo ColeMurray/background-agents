@@ -1,9 +1,9 @@
 {
-  "runtimeVersion": "v68-early-bridge-connect",
-  "generation": 68,
-  "minimumCompatibleGeneration": 62,
-  "minimumRebuildGeneration": 67,
+  "runtimeVersion": "v69-discard-hook-output",
+  "generation": 69,
+  "minimumCompatibleGeneration": 69,
+  "minimumRebuildGeneration": 69,
   "harnessMinimumGeneration": {
-    "claude": 64
+    "claude": 69
   }
 }

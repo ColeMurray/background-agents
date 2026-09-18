@@ -52,37 +52,17 @@ export type BootPhaseStatus = z.infer<typeof bootPhaseStatusSchema>;
 
 /**
  * The byte budget for a `sandbox-error` report as the public route accepts it.
- * One contract for the sender, the route cap and the tail bounds below: a
- * report valid at the schema must fit through the route.
+ * A report valid at the schema must fit through the route.
  */
 export const SANDBOX_ERROR_BODY_MAX_BYTES = 32 * 1024;
-/** Most lines a boot failure's output tail may carry. */
-export const SANDBOX_OUTPUT_TAIL_MAX_LINES = 60;
-/** Most characters an output tail may carry across all its lines. */
-export const SANDBOX_OUTPUT_TAIL_MAX_CHARS = 8 * 1024;
-
-/**
- * The last lines of a failing boot script, bounded and redacted by the
- * runtime before they leave the sandbox and bounded again here. Sized so a
- * full tail, JSON-escaped, fits inside SANDBOX_ERROR_BODY_MAX_BYTES with
- * room for the rest of the report.
- */
-export const sandboxOutputTailSchema = z
-  .array(z.string().max(1024))
-  .max(SANDBOX_OUTPUT_TAIL_MAX_LINES)
-  .refine(
-    (lines) =>
-      lines.reduce((total, line) => total + line.length, 0) <= SANDBOX_OUTPUT_TAIL_MAX_CHARS,
-    { message: `output tail exceeds ${SANDBOX_OUTPUT_TAIL_MAX_CHARS} characters` }
-  );
 
 /**
  * The latest `boot_progress` report of a booting sandbox, as the control
  * plane stores it and the subscribe snapshot carries it: the same fields
  * the event has, minus the envelope. Present while the sandbox boots and
- * after a boot failed (naming the step that broke, with the script's
- * output tail); cleared at ready. `sandboxId` identifies the boot that
- * reported, the same identity every `boot_progress` event carries.
+ * after a boot failed, naming the step that broke; cleared at ready.
+ * `sandboxId` identifies the boot that reported, the same identity every
+ * `boot_progress` event carries.
  */
 export const sandboxBootPhaseSchema = z.object({
   phase: bootPhaseNameSchema,
@@ -93,7 +73,6 @@ export const sandboxBootPhaseSchema = z.object({
   repoOwner: z.string().optional(),
   repoName: z.string().optional(),
   elapsedMs: z.number().optional(),
-  outputTail: sandboxOutputTailSchema.optional(),
   detail: z.string().optional(),
 });
 export type SandboxBootPhase = z.infer<typeof sandboxBootPhaseSchema>;
@@ -248,8 +227,6 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     repoOwner: z.string().optional(),
     repoName: z.string().optional(),
     elapsedMs: z.number().optional(),
-    /** Last lines of the failing script, bounded and redacted by the runtime. */
-    outputTail: sandboxOutputTailSchema.optional(),
     detail: z.string().optional(),
     sandboxId: z.string().optional(),
     timestamp: z.number(),
@@ -332,10 +309,12 @@ export const eventTypeSchema = z.enum(
   sandboxEventSchema.options.map((option) => option.shape.type.value) as [EventType, ...EventType[]]
 );
 
+const eventDataSchema = recordSchema.transform(({ outputTail: _outputTail, ...data }) => data);
+
 export const eventResponseSchema = z.object({
   id: z.string(),
   type: eventTypeSchema,
-  data: recordSchema,
+  data: eventDataSchema,
   messageId: z.string().nullable(),
   createdAt: z.number(),
 });

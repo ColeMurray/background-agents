@@ -1,13 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  SANDBOX_ERROR_BODY_MAX_BYTES,
-  SANDBOX_OUTPUT_TAIL_MAX_CHARS,
-  SANDBOX_OUTPUT_TAIL_MAX_LINES,
-  sandboxBootPhaseSchema,
-  sandboxEventSchema,
-  sandboxOutputTailSchema,
-  toSandboxBootPhase,
-} from "./sandbox-events";
+import { sandboxBootPhaseSchema, sandboxEventSchema, toSandboxBootPhase } from "./sandbox-events";
 
 describe("boot_progress sandbox event", () => {
   it("parses a phase report with its repository and sequence", () => {
@@ -28,7 +20,7 @@ describe("boot_progress sandbox event", () => {
     }
   });
 
-  it("parses a failed phase carrying the script's output tail", () => {
+  it("strips a legacy output tail while parsing a failed phase", () => {
     const parsed = sandboxEventSchema.parse({
       type: "boot_progress",
       bootSeq: 7,
@@ -38,7 +30,14 @@ describe("boot_progress sandbox event", () => {
       outputTail: ["npm ERR! missing script: start"],
       timestamp: 1_789_420_751.4,
     });
-    expect(parsed.type).toBe("boot_progress");
+    expect(parsed).toEqual({
+      type: "boot_progress",
+      bootSeq: 7,
+      phase: "start",
+      status: "failed",
+      elapsedMs: 1200,
+      timestamp: 1_789_420_751.4,
+    });
   });
 
   it("rejects an unknown phase", () => {
@@ -54,39 +53,24 @@ describe("boot_progress sandbox event", () => {
   });
 });
 
-describe("sandboxOutputTailSchema", () => {
-  it("accepts a full tail at both bounds", () => {
-    const perLine = Math.floor(SANDBOX_OUTPUT_TAIL_MAX_CHARS / SANDBOX_OUTPUT_TAIL_MAX_LINES);
-    const lines = Array.from({ length: SANDBOX_OUTPUT_TAIL_MAX_LINES }, () => "x".repeat(perLine));
-    expect(sandboxOutputTailSchema.safeParse(lines).success).toBe(true);
-  });
-
-  it("rejects one line too many", () => {
-    const lines = Array.from({ length: SANDBOX_OUTPUT_TAIL_MAX_LINES + 1 }, () => "x");
-    expect(sandboxOutputTailSchema.safeParse(lines).success).toBe(false);
-  });
-
-  it("rejects a tail whose lines together exceed the character budget", () => {
-    const lines = Array.from({ length: 9 }, () => "x".repeat(1024));
-    expect(sandboxOutputTailSchema.safeParse(lines).success).toBe(false);
-  });
-
-  it("fits a full tail inside the sandbox-error body budget once JSON-escaped", () => {
-    // Every character a quote: the worst legal escape doubles the tail.
-    const perLine = Math.floor(SANDBOX_OUTPUT_TAIL_MAX_CHARS / SANDBOX_OUTPUT_TAIL_MAX_LINES);
-    const lines = Array.from({ length: SANDBOX_OUTPUT_TAIL_MAX_LINES }, () => '"'.repeat(perLine));
-    const body = JSON.stringify({
-      error: "e".repeat(1000),
-      fatal: true,
-      phase: "setup",
-      bootSeq: 3,
-      repoOwner: "o".repeat(39),
-      repoName: "n".repeat(100),
-      outputTail: lines,
+describe("sandboxBootPhaseSchema", () => {
+  it("strips an output tail from a legacy persisted phase", () => {
+    expect(
+      sandboxBootPhaseSchema.parse({
+        phase: "start",
+        status: "failed",
+        bootSeq: 6,
+        sandboxId: "sb-1",
+        detail: "start hook failed for acme/api",
+        outputTail: ["legacy secret output"],
+      })
+    ).toEqual({
+      phase: "start",
+      status: "failed",
+      bootSeq: 6,
+      sandboxId: "sb-1",
+      detail: "start hook failed for acme/api",
     });
-    expect(new TextEncoder().encode(body).byteLength).toBeLessThanOrEqual(
-      SANDBOX_ERROR_BODY_MAX_BYTES
-    );
   });
 });
 
@@ -99,7 +83,6 @@ describe("toSandboxBootPhase", () => {
       status: "failed",
       repoOwner: "acme",
       repoName: "api",
-      outputTail: ["npm ERR! missing script: dev"],
       detail: "start hook failed for acme/api",
       sandboxId: "sb-1",
       timestamp: 9,
@@ -112,7 +95,6 @@ describe("toSandboxBootPhase", () => {
       status: "failed",
       repoOwner: "acme",
       repoName: "api",
-      outputTail: ["npm ERR! missing script: dev"],
       detail: "start hook failed for acme/api",
       sandboxId: "sb-1",
     });

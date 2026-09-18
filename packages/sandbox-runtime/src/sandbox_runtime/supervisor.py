@@ -102,9 +102,9 @@ class SandboxSupervisor:
     ) -> None:
         """Report a fatal runtime failure to the control plane.
 
-        A ``BootPhaseError`` adds the phase, repository and output tail; the
-        HTTP report is the reliable carrier of those, since the bridge's copy
-        of the ``failed`` phase line may be lost when the socket closes first.
+        A ``BootPhaseError`` adds the phase and repository; the HTTP report is
+        the reliable carrier of those, since the bridge's copy of the
+        ``failed`` phase line may be lost when the socket closes first.
         """
         self.log.error(
             "supervisor.fatal",
