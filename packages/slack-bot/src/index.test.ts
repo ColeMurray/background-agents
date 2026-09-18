@@ -859,6 +859,44 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  it("applies combined inline overrides to a new direct-message session", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv();
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "message",
+        text: "!model anthropic/claude-haiku-4-5 !reasoning high fix the auth tests",
+        user: "U123",
+        channel: "D123",
+        ts: "444.555",
+        channel_type: "im",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
+    expect(promptBodies).toHaveLength(1);
+    expect(promptBodies[0]).toMatchObject({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+      callbackContext: {
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+      },
+    });
+    expect(String(promptBodies[0].content)).toContain("fix the auth tests");
+    expect(String(promptBodies[0].content)).not.toContain("!model");
+    expect(String(promptBodies[0].content)).not.toContain("!reasoning");
+
+    slackFetch.mockRestore();
+  });
+
   it("sets Starting status for follow-up prompts in existing threads", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order, {
