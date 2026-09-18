@@ -434,6 +434,20 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(manager.isActiveSandboxSocket(ws)).toBe(false);
     });
 
+    it("requires the sandbox id to match even when the socket identity does", () => {
+      const { manager, mockRepo } = createManager();
+      const row = createSandboxRow("sb-current");
+      mockRepo.setSandbox(row);
+      const ws = createFakeWebSocket();
+
+      manager.acceptAndSetSandboxSocket(ws, "sb-stale");
+
+      expect(row.active_socket_id).toMatch(/^sbws-/);
+      expect(manager.isActiveSandboxSocket(ws)).toBe(false);
+      expect(manager.getSandboxSocket()).toBeNull();
+      expect(ws.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
+    });
+
     it("is false for every socket once detach has revoked authority", () => {
       const { manager, sockets, mockRepo } = createManager();
       const row = createSandboxRow("sb-1");
