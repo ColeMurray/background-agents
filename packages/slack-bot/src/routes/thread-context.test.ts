@@ -172,6 +172,21 @@ describe("POST /internal/thread-context", () => {
               url_private: "https://files.slack.com/private/details.pdf",
             },
           ],
+          attachments: [
+            {
+              is_share: true,
+              author_name: "Ada",
+              text: "forwarded diagram context",
+              files: [
+                {
+                  id: "F3",
+                  name: "forwarded.png",
+                  mimetype: "image/png",
+                  url_private: "https://files.slack.com/private/forwarded.png",
+                },
+              ],
+            },
+          ],
         },
       ],
     });
@@ -183,12 +198,16 @@ describe("POST /internal/thread-context", () => {
     expect(record).toEqual(
       expect.objectContaining({
         ts: "1.000001",
-        text: expect.stringContaining("diagram.png"),
+        text: expect.stringContaining("forwarded diagram context"),
+        files: expect.arrayContaining([
+          expect.stringContaining("diagram.png"),
+          expect.stringContaining("details.pdf"),
+          expect.stringContaining("forwarded.png"),
+        ]),
       })
     );
-    expect(record!.text).toContain("not forwarded by Slack Message automations");
-    expect(record!.text).toContain("details.pdf");
-    expect(record!.text).toContain("unsupported or unavailable file");
+    expect(record!.files!.join("\n")).toContain("not forwarded by Slack Message automations");
+    expect(record!.files!.join("\n")).toContain("unsupported or unavailable file");
     expect(threadContext).not.toContain("https://files.slack.com");
   });
 
@@ -199,6 +218,17 @@ describe("POST /internal/thread-context", () => {
         ts: `${i + 2}.000000`,
         text: i === 39 ? "z".repeat(2000) : `filler ${i}`,
         user: "U111",
+        ...(i === 39
+          ? {
+              files: [
+                {
+                  name: "still-visible.png",
+                  mimetype: "image/png",
+                  url_private: "https://files.slack.com/still-visible.png",
+                },
+              ],
+            }
+          : {}),
       })),
     ];
     mockGetThreadMessages.mockResolvedValue({ ok: true, messages });
@@ -213,6 +243,7 @@ describe("POST /internal/thread-context", () => {
       text: "the original request",
     });
     expect(records.at(-1)!.text).toHaveLength(1024);
+    expect(records.at(-1)!.files).toEqual([expect.stringContaining("still-visible.png")]);
   });
 
   it("returns empty context when Slack fails", async () => {

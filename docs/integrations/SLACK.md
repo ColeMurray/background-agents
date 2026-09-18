@@ -111,9 +111,9 @@ Remote files hosted outside Slack and non-image attachments are not forwarded.
 
 Interactive requests also retain files from the recent Slack thread context. A supported image on an
 earlier selected message is forwarded through the same protected attachment path; file-only messages
-remain visible through a URL-free text annotation even when their file type is unsupported or the
-image cannot be retrieved. Images on the current request take priority within the six-image prompt
-limit, followed by deduplicated images from earlier context.
+remain visible through URL-free metadata in the message's JSON context record even when their file
+type is unsupported or the image cannot be retrieved. Images on the current request take priority
+within the six-image prompt limit, followed by deduplicated images from earlier context.
 
 ### With forwarded messages
 
@@ -197,10 +197,11 @@ and create a new session.
 
 For follow-ups, Open-Inspect includes up to ten recent thread messages posted after the preceding
 prompt and strictly before the new request. Replies that arrive while Slack history is being fetched
-are not exposed to the earlier turn; they remain eligible for a later follow-up. Earlier file-only
-messages receive a speaker-and-timestamp annotation, and supported images are forwarded as described
-above. Open-Inspect also adds an eyes reaction while the follow-up is being processed, then removes
-it when the completion reply is posted.
+are not exposed to the earlier turn; they remain eligible for a later follow-up. Earlier messages
+are encoded as untrusted JSON records with speaker and timestamp provenance; file-only messages keep
+URL-free metadata, and supported images are forwarded as described above. Open-Inspect also adds an
+eyes reaction while the follow-up is being processed, then removes it when the completion reply is
+posted.
 
 ---
 

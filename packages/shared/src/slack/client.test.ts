@@ -554,6 +554,21 @@ describe("getThreadMessages", () => {
                 extra: "discard me",
               },
             ],
+            attachments: [
+              {
+                is_share: true,
+                text: "forwarded context",
+                files: [
+                  {
+                    id: "F2",
+                    name: "forwarded.png",
+                    mimetype: "image/png",
+                    url_private: "https://files.slack.com/files-pri/T1-F2/forwarded.png",
+                    extra: "discard me too",
+                  },
+                ],
+              },
+            ],
           },
         ],
       })
@@ -575,6 +590,20 @@ describe("getThreadMessages", () => {
               mimetype: "image/png",
               url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
               size: 42,
+            },
+          ],
+          attachments: [
+            {
+              is_share: true,
+              text: "forwarded context",
+              files: [
+                {
+                  id: "F2",
+                  name: "forwarded.png",
+                  mimetype: "image/png",
+                  url_private: "https://files.slack.com/files-pri/T1-F2/forwarded.png",
+                },
+              ],
             },
           ],
         },

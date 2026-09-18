@@ -1,11 +1,11 @@
 import {
-  classifyThreadSpeaker,
   getThreadMessages,
-  resolveUserNames,
   selectThreadWindow,
   type SlackThreadMessage,
 } from "@open-inspect/shared/slack";
-import { slackFileAnnotations, toImageAttachments, type SlackImageAttachment } from "./attachments";
+import { toImageAttachments, type SlackImageAttachment } from "./attachments";
+import { collectForwardedMessages } from "./forwarded-messages";
+import { buildThreadContextRecords, renderThreadContext } from "./thread-context";
 import type { Env } from "./types";
 
 const THREAD_HISTORY_MESSAGE_LIMIT = 10;
@@ -24,16 +24,13 @@ export interface InteractiveThreadContextOptions {
 }
 
 function collectContextImages(messages: SlackThreadMessage[], traceId?: string) {
-  const seen = new Set<string>();
   return toImageAttachments(
-    messages.flatMap((message) => message.files ?? []),
+    [...messages].reverse().flatMap((message) => {
+      const forwarded = collectForwardedMessages(message.attachments);
+      return [...(message.files ?? []), ...forwarded.files];
+    }),
     traceId
-  ).filter((attachment) => {
-    const identity = attachment.id ? `id:${attachment.id}` : `url:${attachment.downloadUrl}`;
-    if (seen.has(identity)) return false;
-    seen.add(identity);
-    return true;
-  });
+  );
 }
 
 /** Fetch bounded, causal context for interactive mentions and DMs. */
@@ -57,24 +54,11 @@ export async function fetchInteractiveThreadContext(
     });
     if (relevant.length === 0) return { messages: [], images: [] };
 
-    const speakers = relevant.map((message) => classifyThreadSpeaker(message));
-    const uniqueUserIds = [
-      ...new Set(speakers.flatMap((speaker) => (speaker.kind === "user" ? [speaker.id] : []))),
-    ];
-    const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
-    const messages = relevant.map((message, index) => {
-      const speaker = speakers[index]!;
-      const name =
-        speaker.kind === "app"
-          ? "Bot"
-          : speaker.kind === "user"
-            ? (userNames.get(speaker.id) ?? speaker.id)
-            : "Unknown";
-      const body = message.text || "(no text)";
-      const fileContext = slackFileAnnotations(message.files, "interactive");
-      return `[${name} at Slack ts ${message.ts}]: ${[body, ...fileContext].join("\n")}`;
-    });
-    return { messages, images: collectContextImages(relevant, traceId) };
+    const records = await buildThreadContextRecords(env, relevant, "interactive", traceId);
+    return {
+      messages: [renderThreadContext(records)],
+      images: collectContextImages(relevant, traceId),
+    };
   } catch {
     // Thread context is best effort.
     return undefined;

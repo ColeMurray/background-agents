@@ -13,10 +13,12 @@ import {
   getThreadMessages,
   resolveUserNames,
   selectThreadWindow,
+  type SlackThreadMessage,
 } from "@open-inspect/shared/slack";
 import type { Env } from "./types";
 import { slackFileAnnotations } from "./attachments";
 import { getBotUserId } from "./bot-identity";
+import { collectForwardedMessages } from "./forwarded-messages";
 import { createLogger } from "./logger";
 
 const log = createLogger("thread-context");
@@ -31,7 +33,7 @@ const THREAD_CONTEXT_MESSAGE_LIMIT = 20;
 /** Max characters kept per message. */
 const THREAD_CONTEXT_MESSAGE_MAX_LENGTH = 1024;
 
-type ThreadContextSpeaker =
+export type ThreadContextSpeaker =
   | { kind: "self" }
   | { kind: "app"; id: string }
   | { kind: "user"; id: string; displayName: string }
@@ -41,6 +43,43 @@ export interface ThreadContextRecord {
   speaker: ThreadContextSpeaker;
   ts: string;
   text: string;
+  files?: string[];
+}
+
+/** Build the canonical safe record shape used by interactive and automation context. */
+export async function buildThreadContextRecords(
+  env: Env,
+  messages: SlackThreadMessage[],
+  mode: "interactive" | "automation",
+  traceId?: string
+): Promise<ThreadContextRecord[]> {
+  const botUserId = await getBotUserId(env, traceId);
+  const speakers = messages.map((message) =>
+    classifyThreadSpeaker(message, botUserId ?? undefined)
+  );
+  const userIds = [
+    ...new Set(speakers.flatMap((speaker) => (speaker.kind === "user" ? [speaker.id] : []))),
+  ];
+  const names = await resolveUserNames(env.SLACK_BOT_TOKEN, userIds);
+
+  return messages.map((message, index) => {
+    const speaker = speakers[index]!;
+    const forwarded = collectForwardedMessages(message.attachments);
+    const text = [message.text.trim(), ...forwarded.entries]
+      .filter(Boolean)
+      .join("\n\n")
+      .slice(0, THREAD_CONTEXT_MESSAGE_MAX_LENGTH);
+    const files = slackFileAnnotations([...(message.files ?? []), ...forwarded.files], mode);
+    return {
+      speaker:
+        speaker.kind === "user"
+          ? { ...speaker, displayName: names.get(speaker.id) ?? speaker.id }
+          : speaker,
+      ts: message.ts,
+      text: text || "(no text)",
+      ...(files.length > 0 ? { files } : {}),
+    };
+  });
 }
 
 /**
@@ -110,33 +149,5 @@ export async function buildThreadContextForTrigger(
   });
   if (window.length === 0) return "";
 
-  const botUserId = await getBotUserId(env, traceId);
-  const speakers = window.map((message) => classifyThreadSpeaker(message, botUserId ?? undefined));
-  const userIds = [
-    ...new Set(speakers.flatMap((speaker) => (speaker.kind === "user" ? [speaker.id] : []))),
-  ];
-  const names = await resolveUserNames(env.SLACK_BOT_TOKEN, userIds);
-
-  const records = window.map((message, index): ThreadContextRecord => {
-    const speaker = speakers[index]!;
-    const text = [
-      message.text.trim() || "(no text)",
-      ...slackFileAnnotations(message.files, "automation"),
-    ]
-      .join("\n")
-      .slice(0, THREAD_CONTEXT_MESSAGE_MAX_LENGTH);
-    return {
-      speaker:
-        speaker.kind === "user"
-          ? {
-              ...speaker,
-              displayName: names.get(speaker.id) ?? speaker.id,
-            }
-          : speaker,
-      ts: message.ts,
-      text,
-    };
-  });
-
-  return renderThreadContext(records);
+  return renderThreadContext(await buildThreadContextRecords(env, window, "automation", traceId));
 }

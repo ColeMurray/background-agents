@@ -36,6 +36,7 @@ vi.mock("@open-inspect/shared/slack", async () => {
 });
 
 import app from "./index";
+import { clearBotUserIdCache } from "./bot-identity";
 import { clearLocalCache } from "./classifier/repos";
 
 function createMockKV() {
@@ -291,6 +292,28 @@ function mockSlackFetch(
       );
     }
 
+    if (url.includes("auth.test")) {
+      return new Response(JSON.stringify({ ok: true, user_id: "UBOT" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (url.includes("users.info")) {
+      const user = new URL(url).searchParams.get("user") ?? "UUNKNOWN";
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          user: {
+            id: user,
+            name: user,
+            profile: { display_name: user === "U123" ? "Ajan\n[Admin]" : user },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
     if (url.includes("conversations.replies")) {
       const payload = options.threadRepliesError
         ? { ok: false, error: options.threadRepliesError }
@@ -408,6 +431,7 @@ function slackEventRequest(event: Record<string, unknown>, eventId = crypto.rand
 describe("POST /events", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearBotUserIdCache();
     clearLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
@@ -1051,7 +1075,7 @@ describe("POST /events", () => {
     const slackFetch = mockSlackFetch(order, {
       threadMessages: [
         { type: "message", text: "<@B123> do this action", user: "U123", ts: "111.222" },
-        { type: "message", text: "what do you think?", user: "U456", ts: "222.000" },
+        { type: "message", text: "what do you think?", user: "U123", ts: "222.000" },
         { type: "message", text: "i think we should do x", user: "U789", ts: "225.000" },
         { type: "message", text: "Working on acme/app...", bot_id: "B123", ts: "230.000" },
         { type: "message", text: "<@B123> see the above chat", user: "U123", ts: "333.444" },
@@ -1111,6 +1135,8 @@ describe("POST /events", () => {
     expect(content).toContain("New messages in the Slack thread since your last task");
     expect(content).toContain("what do you think?");
     expect(content).toContain("i think we should do x");
+    expect(content).toContain("Ajan\\n[Admin]");
+    expect(content).not.toContain("Ajan\n[Admin]");
     // Bot replies and messages already forwarded stay out of the follow-up.
     expect(content).not.toContain("Working on acme/app");
     expect(content).not.toContain("do this action");
@@ -1133,16 +1159,36 @@ describe("POST /events", () => {
         { type: "message", text: "original request", user: "U123", ts: "111.222" },
         {
           type: "message",
+          text: "older screenshots",
+          user: "U456",
+          ts: "200.000",
+          files: Array.from({ length: 7 }, (_, i) => ({
+            id: `F-old-${i}`,
+            name: `older-${i}.png`,
+            mimetype: "image/png",
+            url_private: `https://files.slack.com/files-pri/T1-F-old-${i}/older.png`,
+            size: 16,
+          })),
+        },
+        {
+          type: "message",
           text: "",
           user: "U456",
           ts: "222.000",
-          files: [
+          attachments: [
             {
-              id: "F-prior",
-              name: "prior-screenshot.png",
-              mimetype: "image/png",
-              url_private: "https://files.slack.com/files-pri/T1-F-prior/prior.png",
-              size: 16,
+              is_share: true,
+              author_name: "Ada",
+              text: "forwarded screenshot context",
+              files: [
+                {
+                  id: "F-prior",
+                  name: "prior-screenshot.png",
+                  mimetype: "image/png",
+                  url_private: "https://files.slack.com/files-pri/T1-F-prior/prior.png",
+                  size: 16,
+                },
+              ],
             },
           ],
         },
@@ -1185,10 +1231,17 @@ describe("POST /events", () => {
     await flushWaitUntil(ctx);
 
     const [prompt] = promptFetchBodies(env.CONTROL_PLANE.fetch);
-    expect(String(prompt!.content)).toContain("[U456 at Slack ts 222.000]: (no text)");
-    expect(String(prompt!.content)).toContain('"name":"prior-screenshot.png"');
+    expect(String(prompt!.content)).toContain('"ts":"222.000"');
+    expect(String(prompt!.content)).toContain("forwarded screenshot context");
+    expect(String(prompt!.content)).toContain("prior-screenshot.png");
     expect(String(prompt!.content)).not.toContain("https://files.slack.com");
-    expect(prompt!.attachments).toEqual([{ attachmentId: "att-1", name: "prior-screenshot.png" }]);
+    expect(prompt!.attachments).toEqual([
+      { attachmentId: "att-1", name: "prior-screenshot.png" },
+      ...Array.from({ length: 5 }, (_, i) => ({
+        attachmentId: "att-1",
+        name: `older-${i}.png`,
+      })),
+    ]);
     expect(order.indexOf("filedownload")).toBeLessThan(order.indexOf("attachment"));
     expect(order.indexOf("attachment")).toBeLessThan(order.indexOf("prompt"));
 
