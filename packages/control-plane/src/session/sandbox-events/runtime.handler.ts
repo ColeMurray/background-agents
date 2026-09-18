@@ -1,4 +1,4 @@
-import type { SandboxBootPhase, SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import { toSandboxBootPhase, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
 import type { BackgroundTasks } from "../../platform-ports";
 import type { SessionDiffService } from "../diffs/service";
@@ -115,14 +115,7 @@ export class SandboxRuntimeEventHandler {
     event: Extract<SandboxEvent, { type: "boot_progress" }>,
     context: SandboxEventContext
   ): void {
-    const phase: SandboxBootPhase = {
-      phase: event.phase,
-      status: event.status,
-      ...(event.warning !== undefined ? { warning: event.warning } : {}),
-      ...(event.repoOwner !== undefined ? { repoOwner: event.repoOwner } : {}),
-      ...(event.repoName !== undefined ? { repoName: event.repoName } : {}),
-    };
-    if (!this.sandboxRepository.recordBootProgress(phase, event.bootSeq)) {
+    if (!this.sandboxRepository.recordBootProgress(toSandboxBootPhase(event), event.bootSeq)) {
       this.log.debug("sandbox.boot_progress_repeated", { boot_seq: event.bootSeq });
       return;
     }

@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { SandboxEvent } from "@/types/session";
+import type { BootProgressEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SessionTimelineEvent } from "@open-inspect/shared/types/server-messages";
 import {
+  applyBootProgress,
   bootPhaseLabel,
   bootPhaseRepoLabel,
-  bootProgressFromEvent,
-  collectBootPhaseTimings,
+  endBootPhase,
   formatBootDuration,
-  seedBootProgress,
-  type BootProgressEvent,
+  seedSandboxBoot,
 } from "./boot-phase";
 
 function bootProgress(overrides: Partial<BootProgressEvent> = {}): BootProgressEvent {
@@ -23,159 +23,204 @@ function bootProgress(overrides: Partial<BootProgressEvent> = {}): BootProgressE
   };
 }
 
-function timelineEvent(event: SandboxEvent, sequence: number): SessionTimelineEvent {
-  return { eventId: `event-${sequence}`, timelineSequence: sequence, event };
+function timeline(...events: SandboxEvent[]): {
+  events: SessionTimelineEvent[];
+  hasMore: boolean;
+  cursor: null;
+} {
+  return {
+    events: events.map((event, index) => ({
+      eventId: `event-${index}`,
+      timelineSequence: index,
+      event,
+    })),
+    hasMore: false,
+    cursor: null,
+  };
 }
 
-describe("bootProgressFromEvent", () => {
-  it("keeps the phase identity and what only the timeline copy carries", () => {
+describe("seedSandboxBoot", () => {
+  it("is null when nothing has booted", () => {
+    expect(seedSandboxBoot({ bootPhase: null, timeline: timeline() })).toBeNull();
     expect(
-      bootProgressFromEvent(
+      seedSandboxBoot({
+        timeline: timeline({
+          type: "git_sync",
+          status: "completed",
+          sandboxId: "sb-1",
+          timestamp: 1,
+        }),
+      })
+    ).toBeNull();
+  });
+
+  it("takes the snapshot's phase as authoritative and collects that sandbox's timings", () => {
+    const boot = seedSandboxBoot({
+      bootPhase: {
+        phase: "start",
+        status: "failed",
+        bootSeq: 6,
+        sandboxId: "sb-2",
+        outputTail: ["npm ERR! missing script: dev"],
+        detail: "start hook failed",
+      },
+      timeline: timeline(
+        // An earlier sandbox's boot: its timings are not this boot's.
+        bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 900 }),
+        bootProgress({ bootSeq: 3, phase: "setup", status: "failed", outputTail: ["boom"] }),
         bootProgress({
-          bootSeq: 7,
-          phase: "start",
-          status: "failed",
+          sandboxId: "sb-2",
+          bootSeq: 2,
+          phase: "sync",
+          status: "completed",
+          elapsedMs: 540,
+        }),
+        bootProgress({
+          sandboxId: "sb-2",
+          bootSeq: 4,
+          phase: "setup",
+          status: "completed",
+          warning: true,
           repoOwner: "acme",
           repoName: "web",
-          outputTail: ["npm ERR! missing script: dev"],
-          detail: "start hook failed for acme/web",
-        })
-      )
-    ).toEqual({
-      phase: "start",
-      status: "failed",
-      bootSeq: 7,
-      repoOwner: "acme",
-      repoName: "web",
-      outputTail: ["npm ERR! missing script: dev"],
-      detail: "start hook failed for acme/web",
-    });
-  });
-
-  it("omits fields the event did not carry", () => {
-    expect(bootProgressFromEvent(bootProgress())).toEqual({
-      phase: "sync",
-      status: "started",
-      bootSeq: 1,
-    });
-  });
-});
-
-describe("seedBootProgress", () => {
-  it("is null when the snapshot names no phase", () => {
-    expect(
-      seedBootProgress({ bootPhase: null, timeline: { events: [], hasMore: false, cursor: null } })
-    ).toBeNull();
-    expect(seedBootProgress({ timeline: { events: [], hasMore: false, cursor: null } })).toBeNull();
-  });
-
-  it("takes the timeline copy of the snapshot's phase so a reload keeps the tail", () => {
-    const seeded = seedBootProgress({
-      bootPhase: { phase: "setup", status: "failed", repoOwner: "acme", repoName: "web" },
-      timeline: {
-        events: [
-          timelineEvent(bootProgress({ bootSeq: 3, phase: "setup", status: "started" }), 1),
-          timelineEvent(
-            bootProgress({
-              bootSeq: 4,
-              phase: "setup",
-              status: "failed",
-              repoOwner: "acme",
-              repoName: "web",
-              outputTail: ["error: exit 3"],
-              detail: "setup hook failed",
-            }),
-            2
-          ),
-        ],
-        hasMore: false,
-        cursor: null,
-      },
+          elapsedMs: 91_200,
+        }),
+        bootProgress({ sandboxId: "sb-2", bootSeq: 6, phase: "start", status: "failed" })
+      ),
     });
 
-    expect(seeded).toEqual({
-      phase: "setup",
-      status: "failed",
-      bootSeq: 4,
-      repoOwner: "acme",
-      repoName: "web",
-      outputTail: ["error: exit 3"],
-      detail: "setup hook failed",
-    });
-  });
-
-  it("falls back to the snapshot's phase when the timeline page holds a different line", () => {
-    const seeded = seedBootProgress({
-      bootPhase: { phase: "skills", status: "started" },
-      timeline: {
-        events: [
-          // An earlier boot's failure is not this boot's phase.
-          timelineEvent(
-            bootProgress({ bootSeq: 9, phase: "start", status: "failed", outputTail: ["boom"] }),
-            1
-          ),
-        ],
-        hasMore: true,
-        cursor: null,
-      },
-    });
-
-    expect(seeded).toEqual({ phase: "skills", status: "started" });
-  });
-});
-
-describe("collectBootPhaseTimings", () => {
-  it("reports the completed phases of the latest boot only, in order", () => {
-    const events: SandboxEvent[] = [
-      bootProgress({ bootSeq: 1, phase: "sync", status: "started" }),
-      bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 900 }),
-      bootProgress({ bootSeq: 3, phase: "start", status: "failed", outputTail: ["boom"] }),
-      // The next generation restarts the sequence.
-      bootProgress({ bootSeq: 1, phase: "sync", status: "started" }),
-      bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 540 }),
-      {
-        type: "git_sync",
-        status: "completed",
+    expect(boot).toEqual({
+      sandboxId: "sb-2",
+      phase: {
+        phase: "start",
+        status: "failed",
+        bootSeq: 6,
         sandboxId: "sb-2",
-        timestamp: 5,
+        outputTail: ["npm ERR! missing script: dev"],
+        detail: "start hook failed",
       },
-      bootProgress({
-        bootSeq: 3,
-        phase: "setup",
-        status: "started",
-        repoOwner: "acme",
-        repoName: "web",
-      }),
-      bootProgress({
-        bootSeq: 4,
-        phase: "setup",
-        status: "completed",
-        warning: true,
-        repoOwner: "acme",
-        repoName: "web",
-        elapsedMs: 91_200,
-      }),
-      bootProgress({ bootSeq: 5, phase: "harness", status: "started" }),
-    ];
-
-    expect(collectBootPhaseTimings(events)).toEqual([
-      { phase: "sync", elapsedMs: 540 },
-      { phase: "setup", elapsedMs: 91_200, warning: true, repoOwner: "acme", repoName: "web" },
-    ]);
+      timings: [
+        { phase: "sync", elapsedMs: 540 },
+        { phase: "setup", elapsedMs: 91_200, warning: true, repoOwner: "acme", repoName: "web" },
+      ],
+    });
   });
 
-  it("is empty for a timeline without boot phases", () => {
-    expect(
-      collectBootPhaseTimings([
-        { type: "git_sync", status: "completed", sandboxId: "sb-1", timestamp: 1 },
-      ])
-    ).toEqual([]);
+  it("separates boots by the sandbox that reported, not by sequence rollback", () => {
+    // The bridge sends only its latest phase when it connects, so the next
+    // sandbox's first persisted report can carry a higher sequence than the
+    // previous sandbox's last one.
+    const boot = seedSandboxBoot({
+      bootPhase: { phase: "harness", status: "started", bootSeq: 5, sandboxId: "sb-2" },
+      timeline: timeline(
+        bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 900 }),
+        bootProgress({ bootSeq: 3, phase: "setup", status: "failed" }),
+        bootProgress({
+          sandboxId: "sb-2",
+          bootSeq: 4,
+          phase: "start",
+          status: "completed",
+          elapsedMs: 300,
+        }),
+        bootProgress({ sandboxId: "sb-2", bootSeq: 5, phase: "harness", status: "started" })
+      ),
+    });
+
+    expect(boot?.timings).toEqual([{ phase: "start", elapsedMs: 300 }]);
+  });
+
+  it("keeps a finished boot's timings once the snapshot names no phase", () => {
+    const boot = seedSandboxBoot({
+      bootPhase: null,
+      timeline: timeline(
+        bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 900 }),
+        bootProgress({
+          sandboxId: "sb-2",
+          bootSeq: 2,
+          phase: "sync",
+          status: "completed",
+          elapsedMs: 540,
+        }),
+        bootProgress({
+          sandboxId: "sb-2",
+          bootSeq: 10,
+          phase: "harness",
+          status: "completed",
+          elapsedMs: 3_000,
+        })
+      ),
+    });
+
+    expect(boot).toEqual({
+      sandboxId: "sb-2",
+      phase: null,
+      timings: [
+        { phase: "sync", elapsedMs: 540 },
+        { phase: "harness", elapsedMs: 3_000 },
+      ],
+    });
   });
 
   it("skips a completed phase that reports no duration", () => {
+    const boot = seedSandboxBoot({
+      bootPhase: null,
+      timeline: timeline(bootProgress({ bootSeq: 2, phase: "sync", status: "completed" })),
+    });
+
+    expect(boot?.timings).toEqual([]);
+  });
+});
+
+describe("applyBootProgress", () => {
+  it("advances the boot it belongs to and keeps its timings", () => {
+    const boot = applyBootProgress(
+      { sandboxId: "sb-1", phase: { phase: "sync", status: "started" }, timings: [] },
+      bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 })
+    );
+
+    expect(boot).toEqual({
+      sandboxId: "sb-1",
+      phase: { bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800, sandboxId: "sb-1" },
+      timings: [{ phase: "sync", elapsedMs: 800 }],
+    });
+  });
+
+  it("starts a new boot when a different sandbox reports", () => {
+    const boot = applyBootProgress(
+      {
+        sandboxId: "sb-1",
+        phase: { phase: "start", status: "failed" },
+        timings: [{ phase: "sync", elapsedMs: 900 }],
+      },
+      bootProgress({ sandboxId: "sb-2", bootSeq: 4, phase: "setup", status: "started" })
+    );
+
+    expect(boot).toEqual({
+      sandboxId: "sb-2",
+      phase: { bootSeq: 4, phase: "setup", status: "started", sandboxId: "sb-2" },
+      timings: [],
+    });
+  });
+
+  it("starts the first boot from nothing", () => {
+    expect(applyBootProgress(null, bootProgress())).toEqual({
+      sandboxId: "sb-1",
+      phase: { bootSeq: 1, phase: "sync", status: "started", sandboxId: "sb-1" },
+      timings: [],
+    });
+  });
+});
+
+describe("endBootPhase", () => {
+  it("drops the phase and keeps the timings", () => {
     expect(
-      collectBootPhaseTimings([bootProgress({ bootSeq: 2, phase: "sync", status: "completed" })])
-    ).toEqual([]);
+      endBootPhase({
+        sandboxId: "sb-1",
+        phase: { phase: "harness", status: "completed" },
+        timings: [{ phase: "sync", elapsedMs: 900 }],
+      })
+    ).toEqual({ sandboxId: "sb-1", phase: null, timings: [{ phase: "sync", elapsedMs: 900 }] });
+    expect(endBootPhase(null)).toBeNull();
   });
 });
 

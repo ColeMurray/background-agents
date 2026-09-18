@@ -3,8 +3,10 @@ import {
   SANDBOX_ERROR_BODY_MAX_BYTES,
   SANDBOX_OUTPUT_TAIL_MAX_CHARS,
   SANDBOX_OUTPUT_TAIL_MAX_LINES,
+  sandboxBootPhaseSchema,
   sandboxEventSchema,
   sandboxOutputTailSchema,
+  toSandboxBootPhase,
 } from "./sandbox-events";
 
 describe("boot_progress sandbox event", () => {
@@ -85,5 +87,36 @@ describe("sandboxOutputTailSchema", () => {
     expect(new TextEncoder().encode(body).byteLength).toBeLessThanOrEqual(
       SANDBOX_ERROR_BODY_MAX_BYTES
     );
+  });
+});
+
+describe("toSandboxBootPhase", () => {
+  it("keeps everything the event reports except its envelope", () => {
+    const phase = toSandboxBootPhase({
+      type: "boot_progress",
+      bootSeq: 6,
+      phase: "start",
+      status: "failed",
+      repoOwner: "acme",
+      repoName: "api",
+      outputTail: ["npm ERR! missing script: dev"],
+      detail: "start hook failed for acme/api",
+      sandboxId: "sb-1",
+      timestamp: 9,
+      ackId: "ack-1",
+    });
+
+    expect(phase).toEqual({
+      bootSeq: 6,
+      phase: "start",
+      status: "failed",
+      repoOwner: "acme",
+      repoName: "api",
+      outputTail: ["npm ERR! missing script: dev"],
+      detail: "start hook failed for acme/api",
+      sandboxId: "sb-1",
+    });
+    // What the control plane stores is what the snapshot schema accepts.
+    expect(sandboxBootPhaseSchema.parse(phase)).toEqual(phase);
   });
 });

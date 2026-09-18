@@ -35,6 +35,8 @@ import { prBadgeVariant } from "@/components/ui/badge-variants";
 
 type WarningEvent = Extract<SandboxEvent, { type: "warning" }>;
 
+const DEFAULT_BOOT_PHASES: BootPhaseTiming[] = [];
+
 interface MetadataSectionProps {
   /** Enables the PR sync button; older callers without it just omit it. */
   sessionId?: string;
@@ -112,7 +114,7 @@ export function MetadataSection({
   repositories,
   environmentId,
   environmentName,
-  bootPhases = [],
+  bootPhases = DEFAULT_BOOT_PHASES,
   warnings = [],
   parentSessionId,
   canManageLifecycle,

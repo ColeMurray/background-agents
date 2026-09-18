@@ -13,7 +13,7 @@ import { TunnelUrlsSection } from "./sidebar/tunnel-urls-section";
 import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
 import { buildAuthenticatedUrl } from "@/lib/urls";
-import { collectBootPhaseTimings } from "@/lib/session-socket/boot-phase";
+import type { BootPhaseTiming } from "@/lib/session-socket/boot-phase";
 import { extractLatestTasks } from "@/lib/tasks";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { ParticipantPresence, SessionState } from "@open-inspect/shared/types/server-messages";
@@ -36,6 +36,8 @@ interface SessionRightSidebarProps {
   participants: ParticipantPresence[];
   presenceSynced: boolean;
   events: SandboxEvent[];
+  /** Completed phases of the latest sandbox boot, with their durations. */
+  bootPhases?: BootPhaseTiming[];
   artifacts: Artifact[];
   terminalOpen?: boolean;
   onToggleTerminal?: () => void;
@@ -58,6 +60,7 @@ export function SessionRightSidebarContent({
   participants,
   presenceSynced,
   events,
+  bootPhases,
   artifacts,
   terminalOpen,
   onToggleTerminal,
@@ -77,7 +80,6 @@ export function SessionRightSidebarContent({
       ),
     [events]
   );
-  const bootPhases = useMemo(() => collectBootPhaseTimings(events), [events]);
   const mediaArtifacts = useMemo(
     () =>
       artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
@@ -299,6 +301,7 @@ export function SessionRightSidebar({
   participants,
   presenceSynced,
   events,
+  bootPhases,
   artifacts,
   terminalOpen,
   onToggleTerminal,
@@ -326,6 +329,7 @@ export function SessionRightSidebar({
         participants={participants}
         presenceSynced={presenceSynced}
         events={events}
+        bootPhases={bootPhases}
         artifacts={artifacts}
         terminalOpen={terminalOpen}
         onToggleTerminal={onToggleTerminal}

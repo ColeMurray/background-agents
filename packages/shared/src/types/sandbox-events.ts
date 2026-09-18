@@ -77,15 +77,24 @@ export const sandboxOutputTailSchema = z
   );
 
 /**
- * The phase a booting sandbox last reported, as the subscribe snapshot
- * carries it. Present only while the sandbox is booting; cleared at ready.
+ * The latest `boot_progress` report of a booting sandbox, as the control
+ * plane stores it and the subscribe snapshot carries it: the same fields
+ * the event has, minus the envelope. Present while the sandbox boots and
+ * after a boot failed (naming the step that broke, with the script's
+ * output tail); cleared at ready. `sandboxId` identifies the boot that
+ * reported, the same identity every `boot_progress` event carries.
  */
 export const sandboxBootPhaseSchema = z.object({
   phase: bootPhaseNameSchema,
   status: bootPhaseStatusSchema,
+  bootSeq: z.number().int().optional(),
+  sandboxId: z.string().optional(),
   warning: z.boolean().optional(),
   repoOwner: z.string().optional(),
   repoName: z.string().optional(),
+  elapsedMs: z.number().optional(),
+  outputTail: sandboxOutputTailSchema.optional(),
+  detail: z.string().optional(),
 });
 export type SandboxBootPhase = z.infer<typeof sandboxBootPhaseSchema>;
 
@@ -279,6 +288,14 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
 
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
 export type EventType = SandboxEvent["type"];
+
+export type BootProgressEvent = Extract<SandboxEvent, { type: "boot_progress" }>;
+
+/** The boot phase a `boot_progress` event reports: the event without its envelope. */
+export function toSandboxBootPhase(event: BootProgressEvent): SandboxBootPhase {
+  const { type: _type, timestamp: _timestamp, ackId: _ackId, ...phase } = event;
+  return phase;
+}
 
 export interface AgentEvent {
   id: string;

@@ -55,8 +55,8 @@ interface UseSessionSocketReturn {
   sessionState: SessionState | null;
   /** Why the sandbox last failed, when the control plane reported a reason. */
   sandboxError: string | null;
-  /** The boot phase a booting (or just-failed) sandbox last reported. */
-  bootPhase: SessionSocketState["bootPhase"];
+  /** The latest sandbox boot: its last phase and completed-phase timings. */
+  boot: SessionSocketState["boot"];
   messages: Message[];
   events: SandboxEvent[];
   participants: ParticipantPresence[];
@@ -430,7 +430,7 @@ export function useSessionSocket(
     connectionError: transport.connectionError,
     sessionState,
     sandboxError: state.sandboxError,
-    bootPhase: state.bootPhase,
+    boot: state.boot,
     messages: NO_MESSAGES,
     events: state.events,
     participants: state.participants,

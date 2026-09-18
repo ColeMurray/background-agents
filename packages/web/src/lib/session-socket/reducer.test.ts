@@ -276,7 +276,7 @@ describe("sessionSocketReducer", () => {
     });
   });
 
-  describe("bootPhase", () => {
+  describe("boot", () => {
     const bootProgress = (
       overrides: Partial<Extract<SandboxEvent, { type: "boot_progress" }>> = {}
     ): Extract<SandboxEvent, { type: "boot_progress" }> => ({
@@ -291,50 +291,51 @@ describe("sessionSocketReducer", () => {
     const booting = () =>
       subscribedState({
         session: createSessionState({ sandboxStatus: "connecting" }),
-        bootPhase: { phase: "sync", status: "started" },
+        bootPhase: { phase: "sync", status: "started", bootSeq: 1, sandboxId: "sb-1" },
       });
 
-    it("seeds the phase from the snapshot and from subscribed", () => {
+    it("seeds the boot from the snapshot and from subscribed", () => {
       expect(
         createSessionSocketState(
-          createSnapshot({ bootPhase: { phase: "setup", status: "started" } })
-        ).bootPhase
-      ).toEqual({ phase: "setup", status: "started" });
-      expect(booting().bootPhase).toEqual({ phase: "sync", status: "started" });
-      expect(subscribedState().bootPhase).toBeNull();
+          createSnapshot({
+            bootPhase: { phase: "setup", status: "started", bootSeq: 3, sandboxId: "sb-1" },
+          })
+        ).boot
+      ).toEqual({
+        sandboxId: "sb-1",
+        phase: { phase: "setup", status: "started", bootSeq: 3, sandboxId: "sb-1" },
+        timings: [],
+      });
+      expect(booting().boot?.phase).toEqual({
+        phase: "sync",
+        status: "started",
+        bootSeq: 1,
+        sandboxId: "sb-1",
+      });
+      expect(subscribedState().boot).toBeNull();
     });
 
-    it("seeds a failed phase with the tail its timeline line carries", () => {
+    it("seeds a failed boot with the tail the snapshot carries", () => {
       const state = subscribedState({
         session: createSessionState({ sandboxStatus: "failed" }),
         spawnError: "start hook failed for acme/web-app",
-        bootPhase: { phase: "start", status: "failed", repoOwner: "acme", repoName: "web-app" },
-        timeline: {
-          events: [
-            {
-              eventId: "event-9",
-              timelineSequence: 9,
-              event: bootProgress({
-                bootSeq: 6,
-                phase: "start",
-                status: "failed",
-                repoOwner: "acme",
-                repoName: "web-app",
-                outputTail: ["npm ERR! missing script: dev"],
-                detail: "start hook failed for acme/web-app",
-              }),
-            },
-          ],
-          hasMore: false,
-          cursor: null,
+        bootPhase: {
+          phase: "start",
+          status: "failed",
+          bootSeq: 6,
+          sandboxId: "sb-1",
+          repoOwner: "acme",
+          repoName: "web-app",
+          outputTail: ["npm ERR! missing script: dev"],
+          detail: "start hook failed for acme/web-app",
         },
       });
 
-      expect(state.bootPhase?.outputTail).toEqual(["npm ERR! missing script: dev"]);
+      expect(state.boot?.phase?.outputTail).toEqual(["npm ERR! missing script: dev"]);
       expect(state.sandboxError).toBe("start hook failed for acme/web-app");
     });
 
-    it("advances with each live boot_progress event", () => {
+    it("advances with each live boot_progress event and keeps completed-phase timings", () => {
       const state = reduce(booting(), {
         type: "events_appended",
         events: [
@@ -349,20 +350,38 @@ describe("sessionSocketReducer", () => {
         ],
       });
 
-      expect(state.bootPhase).toEqual({
-        phase: "setup",
-        status: "started",
-        bootSeq: 3,
-        repoOwner: "acme",
-        repoName: "web-app",
+      expect(state.boot).toEqual({
+        sandboxId: "sb-1",
+        phase: {
+          phase: "setup",
+          status: "started",
+          bootSeq: 3,
+          sandboxId: "sb-1",
+          repoOwner: "acme",
+          repoName: "web-app",
+        },
+        timings: [{ phase: "sync", elapsedMs: 800 }],
       });
       expect(state.events).toHaveLength(2);
     });
 
-    it("clears the phase once the sandbox is ready", () => {
-      const state = reduce(booting(), serverMessage({ type: "sandbox_status", status: "ready" }));
+    it("ends the phase once the sandbox is ready but keeps the timings", () => {
+      const state = reduce(
+        booting(),
+        {
+          type: "events_appended",
+          events: [
+            bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          ],
+        },
+        serverMessage({ type: "sandbox_status", status: "ready" })
+      );
 
-      expect(state.bootPhase).toBeNull();
+      expect(state.boot).toEqual({
+        sandboxId: "sb-1",
+        phase: null,
+        timings: [{ phase: "sync", elapsedMs: 800 }],
+      });
       expect(state.sessionState?.sandboxStatus).toBe("ready");
     });
 
@@ -380,32 +399,72 @@ describe("sessionSocketReducer", () => {
         serverMessage({ type: "sandbox_status", status: "failed" })
       );
 
-      expect(failed.bootPhase).toEqual({
+      expect(failed.boot?.phase).toEqual({
         phase: "setup",
         status: "failed",
         bootSeq: 4,
+        sandboxId: "sb-1",
         outputTail: ["boom"],
       });
       expect(failed.sandboxError).toBe("setup hook failed");
     });
 
-    it("clears the phase when a fresh attempt starts or the sandbox ends", () => {
+    it("drops the whole boot when a fresh attempt starts, with nothing to show until it reports", () => {
       const failed = reduce(booting(), {
         type: "events_appended",
-        events: [bootProgress({ bootSeq: 4, phase: "setup", status: "failed" })],
+        events: [
+          bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          bootProgress({ bootSeq: 4, phase: "setup", status: "failed" }),
+        ],
       });
 
-      expect(reduce(failed, serverMessage({ type: "sandbox_spawning" })).bootPhase).toBeNull();
-      expect(reduce(failed, serverMessage({ type: "sandbox_warming" })).bootPhase).toBeNull();
+      // An older runtime on the next attempt reports no phases: the previous
+      // boot's timings must not stand in for it.
+      expect(reduce(failed, serverMessage({ type: "sandbox_spawning" })).boot).toBeNull();
+      expect(reduce(failed, serverMessage({ type: "sandbox_warming" })).boot).toBeNull();
       expect(
-        reduce(failed, serverMessage({ type: "sandbox_status", status: "spawning" })).bootPhase
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "spawning" })).boot
+      ).toBeNull();
+    });
+
+    it("ends the phase when the sandbox is gone", () => {
+      const failed = reduce(booting(), {
+        type: "events_appended",
+        events: [bootProgress({ bootSeq: 4, phase: "setup", status: "started" })],
+      });
+
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "stale" })).boot?.phase
       ).toBeNull();
       expect(
-        reduce(failed, serverMessage({ type: "sandbox_status", status: "stale" })).bootPhase
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "stopped" })).boot?.phase
       ).toBeNull();
-      expect(
-        reduce(failed, serverMessage({ type: "sandbox_status", status: "stopped" })).bootPhase
-      ).toBeNull();
+    });
+
+    it("starts a new boot when a different sandbox reports", () => {
+      const state = reduce(
+        booting(),
+        {
+          type: "events_appended",
+          events: [
+            bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          ],
+        },
+        serverMessage({ type: "sandbox_status", status: "spawning" }),
+        {
+          type: "events_appended",
+          // Only the latest phase was relayed when the new bridge connected.
+          events: [
+            bootProgress({ sandboxId: "sb-2", bootSeq: 5, phase: "harness", status: "started" }),
+          ],
+        }
+      );
+
+      expect(state.boot).toEqual({
+        sandboxId: "sb-2",
+        phase: { phase: "harness", status: "started", bootSeq: 5, sandboxId: "sb-2" },
+        timings: [],
+      });
     });
   });
 

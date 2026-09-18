@@ -1,28 +1,32 @@
 import type { SandboxEvent } from "@/types/session";
-import type { BootPhaseName, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
+import {
+  toSandboxBootPhase,
+  type BootPhaseName,
+  type BootProgressEvent,
+  type SandboxBootPhase,
+} from "@open-inspect/shared/types/sandbox-events";
 import type { SessionSnapshot } from "@open-inspect/shared/types/server-messages";
 
-export type BootProgressEvent = Extract<SandboxEvent, { type: "boot_progress" }>;
-
-/**
- * The boot phase the view tracks while a sandbox boots: the snapshot's shape
- * plus what only the timeline copy of the same line carries — the failing
- * script's output tail and the phase's error.
- */
-export interface SandboxBootProgress extends SandboxBootPhase {
-  bootSeq?: number;
-  elapsedMs?: number;
-  outputTail?: string[];
-  detail?: string;
-}
-
-/** A phase of the most recent boot that completed, with how long it took. */
+/** A phase of a boot that completed, with how long it took. */
 export interface BootPhaseTiming {
   phase: BootPhaseName;
   elapsedMs: number;
   warning?: boolean;
   repoOwner?: string;
   repoName?: string;
+}
+
+/**
+ * The latest sandbox boot as the client knows it. One boot is one sandbox:
+ * every `boot_progress` event carries the id of the sandbox that reported
+ * it, so a report from a different sandbox is a different boot, however its
+ * sequence numbers compare. `phase` is the last report and is null once the
+ * boot is over; `timings` keeps every completed phase of this boot.
+ */
+export interface SandboxBoot {
+  sandboxId: string | undefined;
+  phase: SandboxBootPhase | null;
+  timings: BootPhaseTiming[];
 }
 
 const BOOT_PHASE_LABELS: Record<BootPhaseName, string> = {
@@ -44,79 +48,65 @@ export function bootPhaseLabel(phase: BootPhaseName): string {
  * naming it there is noise.
  */
 export function bootPhaseRepoLabel(
-  progress: Pick<SandboxBootProgress, "repoOwner" | "repoName">,
+  progress: Pick<SandboxBootPhase, "repoOwner" | "repoName">,
   repositoryCount: number
 ): string | null {
   if (repositoryCount < 2 || !progress.repoOwner || !progress.repoName) return null;
   return `${progress.repoOwner}/${progress.repoName}`;
 }
 
-export function bootProgressFromEvent(event: BootProgressEvent): SandboxBootProgress {
+function isBootProgress(event: SandboxEvent): event is BootProgressEvent {
+  return event.type === "boot_progress";
+}
+
+function bootPhaseTiming(event: BootProgressEvent): BootPhaseTiming | null {
+  if (event.status !== "completed" || event.elapsedMs === undefined) return null;
   return {
     phase: event.phase,
-    status: event.status,
-    bootSeq: event.bootSeq,
+    elapsedMs: event.elapsedMs,
     ...(event.warning !== undefined ? { warning: event.warning } : {}),
     ...(event.repoOwner !== undefined ? { repoOwner: event.repoOwner } : {}),
     ...(event.repoName !== undefined ? { repoName: event.repoName } : {}),
-    ...(event.elapsedMs !== undefined ? { elapsedMs: event.elapsedMs } : {}),
-    ...(event.outputTail !== undefined ? { outputTail: event.outputTail } : {}),
-    ...(event.detail !== undefined ? { detail: event.detail } : {}),
   };
 }
 
-function isSamePhase(event: BootProgressEvent, phase: SandboxBootPhase): boolean {
-  return (
-    event.phase === phase.phase &&
-    event.status === phase.status &&
-    event.repoOwner === phase.repoOwner &&
-    event.repoName === phase.repoName
-  );
-}
-
 /**
- * The boot phase a snapshot describes. The snapshot names the phase; when
- * the timeline page holds the same line, that copy carries the output tail
- * and the error too, so a reload of a failed boot still shows them.
+ * The boot a snapshot describes. The snapshot's `bootPhase` is the latest
+ * report of a boot still going or just failed; the timeline page holds
+ * every report the sandbox made, from which the completed phases of that
+ * same sandbox are collected. Once a boot is over the snapshot names no
+ * phase, and the boot is whichever sandbox reported last.
  */
-export function seedBootProgress(
+export function seedSandboxBoot(
   snapshot: Pick<SessionSnapshot, "bootPhase" | "timeline">
-): SandboxBootProgress | null {
-  const phase = snapshot.bootPhase;
-  if (!phase) return null;
-  const events = snapshot.timeline.events;
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index].event;
-    if (event.type !== "boot_progress") continue;
-    return isSamePhase(event, phase) ? bootProgressFromEvent(event) : { ...phase };
-  }
-  return { ...phase };
+): SandboxBoot | null {
+  const reports = snapshot.timeline.events.map((item) => item.event).filter(isBootProgress);
+  const phase = snapshot.bootPhase ?? null;
+  const last = reports.at(-1);
+  if (!phase && !last) return null;
+  const sandboxId = phase?.sandboxId ?? last?.sandboxId;
+  return {
+    sandboxId,
+    phase,
+    timings: reports
+      .filter((report) => report.sandboxId === sandboxId)
+      .flatMap((report) => bootPhaseTiming(report) ?? []),
+  };
 }
 
-/**
- * Completed phases of the most recent boot, in order, with their durations.
- * The timeline keeps every boot's phases; a sequence number that does not
- * advance marks where a later boot began, and only that boot is reported.
- */
-export function collectBootPhaseTimings(events: readonly SandboxEvent[]): BootPhaseTiming[] {
-  let timings: BootPhaseTiming[] = [];
-  let lastSeq: number | null = null;
-  for (const event of events) {
-    if (event.type !== "boot_progress") continue;
-    if (lastSeq !== null && event.bootSeq <= lastSeq) {
-      timings = [];
-    }
-    lastSeq = event.bootSeq;
-    if (event.status !== "completed" || event.elapsedMs === undefined) continue;
-    timings.push({
-      phase: event.phase,
-      elapsedMs: event.elapsedMs,
-      ...(event.warning !== undefined ? { warning: event.warning } : {}),
-      ...(event.repoOwner !== undefined ? { repoOwner: event.repoOwner } : {}),
-      ...(event.repoName !== undefined ? { repoName: event.repoName } : {}),
-    });
+/** Apply a live report: it advances the boot it belongs to or starts the next one. */
+export function applyBootProgress(boot: SandboxBoot | null, event: BootProgressEvent): SandboxBoot {
+  const timing = bootPhaseTiming(event);
+  const phase = toSandboxBootPhase(event);
+  if (!boot || boot.sandboxId !== event.sandboxId) {
+    return { sandboxId: event.sandboxId, phase, timings: timing ? [timing] : [] };
   }
-  return timings;
+  return { ...boot, phase, timings: timing ? [...boot.timings, timing] : boot.timings };
+}
+
+/** The boot is over (ready, or the sandbox is gone): its phase no longer describes anything. */
+export function endBootPhase(boot: SandboxBoot | null): SandboxBoot | null {
+  return boot?.phase ? { ...boot, phase: null } : boot;
 }
 
 /** "0.4s", "91.2s", "2m 03s": enough precision to tell a slow step from a fast one. */

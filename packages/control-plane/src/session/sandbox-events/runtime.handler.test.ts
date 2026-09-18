@@ -181,8 +181,17 @@ describe("SandboxRuntimeEventHandler.handleBootProgress", () => {
 
     h.handler.handleBootProgress(progress, context);
 
+    // The stored phase is the event minus its envelope, so the snapshot can
+    // hand a client everything the timeline copy carries.
     expect(h.sandboxRepository.recordBootProgress).toHaveBeenCalledWith(
-      { phase: "setup", status: "started", repoOwner: "acme", repoName: "api" },
+      {
+        bootSeq: 3,
+        phase: "setup",
+        status: "started",
+        repoOwner: "acme",
+        repoName: "api",
+        sandboxId: "sb-1",
+      },
       3
     );
     expect(h.eventRepository.createEvent).toHaveBeenCalledWith(

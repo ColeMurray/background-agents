@@ -182,20 +182,26 @@ describe("sandbox early connect (via SELF.fetch)", () => {
     );
     expect(row.boot_seq).toBe(2);
     expect(JSON.parse(row.boot_phase)).toEqual({
+      bootSeq: 2,
       phase: "setup",
       status: "completed",
+      elapsedMs: 750_000,
       repoOwner: "acme",
       repoName: "api",
+      sandboxId: SANDBOX_ID,
     });
 
     const snapshotRes = await stub.fetch("http://internal/internal/snapshot");
     expect(snapshotRes.status).toBe(200);
     const snapshot = await snapshotRes.json<{ bootPhase: unknown }>();
     expect(snapshot.bootPhase).toEqual({
+      bootSeq: 2,
       phase: "setup",
       status: "completed",
+      elapsedMs: 750_000,
       repoOwner: "acme",
       repoName: "api",
+      sandboxId: SANDBOX_ID,
     });
 
     // Ready clears the phase along with the transition.
@@ -283,6 +289,20 @@ describe("sandbox early connect (via SELF.fetch)", () => {
     expect(
       await queryDO<{ last_spawn_error: string }>(stub, "SELECT last_spawn_error FROM sandbox")
     ).toEqual([{ last_spawn_error: "start.sh exited 1" }]);
+    // A client that loads the session after the failure gets the failed
+    // phase, its reason and the tail from the snapshot alone.
+    const snapshotRes = await stub.fetch("http://internal/internal/snapshot");
+    const snapshot = await snapshotRes.json<{ bootPhase: unknown }>();
+    expect(snapshot.bootPhase).toEqual({
+      phase: "start",
+      status: "failed",
+      bootSeq: 5,
+      repoOwner: "acme",
+      repoName: "api",
+      outputTail: ["npm ERR! missing script: start"],
+      detail: "start.sh exited 1",
+      sandboxId: SANDBOX_ID,
+    });
   });
 
   it("accepts a structured fatal report with a full output tail through the public route", async () => {

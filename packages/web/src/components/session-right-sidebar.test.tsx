@@ -77,40 +77,15 @@ describe("SessionRightSidebar", () => {
     expect(screen.queryByText("Port app")).not.toBeInTheDocument();
     expect(screen.getByText("main")).toBeInTheDocument();
   });
-  it("derives the boot phase timings from the timeline events", () => {
+  it("lists the boot phase timings it is given", () => {
     render(
       <SessionRightSidebar
         sessionId="session-1"
         sessionState={{ ...sessionState, repoOwner: "acme", repoName: "web" }}
         participants={[]}
         presenceSynced={false}
-        events={[
-          {
-            type: "boot_progress",
-            bootSeq: 1,
-            phase: "sync",
-            status: "started",
-            sandboxId: "sb-1",
-            timestamp: 1,
-          },
-          {
-            type: "boot_progress",
-            bootSeq: 2,
-            phase: "sync",
-            status: "completed",
-            elapsedMs: 1_200,
-            sandboxId: "sb-1",
-            timestamp: 2,
-          },
-          {
-            type: "boot_progress",
-            bootSeq: 3,
-            phase: "harness",
-            status: "started",
-            sandboxId: "sb-1",
-            timestamp: 3,
-          },
-        ]}
+        events={[]}
+        bootPhases={[{ phase: "sync", elapsedMs: 1_200 }]}
         artifacts={[]}
         onOpenMedia={vi.fn()}
         capabilities={FULL_CAPABILITIES}
@@ -120,7 +95,6 @@ describe("SessionRightSidebar", () => {
     const list = screen.getByRole("list", { name: "Boot phases" });
     expect(list).toHaveTextContent("Cloning repository");
     expect(list).toHaveTextContent("1.2s");
-    expect(list).not.toHaveTextContent("Starting agent");
   });
 
   it("keeps its ARIA target mounted when closed", () => {
