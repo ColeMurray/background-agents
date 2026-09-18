@@ -5,6 +5,7 @@ import os
 import time
 from typing import TYPE_CHECKING, Any
 
+from .boot_events import OUTPUT_TAIL_MAX_LINES, bounded_output_tail, secret_values
 from .process_output import (
     BoundedOutputCollector,
     finish_cancellation_cleanup,
@@ -25,6 +26,14 @@ class RepositoryHooks:
     def __init__(self, log: Any) -> None:
         self.log = log
         self._output_collectors: set[BoundedOutputCollector] = set()
+        # The bounded, redacted tail of each hook's most recent failed run,
+        # keyed by repository and hook; cleared by a later success. Read by
+        # the boot when a failure is fatal so the report can carry it.
+        self._failure_tails: dict[tuple[str, str, str], tuple[str, ...]] = {}
+
+    def failure_tail(self, repo: RepoEntry, hook_name: str) -> tuple[str, ...]:
+        """Output tail of the hook's most recent failed run, empty if it succeeded."""
+        return self._failure_tails.get((repo.owner, repo.name, hook_name), ())
 
     def _collect_output(self, process: asyncio.subprocess.Process) -> BoundedOutputCollector:
         if process.stdout is None:
@@ -87,14 +96,20 @@ class RepositoryHooks:
                 "duration_ms": int((time.time() - start_time) * 1000),
                 "boot_mode": boot_mode.value,
             }
+            tail_key = (repo.owner, repo.name, hook_name)
             if process.returncode == 0:
                 output.discard_tail()
+                self._failure_tails.pop(tail_key, None)
                 self.log.info(f"{hook_name}.complete", **fields)
                 return True
             await self._terminate(process)
             await output.shutdown()
             if boot_mode is not BootMode.BUILD:
-                fields["output_tail"] = output.tail_lines()
+                raw_tail = output.tail_lines(OUTPUT_TAIL_MAX_LINES)
+                fields["output_tail"] = raw_tail
+                self._failure_tails[tail_key] = tuple(
+                    bounded_output_tail(raw_tail, secrets=secret_values(env))
+                )
             self.log.error(f"{hook_name}.failed", **fields)
             return False
         except asyncio.CancelledError:

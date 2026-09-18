@@ -24,19 +24,18 @@ def isolate_runtime_file_paths(tmp_path, monkeypatch):
     session's real manifest. A test that drives a real SandboxSupervisor
     (e.g. ``await sup.run()``) would otherwise overwrite it with fixture
     repos, which breaks push targeting and PR creation for the live session —
-    and likewise delete the live boot-warnings file or read the live
+    and likewise truncate the live boot-events file or read the live
     tunnel-env file. Tests that care about a specific path still patch it
     themselves; this fixture is the backstop that keeps every other test off
     the real files.
     """
     manifest_path = str(tmp_path / "oi-repo-manifest.json")
-    boot_warnings_path = str(tmp_path / "oi-boot-warnings.jsonl")
+    boot_events_path = str(tmp_path / "oi-boot-events.jsonl")
     tunnel_env_path = str(tmp_path / ".tunnels.env")
     monkeypatch.setattr("sandbox_runtime.repository_boot.REPO_MANIFEST_FILE_PATH", manifest_path)
     monkeypatch.setattr("sandbox_runtime.bridge.REPO_MANIFEST_FILE_PATH", manifest_path)
-    monkeypatch.setattr("sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
-    monkeypatch.setattr("sandbox_runtime.supervisor.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
-    monkeypatch.setattr("sandbox_runtime.bridge.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
+    monkeypatch.setattr("sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH", boot_events_path)
+    monkeypatch.setattr("sandbox_runtime.bridge.BOOT_EVENTS_FILE_PATH", boot_events_path)
     monkeypatch.setattr("sandbox_runtime.tunnel_environment.TUNNEL_ENV_FILE_PATH", tunnel_env_path)
 
 
