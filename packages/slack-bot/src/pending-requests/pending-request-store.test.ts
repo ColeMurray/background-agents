@@ -142,7 +142,11 @@ describe("pending request store", () => {
   });
 
   it("reads and deletes legacy thread-keyed records separately", async () => {
-    const legacy = { message: "Fix it", userId: "U123" };
+    const legacy = {
+      message: "Fix it",
+      userId: "U123",
+      inlinePromptOptions: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" },
+    };
     mocks.get.mockResolvedValue(legacy);
 
     await expect(getLegacyPendingRequest(mocks.env, "C123", "111.222")).resolves.toEqual(legacy);

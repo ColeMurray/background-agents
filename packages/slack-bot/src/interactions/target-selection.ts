@@ -5,6 +5,7 @@ import {
   updateMessage,
 } from "@open-inspect/shared/slack";
 import { toImageAttachments, type SlackImageAttachment } from "../attachments";
+import { MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import { collectForwardedMessages } from "../forwarded-messages";
 import { createLogger } from "../logger";
 import {
@@ -19,11 +20,16 @@ import {
   getLegacyPendingRequest,
   getPendingRequest,
 } from "../pending-requests/pending-request-store";
-import { startSessionAndSendPrompt } from "../sessions/session-launcher";
+import {
+  loadAuthoritativeSlackLaunchSettings,
+  startSessionAndSendPrompt,
+  type SlackLaunchSettings,
+} from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { targetId } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
+import { hasInlinePromptOptions, resolveInlinePromptOptions } from "../inline-flags";
 
 const log = createLogger("target-selection");
 
@@ -99,6 +105,42 @@ export async function handleTargetSelection(
       { thread_ts: threadKey }
     );
     return;
+  }
+  const legacyInlinePromptOptions =
+    !requestId && "inlinePromptOptions" in pendingData
+      ? pendingData.inlinePromptOptions
+      : undefined;
+  let resolvedTurnPlan = turnPlan;
+  let launchSettings: SlackLaunchSettings | undefined;
+  if (
+    !resolvedTurnPlan &&
+    legacyInlinePromptOptions &&
+    hasInlinePromptOptions(legacyInlinePromptOptions)
+  ) {
+    const authoritativeLaunchSettings = await loadAuthoritativeSlackLaunchSettings(
+      env,
+      userId,
+      traceId
+    );
+    if (!authoritativeLaunchSettings) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE, {
+        thread_ts: threadKey,
+      });
+      return;
+    }
+    launchSettings = authoritativeLaunchSettings;
+    const resolvedTurn = resolveInlinePromptOptions(
+      legacyInlinePromptOptions,
+      launchSettings.userPreferences,
+      launchSettings.enabledModels
+    );
+    if (!resolvedTurn.ok) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, {
+        thread_ts: threadKey,
+      });
+      return;
+    }
+    resolvedTurnPlan = resolvedTurn.turnPlan;
   }
   const target = await resolveTargetValue(env, selectedValue, traceId);
   if (!target) {
@@ -186,7 +228,8 @@ export async function handleTargetSelection(
     channelDescription,
     images,
     imageOnly,
-    turnPlan,
+    turnPlan: resolvedTurnPlan,
+    launchSettings,
     traceId,
   });
   if (!sessionResult) return;

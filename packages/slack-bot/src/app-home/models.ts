@@ -16,6 +16,9 @@ const ALL_MODELS = MODEL_OPTIONS.flatMap((group) =>
   }))
 );
 
+export const MODEL_PREFERENCES_UNAVAILABLE_MESSAGE =
+  "Model preferences are temporarily unavailable. Please try again.";
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

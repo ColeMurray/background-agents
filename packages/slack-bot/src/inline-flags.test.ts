@@ -84,6 +84,32 @@ describe("resolveInlinePromptOptions", () => {
     });
   });
 
+  it("falls back from a disabled session model before applying a reasoning override", () => {
+    expect(
+      resolveInlinePromptOptions(
+        { reasoningEffort: "max" },
+        { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" },
+        ["anthropic/claude-sonnet-4-6"]
+      )
+    ).toEqual({
+      ok: true,
+      turnPlan: {
+        sessionDefaults: {
+          model: "openai/gpt-5.6-sol",
+          reasoningEffort: "xhigh",
+        },
+        promptOverrides: {
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "max",
+        },
+        effective: {
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "max",
+        },
+      },
+    });
+  });
+
   it("rejects disabled models and incompatible reasoning", () => {
     expect(
       resolveInlinePromptOptions({ model: "openai/gpt-5.5" }, defaults, enabledModels)

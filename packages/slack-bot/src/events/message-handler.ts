@@ -61,12 +61,10 @@ import {
   type InlinePromptOptions,
   type ResolvedTurnPlan,
 } from "../inline-flags";
-import { getAuthoritativeModels } from "../app-home/models";
+import { getAuthoritativeModels, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 
 const log = createLogger("handler");
 const THREAD_HISTORY_MESSAGE_LIMIT = 10;
-const MODEL_PREFERENCES_UNAVAILABLE_MESSAGE =
-  "Model preferences are temporarily unavailable. Please try again.";
 
 interface ThreadHistoryOptions {
   /** ts of the message currently being handled, excluded from the history. */
@@ -201,9 +199,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     if (existingSession) {
       let turnPlan: ResolvedTurnPlan | undefined;
       if (hasInlineOverrides) {
-        const enabledModels = inlinePromptOptions.model
-          ? await getAuthoritativeModels(env, traceId)
-          : [];
+        const enabledModels = await getAuthoritativeModels(env, traceId);
         if (!enabledModels) {
           await postMessage(env.SLACK_BOT_TOKEN, channel, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE, {
             thread_ts: threadTs,

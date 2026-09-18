@@ -19,6 +19,11 @@ const unattributedPromptSchema = z.object({
   forwardedMessages: z.array(z.string()),
 });
 
+const inlinePromptOptionsSchema = z.object({
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});
+
 const classificationSchema = z.object({
   targetId: z.string().min(1).optional(),
   confidence: z.enum(["high", "medium", "low"]),
@@ -47,8 +52,12 @@ const pendingRequestSchema = pendingRequestDataSchema.extend({
   threadTs: z.string().min(1),
 });
 
+const legacyPendingRequestSchema = pendingRequestDataSchema.extend({
+  inlinePromptOptions: inlinePromptOptionsSchema.optional(),
+});
+
 export type PendingRequest = z.infer<typeof pendingRequestSchema>;
-export type LegacyPendingRequest = z.infer<typeof pendingRequestDataSchema>;
+export type LegacyPendingRequest = z.infer<typeof legacyPendingRequestSchema>;
 
 function pendingRequestKey(requestId: string): string {
   return `pending:${requestId}`;
@@ -89,7 +98,7 @@ export async function getLegacyPendingRequest(
     legacyPendingRequestKey(channel, threadTs),
     "json"
   );
-  const result = pendingRequestDataSchema.safeParse(data);
+  const result = legacyPendingRequestSchema.safeParse(data);
   return result.success ? result.data : null;
 }
 

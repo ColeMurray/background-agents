@@ -41,11 +41,6 @@ async function getModelPreferences(
   ctx: RequestContext
 ): Promise<Response> {
   const strict = new URL(request.url).searchParams.get("strict") === "true";
-  if (!ctx.db) {
-    if (strict) return error("Model preferences storage unavailable", 503);
-    return json({ enabledModels: DEFAULT_ENABLED_MODELS, revision: 0 });
-  }
-
   const store = new ModelPreferencesStore(ctx.db);
 
   try {

@@ -3,11 +3,15 @@ import { getMessageDetails, postEphemeral, postMessage } from "@open-inspect/sha
 import type { Env } from "../types";
 import { handleTargetSelection } from "./target-selection";
 import {
+  getLegacyPendingRequest,
   getPendingRequest,
   deletePendingRequest,
   type PendingRequest,
 } from "../pending-requests/pending-request-store";
-import { startSessionAndSendPrompt } from "../sessions/session-launcher";
+import {
+  loadAuthoritativeSlackLaunchSettings,
+  startSessionAndSendPrompt,
+} from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { resolveSlackActorIdentity } from "../user-identity";
 
@@ -33,6 +37,7 @@ vi.mock("../pending-requests/pending-request-store", () => ({
 }));
 
 vi.mock("../sessions/session-launcher", () => ({
+  loadAuthoritativeSlackLaunchSettings: vi.fn(),
   startSessionAndSendPrompt: vi.fn(async () => ({ sessionId: "session-1" })),
 }));
 
@@ -178,6 +183,52 @@ describe("handleTargetSelection", () => {
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ messageText: "Fix the deploy", images: [] })
+    );
+  });
+
+  it("resolves overrides preserved in a legacy thread-keyed request", async () => {
+    vi.mocked(getLegacyPendingRequest).mockResolvedValue({
+      message: "Fix the deploy",
+      userId: "U123",
+      inlinePromptOptions: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" },
+    });
+    const launchSettings = {
+      enabledModels: ["openai/gpt-5.6-sol" as const],
+      slackConfig: {},
+      userPreferences: {
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "max",
+        branch: undefined,
+      },
+    };
+    vi.mocked(loadAuthoritativeSlackLaunchSettings).mockResolvedValue(launchSettings);
+
+    await handleTargetSelection(
+      { ...selectionRequest(), requestId: undefined },
+      makeEnv(),
+      "trace-1",
+      vi.fn()
+    );
+
+    expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        turnPlan: {
+          sessionDefaults: {
+            model: "anthropic/claude-sonnet-4-6",
+            reasoningEffort: "max",
+          },
+          promptOverrides: {
+            model: "openai/gpt-5.6-sol",
+            reasoningEffort: "high",
+          },
+          effective: {
+            model: "openai/gpt-5.6-sol",
+            reasoningEffort: "high",
+          },
+        },
+        launchSettings,
+      })
     );
   });
 

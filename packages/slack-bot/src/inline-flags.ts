@@ -5,6 +5,7 @@ import {
   isValidModel,
   isValidReasoningEffort,
   normalizeModelId,
+  resolveEnabledModel,
   type ReasoningEffort,
   type ValidModel,
 } from "@open-inspect/shared/models";
@@ -141,6 +142,9 @@ export function resolveInlinePromptOptions(
     if (!enabledModels.includes(modelOverride)) {
       return { ok: false, error: `Model "${modelOverride}" is not enabled.` };
     }
+  } else {
+    const enabledSessionModel = resolveEnabledModel({ model: sessionModel, enabledModels });
+    if (enabledSessionModel !== sessionModel) modelOverride = enabledSessionModel;
   }
 
   const effectiveModel = modelOverride ?? sessionModel;

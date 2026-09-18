@@ -186,6 +186,8 @@ async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): P
   await ctx.waitUntil.mock.calls[callIndex]?.[0];
 }
 
+const DEFAULT_MODEL_PREFERENCES_STATUS = 200;
+
 function makeSessionEnv(
   order: string[] = [],
   responses: {
@@ -255,7 +257,7 @@ function makeSessionEnv(
     }
 
     return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-      status: responses.modelPreferencesStatus ?? 200,
+      status: responses.modelPreferencesStatus ?? DEFAULT_MODEL_PREFERENCES_STATUS,
       headers: { "Content-Type": "application/json" },
     });
   });
@@ -1026,6 +1028,59 @@ describe("POST /events", () => {
         model: "anthropic/claude-haiku-4-5",
         reasoningEffort: "max",
       })
+    );
+
+    slackFetch.mockRestore();
+  });
+
+  it("uses an enabled fallback model for a reasoning-only existing-thread override", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv();
+    const kv = env.SLACK_KV as unknown as {
+      put: (key: string, value: string) => Promise<void>;
+    };
+    await kv.put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "xhigh",
+        createdAt: Date.now(),
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> !reasoning:max add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+      expect.objectContaining({
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "max",
+        callbackContext: expect.objectContaining({
+          model: "anthropic/claude-haiku-4-5",
+          reasoningEffort: "max",
+        }),
+      }),
+    ]);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+      "https://internal/model-preferences?strict=true",
+      expect.objectContaining({ method: "GET" })
     );
 
     slackFetch.mockRestore();
