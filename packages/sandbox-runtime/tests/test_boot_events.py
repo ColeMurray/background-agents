@@ -8,16 +8,10 @@ import pytest
 
 from sandbox_runtime.boot_events import (
     DETAIL_MAX_CHARS,
-    OUTPUT_TAIL_MAX_CHARS,
-    OUTPUT_TAIL_MAX_LINE_CHARS,
-    OUTPUT_TAIL_MAX_LINES,
-    OUTPUT_TAIL_MAX_SERIALIZED_BYTES,
     BootEventLog,
     BootEventWriteError,
     BootPhaseError,
     boot_events_cursor_path,
-    bounded_output_tail,
-    secret_values,
 )
 from sandbox_runtime.repo_config import RepoEntry
 
@@ -159,7 +153,7 @@ class TestPhaseScope:
 
         assert "warning" not in _lines(path)[1]
 
-    def test_boot_phase_error_writes_failed_with_its_tail(self, events, tmp_path):
+    def test_boot_phase_error_writes_failed_with_metadata(self, events, tmp_path):
         log, path = events
         log.reset()
 
@@ -171,14 +165,14 @@ class TestPhaseScope:
                 "start hook failed for acme/api",
                 phase="start",
                 repo=_repo(tmp_path),
-                output_tail=("npm ERR! missing script", "exit 1"),
             )
 
         failed = _lines(path)[1]
         assert failed["status"] == "failed"
-        assert failed["outputTail"] == ["npm ERR! missing script", "exit 1"]
         assert failed["detail"] == "start hook failed for acme/api"
         assert failed["repoOwner"] == "acme"
+        assert "outputTail" not in failed
+        assert not hasattr(raised.value, "output_tail")
         assert raised.value.boot_seq == failed["seq"] == 2
 
     def test_plain_exception_becomes_a_phase_error_naming_the_phase(self, events):
@@ -194,7 +188,6 @@ class TestPhaseScope:
         assert isinstance(error.__cause__, RuntimeError)
         assert error.phase == "harness"
         assert error.repo_owner is None
-        assert error.output_tail == ()
         assert error.boot_seq == 2
         assert _lines(path)[1]["detail"] == "OpenCode server failed to become healthy"
 
@@ -261,88 +254,3 @@ class TestPhaseScope:
             await task
 
         assert [line["status"] for line in _lines(path)] == ["started"]
-
-
-class TestOutputTail:
-    def test_keeps_only_the_final_lines(self):
-        text = "\n".join(f"line {index}" for index in range(100))
-
-        tail = bounded_output_tail(text)
-
-        assert len(tail) == OUTPUT_TAIL_MAX_LINES
-        assert tail[0] == "line 40"
-        assert tail[-1] == "line 99"
-
-    def test_truncates_long_lines_and_bounds_total_size(self):
-        text = "\n".join("x" * 2000 for _ in range(10))
-
-        tail = bounded_output_tail(text)
-
-        assert all(len(line) <= OUTPUT_TAIL_MAX_LINE_CHARS for line in tail)
-        assert sum(len(line) for line in tail) <= OUTPUT_TAIL_MAX_CHARS
-        # The newest lines survive; older ones are dropped from the front.
-        assert len(tail) == OUTPUT_TAIL_MAX_CHARS // OUTPUT_TAIL_MAX_LINE_CHARS
-
-    def test_redacts_secret_values_before_they_leave(self):
-        secrets = secret_values(
-            {
-                "NPM_TOKEN": "npm_abcdef123456",
-                "DATABASE_PASSWORD": "hunter2hunter2",
-                "SANDBOX_AUTH_TOKEN": "sbx-token-value",
-                "HOME": "/home/user",
-                "SHORT_KEY": "abc",
-            }
-        )
-
-        tail = bounded_output_tail(
-            "auth: npm_abcdef123456\npg: hunter2hunter2 at /home/user\nkey abc kept",
-            secrets=secrets,
-        )
-
-        assert tail == ["auth: ***", "pg: *** at /home/user", "key abc kept"]
-
-    def test_bounds_are_measured_the_way_the_control_plane_measures(self):
-        # zod's .max() counts UTF-16 code units; an astral character is two.
-        exact = "x" * 1022 + "\U0001f680"
-        over = "x" * 1023 + "\U0001f680"
-
-        assert bounded_output_tail(exact) == [exact]
-        assert bounded_output_tail(over) == ["x" * 1023]
-
-    def test_redacts_a_secret_that_spans_several_lines(self):
-        key = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----"
-        secrets = secret_values({"REPO_SIGNING_PRIVATE_KEY": key})
-
-        tail = bounded_output_tail(f"ssh: using\n{key}\ndone", secrets=secrets)
-
-        assert tail == ["ssh: using", "***", "done"]
-        assert all("MIIEvQIBADANBg" not in line for line in tail)
-
-    def test_serialized_size_is_bounded_for_output_json_escapes(self):
-        # Control characters cost six bytes each once serialized, so the
-        # character bounds alone would let a tail through that the control
-        # plane's body cap rejects.
-        text = "\n".join("\x00" * OUTPUT_TAIL_MAX_LINE_CHARS for _ in range(20))
-
-        tail = bounded_output_tail(text)
-
-        assert tail
-        serialized = len(json.dumps(tail, ensure_ascii=False).encode("utf-8"))
-        assert serialized <= OUTPUT_TAIL_MAX_SERIALIZED_BYTES
-
-    def test_empty_output_is_an_empty_tail(self):
-        assert bounded_output_tail("") == []
-        assert bounded_output_tail("\n\n") == []
-
-
-class TestCutSecrets:
-    def test_the_surviving_lines_of_a_cut_private_key_are_still_redacted(self):
-        key = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----"
-        secrets = secret_values({"DEPLOY_PRIVATE_KEY": key})
-
-        # Output cut part way through the key, so the whole value never matches.
-        tail = bounded_output_tail(
-            "BgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\ndone", secrets=secrets
-        )
-
-        assert tail == ["BgkqhkiG9w0BAQEFAASC", "***", "done"]

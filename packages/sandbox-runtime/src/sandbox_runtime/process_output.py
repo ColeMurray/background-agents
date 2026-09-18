@@ -1,4 +1,4 @@
-"""Resilient decoding for child-process output streams."""
+"""Child-process lifecycle helpers and resilient output decoding."""
 
 from __future__ import annotations
 
@@ -9,84 +9,9 @@ import signal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
-PROCESS_OUTPUT_TAIL_BYTES = 64 * 1024
-PROCESS_OUTPUT_SHUTDOWN_SECONDS = 1.0
-
-
-class BoundedOutputCollector:
-    """Continuously drain a stream while retaining only a bounded byte tail."""
-
-    def __init__(
-        self,
-        stream: asyncio.StreamReader,
-        *,
-        max_tail_bytes: int = PROCESS_OUTPUT_TAIL_BYTES,
-    ) -> None:
-        if max_tail_bytes <= 0:
-            raise ValueError("max_tail_bytes must be positive")
-        self._stream = stream
-        self._max_tail_bytes = max_tail_bytes
-        self._tail = bytearray()
-        self._retaining = True
-        self._head_is_fragment = False
-        self.task = asyncio.create_task(self._drain())
-
-    async def _drain(self) -> None:
-        while chunk := await self._stream.read(16 * 1024):
-            if not self._retaining:
-                continue
-            self._tail.extend(chunk)
-            overflow = len(self._tail) - self._max_tail_bytes
-            if overflow > 0:
-                dropped = bytes(self._tail[:overflow]).decode(errors="replace")
-                # Match splitlines() so every supported separator preserves a whole line.
-                self._head_is_fragment = len(f"x{dropped[-1]}y".splitlines()) == 1
-                del self._tail[:overflow]
-
-    async def wait(self) -> None:
-        """Wait until every writer has closed the stream."""
-        await self.task
-
-    async def shutdown(self) -> None:
-        """Close the stream and bound how long collector cleanup can take."""
-        transport = getattr(self._stream, "_transport", None)
-        if transport is not None:
-            transport.close()
-        try:
-            await asyncio.wait_for(
-                asyncio.shield(self.task),
-                timeout=PROCESS_OUTPUT_SHUTDOWN_SECONDS,
-            )
-        except TimeoutError:
-            self.task.cancel()
-            await asyncio.gather(self.task, return_exceptions=True)
-
-    def discard_tail(self) -> None:
-        """Continue draining without retaining output."""
-        self._retaining = False
-        self._tail.clear()
-
-    def tail_lines(self, max_lines: int = 50, *, secrets: Sequence[str] = ()) -> str:
-        """Decode and return at most the requested final lines.
-
-        A window trimmed mid-line opens on a fragment cut at an arbitrary
-        byte, which is dropped: a fragment of a secret would no longer match
-        the value it is redacted by. A newline-aligned window can keep its
-        first lines unless they are a suffix of a multiline secret.
-        """
-        lines = bytes(self._tail).decode(errors="replace").splitlines()
-        drop_count = 1 if self._head_is_fragment else 0
-        for secret in secrets:
-            secret_lines = [line for line in secret.splitlines() if line]
-            for start in range(len(secret_lines)):
-                suffix = secret_lines[start:]
-                if lines[: len(suffix)] == suffix:
-                    drop_count = max(drop_count, len(suffix))
-        lines = lines[drop_count:]
-        return "\n".join(lines[-max_lines:])
 
 
 async def wait_for_process_exit(process: asyncio.subprocess.Process) -> int:

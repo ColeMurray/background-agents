@@ -114,6 +114,38 @@ describe("SandboxHandler", () => {
     expect(processSandboxEvent).toHaveBeenCalledWith(event);
   });
 
+  it("strips a legacy output tail before processing a boot phase event", async () => {
+    const { handler, processSandboxEvent } = createHandler();
+
+    const response = await handler.sandboxEvent(
+      new Request("http://internal/internal/sandbox/event", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "boot_progress",
+          bootSeq: 3,
+          phase: "setup",
+          status: "failed",
+          detail: "setup hook failed",
+          outputTail: ["legacy secret output"],
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(processSandboxEvent).toHaveBeenCalledWith({
+      type: "boot_progress",
+      bootSeq: 3,
+      phase: "setup",
+      status: "failed",
+      detail: "setup hook failed",
+      sandboxId: "sandbox-1",
+      timestamp: 123,
+    });
+  });
+
   it("authenticates the current sandbox generation and coordinates a fatal runtime error", async () => {
     const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
     const sandbox = {
@@ -142,7 +174,7 @@ describe("SandboxHandler", () => {
     expect(failSandbox).toHaveBeenCalledWith("OpenCode repeatedly crashed");
   });
 
-  it("lands a structured fatal report on the timeline as the failed boot phase before failing the sandbox", async () => {
+  it("strips a legacy output tail before landing a fatal report as the failed phase", async () => {
     const { handler, getSandbox, isValidSandboxToken, failSandbox, processSandboxEvent } =
       createHandler();
     getSandbox.mockReturnValue({
@@ -182,18 +214,17 @@ describe("SandboxHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(processSandboxEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "boot_progress",
-        phase: "start",
-        status: "failed",
-        bootSeq: 7,
-        repoOwner: "acme",
-        repoName: "api",
-        outputTail: ["npm ERR! missing script: start"],
-        sandboxId: "sandbox-1",
-      })
-    );
+    expect(processSandboxEvent).toHaveBeenCalledWith({
+      type: "boot_progress",
+      phase: "start",
+      status: "failed",
+      bootSeq: 7,
+      repoOwner: "acme",
+      repoName: "api",
+      detail: "start.sh exited 1",
+      sandboxId: "sandbox-1",
+      timestamp: 1.234,
+    });
     expect(order).toEqual(["phase", "fail"]);
     expect(failSandbox).toHaveBeenCalledWith("start.sh exited 1");
   });

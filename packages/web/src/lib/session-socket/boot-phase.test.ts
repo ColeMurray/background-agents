@@ -53,20 +53,19 @@ describe("seedSandboxBoot", () => {
     ).toBeNull();
   });
 
-  it("takes the snapshot's phase as authoritative and collects that sandbox's timings", () => {
+  it("takes the snapshot's phase metadata as authoritative and collects that sandbox's timings", () => {
     const boot = seedSandboxBoot({
       bootPhase: {
         phase: "start",
         status: "failed",
         bootSeq: 6,
         sandboxId: "sb-2",
-        outputTail: ["npm ERR! missing script: dev"],
         detail: "start hook failed",
       },
       timeline: timeline(
         // An earlier sandbox's boot: its timings are not this boot's.
         bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 900 }),
-        bootProgress({ bootSeq: 3, phase: "setup", status: "failed", outputTail: ["boom"] }),
+        bootProgress({ bootSeq: 3, phase: "setup", status: "failed" }),
         bootProgress({
           sandboxId: "sb-2",
           bootSeq: 2,
@@ -95,7 +94,6 @@ describe("seedSandboxBoot", () => {
         status: "failed",
         bootSeq: 6,
         sandboxId: "sb-2",
-        outputTail: ["npm ERR! missing script: dev"],
         detail: "start hook failed",
       },
       timings: [

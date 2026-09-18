@@ -1,9 +1,4 @@
 import { beforeEach, describe, it, expect } from "vitest";
-import { createExecutionContext, env } from "cloudflare:test";
-import {
-  SANDBOX_OUTPUT_TAIL_MAX_CHARS,
-  SANDBOX_OUTPUT_TAIL_MAX_LINES,
-} from "@open-inspect/shared/types/sandbox-events";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { cleanD1Tables } from "./cleanup";
 import { runInSessionDO } from "./session-do-access";
@@ -13,7 +8,6 @@ import {
   openClientWs,
   openSandboxWs,
   queryDO,
-  routeRequest,
   seedSandboxAuth,
   waitForSandboxStatus,
 } from "./helpers";
@@ -215,6 +209,42 @@ describe("sandbox early connect (via SELF.fetch)", () => {
     clientWs.close();
   });
 
+  it("strips a legacy output tail from a persisted boot phase snapshot", async () => {
+    const name = `ws-early-connect-legacy-phase-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
+        "UPDATE sandbox SET boot_phase = ?, boot_seq = ?",
+        JSON.stringify({
+          phase: "setup",
+          status: "failed",
+          bootSeq: 3,
+          sandboxId: SANDBOX_ID,
+          detail: "setup hook failed",
+          outputTail: ["legacy secret output"],
+        }),
+        3
+      );
+    });
+
+    const snapshotRes = await stub.fetch("http://internal/internal/snapshot");
+
+    expect(snapshotRes.status).toBe(200);
+    const snapshot = await snapshotRes.json<{ bootPhase: unknown }>();
+    expect(snapshot.bootPhase).toEqual({
+      phase: "setup",
+      status: "failed",
+      bootSeq: 3,
+      sandboxId: SANDBOX_ID,
+      detail: "setup hook failed",
+    });
+  });
+
   it("refuses to revive a fenced generation on a late ready event", async () => {
     const name = `ws-early-connect-fenced-${Date.now()}`;
     const { stub } = await initNamedSession(name);
@@ -243,7 +273,7 @@ describe("sandbox early connect (via SELF.fetch)", () => {
     ws!.close();
   });
 
-  it("lands a structured fatal report on the timeline as the failed phase", async () => {
+  it("strips a legacy output tail while landing a structured fatal report", async () => {
     const name = `ws-early-connect-fatal-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, {
@@ -278,19 +308,22 @@ describe("sandbox early connect (via SELF.fetch)", () => {
       "boot_progress"
     );
     expect(events).toHaveLength(1);
-    expect(JSON.parse(events[0].data)).toEqual(
-      expect.objectContaining({
-        phase: "start",
-        status: "failed",
-        bootSeq: 5,
-        outputTail: ["npm ERR! missing script: start"],
-      })
-    );
+    expect(JSON.parse(events[0].data)).toEqual({
+      type: "boot_progress",
+      phase: "start",
+      status: "failed",
+      bootSeq: 5,
+      repoOwner: "acme",
+      repoName: "api",
+      detail: "start.sh exited 1",
+      sandboxId: SANDBOX_ID,
+      timestamp: expect.any(Number),
+    });
     expect(
       await queryDO<{ last_spawn_error: string }>(stub, "SELECT last_spawn_error FROM sandbox")
     ).toEqual([{ last_spawn_error: "start.sh exited 1" }]);
-    // A client that loads the session after the failure gets the failed
-    // phase, its reason and the tail from the snapshot alone.
+    // A client that loads the session after the failure gets only the failed
+    // phase metadata and its reason from the snapshot.
     const snapshotRes = await stub.fetch("http://internal/internal/snapshot");
     const snapshot = await snapshotRes.json<{ bootPhase: unknown }>();
     expect(snapshot.bootPhase).toEqual({
@@ -299,59 +332,8 @@ describe("sandbox early connect (via SELF.fetch)", () => {
       bootSeq: 5,
       repoOwner: "acme",
       repoName: "api",
-      outputTail: ["npm ERR! missing script: start"],
       detail: "start.sh exited 1",
       sandboxId: SANDBOX_ID,
     });
-  });
-
-  it("accepts a structured fatal report with a full output tail through the public route", async () => {
-    // The route's body cap and the report schema share one budget, so the
-    // largest tail the runtime may send must land, not 413 at the door.
-    const name = `ws-early-connect-fatal-public-${Date.now()}`;
-    const { stub } = await initNamedSession(name);
-    await seedSandboxAuth(stub, {
-      authToken: SANDBOX_TOKEN,
-      sandboxId: SANDBOX_ID,
-      status: "connecting",
-    });
-    const perLine = Math.floor(SANDBOX_OUTPUT_TAIL_MAX_CHARS / SANDBOX_OUTPUT_TAIL_MAX_LINES);
-    const outputTail = Array.from({ length: SANDBOX_OUTPUT_TAIL_MAX_LINES }, (_, i) =>
-      `${i}: `.padEnd(perLine, "x")
-    );
-
-    const response = await routeRequest(
-      new Request(`http://localhost/sessions/${name}/sandbox-error`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${SANDBOX_TOKEN}`,
-          "X-Sandbox-ID": SANDBOX_ID,
-        },
-        body: JSON.stringify({
-          error: "setup.sh exited 1",
-          fatal: true,
-          phase: "setup",
-          bootSeq: 4,
-          repoOwner: "acme",
-          repoName: "api",
-          outputTail,
-        }),
-      }),
-      env,
-      createExecutionContext()
-    );
-
-    expect(response.status).toBe(200);
-    await waitForSandboxStatus(stub, "failed");
-    const events = await queryDO<{ data: string }>(
-      stub,
-      "SELECT data FROM events WHERE type = ?",
-      "boot_progress"
-    );
-    expect(events).toHaveLength(1);
-    const landed = JSON.parse(events[0].data) as { phase: string; outputTail: string[] };
-    expect(landed.phase).toBe("setup");
-    expect(landed.outputTail).toEqual(outputTail);
   });
 });

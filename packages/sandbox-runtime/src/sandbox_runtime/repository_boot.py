@@ -254,7 +254,6 @@ class RepositoryBoot:
                             f"start hook failed for {repo.owner}/{repo.name}",
                             phase="start",
                             repo=repo,
-                            output_tail=self.hooks.failure_tail(repo, "start"),
                         )
                     start_phase.warning = True
                     self.warnings.record(

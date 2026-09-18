@@ -7,27 +7,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sandbox_runtime.boot_events import bounded_output_tail, secret_values
 from sandbox_runtime.process_output import (
-    PROCESS_OUTPUT_TAIL_BYTES,
-    BoundedOutputCollector,
     communicate_owned_subprocess,
     terminate_owned_subprocess,
     wait_for_process_exit,
 )
-
-
-async def test_bounded_output_collector_retains_only_tail_window():
-    stream = asyncio.StreamReader()
-    collector = BoundedOutputCollector(stream)
-    stream.feed_data(b"discarded\n" * 10_000 + b"final line\n")
-    stream.feed_eof()
-
-    await collector.wait()
-
-    tail = collector.tail_lines(max_lines=10_000)
-    assert len(tail.encode()) <= PROCESS_OUTPUT_TAIL_BYTES
-    assert tail.endswith("final line")
 
 
 async def test_wait_for_process_exit_does_not_wait_for_inherited_pipe_eof():
@@ -112,82 +96,3 @@ async def test_cancellation_during_grace_still_kills_and_reaps():
         (123, signal.SIGKILL),
     ]
     assert process.wait.await_count == 2
-
-
-async def test_overflowed_window_drops_the_cut_first_line():
-    """The first line after an overflow starts at an arbitrary byte and is never reported."""
-    stream = asyncio.StreamReader()
-    collector = BoundedOutputCollector(stream, max_tail_bytes=64)
-    stream.feed_data(b"a" * 40 + b"\n" + b"b" * 40 + b"\nlast\n")
-    stream.feed_eof()
-
-    await collector.wait()
-
-    assert collector.tail_lines() == "b" * 40 + "\nlast"
-
-
-async def test_a_trim_ending_on_a_newline_keeps_its_first_line():
-    """A window trimmed exactly after a newline opens on a whole line, not a fragment."""
-    stream = asyncio.StreamReader()
-    collector = BoundedOutputCollector(stream, max_tail_bytes=20)
-    # 25 bytes: the trim drops "AAAA\n" exactly, so "BBBB" survives intact.
-    stream.feed_data(b"AAAA\nBBBB\nCCCC\nDDDD\nEEEE\n")
-    stream.feed_eof()
-
-    await collector.wait()
-
-    assert collector.tail_lines() == "BBBB\nCCCC\nDDDD\nEEEE"
-
-
-async def test_a_later_mid_line_trim_drops_the_fragment_again():
-    """The head state tracks the latest trim, not merely that one has happened."""
-    stream = asyncio.StreamReader()
-    collector = BoundedOutputCollector(stream, max_tail_bytes=20)
-    stream.feed_data(b"AAAA\nBBBB\nCCCC\nDDDD\nEEEE\n")
-    await asyncio.sleep(0)
-    assert collector.tail_lines() == "BBBB\nCCCC\nDDDD\nEEEE"
-    stream.feed_data(b"FFFFFFF\n")
-    stream.feed_eof()
-
-    await collector.wait()
-
-    assert collector.tail_lines() == "DDDD\nEEEE\nFFFFFFF"
-
-
-@pytest.mark.parametrize(
-    "separator", ["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]
-)
-async def test_a_trim_ending_on_any_splitlines_separator_keeps_its_first_line(separator):
-    stream = asyncio.StreamReader()
-    retained = b"BBBB\nCCCC\n"
-    collector = BoundedOutputCollector(stream, max_tail_bytes=len(retained))
-    stream.feed_data(f"AAAA{separator}".encode() + retained)
-    stream.feed_eof()
-
-    await collector.wait()
-
-    assert collector.tail_lines() == "BBBB\nCCCC"
-
-
-async def test_newline_aligned_tail_drops_a_multiline_secret_suffix():
-    stream = asyncio.StreamReader()
-    collector = BoundedOutputCollector(stream, max_tail_bytes=2)
-    secrets = secret_values({"API_TOKEN": "abcdefgh\nx"})
-    stream.feed_data(b"abcdefgh\nx\n")
-    stream.feed_eof()
-
-    await collector.wait()
-
-    assert bounded_output_tail(collector.tail_lines(secrets=secrets), secrets=secrets) == []
-
-
-async def test_newline_aligned_tail_drops_an_interior_multiline_secret_suffix():
-    stream = asyncio.StreamReader()
-    collector = BoundedOutputCollector(stream, max_tail_bytes=4)
-    secrets = secret_values({"API_TOKEN": "abcdefgh\nx\ny"})
-    stream.feed_data(b"abcdefgh\nx\ny\n")
-    stream.feed_eof()
-
-    await collector.wait()
-
-    assert bounded_output_tail(collector.tail_lines(secrets=secrets), secrets=secrets) == []

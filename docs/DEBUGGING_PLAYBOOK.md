@@ -428,11 +428,9 @@ Three things end a boot that never reaches `ready`:
   control plane sends `shutdown`, fences the generation, fails the row, and fails the waiting prompt
   with the phase text (`Sandbox boot exceeded 30 minutes while running setup.sh for acme/api…`).
 - `sandbox.fatal_runtime_error`: the runtime reported a fatal error (clone failed, the primary
-  repository's `start.sh` failed, the harness would not open). The report always carries the phase.
-  It carries the repository and a redacted output tail only when the failure has them — the fatal
-  `start.sh` path carries both, while a clone failure or a harness failure carries neither — so do
-  not go looking for a tail that was never collected. Where there is one, the web shows it in the
-  session header.
+  repository's `start.sh` failed, the harness would not open). The report retains the phase and
+  error metadata, and repository metadata when applicable. Hook stdout and stderr are discarded
+  rather than collected or shown, including for a fatal `start.sh` failure.
 
 Fencing revokes a generation for good: the sandbox token hash is blanked, the socket id cleared, and
 `fenced=1` set on the row. The runtime's next authenticated call or reconnect is refused, the bridge

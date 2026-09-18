@@ -332,6 +332,79 @@ describe("applyMigrations", () => {
     }
   });
 
+  it("removes persisted hook output tails without touching malformed event data", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 53);
+    expect(typeof migration?.run).toBe("function");
+
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec("CREATE TABLE events (type TEXT NOT NULL, data TEXT NOT NULL)");
+      db.exec("CREATE TABLE sandbox (boot_phase TEXT)");
+      db.prepare("INSERT INTO events VALUES (?, ?)").run(
+        "boot_progress",
+        JSON.stringify({ type: "boot_progress", phase: "start", outputTail: ["secret"] })
+      );
+      db.prepare("INSERT INTO events VALUES (?, ?)").run("boot_progress", "not-json");
+      db.prepare("INSERT INTO events VALUES (?, ?)").run(
+        "token",
+        JSON.stringify({ type: "token", outputTail: ["unrelated"] })
+      );
+      db.prepare("INSERT INTO sandbox VALUES (?)").run(
+        JSON.stringify({ phase: "start", status: "failed", outputTail: ["secret"] })
+      );
+
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+
+      const events = db.prepare("SELECT data FROM events ORDER BY rowid").all() as Array<{
+        data: string;
+      }>;
+      expect(JSON.parse(events[0].data)).toEqual({ type: "boot_progress", phase: "start" });
+      expect(events[1].data).toBe("not-json");
+      expect(JSON.parse(events[2].data)).toEqual({
+        type: "token",
+        outputTail: ["unrelated"],
+      });
+      const sandbox = db.prepare("SELECT boot_phase FROM sandbox").get() as {
+        boot_phase: string;
+      };
+      expect(JSON.parse(sandbox.boot_phase)).toEqual({ phase: "start", status: "failed" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reapplies the output-tail scrub after migrations have already run", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      initSchema(sql);
+      db.prepare(
+        `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+         VALUES (?, ?, ?, NULL, ?, ?)`
+      ).run(
+        "legacy-boot-progress",
+        "boot_progress",
+        JSON.stringify({ type: "boot_progress", phase: "start", outputTail: ["secret"] }),
+        1,
+        1
+      );
+
+      initSchema(sql);
+
+      const row = db
+        .prepare("SELECT data FROM events WHERE id = ?")
+        .get("legacy-boot-progress") as {
+        data: string;
+      };
+      expect(JSON.parse(row.data)).toEqual({ type: "boot_progress", phase: "start" });
+    } finally {
+      db.close();
+    }
+  });
+
   it("keeps repository context consistent at the session table boundary", () => {
     expect(SCHEMA_SQL).toContain("(repo_owner IS NULL) = (repo_name IS NULL)");
     expect(SCHEMA_SQL).toContain("repo_owner IS NOT NULL");

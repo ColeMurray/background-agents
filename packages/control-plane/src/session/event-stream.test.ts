@@ -36,6 +36,19 @@ function gitSyncEvent(status: "in_progress" | "completed", timestamp: number) {
   return { type: "git_sync", status, sandboxId: "sandbox-1", timestamp } as const;
 }
 
+function legacyBootProgressEvent() {
+  return {
+    type: "boot_progress",
+    bootSeq: 3,
+    phase: "setup",
+    status: "failed",
+    detail: "setup hook failed",
+    outputTail: ["legacy secret output"],
+    sandboxId: "sandbox-1",
+    timestamp: 3,
+  };
+}
+
 describe("SessionEventStream", () => {
   describe("getReplay", () => {
     it("loads replay through the canonical timeline pager", () => {
@@ -75,6 +88,31 @@ describe("SessionEventStream", () => {
         hasMore: false,
         cursor: { timestamp: 1000, id: "e1", sequence: 41 },
       });
+    });
+
+    it("strips legacy output tails from persisted replay events", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.getEventTimelinePage).mockReturnValue({
+        events: [eventRow("e1", "boot_progress", legacyBootProgressEvent(), 1000, 41)],
+        hasMore: false,
+        nextCursor: null,
+      });
+
+      expect(stream.getReplay().events).toEqual([
+        {
+          eventId: "e1",
+          timelineSequence: 41,
+          event: {
+            type: "boot_progress",
+            bootSeq: 3,
+            phase: "setup",
+            status: "failed",
+            detail: "setup hook failed",
+            sandboxId: "sandbox-1",
+            timestamp: 3,
+          },
+        },
+      ]);
     });
 
     it("returns the canonical page's pagination state", () => {
@@ -253,6 +291,32 @@ describe("SessionEventStream", () => {
         ],
         cursor: "1000:e1",
         hasMore: true,
+      });
+    });
+
+    it("strips legacy output tails from raw event API responses", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.listEventPage).mockReturnValue({
+        events: [eventRow("e1", "boot_progress", legacyBootProgressEvent(), 1000)],
+        hasMore: false,
+        nextCursor: null,
+      });
+
+      const page = stream.listEvents({
+        cursor: null,
+        limit: 10,
+        type: "boot_progress",
+        messageId: null,
+      });
+
+      expect(page.events[0].data).toEqual({
+        type: "boot_progress",
+        bootSeq: 3,
+        phase: "setup",
+        status: "failed",
+        detail: "setup hook failed",
+        sandboxId: "sandbox-1",
+        timestamp: 3,
       });
     });
 
