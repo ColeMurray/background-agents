@@ -19,17 +19,14 @@ export function scheduleStartingStatus(
 }
 
 export function buildWorkingMessageBlocks(
-  repoFullName: string,
-  options: { reasoning?: string; sessionId?: string; webAppUrl?: string } = {}
+  options: { sessionId?: string; webAppUrl?: string } = {}
 ): Array<Record<string, unknown>> {
   const blocks: Array<Record<string, unknown>> = [
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: options.reasoning
-          ? `Working on *${repoFullName}*...\n_${options.reasoning}_`
-          : `Working on *${repoFullName}*...`,
+        text: "Starting work...",
       },
     },
   ];

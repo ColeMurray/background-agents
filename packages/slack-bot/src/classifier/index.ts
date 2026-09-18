@@ -21,7 +21,13 @@ import {
   requireClassificationProviderKey,
   resolveClassificationProvider,
 } from "@open-inspect/shared/classification";
-import { targetId, targetLabel, targetValue, type SlackSessionTarget } from "../targets";
+import {
+  NO_REPOSITORY_TARGET_VALUE,
+  targetId,
+  targetLabel,
+  targetValue,
+  type SlackSessionTarget,
+} from "../targets";
 import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
@@ -35,15 +41,14 @@ const CONFIDENCE_LEVELS = [
 const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
   name: CLASSIFY_TARGET_TOOL_NAME,
   description:
-    "Classify which repository or environment a Slack message refers to. " +
+    "Classify which repository, environment, or repository-less sandbox a Slack message needs. " +
     "Use targetId as null when uncertain.",
   input_schema: {
     type: "object",
     properties: {
       targetId: {
         type: ["string", "null"],
-        description:
-          'A repository "owner/name" or an environment id ("env_…") if confident enough to choose one, otherwise null.',
+        description: `A repository "owner/name", an environment id ("env_…"), or "${NO_REPOSITORY_TARGET_VALUE}". Use null when unclear.`,
       },
       confidence: {
         type: "string",
@@ -56,8 +61,7 @@ const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
       alternatives: {
         type: "array",
         items: { type: "string" },
-        description:
-          "Alternative repository fullNames / environment ids when confidence is not high.",
+        description: `Other reasonable repository fullNames, environment ids, or "${NO_REPOSITORY_TARGET_VALUE}", especially whenever clarification may be required.`,
       },
     },
     required: ["targetId", "confidence", "reasoning", "alternatives"],
@@ -104,11 +108,16 @@ ${context.previousMessages.map((m) => `- ${m}`).join("\n")}`
 }`;
   }
 
-  return `You are a target classifier for a coding agent. Your job is to determine which code repository or environment a Slack message is referring to.
+  return `You are a target classifier for a coding agent. Your job is to determine which repository, environment, or repository-less sandbox a Slack message needs.
 
 ## Available Repositories
 ${repoDescriptions}
 ${environmentSection}
+
+## No Repository Target
+
+Use targetId "${NO_REPOSITORY_TARGET_VALUE}" when the task should run in an empty sandbox without cloning a repository.
+Choose this target when the task does not require any available repository or environment. Include likely repository targets as alternatives when applicable.
 ${contextSection}
 
 ## User's Message
@@ -116,7 +125,7 @@ ${message}
 
 ## Your Task
 
-Analyze the message and context to determine which repository or environment the user is referring to.
+Analyze the message and context to determine which target the user needs.
 
 Consider:
 1. Explicit mentions of repository or environment names or aliases
@@ -124,14 +133,15 @@ Consider:
 3. File paths or code patterns mentioned
 4. Channel associations (some channels are associated with specific repos)
 5. Context from previous messages in the thread
+6. Whether the task requires any repository at all
 
 ## Response Format
 
 Respond with a JSON object with these fields:
-- targetId: a repository "owner/name", an environment id ("env_…"), or null if unclear
+- targetId: a repository "owner/name", an environment id ("env_…"), "${NO_REPOSITORY_TARGET_VALUE}", or null if unclear
 - confidence: "high" | "medium" | "low"
 - reasoning: brief explanation
-- alternatives: other possible targets when confidence is not high`;
+- alternatives: other reasonable targets, especially whenever clarification may be required`;
 }
 
 const llmResponseSchema = z.object({
@@ -274,6 +284,7 @@ export class RepoClassifier {
         // Reasoning renders as mrkdwn; keyword and label are both user text.
         reasoning: `Matched routing rule "${escapeMrkdwnText(keyword)}" → ${escapeMrkdwnText(targetLabel(target))}`,
         needsClarification: false,
+        source: "routing_rule",
       };
     }
 
@@ -283,6 +294,7 @@ export class RepoClassifier {
       reasoning: "Multiple routing rules matched; asking which one to use.",
       alternatives: resolved.map((t) => t.target),
       needsClarification: true,
+      source: "routing_rule",
     };
   }
 
@@ -317,6 +329,7 @@ export class RepoClassifier {
         // Reasoning renders as mrkdwn; the label is user text.
         reasoning: `Channel is associated with ${target.kind} ${escapeMrkdwnText(targetLabel(target))}`,
         needsClarification: false,
+        source: "channel_association",
       };
     }
 
@@ -327,6 +340,7 @@ export class RepoClassifier {
         reasoning: "This channel is associated with several targets; asking which one to use.",
         alternatives: targets,
         needsClarification: true,
+        source: "channel_association",
       };
     }
 
@@ -346,46 +360,20 @@ export class RepoClassifier {
     // classification — to repository-only.
     const catalog = await loadTargetCatalog(this.env, traceId);
 
-    // Only a fully empty catalog is unclassifiable — environments launch by id
-    // without consulting the repo list, so they stay reachable when the repo
-    // fetch degrades to [].
-    if (catalog.repos.length === 0 && catalog.environments.length === 0) {
-      return {
-        target: null,
-        confidence: "low",
-        reasoning: "No repositories or environments are currently available.",
-        needsClarification: true,
-      };
-    }
-
     // Deterministic routing rules (explicit keyword → repo or environment) take
-    // precedence over everything below — including the single-repo shortcut,
-    // which would otherwise make environment-targeted rules unreachable in
-    // one-repo workspaces — but never override an active thread (handled before
-    // classify is called).
+    // precedence over everything below, but never override an active thread
+    // (handled before classify is called).
     const routed = await this.classifyByRoutingRules(message, catalog, traceId);
     if (routed) {
       return routed;
     }
 
-    // Channel associations are the second deterministic stage. Like routing
-    // rules, they run before the single-repo shortcut so a channel associated
-    // with an environment stays reachable in one-repo workspaces.
+    // Channel associations are the second deterministic stage.
     const channelRouted = context?.channelId
       ? this.classifyByChannelAssociations(context.channelId, catalog, traceId)
       : null;
     if (channelRouted) {
       return channelRouted;
-    }
-
-    // With a single repository and no environments there is nothing to choose.
-    if (catalog.repos.length === 1 && catalog.environments.length === 0) {
-      return {
-        target: { kind: "repository", repo: catalog.repos[0] },
-        confidence: "high",
-        reasoning: "Only one repository is available.",
-        needsClarification: false,
-      };
     }
 
     // Use LLM for classification
@@ -437,6 +425,7 @@ export class RepoClassifier {
           !matchedTarget ||
           llmResult.confidence === "low" ||
           (llmResult.confidence === "medium" && alternatives.length > 0),
+        source: "llm",
       };
     } catch (e) {
       log.error("classifier.classify", {
@@ -456,6 +445,7 @@ export class RepoClassifier {
         // the picker lets the user search the full list.
         alternatives: undefined,
         needsClarification: true,
+        source: "llm",
       };
     }
   }

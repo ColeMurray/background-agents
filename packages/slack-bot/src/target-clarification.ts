@@ -15,7 +15,13 @@ import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import { loadTargetCatalog, type TargetCatalog } from "./classifier/catalog";
 import { MAX_REPO_SUGGESTION_OPTIONS } from "./app-home/constants";
 import { plainTextOption } from "./slack-options";
-import { parseTargetValue, targetValue, type SlackSessionTarget } from "./targets";
+import {
+  NO_REPOSITORY_TARGET_LABEL,
+  NO_REPOSITORY_TARGET_VALUE,
+  parseTargetValue,
+  targetValue,
+  type SlackSessionTarget,
+} from "./targets";
 import type {
   SlackActionsBlock,
   SlackButtonElement,
@@ -43,6 +49,29 @@ export const SELECT_TARGET_ACTION_ID = "select_repo";
  * Wire value kept stable for already-posted messages, like the picker's.
  */
 export const SELECT_TARGET_QUICK_PICK_ACTION_ID = "select_repo_quick_pick";
+const TARGET_PICKER_BLOCK_ID_PREFIX = "target_picker:";
+const TARGET_QUICK_PICK_BLOCK_ID_PREFIX = "target_quick_picks:";
+const REQUEST_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function targetPickerBlockId(requestId: string): string {
+  return `${TARGET_PICKER_BLOCK_ID_PREFIX}${requestId}`;
+}
+
+export function targetQuickPickBlockId(requestId: string): string {
+  return `${TARGET_QUICK_PICK_BLOCK_ID_PREFIX}${requestId}`;
+}
+
+export function parseTargetInteractionRequestId(
+  blockId: string,
+  source: "picker" | "quick_pick"
+): string | null {
+  const prefix =
+    source === "picker" ? TARGET_PICKER_BLOCK_ID_PREFIX : TARGET_QUICK_PICK_BLOCK_ID_PREFIX;
+  if (!blockId.startsWith(prefix)) return null;
+  const requestId = blockId.slice(prefix.length);
+  return REQUEST_ID_PATTERN.test(requestId) ? requestId : null;
+}
 
 /** Unique per-button action_id; Slack requires action_id uniqueness within an actions block. */
 export function quickPickActionId(index: number): string {
@@ -86,6 +115,14 @@ function toEnvironmentSelectOption(environment: Environment): SlackSelectOption 
   };
 }
 
+function toNoRepositorySelectOption(): SlackSelectOption {
+  return {
+    text: plainTextOption(NO_REPOSITORY_TARGET_LABEL),
+    description: plainTextOption("Start without cloning a repository"),
+    value: NO_REPOSITORY_TARGET_VALUE,
+  };
+}
+
 /**
  * Filter environments by a free-text query against their name
  * (case-insensitive), mirroring {@link filterReposByQuery}.
@@ -115,6 +152,9 @@ export async function resolveTargetValue(
   traceId?: string
 ): Promise<SlackSessionTarget | null> {
   const ref = parseTargetValue(value);
+  if (ref.kind === "none") {
+    return { kind: "none" };
+  }
   if (ref.kind === "environment") {
     const environment = await getEnvironmentById(env, ref.environmentId, traceId);
     return environment ? { kind: "environment", environment } : null;
@@ -126,8 +166,8 @@ export async function resolveTargetValue(
 
 /**
  * The body of a block_suggestion response: flat options while the workspace is
- * repository-only, or Environments/Repositories groups once environments exist
- * (Slack accepts exactly one of the two shapes).
+ * repository-only, or grouped options once environments exist (Slack accepts
+ * exactly one of the two shapes).
  */
 export type TargetClarificationOptions =
   | { options: SlackSelectOption[] }
@@ -140,12 +180,20 @@ export function countClarificationOptions(response: TargetClarificationOptions):
     : response.option_groups.reduce((sum, group) => sum + group.options.length, 0);
 }
 
+export function getTargetCatalogNotice(catalog: TargetCatalog): string {
+  return catalog.repos.length === 0 && catalog.environments.length === 0
+    ? "\n\nNo repositories or environments are currently available. You can continue without one; if you expected other targets, check the integration configuration."
+    : "";
+}
+
 function buildGroupedOptions(
   environments: Environment[],
   repos: RepoConfig[]
 ): TargetClarificationOptions {
   if (environments.length === 0) {
-    return { options: repos.map(toRepoSelectOption) };
+    return {
+      options: [toNoRepositorySelectOption(), ...repos.map(toRepoSelectOption)],
+    };
   }
   const groups: SlackSelectOptionGroup[] = [
     {
@@ -159,15 +207,20 @@ function buildGroupedOptions(
       options: repos.map(toRepoSelectOption),
     });
   }
+  groups.push({
+    label: { type: "plain_text", text: "Other" },
+    options: [toNoRepositorySelectOption()],
+  });
   return { option_groups: groups };
 }
 
 /**
  * Options for the clarification picker's external_select. Slack queries this as
  * the user types; we filter environments on name and repositories on full name,
- * and cap at Slack's per-response limit (environments first — the list is
- * short). With min_query_length 0 the unfiltered list shows as soon as the menu
- * opens, and typing surfaces any of the remaining targets.
+ * always retain No repository, and cap at Slack's per-response limit
+ * (environments first — the list is short). With min_query_length 0 the
+ * unfiltered list shows as soon as the menu opens, and typing surfaces any of
+ * the remaining targets.
  */
 export async function getTargetClarificationOptions(
   env: Env,
@@ -175,13 +228,14 @@ export async function getTargetClarificationOptions(
   traceId?: string
 ): Promise<TargetClarificationOptions> {
   const catalog = await loadTargetCatalog(env, traceId);
+  const remainingAfterNoRepository = MAX_REPO_SUGGESTION_OPTIONS - 1;
   const matchedEnvironments = filterEnvironmentsByQuery(catalog.environments, query).slice(
     0,
-    MAX_REPO_SUGGESTION_OPTIONS
+    remainingAfterNoRepository
   );
   const matchedRepos = filterReposByQuery(catalog.repos, query).slice(
     0,
-    MAX_REPO_SUGGESTION_OPTIONS - matchedEnvironments.length
+    remainingAfterNoRepository - matchedEnvironments.length
   );
   return buildGroupedOptions(matchedEnvironments, matchedRepos);
 }
@@ -190,13 +244,13 @@ function buildTargetPickerAccessory(
   catalog: TargetCatalog
 ): SlackStaticSelectElement | SlackExternalSelectElement {
   const { repos, environments } = catalog;
-  const total = repos.length + environments.length;
+  const total = repos.length + environments.length + 1;
   const placeholder = {
     type: "plain_text" as const,
-    text: environments.length > 0 ? "Select a repository or environment" : "Select a repository",
+    text: "Select a target",
   };
 
-  if (total > 0 && total <= MAX_REPO_SUGGESTION_OPTIONS) {
+  if (total <= MAX_REPO_SUGGESTION_OPTIONS) {
     return {
       type: "static_select",
       placeholder,
@@ -214,9 +268,16 @@ function buildTargetPickerAccessory(
   };
 }
 
-/** Short button text for a target: the repo displayName or environment name. */
+/** Short button text for a target. */
 function targetDisplayName(target: SlackSessionTarget): string {
-  return target.kind === "environment" ? target.environment.name : target.repo.displayName;
+  switch (target.kind) {
+    case "repository":
+      return target.repo.displayName;
+    case "environment":
+      return target.environment.name;
+    case "none":
+      return NO_REPOSITORY_TARGET_LABEL;
+  }
 }
 
 /**
@@ -224,16 +285,20 @@ function targetDisplayName(target: SlackSessionTarget): string {
  * repo's fullName, or the environment name tagged as an environment.
  */
 function targetDisambiguatedName(target: SlackSessionTarget): string {
-  return target.kind === "environment"
-    ? `${target.environment.name} (environment)`
-    : target.repo.fullName;
+  switch (target.kind) {
+    case "repository":
+      return target.repo.fullName;
+    case "environment":
+      return `${target.environment.name} (environment)`;
+    case "none":
+      return NO_REPOSITORY_TARGET_LABEL;
+  }
 }
 
 /**
- * One-click buttons for the classifier's ranked alternatives — repositories or
- * environments — capped at MAX_TARGET_QUICK_PICKS. Each carries the target's
- * value (repo id or `env:<id>`) and routes through the same selection handler
- * as the picker.
+ * One-click buttons for the classifier's ranked alternatives, capped at
+ * MAX_TARGET_QUICK_PICKS. Each carries the target's stable value and routes
+ * through the same selection handler as the picker.
  */
 export function buildTargetQuickPickButtons(
   alternatives: SlackSessionTarget[]
@@ -278,41 +343,43 @@ function duplicateDisplayNames(targets: SlackSessionTarget[]): Set<string> {
 export function buildTargetClarificationBlocks(
   reasoning: string,
   alternatives: SlackSessionTarget[] | undefined,
-  catalog: TargetCatalog
+  catalog: TargetCatalog,
+  requestId: string
 ): Array<SlackSectionBlock | SlackActionsBlock> {
   const quickPicks = alternatives?.length ? buildTargetQuickPickButtons(alternatives) : [];
-  const total = catalog.repos.length + catalog.environments.length;
-  const usesInlinePicker = total > 0 && total <= MAX_REPO_SUGGESTION_OPTIONS;
-  // The headline names environments only when the workspace has any on offer.
-  const offersEnvironments =
-    catalog.environments.length > 0 ||
-    (alternatives?.some((t) => t.kind === "environment") ?? false);
-  const subject = offersEnvironments ? "repository or environment" : "repository";
+  const total = catalog.repos.length + catalog.environments.length + 1;
+  const usesInlinePicker = total <= MAX_REPO_SUGGESTION_OPTIONS;
+  const catalogNotice = getTargetCatalogNotice(catalog);
 
   const blocks: Array<SlackSectionBlock | SlackActionsBlock> = [
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `I couldn't determine which ${subject} you're referring to.\n\n_${reasoning}_`,
+        text: `I couldn't determine which target to use.\n\n_${reasoning}_${catalogNotice}`,
       },
     },
   ];
 
   if (quickPicks.length > 0) {
-    blocks.push({ type: "actions", block_id: "repo_quick_picks", elements: quickPicks });
+    blocks.push({
+      type: "actions",
+      block_id: targetQuickPickBlockId(requestId),
+      elements: quickPicks,
+    });
   }
 
   blocks.push({
     type: "section",
+    block_id: targetPickerBlockId(requestId),
     text: {
       type: "mrkdwn",
       text:
         quickPicks.length > 0
           ? usesInlinePicker
-            ? `Or choose another ${subject}:`
-            : `Or search for another ${subject}:`
-          : `Which ${subject} should I work with?`,
+            ? "Or choose another target:"
+            : "Or search for another target:"
+          : "Which target should I use?",
     },
     accessory: buildTargetPickerAccessory(catalog),
   });
