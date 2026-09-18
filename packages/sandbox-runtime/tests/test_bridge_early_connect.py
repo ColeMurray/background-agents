@@ -18,7 +18,7 @@ from websockets import State
 from sandbox_runtime import bridge as bridge_module
 from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.git_signing import GitSigningError
-from sandbox_runtime.harness import HarnessStartError
+from sandbox_runtime.harness import DETERMINISTIC_FAILURE_EXIT_CODE, HarnessStartError
 from tests.conftest import ScriptedHarness
 
 
@@ -291,24 +291,89 @@ class TestHarnessAttach:
         sleep.assert_awaited_once_with(bridge.RECONNECT_BACKOFF_BASE)
         assert bridge._boot_ready.is_set()
 
-    async def test_non_retryable_signing_failure_ends_the_run_gracefully(
+    async def test_non_retryable_signing_failure_exits_with_the_deterministic_cause(
         self, tmp_path, monkeypatch
     ):
+        fatal_path = tmp_path / "fatal.txt"
+        monkeypatch.setattr("sandbox_runtime.bridge.BRIDGE_FATAL_ERROR_FILE_PATH", str(fatal_path))
         harness = OpeningHarness([])
         bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
         bridge.git_signing.initialize = AsyncMock(
-            side_effect=GitSigningError("Commit signing configuration unavailable", status_code=403)
+            side_effect=GitSigningError("Commit signing configuration unavailable", status_code=401)
         )
         bridge._send_event = AsyncMock()
         _connect_quiet(bridge, monkeypatch)
         _write_lines(HARNESS_COMPLETED)
+        monkeypatch.setattr(bridge_module, "AgentBridge", MagicMock(return_value=bridge))
+        monkeypatch.setattr(
+            bridge_module.sys,
+            "argv",
+            [
+                "sandbox_runtime.bridge",
+                "--sandbox-id",
+                "test-sandbox",
+                "--session-id",
+                "test-session",
+                "--control-plane",
+                "http://localhost:8787",
+                "--token",
+                "test-token",
+                "--early-connect",
+            ],
+        )
 
-        await asyncio.wait_for(bridge.run(), timeout=2)
+        with pytest.raises(SystemExit) as exit_info:
+            await asyncio.wait_for(bridge_module.main(), timeout=2)
 
+        assert exit_info.value.code == DETERMINISTIC_FAILURE_EXIT_CODE
         assert bridge.shutdown_event.is_set()
         assert not bridge._boot_ready.is_set()
         assert harness.closed is True
+        assert fatal_path.read_text() == "Commit signing configuration unavailable"
         assert _run_complete(bridge) == ("fatal_error", 1)
+
+    async def test_non_retryable_signing_failure_interrupts_reconnect_backoff(
+        self, tmp_path, monkeypatch
+    ):
+        fatal_path = tmp_path / "fatal.txt"
+        monkeypatch.setattr("sandbox_runtime.bridge.BRIDGE_FATAL_ERROR_FILE_PATH", str(fatal_path))
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: OpeningHarness([]))
+        bridge.git_signing.initialize = AsyncMock(
+            side_effect=GitSigningError("Invalid repository manifest")
+        )
+        bridge._connect_and_run = AsyncMock(side_effect=RuntimeError("transport unavailable"))
+        _write_lines(HARNESS_COMPLETED)
+
+        with pytest.raises(GitSigningError, match="Invalid repository manifest"):
+            await asyncio.wait_for(bridge.run(), timeout=1)
+
+        assert fatal_path.read_text() == "Invalid repository manifest"
+
+    async def test_shutdown_wins_a_race_with_non_retryable_signing(self, tmp_path, monkeypatch):
+        fatal_path = tmp_path / "fatal.txt"
+        monkeypatch.setattr("sandbox_runtime.bridge.BRIDGE_FATAL_ERROR_FILE_PATH", str(fatal_path))
+        signing_started = asyncio.Event()
+        signing_may_finish = asyncio.Event()
+
+        async def fail_signing(_author):
+            signing_started.set()
+            await signing_may_finish.wait()
+            raise GitSigningError("Commit signing configuration unavailable", status_code=401)
+
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: OpeningHarness([]))
+        bridge.git_signing.initialize = AsyncMock(side_effect=fail_signing)
+        _connect_quiet(bridge, monkeypatch)
+        _write_lines(HARNESS_COMPLETED)
+
+        run_task = asyncio.create_task(bridge.run())
+        await asyncio.wait_for(signing_started.wait(), timeout=1)
+        bridge.shutdown_event.set()
+        signing_may_finish.set()
+
+        await asyncio.wait_for(run_task, timeout=1)
+
+        assert not fatal_path.exists()
+        assert _run_complete(bridge) == ("shutdown", 1)
 
 
 class TestConnectSnapshot:
@@ -532,10 +597,20 @@ class TestCommandsWhileBooting:
 
     async def test_shutdown_ends_the_bridge_while_booting(self, tmp_path, monkeypatch):
         bridge = _bridge(tmp_path, monkeypatch)
+        ws = _connect_quiet(bridge, monkeypatch)
+        run_task = asyncio.create_task(bridge.run())
+        for _ in range(10):
+            if bridge.ws is not None:
+                break
+            await asyncio.sleep(0)
+        assert bridge.ws is ws
 
         await bridge._handle_command({"type": "shutdown"})
+        await asyncio.wait_for(run_task, timeout=1)
 
         assert bridge.shutdown_event.is_set()
+        assert ws.closed.is_set()
+        assert _run_complete(bridge) == ("shutdown", 1)
 
     async def test_push_replies_push_error_without_running_git(self, tmp_path, monkeypatch):
         bridge = _bridge(tmp_path, monkeypatch)

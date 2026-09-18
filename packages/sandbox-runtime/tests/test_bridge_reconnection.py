@@ -115,7 +115,7 @@ class TestIsFatalConnectionError:
         )
 
     @pytest.mark.asyncio
-    async def test_run_complete_does_not_retain_transient_outcome(self, bridge, monkeypatch):
+    async def test_run_complete_does_not_retain_transient_outcome(self, bridge):
         attempts = 0
 
         async def connect_and_run():
@@ -129,7 +129,7 @@ class TestIsFatalConnectionError:
         bridge.git_signing.initialize = AsyncMock()
         bridge._load_session_id = AsyncMock()
         bridge._connect_and_run = connect_and_run
-        monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", AsyncMock())
+        bridge.RECONNECT_BACKOFF_BASE = 0
 
         await bridge.run()
 
@@ -143,7 +143,7 @@ class TestIsFatalConnectionError:
         )
 
     @pytest.mark.asyncio
-    async def test_run_retries_signing_initialization_before_connecting(self, bridge, monkeypatch):
+    async def test_run_retries_signing_initialization_before_connecting(self, bridge):
         async def connect_and_run():
             bridge.shutdown_event.set()
 
@@ -156,20 +156,20 @@ class TestIsFatalConnectionError:
         )
         bridge._load_session_id = AsyncMock()
         bridge._connect_and_run = AsyncMock(side_effect=connect_and_run)
-        sleep = AsyncMock()
-        monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", sleep)
+        bridge.RECONNECT_BACKOFF_BASE = 0
 
         await bridge.run()
 
         assert bridge.git_signing.initialize.await_count == 2
         bridge._connect_and_run.assert_awaited_once()
-        sleep.assert_awaited_once_with(bridge.RECONNECT_BACKOFF_BASE)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", [401, 403, 404, 410])
-    async def test_run_exits_on_terminal_signing_configuration_status(
-        self, bridge, monkeypatch, status
+    async def test_run_fails_deterministically_on_terminal_signing_configuration_status(
+        self, bridge, monkeypatch, tmp_path, status
     ):
+        fatal_path = tmp_path / "fatal.txt"
+        monkeypatch.setattr("sandbox_runtime.bridge.BRIDGE_FATAL_ERROR_FILE_PATH", str(fatal_path))
         bridge.log = MagicMock()
         bridge.git_signing.initialize = AsyncMock(
             side_effect=GitSigningError(
@@ -181,11 +181,12 @@ class TestIsFatalConnectionError:
         sleep = AsyncMock()
         monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", sleep)
 
-        await bridge.run()
+        with pytest.raises(GitSigningError, match="Commit signing configuration unavailable"):
+            await bridge.run()
 
         bridge._connect_and_run.assert_not_awaited()
         sleep.assert_not_awaited()
-        assert bridge.shutdown_event.is_set()
+        assert fatal_path.read_text() == "Commit signing configuration unavailable"
         bridge.log.info.assert_any_call(
             "bridge.run_complete",
             outcome="fatal_error",
@@ -196,7 +197,11 @@ class TestIsFatalConnectionError:
         )
 
     @pytest.mark.asyncio
-    async def test_run_exits_on_nonretryable_payload_failure(self, bridge, monkeypatch):
+    async def test_run_fails_deterministically_on_nonretryable_payload_failure(
+        self, bridge, monkeypatch, tmp_path
+    ):
+        fatal_path = tmp_path / "fatal.txt"
+        monkeypatch.setattr("sandbox_runtime.bridge.BRIDGE_FATAL_ERROR_FILE_PATH", str(fatal_path))
         bridge.log = MagicMock()
         bridge.git_signing.initialize = AsyncMock(
             side_effect=GitSigningError("Invalid commit signing configuration")
@@ -206,10 +211,12 @@ class TestIsFatalConnectionError:
         sleep = AsyncMock()
         monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", sleep)
 
-        await bridge.run()
+        with pytest.raises(GitSigningError, match="Invalid commit signing configuration"):
+            await bridge.run()
 
         bridge._connect_and_run.assert_not_awaited()
         sleep.assert_not_awaited()
+        assert fatal_path.read_text() == "Invalid commit signing configuration"
 
 
 class TestSessionTerminatedError:

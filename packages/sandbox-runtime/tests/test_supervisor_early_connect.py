@@ -244,12 +244,14 @@ class TestBridgeWatcherDuringBoot:
         supervisor.shutdown_event.set()
         await asyncio.wait_for(run_task, timeout=1)
 
-    async def test_deterministic_bridge_failure_during_boot_is_fatal(self, tmp_path):
+    async def test_deterministic_signing_failure_during_boot_is_fatal(self, tmp_path):
         supervisor = _supervisor(tmp_path, [])
         boot_started, boot_cancelled = self._blocked_boot(supervisor)
         bridge_exited = asyncio.Event()
         supervisor.agent_bridge.wait = AsyncMock(side_effect=bridge_exited.wait)
-        supervisor._read_bridge_fatal_error = MagicMock(return_value="credential denied")
+        supervisor._read_bridge_fatal_error = MagicMock(
+            return_value="Commit signing configuration unavailable"
+        )
 
         run_task = asyncio.create_task(supervisor.run())
         await asyncio.wait_for(boot_started.wait(), timeout=1)
@@ -260,7 +262,7 @@ class TestBridgeWatcherDuringBoot:
         assert boot_cancelled.is_set()
         supervisor._report_fatal_error.assert_awaited_once()
         message, failure = supervisor._report_fatal_error.await_args.args
-        assert message == "credential denied"
+        assert message == "Commit signing configuration unavailable"
         assert failure.report_fields() == {"phase": "harness"}
         supervisor.agent_bridge.start.assert_awaited_once()
 
