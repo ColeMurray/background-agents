@@ -249,7 +249,7 @@ When you create a session for a repo without an existing snapshot:
 ```
 ┌─────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────┐   ┌──────────────┐
 │ Sandbox │──▶│  Bridge  │──▶│ Git Sync │──▶│ Setup Script │──▶│ Start Script │──┐
-│ Created │   │ Connects │   │ (clone)  │   │  (optional)  │   │  (optional)  │  │
+│ Created │   │  Starts  │   │ (clone)  │   │  (optional)  │   │  (optional)  │  │
 └─────────┘   └──────────┘   └──────────┘   └──────────────┘   └──────────────┘  │
                "starting"      "sync"           "setup"            "start"        │
                                           .openinspect/setup.sh  .openinspect/start.sh
@@ -261,10 +261,13 @@ When you create a session for a repo without an existing snapshot:
 ```
 
 1. **Sandbox created**: The selected backend creates a fresh sandbox from its base runtime
-2. **Bridge connects**: Before anything else runs, the runtime's bridge process opens its WebSocket
-   to the control plane and reports the `starting` phase. The sandbox is now `connecting`: it sends
-   a heartbeat every 30 seconds and reports every later phase as it starts and completes, so the
-   control plane can tell a long boot from a dead one. A prompt sent during boot waits here.
+2. **Bridge starts**: The runtime starts its bridge process ahead of the repository boot, and the
+   bridge opens its WebSocket to the control plane and reports the `starting` phase. The supervisor
+   does not wait for that handshake, so the first boot steps can begin a moment before the socket is
+   up; in practice it connects a second or two into the boot. Once connected the sandbox is
+   `connecting`: it sends a heartbeat every 30 seconds and reports every later phase as it starts
+   and completes, so the control plane can tell a long boot from a dead one. A prompt sent during
+   boot waits here.
 3. **Git sync** (`sync`): Clones your repository using brokered SCM credentials from the git
    credential helper
 4. **Setup script** (`setup`): Runs `.openinspect/setup.sh` for provisioning (if present). A
@@ -276,9 +279,11 @@ When you create a session for a repo without an existing snapshot:
 8. **Ready**: The runtime's `ready` event, not the connection, marks the sandbox ready. Prompts that
    were waiting dispatch now
 
-For multi-repository sessions, steps 3–5 run per repository in position order: every repository is
-cloned into its own `/workspace` directory and each repository's setup and start scripts run in
-sequence. Each `setup` and `start` phase names the repository it is running for.
+For multi-repository sessions the three steps have different shapes. Git sync is a single phase
+covering the whole set — the repositories are cloned concurrently into `/workspace/<repo-name>` — so
+it names no individual repository. Setup then runs for every repository in position order, and start
+runs as a second pass in the same order. Each `setup` and `start` phase names the repository it is
+running for.
 
 #### Watching a boot
 
@@ -286,8 +291,17 @@ The session header names the phase while it runs: "Cloning repository", "Running
 "Starting services", "Installing skills", "Starting agent". Multi-repository sessions add the
 repository, as in "Running setup.sh for acme/api". The session details panel lists every completed
 phase with how long it took, so a slow `setup.sh` is visible rather than inferred. When a script
-fails, the header's status popover says which phase failed and for which repository, and shows the
-last lines of the script's output. Secret values are redacted before that output leaves the sandbox.
+fails, the header's status popover says which phase failed and for which repository. It shows the
+script's last output lines only for a phase that failed outright, which today means a failed clone
+or a failed `start.sh` in the session's first repository. A `setup.sh` failure, and a `start.sh`
+failure in a later repository, are tolerated instead: the boot continues, the phase completes
+carrying a warning, and no output is attached.
+
+Before a tail leaves the sandbox the runtime redacts environment values whose variable names look
+like credentials — names containing `TOKEN`, `SECRET`, `KEY`, `PASS`, `CREDENTIAL`, `PRIVATE`,
+`AUTH`, `COOKIE` or `DSN`, holding at least eight characters. Treat that as a best-effort filter
+rather than a guarantee: a secret stored under a name like `DATABASE_URL` is not recognised, so
+hooks should not print secrets in the first place.
 
 #### How long a boot may take
 
@@ -301,7 +315,10 @@ There is no fixed limit on `setup.sh` or `start.sh`. Two bounds apply instead:
   fails with the phase that was running, and the next prompt starts a new sandbox.
 
 A bridge that stops sending heartbeats for 90 seconds during boot is treated as dead the same way.
-In both cases the sandbox is stopped without a snapshot.
+No snapshot is taken in any of these cases, so a half-provisioned workspace never becomes the
+restore point. The sandbox itself is stopped only on providers that can stop one explicitly; on the
+others the row is marked stale and its socket detached, and the sandbox ages out on the provider's
+own timeout.
 
 ### Restore (From Snapshot)
 
@@ -310,20 +327,27 @@ When restoring from a previous snapshot:
 ```
 ┌─────────────┐   ┌──────────┐   ┌────────────┐   ┌──────────────┐   ┌─────────────┐   ┌───────┐
 │  Restore    │──▶│  Bridge  │──▶│ Quick Sync │──▶│ Start Script │──▶│ Agent Start │──▶│ Ready │
-│  Snapshot   │   │ Connects │   │ (git pull) │   │  (optional)  │   │             │   │       │
+│  Snapshot   │   │  Starts  │   │(git fetch) │   │  (optional)  │   │             │   │       │
 └─────────────┘   └──────────┘   └────────────┘   └──────────────┘   └─────────────┘   └───────┘
 ```
 
 1. **Restore snapshot**: The selected snapshot-capable provider restores the filesystem from a saved
    snapshot or checkpoint
 2. **Bridge connects**: As in a fresh start, the bridge connects first and reports each phase
-3. **Quick sync**: Pulls latest changes (usually just a few commits)
+3. **Quick sync**: Fetches the session's branch from origin. The restored checkout is left as it is,
+   so the snapshot's commit and any uncommitted work survive the restore
 4. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
 5. **Agent start**: Managed skills are installed and the agent harness starts
 6. **Ready**: Sandbox is ready almost instantly
 
 A restore reports the same phases as a fresh start minus `setup`, so the header shows the same
 labels.
+
+A snapshot taken by an older runtime still restores: the control plane accepts any runtime from
+generation 62 up, and connecting before the boot arrived in generation 68. A session restored from a
+generation 62–67 snapshot therefore boots the old way — its bridge connects only once the repository
+boot has finished — so it reports no phases while it boots and the whole boot still has to fit
+inside the four-minute connect watchdog.
 
 Snapshots include installed dependencies, built artifacts, and workspace state. This is why
 follow-up prompts in an existing session are much faster than the first prompt.
@@ -339,7 +363,9 @@ from a prebuild-enabled environment, the environment's whole repository set):
 3. **Setup skipped**: `.openinspect/setup.sh` already ran when the image was built, so no `setup`
    phase is reported
 4. **Start script runs**: `.openinspect/start.sh` executes for per-session runtime startup
-5. **Ready**: Agent starts once runtime hook succeeds
+5. **Managed skills** (`skills`): The session's managed skills are installed
+6. **Agent start** (`harness`): The agent harness starts and the bridge attaches to it
+7. **Ready**: The runtime sends `ready` once the harness is up
 
 If `start.sh` exists and fails, startup fails fast instead of continuing with a broken runtime.
 
@@ -378,8 +404,10 @@ particularly with explicit `--package` commands.
 - **After successful prompt completion**: Preserves the workspace state
 - **Before sandbox timeout**: Saves state before the sandbox shuts down due to inactivity
 - **On explicit save**: Can be triggered by the control plane
-- **Never mid-boot**: A sandbox that dies while booting is not snapshotted, so a half-provisioned
-  workspace can never become the restore point
+- **Not on a failed boot**: None of the automatic boot-failure paths — connect watchdog, boot
+  budget, stale heartbeat, fatal runtime error — takes a snapshot, so a half-provisioned workspace
+  does not become the restore point that way. The runtime also refuses a `snapshot` command while it
+  is still booting
 
 ### Sandbox Warming
 
@@ -562,14 +590,14 @@ Sessions stream events to all connected clients via WebSocket.
 
 ### Event Types
 
-| Event              | Description                                                                               |
-| ------------------ | ----------------------------------------------------------------------------------------- |
-| `sandbox_spawning` | Sandbox is being created                                                                  |
-| `sandbox_status`   | Sandbox moved between `spawning`, `connecting`, `ready`, `stale`, `stopped`, and `failed` |
-| `sandbox_event`    | Tool call, token stream, boot phase (`boot_progress`), or other agent event               |
-| `artifact_created` | PR created, screenshot captured                                                           |
-| `presence_update`  | User joined or left the session                                                           |
-| `session_status`   | Session state changed                                                                     |
+| Event              | Description                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `sandbox_spawning` | Sandbox is being created                                                                                                        |
+| `sandbox_status`   | Sandbox moved between `pending`, `spawning`, `connecting`, `warming`, `ready`, `snapshotting`, `stale`, `stopped`, and `failed` |
+| `sandbox_event`    | Tool call, token stream, boot phase (`boot_progress`), or other agent event                                                     |
+| `artifact_created` | PR created, screenshot captured                                                                                                 |
+| `presence_update`  | User joined or left the session                                                                                                 |
+| `session_status`   | Session state changed                                                                                                           |
 
 ### Multiplayer
 
