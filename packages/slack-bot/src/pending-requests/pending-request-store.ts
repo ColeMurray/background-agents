@@ -1,5 +1,6 @@
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { z } from "zod";
+import { resolvedTurnPlanSchema } from "../inline-flags";
 import type { Env } from "../types";
 
 const PENDING_REQUEST_TTL_MS = 60 * 60 * 1000;
@@ -16,11 +17,6 @@ const sourceMessageSchema = z.object({
 
 const unattributedPromptSchema = z.object({
   forwardedMessages: z.array(z.string()),
-});
-
-const inlinePromptOptionsSchema = z.object({
-  model: z.string().optional(),
-  reasoningEffort: z.string().optional(),
 });
 
 const classificationSchema = z.object({
@@ -40,7 +36,7 @@ const pendingRequestDataSchema = z.object({
   /** True when the original message had no user text, only images. */
   imageOnly: z.boolean().optional(),
   sourceMessage: sourceMessageSchema.optional(),
-  inlinePromptOptions: inlinePromptOptionsSchema.optional(),
+  turnPlan: resolvedTurnPlanSchema.optional(),
   /** Classifier provenance retained until the user resolves clarification. */
   classification: classificationSchema.optional(),
 });

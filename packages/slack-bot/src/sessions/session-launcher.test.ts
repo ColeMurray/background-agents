@@ -32,6 +32,7 @@ vi.mock("./prompt-delivery", () => ({
 
 vi.mock("../app-home/models", () => ({
   getAvailableModels: vi.fn(),
+  getAuthoritativeModels: vi.fn(),
 }));
 
 vi.mock("../branch-preferences", () => ({
@@ -216,15 +217,25 @@ describe("startSessionAndSendPrompt", () => {
       threadTs: "111.222",
       messageText: "Investigate the failing deploy",
       actor,
-      inlinePromptOptions: {
-        model: "anthropic/claude-sonnet-4-6",
-        reasoningEffort: "max",
+      turnPlan: {
+        sessionDefaults: {
+          model: "anthropic/claude-haiku-4-5",
+          reasoningEffort: "max",
+        },
+        promptOverrides: {
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "max",
+        },
+        effective: {
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "max",
+        },
       },
     });
 
     expect(createSession).toHaveBeenCalledWith(
       env,
-      expect.objectContaining({ model: "openai/gpt-5.4", reasoningEffort: "high" })
+      expect.objectContaining({ model: "anthropic/claude-haiku-4-5", reasoningEffort: "max" })
     );
     expect(deliverPrompt).toHaveBeenCalledWith(
       env,
@@ -240,8 +251,8 @@ describe("startSessionAndSendPrompt", () => {
     expect(buildThreadSession).toHaveBeenCalledWith(
       "session-1",
       repositoryTarget,
-      "openai/gpt-5.4",
-      "high",
+      "anthropic/claude-haiku-4-5",
+      "max",
       undefined
     );
   });

@@ -1,6 +1,7 @@
 import { postMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
-import { getAvailableModels } from "../app-home/models";
+import { normalizeValidModels, type ValidModel } from "@open-inspect/shared/models";
+import { getAuthoritativeModels, getAvailableModels } from "../app-home/models";
 import {
   notifyDroppedAttachments,
   prepareImageAttachments,
@@ -19,14 +20,26 @@ import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import {
   EMPTY_INLINE_PROMPT_OPTIONS,
   resolveInlinePromptOptions,
-  type InlinePromptOptions,
+  type ResolvedTurnPlan,
 } from "../inline-flags";
-import type { ModelOption } from "../app-home/slack-types";
 
 export interface SlackLaunchSettings {
-  availableModels: ModelOption[];
+  enabledModels: ValidModel[];
   slackConfig: SlackSettings;
   userPreferences: ResolvedUserPreferences;
+}
+
+async function resolveSlackLaunchSettings(
+  env: Env,
+  userId: string,
+  enabledModels: ValidModel[],
+  slackConfig: SlackSettings
+): Promise<SlackLaunchSettings> {
+  const userPreferences = await getResolvedUserPreferences(env, userId, {
+    defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
+    enabledModels,
+  });
+  return { enabledModels, slackConfig, userPreferences };
 }
 
 export async function loadSlackLaunchSettings(
@@ -38,11 +51,24 @@ export async function loadSlackLaunchSettings(
     getAvailableModels(env, traceId),
     getSlackSettings(env, traceId),
   ]);
-  const userPreferences = await getResolvedUserPreferences(env, userId, {
-    defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
-    enabledModels: availableModels.map((modelOption) => modelOption.value),
-  });
-  return { availableModels, slackConfig, userPreferences };
+  return resolveSlackLaunchSettings(
+    env,
+    userId,
+    normalizeValidModels(availableModels.map((modelOption) => modelOption.value)),
+    slackConfig
+  );
+}
+
+export async function loadAuthoritativeSlackLaunchSettings(
+  env: Env,
+  userId: string,
+  traceId?: string
+): Promise<SlackLaunchSettings | null> {
+  const [enabledModels, slackConfig] = await Promise.all([
+    getAuthoritativeModels(env, traceId),
+    getSlackSettings(env, traceId),
+  ]);
+  return enabledModels ? resolveSlackLaunchSettings(env, userId, enabledModels, slackConfig) : null;
 }
 
 export interface StartSessionOptions {
@@ -63,7 +89,7 @@ export interface StartSessionOptions {
   images?: SlackImageAttachment[];
   /** True when the triggering message had no user text, only images. */
   imageOnly?: boolean;
-  inlinePromptOptions?: InlinePromptOptions;
+  turnPlan?: ResolvedTurnPlan;
   launchSettings?: SlackLaunchSettings;
   traceId?: string;
 }
@@ -84,7 +110,7 @@ export async function startSessionAndSendPrompt(
     channelDescription,
     images,
     imageOnly,
-    inlinePromptOptions = EMPTY_INLINE_PROMPT_OPTIONS,
+    turnPlan: providedTurnPlan,
     launchSettings: providedLaunchSettings,
     traceId,
   } = options;
@@ -102,21 +128,24 @@ export async function startSessionAndSendPrompt(
     return null;
   }
   const {
-    availableModels,
+    enabledModels,
     slackConfig,
     userPreferences: userPrefs,
   } = providedLaunchSettings ?? (await loadSlackLaunchSettings(env, actor.userId, traceId));
-  const model = userPrefs.model;
-  const reasoningEffort = userPrefs.reasoningEffort;
-  const turnSettings = resolveInlinePromptOptions(
-    inlinePromptOptions,
-    { model, reasoningEffort },
-    availableModels.map((modelOption) => modelOption.value)
-  );
-  if (!turnSettings.ok) {
-    await postMessage(env.SLACK_BOT_TOKEN, channel, turnSettings.error, { thread_ts: threadTs });
-    return null;
+  let turnPlan = providedTurnPlan;
+  if (!turnPlan) {
+    const resolvedTurn = resolveInlinePromptOptions(
+      EMPTY_INLINE_PROMPT_OPTIONS,
+      userPrefs,
+      enabledModels
+    );
+    if (!resolvedTurn.ok) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, { thread_ts: threadTs });
+      return null;
+    }
+    turnPlan = resolvedTurn.turnPlan;
   }
+  const { model, reasoningEffort } = turnPlan.sessionDefaults;
   const preferenceRepo = branchPreferenceRepo(target);
   let branch: string | undefined;
   if (preferenceRepo) {
@@ -149,8 +178,8 @@ export async function startSessionAndSendPrompt(
     channel,
     threadTs,
     repoFullName: targetLabel(target),
-    model: turnSettings.effectiveModel,
-    reasoningEffort: turnSettings.effectiveReasoningEffort,
+    model: turnPlan.effective.model,
+    reasoningEffort: turnPlan.effective.reasoningEffort,
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
@@ -165,7 +194,7 @@ export async function startSessionAndSendPrompt(
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),
     callbackContext,
-    ...turnSettings.promptOverrides,
+    ...turnPlan.promptOverrides,
     channel,
     threadTs,
     traceId,

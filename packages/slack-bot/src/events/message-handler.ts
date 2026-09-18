@@ -40,7 +40,7 @@ import {
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
 import {
-  loadSlackLaunchSettings,
+  loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,
   type SlackLaunchSettings,
 } from "../sessions/session-launcher";
@@ -59,11 +59,14 @@ import {
   parseInlinePromptFlags,
   resolveInlinePromptOptions,
   type InlinePromptOptions,
+  type ResolvedTurnPlan,
 } from "../inline-flags";
-import { getAvailableModels } from "../app-home/models";
+import { getAuthoritativeModels } from "../app-home/models";
 
 const log = createLogger("handler");
 const THREAD_HISTORY_MESSAGE_LIMIT = 10;
+const MODEL_PREFERENCES_UNAVAILABLE_MESSAGE =
+  "Model preferences are temporarily unavailable. Please try again.";
 
 interface ThreadHistoryOptions {
   /** ts of the message currently being handled, excluded from the history. */
@@ -165,6 +168,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     scheduleBackground,
   } = params;
   const { text: messageText, images, forwarded, inlinePromptOptions, inlineFlagError } = content;
+  const hasInlineOverrides = hasInlinePromptOptions(inlinePromptOptions);
   if (inlineFlagError) {
     await postMessage(env.SLACK_BOT_TOKEN, channel, inlineFlagError, {
       thread_ts: threadTs || ts,
@@ -195,28 +199,34 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
     if (existingSession) {
-      const turnSettings = hasInlinePromptOptions(inlinePromptOptions)
-        ? resolveInlinePromptOptions(
-            inlinePromptOptions,
-            {
-              model: existingSession.model,
-              reasoningEffort: existingSession.reasoningEffort,
-            },
-            (await getAvailableModels(env, traceId)).map((model) => model.value)
-          )
-        : {
-            ok: true as const,
-            promptOverrides: {},
-            effectiveModel: existingSession.model,
-            effectiveReasoningEffort: existingSession.reasoningEffort,
-          };
-      if (!turnSettings.ok) {
-        await postMessage(env.SLACK_BOT_TOKEN, channel, turnSettings.error, {
-          thread_ts: threadTs,
-        });
-        return;
+      let turnPlan: ResolvedTurnPlan | undefined;
+      if (hasInlineOverrides) {
+        const enabledModels = inlinePromptOptions.model
+          ? await getAuthoritativeModels(env, traceId)
+          : [];
+        if (!enabledModels) {
+          await postMessage(env.SLACK_BOT_TOKEN, channel, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE, {
+            thread_ts: threadTs,
+          });
+          return;
+        }
+        const resolvedTurn = resolveInlinePromptOptions(
+          inlinePromptOptions,
+          {
+            model: existingSession.model,
+            reasoningEffort: existingSession.reasoningEffort,
+          },
+          enabledModels
+        );
+        if (!resolvedTurn.ok) {
+          await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, {
+            thread_ts: threadTs,
+          });
+          return;
+        }
+        turnPlan = resolvedTurn.turnPlan;
       }
-      if (hasInlinePromptOptions(inlinePromptOptions)) {
+      if (hasInlineOverrides) {
         scheduleStartingStatus(scheduleBackground, env, channel, threadTs, traceId);
       }
       const callbackContext: CallbackContext = {
@@ -224,8 +234,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         channel,
         threadTs,
         repoFullName: existingSession.repoFullName,
-        model: turnSettings.effectiveModel,
-        reasoningEffort: turnSettings.effectiveReasoningEffort,
+        model: turnPlan?.effective.model ?? existingSession.model,
+        reasoningEffort: turnPlan?.effective.reasoningEffort ?? existingSession.reasoningEffort,
         reactionMessageTs: ts,
       };
       const channelContext = channelName
@@ -255,7 +265,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         attachments: await prepareImageAttachments(env, images, traceId),
         imageOnly,
         callbackContext,
-        ...turnSettings.promptOverrides,
+        ...turnPlan?.promptOverrides,
         channel,
         threadTs,
         traceId,
@@ -304,22 +314,35 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   }
 
   let launchSettings: SlackLaunchSettings | undefined;
-  if (hasInlinePromptOptions(inlinePromptOptions)) {
-    launchSettings = await loadSlackLaunchSettings(env, user, traceId);
-    const turnSettings = resolveInlinePromptOptions(
+  let turnPlan: ResolvedTurnPlan | undefined;
+  if (hasInlineOverrides) {
+    const authoritativeLaunchSettings = await loadAuthoritativeSlackLaunchSettings(
+      env,
+      user,
+      traceId
+    );
+    if (!authoritativeLaunchSettings) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE, {
+        thread_ts: threadTs || ts,
+      });
+      return;
+    }
+    launchSettings = authoritativeLaunchSettings;
+    const resolvedTurn = resolveInlinePromptOptions(
       inlinePromptOptions,
       {
         model: launchSettings.userPreferences.model,
         reasoningEffort: launchSettings.userPreferences.reasoningEffort,
       },
-      launchSettings.availableModels.map((model) => model.value)
+      launchSettings.enabledModels
     );
-    if (!turnSettings.ok) {
-      await postMessage(env.SLACK_BOT_TOKEN, channel, turnSettings.error, {
+    if (!resolvedTurn.ok) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, {
         thread_ts: threadTs || ts,
       });
       return;
     }
+    turnPlan = resolvedTurn.turnPlan;
     scheduleStartingStatus(scheduleBackground, env, channel, threadTs || ts, traceId);
   }
 
@@ -350,9 +373,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       // Persist where the images live, not the file objects; they are
       // re-fetched from Slack when the user resolves the clarification.
       sourceMessage: images.length > 0 ? { ts, threadTs } : undefined,
-      inlinePromptOptions: hasInlinePromptOptions(inlinePromptOptions)
-        ? inlinePromptOptions
-        : undefined,
+      turnPlan,
       classification: {
         targetId: result.target ? targetId(result.target) : undefined,
         confidence: result.confidence,
@@ -408,7 +429,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     channelDescription,
     images,
     imageOnly,
-    inlinePromptOptions,
+    turnPlan,
     launchSettings,
     traceId,
   });

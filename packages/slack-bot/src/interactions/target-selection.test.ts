@@ -7,7 +7,7 @@ import {
   deletePendingRequest,
   type PendingRequest,
 } from "../pending-requests/pending-request-store";
-import { loadSlackLaunchSettings, startSessionAndSendPrompt } from "../sessions/session-launcher";
+import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { resolveSlackActorIdentity } from "../user-identity";
 
@@ -34,7 +34,6 @@ vi.mock("../pending-requests/pending-request-store", () => ({
 
 vi.mock("../sessions/session-launcher", () => ({
   startSessionAndSendPrompt: vi.fn(async () => ({ sessionId: "session-1" })),
-  loadSlackLaunchSettings: vi.fn(),
 }));
 
 vi.mock("../target-clarification", () => ({
@@ -47,6 +46,20 @@ vi.mock("../user-identity", () => ({
 
 const DEFAULT_SELECTED_VALUE = "acme/app";
 const REQUEST_ID = "00000000-0000-4000-8000-000000000001";
+const TURN_PLAN = {
+  sessionDefaults: {
+    model: "anthropic/claude-sonnet-4-6" as const,
+    reasoningEffort: "high" as const,
+  },
+  promptOverrides: {
+    model: "openai/gpt-5.6-sol" as const,
+    reasoningEffort: "high" as const,
+  },
+  effective: {
+    model: "openai/gpt-5.6-sol" as const,
+    reasoningEffort: "high" as const,
+  },
+};
 
 function pendingRequest(overrides: Partial<PendingRequest> = {}): PendingRequest {
   return {
@@ -100,31 +113,16 @@ beforeEach(() => {
     senderLabel: "Ajan (U123)",
     displayName: "Ajan",
   });
-  vi.mocked(loadSlackLaunchSettings).mockResolvedValue({
-    availableModels: [
-      { label: "GPT 5.6 Sol", value: "openai/gpt-5.6-sol" },
-      { label: "Claude Sonnet", value: "anthropic/claude-sonnet-4-6" },
-    ],
-    slackConfig: {},
-    userPreferences: {
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: "high",
-      branch: undefined,
-    },
-  });
 });
 
 describe("handleTargetSelection", () => {
-  it("re-fetches the source message's files and forwards them into the launch", async () => {
+  it("re-fetches files and forwards the resolved turn plan unchanged", async () => {
     vi.mocked(getPendingRequest).mockResolvedValue(
       pendingRequest({
         message: "What is wrong in this screenshot?",
         unattributedPrompt: { forwardedMessages: ["Forwarded body"] },
         sourceMessage: { ts: "111.222" },
-        inlinePromptOptions: {
-          model: "openai/gpt-5.6-sol",
-          reasoningEffort: "high",
-        },
+        turnPlan: TURN_PLAN,
       })
     );
     vi.mocked(getMessageDetails).mockResolvedValue({
@@ -165,13 +163,7 @@ describe("handleTargetSelection", () => {
             downloadUrl: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
           },
         ],
-        inlinePromptOptions: {
-          model: "openai/gpt-5.6-sol",
-          reasoningEffort: "high",
-        },
-        launchSettings: expect.objectContaining({
-          userPreferences: expect.objectContaining({ model: "anthropic/claude-sonnet-4-6" }),
-        }),
+        turnPlan: TURN_PLAN,
       })
     );
     expect(deletePendingRequest).toHaveBeenCalledWith(env, REQUEST_ID);
@@ -276,27 +268,6 @@ describe("handleTargetSelection", () => {
       { thread_ts: "111.222" }
     );
     expect(postMessage).not.toHaveBeenCalled();
-  });
-
-  it("rejects stale inline overrides before posting a working acknowledgement", async () => {
-    vi.mocked(getPendingRequest).mockResolvedValue(
-      pendingRequest({
-        inlinePromptOptions: { model: "openai/gpt-5.5", reasoningEffort: "high" },
-      })
-    );
-    const env = makeEnv();
-
-    await handleTargetSelection(selectionRequest(), env, "trace-1", vi.fn());
-
-    expect(resolveTargetValue).not.toHaveBeenCalled();
-    expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
-    expect(postMessage).toHaveBeenCalledTimes(1);
-    expect(postMessage).toHaveBeenCalledWith(
-      "xoxb-test",
-      "C123",
-      'Model "openai/gpt-5.5" is not enabled.',
-      { thread_ts: "111.222" }
-    );
   });
 
   it("rejects a request whose stored channel or thread does not match the interaction", async () => {

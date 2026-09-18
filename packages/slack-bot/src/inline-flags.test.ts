@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ValidModel } from "@open-inspect/shared/models";
 import { parseInlinePromptFlags, resolveInlinePromptOptions } from "./inline-flags";
 
 describe("parseInlinePromptFlags", () => {
@@ -46,7 +47,14 @@ describe("parseInlinePromptFlags", () => {
 
 describe("resolveInlinePromptOptions", () => {
   const defaults = { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" };
-  const enabledModels = ["anthropic/claude-sonnet-4-6", "openai/gpt-5.6-sol"];
+  const enabledModels = [
+    "anthropic/claude-sonnet-4-6",
+    "openai/gpt-5.6-sol",
+  ] satisfies ValidModel[];
+  const sessionDefaults = {
+    model: "anthropic/claude-sonnet-4-6",
+    reasoningEffort: "high",
+  };
 
   it("resolves combined overrides against the inline model", () => {
     expect(
@@ -57,18 +65,22 @@ describe("resolveInlinePromptOptions", () => {
       )
     ).toEqual({
       ok: true,
-      promptOverrides: { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" },
-      effectiveModel: "openai/gpt-5.6-sol",
-      effectiveReasoningEffort: "xhigh",
+      turnPlan: {
+        sessionDefaults,
+        promptOverrides: { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" },
+        effective: { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" },
+      },
     });
   });
 
   it("normalizes bare model ids and preserves a compatible default effort", () => {
     expect(resolveInlinePromptOptions({ model: "gpt-5.6-sol" }, defaults, enabledModels)).toEqual({
       ok: true,
-      promptOverrides: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" },
-      effectiveModel: "openai/gpt-5.6-sol",
-      effectiveReasoningEffort: "high",
+      turnPlan: {
+        sessionDefaults,
+        promptOverrides: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" },
+        effective: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" },
+      },
     });
   });
 
@@ -79,9 +91,11 @@ describe("resolveInlinePromptOptions", () => {
     expect(resolveInlinePromptOptions({ reasoningEffort: "max" }, defaults, enabledModels)).toEqual(
       {
         ok: true,
-        promptOverrides: { reasoningEffort: "max" },
-        effectiveModel: "anthropic/claude-sonnet-4-6",
-        effectiveReasoningEffort: "max",
+        turnPlan: {
+          sessionDefaults,
+          promptOverrides: { reasoningEffort: "max" },
+          effective: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" },
+        },
       }
     );
     expect(

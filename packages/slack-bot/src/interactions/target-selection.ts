@@ -19,16 +19,11 @@ import {
   getLegacyPendingRequest,
   getPendingRequest,
 } from "../pending-requests/pending-request-store";
-import { loadSlackLaunchSettings, startSessionAndSendPrompt } from "../sessions/session-launcher";
+import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { targetId } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
-import {
-  EMPTY_INLINE_PROMPT_OPTIONS,
-  hasInlinePromptOptions,
-  resolveInlinePromptOptions,
-} from "../inline-flags";
 
 const log = createLogger("target-selection");
 
@@ -92,7 +87,7 @@ export async function handleTargetSelection(
     imageOnly,
     sourceMessage,
     unattributedPrompt,
-    inlinePromptOptions,
+    turnPlan,
     classification,
   } = pendingData;
   if (selectedBy !== userId) {
@@ -104,23 +99,6 @@ export async function handleTargetSelection(
       { thread_ts: threadKey }
     );
     return;
-  }
-  const launchSettings = hasInlinePromptOptions(inlinePromptOptions ?? EMPTY_INLINE_PROMPT_OPTIONS)
-    ? await loadSlackLaunchSettings(env, userId, traceId)
-    : undefined;
-  if (launchSettings && inlinePromptOptions) {
-    const turnSettings = resolveInlinePromptOptions(
-      inlinePromptOptions,
-      {
-        model: launchSettings.userPreferences.model,
-        reasoningEffort: launchSettings.userPreferences.reasoningEffort,
-      },
-      launchSettings.availableModels.map((model) => model.value)
-    );
-    if (!turnSettings.ok) {
-      await postMessage(env.SLACK_BOT_TOKEN, channel, turnSettings.error, { thread_ts: threadKey });
-      return;
-    }
   }
   const target = await resolveTargetValue(env, selectedValue, traceId);
   if (!target) {
@@ -208,8 +186,7 @@ export async function handleTargetSelection(
     channelDescription,
     images,
     imageOnly,
-    inlinePromptOptions,
-    launchSettings,
+    turnPlan,
     traceId,
   });
   if (!sessionResult) return;

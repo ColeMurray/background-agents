@@ -192,6 +192,7 @@ function makeSessionEnv(
     session?: unknown;
     prompt?: unknown | unknown[];
     promptStatus?: number | number[];
+    modelPreferencesStatus?: number;
   } = {}
 ): ReturnType<typeof makeEnv> {
   const env = makeEnv();
@@ -254,7 +255,7 @@ function makeSessionEnv(
     }
 
     return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-      status: 200,
+      status: responses.modelPreferencesStatus ?? 200,
       headers: { "Content-Type": "application/json" },
     });
   });
@@ -986,6 +987,51 @@ describe("POST /events", () => {
       expect.objectContaining({
         model: "anthropic/claude-haiku-4-5",
         reasoningEffort: "max",
+      })
+    );
+
+    slackFetch.mockRestore();
+  });
+
+  it("does not admit model overrides from fallback preferences", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], { modelPreferencesStatus: 503 });
+    const kv = env.SLACK_KV as unknown as {
+      put: (key: string, value: string) => Promise<void>;
+    };
+    await kv.put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "max",
+        createdAt: Date.now(),
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> !model:anthropic/claude-haiku-4-5 add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(0);
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toContainEqual(
+      expect.objectContaining({
+        text: "Model preferences are temporarily unavailable. Please try again.",
+        thread_ts: "111.222",
       })
     );
 
