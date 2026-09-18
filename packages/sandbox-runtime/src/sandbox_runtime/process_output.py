@@ -31,7 +31,7 @@ class BoundedOutputCollector:
         self._max_tail_bytes = max_tail_bytes
         self._tail = bytearray()
         self._retaining = True
-        self._overflowed = False
+        self._head_is_fragment = False
         self.task = asyncio.create_task(self._drain())
 
     async def _drain(self) -> None:
@@ -41,7 +41,10 @@ class BoundedOutputCollector:
             self._tail.extend(chunk)
             overflow = len(self._tail) - self._max_tail_bytes
             if overflow > 0:
-                self._overflowed = True
+                # The last byte dropped tells us where the new window starts:
+                # a newline leaves a whole line at the head, anything else
+                # cuts one.
+                self._head_is_fragment = self._tail[overflow - 1] != ord("\n")
                 del self._tail[:overflow]
 
     async def wait(self) -> None:
@@ -70,12 +73,13 @@ class BoundedOutputCollector:
     def tail_lines(self, max_lines: int = 50) -> str:
         """Decode and return at most the requested final lines.
 
-        Once the window has overflowed, its first line is a fragment cut at
-        an arbitrary byte and is dropped: a fragment of a secret would no
-        longer match the value it is redacted by.
+        A window trimmed mid-line opens on a fragment cut at an arbitrary
+        byte, which is dropped: a fragment of a secret would no longer match
+        the value it is redacted by. A trim that ended on a newline leaves a
+        whole line at the head, which is reported.
         """
         lines = bytes(self._tail).decode(errors="replace").splitlines()
-        if self._overflowed:
+        if self._head_is_fragment:
             lines = lines[1:]
         return "\n".join(lines[-max_lines:])
 

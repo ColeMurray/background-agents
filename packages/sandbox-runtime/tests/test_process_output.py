@@ -123,3 +123,29 @@ async def test_overflowed_window_drops_the_cut_first_line():
     await collector.wait()
 
     assert collector.tail_lines() == "b" * 40 + "\nlast"
+
+
+async def test_a_trim_ending_on_a_newline_keeps_its_first_line():
+    """A window trimmed exactly after a newline opens on a whole line, not a fragment."""
+    stream = asyncio.StreamReader()
+    collector = BoundedOutputCollector(stream, max_tail_bytes=20)
+    # 25 bytes: the trim drops "AAAA\n" exactly, so "BBBB" survives intact.
+    stream.feed_data(b"AAAA\nBBBB\nCCCC\nDDDD\nEEEE\n")
+    stream.feed_eof()
+
+    await collector.wait()
+
+    assert collector.tail_lines() == "BBBB\nCCCC\nDDDD\nEEEE"
+
+
+async def test_a_later_mid_line_trim_drops_the_fragment_again():
+    """The head state tracks the latest trim, not merely that one has happened."""
+    stream = asyncio.StreamReader()
+    collector = BoundedOutputCollector(stream, max_tail_bytes=20)
+    stream.feed_data(b"AAAA\nBBBB\nCCCC\nDDDD\nEEEE\n")
+    stream.feed_data(b"FFFFFFF\n")
+    stream.feed_eof()
+
+    await collector.wait()
+
+    assert collector.tail_lines() == "DDDD\nEEEE\nFFFFFFF"
