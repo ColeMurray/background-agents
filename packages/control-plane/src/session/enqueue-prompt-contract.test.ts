@@ -9,6 +9,7 @@ describe("enqueuePromptRequestSchema", () => {
       source: "github",
       model: "anthropic/claude-haiku-4-5",
       reasoningEffort: "high",
+      clientRequestId: "request-1",
       attachments: [{ attachmentId: "attachment-1", name: "screenshot.png" }],
       callbackContext: { source: "automation", runId: "run-1" },
       scmEnrichment: {

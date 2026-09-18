@@ -34,6 +34,11 @@ export class SessionAttachmentRepository {
     );
   }
 
+  getById(attachmentId: string): SessionAttachmentRow | null {
+    const result = this.sql.exec(`SELECT * FROM attachments WHERE id = ?`, attachmentId);
+    return parseSessionAttachmentRows(result.toArray())[0] ?? null;
+  }
+
   getTotals(): { count: number; totalBytes: number } {
     const result = this.sql.exec(
       `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes

@@ -6,6 +6,7 @@ import {
   getLegacyPendingRequest,
   getPendingRequest,
   storePendingRequest,
+  updatePendingRequestLaunchState,
   type PendingRequest,
 } from "./pending-request-store";
 
@@ -86,6 +87,75 @@ describe("pending request store", () => {
 
     await deletePendingRequest(mocks.env, REQUEST_ID);
     expect(mocks.deleteValue).toHaveBeenCalledWith(`pending:${REQUEST_ID}`);
+  });
+
+  it("round-trips recoverable launch state with the same privacy and TTL policy", async () => {
+    const pending = { ...request(), ignoredSecret: "do-not-persist" };
+    mocks.get.mockResolvedValue(pending);
+    const snapshot = {
+      model: "openai/gpt-5.4",
+      reasoningEffort: "high",
+      branch: "fix/retry",
+      content: "Fix the tests",
+      callbackContext: {
+        source: "slack" as const,
+        channel: "C123",
+        threadTs: "111.222",
+        repoFullName: "acme/app",
+        model: "openai/gpt-5.4",
+        reasoningEffort: "high",
+      },
+      attachmentReferences: [{ attachmentId: "att-1", name: "screenshot.png" }],
+    };
+
+    const updated = await updatePendingRequestLaunchState(
+      mocks.env,
+      { requestId: REQUEST_ID },
+      { selectedValue: "acme/app", sessionId: "session-1", snapshot }
+    );
+
+    expect(updated).toEqual({
+      ...request(),
+      launchState: { selectedValue: "acme/app", sessionId: "session-1", snapshot },
+    });
+    expect(mocks.put).toHaveBeenCalledWith(`pending:${REQUEST_ID}`, expect.any(String), {
+      expirationTtl: 3600,
+    });
+    expect(JSON.parse(mocks.put.mock.calls[0][1])).toEqual(updated);
+    expect(mocks.put.mock.calls[0][1]).not.toContain("ignoredSecret");
+  });
+
+  it("preserves an existing launch state when a competing update reloads it", async () => {
+    mocks.get.mockResolvedValue(
+      request({ launchState: { selectedValue: "acme/app", sessionId: "session-1" } })
+    );
+
+    await expect(
+      updatePendingRequestLaunchState(
+        mocks.env,
+        { requestId: REQUEST_ID },
+        { selectedValue: "acme/api", sessionId: "session-2" }
+      )
+    ).resolves.toEqual(
+      request({ launchState: { selectedValue: "acme/app", sessionId: "session-1" } })
+    );
+  });
+
+  it("replaces the expected stale session while preserving the selected target", async () => {
+    mocks.get.mockResolvedValue(
+      request({ launchState: { selectedValue: "acme/app", sessionId: "session-1" } })
+    );
+
+    await expect(
+      updatePendingRequestLaunchState(
+        mocks.env,
+        { requestId: REQUEST_ID },
+        { selectedValue: "acme/app", sessionId: "session-2" },
+        "session-1"
+      )
+    ).resolves.toEqual(
+      request({ launchState: { selectedValue: "acme/app", sessionId: "session-2" } })
+    );
   });
 
   it("rejects missing, malformed, and mismatched records", async () => {

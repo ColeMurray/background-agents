@@ -67,6 +67,24 @@ describe("SessionAttachmentRepository", () => {
     ]);
   });
 
+  it("finds an attachment by id", () => {
+    const query = `SELECT * FROM attachments WHERE id = ?`;
+    mock.setRows(query, [
+      {
+        id: "up-1",
+        mime_type: "image/png",
+        size_bytes: 100,
+        object_key: "sessions/session-1/attachments/up-1",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+
+    expect(repository.getById("up-1")?.id).toBe("up-1");
+    expect(mock.calls[0].params).toEqual(["up-1"]);
+  });
+
   it("returns attachment totals including cleanup claims", () => {
     const query = `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes
        FROM attachments`;

@@ -52,6 +52,26 @@ export class AttachmentsHandler {
     const record = command.data;
 
     const timestamp = this.now();
+    const objectKey = buildSessionAttachmentObjectKey(sessionId, record.attachmentId);
+    const existing = this.repository.getById(record.attachmentId);
+    if (existing) {
+      if (
+        existing.cleanup_claimed_at !== null &&
+        existing.cleanup_claimed_at >= timestamp - SESSION_ATTACHMENT_CLEANUP_CLAIM_TTL_MS
+      ) {
+        return Response.json({ error: "Attachment cleanup is in progress" }, { status: 409 });
+      }
+      if (
+        existing.cleanup_claimed_at === null &&
+        (existing.mime_type !== record.mimeType ||
+          existing.size_bytes !== record.sizeBytes ||
+          existing.object_key !== objectKey)
+      ) {
+        return Response.json({ error: "Attachment ID is already registered" }, { status: 409 });
+      }
+      if (existing.cleanup_claimed_at === null) return Response.json({ status: "ok" });
+    }
+
     const stale = this.repository.claimStale(
       timestamp - SESSION_ATTACHMENT_UNREFERENCED_TTL_MS,
       timestamp,
@@ -89,7 +109,7 @@ export class AttachmentsHandler {
       id: record.attachmentId,
       mimeType: record.mimeType,
       sizeBytes: record.sizeBytes,
-      objectKey: buildSessionAttachmentObjectKey(sessionId, record.attachmentId),
+      objectKey,
       createdAt: timestamp,
     });
 

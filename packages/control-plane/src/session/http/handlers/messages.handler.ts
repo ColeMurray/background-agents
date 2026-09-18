@@ -56,7 +56,11 @@ export class MessagesHandler {
       }
       if (error instanceof PromptRequestConflictError) {
         return Response.json(
-          { error: error.message, code: "PROMPT_REQUEST_CONFLICT" },
+          {
+            error: error.message,
+            code: "PROMPT_REQUEST_CONFLICT",
+            existingMessageId: error.existingMessageId,
+          },
           { status: 409 }
         );
       }

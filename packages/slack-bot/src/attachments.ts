@@ -25,6 +25,7 @@ import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "./request-options";
 import type { Env } from "./types";
+import { deriveClientRequestId } from "./client-request-id";
 
 const log = createLogger("attachments");
 
@@ -375,7 +376,9 @@ async function uploadToSession(
   sessionId: string,
   file: PreparedImageAttachments["files"][number],
   authorId: string,
-  traceId?: string
+  traceId?: string,
+  clientRequestId?: string,
+  index?: number
 ): Promise<
   { reference: SessionAttachmentReference } | { sessionMissing: boolean; reportDrop: boolean }
 > {
@@ -383,6 +386,15 @@ async function uploadToSession(
   try {
     const formData = new FormData();
     formData.append("file", new File([bytes], attachment.name, { type: attachment.mimetype }));
+    if (clientRequestId !== undefined) {
+      formData.append(
+        "clientRequestId",
+        await deriveClientRequestId("slack-attachment", [
+          clientRequestId,
+          attachment.id ? `id:${attachment.id}` : `index:${index}`,
+        ])
+      );
+    }
     // sig1 hashes the exact body bytes, so the multipart form (whose boundary
     // is generated at serialization time) is serialized ONCE here; the signed
     // bytes, the Content-Type boundary, and the bytes sent are all from this
@@ -446,10 +458,13 @@ export async function uploadPreparedAttachments(
   sessionId: string,
   prepared: PreparedImageAttachments,
   authorId: string,
-  traceId?: string
+  traceId?: string,
+  clientRequestId?: string
 ): Promise<SlackAttachmentUploadResult> {
   const outcomes = await Promise.all(
-    prepared.files.map((file) => uploadToSession(env, sessionId, file, authorId, traceId))
+    prepared.files.map((file, index) =>
+      uploadToSession(env, sessionId, file, authorId, traceId, clientRequestId, index)
+    )
   );
   const references: SessionAttachmentReference[] = [];
   const dropped: SlackAttachmentDropReason[] = [...prepared.dropped];

@@ -1,4 +1,6 @@
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
+import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
+import { slackCallbackContextSchema } from "@open-inspect/shared/types/session-api";
 import { z } from "zod";
 import type { Env } from "../types";
 
@@ -29,6 +31,21 @@ const classificationSchema = z.object({
   source: z.enum(["routing_rule", "channel_association", "llm"]),
 });
 
+const sessionLaunchSnapshotSchema = z.object({
+  model: z.string().min(1),
+  reasoningEffort: z.string().optional(),
+  branch: z.string().optional(),
+  content: z.string().min(1),
+  callbackContext: slackCallbackContextSchema,
+  attachmentReferences: sessionAttachmentReferencesSchema.optional(),
+});
+
+const pendingLaunchStateSchema = z.object({
+  selectedValue: z.string().min(1),
+  sessionId: z.string().min(1).optional(),
+  snapshot: sessionLaunchSnapshotSchema.optional(),
+});
+
 const pendingRequestDataSchema = z.object({
   message: z.string().min(1),
   userId: z.string().min(1),
@@ -46,6 +63,8 @@ const pendingRequestDataSchema = z.object({
   threadContextSource: threadContextSourceSchema.optional(),
   /** Classifier provenance retained until the user resolves clarification. */
   classification: classificationSchema.optional(),
+  /** Recoverable state for retrying delivery after session creation. */
+  launchState: pendingLaunchStateSchema.optional(),
 });
 
 const pendingRequestSchema = pendingRequestDataSchema.extend({
@@ -56,6 +75,10 @@ const pendingRequestSchema = pendingRequestDataSchema.extend({
 
 export type PendingRequest = z.infer<typeof pendingRequestSchema>;
 export type LegacyPendingRequest = z.infer<typeof pendingRequestDataSchema>;
+type PendingLaunchState = z.infer<typeof pendingLaunchStateSchema>;
+export type SessionLaunchSnapshot = z.infer<typeof sessionLaunchSnapshotSchema>;
+
+type PendingRequestLocator = { requestId: string } | { channel: string; threadTs: string };
 
 function pendingRequestKey(requestId: string): string {
   return `pending:${requestId}`;
@@ -81,6 +104,38 @@ export async function getPendingRequest(
   const data = await createKvCacheStore(env.SLACK_KV).get(pendingRequestKey(requestId), "json");
   const result = pendingRequestSchema.safeParse(data);
   return result.success && result.data.requestId === requestId ? result.data : null;
+}
+
+/** Reload and persist recoverable launch state without retaining unknown fields. */
+export async function updatePendingRequestLaunchState(
+  env: Env,
+  locator: PendingRequestLocator,
+  launchState: PendingLaunchState,
+  expectedSessionId?: string
+): Promise<PendingRequest | LegacyPendingRequest | null> {
+  const store = createKvCacheStore(env.SLACK_KV);
+  const key =
+    "requestId" in locator
+      ? pendingRequestKey(locator.requestId)
+      : legacyPendingRequestKey(locator.channel, locator.threadTs);
+  const data = await store.get(key, "json");
+  let pending: PendingRequest | LegacyPendingRequest;
+  if ("requestId" in locator) {
+    const parsed = pendingRequestSchema.safeParse(data);
+    if (!parsed.success || parsed.data.requestId !== locator.requestId) return null;
+    pending = parsed.data;
+  } else {
+    const parsed = pendingRequestDataSchema.safeParse(data);
+    if (!parsed.success) return null;
+    pending = parsed.data;
+  }
+
+  const current = pending.launchState;
+  const canReplace =
+    current?.selectedValue === launchState.selectedValue && current.sessionId === expectedSessionId;
+  const updated = !current || canReplace ? { ...pending, launchState } : pending;
+  await store.put(key, JSON.stringify(updated), { expirationTtl: PENDING_REQUEST_TTL_MS / 1000 });
+  return updated;
 }
 
 export async function deletePendingRequest(env: Env, requestId: string): Promise<void> {

@@ -25,7 +25,7 @@ function createContext(): RequestContext {
 }
 
 function createEnv(fetch: (request: Request) => Promise<Response>) {
-  const put = vi.fn(async () => null);
+  const put = vi.fn(async (_key: string, _value: unknown, _options?: unknown) => undefined);
   const remove = vi.fn(async () => undefined);
   const env = {
     SESSION: fakeSessionRuntimeDispatch(fetch),
@@ -39,9 +39,10 @@ function createEnv(fetch: (request: Request) => Promise<Response>) {
   return { env, put, remove };
 }
 
-function attachmentUploadRequest(): Request {
+function attachmentUploadRequest(clientRequestId?: string): Request {
   const form = new FormData();
   form.append("file", new File([PNG_BYTES], "image.png", { type: "image/png" }));
+  if (clientRequestId) form.append("clientRequestId", clientRequestId);
   return new Request("https://test.local/sessions/session-1/attachments", {
     method: "POST",
     body: form,
@@ -136,5 +137,32 @@ describe("session attachment routes", () => {
       error: "Failed to clean up expired attachments; please retry",
     });
     expect(put).not.toHaveBeenCalled();
+  });
+
+  it("returns the same attachment id for an identical keyed upload", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const { env, put } = createEnv(fetch);
+
+    const first = await handleAttachmentPost(
+      attachmentUploadRequest("request-1"),
+      env,
+      { id: "session-1" },
+      withSessionRuntime(env, createContext())
+    );
+    const second = await handleAttachmentPost(
+      attachmentUploadRequest("request-1"),
+      env,
+      { id: "session-1" },
+      withSessionRuntime(env, createContext())
+    );
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    const firstBody = (await first.json()) as { attachmentId: string };
+    const secondBody = (await second.json()) as { attachmentId: string };
+    expect(firstBody.attachmentId).toMatch(/^[0-9a-f]{64}$/);
+    expect(secondBody.attachmentId).toBe(firstBody.attachmentId);
+    expect(put).toHaveBeenCalledTimes(2);
+    expect(put.mock.calls[0][0]).toBe(put.mock.calls[1][0]);
   });
 });

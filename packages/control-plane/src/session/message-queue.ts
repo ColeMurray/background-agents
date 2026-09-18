@@ -93,7 +93,7 @@ export class PromptQueueFullError extends Error {
 }
 
 export class PromptRequestConflictError extends Error {
-  constructor() {
+  constructor(readonly existingMessageId?: string) {
     super("clientRequestId was already used for a different prompt");
     this.name = "PromptRequestConflictError";
   }
@@ -109,14 +109,19 @@ export class HarnessModelIncompatibleError extends Error {
 
 export async function fingerprintWebPrompt(
   participantId: string,
-  data: Pick<PromptMessageData, "content" | "model" | "reasoningEffort" | "attachments">
+  data: Pick<
+    EnqueuePromptCoreData,
+    "content" | "source" | "model" | "reasoningEffort" | "attachments" | "callbackContext"
+  >
 ): Promise<string> {
   const canonicalRequest = JSON.stringify({
     participantId,
     content: data.content,
+    source: data.source,
     model: data.model ?? null,
     reasoningEffort: data.reasoningEffort ?? null,
     attachmentIds: data.attachments?.map((attachment) => attachment.attachmentId) ?? [],
+    callbackContext: data.callbackContext ?? null,
   });
   return hashToken(canonicalRequest);
 }
@@ -672,10 +677,10 @@ export class SessionMessageQueue {
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
     this.assertPromptableSession();
-    this.assertBudgetAvailable();
-    this.assertQueueCapacity();
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
+      this.assertBudgetAvailable();
+      this.assertQueueCapacity();
       const name = data.scmEnrichment?.name || data.authorId;
       participant = data.canonicalUserId
         ? this.participantService.create(data.authorId, name, data.canonicalUserId)
@@ -710,6 +715,7 @@ export class SessionMessageQueue {
       source: data.source,
       model: data.model,
       reasoningEffort: data.reasoningEffort,
+      clientRequestId: data.clientRequestId,
       attachments: data.attachments,
       callbackContext: data.callbackContext,
     });
@@ -746,7 +752,7 @@ export class SessionMessageQueue {
             queue_depth_before: queueDepthBefore,
             queue_depth_after: queueDepthBefore,
           });
-          throw new PromptRequestConflictError();
+          throw new PromptRequestConflictError(existing.id);
         }
         this.log.info("prompt.enqueue", {
           event: "prompt.enqueue",

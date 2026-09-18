@@ -116,6 +116,31 @@ describe("control plane client timeouts", () => {
       })
     ).resolves.toEqual({ ok: false, reason: "transient" });
   });
+
+  it("accepts the existing prompt when a concurrent idempotent request won", async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            code: "PROMPT_REQUEST_CONFLICT",
+            existingMessageId: "message-existing",
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } }
+        )
+    );
+
+    await expect(
+      sendPrompt(makeEnv(fetch), {
+        sessionId: "session-1",
+        content: "Fix it",
+        authorId: "slack:U123",
+        clientRequestId: "request-1",
+      })
+    ).resolves.toEqual({
+      ok: true,
+      data: { messageId: "message-existing", status: "queued" },
+    });
+  });
 });
 
 describe("control plane client request payloads", () => {
@@ -138,6 +163,7 @@ describe("control plane client request payloads", () => {
         actorDisplayName: "Ada Lovelace",
         actorEmail: "ada@example.com",
         traceId: "trace-1",
+        clientRequestId: "request-1",
       })
     ).resolves.toEqual({ sessionId: "session-1", status: "created" });
 
@@ -155,6 +181,7 @@ describe("control plane client request payloads", () => {
       reasoningEffort: "high",
       actorDisplayName: "Ada Lovelace",
       actorEmail: "ada@example.com",
+      clientRequestId: "request-1",
     });
   });
 
@@ -203,6 +230,7 @@ describe("control plane client request payloads", () => {
       content: "Use the screenshot",
       authorId: "slack:U123",
       attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
+      clientRequestId: "prompt-request-1",
     });
     await sendPrompt(makeEnv(fetch), {
       sessionId: "session-1",
@@ -215,6 +243,7 @@ describe("control plane client request payloads", () => {
       content: "Use the screenshot",
       source: "slack",
       attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
+      clientRequestId: "prompt-request-1",
     });
     expect(parseRequestBody(fetch, 1)).toEqual({
       content: "No attachments",

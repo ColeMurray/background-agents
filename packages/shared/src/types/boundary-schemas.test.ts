@@ -181,6 +181,7 @@ describe("boundary schemas", () => {
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: "high",
         branch: "main",
+        clientRequestId: "create-request-1",
       });
 
       expect(result.success).toBe(true);
@@ -478,6 +479,7 @@ describe("boundary schemas", () => {
         source: "slack",
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: "high",
+        clientRequestId: "prompt-request-1",
         attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
         callbackContext: {
           source: "slack",

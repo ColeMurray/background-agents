@@ -53,7 +53,7 @@ describe("deliverPrompt", () => {
       sessionMissing: false,
     });
 
-    const result = await deliverPrompt(env, options());
+    const result = await deliverPrompt(env, options({ clientRequestId: "request-1" }));
 
     expect(result).toEqual({ ok: true, data: { messageId: "message-1" } });
     expect(sendPrompt).toHaveBeenCalledWith(env, {
@@ -63,7 +63,16 @@ describe("deliverPrompt", () => {
       callbackContext: undefined,
       attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
       traceId: "trace-1",
+      clientRequestId: "request-1",
     });
+    expect(uploadPreparedAttachments).toHaveBeenCalledWith(
+      env,
+      "session-1",
+      emptyPrepared,
+      "slack:U123",
+      "trace-1",
+      "request-1"
+    );
     expect(notifyDroppedAttachments).toHaveBeenCalledWith(
       env,
       "C123",
@@ -74,6 +83,41 @@ describe("deliverPrompt", () => {
     const sendOrder = vi.mocked(sendPrompt).mock.invocationCallOrder[0]!;
     const notifyOrder = vi.mocked(notifyDroppedAttachments).mock.invocationCallOrder[0]!;
     expect(sendOrder).toBeLessThan(notifyOrder);
+  });
+
+  it("persists uploaded references before sending an idempotent prompt", async () => {
+    const references = [{ attachmentId: "att-1", name: "screenshot.png" }];
+    const onAttachmentsPrepared = vi.fn(async () => {});
+    vi.mocked(uploadPreparedAttachments).mockResolvedValue({
+      references,
+      dropped: [],
+      sessionMissing: false,
+    });
+
+    await deliverPrompt(env, options({ onAttachmentsPrepared }));
+
+    expect(onAttachmentsPrepared).toHaveBeenCalledWith(references);
+    expect(onAttachmentsPrepared.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sendPrompt).mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("replays persisted attachment references when upload outcomes change", async () => {
+    const references = [{ attachmentId: "att-original", name: "screenshot.png" }];
+    const onAttachmentsPrepared = vi.fn(async () => {});
+    vi.mocked(uploadPreparedAttachments).mockResolvedValue({
+      references: [{ attachmentId: "att-new", name: "screenshot.png" }],
+      dropped: [],
+      sessionMissing: false,
+    });
+
+    await deliverPrompt(env, options({ attachmentReferences: references, onAttachmentsPrepared }));
+
+    expect(onAttachmentsPrepared).not.toHaveBeenCalled();
+    expect(sendPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ attachments: references })
+    );
   });
 
   it("does not notify drops when the prompt send fails", async () => {

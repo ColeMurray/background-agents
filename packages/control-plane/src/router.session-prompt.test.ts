@@ -125,6 +125,25 @@ describe("session prompt identity enrichment", () => {
     expect(sessionFetch).toHaveBeenCalledOnce();
   });
 
+  it("forwards clientRequestId to the session prompt endpoint", async () => {
+    vi.mocked(UserStore).mockImplementation(function () {
+      return { getUserById: async () => ({ id: "user-1" }) } as never;
+    });
+    vi.mocked(resolveGitHubEnrichmentForRequest).mockResolvedValue(null);
+    const sessionFetch = vi.fn(async (request: Request) => {
+      await expect(request.json()).resolves.toMatchObject({ clientRequestId: "request-1" });
+      return Response.json({ status: "queued" });
+    });
+
+    const response = await handleRequest(
+      await userPromptRequest({ content: "Fix the bug", clientRequestId: "request-1" }),
+      createEnv(sessionFetch) as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(200);
+  });
+
   it("preserves stored enrichment when the GitHub identity lookup is unavailable", async () => {
     vi.mocked(UserStore).mockImplementation(function () {
       return {

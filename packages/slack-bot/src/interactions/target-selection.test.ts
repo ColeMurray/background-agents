@@ -4,7 +4,9 @@ import type { Env } from "../types";
 import { handleTargetSelection } from "./target-selection";
 import {
   getPendingRequest,
+  getLegacyPendingRequest,
   deletePendingRequest,
+  updatePendingRequestLaunchState,
   type PendingRequest,
 } from "../pending-requests/pending-request-store";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
@@ -31,6 +33,7 @@ vi.mock("../pending-requests/pending-request-store", () => ({
   deletePendingRequest: vi.fn(async () => {}),
   getLegacyPendingRequest: vi.fn(),
   deleteLegacyPendingRequest: vi.fn(async () => {}),
+  updatePendingRequestLaunchState: vi.fn(),
 }));
 
 vi.mock("../sessions/session-launcher", () => ({
@@ -98,6 +101,7 @@ function selectionRequest(selectedValue = DEFAULT_SELECTED_VALUE) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(startSessionAndSendPrompt).mockResolvedValue({ sessionId: "session-1" });
   vi.mocked(resolveTargetValue).mockResolvedValue(repositoryTarget);
   vi.mocked(resolveSlackActorIdentity).mockResolvedValue({
     userId: "U123",
@@ -105,6 +109,9 @@ beforeEach(() => {
     displayName: "Ajan",
   });
   vi.mocked(fetchInteractiveThreadContext).mockResolvedValue(undefined);
+  vi.mocked(updatePendingRequestLaunchState).mockImplementation(async (_env, _locator, state) =>
+    pendingRequest({ launchState: state })
+  );
 });
 
 describe("handleTargetSelection", () => {
@@ -342,5 +349,137 @@ describe("handleTargetSelection", () => {
       expect.anything(),
       expect.objectContaining({ messageText: "Alice's original request" })
     );
+  });
+
+  it("resumes the persisted session when the same target selection is retried", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue(
+      pendingRequest({
+        launchState: { selectedValue: DEFAULT_SELECTED_VALUE, sessionId: "session-existing" },
+      })
+    );
+
+    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
+
+    expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        clientRequestId: REQUEST_ID,
+        existingSessionId: "session-existing",
+      })
+    );
+  });
+
+  it("rejects a different target after launch state has been persisted", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue(
+      pendingRequest({
+        launchState: { selectedValue: DEFAULT_SELECTED_VALUE, sessionId: "session-existing" },
+      })
+    );
+
+    await handleTargetSelection(selectionRequest("acme/api"), makeEnv(), "trace-1", vi.fn());
+
+    expect(resolveTargetValue).not.toHaveBeenCalled();
+    expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
+    expect(postEphemeral).toHaveBeenCalledWith(
+      "xoxb-test",
+      "C123",
+      "U123",
+      expect.stringContaining("different target"),
+      { thread_ts: "111.222" }
+    );
+  });
+
+  it("derives the same bounded request key for legacy channel/thread records", async () => {
+    vi.mocked(getLegacyPendingRequest).mockResolvedValue({
+      message: "Fix the deploy",
+      userId: "U123",
+    });
+    const { requestId: _requestId, ...legacySelection } = selectionRequest();
+
+    await handleTargetSelection(legacySelection, makeEnv(), "trace-1", vi.fn());
+    await handleTargetSelection(legacySelection, makeEnv(), "trace-2", vi.fn());
+
+    const firstId = vi.mocked(startSessionAndSendPrompt).mock.calls[0]![1].clientRequestId;
+    const secondId = vi.mocked(startSessionAndSendPrompt).mock.calls[1]![1].clientRequestId;
+    expect(firstId).toBe(secondId);
+    expect(firstId).toMatch(/^slack-legacy-target:[a-f0-9]{64}$/);
+    expect(firstId!.length).toBeLessThanOrEqual(128);
+  });
+
+  it("persists the selected target and created session before delivery continues", async () => {
+    const env = makeEnv();
+    const snapshot = {
+      model: "openai/gpt-5.4",
+      reasoningEffort: "high",
+      content: "Fix the deploy",
+      callbackContext: {
+        source: "slack" as const,
+        channel: "C123",
+        threadTs: "111.222",
+        repoFullName: "acme/app",
+        model: "openai/gpt-5.4",
+        reasoningEffort: "high",
+      },
+    };
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
+    vi.mocked(startSessionAndSendPrompt).mockImplementation(async (_env, options) => {
+      await options.onLaunchPrepared?.(snapshot);
+      await options.onSessionCreated?.("session-created");
+      return { sessionId: "session-created" };
+    });
+
+    await handleTargetSelection(selectionRequest(), env, "trace-1", vi.fn());
+
+    expect(updatePendingRequestLaunchState).toHaveBeenNthCalledWith(
+      1,
+      env,
+      { requestId: REQUEST_ID },
+      { selectedValue: DEFAULT_SELECTED_VALUE, sessionId: undefined, snapshot },
+      undefined
+    );
+    expect(updatePendingRequestLaunchState).toHaveBeenNthCalledWith(
+      2,
+      env,
+      { requestId: REQUEST_ID },
+      { selectedValue: DEFAULT_SELECTED_VALUE, sessionId: "session-created", snapshot }
+    );
+    expect(deletePendingRequest).toHaveBeenCalledWith(env, REQUEST_ID);
+  });
+
+  it("keeps pending state when launch or prompt delivery fails", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
+    vi.mocked(startSessionAndSendPrompt).mockResolvedValue(null);
+
+    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
+
+    expect(deletePendingRequest).not.toHaveBeenCalled();
+  });
+
+  it("concurrent clicks share the control plane's idempotent session result", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
+    const sessionsByRequest = new Map<string, string>();
+    vi.mocked(startSessionAndSendPrompt).mockImplementation(async (_env, options) => {
+      const sessionId = sessionsByRequest.get(options.clientRequestId!) ?? "session-shared";
+      sessionsByRequest.set(options.clientRequestId!, sessionId);
+      await options.onSessionCreated?.(sessionId);
+      return { sessionId };
+    });
+
+    await Promise.all([
+      handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn()),
+      handleTargetSelection(selectionRequest(), makeEnv(), "trace-2", vi.fn()),
+    ]);
+
+    expect(startSessionAndSendPrompt).toHaveBeenCalledTimes(2);
+    expect(
+      vi.mocked(startSessionAndSendPrompt).mock.calls.map(([, options]) => options.clientRequestId)
+    ).toEqual([REQUEST_ID, REQUEST_ID]);
+    expect(updatePendingRequestLaunchState).toHaveBeenCalledTimes(2);
+    expect(
+      vi.mocked(updatePendingRequestLaunchState).mock.calls.map(([, , state]) => state)
+    ).toEqual([
+      { selectedValue: DEFAULT_SELECTED_VALUE, sessionId: "session-shared" },
+      { selectedValue: DEFAULT_SELECTED_VALUE, sessionId: "session-shared" },
+    ]);
   });
 });

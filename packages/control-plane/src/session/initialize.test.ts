@@ -60,6 +60,7 @@ describe("initializeSession", () => {
   };
 
   let createMock: ReturnType<typeof vi.fn>;
+  let existsMock: ReturnType<typeof vi.fn>;
   let updateStatusMock: ReturnType<typeof vi.fn>;
   let stubFetchMock: ReturnType<typeof vi.fn<(request: Request) => Promise<Response>>>;
 
@@ -74,9 +75,10 @@ describe("initializeSession", () => {
     vi.clearAllMocks();
 
     createMock = vi.fn().mockResolvedValue(undefined);
+    existsMock = vi.fn().mockResolvedValue(false);
     updateStatusMock = vi.fn().mockResolvedValue(true);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
-      return { create: createMock, updateStatus: updateStatusMock } as never;
+      return { create: createMock, exists: existsMock, updateStatus: updateStatusMock } as never;
     });
 
     stubFetchMock = vi.fn(async () => Response.json({ status: "created" }));
@@ -118,6 +120,45 @@ describe("initializeSession", () => {
     );
     expect(createMock).toHaveBeenCalledOnce();
     expect(stubFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("resumes a claimed creation when the D1 session row already exists", async () => {
+    existsMock.mockResolvedValue(true);
+
+    await initializeSession(
+      createEnv(),
+      { ...baseInput, resumeClaimedCreation: true },
+      ctx as never
+    );
+
+    expect(createMock).not.toHaveBeenCalled();
+    expect(stubFetchMock).toHaveBeenCalledOnce();
+    expect(updateStatusMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves claimed creation status fencing to the claim store after init failure", async () => {
+    existsMock.mockResolvedValue(true);
+    stubFetchMock.mockResolvedValue(new Response("Internal error", { status: 500 }));
+
+    await expect(
+      initializeSession(createEnv(), { ...baseInput, resumeClaimedCreation: true }, ctx as never)
+    ).rejects.toThrow();
+
+    expect(updateStatusMock).not.toHaveBeenCalled();
+  });
+
+  it("recovers when a concurrent claimed retry inserts the D1 row first", async () => {
+    createMock.mockRejectedValue(new Error("duplicate id"));
+    existsMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await initializeSession(
+      createEnv(),
+      { ...baseInput, resumeClaimedCreation: true },
+      ctx as never
+    );
+
+    expect(createMock).toHaveBeenCalledOnce();
+    expect(stubFetchMock).toHaveBeenCalledOnce();
   });
 
   it.each([

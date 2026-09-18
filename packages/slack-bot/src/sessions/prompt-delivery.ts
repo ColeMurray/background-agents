@@ -7,6 +7,7 @@
  */
 
 import type { CallbackContext, SendPromptResponse } from "@open-inspect/shared/types/session-api";
+import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import {
   notifyDroppedAttachments,
   uploadPreparedAttachments,
@@ -32,6 +33,9 @@ export interface DeliverPromptOptions {
   channel: string;
   threadTs: string;
   traceId?: string;
+  clientRequestId?: string;
+  attachmentReferences?: SessionAttachmentReference[];
+  onAttachmentsPrepared?: (references: SessionAttachmentReference[]) => Promise<void>;
 }
 
 export type DeliverPromptResult =
@@ -59,10 +63,21 @@ export async function deliverPrompt(
     channel,
     threadTs,
     traceId,
+    clientRequestId,
+    attachmentReferences,
+    onAttachmentsPrepared,
   } = options;
-  const upload = await uploadPreparedAttachments(env, sessionId, attachments, authorId, traceId);
+  const upload = await uploadPreparedAttachments(
+    env,
+    sessionId,
+    attachments,
+    authorId,
+    traceId,
+    clientRequestId
+  );
 
-  if (imageOnly && upload.references.length === 0) {
+  const references = attachmentReferences ?? upload.references;
+  if (imageOnly && references.length === 0) {
     // The placeholder prompt would launch a meaningless run with nothing
     // attached. When the uploads failed only because the session is gone,
     // surface staleness instead so the caller retries on a fresh session.
@@ -74,13 +89,22 @@ export async function deliverPrompt(
     return { ok: false, reason: "no_images_delivered" };
   }
 
+  if (attachmentReferences === undefined && onAttachmentsPrepared) {
+    try {
+      await onAttachmentsPrepared(references);
+    } catch {
+      return { ok: false, reason: "transient" };
+    }
+  }
+
   const promptResult = await sendPrompt(env, {
     sessionId,
     content,
     authorId,
     callbackContext,
-    attachments: upload.references,
+    attachments: references,
     traceId,
+    ...(clientRequestId ? { clientRequestId } : {}),
   });
   if (!promptResult.ok) return promptResult;
   // Notify about dropped images only now that the session proved live —
