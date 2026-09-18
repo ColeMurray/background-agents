@@ -224,6 +224,10 @@ class AgentBridge:
             self._boot_ready.set()
         self.boot_relay = BootEventRelay(Path(BOOT_EVENTS_FILE_PATH), self.log)
         self._boot_relay_task: asyncio.Task[None] | None = None
+        # Boot-event lines read but not yet delivered over an open socket.
+        # Retried at the head of the next pass, and they hold the relay
+        # cursor where it is until they land.
+        self._held_boot_lines: list[dict[str, Any]] = []
         # A harness attach that ended the run; re-raised from run() so the
         # process exits the way a pre-connect open failure always has.
         self._attach_failure: BaseException | None = None
@@ -586,16 +590,18 @@ class AgentBridge:
     async def _relay_boot_events(self) -> None:
         """Tail the supervisor's boot-events file until the harness phase completes.
 
-        Each warning line is forwarded as a `warning` event (buffered like any
-        timeline event). In early-connect mode each phase line is forwarded as
-        `boot_progress`, unbuffered, and the `harness completed` line triggers
-        the harness attach; in classic mode the bridge only starts after boot,
-        so phases are already history and only warnings are relayed.
+        Each warning line is forwarded as a `warning` event, over an open
+        socket or not at all: an undelivered one is held for the next pass.
+        In early-connect mode each phase line is forwarded as `boot_progress`,
+        unbuffered, and the `harness completed` line triggers the harness
+        attach; in classic mode the bridge only starts after boot, so phases
+        are already history and only warnings are relayed.
         """
         try:
             while not self.shutdown_event.is_set():
                 await self._relay_boot_events_once()
                 if self.boot_relay.harness_completed:
+                    await self._buffer_held_boot_events()
                     return
                 await asyncio.sleep(self.BOOT_EVENTS_POLL_SECONDS)
         except asyncio.CancelledError:
@@ -631,35 +637,48 @@ class AgentBridge:
     async def _relay_boot_events_once(self) -> None:
         """One pass over new boot-events lines (see ``_relay_boot_events``).
 
-        The cursor advances only over lines this bridge is done with: one
-        sent over an open socket, one the wire has no shape for, or a phase,
-        which is never replayed from the file (a reconnect resends the latest
-        phase instead). A warning that only reached the in-memory buffer
-        holds the cursor where it is, so a bridge that is replaced before it
-        flushes leaves the warning for its successor to relay. Delivery is
-        therefore at least once: a buffer flushed just before the process
-        dies is relayed twice.
+        Lines held by an earlier pass are retried first, so the file is the
+        queue of what this boot still owes the control plane and no warning
+        waits on a buffer the cursor cannot see. A warning goes out over an
+        open socket or is held again; a line the wire has no shape for, and a
+        phase, are done with either way — a phase is never replayed from the
+        file, a reconnect resends the latest one instead.
+
+        The cursor advances only while nothing is held, so it never passes a
+        warning this bridge has not delivered and its successor picks that
+        warning up. Delivery is therefore at least once: a line sent just
+        before the process dies is relayed again by the next bridge.
         """
-        lines = self.boot_relay.read_new_lines()
+        lines = self._held_boot_lines + self.boot_relay.read_new_lines()
+        self._held_boot_lines = []
         relayed_through: int | None = None
-        pending = False
         for line in lines:
             event = BootEventRelay.to_event(line)
-            if event is None:
-                handed_off = True
-            elif event["type"] == "boot_progress":
-                if self.early_connect and not self._boot_ready.is_set():
+            if event is not None:
+                if event["type"] == "warning":
+                    if not await self.event_forwarder.send(event, buffered=False):
+                        self._held_boot_lines.append(line)
+                elif self.early_connect and not self._boot_ready.is_set():
                     await self.event_forwarder.send(event, buffered=False)
-                handed_off = True
-            else:
-                handed_off = await self._send_event(event)
-            pending = pending or not handed_off
-            if not pending:
+            if not self._held_boot_lines:
                 relayed_through = line["seq"]
         if relayed_through is not None:
             self.boot_relay.mark_relayed(relayed_through)
         if self.early_connect and self.boot_relay.harness_completed and self.harness is None:
             await self._attach_harness()
+
+    async def _buffer_held_boot_events(self) -> None:
+        """Hand still-undelivered boot events to the event buffer at the end of boot.
+
+        The relay stops polling once the harness attaches, so nothing would
+        retry them; the buffer outlives it and flushes on the next connect.
+        The cursor stays behind them, as it does for any undelivered line.
+        """
+        held, self._held_boot_lines = self._held_boot_lines, []
+        for line in held:
+            event = BootEventRelay.to_event(line)
+            if event is not None:
+                await self._send_event(event)
 
     async def _attach_harness(self) -> None:
         """Build, open and resume the harness, then report `ready`.
@@ -831,8 +850,14 @@ class AgentBridge:
             reasoning_effort=reasoning_effort,
         )
 
+        # One deadline for the whole prompt, set at receipt: the wait for a
+        # booting sandbox, the preflight below and the turn itself all spend
+        # it, so no prompt can outlive the configured maximum and eat the
+        # snapshot reserve.
+        turn_deadline = time.monotonic() + self.prompt_limits.prompt_max_duration_seconds
+
         try:
-            harness, turn_budget_seconds = await self._await_harness(message_id)
+            harness = await self._await_harness(message_id, turn_deadline)
             prompt_author = parse_prompt_git_author(author_data)
             await self._configure_git_identity(prompt_author)
 
@@ -875,7 +900,7 @@ class AgentBridge:
                     reasoning_effort=reasoning_effort,
                     attachments=tuple(attachments or ()),
                     author=author_data if isinstance(author_data, dict) else {},
-                    max_duration_seconds=turn_budget_seconds,
+                    max_duration_seconds=max(turn_deadline - time.monotonic(), 0.0),
                 ),
                 emit,
             )
@@ -936,27 +961,24 @@ class AgentBridge:
             }
         )
 
-    async def _await_harness(self, message_id: str) -> tuple[AgentHarness, float]:
-        """The attached harness and the budget left for its turn.
+    async def _await_harness(self, message_id: str, deadline: float) -> AgentHarness:
+        """The attached harness, waited for within the prompt's deadline.
 
-        One budget covers the whole prompt: a sandbox that never becomes
-        ready fails it the way a turn that never finishes would, `stop`
-        cancels the hold like any running turn, and whatever the hold spends
-        is taken off the turn that follows, so a prompt received while the
-        sandbox boots can never run for twice the configured maximum and eat
-        the snapshot reserve.
+        A sandbox that never becomes ready fails the prompt the way a turn
+        that never finishes would, and `stop` cancels the hold like any
+        running turn. What the hold spends is the prompt's own budget, so a
+        prompt received while the sandbox boots can never run for twice the
+        configured maximum.
         """
-        budget = self.prompt_limits.prompt_max_duration_seconds
         if self._boot_ready.is_set():
-            return self._require_harness(), budget
+            return self._require_harness()
+        budget = max(deadline - time.monotonic(), 0.0)
         self.log.info("prompt.held_until_ready", message_id=message_id, timeout_s=budget)
-        held_from = time.monotonic()
         try:
             await asyncio.wait_for(self._boot_ready.wait(), budget)
         except TimeoutError:
             raise RuntimeError(f"sandbox did not become ready within {int(budget)} s") from None
-        remaining = budget - (time.monotonic() - held_from)
-        return self._require_harness(), max(remaining, 0.0)
+        return self._require_harness()
 
     async def _ensure_agent_session(self, harness: AgentHarness | None = None) -> None:
         """Create the vendor session on first use and persist its id."""

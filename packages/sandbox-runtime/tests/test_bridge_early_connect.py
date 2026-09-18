@@ -364,7 +364,8 @@ class TestConnectSnapshot:
 
         assert [event["type"] for event in ws.sent] == ["ready"]
 
-    async def test_phases_are_never_buffered_but_warnings_are(self, tmp_path, monkeypatch):
+    async def test_nothing_relayed_while_booting_is_buffered(self, tmp_path, monkeypatch):
+        """A warning with nowhere to go is held by the relay, not buffered."""
         bridge = _bridge(tmp_path, monkeypatch)
         _write_lines(
             _phase(1, "sync", "started"),
@@ -374,8 +375,8 @@ class TestConnectSnapshot:
 
         await bridge._relay_boot_events_once()
 
-        buffered = [event["type"] for event in bridge.event_forwarder._event_buffer]
-        assert buffered == ["warning"]
+        assert bridge.event_forwarder._event_buffer == []
+        assert [line["seq"] for line in bridge._held_boot_lines] == [2]
 
     async def test_heartbeat_reports_booting_until_attached(self, tmp_path, monkeypatch):
         harness = OpeningHarness([])
@@ -435,7 +436,9 @@ class TestCommandsWhileBooting:
         assert budget is not None
         assert 9.0 < budget < 10.0
 
-    async def test_an_unheld_prompt_gets_the_whole_budget(self, tmp_path, monkeypatch):
+    async def test_an_unheld_prompt_gets_what_is_left_of_the_whole_budget(
+        self, tmp_path, monkeypatch
+    ):
         harness = ScriptedHarness()
         bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness, early_connect=False)
         bridge._send_event = AsyncMock()
@@ -443,10 +446,29 @@ class TestCommandsWhileBooting:
 
         await bridge._handle_prompt(_agent_prompt("msg-1"))
 
-        assert (
-            harness.prompts[0].max_duration_seconds
-            == bridge.prompt_limits.prompt_max_duration_seconds
-        )
+        configured = bridge.prompt_limits.prompt_max_duration_seconds
+        budget = harness.prompts[0].max_duration_seconds
+        assert budget is not None
+        assert configured - 1.0 < budget <= configured
+
+    async def test_slow_preflight_is_taken_off_the_turn_budget(self, tmp_path, monkeypatch):
+        """One deadline covers the whole prompt, the work before the turn included."""
+
+        class SlowSessionHarness(ScriptedHarness):
+            async def create_session(self) -> None:
+                await asyncio.sleep(0.2)
+                self.session_id = "oc-session-new"
+
+        harness = SlowSessionHarness(session_id=None)
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness, early_connect=False)
+        bridge._send_event = AsyncMock()
+        bridge.git_signing.refresh = AsyncMock()
+
+        await bridge._handle_prompt(_agent_prompt("msg-1"))
+
+        budget = harness.prompts[0].max_duration_seconds
+        assert budget is not None
+        assert budget <= bridge.prompt_limits.prompt_max_duration_seconds - 0.2
 
     async def test_held_prompt_fails_when_the_hold_expires(self, tmp_path, monkeypatch):
         bridge = _bridge(tmp_path, monkeypatch)
@@ -468,7 +490,9 @@ class TestCommandsWhileBooting:
         assert terminal["type"] == "execution_complete"
         assert terminal["success"] is False
         assert "did not become ready" in terminal["error"]
-        assert seen_timeouts == [0.01]
+        # What is left of the prompt's deadline when the hold starts.
+        assert len(seen_timeouts) == 1
+        assert 0.0 < seen_timeouts[0] <= 0.01
 
     async def test_stop_cancels_a_held_prompt(self, tmp_path, monkeypatch):
         bridge = _bridge(tmp_path, monkeypatch)
@@ -578,11 +602,11 @@ class TestRelayCursor:
 
         return boot_events_cursor_path(_events_path())
 
-    async def test_a_buffered_warning_holds_the_cursor_for_the_next_bridge(
+    async def test_an_undelivered_warning_holds_the_cursor_for_the_next_bridge(
         self, tmp_path, monkeypatch
     ):
         # Never connected, so the forwarder has nothing to write to and the
-        # warning exists only in this process's buffer.
+        # warning stays held for a later pass of this relay.
         first = _bridge(tmp_path, monkeypatch)
         _write_lines(
             _phase(1, "sync", "started"),
@@ -591,7 +615,7 @@ class TestRelayCursor:
 
         await first._relay_boot_events_once()
 
-        assert [event["type"] for event in first.event_forwarder._event_buffer] == ["warning"]
+        assert [line["seq"] for line in first._held_boot_lines] == [2]
         # The phase is done with; the buffered warning holds the cursor there.
         assert self._cursor().read_text() == "1"
 
@@ -619,6 +643,64 @@ class TestRelayCursor:
 
         assert [event["type"] for event in ws.sent] == ["boot_progress", "warning"]
         assert self._cursor().read_text() == "2"
+
+    async def test_a_later_pass_never_moves_the_cursor_past_a_held_warning(
+        self, tmp_path, monkeypatch
+    ):
+        """The warning is still undelivered when the next line is handed off."""
+        bridge = _bridge(tmp_path, monkeypatch)
+        _write_lines({"seq": 1, "kind": "warning", "scope": "sync", "message": "stale", "at": 1.0})
+        await bridge._relay_boot_events_once()
+
+        _write_lines(_phase(2, "sync", "completed"))
+        await bridge._relay_boot_events_once()
+
+        assert [line["seq"] for line in bridge._held_boot_lines] == [1]
+        assert not self._cursor().exists()
+
+    async def test_a_held_warning_is_relayed_once_when_the_socket_returns(
+        self, tmp_path, monkeypatch
+    ):
+        bridge = _bridge(tmp_path, monkeypatch)
+        first_ws = FakeWs()
+        await bridge.event_forwarder.bind(first_ws)
+        _write_lines({"seq": 1, "kind": "warning", "scope": "sync", "message": "first", "at": 1.0})
+        await bridge._relay_boot_events_once()
+        bridge.event_forwarder.unbind()
+
+        _write_lines({"seq": 2, "kind": "warning", "scope": "setup", "message": "held", "at": 2.0})
+        await bridge._relay_boot_events_once()
+        assert self._cursor().read_text() == "1"
+
+        second_ws = FakeWs()
+        await bridge.event_forwarder.bind(second_ws)
+        await bridge._relay_boot_events_once()
+        await bridge._relay_boot_events_once()
+
+        assert [event.get("message") for event in first_ws.sent] == ["first"]
+        assert [event.get("message") for event in second_ws.sent] == ["held"]
+        assert bridge._held_boot_lines == []
+        assert self._cursor().read_text() == "2"
+
+    async def test_a_warning_held_when_boot_ends_is_buffered_for_the_next_connect(
+        self, tmp_path, monkeypatch
+    ):
+        """The relay stops polling at attach, so what it holds goes to the buffer."""
+        harness = OpeningHarness([])
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        _write_lines(
+            {"seq": 1, "kind": "warning", "scope": "sync", "message": "stale", "at": 1.0},
+            HARNESS_COMPLETED,
+        )
+
+        await bridge._relay_boot_events()
+
+        buffered = [
+            (event["type"], event.get("message")) for event in bridge.event_forwarder._event_buffer
+        ]
+        assert ("warning", "stale") in buffered
+        assert bridge._held_boot_lines == []
+        assert not self._cursor().exists()
 
     async def test_a_dropped_phase_does_not_hold_the_cursor(self, tmp_path, monkeypatch):
         """A phase is never replayed from the file: a reconnect resends the latest one."""

@@ -77,6 +77,10 @@ def _resolve_bounded_seconds(
     else:
         try:
             value = float(raw)
+            # A non-finite value passes every clamp comparison below and then
+            # cannot be logged or turned into a timeout at all.
+            if not math.isfinite(value):
+                raise ValueError
         except ValueError:
             log.warn(
                 "bridge.timeout_invalid",
