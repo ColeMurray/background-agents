@@ -84,3 +84,7 @@ class SessionConfig(BaseModel):
     # Shared working-branch name, computed control-plane-side
     # (generateBranchName) — the runtime never derives branch names itself.
     working_branch_name: str | None = None
+    # The control plane asks the bridge to connect before the repository boots
+    # and to report boot phases; absent (an older control plane) means the
+    # classic order, bridge last.
+    bridge_early_connect: bool = False

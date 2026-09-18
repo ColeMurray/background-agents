@@ -111,9 +111,6 @@ describe("session prompt identity enrichment", () => {
           login: "ada",
           name: "Trusted Ada",
           email: "1001+ada@users.noreply.github.com",
-          accessTokenEncrypted: null,
-          refreshTokenEncrypted: null,
-          tokenExpiresAt: null,
         },
       });
       return Response.json({ status: "queued" });
@@ -150,6 +147,27 @@ describe("session prompt identity enrichment", () => {
 
     expect(response.status).toBe(200);
     expect(sessionFetch).toHaveBeenCalledOnce();
+  });
+
+  it("does not dispatch a prompt when GitHub credential integrity fails", async () => {
+    vi.mocked(UserStore).mockImplementation(function () {
+      return {
+        getUserById: async () => ({ id: "user-1", displayName: "Trusted Ada" }),
+      } as never;
+    });
+    vi.mocked(resolveGitHubEnrichmentForRequest).mockRejectedValue(
+      new Error("GitHub credential authority is corrupt")
+    );
+    const sessionFetch = vi.fn(async () => Response.json({ status: "queued" }));
+
+    const response = await handleRequest(
+      await userPromptRequest({ content: "Fix the bug" }),
+      createEnv(sessionFetch) as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(500);
+    expect(sessionFetch).not.toHaveBeenCalled();
   });
 
   it("leaves stored enrichment unchanged when no linked GitHub identity exists", async () => {

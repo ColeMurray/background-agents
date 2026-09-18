@@ -3,7 +3,8 @@
  *
  * Extracted from SessionDO to reduce its size. Handles:
  * - Creating and looking up participants
- * - SCM OAuth token refresh (GitHub, Bitbucket, etc.)
+ * - Resolving current GitHub credentials through Better Auth
+ * - Refreshing legacy credentials copied into existing session participants
  * - Resolving auth context for PR creation
  */
 
@@ -11,9 +12,11 @@ import { decryptToken, encryptToken } from "../auth/crypto";
 import { refreshAccessToken } from "../auth/github";
 import type { SourceControlAuthContext, SourceControlProviderName } from "../source-control";
 import type { Logger } from "../logger";
+import { BetterAuthGitHubTokenUnavailableError } from "./identity";
 import type { ParticipantRow } from "./types";
 import type { ParticipantRepository } from "./participant-repository";
-import { DEFAULT_TOKEN_LIFETIME_MS, type UserScmTokenStore } from "../db/user-scm-tokens";
+
+const GITHUB_DEFAULT_TOKEN_LIFETIME_MS = 8 * 60 * 60 * 1000;
 
 /**
  * Environment config — only the secrets ParticipantService needs.
@@ -33,8 +36,15 @@ export interface ParticipantServiceDeps {
   env: ParticipantServiceEnv;
   log: Logger;
   generateId: () => string;
-  userScmTokenStore: UserScmTokenStore;
+  resolveCurrentGitHubAccessToken?: (
+    canonicalUserId: string,
+    scmUserId: string
+  ) => Promise<string | null>;
 }
+
+export type PromptingAuthResolution =
+  | { auth: SourceControlAuthContext | null }
+  | { error: string; status: number };
 
 /**
  * Build avatar URL from SCM login.
@@ -54,7 +64,7 @@ export class ParticipantService {
   private readonly env: ParticipantServiceEnv;
   private readonly log: Logger;
   private readonly generateId: () => string;
-  private readonly userScmTokenStore: UserScmTokenStore;
+  private readonly resolveCurrentGitHubAccessToken?: ParticipantServiceDeps["resolveCurrentGitHubAccessToken"];
   private readonly getProcessingMessageAuthor: () => { author_id: string } | null;
 
   constructor(deps: ParticipantServiceDeps) {
@@ -62,7 +72,7 @@ export class ParticipantService {
     this.env = deps.env;
     this.log = deps.log;
     this.generateId = deps.generateId;
-    this.userScmTokenStore = deps.userScmTokenStore;
+    this.resolveCurrentGitHubAccessToken = deps.resolveCurrentGitHubAccessToken;
     this.getProcessingMessageAuthor = deps.getProcessingMessageAuthor;
   }
 
@@ -157,172 +167,16 @@ export class ParticipantService {
   }
 
   /**
-   * Refresh a participant's SCM OAuth token.
-   * Dispatches to centralized (D1) or local (per-DO SQLite) refresh path.
+   * Refresh credentials copied into an existing participant. New GitHub
+   * sessions resolve through Better Auth instead of copying refresh tokens.
    */
   async refreshToken(participant: ParticipantRow): Promise<ParticipantRow | null> {
-    if (participant.scm_user_id) {
-      return this.refreshTokenCentralized(participant);
-    }
     return this.refreshTokenLocal(participant);
   }
 
   /**
-   * Centralized refresh via D1.
-   *
-   * 1. Read D1 for the user's tokens
-   * 2. If D1 has a fresh access token, use it (skip OAuth API call)
-   * 3. If D1 token is expired, refresh via OAuth API and CAS-write to D1
-   * 4. On CAS conflict, re-read D1 and use the winner's tokens
-   * 5. Always update local SQLite cache with final tokens
-   */
-  private async refreshTokenCentralized(
-    participant: ParticipantRow
-  ): Promise<ParticipantRow | null> {
-    const store = this.userScmTokenStore;
-    const scmUserId = participant.scm_user_id!;
-
-    try {
-      const d1Tokens = await store.getTokens(scmUserId);
-
-      if (!d1Tokens) {
-        this.log.info("No D1 token record, falling back to local refresh", {
-          user_id: participant.user_id,
-        });
-        const result = await this.refreshTokenLocal(participant);
-        if (result) {
-          await this.seedD1AfterLocalRefresh(result);
-        }
-        return result;
-      }
-
-      if (store.isTokenFresh(d1Tokens.expiresAt)) {
-        this.log.info("Using fresh D1 access token", { user_id: participant.user_id });
-        await this.updateLocalTokensFromD1(participant.id, d1Tokens);
-        return this.repository.getParticipantById(participant.id);
-      }
-
-      // D1 token expired — refresh via OAuth API
-      if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
-        this.log.warn("Cannot refresh: OAuth credentials not configured");
-        return null;
-      }
-
-      const newTokens = await refreshAccessToken(d1Tokens.refreshToken, {
-        clientId: this.env.GITHUB_CLIENT_ID,
-        clientSecret: this.env.GITHUB_CLIENT_SECRET,
-      });
-
-      const newAccessToken = newTokens.access_token;
-      const newRefreshToken = newTokens.refresh_token ?? d1Tokens.refreshToken;
-      const newExpiresAt = newTokens.expires_in
-        ? Date.now() + newTokens.expires_in * 1000
-        : Date.now() + DEFAULT_TOKEN_LIFETIME_MS;
-
-      const casResult = await store.casUpdateTokens(
-        scmUserId,
-        d1Tokens.refreshTokenEncrypted,
-        newAccessToken,
-        newRefreshToken,
-        newExpiresAt
-      );
-
-      if (casResult.ok) {
-        this.log.info("CAS update succeeded", { user_id: participant.user_id });
-        const newAccessTokenEncrypted = await encryptToken(
-          newAccessToken,
-          this.env.TOKEN_ENCRYPTION_KEY
-        );
-        const newRefreshTokenEncrypted = await encryptToken(
-          newRefreshToken,
-          this.env.TOKEN_ENCRYPTION_KEY
-        );
-        this.repository.updateParticipantTokens(participant.id, {
-          scmAccessTokenEncrypted: newAccessTokenEncrypted,
-          scmRefreshTokenEncrypted: newRefreshTokenEncrypted,
-          scmTokenExpiresAt: newExpiresAt,
-        });
-        return this.repository.getParticipantById(participant.id);
-      }
-
-      // CAS conflict — another DO won the race. Re-read D1 for the winner's tokens.
-      this.log.info("CAS conflict, re-reading D1 for winner's tokens", {
-        user_id: participant.user_id,
-      });
-      const winnerTokens = await store.getTokens(scmUserId);
-      if (winnerTokens) {
-        await this.updateLocalTokensFromD1(participant.id, winnerTokens);
-        return this.repository.getParticipantById(participant.id);
-      }
-
-      // Unexpected: CAS lost but no row found. Fall back to local.
-      return this.refreshTokenLocal(participant);
-    } catch (error) {
-      this.log.error("Centralized token refresh failed, falling back to local", {
-        user_id: participant.user_id,
-        error: error instanceof Error ? error : String(error),
-      });
-      return this.refreshTokenLocal(participant);
-    }
-  }
-
-  /**
-   * Update local SQLite participant tokens from a D1 record.
-   */
-  private async updateLocalTokensFromD1(
-    participantId: string,
-    d1Tokens: { accessToken: string; refreshToken: string; expiresAt: number }
-  ): Promise<void> {
-    const [accessEnc, refreshEnc] = await Promise.all([
-      encryptToken(d1Tokens.accessToken, this.env.TOKEN_ENCRYPTION_KEY),
-      encryptToken(d1Tokens.refreshToken, this.env.TOKEN_ENCRYPTION_KEY),
-    ]);
-    this.repository.updateParticipantTokens(participantId, {
-      scmAccessTokenEncrypted: accessEnc,
-      scmRefreshTokenEncrypted: refreshEnc,
-      scmTokenExpiresAt: d1Tokens.expiresAt,
-    });
-  }
-
-  /**
-   * After a successful local refresh, seed D1 so future refreshes are centralized.
-   */
-  private async seedD1AfterLocalRefresh(participant: ParticipantRow): Promise<void> {
-    if (
-      !participant.scm_user_id ||
-      !participant.scm_access_token_encrypted ||
-      !participant.scm_refresh_token_encrypted ||
-      !participant.scm_token_expires_at
-    ) {
-      return;
-    }
-
-    try {
-      const [accessToken, refreshToken] = await Promise.all([
-        decryptToken(participant.scm_access_token_encrypted, this.env.TOKEN_ENCRYPTION_KEY),
-        decryptToken(participant.scm_refresh_token_encrypted, this.env.TOKEN_ENCRYPTION_KEY),
-      ]);
-
-      await this.userScmTokenStore.upsertTokens(
-        participant.scm_user_id,
-        accessToken,
-        refreshToken,
-        participant.scm_token_expires_at
-      );
-
-      this.log.info("Seeded D1 after local refresh", { user_id: participant.user_id });
-    } catch (error) {
-      this.log.warn("Failed to seed D1 after local refresh", {
-        user_id: participant.user_id,
-        error: error instanceof Error ? error : String(error),
-      });
-    }
-  }
-
-  /**
-   * Local-only refresh using the per-DO SQLite refresh token. Taken by a
-   * participant with no `scm_user_id`, who has no row in the shared token
-   * store to refresh centrally, and as the fallback when that row is missing.
+   * Local-only refresh using the per-DO SQLite refresh token. Retained for
+   * already-running sessions created before Better Auth became authoritative.
    */
   private async refreshTokenLocal(participant: ParticipantRow): Promise<ParticipantRow | null> {
     if (!participant.scm_refresh_token_encrypted) {
@@ -357,7 +211,7 @@ export class ParticipantService {
 
       const newExpiresAt = newTokens.expires_in
         ? Date.now() + newTokens.expires_in * 1000
-        : Date.now() + DEFAULT_TOKEN_LIFETIME_MS; // fallback: 8 hours
+        : Date.now() + GITHUB_DEFAULT_TOKEN_LIFETIME_MS;
 
       this.repository.updateParticipantTokens(participant.id, {
         scmAccessTokenEncrypted: newAccessTokenEncrypted,
@@ -385,16 +239,58 @@ export class ParticipantService {
    * - `{ auth: null }` when user has no usable OAuth token (caller falls back to app token)
    * - `{ error, status }` on unexpected failure
    */
-  async resolveAuthForPR(
+  async resolveAuthForPR(participant: ParticipantRow): Promise<PromptingAuthResolution> {
+    // Token-bearing participant rows predate Better Auth authority. Keep their
+    // local refresh/decrypt flow isolated from current identity-only sessions.
+    if (participant.scm_access_token_encrypted || participant.scm_refresh_token_encrypted) {
+      return this.resolveLegacyAuthForPR(participant);
+    }
+
+    if (
+      this.resolveCurrentGitHubAccessToken &&
+      participant.canonical_user_id &&
+      participant.scm_user_id
+    ) {
+      try {
+        const accessToken = await this.resolveCurrentGitHubAccessToken(
+          participant.canonical_user_id,
+          participant.scm_user_id
+        );
+        if (accessToken) {
+          return { auth: { authType: "oauth", token: accessToken } };
+        }
+      } catch (error) {
+        if (error instanceof BetterAuthGitHubTokenUnavailableError) {
+          this.log.warn("Better Auth GitHub token retrieval failed, using app fallback", {
+            user_id: participant.user_id,
+            error:
+              error.retrievalError instanceof Error
+                ? error.retrievalError
+                : String(error.retrievalError),
+          });
+          return { auth: null };
+        }
+        this.log.error("Failed to resolve current Better Auth token for PR creation", {
+          user_id: participant.user_id,
+          error: error instanceof Error ? error : String(error),
+        });
+        return { error: "Failed to resolve GitHub credentials", status: 500 };
+      }
+    }
+
+    this.log.info("PR creation: prompting user has no OAuth token, using app fallback", {
+      user_id: participant.user_id,
+    });
+    return { auth: null };
+  }
+
+  private async resolveLegacyAuthForPR(
     participant: ParticipantRow
-  ): Promise<
-    | { auth: SourceControlAuthContext | null; error?: never; status?: never }
-    | { auth?: never; error: string; status: number }
-  > {
+  ): Promise<{ auth: SourceControlAuthContext | null }> {
     let resolvedParticipant = participant;
 
     if (!resolvedParticipant.scm_access_token_encrypted) {
-      this.log.info("PR creation: prompting user has no OAuth token, using manual fallback", {
+      this.log.info("PR creation: legacy participant has no OAuth token, using app fallback", {
         user_id: resolvedParticipant.user_id,
       });
       return { auth: null };

@@ -107,24 +107,11 @@ async function handleTriggerAutomation(
   const requesterUserId = ctx.authorization?.userId;
   if (!requesterUserId) return error("Authorization unavailable", 503);
 
-  let requesterEnrichment;
-  try {
-    requesterEnrichment = await resolveGitHubEnrichmentForRequest(
-      env,
-      ctx.db,
-      new UserStore(ctx.db),
-      requesterUserId,
-      await resolveGitHubCredentialAuthority(ctx, request.headers)
-    );
-  } catch (enrichmentError) {
-    logger.warn("Failed to enrich manual automation trigger with GitHub identity", {
-      error:
-        enrichmentError instanceof Error ? enrichmentError : new Error(String(enrichmentError)),
-      automation_id: id,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-  }
+  const requesterEnrichment = await resolveGitHubEnrichmentForRequest(
+    new UserStore(ctx.db),
+    requesterUserId,
+    await resolveGitHubCredentialAuthority(ctx, request.headers)
+  );
 
   // The scheduler performs the authoritative D1-backed concurrency check.
   let triggerResult;

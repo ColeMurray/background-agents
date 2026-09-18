@@ -1,6 +1,6 @@
 {
-  "runtimeVersion": "v67-unbounded-repository-hooks",
-  "generation": 67,
+  "runtimeVersion": "v68-early-bridge-connect",
+  "generation": 68,
   "minimumCompatibleGeneration": 62,
   "minimumRebuildGeneration": 67,
   "harnessMinimumGeneration": {

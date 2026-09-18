@@ -3,7 +3,7 @@
 
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { MetadataSection as MetadataSectionComponent } from "./metadata-section";
 
@@ -230,6 +230,29 @@ describe("MetadataSection", () => {
     );
 
     expect(screen.getByText("acme/api: Secret key collision on API_KEY")).toBeInTheDocument();
+  });
+
+  it("lists the latest boot's completed phases with their durations", () => {
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        baseBranch="main"
+        repoOwner="acme"
+        repoName="web"
+        repositories={[member("acme", "web", 0), member("acme", "api", 1)]}
+        bootPhases={[
+          { phase: "sync", elapsedMs: 540 },
+          { phase: "setup", elapsedMs: 91_240, warning: true, repoOwner: "acme", repoName: "api" },
+        ]}
+      />
+    );
+
+    const rows = within(screen.getByRole("list", { name: "Boot phases" })).getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Cloning repository0.5s",
+      "Running setup.sh (acme/api)1m 31s",
+    ]);
+    expect(rows[1]).toHaveClass("text-warning");
   });
 
   it("renders the environment name for environment-launched sessions", () => {

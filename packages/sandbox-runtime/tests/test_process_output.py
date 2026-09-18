@@ -111,3 +111,15 @@ async def test_cancellation_during_grace_still_kills_and_reaps():
         (123, signal.SIGKILL),
     ]
     assert process.wait.await_count == 2
+
+
+async def test_overflowed_window_drops_the_cut_first_line():
+    """The first line after an overflow starts at an arbitrary byte and is never reported."""
+    stream = asyncio.StreamReader()
+    collector = BoundedOutputCollector(stream, max_tail_bytes=64)
+    stream.feed_data(b"a" * 40 + b"\n" + b"b" * 40 + b"\nlast\n")
+    stream.feed_eof()
+
+    await collector.wait()
+
+    assert collector.tail_lines() == "b" * 40 + "\nlast"

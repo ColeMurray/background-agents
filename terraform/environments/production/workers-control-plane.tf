@@ -101,6 +101,7 @@ module "control_plane_worker" {
       GITHUB_BOT_USERNAME           = { value = var.github_bot_username }
       SANDBOX_PROVIDER              = { value = var.sandbox_provider }
       SANDBOX_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_inactivity_timeout_ms) }
+      SANDBOX_BOOT_TIMEOUT_MS       = { value = tostring(var.sandbox_boot_timeout_ms) }
     },
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }

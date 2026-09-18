@@ -77,6 +77,26 @@ describe("SessionRightSidebar", () => {
     expect(screen.queryByText("Port app")).not.toBeInTheDocument();
     expect(screen.getByText("main")).toBeInTheDocument();
   });
+  it("lists the boot phase timings it is given", () => {
+    render(
+      <SessionRightSidebar
+        sessionId="session-1"
+        sessionState={{ ...sessionState, repoOwner: "acme", repoName: "web" }}
+        participants={[]}
+        presenceSynced={false}
+        events={[]}
+        bootPhases={[{ phase: "sync", elapsedMs: 1_200 }]}
+        artifacts={[]}
+        onOpenMedia={vi.fn()}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
+
+    const list = screen.getByRole("list", { name: "Boot phases" });
+    expect(list).toHaveTextContent("Cloning repository");
+    expect(list).toHaveTextContent("1.2s");
+  });
+
   it("keeps its ARIA target mounted when closed", () => {
     render(
       <SessionRightSidebar

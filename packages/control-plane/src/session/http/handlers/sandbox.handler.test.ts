@@ -63,7 +63,7 @@ function createHandler() {
   // repeating it at every invocation.
   const handler = {
     sandboxEvent: (request: Request) => sandboxHandler.sandboxEvent(request),
-    sandboxError: (request: Request) => sandboxHandler.sandboxError(request),
+    sandboxError: (request: Request) => sandboxHandler.sandboxError(request, log),
     createMediaArtifact: (request: Request) => sandboxHandler.createMediaArtifact(request),
     verifySandboxToken: (request: Request) => sandboxHandler.verifySandboxToken(request, log),
     openaiTokenRefresh: () => sandboxHandler.openaiTokenRefresh(log),
@@ -142,6 +142,91 @@ describe("SandboxHandler", () => {
     expect(failSandbox).toHaveBeenCalledWith("OpenCode repeatedly crashed");
   });
 
+  it("lands a structured fatal report on the timeline as the failed boot phase before failing the sandbox", async () => {
+    const { handler, getSandbox, isValidSandboxToken, failSandbox, processSandboxEvent } =
+      createHandler();
+    getSandbox.mockReturnValue({
+      id: "sandbox-row-1",
+      modal_sandbox_id: "sandbox-1",
+      auth_token_hash: "token-hash-1",
+      auth_token: null,
+      status: "connecting",
+    } as SandboxRow);
+    isValidSandboxToken.mockResolvedValue(true);
+    const order: string[] = [];
+    processSandboxEvent.mockImplementation(async () => {
+      order.push("phase");
+    });
+    failSandbox.mockImplementation(async () => {
+      order.push("fail");
+    });
+
+    const response = await handler.sandboxError(
+      new Request("http://internal/internal/sandbox-error", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: "Bearer sandbox-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
+        body: JSON.stringify({
+          error: "start.sh exited 1",
+          fatal: true,
+          phase: "start",
+          bootSeq: 7,
+          repoOwner: "acme",
+          repoName: "api",
+          outputTail: ["npm ERR! missing script: start"],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(processSandboxEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "boot_progress",
+        phase: "start",
+        status: "failed",
+        bootSeq: 7,
+        repoOwner: "acme",
+        repoName: "api",
+        outputTail: ["npm ERR! missing script: start"],
+        sandboxId: "sandbox-1",
+      })
+    );
+    expect(order).toEqual(["phase", "fail"]);
+    expect(failSandbox).toHaveBeenCalledWith("start.sh exited 1");
+  });
+
+  it("accepts a fatal report without phase fields from an older runtime", async () => {
+    const { handler, getSandbox, isValidSandboxToken, failSandbox, processSandboxEvent } =
+      createHandler();
+    getSandbox.mockReturnValue({
+      id: "sandbox-row-1",
+      modal_sandbox_id: "sandbox-1",
+      auth_token_hash: "token-hash-1",
+      auth_token: null,
+      status: "connecting",
+    } as SandboxRow);
+    isValidSandboxToken.mockResolvedValue(true);
+
+    const response = await handler.sandboxError(
+      new Request("http://internal/internal/sandbox-error", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: "Bearer sandbox-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
+        body: JSON.stringify({ error: "OpenCode repeatedly crashed" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(processSandboxEvent).not.toHaveBeenCalled();
+    expect(failSandbox).toHaveBeenCalledWith("OpenCode repeatedly crashed");
+  });
+
   it("rejects an empty sandbox error", async () => {
     const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
     getSandbox.mockReturnValue({
@@ -181,10 +266,10 @@ describe("SandboxHandler", () => {
     expect(failSandbox).not.toHaveBeenCalled();
   });
 
-  it.each(["stopped", "stale"] as const)(
+  it.each(["stopped", "stale", "failed"] as const)(
     "does not overwrite a %s sandbox with a delayed fatal report",
     async (status) => {
-      const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
+      const { handler, getSandbox, isValidSandboxToken, failSandbox, log } = createHandler();
       getSandbox.mockReturnValue({
         id: "sandbox-row-1",
         modal_sandbox_id: "sandbox-1",
@@ -209,8 +294,50 @@ describe("SandboxHandler", () => {
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({ status: "ignored" });
       expect(failSandbox).not.toHaveBeenCalled();
+      expect(log.warn).toHaveBeenCalledWith(
+        "Ignoring fatal report from a sandbox that is no longer live",
+        {
+          event: "sandbox.error_ignored",
+          sandbox_status: status,
+          sandbox_status_at_report: status,
+          error: "Delayed failure",
+        }
+      );
     }
   );
+
+  it("ignores a report from a failed sandbox that reconnected while the report was authenticating", async () => {
+    const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
+    const credentials = {
+      id: "sandbox-row-1",
+      modal_sandbox_id: "sandbox-1",
+      auth_token_hash: "token-hash-1",
+      auth_token: null,
+    };
+    getSandbox.mockReturnValue({ ...credentials, status: "failed" } as SandboxRow);
+    // The watchdog-failed generation's bridge arrives during token hashing
+    // and is published as ready with the same credentials.
+    isValidSandboxToken.mockImplementation(async () => {
+      getSandbox.mockReturnValue({ ...credentials, status: "ready" } as SandboxRow);
+      return true;
+    });
+
+    const response = await handler.sandboxError(
+      new Request("http://internal/internal/sandbox-error", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: "Bearer sandbox-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
+        body: JSON.stringify({ error: "Delayed failure" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "ignored" });
+    expect(failSandbox).not.toHaveBeenCalled();
+  });
 
   it("rejects a sandbox generation replaced while its token is being hashed", async () => {
     const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
@@ -447,7 +574,7 @@ describe("SandboxHandler", () => {
     expect(log.warn).toHaveBeenCalledWith("Sandbox token verification failed: no sandbox");
   });
 
-  it.each(["stopped", "stale", "failed"] as const)(
+  it.each(["stopped", "stale"] as const)(
     "returns 410 without comparing the token when sandbox is %s",
     async (status) => {
       const { handler, getSandbox, isValidSandboxToken, log } = createHandler();
@@ -463,35 +590,44 @@ describe("SandboxHandler", () => {
 
       expect(response.status).toBe(410);
       expect(await response.json()).toEqual({ valid: false, error: "Sandbox not active" });
-      expect(log.warn).toHaveBeenCalledWith("Sandbox token verification failed: sandbox is dead", {
-        status,
-      });
+      expect(log.warn).toHaveBeenCalledWith(
+        "Sandbox token verification failed: sandbox is stopped",
+        { status }
+      );
       expect(isValidSandboxToken).not.toHaveBeenCalled();
     }
   );
 
   // Boot-time states (spawning/connecting) must authenticate — the git
   // credential broker is called during the initial clone, before the sandbox
-  // WebSocket connect flips the status to ready.
-  it.each(["pending", "spawning", "connecting", "warming", "ready", "snapshotting"] as const)(
-    "accepts a valid token when sandbox is %s",
-    async (status) => {
-      const { handler, getSandbox, isValidSandboxToken } = createHandler();
-      getSandbox.mockReturnValue({ status } as SandboxRow);
-      vi.mocked(isValidSandboxToken).mockResolvedValue(true);
+  // WebSocket connect flips the status to ready. A failed row must too: the
+  // bridge still accepts that generation so a boot the connect watchdog gave
+  // up on can self-heal, and it only gets there if the calls it makes on the
+  // way are not refused.
+  it.each([
+    "pending",
+    "spawning",
+    "connecting",
+    "warming",
+    "ready",
+    "snapshotting",
+    "failed",
+  ] as const)("accepts a valid token when sandbox is %s", async (status) => {
+    const { handler, getSandbox, isValidSandboxToken } = createHandler();
+    getSandbox.mockReturnValue({ status } as SandboxRow);
+    vi.mocked(isValidSandboxToken).mockResolvedValue(true);
 
-      const response = await handler.verifySandboxToken(
-        new Request("http://internal/internal/verify-sandbox-token", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token: "abc" }),
-        })
-      );
+    const response = await handler.verifySandboxToken(
+      new Request("http://internal/internal/verify-sandbox-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: "abc" }),
+      })
+    );
 
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ valid: true });
-    }
-  );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ valid: true });
+  });
 
   it("returns 401 when sandbox token is invalid", async () => {
     const { handler, getSandbox, isValidSandboxToken, log } = createHandler();

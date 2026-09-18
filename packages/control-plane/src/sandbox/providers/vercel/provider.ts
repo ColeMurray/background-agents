@@ -18,6 +18,7 @@ import {
 } from "../../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   createVncAccess,
   type CreateSandboxConfig,
@@ -117,19 +118,31 @@ export class VercelSandboxProvider implements SandboxProvider {
         );
       }
 
-      const created = await this.client.createSandbox(
-        {
-          name: config.sandboxId,
-          runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
-          timeoutMs,
-          resources: resolveVercelResources(config.sandboxSettings),
-          ports,
-          env,
-          tags: this.buildTags(config),
-          sourceSnapshotId,
-        },
-        config.correlation
-      );
+      let created: VercelCreateSandboxResponse;
+      try {
+        created = await this.client.createSandbox(
+          {
+            name: config.sandboxId,
+            runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
+            timeoutMs,
+            resources: resolveVercelResources(config.sandboxSettings),
+            ports,
+            env,
+            tags: this.buildTags(config),
+            sourceSnapshotId,
+          },
+          config.correlation
+        );
+      } catch (error) {
+        if (
+          config.prebuiltImageId &&
+          error instanceof VercelSandboxApiError &&
+          error.status === 404
+        ) {
+          throw new PrebuiltImageUnavailableError("Vercel prebuilt snapshot is unavailable", error);
+        }
+        throw error;
+      }
 
       const access = await this.prepareSandboxAccess(
         created,
@@ -153,6 +166,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         tunnelUrls: access.tunnelUrls,
       };
     } catch (error) {
+      if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to create Vercel sandbox", error);
     }
   }

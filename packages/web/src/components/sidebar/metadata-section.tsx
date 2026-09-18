@@ -10,6 +10,12 @@ import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 import { listPrArtifacts, listPrArtifactsForRepo } from "@/lib/pr-artifacts";
+import {
+  bootPhaseLabel,
+  bootPhaseRepoLabel,
+  formatBootDuration,
+  type BootPhaseTiming,
+} from "@/lib/session-socket/boot-phase";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
   ClockIcon,
@@ -29,6 +35,8 @@ import { prBadgeVariant } from "@/components/ui/badge-variants";
 
 type WarningEvent = Extract<SandboxEvent, { type: "warning" }>;
 
+const DEFAULT_BOOT_PHASES: BootPhaseTiming[] = [];
+
 interface MetadataSectionProps {
   /** Enables the PR sync button; older callers without it just omit it. */
   sessionId?: string;
@@ -47,6 +55,8 @@ interface MetadataSectionProps {
    *  non-null id with a null name means the environment was deleted. */
   environmentId?: string | null;
   environmentName?: string | null;
+  /** Completed phases of the latest sandbox boot, with how long each took. */
+  bootPhases?: BootPhaseTiming[];
   /** Non-fatal boot/runtime warnings surfaced to the user. */
   warnings?: WarningEvent[];
   parentSessionId?: string | null;
@@ -104,6 +114,7 @@ export function MetadataSection({
   repositories,
   environmentId,
   environmentName,
+  bootPhases = DEFAULT_BOOT_PHASES,
   warnings = [],
   parentSessionId,
   canManageLifecycle,
@@ -427,6 +438,28 @@ export function MetadataSection({
             );
           })}
         </div>
+      )}
+
+      {/* How the latest boot went, one row per completed phase */}
+      {bootPhases.length > 0 && (
+        <ul aria-label="Boot phases" className="space-y-1">
+          {bootPhases.map((timing, index) => {
+            const repo = bootPhaseRepoLabel(timing, repositories?.length ?? 0);
+            return (
+              <li
+                key={`${timing.phase}-${repo ?? ""}-${index}`}
+                className={`flex items-center gap-2 text-xs ${timing.warning ? "text-warning" : "text-muted-foreground"}`}
+              >
+                <ClockIcon className="w-3.5 h-3.5 flex-shrink-0" />
+                <span className="min-w-0 flex-1 truncate">
+                  {bootPhaseLabel(timing.phase)}
+                  {repo ? ` (${repo})` : ""}
+                </span>
+                <span className="tabular-nums">{formatBootDuration(timing.elapsedMs)}</span>
+              </li>
+            );
+          })}
+        </ul>
       )}
 
       {/* Non-fatal boot/runtime warnings */}

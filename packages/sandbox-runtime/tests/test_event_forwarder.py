@@ -544,6 +544,96 @@ class TestConcurrentRecovery:
         ]
 
 
+class TestUnbufferedSends:
+    """``buffered=False`` means at most once: every failure path drops."""
+
+    @pytest.mark.asyncio
+    async def test_unbound_unbuffered_send_is_dropped_and_reports_undelivered(self):
+        forwarder = make_forwarder()
+
+        delivered = await forwarder.send({"type": "boot_progress", "bootSeq": 1}, buffered=False)
+
+        assert delivered is False
+        assert forwarder._event_buffer == []
+
+    @pytest.mark.asyncio
+    async def test_delivered_send_reports_delivered(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+
+        assert await forwarder.send({"type": "boot_progress", "bootSeq": 1}) is True
+        assert await forwarder.send({"type": "warning", "scope": "sync"}) is True
+
+    @pytest.mark.asyncio
+    async def test_failed_unbuffered_send_is_dropped_not_replayed(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        ws.send = AsyncMock(side_effect=ConnectionError("broken pipe"))
+        await forwarder.bind(ws)
+
+        delivered = await forwarder.send({"type": "boot_progress", "bootSeq": 3}, buffered=False)
+
+        assert delivered is False
+        assert forwarder._event_buffer == []
+        # A later connection must not receive the stale phase.
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert sent_events(replacement) == []
+
+    @pytest.mark.asyncio
+    async def test_failed_unbuffered_send_does_not_drain_for_the_dropped_event(self):
+        """Nothing was stranded, so the rebind drain has nothing to do here."""
+        forwarder = make_forwarder()
+        release_failure = asyncio.Event()
+        old_ws = MagicMock()
+        old_ws.state = State.OPEN
+
+        async def wedged_send(data):
+            await release_failure.wait()
+            raise ConnectionError("connection timed out")
+
+        old_ws.send = wedged_send
+        await forwarder.bind(old_ws)
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "boot_progress", "bootSeq": 4}, buffered=False)
+        )
+        await asyncio.sleep(0)
+
+        forwarder.unbind()
+        new_ws = open_ws()
+        await forwarder.bind(new_ws)
+        release_failure.set()
+
+        assert await send_task is False
+        assert sent_events(new_ws) == []
+        assert forwarder._event_buffer == []
+
+    @pytest.mark.asyncio
+    async def test_cancelled_unbuffered_send_is_dropped_not_rebuffered(self):
+        forwarder = make_forwarder()
+        started = asyncio.Event()
+        ws = MagicMock()
+        ws.state = State.OPEN
+
+        async def hanging_send(data: str) -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        ws.send = hanging_send
+        await forwarder.bind(ws)
+
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "boot_progress", "bootSeq": 5}, buffered=False)
+        )
+        await started.wait()
+        send_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await send_task
+
+        assert forwarder._event_buffer == []
+
+
 class TestOverflowEviction:
     @pytest.mark.asyncio
     async def test_overflow_evicts_oldest_non_critical_first(self):

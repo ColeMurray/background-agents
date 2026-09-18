@@ -400,6 +400,7 @@ export class ModalClient {
           repositories: request.repositories?.length
             ? request.repositories.map(toRepositoryConfigPayload)
             : null,
+          bridge_early_connect: true,
         },
         createSandboxModalResponseSchema,
         correlation,

@@ -216,6 +216,13 @@ export function applyMockDefaults(): void {
     archivedAt: null,
   });
   mockProviderAdapterGet.mockReturnValue({});
-  mockResolveGitHubCredentialAuthority.mockResolvedValue({ kind: "legacy" });
+  mockResolveGitHubCredentialAuthority.mockResolvedValue({
+    kind: "service_principal",
+    accountClient: {
+      listUserAccounts: vi.fn(async () => []),
+      getAccessToken: vi.fn(async () => null),
+      accountInfo: vi.fn(async () => null),
+    },
+  });
   mockResolveGitHubEnrichmentForRequest.mockResolvedValue(null);
 }

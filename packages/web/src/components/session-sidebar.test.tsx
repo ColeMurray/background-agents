@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SessionSidebar } from "./session-sidebar";
 
@@ -67,6 +67,13 @@ const noPagination = {
 };
 
 beforeEach(() => {
+  const values: Record<string, string> = {};
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => values[key] ?? null,
+    setItem: (key: string, value: string) => {
+      values[key] = value;
+    },
+  });
   authorization.permissions = null;
   const attention = session("attention", "Needs review");
   const running = session("running", "Implementing inbox");
@@ -95,6 +102,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("SessionSidebar", () => {
@@ -127,6 +135,66 @@ describe("SessionSidebar", () => {
     expect(screen.getByRole("heading", { name: "Recent" })).toBeInTheDocument();
     expect(screen.getByText("Checking tests")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Signed in as Test User" })).toBeInTheDocument();
+  });
+
+  it("toggles groups independently with accessible controls and matching chevrons", () => {
+    render(<SessionSidebar />);
+
+    const attentionToggle = screen.getByRole("button", { name: "Needs attention" });
+    const progressToggle = screen.getByRole("button", { name: "In progress" });
+    const recentToggle = screen.getByRole("button", { name: "Recent" });
+
+    expect(attentionToggle).toHaveAttribute("aria-expanded", "true");
+    expect(attentionToggle).toHaveAttribute(
+      "aria-controls",
+      "session-group-needs-attention-content"
+    );
+    expect(attentionToggle.querySelector('path[d="M19 9l-7 7-7-7"]')).toBeInTheDocument();
+    expect(attentionToggle.querySelector("[aria-hidden='true']")).toBeInTheDocument();
+
+    fireEvent.click(attentionToggle);
+
+    expect(attentionToggle).toHaveAttribute("aria-expanded", "false");
+    expect(attentionToggle.querySelector('path[d="M9 5l7 7-7 7"]')).toBeInTheDocument();
+    expect(screen.queryByText("Needs review")).not.toBeInTheDocument();
+    expect(screen.getByText("Implementing inbox")).toBeInTheDocument();
+    expect(recentToggle).toHaveAttribute("aria-expanded", "true");
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:needs-attention")).toBe(
+      "false"
+    );
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:in-progress")).toBeNull();
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:recent")).toBeNull();
+
+    fireEvent.click(progressToggle);
+
+    expect(attentionToggle).toHaveAttribute("aria-expanded", "false");
+    expect(progressToggle).toHaveAttribute("aria-expanded", "false");
+    expect(recentToggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("Implementing inbox")).not.toBeInTheDocument();
+    expect(screen.getByText("Finished work")).toBeInTheDocument();
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:in-progress")).toBe("false");
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:recent")).toBeNull();
+  });
+
+  it("restores collapsed groups after remounting", async () => {
+    const view = render(<SessionSidebar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Recent" }));
+    await waitFor(() =>
+      expect(localStorage.getItem("open-inspect-session-sidebar-expanded:recent")).toBe("false")
+    );
+
+    view.unmount();
+    render(<SessionSidebar />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Recent" })).toHaveAttribute(
+        "aria-expanded",
+        "false"
+      )
+    );
+    expect(screen.queryByText("Finished work")).not.toBeInTheDocument();
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
   });
 
   it("loads more only in the requested section", () => {

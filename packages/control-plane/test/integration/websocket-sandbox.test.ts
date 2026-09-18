@@ -132,6 +132,9 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       expect(response.status).toBe(101);
       expect(ws).not.toBeNull();
       ws!.accept();
+      ws!.send(
+        JSON.stringify({ type: "ready", sandboxId: SANDBOX_ID, timestamp: Date.now() / 1000 })
+      );
       await waitForSandboxStatus(stub, "ready");
       ws!.close();
     }
@@ -435,11 +438,12 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("sandbox connect sets status to ready", async () => {
+  it("the runtime's ready event, not the connect, sets status to ready", async () => {
     const name = `ws-sandbox-ready-${Date.now()}`;
     const { stub } = await initNamedSession(name);
-    // Model the production boot sequence: the sandbox connects while the
-    // lifecycle is still in "connecting", and the WS accept flips it to ready.
+    // Model the production boot sequence: the bridge connects while the
+    // lifecycle is still in "connecting", ahead of the repository boot, and
+    // its ready event is what flips the row.
     await seedSandboxAuth(stub, {
       authToken: SANDBOX_TOKEN,
       sandboxId: SANDBOX_ID,
@@ -452,6 +456,9 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     });
     expect(ws).not.toBeNull();
     ws!.accept();
+    ws!.send(
+      JSON.stringify({ type: "ready", sandboxId: SANDBOX_ID, timestamp: Date.now() / 1000 })
+    );
     await waitForSandboxStatus(stub, "ready");
 
     const stateRes = await stub.fetch("http://internal/internal/state");
@@ -500,10 +507,22 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     sandboxWs!.accept();
 
     const messages = await collector;
-    expect(messages.slice(-2).map((message) => message.type)).toEqual([
-      "sandbox_status",
-      "sandbox_access_changed",
-    ]);
+    // The row was already `connecting`, so attach publishes access alone;
+    // `sandbox_status: ready` waits for the runtime's ready event, and so
+    // does the access endpoint.
+    expect(messages.slice(-1).map((message) => message.type)).toEqual(["sandbox_access_changed"]);
+    expect(messages.map((message) => message.type)).not.toContain("sandbox_status");
+    const booting = await stub.fetch("http://internal/internal/sandbox-access");
+    expect(booting.status).toBe(409);
+
+    const readyBroadcast = collectMessages(clientWs, {
+      until: (message) => message.type === "sandbox_status" && message.status === "ready",
+    });
+    sandboxWs!.send(
+      JSON.stringify({ type: "ready", sandboxId: SANDBOX_ID, timestamp: Date.now() / 1000 })
+    );
+    await waitForSandboxStatus(stub, "ready");
+    expect((await readyBroadcast).at(-1)).toEqual({ type: "sandbox_status", status: "ready" });
     const accessResponse = await stub.fetch("http://internal/internal/sandbox-access");
     expect(accessResponse.status).toBe(200);
     await expect(accessResponse.json()).resolves.toEqual({
@@ -550,9 +569,12 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     replacementSandboxWs!.accept();
 
     const messages = await collector;
-    expect(
-      messages.filter((message) => message.type === "sandbox_status" && message.status === "ready")
-    ).toHaveLength(2);
+    // The first attach moves the reservation to `connecting`; the replacement
+    // finds it there already. Neither publishes ready, and neither publishes
+    // access while provider startup is still persisting it.
+    expect(messages.filter((message) => message.type === "sandbox_status")).toEqual([
+      { type: "sandbox_status", status: "connecting" },
+    ]);
     expect(messages).not.toContainEqual({ type: "sandbox_access_changed" });
 
     replacementSandboxWs!.close();
@@ -665,8 +687,53 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     });
     expect(ws).not.toBeNull();
     ws!.accept();
+    // Attach must not cut the admitted bridge off: the row leaves `failed`
+    // for `connecting` at attach, so the registry does not close its socket.
+    await waitForSandboxStatus(stub, "connecting");
+    const promptDelivery = collectMessages(ws!, {
+      until: (message) => message.type === "prompt",
+    });
+    ws!.send(
+      JSON.stringify({ type: "ready", sandboxId: SANDBOX_ID, timestamp: Date.now() / 1000 })
+    );
     await waitForSandboxStatus(stub, "ready");
+
+    // The healed sandbox, not a replacement, serves the next prompt.
+    const enqueue = await stub.fetch("http://internal/internal/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "Still here?", authorId: "user-1", source: "web" }),
+    });
+    expect(enqueue.status).toBe(200);
+    const delivered = await promptDelivery;
+    expect(delivered.find((message) => message.type === "prompt")).toEqual(
+      expect.objectContaining({ content: "Still here?" })
+    );
+    expect(ws!.readyState).toBe(WebSocket.OPEN);
     ws!.close();
+  });
+
+  it("refuses a fenced generation's bridge at the door", async () => {
+    const name = `ws-sandbox-fenced-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "failed",
+    });
+    // The boot budget fences by revoking the hash; the runtime's token no
+    // longer matches anything, so admission fails before any state check.
+    await runInSessionDO(stub, (instance: SessionDO) => {
+      componentsOf(instance).sandboxRepository.fenceSandboxGeneration();
+    });
+
+    const { ws, response } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+
+    expect(response.status).toBe(401);
+    expect(ws).toBeNull();
   });
 
   it("sandbox WS message is stored as event", async () => {
