@@ -292,9 +292,9 @@ The session header names the phase while it runs: "Cloning repository", "Running
 "Starting services", "Installing skills", "Starting agent". Multi-repository sessions add the
 repository, as in "Running setup.sh for acme/api". Between phases, its status popover can say what
 just finished, but it does not display a list of completed phases or their durations. When a script
-fails, the header's status popover says which phase failed and for which repository. It shows the
-script's last output lines only for a phase that failed outright, which today means a failed clone
-or a failed `start.sh` in the session's first repository. A `setup.sh` failure, and a `start.sh`
+fails, the header's status popover says which phase failed and names its repository when available.
+It can show a redacted output tail only for a fatal `start.sh` failure in the session's first
+repository. Clone and harness failures carry no output tail. A `setup.sh` failure, and a `start.sh`
 failure in a later repository, are tolerated instead: the boot continues, the phase completes
 carrying a warning, and no output is attached.
 
