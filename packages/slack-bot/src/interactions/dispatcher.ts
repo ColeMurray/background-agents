@@ -19,10 +19,11 @@ export async function handleSlackInteraction(
   const channel = payload.channel?.id;
   const messageTs = payload.message?.ts;
   const threadTs = payload.message?.thread_ts;
+  const userId = payload.user?.id;
   switch (baseActionId(action.action_id)) {
     case SELECT_TARGET_ACTION_ID:
     case SELECT_TARGET_QUICK_PICK_ACTION_ID: {
-      if (!channel || !messageTs || !payload.user?.id) return;
+      if (!channel || !messageTs || !userId) return;
       const selectedValue = action.selected_option?.value ?? action.value;
       if (selectedValue) {
         const selectionSource =
@@ -41,7 +42,7 @@ export async function handleSlackInteraction(
             channel,
             messageTs,
             threadTs,
-            selectedBy: payload.user.id,
+            selectedBy: userId,
             selectionSource,
           },
           env,

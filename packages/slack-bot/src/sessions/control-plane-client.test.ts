@@ -226,6 +226,8 @@ describe("control plane client request payloads", () => {
       sessionId: "session-1",
       content: "Use the screenshot",
       authorId: "slack:U123",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "high",
       attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
       clientRequestId: "prompt-request-1",
     });
@@ -239,6 +241,8 @@ describe("control plane client request payloads", () => {
     expect(parseRequestBody(fetch, 0)).toEqual({
       content: "Use the screenshot",
       source: "slack",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "high",
       attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
       clientRequestId: "prompt-request-1",
     });

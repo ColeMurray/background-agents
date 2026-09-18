@@ -36,7 +36,11 @@ import {
 } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
-import { startSessionAndSendPrompt } from "../sessions/session-launcher";
+import {
+  loadAuthoritativeSlackLaunchSettings,
+  startSessionAndSendPrompt,
+  type SlackLaunchSettings,
+} from "../sessions/session-launcher";
 import {
   advanceLastPromptTs,
   clearThreadSession,
@@ -46,11 +50,22 @@ import { buildTargetClarificationBlocks, getTargetCatalogNotice } from "../targe
 import { targetId } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-identity";
+import {
+  EMPTY_INLINE_PROMPT_OPTIONS,
+  hasInlinePromptOptions,
+  parseInlinePromptFlags,
+  resolveInlinePromptOptions,
+  type InlinePromptOptions,
+  type ResolvedTurnPlan,
+} from "../inline-flags";
+import { getAuthoritativeModels, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 
 const log = createLogger("handler");
 
 interface IncomingMessageContent {
   text: string;
+  inlinePromptOptions: InlinePromptOptions;
+  inlineFlagError?: string;
   /** Images attached to the Slack message, normalized at event ingress. */
   images: SlackImageAttachment[];
   /** Quoted bodies, provenance, and files recovered from explicit Slack shares. */
@@ -93,7 +108,14 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     traceId,
     scheduleBackground,
   } = params;
-  const { text: messageText, images, forwarded } = content;
+  const { text: messageText, images, forwarded, inlinePromptOptions, inlineFlagError } = content;
+  const hasInlineOverrides = hasInlinePromptOptions(inlinePromptOptions);
+  if (inlineFlagError) {
+    await postMessage(env.SLACK_BOT_TOKEN, channel, inlineFlagError, {
+      thread_ts: threadTs || ts,
+    });
+    return;
+  }
   if (!hasRunnableContent(content)) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
@@ -118,13 +140,41 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
     if (existingSession) {
+      let turnPlan: ResolvedTurnPlan | undefined;
+      if (hasInlineOverrides) {
+        const enabledModels = await getAuthoritativeModels(env, traceId);
+        if (!enabledModels) {
+          await postMessage(env.SLACK_BOT_TOKEN, channel, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE, {
+            thread_ts: threadTs,
+          });
+          return;
+        }
+        const resolvedTurn = resolveInlinePromptOptions(
+          inlinePromptOptions,
+          {
+            model: existingSession.model,
+            reasoningEffort: existingSession.reasoningEffort,
+          },
+          enabledModels
+        );
+        if (!resolvedTurn.ok) {
+          await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, {
+            thread_ts: threadTs,
+          });
+          return;
+        }
+        turnPlan = resolvedTurn.turnPlan;
+      }
+      if (hasInlineOverrides) {
+        scheduleStartingStatus(scheduleBackground, env, channel, threadTs, traceId);
+      }
       const callbackContext: CallbackContext = {
         source: "slack",
         channel,
         threadTs,
         repoFullName: existingSession.repoFullName,
-        model: existingSession.model,
-        reasoningEffort: existingSession.reasoningEffort,
+        model: turnPlan?.effective.model ?? existingSession.model,
+        reasoningEffort: turnPlan?.effective.reasoningEffort ?? existingSession.reasoningEffort,
         reactionMessageTs: ts,
       };
       const channelContext = channelName
@@ -167,6 +217,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         ),
         imageOnly,
         callbackContext,
+        ...turnPlan?.promptOverrides,
         channel,
         threadTs,
         traceId,
@@ -214,6 +265,39 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     }
   }
 
+  let launchSettings: SlackLaunchSettings | undefined;
+  let turnPlan: ResolvedTurnPlan | undefined;
+  if (hasInlineOverrides) {
+    const authoritativeLaunchSettings = await loadAuthoritativeSlackLaunchSettings(
+      env,
+      user,
+      traceId
+    );
+    if (!authoritativeLaunchSettings) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE, {
+        thread_ts: threadTs || ts,
+      });
+      return;
+    }
+    launchSettings = authoritativeLaunchSettings;
+    const resolvedTurn = resolveInlinePromptOptions(
+      inlinePromptOptions,
+      {
+        model: launchSettings.userPreferences.model,
+        reasoningEffort: launchSettings.userPreferences.reasoningEffort,
+      },
+      launchSettings.enabledModels
+    );
+    if (!resolvedTurn.ok) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, {
+        thread_ts: threadTs || ts,
+      });
+      return;
+    }
+    turnPlan = resolvedTurn.turnPlan;
+    scheduleStartingStatus(scheduleBackground, env, channel, threadTs || ts, traceId);
+  }
+
   const threadHistory = threadTs
     ? await fetchInteractiveThreadContext(
         env,
@@ -250,6 +334,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       // Persist where the images live, not the file objects; they are
       // re-fetched from Slack when the user resolves the clarification.
       sourceMessage: images.length > 0 ? { ts, threadTs } : undefined,
+      turnPlan,
       classification: {
         targetId: result.target ? targetId(result.target) : undefined,
         confidence: result.confidence,
@@ -306,6 +391,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     images,
     contextImages: threadHistory?.images,
     imageOnly,
+    turnPlan,
+    launchSettings,
     traceId,
   });
   if (!sessionResult) return;
@@ -341,9 +428,10 @@ export async function handleAppMention(
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
-  const messageText = stripMentions(event.text);
+  const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
+  const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const threadKey = event.thread_ts || event.ts;
-  if (messageText)
+  if (messageText && parsedFlags.ok && !hasInlinePromptOptions(parsedFlags.options))
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
 
   // app_mention events don't carry the message's `files` array and may arrive
@@ -390,8 +478,19 @@ export async function handleAppMention(
   // A forwarded message's own images are Slack-hosted message files, so they
   // join the message's own images on the single attachment path.
   const images = toImageAttachments([...details.files, ...forwarded.files], traceId);
-  const content = { text: messageText, images, forwarded };
-  if (!messageText && hasRunnableContent(content)) {
+  const content: IncomingMessageContent = {
+    text: messageText,
+    images,
+    forwarded,
+    inlinePromptOptions: parsedFlags.ok ? parsedFlags.options : EMPTY_INLINE_PROMPT_OPTIONS,
+    inlineFlagError: parsedFlags.ok ? undefined : parsedFlags.error,
+  };
+  if (
+    parsedFlags.ok &&
+    !hasInlinePromptOptions(parsedFlags.options) &&
+    !messageText &&
+    hasRunnableContent(content)
+  ) {
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   }
   let channelName: string | undefined;
@@ -432,12 +531,19 @@ export async function handleDirectMessage(
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
-  const messageText = stripMentions(event.text);
+  const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
+  const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const forwarded = collectForwardedMessages(event.attachments);
   const images = toImageAttachments([...(event.files ?? []), ...forwarded.files], traceId);
-  const content = { text: messageText, images, forwarded };
+  const content: IncomingMessageContent = {
+    text: messageText,
+    images,
+    forwarded,
+    inlinePromptOptions: parsedFlags.ok ? parsedFlags.options : EMPTY_INLINE_PROMPT_OPTIONS,
+    inlineFlagError: parsedFlags.ok ? undefined : parsedFlags.error,
+  };
   const threadKey = event.thread_ts || event.ts;
-  if (hasRunnableContent(content))
+  if (parsedFlags.ok && !hasInlinePromptOptions(parsedFlags.options) && hasRunnableContent(content))
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   await handleIncomingMessage({
     content,

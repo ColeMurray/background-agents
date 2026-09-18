@@ -4,7 +4,7 @@ With ``bridge_early_connect`` in SESSION_CONFIG the bridge starts before the
 repository boots and the supervisor watches its exit code from then on;
 without it the boot order is unchanged. Boot phases the supervisor owns
 (``skills``, ``harness``) are reported through the boot-events file, and a
-fatal boot failure reports its phase and output tail to the control plane.
+fatal boot failure reports its phase metadata to the control plane.
 """
 
 import asyncio
@@ -244,12 +244,14 @@ class TestBridgeWatcherDuringBoot:
         supervisor.shutdown_event.set()
         await asyncio.wait_for(run_task, timeout=1)
 
-    async def test_deterministic_bridge_failure_during_boot_is_fatal(self, tmp_path):
+    async def test_deterministic_signing_failure_during_boot_is_fatal(self, tmp_path):
         supervisor = _supervisor(tmp_path, [])
         boot_started, boot_cancelled = self._blocked_boot(supervisor)
         bridge_exited = asyncio.Event()
         supervisor.agent_bridge.wait = AsyncMock(side_effect=bridge_exited.wait)
-        supervisor._read_bridge_fatal_error = MagicMock(return_value="credential denied")
+        supervisor._read_bridge_fatal_error = MagicMock(
+            return_value="Commit signing configuration unavailable"
+        )
 
         run_task = asyncio.create_task(supervisor.run())
         await asyncio.wait_for(boot_started.wait(), timeout=1)
@@ -260,7 +262,7 @@ class TestBridgeWatcherDuringBoot:
         assert boot_cancelled.is_set()
         supervisor._report_fatal_error.assert_awaited_once()
         message, failure = supervisor._report_fatal_error.await_args.args
-        assert message == "credential denied"
+        assert message == "Commit signing configuration unavailable"
         assert failure.report_fields() == {"phase": "harness"}
         supervisor.agent_bridge.start.assert_awaited_once()
 
@@ -425,7 +427,7 @@ class TestBootEventsFileFailures:
 
 
 class TestFatalBootReport:
-    async def test_boot_phase_failure_reports_phase_and_tail(self, tmp_path):
+    async def test_boot_phase_failure_reports_metadata(self, tmp_path):
         supervisor = _supervisor(tmp_path, [])
         supervisor.repository_boot.boot = AsyncMock(
             side_effect=BootPhaseError(
@@ -434,7 +436,6 @@ class TestFatalBootReport:
                 repo=RepoEntry(
                     owner="acme", name="repo", branch="main", path=Path("/workspace/repo")
                 ),
-                output_tail=("npm ERR!", "exit 1"),
                 boot_seq=7,
             )
         )
@@ -449,7 +450,6 @@ class TestFatalBootReport:
             "bootSeq": 7,
             "repoOwner": "acme",
             "repoName": "repo",
-            "outputTail": ["npm ERR!", "exit 1"],
         }
 
     async def test_harness_start_failure_is_reported_as_the_harness_phase(self, tmp_path):
@@ -466,26 +466,6 @@ class TestFatalBootReport:
         failed = _lines()[-1]
         assert (failed["phase"], failed["status"]) == ("harness", "failed")
         assert failure.boot_seq == failed["seq"]
-
-    async def test_a_maximal_report_fits_the_control_planes_body_cap(self, tmp_path):
-        # Control characters cost six bytes each once serialized; a tail that
-        # satisfies the character bounds alone would be rejected by the route
-        # before it ever reached the schema.
-        hostile = "\n".join("\x00" * 1024 for _ in range(boot_events.OUTPUT_TAIL_MAX_LINES))
-        failure = BootPhaseError(
-            "x" * 1000,
-            phase="start",
-            repo=RepoEntry(owner="acme", name="repo", branch="main", path=Path("/workspace/repo")),
-            output_tail=boot_events.bounded_output_tail(hostile),
-            boot_seq=12,
-        )
-
-        body = {"error": str(failure), "fatal": True, **failure.report_fields()}
-
-        assert failure.output_tail
-        # httpx serializes a json= body with ensure_ascii=False.
-        serialized = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        assert len(serialized) <= boot_events.FATAL_REPORT_MAX_BYTES
 
     async def test_report_body_carries_the_structured_failure(self):
         supervisor = SandboxSupervisor.__new__(SandboxSupervisor)
@@ -506,7 +486,6 @@ class TestFatalBootReport:
             "start hook failed for acme/repo",
             phase="start",
             repo=RepoEntry(owner="acme", name="repo", branch="main", path=Path("/workspace/repo")),
-            output_tail=("npm ERR!",),
             boot_seq=3,
         )
 
@@ -520,7 +499,6 @@ class TestFatalBootReport:
             "bootSeq": 3,
             "repoOwner": "acme",
             "repoName": "repo",
-            "outputTail": ["npm ERR!"],
         }
 
 

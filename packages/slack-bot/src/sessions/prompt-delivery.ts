@@ -29,6 +29,8 @@ export interface DeliverPromptOptions {
    * placeholder that is only meaningful if at least one image lands.
    */
   imageOnly: boolean;
+  model?: string;
+  reasoningEffort?: string;
   callbackContext?: CallbackContext;
   /** Thread where attachment-drop notices are posted. */
   channel: string;
@@ -67,6 +69,8 @@ export async function deliverPrompt(
     authorId,
     attachments,
     imageOnly,
+    model,
+    reasoningEffort,
     callbackContext,
     channel,
     threadTs,
@@ -111,6 +115,8 @@ export async function deliverPrompt(
     sessionId,
     content,
     authorId,
+    model,
+    reasoningEffort,
     callbackContext,
     attachments: references,
     traceId,

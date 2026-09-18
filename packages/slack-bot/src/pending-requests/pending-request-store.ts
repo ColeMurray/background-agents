@@ -2,6 +2,7 @@ import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
 import { slackCallbackContextSchema } from "@open-inspect/shared/types/session-api";
 import { z } from "zod";
+import { resolvedTurnPlanSchema } from "../inline-flags";
 import type { Env } from "../types";
 
 const PENDING_REQUEST_TTL_MS = 60 * 60 * 1000;
@@ -25,6 +26,11 @@ const unattributedPromptSchema = z.object({
   forwardedMessages: z.array(z.string()),
 });
 
+const inlinePromptOptionsSchema = z.object({
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});
+
 const classificationSchema = z.object({
   targetId: z.string().min(1).optional(),
   confidence: z.enum(["high", "medium", "low"]),
@@ -34,6 +40,7 @@ const classificationSchema = z.object({
 const sessionLaunchSnapshotBaseSchema = z.object({
   model: z.string().min(1),
   reasoningEffort: z.string().optional(),
+  promptOverrides: resolvedTurnPlanSchema.shape.promptOverrides.optional(),
   branch: z.string().optional(),
   content: z.string().min(1),
   callbackContext: slackCallbackContextSchema,
@@ -67,6 +74,7 @@ const pendingRequestDataSchema = z.object({
   sourceMessage: sourceMessageSchema.optional(),
   /** Coordinates used to re-fetch prior images without persisting Slack URLs. */
   threadContextSource: threadContextSourceSchema.optional(),
+  turnPlan: resolvedTurnPlanSchema.optional(),
   /** Classifier provenance retained until the user resolves clarification. */
   classification: classificationSchema.optional(),
   /** Recoverable state for retrying delivery after session creation. */
@@ -79,8 +87,12 @@ const pendingRequestSchema = pendingRequestDataSchema.extend({
   threadTs: z.string().min(1),
 });
 
+const legacyPendingRequestSchema = pendingRequestDataSchema.extend({
+  inlinePromptOptions: inlinePromptOptionsSchema.optional(),
+});
+
 export type PendingRequest = z.infer<typeof pendingRequestSchema>;
-export type LegacyPendingRequest = z.infer<typeof pendingRequestDataSchema>;
+export type LegacyPendingRequest = z.infer<typeof legacyPendingRequestSchema>;
 export type PendingLaunchState = z.infer<typeof pendingLaunchStateSchema>;
 export type SessionLaunchSnapshot = z.infer<typeof sessionLaunchSnapshotSchema>;
 
@@ -324,7 +336,7 @@ export async function getLegacyPendingRequest(
     legacyPendingRequestKey(channel, threadTs),
     "json"
   );
-  const result = pendingRequestDataSchema.safeParse(data);
+  const result = legacyPendingRequestSchema.safeParse(data);
   if (!result.success) return null;
   const launchState = await getStoredLaunchState(
     env,

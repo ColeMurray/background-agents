@@ -102,9 +102,9 @@ class SandboxSupervisor:
     ) -> None:
         """Report a fatal runtime failure to the control plane.
 
-        A ``BootPhaseError`` adds the phase, repository and output tail; the
-        HTTP report is the reliable carrier of those, since the bridge's copy
-        of the ``failed`` phase line may be lost when the socket closes first.
+        A ``BootPhaseError`` adds the phase and repository; the HTTP report is
+        the reliable carrier of those, since the bridge's copy of the
+        ``failed`` phase line may be lost when the socket closes first.
         """
         self.log.error(
             "supervisor.fatal",
@@ -226,8 +226,7 @@ class SandboxSupervisor:
             self.shutdown_event.set()
             return restart_count
         if exit_code == DETERMINISTIC_FAILURE_EXIT_CODE:
-            # The harness could not open and told us retrying is futile
-            # (for example a denied credential); report the cause
+            # Harness-phase startup failed deterministically; report the cause
             # rather than spending the restart budget on it.
             cause = self._read_bridge_fatal_error() or "agent harness failed to start"
             self.log.error("bridge.deterministic_failure", exit_code=exit_code, cause=cause)

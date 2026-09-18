@@ -90,6 +90,20 @@ Can you investigate the flaky login test in acme/web?
 DMs do not need an `@mention`. If you include one anyway, Open-Inspect strips it before sending the
 request to the agent.
 
+### One-turn model and reasoning overrides
+
+Start a DM or `@mention` request with `!model` or `!reasoning` to override your App Home defaults
+for that request only. The same flags work on follow-ups in an existing session thread without
+changing the session's defaults for later replies:
+
+```text
+@Open-Inspect !model anthropic/claude-sonnet-4-6 !reasoning max investigate the flaky test
+```
+
+Both flags accept a space or colon before their value, such as `!model:openai/gpt-5.6-sol` and
+`!reasoning:high`. Any flags must appear together at the start of the request. Models must be
+enabled under **Settings > Models**, and reasoning values must be supported by the selected model.
+
 To continue a session that started from a DM, reply in the Slack thread created for that DM request.
 Sending a new top-level DM is treated as a new request and may start repository selection again.
 
@@ -248,7 +262,8 @@ Branch preference priority is:
 3. Repository default branch
 
 These preferences are per Slack user. They affect new Slack sessions; follow-ups in an existing
-Slack thread continue the existing session.
+Slack thread continue the existing session. A leading `!model` or `!reasoning` flag overrides the
+corresponding setting for one request without changing these preferences.
 
 ---
 

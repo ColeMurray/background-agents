@@ -12,6 +12,20 @@ import {
 } from "./pending-request-store";
 
 const REQUEST_ID = "00000000-0000-4000-8000-000000000001";
+const TURN_PLAN = {
+  sessionDefaults: {
+    model: "anthropic/claude-sonnet-4-6" as const,
+    reasoningEffort: "high" as const,
+  },
+  promptOverrides: {
+    model: "openai/gpt-5.6-sol" as const,
+    reasoningEffort: "high" as const,
+  },
+  effective: {
+    model: "openai/gpt-5.6-sol" as const,
+    reasoningEffort: "high" as const,
+  },
+};
 
 function request(overrides: Partial<PendingRequest> = {}): PendingRequest {
   return {
@@ -50,6 +64,7 @@ describe("pending request store", () => {
       channelDescription: "Build discussion",
       messageTs: "222.000003",
       threadContextSource: { threadTs: "111.222", beforeTs: "222.000003" },
+      turnPlan: TURN_PLAN,
     });
 
     await storePendingRequest(mocks.env, pending);
@@ -205,6 +220,15 @@ describe("pending request store", () => {
     { message: "Fix it", userId: "U123", unattributedPrompt: {} },
     { message: "Fix it", userId: "U123", unattributedPrompt: { forwardedMessages: [123] } },
     { message: "Fix it", userId: "U123", channelName: 123 },
+    { message: "Fix it", userId: "U123", turnPlan: {} },
+    {
+      message: "Fix it",
+      userId: "U123",
+      turnPlan: {
+        ...TURN_PLAN,
+        effective: { model: "openai/gpt-5.4", reasoningEffort: "high" },
+      },
+    },
     { ...request(), requestId: "not-a-uuid" },
     { ...request(), channel: "" },
     { ...request(), threadTs: "" },
@@ -220,6 +244,7 @@ describe("pending request store", () => {
       userId: "U123",
       messageTs: "222.000003",
       threadContextSource: { threadTs: "111.222", beforeTs: "222.000003" },
+      inlinePromptOptions: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" },
     };
     mocks.get.mockResolvedValue(legacy);
 
