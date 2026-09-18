@@ -7,7 +7,6 @@ import {
   bootPhaseLabel,
   bootPhaseRepoLabel,
   endBootPhase,
-  formatBootDuration,
   seedSandboxBoot,
 } from "./boot-phase";
 
@@ -239,15 +238,5 @@ describe("labels", () => {
     expect(bootPhaseRepoLabel(progress, 2)).toBe("acme/api");
     expect(bootPhaseRepoLabel(progress, 1)).toBeNull();
     expect(bootPhaseRepoLabel({}, 2)).toBeNull();
-  });
-});
-
-describe("formatBootDuration", () => {
-  it("shows tenths under a minute and minutes above", () => {
-    expect(formatBootDuration(420)).toBe("0.4s");
-    expect(formatBootDuration(91_240)).toBe("1m 31s");
-    expect(formatBootDuration(59_960)).toBe("1m 00s");
-    expect(formatBootDuration(125_000)).toBe("2m 05s");
-    expect(formatBootDuration(-5)).toBe("0.0s");
   });
 });

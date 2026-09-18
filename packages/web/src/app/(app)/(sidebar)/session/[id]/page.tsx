@@ -463,7 +463,6 @@ export default function SessionPage() {
                 participants={profiledParticipants}
                 presenceSynced={presenceSynced}
                 events={events}
-                bootPhases={boot?.timings}
                 artifacts={artifacts}
                 terminalOpen={terminalOpen}
                 onToggleTerminal={toggleTerminal}
@@ -500,7 +499,6 @@ export default function SessionPage() {
               participants={profiledParticipants}
               presenceSynced={presenceSynced}
               events={events}
-              bootPhases={boot?.timings}
               artifacts={artifacts}
               terminalOpen={terminalOpen}
               onToggleTerminal={toggleTerminal}
@@ -527,7 +525,6 @@ export default function SessionPage() {
           participants={profiledParticipants}
           presenceSynced={presenceSynced}
           events={events}
-          bootPhases={boot?.timings}
           artifacts={artifacts}
           terminalOpen={terminalOpen}
           onToggleTerminal={toggleTerminal}
