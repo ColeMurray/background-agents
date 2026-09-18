@@ -16,7 +16,11 @@ import { createSession } from "./control-plane-client";
 import { getSlackSettings, type SlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
-import { resolveInlinePromptOptions, type InlinePromptOptions } from "../inline-flags";
+import {
+  EMPTY_INLINE_PROMPT_OPTIONS,
+  resolveInlinePromptOptions,
+  type InlinePromptOptions,
+} from "../inline-flags";
 import type { ModelOption } from "../app-home/slack-types";
 
 export interface SlackLaunchSettings {
@@ -80,7 +84,7 @@ export async function startSessionAndSendPrompt(
     channelDescription,
     images,
     imageOnly,
-    inlinePromptOptions = {},
+    inlinePromptOptions = EMPTY_INLINE_PROMPT_OPTIONS,
     launchSettings: providedLaunchSettings,
     traceId,
   } = options;

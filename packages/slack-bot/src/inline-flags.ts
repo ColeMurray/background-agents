@@ -11,6 +11,8 @@ export interface InlinePromptOptions {
   reasoningEffort?: string;
 }
 
+export const EMPTY_INLINE_PROMPT_OPTIONS: InlinePromptOptions = {};
+
 export type ParseInlinePromptFlagsResult =
   | { ok: true; text: string; options: InlinePromptOptions }
   | { ok: false; error: string };

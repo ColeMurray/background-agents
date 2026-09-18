@@ -4,14 +4,25 @@ import { makeExecutionContext as makeCtx } from "./test-helpers";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import type * as SlackModule from "@open-inspect/shared/slack";
 
-const { mockVerifySlackSignature, mockPublishView, mockOpenView, mockGetUserInfo } = vi.hoisted(
-  () => ({
-    mockVerifySlackSignature: vi.fn(),
-    mockPublishView: vi.fn(),
-    mockOpenView: vi.fn(),
-    mockGetUserInfo: vi.fn(),
-  })
-);
+const {
+  mockVerifySlackSignature,
+  mockPublishView,
+  mockOpenView,
+  mockGetUserInfo,
+  mockMessagesCreate,
+} = vi.hoisted(() => ({
+  mockVerifySlackSignature: vi.fn(),
+  mockPublishView: vi.fn(),
+  mockOpenView: vi.fn(),
+  mockGetUserInfo: vi.fn(),
+  mockMessagesCreate: vi.fn(),
+}));
+
+vi.mock("@anthropic-ai/sdk", () => ({
+  default: vi.fn().mockImplementation(function () {
+    return { messages: { create: mockMessagesCreate } };
+  }),
+}));
 
 vi.mock("@open-inspect/shared/slack", async () => {
   const actual = await vi.importActual<typeof SlackModule>("@open-inspect/shared/slack");
@@ -400,6 +411,21 @@ describe("POST /events", () => {
     clearLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
+    mockMessagesCreate.mockResolvedValue({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_test",
+          name: "classify_target",
+          input: {
+            targetId: "acme/app",
+            confidence: "high",
+            reasoning: "The request applies to the available repository.",
+            alternatives: [],
+          },
+        },
+      ],
+    });
   });
 
   it("publishes App Home when the home tab is opened", async () => {
@@ -532,7 +558,7 @@ describe("POST /events", () => {
         expect.objectContaining({
           channel: "C123",
           ts: "222.333",
-          text: "Working on *acme/app*...",
+          text: "Starting work...",
           blocks: expect.arrayContaining([
             expect.objectContaining({
               type: "actions",
@@ -632,7 +658,7 @@ describe("POST /events", () => {
 
     const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
     const clarification = postBodies.find((body) =>
-      String(body.text).includes("I couldn't determine which repository")
+      String(body.text).includes("I couldn't determine which target")
     );
 
     expect(clarification).toEqual(
@@ -653,18 +679,37 @@ describe("POST /events", () => {
         ]),
       })
     );
+    const clarificationBlocks = clarification?.blocks;
+    if (!Array.isArray(clarificationBlocks)) throw new Error("expected clarification blocks");
+    const pickerBlock = clarificationBlocks.find(
+      (block): block is Record<string, unknown> =>
+        typeof block === "object" &&
+        block !== null &&
+        typeof (block as Record<string, unknown>).block_id === "string" &&
+        String((block as Record<string, unknown>).block_id).startsWith("target_picker:")
+    );
+    if (!pickerBlock) throw new Error("expected request-bound picker block");
+    const pickerBlockId = String(pickerBlock.block_id);
+    const requestId = pickerBlockId.slice("target_picker:".length);
 
     expect(mockGetUserInfo).not.toHaveBeenCalled();
     await expect(
       (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
-        "pending:C123:111.222",
+        `pending:${requestId}`,
         "json"
       )
     ).resolves.toEqual(
       expect.objectContaining({
+        requestId,
+        channel: "C123",
+        threadTs: "111.222",
         message: "frontend backend help",
         userId: "U123",
         unattributedPrompt: { forwardedMessages: [] },
+        classification: {
+          confidence: "medium",
+          source: "routing_rule",
+        },
       })
     );
 
@@ -683,7 +728,13 @@ describe("POST /events", () => {
             user: { id: "U123" },
             channel: { id: "C123" },
             message: { ts: "111.222" },
-            actions: [{ action_id: "select_repo", selected_option: { value: "acme/web" } }],
+            actions: [
+              {
+                action_id: "select_repo",
+                block_id: pickerBlockId,
+                selected_option: { value: "acme/web" },
+              },
+            ],
           }),
         }),
       }),
@@ -1696,7 +1747,7 @@ describe("POST /interactions", () => {
       expect.objectContaining({
         channel: "C123",
         ts: "222.333",
-        text: "Working on *acme/app*...",
+        text: "Starting work...",
         blocks: expect.arrayContaining([
           expect.objectContaining({
             type: "actions",
@@ -2506,6 +2557,7 @@ describe("POST /interactions", () => {
       actions: [
         {
           action_id: "select_repo_quick_pick",
+          block_id: "target_quick_picks:00000000-0000-4000-8000-000000000001",
           value: "acme/app",
         },
       ],
@@ -2526,9 +2578,9 @@ describe("POST /interactions", () => {
 
     await flushWaitUntil(ctx);
 
-    const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
+    const postBodies = slackApiBodies(slackFetch, "chat.postEphemeral");
     expect(
-      postBodies.some((body) => String(body.text).includes("couldn't find your original request"))
+      postBodies.some((body) => String(body.text).includes("target selection has expired"))
     ).toBe(true);
 
     slackFetch.mockRestore();
@@ -2569,9 +2621,9 @@ describe("POST /interactions", () => {
     // Slack's per-response ceiling.
     expect(body.options).toHaveLength(100);
     expect(body.options[0]).toEqual({
-      text: { type: "plain_text", text: "repo-001" },
-      description: { type: "plain_text", text: "repo-001" },
-      value: "acme/repo-001",
+      text: { type: "plain_text", text: "No repository" },
+      description: { type: "plain_text", text: "Start without cloning a repository" },
+      value: "__no_repository__",
     });
   });
 
@@ -2606,6 +2658,11 @@ describe("POST /interactions", () => {
       options: Array<{ text: { type: string; text: string }; value: string }>;
     };
     expect(body.options).toEqual([
+      {
+        text: { type: "plain_text", text: "No repository" },
+        description: { type: "plain_text", text: "Start without cloning a repository" },
+        value: "__no_repository__",
+      },
       {
         text: { type: "plain_text", text: "repo-150" },
         description: { type: "plain_text", text: "repo-150" },

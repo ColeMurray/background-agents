@@ -1,6 +1,6 @@
 import {
-  escapeMrkdwnText,
   getMessageDetails,
+  postEphemeral,
   postMessage,
   updateMessage,
 } from "@open-inspect/shared/slack";
@@ -13,34 +13,71 @@ import {
   type BackgroundTaskScheduler,
 } from "../messages/blocks";
 import { formatAttributedRequest } from "../messages/context";
-import { deletePendingRequest, getPendingRequest } from "../pending-requests/pending-request-store";
-import { startSessionAndSendPrompt } from "../sessions/session-launcher";
+import {
+  deleteLegacyPendingRequest,
+  deletePendingRequest,
+  getLegacyPendingRequest,
+  getPendingRequest,
+} from "../pending-requests/pending-request-store";
+import { loadSlackLaunchSettings, startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
-import { targetLabel } from "../targets";
+import { targetId } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
-import { hasInlinePromptOptions, resolveInlinePromptOptions } from "../inline-flags";
-import { loadSlackLaunchSettings } from "../sessions/session-launcher";
+import {
+  EMPTY_INLINE_PROMPT_OPTIONS,
+  hasInlinePromptOptions,
+  resolveInlinePromptOptions,
+} from "../inline-flags";
 
 const log = createLogger("target-selection");
 
+interface TargetSelectionRequest {
+  requestId?: string;
+  selectedValue: string;
+  channel: string;
+  messageTs: string;
+  threadTs?: string;
+  selectedBy: string;
+  selectionSource: "picker" | "quick_pick";
+}
+
 export async function handleTargetSelection(
-  selectedValue: string,
-  selectingUserId: string,
-  channel: string,
-  messageTs: string,
-  threadTs: string | undefined,
+  request: TargetSelectionRequest,
   env: Env,
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
+  const { requestId, selectedValue, channel, messageTs, threadTs, selectedBy, selectionSource } =
+    request;
   const threadKey = threadTs || messageTs;
-  const pendingData = await getPendingRequest(env, channel, threadKey);
+  let pendingData;
+  if (requestId) {
+    const boundPendingData = await getPendingRequest(env, requestId);
+    if (
+      boundPendingData &&
+      (boundPendingData.channel !== channel || boundPendingData.threadTs !== threadKey)
+    ) {
+      await postEphemeral(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        selectedBy,
+        "Sorry, this target selection no longer matches its original request.",
+        { thread_ts: threadKey }
+      );
+      return;
+    }
+    pendingData = boundPendingData;
+  } else {
+    pendingData = await getLegacyPendingRequest(env, channel, threadKey);
+  }
+
   if (!pendingData) {
-    await postMessage(
+    await postEphemeral(
       env.SLACK_BOT_TOKEN,
       channel,
-      "Sorry, I couldn't find your original request. Please try again.",
+      selectedBy,
+      "Sorry, this target selection has expired. Please try your request again.",
       { thread_ts: threadKey }
     );
     return;
@@ -56,17 +93,19 @@ export async function handleTargetSelection(
     sourceMessage,
     unattributedPrompt,
     inlinePromptOptions,
+    classification,
   } = pendingData;
-  if (selectingUserId !== userId) {
-    await postMessage(
+  if (selectedBy !== userId) {
+    await postEphemeral(
       env.SLACK_BOT_TOKEN,
       channel,
-      "Only the person who made the original request can choose its repository or environment.",
+      selectedBy,
+      "Only the person who made the original request can choose its target.",
       { thread_ts: threadKey }
     );
     return;
   }
-  const launchSettings = hasInlinePromptOptions(inlinePromptOptions ?? {})
+  const launchSettings = hasInlinePromptOptions(inlinePromptOptions ?? EMPTY_INLINE_PROMPT_OPTIONS)
     ? await loadSlackLaunchSettings(env, userId, traceId)
     : undefined;
   if (launchSettings && inlinePromptOptions) {
@@ -88,7 +127,7 @@ export async function handleTargetSelection(
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
-      "Sorry, that repository or environment is no longer available. Please try again.",
+      "Sorry, that target is no longer available. Please try again.",
       { thread_ts: threadKey }
     );
     return;
@@ -129,11 +168,24 @@ export async function handleTargetSelection(
     }
   }
 
-  const label = escapeMrkdwnText(targetLabel(target));
-  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
-  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, `Working on *${label}*...`, {
+  log.info("target.decision", {
+    trace_id: traceId,
+    request_id: requestId,
+    channel,
     thread_ts: threadKey,
-    blocks: buildWorkingMessageBlocks(label),
+    decision_path: "clarified",
+    classification_source: classification?.source,
+    classifier_target_id: classification?.targetId,
+    classifier_confidence: classification?.confidence,
+    selected_by: selectedBy,
+    selection_source: selectionSource,
+    target_kind: target.kind,
+    target_id: targetId(target),
+  });
+  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
+  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, "Starting work...", {
+    thread_ts: threadKey,
+    blocks: buildWorkingMessageBlocks(),
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
   const actor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, userId);
@@ -162,10 +214,14 @@ export async function handleTargetSelection(
   });
   if (!sessionResult) return;
 
-  await deletePendingRequest(env, channel, threadKey);
+  if (requestId) {
+    await deletePendingRequest(env, requestId);
+  } else {
+    await deleteLegacyPendingRequest(env, channel, threadKey);
+  }
   if (ackTs) {
-    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, `Working on *${label}*...`, {
-      blocks: buildWorkingMessageBlocks(label, {
+    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, "Starting work...", {
+      blocks: buildWorkingMessageBlocks({
         sessionId: sessionResult.sessionId,
         webAppUrl: env.WEB_APP_URL,
       }),

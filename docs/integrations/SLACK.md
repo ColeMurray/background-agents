@@ -20,7 +20,8 @@ notification controls and safety notes are covered near the end.
    @Open-Inspect fix the failing checkout tests in acme/web
    ```
 3. In a DM with the bot, send the request directly. You do not need to mention the bot in DMs.
-4. If Open-Inspect asks which repository to use, choose one from the dropdown.
+4. If Open-Inspect asks which target to use, choose a repository, environment, or **No repository**
+   from the dropdown.
 5. Use **View Session** to open the full web session while the agent works.
 6. Reply in the same Slack thread to continue the same session.
 
@@ -35,7 +36,7 @@ notification controls and safety notes are covered near the end.
 | Continue a session          | Reply in the same Slack thread                                             |
 | Send images to the agent    | Attach PNG, JPEG, WebP, or GIF images to an interactive request            |
 | Forward a message           | Share another Slack message with the bot; text, images, and source travel  |
-| Pick the repository         | Let Open-Inspect infer it, or choose from a dropdown when it is unsure     |
+| Pick the session target     | Use a repository, environment, or empty sandbox                            |
 | Set personal defaults       | Use the Slack app's **Home** tab for model, reasoning effort, and branch   |
 | Follow the result           | Read the completion reply or open the full session with **View Session**   |
 | Review generated media      | Optionally attach charts, screenshots, and small recordings to the thread  |
@@ -71,13 +72,12 @@ repository name when the request could apply to more than one repo:
 @Open-Inspect update the billing docs in acme/api
 ```
 
-Open-Inspect chooses from repositories available to this Open-Inspect deployment, using the message,
-Slack channel context, and recent thread context. It picks a repository in this order: if only one
-repository is available, it uses that one; if your message contains a configured
-[routing-rule keyword](#routing-rules), it routes to that keyword's repository; if an administrator
-has associated the Slack channel with exactly one repository, that repository is used; otherwise it
-infers the repository from your message. When the match is unclear, Open-Inspect asks you to choose
-from candidate repositories in the Slack thread.
+Open-Inspect chooses from repositories and environments available to this deployment, using the
+message, Slack channel context, and recent thread context. A configured
+[routing-rule keyword](#routing-rules) takes precedence, followed by a single channel association.
+Otherwise the classifier chooses the best target for the request, including **No repository** when
+the task does not require a codebase. When the match is unclear, Open-Inspect asks you to choose a
+repository, environment, or **No repository** in the Slack thread.
 
 ### From a DM
 
@@ -114,11 +114,11 @@ interactive thread follow-up. You can include instructions with the images or se
 example, attach a screenshot and ask Open-Inspect to fix the visible error. Open-Inspect forwards at
 most six images per message, and each image must be no larger than 10 MiB.
 
-If Open-Inspect asks you to choose a repository or environment, make the selection normally. The bot
-retrieves the original message's images after you choose and forwards them with the saved request.
-If only some images can be read, the remaining images and any message text still reach the agent,
-and the bot posts a warning in the thread. If an image-only request loses every image, no empty
-session or follow-up is sent.
+If Open-Inspect asks you to choose a target, make the selection normally. The bot retrieves the
+original message's images after you choose and forwards them with the saved request. If only some
+images can be read, the remaining images and any message text still reach the agent, and the bot
+posts a warning in the thread. If an image-only request loses every image, no empty session or
+follow-up is sent.
 
 This feature requires the Slack app's `files:read` bot scope and a reinstall after adding the scope.
 Remote files hosted outside Slack and non-image attachments are not forwarded.
@@ -141,15 +141,15 @@ Forward several messages at once and each is quoted separately, up to ten per re
 message's text is truncated at 4,000 characters. Link previews are skipped, since the message text
 already carries the link.
 
-### Repository dropdowns
+### Target dropdowns
 
-Repository dropdowns are tied to the pending Slack thread, not to a personal GitHub repository list.
-They show candidate repositories that the Open-Inspect deployment can access. Open-Inspect keeps the
-original request for one hour; after a repository is selected, the session starts with that original
-request and thread context.
+Target dropdowns are tied to the pending Slack thread, not to a personal GitHub repository list.
+They show accessible repositories and environments plus **No repository**, which starts with an
+empty sandbox. Open-Inspect keeps the original request for one hour; after a target is selected, the
+session starts with that original request and thread context.
 
-In shared channels, only the original requester can choose the repository. If the dropdown has
-expired, send the request again and include the repository name, such as `owner/repo`.
+In shared channels, only the original requester can choose the target. If the dropdown has expired,
+send the request again and name the repository, environment, or that no repository is needed.
 
 ### Routing rules
 
@@ -200,8 +200,8 @@ thread, no mention is needed. Watched-channel automation threads are text-only, 
 [Channel Message Triggers](#channel-message-triggers).
 
 Open-Inspect keeps the Slack thread connected to the session for about 7 days. If you reply after
-that mapping expires, or if you reply outside the thread, the bot may start repository selection
-again and create a new session.
+that mapping expires, or if you reply outside the thread, the bot may start target selection again
+and create a new session.
 
 For follow-ups, Open-Inspect includes recent thread context with the new prompt. It also adds an
 eyes reaction while the follow-up is being processed, then removes it when the completion reply is
@@ -211,10 +211,8 @@ posted.
 
 ## What Gets Posted Back
 
-When a request is accepted, Open-Inspect posts a working reply in the Slack thread and then adds a
-link to the web session once it exists. For confident repository matches, the working reply may
-include a **View Session** button. Every session also gets a session-started reply with a **View
-progress** link.
+When a request is accepted, Open-Inspect posts a working reply in the Slack thread and adds a **View
+Session** button once the web session exists.
 
 The web session is the best place to watch live output, inspect files, or take over.
 
@@ -223,7 +221,7 @@ When the agent finishes, Slack receives a completion reply with:
 - The agent's final response, shortened if it is too long for Slack
 - Created artifacts such as pull requests or branches
 - A few key tool actions, such as edits or commands
-- The final status, model, repository, and reasoning effort when available
+- The final status, model, session target, and reasoning effort when available
 - A **View Session** button
 
 If the agent created a manual-PR branch and no PR artifact is already present, Slack may also show a
@@ -418,10 +416,10 @@ If setup was just changed, confirm the Slack app event subscriptions and interac
 The Slack app needs the direct message event subscription configured. Once that is set up, send the
 bot a plain DM with your request. No `@mention` is required.
 
-### Open-Inspect asks which repository to use
+### Open-Inspect asks which target to use
 
-Choose a repository from the dropdown, or resend the request with the repository name included. The
-dropdown expires after one hour.
+Choose a repository, environment, or **No repository** from the dropdown, or resend the request with
+the intended target included. The dropdown expires after one hour.
 
 ### A follow-up started a new session
 

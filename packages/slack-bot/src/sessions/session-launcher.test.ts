@@ -98,6 +98,8 @@ const environmentTarget: SlackSessionTarget = {
   },
 };
 
+const noRepositoryTarget: SlackSessionTarget = { kind: "none" };
+
 const actor: SlackActorIdentity = {
   userId: "U123",
   senderLabel: "Display Name (U123)",
@@ -292,6 +294,37 @@ describe("startSessionAndSendPrompt", () => {
         content: "Inspect production",
         callbackContext: expect.objectContaining({ repoFullName: "Production Debug" }),
       })
+    );
+  });
+
+  it("launches no-repository sessions without branch preferences", async () => {
+    const env = makeEnv();
+
+    await startSessionAndSendPrompt(env, {
+      target: noRepositoryTarget,
+      channel: "C123",
+      threadTs: "111.222",
+      messageText: "Research this without cloning a repository",
+      actor,
+    });
+
+    expect(getUserRepoBranchPreference).not.toHaveBeenCalled();
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ target: noRepositoryTarget, branch: undefined })
+    );
+    expect(deliverPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        callbackContext: expect.objectContaining({ repoFullName: "No repository" }),
+      })
+    );
+    expect(buildThreadSession).toHaveBeenCalledWith(
+      "session-1",
+      noRepositoryTarget,
+      "openai/gpt-5.4",
+      "high",
+      undefined
     );
   });
 

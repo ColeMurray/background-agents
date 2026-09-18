@@ -2,6 +2,7 @@ import {
   SELECT_TARGET_ACTION_ID,
   SELECT_TARGET_QUICK_PICK_ACTION_ID,
   baseActionId,
+  parseTargetInteractionRequestId,
 } from "../target-clarification";
 import type { SlackInteractionPayload, Env } from "../types";
 import type { BackgroundTaskScheduler } from "../messages/blocks";
@@ -25,12 +26,25 @@ export async function handleSlackInteraction(
       if (!channel || !messageTs || !userId) return;
       const selectedValue = action.selected_option?.value ?? action.value;
       if (selectedValue) {
+        const selectionSource =
+          baseActionId(action.action_id) === SELECT_TARGET_QUICK_PICK_ACTION_ID
+            ? "quick_pick"
+            : "picker";
+        const parsedRequestId = action.block_id
+          ? parseTargetInteractionRequestId(action.block_id, selectionSource)
+          : undefined;
+        if (action.block_id && !parsedRequestId) return;
+        const requestId = parsedRequestId ?? undefined;
         await handleTargetSelection(
-          selectedValue,
-          userId,
-          channel,
-          messageTs,
-          threadTs,
+          {
+            requestId,
+            selectedValue,
+            channel,
+            messageTs,
+            threadTs,
+            selectedBy: userId,
+            selectionSource,
+          },
           env,
           traceId,
           scheduleBackground

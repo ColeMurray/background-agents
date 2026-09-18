@@ -1,6 +1,5 @@
 import {
   addReaction,
-  escapeMrkdwnText,
   getChannelInfo,
   getMessageDetails,
   getThreadMessages,
@@ -50,11 +49,12 @@ import {
   clearThreadSession,
   lookupThreadSession,
 } from "../sessions/thread-session-store";
-import { buildTargetClarificationBlocks } from "../target-clarification";
-import { targetLabel } from "../targets";
+import { buildTargetClarificationBlocks, getTargetCatalogNotice } from "../target-clarification";
+import { targetId } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-identity";
 import {
+  EMPTY_INLINE_PROMPT_OPTIONS,
   hasInlinePromptOptions,
   parseInlinePromptFlags,
   resolveInlinePromptOptions,
@@ -334,16 +334,12 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   );
   if (result.needsClarification || !result.target) {
     const catalog = await loadTargetCatalog(env, traceId);
-    if (catalog.repos.length === 0 && catalog.environments.length === 0) {
-      await postMessage(
-        env.SLACK_BOT_TOKEN,
-        channel,
-        "Sorry, no repositories or environments are currently available. Please check that the GitHub App is installed and configured.",
-        { thread_ts: threadTs || ts }
-      );
-      return;
-    }
-    await storePendingRequest(env, channel, threadTs || ts, {
+    const clarificationThreadTs = threadTs || ts;
+    const requestId = crypto.randomUUID();
+    await storePendingRequest(env, {
+      requestId,
+      channel,
+      threadTs: clarificationThreadTs,
       message: requestText,
       userId: user,
       unattributedPrompt: { forwardedMessages: forwarded.entries },
@@ -357,24 +353,45 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       inlinePromptOptions: hasInlinePromptOptions(inlinePromptOptions)
         ? inlinePromptOptions
         : undefined,
+      classification: {
+        targetId: result.target ? targetId(result.target) : undefined,
+        confidence: result.confidence,
+        source: result.source,
+      },
     });
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
-      `I couldn't determine which ${catalog.environments.length > 0 ? "repository or environment" : "repository"} you're referring to. ${result.reasoning}`,
+      `I couldn't determine which target to use. ${result.reasoning}${getTargetCatalogNotice(catalog)}`,
       {
-        thread_ts: threadTs || ts,
-        blocks: buildTargetClarificationBlocks(result.reasoning, result.alternatives, catalog),
+        thread_ts: clarificationThreadTs,
+        blocks: buildTargetClarificationBlocks(
+          result.reasoning,
+          result.target?.kind === "none"
+            ? [result.target, ...(result.alternatives ?? [])]
+            : result.alternatives,
+          catalog,
+          requestId
+        ),
       }
     );
     return;
   }
 
-  const label = escapeMrkdwnText(targetLabel(result.target));
   const threadKey = threadTs || ts;
-  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, `Working on *${label}*...`, {
+  log.info("target.decision", {
+    trace_id: traceId,
+    channel,
     thread_ts: threadKey,
-    blocks: buildWorkingMessageBlocks(label, { reasoning: result.reasoning }),
+    decision_path: "direct",
+    classification_source: result.source,
+    confidence: result.confidence,
+    target_kind: result.target.kind,
+    target_id: targetId(result.target),
+  });
+  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, "Starting work...", {
+    thread_ts: threadKey,
+    blocks: buildWorkingMessageBlocks(),
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
   scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
@@ -397,9 +414,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   });
   if (!sessionResult) return;
   if (ackTs) {
-    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, `Working on *${label}*...`, {
-      blocks: buildWorkingMessageBlocks(label, {
-        reasoning: result.reasoning,
+    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, "Starting work...", {
+      blocks: buildWorkingMessageBlocks({
         sessionId: sessionResult.sessionId,
         webAppUrl: env.WEB_APP_URL,
       }),
@@ -483,7 +499,7 @@ export async function handleAppMention(
     text: messageText,
     images,
     forwarded,
-    inlinePromptOptions: parsedFlags.ok ? parsedFlags.options : {},
+    inlinePromptOptions: parsedFlags.ok ? parsedFlags.options : EMPTY_INLINE_PROMPT_OPTIONS,
     inlineFlagError: parsedFlags.ok ? undefined : parsedFlags.error,
   };
   if (
@@ -540,7 +556,7 @@ export async function handleDirectMessage(
     text: messageText,
     images,
     forwarded,
-    inlinePromptOptions: parsedFlags.ok ? parsedFlags.options : {},
+    inlinePromptOptions: parsedFlags.ok ? parsedFlags.options : EMPTY_INLINE_PROMPT_OPTIONS,
     inlineFlagError: parsedFlags.ok ? undefined : parsedFlags.error,
   };
   const threadKey = event.thread_ts || event.ts;

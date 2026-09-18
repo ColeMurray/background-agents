@@ -3,6 +3,7 @@ import type { Environment } from "@open-inspect/shared/types/environments";
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { Env, SlackSessionTarget } from "./types";
 import { MAX_REPO_SUGGESTION_OPTIONS } from "./app-home/constants";
+import { NO_REPOSITORY_TARGET_VALUE } from "./targets";
 
 const { mockGetAvailableRepos, mockGetAvailableEnvironments, mockGetEnvironmentById } = vi.hoisted(
   () => ({
@@ -32,9 +33,14 @@ import {
   baseActionId,
   countClarificationOptions,
   getTargetClarificationOptions,
+  parseTargetInteractionRequestId,
   quickPickActionId,
   resolveTargetValue,
+  targetPickerBlockId,
+  targetQuickPickBlockId,
 } from "./target-clarification";
+
+const REQUEST_ID = "00000000-0000-4000-8000-000000000001";
 
 function repo(fullName: string, displayName?: string): RepoConfig {
   const [owner, name] = fullName.split("/");
@@ -69,6 +75,8 @@ function repoTarget(fullName: string, displayName?: string): SlackSessionTarget 
 function environmentTarget(id: string, name: string): SlackSessionTarget {
   return { kind: "environment", environment: environment(id, name) };
 }
+
+const noRepositoryTarget: SlackSessionTarget = { kind: "none" };
 
 describe("filterReposByQuery", () => {
   const repos = [repo("acme/web"), repo("acme/api"), repo("other/web-utils")];
@@ -117,6 +125,17 @@ describe("buildTargetQuickPickButtons", () => {
         action_id: quickPickActionId(0),
         text: { type: "plain_text", text: "full-stack" },
         value: "env:env_abc123",
+      },
+    ]);
+  });
+
+  it("maps a no-repository alternative to a button", () => {
+    expect(buildTargetQuickPickButtons([noRepositoryTarget])).toEqual([
+      {
+        type: "button",
+        action_id: quickPickActionId(0),
+        text: { type: "plain_text", text: "No repository" },
+        value: NO_REPOSITORY_TARGET_VALUE,
       },
     ]);
   });
@@ -193,6 +212,12 @@ describe("resolveTargetValue", () => {
     expect(await resolveTargetValue(env, "acme/gone")).toBeNull();
     expect(await resolveTargetValue(env, "env:env_deleted")).toBeNull();
   });
+
+  it("resolves no repository without fetching a catalog entity", async () => {
+    expect(await resolveTargetValue(env, NO_REPOSITORY_TARGET_VALUE)).toEqual({ kind: "none" });
+    expect(mockGetAvailableRepos).not.toHaveBeenCalled();
+    expect(mockGetEnvironmentById).not.toHaveBeenCalled();
+  });
 });
 
 describe("baseActionId", () => {
@@ -205,6 +230,27 @@ describe("baseActionId", () => {
     );
     expect(baseActionId(SELECT_TARGET_ACTION_ID)).toBe(SELECT_TARGET_ACTION_ID);
     expect(baseActionId("view_session")).toBe("view_session");
+  });
+});
+
+describe("target interaction block ids", () => {
+  it("round-trips picker and quick-pick request ids", () => {
+    expect(parseTargetInteractionRequestId(targetPickerBlockId(REQUEST_ID), "picker")).toBe(
+      REQUEST_ID
+    );
+    expect(parseTargetInteractionRequestId(targetQuickPickBlockId(REQUEST_ID), "quick_pick")).toBe(
+      REQUEST_ID
+    );
+  });
+
+  it("rejects malformed and mismatched block ids", () => {
+    expect(parseTargetInteractionRequestId("target_picker:not-a-uuid", "picker")).toBeNull();
+    expect(
+      parseTargetInteractionRequestId(targetQuickPickBlockId(REQUEST_ID), "picker")
+    ).toBeNull();
+    expect(
+      parseTargetInteractionRequestId(`${targetPickerBlockId(REQUEST_ID)}:extra`, "picker")
+    ).toBeNull();
   });
 });
 
@@ -222,6 +268,11 @@ describe("getTargetClarificationOptions", () => {
     expect(response).toEqual({
       options: [
         {
+          text: { type: "plain_text", text: "No repository" },
+          description: { type: "plain_text", text: "Start without cloning a repository" },
+          value: NO_REPOSITORY_TARGET_VALUE,
+        },
+        {
           text: { type: "plain_text", text: "web" },
           description: expect.any(Object),
           value: "acme/web",
@@ -233,7 +284,7 @@ describe("getTargetClarificationOptions", () => {
         },
       ],
     });
-    expect(countClarificationOptions(response)).toBe(2);
+    expect(countClarificationOptions(response)).toBe(3);
   });
 
   it("groups environments above repositories when environments exist", async () => {
@@ -261,9 +312,13 @@ describe("getTargetClarificationOptions", () => {
             expect.objectContaining({ value: "acme/api" }),
           ],
         },
+        {
+          label: { type: "plain_text", text: "Other" },
+          options: [expect.objectContaining({ value: NO_REPOSITORY_TARGET_VALUE })],
+        },
       ],
     });
-    expect(countClarificationOptions(response)).toBe(3);
+    expect(countClarificationOptions(response)).toBe(4);
   });
 
   it("describes an environment without a description by its repository count", async () => {
@@ -277,12 +332,15 @@ describe("getTargetClarificationOptions", () => {
     });
   });
 
-  it("collapses to flat options when the query matches no environment name", async () => {
+  it("keeps no repository available when the query matches only a repository", async () => {
     mockGetAvailableEnvironments.mockResolvedValue([environment("env_abc123", "full-stack")]);
 
     const response = await getTargetClarificationOptions(env, "api");
     expect(response).toEqual({
-      options: [expect.objectContaining({ value: "acme/api" })],
+      options: [
+        expect.objectContaining({ value: NO_REPOSITORY_TARGET_VALUE }),
+        expect.objectContaining({ value: "acme/api" }),
+      ],
     });
   });
 
@@ -298,17 +356,23 @@ describe("getTargetClarificationOptions", () => {
     expect(countClarificationOptions(response)).toBe(MAX_REPO_SUGGESTION_OPTIONS);
     if (!("option_groups" in response)) throw new Error("expected groups");
     expect(response.option_groups[0].options).toHaveLength(3);
-    expect(response.option_groups[1].options).toHaveLength(MAX_REPO_SUGGESTION_OPTIONS - 3);
+    expect(response.option_groups[1].options).toHaveLength(MAX_REPO_SUGGESTION_OPTIONS - 4);
+    expect(response.option_groups[2]).toMatchObject({
+      label: { text: "Other" },
+      options: [expect.objectContaining({ value: NO_REPOSITORY_TARGET_VALUE })],
+    });
   });
 });
 
 describe("buildTargetClarificationBlocks", () => {
   it("renders an inline picker when the target list fits in Slack's static option limit", () => {
     const repos = [repo("acme/web"), repo("acme/api")];
-    const blocks = buildTargetClarificationBlocks("could not tell which repo", undefined, {
-      repos,
-      environments: [],
-    });
+    const blocks = buildTargetClarificationBlocks(
+      "could not tell which repo",
+      undefined,
+      { repos, environments: [] },
+      REQUEST_ID
+    );
 
     expect(blocks).toHaveLength(2);
     expect(blocks.some((block) => block.type === "actions")).toBe(false);
@@ -316,12 +380,17 @@ describe("buildTargetClarificationBlocks", () => {
       { type: "section", text: { text: expect.stringContaining("could not tell which repo") } },
       {
         type: "section",
-        text: { text: "Which repository should I work with?" },
+        block_id: targetPickerBlockId(REQUEST_ID),
+        text: { text: "Which target should I use?" },
         accessory: {
           type: "static_select",
           action_id: SELECT_TARGET_ACTION_ID,
-          placeholder: { type: "plain_text", text: "Select a repository" },
+          placeholder: { type: "plain_text", text: "Select a target" },
           options: [
+            {
+              text: { type: "plain_text", text: "No repository" },
+              value: NO_REPOSITORY_TARGET_VALUE,
+            },
             { text: { type: "plain_text", text: "web" }, value: "acme/web" },
             { text: { type: "plain_text", text: "api" }, value: "acme/api" },
           ],
@@ -330,20 +399,26 @@ describe("buildTargetClarificationBlocks", () => {
     ]);
   });
 
-  it("groups the inline picker and names both kinds when environments exist", () => {
+  it("groups the inline picker when environments exist", () => {
     const repos = [repo("acme/web")];
     const environments = [environment("env_abc123", "full-stack")];
-    const blocks = buildTargetClarificationBlocks("unsure", undefined, { repos, environments });
+    const blocks = buildTargetClarificationBlocks(
+      "unsure",
+      undefined,
+      { repos, environments },
+      REQUEST_ID
+    );
 
     expect(blocks).toMatchObject([
-      { type: "section", text: { text: expect.stringContaining("repository or environment") } },
+      { type: "section", text: { text: expect.stringContaining("which target") } },
       {
         type: "section",
-        text: { text: "Which repository or environment should I work with?" },
+        block_id: targetPickerBlockId(REQUEST_ID),
+        text: { text: "Which target should I use?" },
         accessory: {
           type: "static_select",
           action_id: SELECT_TARGET_ACTION_ID,
-          placeholder: { type: "plain_text", text: "Select a repository or environment" },
+          placeholder: { type: "plain_text", text: "Select a target" },
           option_groups: [
             {
               label: { type: "plain_text", text: "Environments" },
@@ -352,6 +427,10 @@ describe("buildTargetClarificationBlocks", () => {
             {
               label: { type: "plain_text", text: "Repositories" },
               options: [expect.objectContaining({ value: "acme/web" })],
+            },
+            {
+              label: { type: "plain_text", text: "Other" },
+              options: [expect.objectContaining({ value: NO_REPOSITORY_TARGET_VALUE })],
             },
           ],
         },
@@ -364,7 +443,8 @@ describe("buildTargetClarificationBlocks", () => {
     const blocks = buildTargetClarificationBlocks(
       "maybe one of these",
       [repoTarget("acme/web"), repoTarget("acme/api")],
-      { repos, environments: [] }
+      { repos, environments: [] },
+      REQUEST_ID
     );
 
     expect(blocks).toHaveLength(3);
@@ -372,7 +452,7 @@ describe("buildTargetClarificationBlocks", () => {
       { type: "section" },
       {
         type: "actions",
-        block_id: "repo_quick_picks",
+        block_id: targetQuickPickBlockId(REQUEST_ID),
         elements: [
           { type: "button", action_id: quickPickActionId(0), value: "acme/web" },
           { type: "button", action_id: quickPickActionId(1), value: "acme/api" },
@@ -380,26 +460,28 @@ describe("buildTargetClarificationBlocks", () => {
       },
       {
         type: "section",
-        text: { text: "Or choose another repository:" },
+        block_id: targetPickerBlockId(REQUEST_ID),
+        text: { text: "Or choose another target:" },
         accessory: { type: "static_select", action_id: SELECT_TARGET_ACTION_ID },
       },
     ]);
   });
 
-  it("names both kinds when an environment is among the alternatives", () => {
+  it("uses target-neutral copy when an environment is among the alternatives", () => {
     const blocks = buildTargetClarificationBlocks(
       "one of these",
       [repoTarget("acme/web"), environmentTarget("env_abc123", "full-stack")],
-      { repos: [repo("acme/web")], environments: [] }
+      { repos: [repo("acme/web")], environments: [] },
+      REQUEST_ID
     );
 
     expect(blocks[0]).toMatchObject({
       type: "section",
-      text: { text: expect.stringContaining("repository or environment") },
+      text: { text: expect.stringContaining("which target") },
     });
     expect(blocks[2]).toMatchObject({
       type: "section",
-      text: { text: "Or choose another repository or environment:" },
+      text: { text: "Or choose another target:" },
     });
   });
 
@@ -407,16 +489,19 @@ describe("buildTargetClarificationBlocks", () => {
     const repos = Array.from({ length: MAX_REPO_SUGGESTION_OPTIONS + 1 }, (_, idx) =>
       repo(`acme/repo-${idx}`)
     );
-    const blocks = buildTargetClarificationBlocks("too many to inline", undefined, {
-      repos,
-      environments: [],
-    });
+    const blocks = buildTargetClarificationBlocks(
+      "too many to inline",
+      undefined,
+      { repos, environments: [] },
+      REQUEST_ID
+    );
 
     expect(blocks).toMatchObject([
       { type: "section" },
       {
         type: "section",
-        text: { text: "Which repository should I work with?" },
+        block_id: targetPickerBlockId(REQUEST_ID),
+        text: { text: "Which target should I use?" },
         accessory: {
           type: "external_select",
           action_id: SELECT_TARGET_ACTION_ID,
@@ -424,5 +509,24 @@ describe("buildTargetClarificationBlocks", () => {
         },
       },
     ]);
+  });
+
+  it("offers no repository when the catalog is empty", () => {
+    const blocks = buildTargetClarificationBlocks(
+      "no catalog targets",
+      undefined,
+      { repos: [], environments: [] },
+      REQUEST_ID
+    );
+
+    expect(blocks[1]).toMatchObject({
+      accessory: {
+        type: "static_select",
+        options: [expect.objectContaining({ value: NO_REPOSITORY_TARGET_VALUE })],
+      },
+    });
+    expect(blocks[0]).toMatchObject({
+      text: { text: expect.stringContaining("if you expected other targets") },
+    });
   });
 });
