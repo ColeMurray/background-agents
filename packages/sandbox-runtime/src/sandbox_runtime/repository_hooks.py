@@ -123,9 +123,10 @@ class RepositoryHooks:
                 # One redacted tail for both readers: the structured log goes
                 # to the sandbox provider's log, which is no place for a
                 # credential either.
+                secrets = secret_values(env)
                 tail = tuple(
                     bounded_output_tail(
-                        output.tail_lines(OUTPUT_TAIL_MAX_LINES), secrets=secret_values(env)
+                        output.tail_lines(OUTPUT_TAIL_MAX_LINES, secrets=secrets), secrets=secrets
                     )
                 )
                 fields["output_tail"] = "\n".join(tail)

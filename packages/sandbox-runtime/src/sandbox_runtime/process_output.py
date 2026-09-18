@@ -9,7 +9,7 @@ import signal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 
 TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
 PROCESS_OUTPUT_TAIL_BYTES = 64 * 1024
@@ -41,10 +41,9 @@ class BoundedOutputCollector:
             self._tail.extend(chunk)
             overflow = len(self._tail) - self._max_tail_bytes
             if overflow > 0:
-                # The last byte dropped tells us where the new window starts:
-                # a newline leaves a whole line at the head, anything else
-                # cuts one.
-                self._head_is_fragment = self._tail[overflow - 1] != ord("\n")
+                dropped = bytes(self._tail[:overflow]).decode(errors="replace")
+                # Match splitlines() so every supported separator preserves a whole line.
+                self._head_is_fragment = len(f"x{dropped[-1]}y".splitlines()) == 1
                 del self._tail[:overflow]
 
     async def wait(self) -> None:
@@ -70,16 +69,24 @@ class BoundedOutputCollector:
         self._retaining = False
         self._tail.clear()
 
-    def tail_lines(self, max_lines: int = 50) -> str:
+    def tail_lines(self, max_lines: int = 50, *, secrets: Sequence[str] = ()) -> str:
         """Decode and return at most the requested final lines.
 
         A window trimmed mid-line opens on a fragment cut at an arbitrary
         byte, which is dropped: a fragment of a secret would no longer match
-        the value it is redacted by. A trim that ended on a newline leaves a
-        whole line at the head, which is reported.
+        the value it is redacted by. A newline-aligned window can keep its
+        first line unless it is the final line of a multiline secret.
         """
         lines = bytes(self._tail).decode(errors="replace").splitlines()
-        if self._head_is_fragment:
+        head_is_secret_suffix = (
+            any(
+                len(secret_lines := secret.splitlines()) > 1 and secret_lines[-1] == lines[0]
+                for secret in secrets
+            )
+            if lines
+            else False
+        )
+        if self._head_is_fragment or head_is_secret_suffix:
             lines = lines[1:]
         return "\n".join(lines[-max_lines:])
 

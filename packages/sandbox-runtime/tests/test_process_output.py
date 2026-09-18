@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from sandbox_runtime.boot_events import bounded_output_tail, secret_values
 from sandbox_runtime.process_output import (
     PROCESS_OUTPUT_TAIL_BYTES,
     BoundedOutputCollector,
@@ -143,9 +144,38 @@ async def test_a_later_mid_line_trim_drops_the_fragment_again():
     stream = asyncio.StreamReader()
     collector = BoundedOutputCollector(stream, max_tail_bytes=20)
     stream.feed_data(b"AAAA\nBBBB\nCCCC\nDDDD\nEEEE\n")
+    await asyncio.sleep(0)
+    assert collector.tail_lines() == "BBBB\nCCCC\nDDDD\nEEEE"
     stream.feed_data(b"FFFFFFF\n")
     stream.feed_eof()
 
     await collector.wait()
 
     assert collector.tail_lines() == "DDDD\nEEEE\nFFFFFFF"
+
+
+@pytest.mark.parametrize(
+    "separator", ["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]
+)
+async def test_a_trim_ending_on_any_splitlines_separator_keeps_its_first_line(separator):
+    stream = asyncio.StreamReader()
+    retained = b"BBBB\nCCCC\n"
+    collector = BoundedOutputCollector(stream, max_tail_bytes=len(retained))
+    stream.feed_data(f"AAAA{separator}".encode() + retained)
+    stream.feed_eof()
+
+    await collector.wait()
+
+    assert collector.tail_lines() == "BBBB\nCCCC"
+
+
+async def test_newline_aligned_tail_drops_a_multiline_secret_suffix():
+    stream = asyncio.StreamReader()
+    collector = BoundedOutputCollector(stream, max_tail_bytes=2)
+    secrets = secret_values({"API_TOKEN": "abcdefgh\nx"})
+    stream.feed_data(b"abcdefgh\nx\n")
+    stream.feed_eof()
+
+    await collector.wait()
+
+    assert bounded_output_tail(collector.tail_lines(secrets=secrets), secrets=secrets) == []
