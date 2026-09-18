@@ -1,6 +1,6 @@
 /**
- * Pure builders for the scheduler → slack-bot notifications (run completion and
- * concurrency-skip). Kept free of Durable Object state so they can be unit
+ * Pure builders for the scheduler → slack-bot notifications (run completion,
+ * concurrency-skip, and auto-pause). Kept free of Durable Object state so they can be unit
  * tested directly; the scheduler signs the result (HMAC over the JSON
  * body) and POSTs it via the optional `SLACK_BOT` Fetcher.
  *
@@ -91,5 +91,33 @@ export function buildSlackSkipNotification(params: {
     channel: params.channelId,
     user: params.actorUserId,
     threadTs: params.threadTs ?? params.ts,
+  };
+}
+
+/**
+ * The scheduler → bot payload for an auto-paused automation: the channels to
+ * notify, the automation's name, and how many consecutive failures triggered
+ * the pause. The bot renders the message; the scheduler only carries the facts.
+ */
+export interface SlackAutoPauseNotification {
+  channels: string[];
+  automationName: string;
+  consecutiveFailures: number;
+}
+
+/**
+ * Build the auto-pause notification. Returns `null` when the automation watches
+ * no channels (non-slack automations have nowhere to post the notice).
+ */
+export function buildSlackAutoPauseNotification(params: {
+  automationName: string;
+  consecutiveFailures: number;
+  channelIds: string[];
+}): SlackAutoPauseNotification | null {
+  if (params.channelIds.length === 0) return null;
+  return {
+    channels: params.channelIds,
+    automationName: params.automationName,
+    consecutiveFailures: params.consecutiveFailures,
   };
 }

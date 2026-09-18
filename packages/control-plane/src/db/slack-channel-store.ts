@@ -46,6 +46,18 @@ export class SlackChannelStore {
     return (result.results || []).map((r) => r.channel_id);
   }
 
+  /** Distinct channel IDs watched by a single automation. */
+  async getChannelsForAutomation(automationId: string): Promise<string[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT DISTINCT c.channel_id FROM automation_slack_channels c
+         WHERE c.automation_id = ?`
+      )
+      .bind(automationId)
+      .all<{ channel_id: string }>();
+    return (result.results || []).map((r) => r.channel_id);
+  }
+
   /**
    * Statements that replace an automation's watched-channel set (DELETE + re-INSERT).
    * Public so a route can compose them with the automation insert/update into one
