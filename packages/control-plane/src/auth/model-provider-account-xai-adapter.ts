@@ -15,6 +15,8 @@ import {
   type ModelProviderAccountAdapter,
   type ProviderConnectionResult,
   type ProviderDeviceAuthorizationCapability,
+  type ProviderExternalIdentity,
+  type ProviderObservedIdentity,
   type ProviderRefreshResult,
 } from "./model-provider-account-adapters";
 import { XaiProviderDeviceAuthorization } from "./model-provider-account-xai-device-authorization";
@@ -133,8 +135,15 @@ export class XaiModelProviderAccountAdapter implements ModelProviderAccountAdapt
     return {};
   }
 
-  validateExternalIdentity(actual: string | undefined, expected: string | null): void {
-    if (actual && expected && actual !== expected) {
+  validateExternalIdentity(
+    actual: ProviderObservedIdentity,
+    expected: ProviderExternalIdentity
+  ): void {
+    if (
+      actual.externalAccountId &&
+      expected.externalAccountId &&
+      actual.externalAccountId !== expected.externalAccountId
+    ) {
       throw new ProviderIdentityError("xAI account identity did not match");
     }
   }

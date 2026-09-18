@@ -123,14 +123,17 @@ function legacyKeyLocationLabel(location: LegacyProviderKeyLocation): string {
 function connectionToastMessage(
   provider: SubscriptionProviderId,
   reconnectedExisting: boolean,
-  operation: ProviderDeviceAuthorizationTarget["operation"]
+  operation: ProviderDeviceAuthorizationTarget["operation"],
+  accountName: string
 ): string {
   if (!reconnectedExisting) {
-    return `${SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName} account connected`;
+    return `${SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName} account ${accountName} connected`;
   }
+  // Name the account on the add path: landing on one already connected means the provider
+  // authorized someone other than the account the operator meant to add.
   return operation === "reconnect"
     ? "Account reconnected"
-    : `Existing ${SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName} account reconnected`;
+    : `Reconnected existing account ${accountName}`;
 }
 
 function LegacyReconnectForm({
@@ -612,7 +615,12 @@ export function ProviderAccountsSettings() {
             setConnection(null);
             void refresh();
             toast.success(
-              connectionToastMessage(target.provider, result.reconnectedExisting, target.operation)
+              connectionToastMessage(
+                target.provider,
+                result.reconnectedExisting,
+                target.operation,
+                result.account.displayName
+              )
             );
           }}
         />

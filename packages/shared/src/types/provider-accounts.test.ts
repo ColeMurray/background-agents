@@ -212,6 +212,7 @@ describe("provider account response schemas", () => {
     provider: "openai" as const,
     displayName: "Team ChatGPT",
     externalAccountId: "acct_external",
+    externalPrincipalId: null,
     status: "active",
     createdBy: "user-1",
     updatedBy: "user-1",

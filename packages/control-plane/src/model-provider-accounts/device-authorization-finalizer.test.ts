@@ -4,7 +4,7 @@ import type { ProcessingProviderAuthorization } from "../db/provider-account-aut
 import type { ModelProviderAccountLifecycleSnapshot } from "../db/model-provider-accounts";
 import { ProviderDeviceAuthorizationFinalizer } from "./device-authorization-finalizer";
 
-const authorization: ProcessingProviderAuthorization = {
+const authorization: ProcessingProviderAuthorization & { operation: "create" } = {
   id: "01".repeat(32),
   userId: "user-1",
   provider: "openai",
@@ -28,6 +28,7 @@ const winner: ModelProviderAccountLifecycleSnapshot = {
     provider: "openai",
     displayName: "Existing OpenAI",
     externalAccountId: "acct-1",
+    externalPrincipalId: null,
     status: "active",
     createdBy: "user-2",
     updatedBy: "user-2",
@@ -108,6 +109,125 @@ describe("ProviderDeviceAuthorizationFinalizer", () => {
       )
     ).rejects.toThrow("encryption failed");
     expect(accounts.findLifecycleSnapshotByExternalIdentity).toHaveBeenCalledOnce();
+    expect(writer.finalizeDeviceAuthorizationReconnect).not.toHaveBeenCalled();
+  });
+});
+
+describe("ProviderDeviceAuthorizationFinalizer seat identity", () => {
+  const WORKSPACE = "workspace-1";
+
+  function seatedAccount(
+    id: string,
+    externalPrincipalId: string | null
+  ): ModelProviderAccountLifecycleSnapshot {
+    return {
+      account: { ...winner.account, id, externalAccountId: WORKSPACE, externalPrincipalId },
+      lifecycleVersion: 0,
+    };
+  }
+
+  /** Store that resolves accounts by the full identity, the way D1 does. */
+  function seatStore(stored: ModelProviderAccountLifecycleSnapshot[]) {
+    return {
+      getLifecycleSnapshot: vi.fn(async (id: string) => stored.find((s) => s.account.id === id)!),
+      findLifecycleSnapshotByExternalIdentity: vi.fn(
+        async (_provider: string, externalAccountId: string, seat: string | null) =>
+          stored.find(
+            (s) =>
+              s.account.externalAccountId === externalAccountId &&
+              s.account.externalPrincipalId === seat
+          ) ?? null
+      ),
+    };
+  }
+
+  function finalizerFor(accounts: ReturnType<typeof seatStore>) {
+    const writer = {
+      finalizeDeviceAuthorizationCreate: vi.fn(async () => ({ type: "created" as const })),
+      finalizeDeviceAuthorizationReconnect: vi.fn(async () => ({ type: "connected" as const })),
+    };
+    return {
+      writer,
+      finalizer: new ProviderDeviceAuthorizationFinalizer(accounts, writer, () => "04".repeat(16)),
+    };
+  }
+
+  const adapter = new OpenAIModelProviderAccountAdapter();
+
+  it("gives a second seat on one subscription its own account", async () => {
+    const accounts = seatStore([seatedAccount("account-a", "user-a")]);
+    const { finalizer, writer } = finalizerFor(accounts);
+
+    await expect(
+      finalizer.finalizeTrustedConnection(
+        authorization,
+        {
+          credential: { refreshToken: "seat-b-secret" },
+          externalAccountId: WORKSPACE,
+          externalPrincipalId: "user-b",
+          externalPrincipalLabel: "seat-b@example.com",
+        },
+        adapter,
+        100_000
+      )
+    ).resolves.toBe(true);
+
+    expect(writer.finalizeDeviceAuthorizationReconnect).not.toHaveBeenCalled();
+    expect(writer.finalizeDeviceAuthorizationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        externalAccountId: WORKSPACE,
+        externalPrincipalId: "user-b",
+        displayName: "seat-b@example.com",
+      })
+    );
+  });
+
+  it("adopts an account whose seat was never recorded instead of duplicating it", async () => {
+    const accounts = seatStore([seatedAccount("account-legacy", null)]);
+    const { finalizer, writer } = finalizerFor(accounts);
+
+    await expect(
+      finalizer.finalizeTrustedConnection(
+        authorization,
+        {
+          credential: { refreshToken: "seat-a-secret" },
+          externalAccountId: WORKSPACE,
+          externalPrincipalId: "user-a",
+        },
+        adapter,
+        100_000
+      )
+    ).resolves.toBe(true);
+
+    expect(writer.finalizeDeviceAuthorizationCreate).not.toHaveBeenCalled();
+    expect(writer.finalizeDeviceAuthorizationReconnect).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "account-legacy", externalPrincipalId: "user-a" })
+    );
+  });
+
+  it("refuses a reconnect authorized by a different seat on the same subscription", async () => {
+    const accounts = seatStore([seatedAccount("account-a", "user-a")]);
+    const { finalizer, writer } = finalizerFor(accounts);
+
+    await expect(
+      finalizer.finalizeTrustedConnection(
+        {
+          ...authorization,
+          operation: "reconnect",
+          providerAccountId: "account-a",
+          targetAccountStatus: "active",
+          targetAccountLifecycleVersion: 0,
+        },
+        {
+          credential: { refreshToken: "seat-b-secret" },
+          externalAccountId: WORKSPACE,
+          externalPrincipalId: "user-b",
+        },
+        adapter,
+        100_000
+      )
+    ).rejects.toThrow("Provider account identity did not match");
+
     expect(writer.finalizeDeviceAuthorizationReconnect).not.toHaveBeenCalled();
   });
 });

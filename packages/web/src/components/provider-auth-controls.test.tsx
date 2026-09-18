@@ -14,6 +14,7 @@ const account = {
   provider: "openai" as const,
   displayName: "Team ChatGPT",
   externalAccountId: "acct_public",
+  externalPrincipalId: null,
   status: "active" as const,
   createdBy: null,
   updatedBy: null,

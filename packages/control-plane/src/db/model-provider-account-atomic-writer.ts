@@ -11,6 +11,18 @@ import {
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import { ProviderDefaultStore } from "./provider-account-defaults";
 
+/**
+ * Whether a connecting seat may take over a stored account.
+ *
+ * An account whose seat was never recorded is adoptable by the first seat that proves itself on
+ * it; once recorded, only that same seat may reconnect. Without this, every member of a shared
+ * ChatGPT workspace could silently replace a colleague's credential, since a workspace account
+ * id alone does not distinguish them.
+ */
+function seatAdoptable(stored: string | null, connecting: string | null): boolean {
+  return stored === null || stored === connecting;
+}
+
 interface CredentialWriteInput {
   providerAccountId: string;
   provider: ModelProviderId;
@@ -23,6 +35,7 @@ interface CredentialWriteInput {
 export interface AccountConnectionWriteInput extends CredentialWriteInput {
   expectedCredentialVersion: number;
   externalAccountId: string | null;
+  externalPrincipalId: string | null;
   status: ModelProviderAccountStatus;
   actorId: string;
   lastVerifiedAt: number;
@@ -47,6 +60,7 @@ export interface CreateAccountWithCredentialInput {
   provider: ModelProviderId;
   displayName: string;
   externalAccountId: string | null;
+  externalPrincipalId: string | null;
   actorId: string;
   now: number;
   credential: Pick<
@@ -58,6 +72,7 @@ export interface CreateAccountWithCredentialInput {
 interface DeviceAuthorizationCredentialInput {
   authorization: ProcessingProviderAuthorization;
   externalAccountId: string;
+  externalPrincipalId: string | null;
   credential: unknown;
   credentialSchemaVersion: number;
   accessTokenExpiresAt: number | null;
@@ -67,6 +82,8 @@ interface DeviceAuthorizationCredentialInput {
 export interface FinalizeDeviceAuthorizationCreateInput extends DeviceAuthorizationCredentialInput {
   authorization: ProcessingProviderAuthorization & { operation: "create" };
   accountId: string;
+  /** Title for the new account; the provider's own name for the seat when it supplied one. */
+  displayName: string;
 }
 
 export interface FinalizeDeviceAuthorizationReconnectInput extends DeviceAuthorizationCredentialInput {
@@ -179,18 +196,21 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
       this.db
         .prepare(
           `INSERT INTO model_provider_accounts
-            (id, provider, display_name, external_account_id, status, created_by, updated_by,
-             last_verified_at, created_at, updated_at)
-           SELECT ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?
+            (id, provider, display_name, external_account_id, external_principal_id, status,
+             created_by, updated_by, last_verified_at, created_at, updated_at)
+           SELECT ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?
            WHERE EXISTS (${authorizationGuard})
              AND NOT EXISTS (SELECT 1 FROM model_provider_accounts
-               WHERE provider = ? AND external_account_id = ? AND archived_at IS NULL)`
+               WHERE provider = ? AND external_account_id = ?
+                 AND COALESCE(external_principal_id, '') = COALESCE(?, '')
+                 AND archived_at IS NULL)`
         )
         .bind(
           input.accountId,
           input.authorization.provider,
-          input.authorization.displayName,
+          input.displayName,
           input.externalAccountId,
+          input.externalPrincipalId,
           input.authorization.userId,
           input.authorization.userId,
           input.now,
@@ -198,7 +218,8 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
           input.now,
           ...guardValues,
           input.authorization.provider,
-          input.externalAccountId
+          input.externalAccountId,
+          input.externalPrincipalId
         ),
       this.db
         .prepare(
@@ -244,7 +265,8 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
     }
     const conflict = await this.accounts.findLifecycleSnapshotByExternalIdentity(
       input.authorization.provider,
-      input.externalAccountId
+      input.externalAccountId,
+      input.externalPrincipalId
     );
     if (conflict) return { type: "identity_conflict" };
     throw new Error("Provider authorization create finalization rejected without a conflict");
@@ -262,6 +284,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
       snapshot.account.archivedAt !== null ||
       snapshot.account.provider !== input.authorization.provider ||
       snapshot.account.externalAccountId !== input.externalAccountId ||
+      !seatAdoptable(snapshot.account.externalPrincipalId, input.externalPrincipalId) ||
       (input.authorization.operation === "create" && snapshot.account.status === "disabled") ||
       (input.authorization.operation === "reconnect" &&
         (input.authorization.providerAccountId !== input.accountId ||
@@ -285,21 +308,24 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
       this.db
         .prepare(
           `UPDATE model_provider_accounts
-           SET status = 'active', updated_by = ?, last_verified_at = ?, updated_at = ?,
-               lifecycle_version = lifecycle_version + 1
+           SET status = 'active', external_principal_id = ?, updated_by = ?, last_verified_at = ?,
+               updated_at = ?, lifecycle_version = lifecycle_version + 1
            WHERE id = ? AND provider = ? AND external_account_id = ?
+             AND (external_principal_id IS NULL OR external_principal_id = ?)
              AND archived_at IS NULL AND status = ? AND lifecycle_version = ?
              AND EXISTS (${authorizationGuard})
              AND EXISTS (SELECT 1 FROM model_provider_account_credentials
                WHERE provider_account_id = ? AND credential_version = ?)`
         )
         .bind(
+          input.externalPrincipalId,
           input.authorization.userId,
           input.now,
           input.now,
           input.accountId,
           input.authorization.provider,
           input.externalAccountId,
+          input.externalPrincipalId,
           snapshot.account.status,
           snapshot.lifecycleVersion,
           ...guardValues,

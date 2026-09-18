@@ -55,6 +55,7 @@ export const modelProviderAccountSchema = z.strictObject({
   provider: subscriptionProviderIdSchema,
   displayName: z.string().min(1).max(100),
   externalAccountId: z.string().min(1).nullable(),
+  externalPrincipalId: z.string().min(1).nullable(),
   status: modelProviderAccountStatusSchema,
   createdBy: z.string().min(1).nullable(),
   updatedBy: z.string().min(1).nullable(),

@@ -17,6 +17,7 @@ function account(
     provider,
     displayName: provider,
     externalAccountId: null,
+    externalPrincipalId: null,
     status: "active",
     createdBy: null,
     updatedBy: null,

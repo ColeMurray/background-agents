@@ -1,7 +1,7 @@
 import {
   checkOpenAIDeviceAuthorization,
   exchangeOpenAIAuthorizationCode,
-  extractOpenAIAccountId,
+  extractOpenAIIdentity,
   openAIAccessTokenLifetimeMs,
   OPENAI_DEVICE_VERIFICATION_URL,
   startOpenAIDeviceAuthorization,
@@ -73,8 +73,8 @@ export class OpenAIProviderDeviceAuthorization implements ProviderDeviceAuthoriz
   }
 
   private connection(tokens: OpenAITokenResponse) {
-    const externalAccountId = extractOpenAIAccountId(tokens);
-    if (!externalAccountId) throw new Error("OpenAI account identity could not be verified");
+    const identity = extractOpenAIIdentity(tokens);
+    if (!identity.accountId) throw new Error("OpenAI account identity could not be verified");
     const accessTokenExpiresAt =
       this.dependencies.now() + openAIAccessTokenLifetimeMs(tokens.expires_in);
     return {
@@ -82,9 +82,11 @@ export class OpenAIProviderDeviceAuthorization implements ProviderDeviceAuthoriz
         refreshToken: tokens.refresh_token,
         accessToken: tokens.access_token,
         accessTokenExpiresAt,
-        accountId: externalAccountId,
+        accountId: identity.accountId,
       },
-      externalAccountId,
+      externalAccountId: identity.accountId,
+      externalPrincipalId: identity.principalId,
+      externalPrincipalLabel: identity.label,
       accessTokenExpiresAt,
     };
   }

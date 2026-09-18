@@ -581,6 +581,7 @@ describe("provider account device authorization routes", () => {
         authorization: transaction as ProcessingProviderAuthorization,
         accountId: ACCOUNT_ID,
         externalAccountId: "acct-integration",
+        externalPrincipalId: null,
         credential: { refreshToken: "new-secret" },
         credentialSchemaVersion: 1,
         accessTokenExpiresAt: null,

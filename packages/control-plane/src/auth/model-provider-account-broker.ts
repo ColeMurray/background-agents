@@ -178,10 +178,7 @@ export class ModelProviderAccountBroker {
           owner: this.createOwner(),
           now: this.now,
           complete: ({ write, refreshed }) => {
-            adapter.validateExternalIdentity(
-              refreshed.externalAccountId,
-              account.externalAccountId
-            );
+            adapter.validateExternalIdentity(refreshed, account);
             return this.stores.credentials.completeExchange(write);
           },
         });

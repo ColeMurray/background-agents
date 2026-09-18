@@ -5,6 +5,8 @@ import {
   ProviderRefreshError,
   type ModelProviderAccountAdapter,
   type ProviderConnectionResult,
+  type ProviderExternalIdentity,
+  type ProviderObservedIdentity,
   type ProviderRefreshResult,
 } from "../auth/model-provider-account-adapters";
 import type { ModelProviderAccount } from "../db/model-provider-accounts";
@@ -26,12 +28,21 @@ function adapter(
     refresh?: ProviderRefreshResult<Credential>;
   } = {}
 ): ModelProviderAccountAdapter<Credential, unknown> {
-  const validateExternalIdentity = (actual: string | undefined, expected: string | null) => {
-    if (!actual) {
+  const validateExternalIdentity = (
+    actual: ProviderObservedIdentity,
+    expected: ProviderExternalIdentity
+  ) => {
+    if (!actual.externalAccountId) {
       throw new ProviderIdentityError("OpenAI account identity could not be verified");
     }
-    if (!expected || actual !== expected) {
+    if (!expected.externalAccountId || actual.externalAccountId !== expected.externalAccountId) {
       throw new ProviderIdentityError("OpenAI account identity did not match");
+    }
+    if (
+      expected.externalPrincipalId &&
+      actual.externalPrincipalId !== expected.externalPrincipalId
+    ) {
+      throw new ProviderIdentityError("OpenAI user identity did not match");
     }
   };
   return {
@@ -47,7 +58,12 @@ function adapter(
       };
       const accountId =
         input && typeof input === "object" && "accountId" in input ? String(input.accountId) : null;
-      if (accountId) validateExternalIdentity(result.externalAccountId, accountId);
+      if (accountId) {
+        validateExternalIdentity(result, {
+          externalAccountId: accountId,
+          externalPrincipalId: null,
+        });
+      }
       return result;
     }),
     parseCredential: vi.fn((value) => value as Credential),
@@ -79,6 +95,7 @@ function providerAccount(overrides: Partial<ModelProviderAccount> = {}): ModelPr
     provider: "openai",
     displayName: "Team ChatGPT",
     externalAccountId: "acct-1",
+    externalPrincipalId: null,
     status: "active",
     createdBy: "user-1",
     updatedBy: "user-1",
@@ -126,6 +143,7 @@ function stores(account: ModelProviderAccount | null = providerAccount()): {
         provider: input.provider,
         displayName: input.displayName,
         externalAccountId: input.externalAccountId,
+        externalPrincipalId: input.externalPrincipalId,
         status: "active" as const,
         createdBy: input.actorId,
         updatedBy: input.actorId,

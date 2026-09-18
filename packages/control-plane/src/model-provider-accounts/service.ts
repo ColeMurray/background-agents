@@ -17,6 +17,8 @@ import {
   type ModelProviderAccountAdapter,
   type ModelProviderAccountAdapterRegistry,
   type ProviderConnectionResult,
+  type ProviderExternalIdentity,
+  type ProviderObservedIdentity,
   ProviderIdentityError,
   ProviderRefreshError,
 } from "../auth/model-provider-account-adapters";
@@ -103,10 +105,15 @@ export class ModelProviderAccountService {
     const connected = await this.connect(adapter, input);
     const now = this.dependencies.now();
     const externalAccountId = connected.externalAccountId ?? null;
+    const externalPrincipalId = connected.externalPrincipalId ?? null;
     let existing: ModelProviderAccount | null = null;
     if (externalAccountId) {
       try {
-        existing = await this.accounts.findByExternalIdentity(input.provider, externalAccountId);
+        existing = await this.resolveConnectTarget(
+          input.provider,
+          externalAccountId,
+          externalPrincipalId
+        );
       } catch (cause) {
         throw this.consumedCredentialError(cause);
       }
@@ -124,6 +131,7 @@ export class ModelProviderAccountService {
         provider: input.provider,
         displayName: input.displayName,
         externalAccountId,
+        externalPrincipalId,
         actorId,
         now,
         credential: {
@@ -141,7 +149,11 @@ export class ModelProviderAccountService {
       let winner: ModelProviderAccount | null = null;
       if (externalAccountId) {
         try {
-          winner = await this.accounts.findByExternalIdentity(input.provider, externalAccountId);
+          winner = await this.resolveConnectTarget(
+            input.provider,
+            externalAccountId,
+            externalPrincipalId
+          );
         } catch {
           throw this.consumedCredentialError(cause);
         }
@@ -223,14 +235,11 @@ export class ModelProviderAccountService {
         owner,
         now: this.dependencies.now,
         complete: ({ write, refreshed }) => {
-          this.validateExternalIdentity(
-            adapter,
-            refreshed.externalAccountId,
-            account.externalAccountId
-          );
+          this.validateExternalIdentity(adapter, refreshed, account);
           return this.atomicWriter.completeVerificationCredentialAndAccount({
             ...write,
             externalAccountId: refreshed.externalAccountId ?? account.externalAccountId,
+            externalPrincipalId: refreshed.externalPrincipalId ?? account.externalPrincipalId,
             status: "active",
             actorId,
             lastVerifiedAt: now,
@@ -287,7 +296,7 @@ export class ModelProviderAccountService {
     const parsedInput = adapter.parseConnectInput(input);
     this.validateReconnectInputIdentity(adapter, parsedInput, account.externalAccountId);
     const connected = await this.connectParsed(adapter, parsedInput);
-    this.validateExternalIdentity(adapter, connected.externalAccountId, account.externalAccountId);
+    this.validateExternalIdentity(adapter, connected, account);
     return this.persistConnectedCredential(
       account,
       connected,
@@ -326,6 +335,7 @@ export class ModelProviderAccountService {
         payload: connected.credential,
         accessTokenExpiresAt: connected.accessTokenExpiresAt,
         externalAccountId: connected.externalAccountId ?? account.externalAccountId,
+        externalPrincipalId: connected.externalPrincipalId ?? account.externalPrincipalId,
         status: "active",
         actorId,
         lastVerifiedAt: now,
@@ -409,10 +419,29 @@ export class ModelProviderAccountService {
     }
   }
 
+  /**
+   * Find the account a connecting seat belongs to, preferring the one already bound to it and
+   * otherwise adopting an account on the same subscription whose seat was never recorded. Mirrors
+   * the device authorization finalizer, which resolves the same question for the browser flow.
+   */
+  private async resolveConnectTarget(
+    provider: ModelProviderId,
+    externalAccountId: string,
+    externalPrincipalId: string | null
+  ): Promise<ModelProviderAccount | null> {
+    const bound = await this.accounts.findByExternalIdentity(
+      provider,
+      externalAccountId,
+      externalPrincipalId
+    );
+    if (bound || externalPrincipalId === null) return bound;
+    return this.accounts.findByExternalIdentity(provider, externalAccountId, null);
+  }
+
   private validateExternalIdentity(
     adapter: ErasedProviderAccountAdapter,
-    actual: string | undefined,
-    expected: string | null
+    actual: ProviderObservedIdentity,
+    expected: ProviderExternalIdentity
   ): void {
     try {
       adapter.validateExternalIdentity(actual, expected);

@@ -3,6 +3,7 @@ import {
   checkOpenAIDeviceAuthorization,
   exchangeOpenAIAuthorizationCode,
   extractOpenAIAccountId,
+  extractOpenAIIdentity,
   openAIAccessTokenLifetimeMs,
   OpenAIOAuthError,
   OpenAITokenRefreshError,
@@ -275,6 +276,63 @@ describe("openai", () => {
       expect(malformed).toBeInstanceOf(OpenAIOAuthError);
       expect(malformed.message).not.toContain("SECRET-CODE");
       await expect(startOpenAIDeviceAuthorization()).rejects.toThrow("oversized response");
+    });
+  });
+
+  describe("extractOpenAIIdentity", () => {
+    function makeJwt(payload: Record<string, unknown>): string {
+      const header = btoa(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+      const body = btoa(JSON.stringify(payload));
+      return `${header}.${body}.sig`;
+    }
+
+    // Claim layout as issued by auth.openai.com for a ChatGPT Business seat: the account id is
+    // the workspace and is identical for every member, and only the user id separates them.
+    it("separates the workspace from the seat holding it", () => {
+      const tokens: OpenAITokenResponse = {
+        id_token: makeJwt({
+          email: "seat@example.com",
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: "workspace-1",
+            chatgpt_user_id: "user-a",
+          },
+        }),
+        access_token: makeJwt({}),
+        refresh_token: "rt",
+      };
+
+      expect(extractOpenAIIdentity(tokens)).toEqual({
+        accountId: "workspace-1",
+        principalId: "user-a",
+        label: "seat@example.com",
+      });
+    });
+
+    it("reads the seat from the access token when the id token omits it", () => {
+      const tokens: OpenAITokenResponse = {
+        id_token: makeJwt({ chatgpt_account_id: "workspace-1" }),
+        access_token: makeJwt({
+          "https://api.openai.com/auth": { chatgpt_account_user_id: "user-b" },
+          "https://api.openai.com/profile": { email: "other@example.com" },
+        }),
+        refresh_token: "rt",
+      };
+
+      expect(extractOpenAIIdentity(tokens)).toEqual({
+        accountId: "workspace-1",
+        principalId: "user-b",
+        label: "other@example.com",
+      });
+    });
+
+    it("reports no seat when the provider issues none", () => {
+      const tokens: OpenAITokenResponse = {
+        id_token: makeJwt({ chatgpt_account_id: "acct_123" }),
+        access_token: makeJwt({}),
+        refresh_token: "rt",
+      };
+
+      expect(extractOpenAIIdentity(tokens).principalId).toBeUndefined();
     });
   });
 

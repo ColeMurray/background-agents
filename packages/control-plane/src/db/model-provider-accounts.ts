@@ -17,6 +17,7 @@ interface AccountRow {
   provider: string;
   display_name: string;
   external_account_id: string | null;
+  external_principal_id: string | null;
   status: string;
   created_by: string | null;
   updated_by: string | null;
@@ -33,6 +34,7 @@ export interface CreateModelProviderAccount {
   provider: ModelProviderId;
   displayName: string;
   externalAccountId?: string | null;
+  externalPrincipalId?: string | null;
   status?: ModelProviderAccountStatus;
   actorId?: string | null;
   lastVerifiedAt?: number | null;
@@ -51,6 +53,7 @@ function toAccount(row: AccountRow): ModelProviderAccount {
     provider: row.provider,
     displayName: row.display_name,
     externalAccountId: row.external_account_id,
+    externalPrincipalId: row.external_principal_id,
     status: modelProviderAccountStatusSchema.parse(row.status),
     createdBy: row.created_by,
     updatedBy: row.updated_by,
@@ -79,16 +82,17 @@ export class ModelProviderAccountStore {
     return this.db
       .prepare(
         `INSERT INTO model_provider_accounts (
-           id, provider, display_name, external_account_id,
+           id, provider, display_name, external_account_id, external_principal_id,
            status, created_by, updated_by, last_verified_at,
            created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         input.id,
         input.provider,
         input.displayName,
         input.externalAccountId ?? null,
+        input.externalPrincipalId ?? null,
         input.status ?? "active",
         input.actorId ?? null,
         input.actorId ?? null,
@@ -114,42 +118,61 @@ export class ModelProviderAccountStore {
     return row ? toLifecycleSnapshot(row) : null;
   }
 
+  /**
+   * Find the live account holding a seat.
+   *
+   * A null `externalPrincipalId` selects the row for this subscription whose seat was never
+   * recorded — the account an upgraded installation already has — so that seat's next connection
+   * adopts it instead of creating a second row alongside it.
+   */
   async findByExternalIdentity(
     provider: ModelProviderId,
-    externalAccountId: string
+    externalAccountId: string,
+    externalPrincipalId: string | null
   ): Promise<ModelProviderAccount | null> {
-    assertModelProviderId(provider);
-    const row = await this.db
-      .prepare(
-        `SELECT * FROM model_provider_accounts
-         WHERE provider = ? AND external_account_id = ?
-            AND archived_at IS NULL`
-      )
-      .bind(provider, externalAccountId)
-      .first<AccountRow>();
+    const row = await this.selectByExternalIdentity(
+      provider,
+      externalAccountId,
+      externalPrincipalId
+    );
     return row ? toAccount(row) : null;
   }
 
   async findLifecycleSnapshotByExternalIdentity(
     provider: ModelProviderId,
-    externalAccountId: string
+    externalAccountId: string,
+    externalPrincipalId: string | null
   ): Promise<ModelProviderAccountLifecycleSnapshot | null> {
+    const row = await this.selectByExternalIdentity(
+      provider,
+      externalAccountId,
+      externalPrincipalId
+    );
+    return row ? toLifecycleSnapshot(row) : null;
+  }
+
+  private selectByExternalIdentity(
+    provider: ModelProviderId,
+    externalAccountId: string,
+    externalPrincipalId: string | null
+  ): Promise<AccountRow | null> {
     assertModelProviderId(provider);
-    const row = await this.db
+    return this.db
       .prepare(
         `SELECT * FROM model_provider_accounts
          WHERE provider = ? AND external_account_id = ?
+           AND COALESCE(external_principal_id, '') = COALESCE(?, '')
            AND archived_at IS NULL`
       )
-      .bind(provider, externalAccountId)
+      .bind(provider, externalAccountId, externalPrincipalId)
       .first<AccountRow>();
-    return row ? toLifecycleSnapshot(row) : null;
   }
 
   bindUpdateConnection(
     id: string,
     input: {
       externalAccountId: string | null;
+      externalPrincipalId: string | null;
       status: ModelProviderAccountStatus;
       actorId: string;
       lastVerifiedAt: number;
@@ -162,8 +185,8 @@ export class ModelProviderAccountStore {
     return this.db
       .prepare(
         `UPDATE model_provider_accounts
-         SET external_account_id = ?, status = ?, updated_by = ?, last_verified_at = ?,
-             updated_at = ?, lifecycle_version = lifecycle_version + 1
+         SET external_account_id = ?, external_principal_id = ?, status = ?, updated_by = ?,
+             last_verified_at = ?, updated_at = ?, lifecycle_version = lifecycle_version + 1
          WHERE id = ? AND archived_at IS NULL AND EXISTS (
            SELECT 1 FROM model_provider_account_credentials
            WHERE provider_account_id = model_provider_accounts.id
@@ -173,6 +196,7 @@ export class ModelProviderAccountStore {
       )
       .bind(
         input.externalAccountId,
+        input.externalPrincipalId,
         input.status,
         input.actorId,
         input.lastVerifiedAt,

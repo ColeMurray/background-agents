@@ -46,11 +46,21 @@ const deviceStatusSchema = z.object({
 });
 
 const openAIAccountIdSchema = z.string().trim().min(1);
+const openAILabelSchema = z.string().trim().min(1).max(100);
 const openAIIdentityClaimsSchema = z.object({
   chatgpt_account_id: openAIAccountIdSchema.optional(),
+  chatgpt_user_id: openAIAccountIdSchema.optional(),
+  user_id: openAIAccountIdSchema.optional(),
+  email: openAILabelSchema.optional(),
   "https://api.openai.com/auth": z
-    .object({ chatgpt_account_id: openAIAccountIdSchema.optional() })
+    .object({
+      chatgpt_account_id: openAIAccountIdSchema.optional(),
+      chatgpt_user_id: openAIAccountIdSchema.optional(),
+      chatgpt_account_user_id: openAIAccountIdSchema.optional(),
+      user_id: openAIAccountIdSchema.optional(),
+    })
     .optional(),
+  "https://api.openai.com/profile": z.object({ email: openAILabelSchema.optional() }).optional(),
   organizations: z.array(z.object({ id: openAIAccountIdSchema })).optional(),
 });
 
@@ -224,32 +234,65 @@ export async function refreshOpenAIToken(refreshToken: string): Promise<OpenAITo
 }
 
 /**
+ * A connected OpenAI identity.
+ *
+ * `accountId` is the subscription the tokens bill through — on ChatGPT Business/Enterprise that
+ * is the workspace, identical for every seat in it, and it is what the runtime sends as
+ * `ChatGPT-Account-Id`. `principalId` is the individual seat, which is what tells two members of
+ * one workspace apart. `label` names the seat for humans.
+ */
+export interface OpenAIIdentity {
+  accountId?: string;
+  principalId?: string;
+  label?: string;
+}
+
+function parseOpenAIClaims(token: string): z.infer<typeof openAIIdentityClaimsSchema> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    // JWTs use base64url encoding; atob() requires standard base64 with padding
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const parsed = openAIIdentityClaimsSchema.safeParse(
+      JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "=")))
+    );
+    return parsed.success ? parsed.data : null;
+  } catch {
+    // Malformed token
+    return null;
+  }
+}
+
+/**
+ * Extract the OpenAI identity from token claims.
+ *
+ * Reads the id_token first and the access_token second, taking each field from the first token
+ * that carries it, because the two disagree on where a claim lives rather than on its value.
+ */
+export function extractOpenAIIdentity(tokens: OpenAITokenResponse): OpenAIIdentity {
+  const identity: OpenAIIdentity = {};
+  for (const tokenField of [tokens.id_token, tokens.access_token] as const) {
+    if (!tokenField) continue;
+    const payload = parseOpenAIClaims(tokenField);
+    if (!payload) continue;
+    const scoped = payload["https://api.openai.com/auth"];
+    identity.accountId ??=
+      payload.chatgpt_account_id ?? scoped?.chatgpt_account_id ?? payload.organizations?.[0]?.id;
+    identity.principalId ??=
+      payload.chatgpt_user_id ??
+      scoped?.chatgpt_user_id ??
+      scoped?.chatgpt_account_user_id ??
+      payload.user_id ??
+      scoped?.user_id;
+    identity.label ??= payload.email ?? payload["https://api.openai.com/profile"]?.email;
+  }
+  return identity;
+}
+
+/**
  * Extract OpenAI account ID from token claims.
- * Tries id_token first, then access_token.
  * Returns undefined if extraction fails.
  */
 export function extractOpenAIAccountId(tokens: OpenAITokenResponse): string | undefined {
-  for (const tokenField of [tokens.id_token, tokens.access_token] as const) {
-    if (!tokenField) continue;
-    try {
-      const parts = tokenField.split(".");
-      if (parts.length < 2) continue;
-      // JWTs use base64url encoding; atob() requires standard base64 with padding
-      const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-      const parsed = openAIIdentityClaimsSchema.safeParse(
-        JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "=")))
-      );
-      if (!parsed.success) continue;
-      const payload = parsed.data;
-      const accountId =
-        payload.chatgpt_account_id ??
-        payload["https://api.openai.com/auth"]?.chatgpt_account_id ??
-        payload.organizations?.[0]?.id;
-
-      if (accountId) return accountId;
-    } catch {
-      // Malformed token, try next
-    }
-  }
-  return undefined;
+  return extractOpenAIIdentity(tokens).accountId;
 }

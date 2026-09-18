@@ -27,6 +27,7 @@ function account(overrides: Partial<ModelProviderAccount> = {}): ModelProviderAc
     provider: "openai",
     displayName: "Primary",
     externalAccountId: "external-1",
+    externalPrincipalId: null,
     status: "active",
     createdBy: null,
     updatedBy: null,
@@ -83,8 +84,18 @@ function adapter(
     runtimeMetadata: (_credential, externalAccountId): Record<string, string> =>
       externalAccountId ? { accountId: externalAccountId } : {},
     validateExternalIdentity: (actual, expected) => {
-      if (!actual || !expected || actual !== expected) {
+      if (
+        !actual.externalAccountId ||
+        !expected.externalAccountId ||
+        actual.externalAccountId !== expected.externalAccountId
+      ) {
         throw new ProviderIdentityError("OpenAI account identity did not match");
+      }
+      if (
+        expected.externalPrincipalId &&
+        actual.externalPrincipalId !== expected.externalPrincipalId
+      ) {
+        throw new ProviderIdentityError("OpenAI user identity did not match");
       }
     },
   };

@@ -13,6 +13,7 @@ describe("provider selection state", () => {
     provider: "openai" as const,
     displayName: "Team ChatGPT",
     externalAccountId: null,
+    externalPrincipalId: null,
     status: "active" as const,
     createdBy: null,
     updatedBy: null,

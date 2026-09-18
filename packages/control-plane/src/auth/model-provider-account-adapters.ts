@@ -3,9 +3,30 @@ import type { ModelProviderId } from "../model-provider-accounts/provider-auth-c
 export const DEFAULT_PROVIDER_ACCESS_TOKEN_LIFETIME_MS = 60 * 60 * 1000;
 export const DEFAULT_PROVIDER_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
-export interface ProviderConnectionResult<TCredential> {
-  credential: TCredential;
+/**
+ * The identity a provider account is bound to.
+ *
+ * `externalAccountId` is the subscription the credential bills through; `externalPrincipalId` is
+ * the individual seat within it. They differ on providers where one subscription has many seats
+ * (a ChatGPT Business workspace), where the account id alone cannot tell two members apart. A
+ * null principal means the seat was never recorded — accounts connected before seats were
+ * tracked, and providers that expose no seat at all.
+ */
+export interface ProviderExternalIdentity {
+  externalAccountId: string | null;
+  externalPrincipalId: string | null;
+}
+
+/** The identity observed on a freshly issued set of provider tokens. */
+export interface ProviderObservedIdentity {
   externalAccountId?: string;
+  externalPrincipalId?: string;
+}
+
+export interface ProviderConnectionResult<TCredential> extends ProviderObservedIdentity {
+  credential: TCredential;
+  /** Human-readable name for the seat, used to title a newly connected account. */
+  externalPrincipalLabel?: string;
   accessTokenExpiresAt?: number;
 }
 
@@ -42,11 +63,10 @@ interface ErasedProviderDeviceAuthorizationCapability {
   ): Promise<ProviderDeviceAuthorizationPollResult<unknown>>;
 }
 
-export interface ProviderRefreshResult<TCredential> {
+export interface ProviderRefreshResult<TCredential> extends ProviderObservedIdentity {
   credential: TCredential;
   accessToken: string;
   accessTokenExpiresAt: number;
-  externalAccountId?: string;
 }
 
 interface CachedProviderAccess {
@@ -72,7 +92,10 @@ export interface ModelProviderAccountAdapter<TCredential, TConnectInput> {
     credential: TCredential,
     externalAccountId: string | null
   ): Record<string, string>;
-  validateExternalIdentity(actual: string | undefined, expected: string | null): void;
+  validateExternalIdentity(
+    actual: ProviderObservedIdentity,
+    expected: ProviderExternalIdentity
+  ): void;
 }
 
 export type ProviderRefreshFailureClassification = "unauthorized" | "ambiguous" | "retry_safe";

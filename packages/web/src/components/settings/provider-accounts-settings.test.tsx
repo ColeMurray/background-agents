@@ -32,6 +32,7 @@ const account = {
   provider: "openai" as const,
   displayName: "Team ChatGPT",
   externalAccountId: "acct_public",
+  externalPrincipalId: null,
   status: "active" as const,
   createdBy: null,
   updatedBy: null,
@@ -199,7 +200,7 @@ describe("ProviderAccountsSettings", () => {
         screen.queryByRole("heading", { name: "Connect your ChatGPT account" })
       ).not.toBeInTheDocument()
     );
-    expect(toast.success).toHaveBeenCalledWith("ChatGPT account connected");
+    expect(toast.success).toHaveBeenCalledWith("ChatGPT account Team ChatGPT connected");
     expect(cancelAuthorization).not.toHaveBeenCalled();
   });
 

@@ -8,6 +8,7 @@ function account(overrides: Partial<ModelProviderAccount> = {}): ModelProviderAc
     provider: "openai",
     displayName: "Team ChatGPT",
     externalAccountId: "acct-1",
+    externalPrincipalId: null,
     status: "active",
     createdBy: "user-1",
     updatedBy: "user-1",

@@ -6,7 +6,7 @@ import {
   type ReconnectModelProviderAccountRequest,
 } from "@open-inspect/shared/types/provider-accounts";
 import {
-  extractOpenAIAccountId,
+  extractOpenAIIdentity,
   openAIAccessTokenLifetimeMs,
   refreshOpenAIToken,
   OpenAITokenRefreshError,
@@ -19,6 +19,8 @@ import {
   type ModelProviderAccountAdapter,
   type ProviderDeviceAuthorizationCapability,
   type ProviderConnectionResult,
+  type ProviderExternalIdentity,
+  type ProviderObservedIdentity,
   type ProviderRefreshResult,
 } from "./model-provider-account-adapters";
 import { OpenAIProviderDeviceAuthorization } from "./model-provider-account-openai-device-authorization";
@@ -68,10 +70,15 @@ export class OpenAIModelProviderAccountAdapter implements ModelProviderAccountAd
     input: OpenAIProviderConnectInput
   ): Promise<ProviderConnectionResult<OpenAIProviderCredential>> {
     const result = await this.refresh({ refreshToken: input.refreshToken });
-    this.validateExternalIdentity(result.externalAccountId, input.accountId);
+    // The refresh-token connect path carries no seat, so only the account is constrained here.
+    this.validateExternalIdentity(result, {
+      externalAccountId: input.accountId,
+      externalPrincipalId: null,
+    });
     return {
       credential: result.credential,
       externalAccountId: result.externalAccountId,
+      externalPrincipalId: result.externalPrincipalId,
       accessTokenExpiresAt: result.accessTokenExpiresAt,
     };
   }
@@ -100,17 +107,18 @@ export class OpenAIModelProviderAccountAdapter implements ModelProviderAccountAd
         );
       }
       const accessTokenExpiresAt = now + openAIAccessTokenLifetimeMs(tokens.expires_in);
-      const accountId = extractOpenAIAccountId(tokens);
+      const identity = extractOpenAIIdentity(tokens);
       return {
         credential: {
           refreshToken: tokens.refresh_token,
           accessToken: tokens.access_token,
           accessTokenExpiresAt,
-          ...(accountId ? { accountId } : {}),
+          ...(identity.accountId ? { accountId: identity.accountId } : {}),
         },
         accessToken: tokens.access_token,
         accessTokenExpiresAt,
-        externalAccountId: accountId,
+        externalAccountId: identity.accountId,
+        externalPrincipalId: identity.principalId,
       };
     } catch (error) {
       if (error instanceof ProviderRefreshError) throw error;
@@ -151,12 +159,23 @@ export class OpenAIModelProviderAccountAdapter implements ModelProviderAccountAd
     return accountId ? { accountId } : {};
   }
 
-  validateExternalIdentity(actual: string | undefined, expected: string | null): void {
-    if (!actual) {
+  validateExternalIdentity(
+    actual: ProviderObservedIdentity,
+    expected: ProviderExternalIdentity
+  ): void {
+    if (!actual.externalAccountId) {
       throw new ProviderIdentityError("OpenAI account identity could not be verified");
     }
-    if (!expected || actual !== expected) {
+    if (!expected.externalAccountId || actual.externalAccountId !== expected.externalAccountId) {
       throw new ProviderIdentityError("OpenAI account identity did not match");
+    }
+    // A workspace account id is shared by every seat in it, so the seat is what separates two
+    // members. Accounts connected before seats were recorded have none to compare against.
+    if (
+      expected.externalPrincipalId &&
+      actual.externalPrincipalId !== expected.externalPrincipalId
+    ) {
+      throw new ProviderIdentityError("OpenAI user identity did not match");
     }
   }
 }

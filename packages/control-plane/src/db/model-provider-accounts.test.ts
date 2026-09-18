@@ -50,6 +50,7 @@ describe("ModelProviderAccountStore lifecycle version", () => {
 
     store.bindUpdateConnection("account-1", {
       externalAccountId: "external-1",
+      externalPrincipalId: null,
       status: "active",
       actorId: "user-1",
       lastVerifiedAt: 10,

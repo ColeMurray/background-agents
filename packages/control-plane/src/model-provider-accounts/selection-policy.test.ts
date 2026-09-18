@@ -13,6 +13,7 @@ function account(overrides: Partial<ModelProviderAccount> = {}): ModelProviderAc
     provider: "openai",
     displayName: "OpenAI account",
     externalAccountId: null,
+    externalPrincipalId: null,
     status: "active",
     createdBy: null,
     updatedBy: null,

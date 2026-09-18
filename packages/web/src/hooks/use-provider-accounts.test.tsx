@@ -44,6 +44,7 @@ const account = {
   provider: "openai" as const,
   displayName: "Primary",
   externalAccountId: "external-1",
+  externalPrincipalId: null,
   status: "active" as const,
   createdBy: null,
   updatedBy: null,
