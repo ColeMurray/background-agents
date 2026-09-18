@@ -65,6 +65,20 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
   };
 }
 
+function member(repoOwner: string, repoName: string, position: number) {
+  return {
+    position,
+    repoOwner,
+    repoName,
+    repoId: position + 1,
+    baseBranch: "main",
+    branchName: null,
+    baseSha: null,
+    currentSha: null,
+    prUrl: null,
+  };
+}
+
 describe("SessionHeader", () => {
   it("disables lifecycle controls and connection UI for a read-only session", async () => {
     render(
@@ -300,6 +314,202 @@ describe("SessionHeader", () => {
     // what tells someone the plan cap was exceeded.
     expect(await screen.findByText("The sandbox could not start or recover.")).toBeInTheDocument();
     expect(screen.getByText(/Timeout cannot be greater than 1 hours/)).toBeInTheDocument();
+  });
+
+  it("names the boot phase in progress instead of a generic connecting label", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "connecting" })}
+        bootPhase={{ phase: "setup", status: "started", repoOwner: "acme", repoName: "web" }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Booting" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Running setup.sh" }));
+
+    expect(await screen.findByText("Sandbox Running setup.sh")).toBeInTheDocument();
+    // One repository: naming it adds nothing.
+    expect(screen.getByText("Running setup.sh.")).toBeInTheDocument();
+    expect(screen.queryByText("Sandbox status: Connecting...")).not.toBeInTheDocument();
+  });
+
+  it("names the repository a phase runs against in a multi-repository session", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({
+          sandboxStatus: "spawning",
+          repositories: [member("acme", "web", 0), member("acme", "api", 1)],
+        })}
+        bootPhase={{ phase: "start", status: "started", repoOwner: "acme", repoName: "api" }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Booting" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Starting services" }));
+
+    expect(await screen.findByText("Running start.sh for acme/api.")).toBeInTheDocument();
+  });
+
+  it("keeps the status label for a completed phase and says what finished", async () => {
+    // The runtime reports a tolerated non-zero exit on the completed phase.
+    render(
+      <SessionHeader
+        sessionState={createSessionState({
+          sandboxStatus: "connecting",
+          repositories: [member("acme", "web", 0), member("acme", "api", 1)],
+        })}
+        bootPhase={{
+          phase: "setup",
+          status: "completed",
+          warning: true,
+          repoOwner: "acme",
+          repoName: "api",
+          elapsedMs: 91_200,
+        }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Booting" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    // Nothing is running between steps, so the pill does not claim it is.
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Connecting..." }));
+
+    expect(await screen.findByText("Sandbox Connecting...")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Finished setup.sh for acme/api. This step exited with an error and the boot continued."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Running setup.sh/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the status label once the sandbox is past booting", () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "ready" })}
+        bootPhase={{ phase: "harness", status: "completed" }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Ready" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Sandbox status: Ready" })).toBeInTheDocument();
+  });
+
+  it("shows the failed phase and the script's output tail inside the failed popover", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "failed" })}
+        sandboxError="start hook failed for acme/web"
+        bootPhase={{
+          phase: "start",
+          status: "failed",
+          repoOwner: "acme",
+          repoName: "web",
+          outputTail: ["> web@1.0.0 dev", "npm ERR! missing script: dev"],
+          detail: "start hook failed for acme/web",
+        }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Failed boot" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Failed" }));
+
+    expect(await screen.findByText("Failed while starting services.")).toBeInTheDocument();
+    expect(screen.getByText("start hook failed for acme/web")).toBeInTheDocument();
+    const output = screen.getByRole("region", { name: "Boot output" });
+    expect(output).toHaveTextContent("> web@1.0.0 dev npm ERR! missing script: dev");
+    // The block scrolls, so keyboard users must be able to reach it.
+    expect(output).toHaveAttribute("tabindex", "0");
+  });
+
+  it("does not attribute a failure to a phase that had not failed", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "failed" })}
+        sandboxError="Sandbox did not become ready within the boot budget"
+        bootPhase={{ phase: "setup", status: "started" }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Failed boot" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Failed" }));
+
+    expect(
+      await screen.findByText("Sandbox did not become ready within the boot budget")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Failed while/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Boot output")).not.toBeInTheDocument();
   });
 
   it("omits the error block when the control plane reported no reason", async () => {

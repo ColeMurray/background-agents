@@ -274,3 +274,56 @@ describe("session view contracts", () => {
     });
   });
 });
+
+describe("sandbox boot phase in the subscribe snapshot", () => {
+  it("carries the phase a booting sandbox last reported", () => {
+    const parsed = serverMessageSchema.parse({
+      type: "subscribed",
+      participantId: "participant-1",
+      session: {
+        id: "session-1",
+        title: null,
+        repoOwner: "acme",
+        repoName: "api",
+        baseBranch: "main",
+        branchName: null,
+        status: "active",
+        sandboxStatus: "connecting",
+        messageCount: 0,
+        createdAt: 1,
+        harness: "opencode",
+        model: "anthropic/claude-sonnet-4-5",
+        isProcessing: false,
+        parentSessionId: null,
+        totalCost: 0,
+        maxSessionCostUsd: null,
+        budgetExhausted: false,
+        codeServerUrl: null,
+        vncUrl: null,
+        tunnelUrls: null,
+        ttydUrl: null,
+        sandboxDashboardUrl: null,
+        repositories: [],
+        environmentId: null,
+        environmentName: null,
+      },
+      artifacts: [],
+      timeline: { events: [], hasMore: false, cursor: null },
+      promptQueue: [],
+      bootPhase: { phase: "setup", status: "started", repoOwner: "acme", repoName: "api" },
+    });
+    expect(parsed.type).toBe("subscribed");
+    if (parsed.type === "subscribed") {
+      expect(parsed.bootPhase).toEqual({
+        phase: "setup",
+        status: "started",
+        repoOwner: "acme",
+        repoName: "api",
+      });
+    }
+  });
+
+  it("no longer accepts the never-emitted sandbox_ready message", () => {
+    expect(serverMessageSchema.safeParse({ type: "sandbox_ready" }).success).toBe(false);
+  });
+});

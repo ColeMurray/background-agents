@@ -9,7 +9,7 @@ import type { SessionTerminalMessageProjection } from "../terminal-message-proje
 
 export interface AlarmHandlerDeps {
   repository: MessageRepository;
-  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage">;
+  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage" | "failPendingMessage">;
   executionStop: Pick<
     ExecutionStopCoordinator,
     "recoverStopConfirmationTimeout" | "resumeAfterSandboxTermination"
@@ -76,12 +76,25 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         }
       }
 
+      // Identified before lifecycle handling, which may yield on provider
+      // I/O: the head can change in that gap, and the prompt a boot was for
+      // is the one that was waiting when the alarm fired.
+      const bootPrompt = deps.repository.getNextPendingMessage();
       const lifecycleResult = await deps.lifecycleManager.handleAlarm();
       if (lifecycleResult !== "no_action") {
         await deps.messageQueue.failStuckProcessingMessage();
       }
       if (lifecycleResult === "sandbox_terminated") {
         await deps.executionStop.resumeAfterSandboxTermination();
+      }
+      if (
+        bootPrompt &&
+        typeof lifecycleResult === "object" &&
+        lifecycleResult.kind === "boot_budget_exceeded"
+      ) {
+        // The boot was for that prompt; it fails with the same words the user
+        // sees, and nothing re-drives it onto a fresh sandbox.
+        await deps.messageQueue.failPendingMessage(bootPrompt.id, lifecycleResult.reason);
       }
       if (projectionFailure) throw projectionFailure.error;
     },

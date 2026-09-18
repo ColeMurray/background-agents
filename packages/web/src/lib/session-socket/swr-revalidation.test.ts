@@ -189,6 +189,6 @@ describe("swrKeysToRevalidate", () => {
     expect(
       swrKeysToRevalidate({ type: "session_branch", branchName: "feature/x" }, SESSION_ID)
     ).toEqual([]);
-    expect(swrKeysToRevalidate({ type: "sandbox_ready" }, SESSION_ID)).toEqual([]);
+    expect(swrKeysToRevalidate({ type: "sandbox_warming" }, SESSION_ID)).toEqual([]);
   });
 });

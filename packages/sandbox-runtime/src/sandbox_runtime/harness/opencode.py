@@ -104,6 +104,7 @@ class OpencodeHarness:
             model=prompt.model,
             reasoning_effort=prompt.reasoning_effort,
             attachments=list(prompt.attachments),
+            max_duration_seconds=prompt.max_duration_seconds,
         )
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:

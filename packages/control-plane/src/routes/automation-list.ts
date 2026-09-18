@@ -4,10 +4,7 @@
 
 import { AutomationStore, toAutomation } from "../db/automation-store";
 import { dispatch } from "../routing/admit";
-import {
-  encodeAutomationListCursor,
-  parseAutomationListCursor,
-} from "../db/automation-list-cursor";
+import { encodeCreatedAtCursor, parseCreatedAtCursor } from "../created-at-cursor";
 import { AutomationModelProviderAuthStore } from "../db/automation-model-provider-auth";
 import { Hono } from "hono";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -40,7 +37,7 @@ const automationListQuerySchema = z.object({
     .string()
     .optional()
     .transform((raw, context) => {
-      const parsed = parseAutomationListCursor(raw ?? null);
+      const parsed = parseCreatedAtCursor(raw);
       if (!parsed.ok) {
         context.addIssue({ code: "custom", message: parsed.error });
         return z.NEVER;
@@ -95,7 +92,7 @@ async function handleListAutomations(
   return json({
     automations,
     hasMore: result.hasMore,
-    nextCursor: result.nextCursor ? encodeAutomationListCursor(result.nextCursor) : null,
+    nextCursor: result.nextCursor ? encodeCreatedAtCursor(result.nextCursor) : null,
   });
 }
 

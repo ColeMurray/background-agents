@@ -86,6 +86,7 @@ export default function SessionPage() {
     connectionError,
     sessionState,
     sandboxError,
+    boot,
     events,
     participants,
     artifacts,
@@ -408,6 +409,7 @@ export default function SessionPage() {
       <SessionHeader
         sessionState={sessionState}
         sandboxError={sandboxError}
+        bootPhase={boot?.phase ?? null}
         fallbackSessionInfo={fallbackSessionInfo}
         connected={connected && ready}
         connecting={connecting || (connected && !ready)}

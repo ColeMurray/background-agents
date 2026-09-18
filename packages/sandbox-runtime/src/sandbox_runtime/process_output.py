@@ -9,7 +9,7 @@ import signal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 
 TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
 PROCESS_OUTPUT_TAIL_BYTES = 64 * 1024
@@ -31,6 +31,7 @@ class BoundedOutputCollector:
         self._max_tail_bytes = max_tail_bytes
         self._tail = bytearray()
         self._retaining = True
+        self._head_is_fragment = False
         self.task = asyncio.create_task(self._drain())
 
     async def _drain(self) -> None:
@@ -40,6 +41,9 @@ class BoundedOutputCollector:
             self._tail.extend(chunk)
             overflow = len(self._tail) - self._max_tail_bytes
             if overflow > 0:
+                dropped = bytes(self._tail[:overflow]).decode(errors="replace")
+                # Match splitlines() so every supported separator preserves a whole line.
+                self._head_is_fragment = len(f"x{dropped[-1]}y".splitlines()) == 1
                 del self._tail[:overflow]
 
     async def wait(self) -> None:
@@ -65,9 +69,24 @@ class BoundedOutputCollector:
         self._retaining = False
         self._tail.clear()
 
-    def tail_lines(self, max_lines: int = 50) -> str:
-        """Decode and return at most the requested final lines."""
-        return "\n".join(bytes(self._tail).decode(errors="replace").splitlines()[-max_lines:])
+    def tail_lines(self, max_lines: int = 50, *, secrets: Sequence[str] = ()) -> str:
+        """Decode and return at most the requested final lines.
+
+        A window trimmed mid-line opens on a fragment cut at an arbitrary
+        byte, which is dropped: a fragment of a secret would no longer match
+        the value it is redacted by. A newline-aligned window can keep its
+        first lines unless they are a suffix of a multiline secret.
+        """
+        lines = bytes(self._tail).decode(errors="replace").splitlines()
+        drop_count = 1 if self._head_is_fragment else 0
+        for secret in secrets:
+            secret_lines = [line for line in secret.splitlines() if line]
+            for start in range(len(secret_lines)):
+                suffix = secret_lines[start:]
+                if lines[: len(suffix)] == suffix:
+                    drop_count = max(drop_count, len(suffix))
+        lines = lines[drop_count:]
+        return "\n".join(lines[-max_lines:])
 
 
 async def wait_for_process_exit(process: asyncio.subprocess.Process) -> int:

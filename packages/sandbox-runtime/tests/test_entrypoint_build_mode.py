@@ -997,7 +997,7 @@ class TestSnapshotRestoreMode:
         with (
             patch.dict(os.environ, {"RESTORED_FROM_SNAPSHOT": "true"}, clear=False),
             patch(
-                "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
@@ -1018,7 +1018,11 @@ class TestSnapshotRestoreMode:
         assert startup_call.kwargs["git_sync_success"] is False
         supervisor.harness_process.start.assert_called_once()
         # The warning is queued for the bridge to forward as a sandbox event.
-        warning_lines = (tmp_path / "warnings.jsonl").read_text().splitlines()
+        warning_lines = [
+            line
+            for line in (tmp_path / "warnings.jsonl").read_text().splitlines()
+            if json.loads(line)["kind"] == "warning"
+        ]
         assert len(warning_lines) == 1
         assert '"scope": "sync"' in warning_lines[0]
 

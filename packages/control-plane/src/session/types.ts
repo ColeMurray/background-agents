@@ -193,6 +193,16 @@ export interface SandboxRow {
    * `''` once revoked, NULL only on rows that predate persisted identities.
    */
   active_socket_id: string | null;
+  /** JSON `SandboxBootPhase` the runtime last reported while booting; NULL once ready. */
+  boot_phase: string | null;
+  /** Sequence number of that report, so a resend after a reconnect is recognised. */
+  boot_seq: number | null;
+  /**
+   * 1 once the boot budget revoked this generation's credentials for good: a
+   * fenced row can never become ready, so a runtime that outlived its budget
+   * cannot self-heal the way a watchdog-failed one may.
+   */
+  fenced: number;
   created_at: number;
 }
 

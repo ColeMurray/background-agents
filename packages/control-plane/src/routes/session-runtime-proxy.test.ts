@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SANDBOX_ERROR_BODY_MAX_BYTES } from "@open-inspect/shared/types/sandbox-events";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import type * as AuthenticateModule from "../auth/authenticate";
@@ -299,6 +300,32 @@ describe("session runtime proxy routes", () => {
     });
   });
 
+  it("forwards a structured sandbox error carrying a full output tail", async () => {
+    // The route cap and the report schema share one budget; a report the
+    // session runtime would accept must not be refused at the door.
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const body = JSON.stringify({
+      error: "setup.sh exited 1",
+      fatal: true,
+      phase: "setup",
+      bootSeq: 4,
+      outputTail: Array.from({ length: 60 }, (_, i) => `line ${i} `.padEnd(136, "x")),
+    });
+    expect(body.length).toBeGreaterThan(8 * 1024);
+
+    const response = await dispatch(
+      new Request("https://test.local/sessions/session-1/sandbox-error", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...SANDBOX_HEADERS },
+        body,
+      }),
+      createEnv(fetch)
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("rejects oversized sandbox errors before forwarding them", async () => {
     const fetch = vi.fn(async () => Response.json({ status: "ok" }));
 
@@ -306,7 +333,7 @@ describe("session runtime proxy routes", () => {
       new Request("https://test.local/sessions/session-1/sandbox-error", {
         method: "POST",
         headers: SANDBOX_HEADERS,
-        body: "x".repeat(2049),
+        body: "x".repeat(SANDBOX_ERROR_BODY_MAX_BYTES + 1),
       }),
       createEnv(fetch)
     );

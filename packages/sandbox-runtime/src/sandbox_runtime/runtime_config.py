@@ -156,6 +156,16 @@ class RuntimeConfig:
         """Which agent runs this session; absent means the built-in OpenCode harness."""
         return parse_harness_id(self.session_config.get("harness"))
 
+    @property
+    def bridge_early_connect(self) -> bool:
+        """The control plane asked for the bridge to connect ahead of the repository boot.
+
+        Only a boolean ``true`` opts in: a control plane that does not know
+        the field leaves it absent, and the runtime then boots in the
+        classic order (bridge last), which every control plane understands.
+        """
+        return self.session_config.get("bridge_early_connect") is True
+
     def repository_config(self) -> RepositoryConfig:
         raw_repositories = self.session_config.get("repositories")
         repositories = (

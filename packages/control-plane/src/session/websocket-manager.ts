@@ -58,8 +58,21 @@ export interface SessionWebSocketManager {
   /**
    * Get the active sandbox socket, recovering from hibernation if needed.
    * Validates sandbox ID against the repository during hibernation recovery.
+   *
+   * This is the lifecycle socket: it exists from the moment the bridge
+   * attaches, which may be well before the runtime can act on a command.
+   * Commands that expect the sandbox to act use `getReadySandboxSocket`.
    */
   getSandboxSocket(): SessionWebSocket | null;
+
+  /**
+   * The active sandbox socket only once the sandbox has reported `ready`
+   * (or is mid-snapshot, which today's dispatch already treats as ready).
+   * Null while the bridge is attached ahead of its boot, so prompt, push and
+   * diff commands take their no-sandbox branches instead of waiting on a
+   * runtime that cannot answer yet.
+   */
+  getReadySandboxSocket(): SessionWebSocket | null;
 
   /** Clear the in-memory sandbox socket reference. */
   clearSandboxSocket(): void;
@@ -275,6 +288,13 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     }
 
     return null;
+  }
+
+  getReadySandboxSocket(): SessionWebSocket | null {
+    const ws = this.getSandboxSocket();
+    if (!ws) return null;
+    const status = this.sandboxRepository.getSandbox()?.status;
+    return status === "ready" || status === "snapshotting" ? ws : null;
   }
 
   clearSandboxSocket(): void {

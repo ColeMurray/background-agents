@@ -474,9 +474,15 @@ class ClaudeHarness:
         # One budget covers the whole turn: connect, submit, every read and
         # every emit. The inactivity budget applies to each read alone, and
         # cleanup after either has its own budget, so a hung SDK call can
-        # never eat the snapshot reserve.
+        # never eat the snapshot reserve. A prompt that carries its own
+        # remaining budget spends that instead of the configured maximum.
+        max_duration = (
+            self.limits.prompt_max_duration_seconds
+            if prompt.max_duration_seconds is None
+            else prompt.max_duration_seconds
+        )
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.limits.prompt_max_duration_seconds
+        deadline = loop.time() + max_duration
         try:
             async with asyncio.timeout_at(deadline):
                 client = await self._ensure_client(model, prompt.reasoning_effort)
@@ -486,9 +492,7 @@ class ClaudeHarness:
             self.log.error("claude.connect_timeout", message_id=prompt.message_id)
             self._needs_reconnect = True
             await self._interrupt_within_budget()
-            return TurnOutcome.failed(
-                f"Claude agent did not start within {self.limits.prompt_max_duration_seconds:.0f}s."
-            )
+            return TurnOutcome.failed(f"Claude agent did not start within {max_duration:.0f}s.")
         except Exception as error:
             self.log.error("claude.connect_error", exc=error, message_id=prompt.message_id)
             self._needs_reconnect = True
@@ -526,9 +530,7 @@ class ClaudeHarness:
         except TimeoutError:
             await self._interrupt_within_budget()
             self._needs_reconnect = True
-            return TurnOutcome.failed(
-                f"Prompt exceeded max duration of {self.limits.prompt_max_duration_seconds:.0f}s."
-            )
+            return TurnOutcome.failed(f"Prompt exceeded max duration of {max_duration:.0f}s.")
         except _InactivityTimeout:
             await self._interrupt_within_budget()
             self._needs_reconnect = True
