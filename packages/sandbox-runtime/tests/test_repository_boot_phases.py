@@ -14,6 +14,7 @@ import pytest
 
 from sandbox_runtime import boot_events
 from sandbox_runtime.boot_events import BootPhaseError
+from sandbox_runtime.process_output import PROCESS_OUTPUT_TAIL_BYTES
 from sandbox_runtime.repository_sync import RepositorySyncStatus
 from sandbox_runtime.runtime_config import BootMode
 from tests.test_multi_repo_workspace import (
@@ -197,6 +198,36 @@ class TestHookFailureTail:
         assert tail[-1] == "token=***"
         assert tail[0] == "line 22"
         assert "npm_secret_value_123" not in "\n".join(tail)
+
+    async def test_a_secret_cut_by_the_output_window_leaves_no_fragment(
+        self, tmp_path, monkeypatch
+    ):
+        """The collector keeps the last 64 KiB; a secret straddling its start must not leak."""
+        sup = self._boot(tmp_path)
+        repo = sup.repositories[0]
+        script_dir = repo.path / ".openinspect"
+        script_dir.mkdir(parents=True)
+        secret = "npm_" + "s" * 40
+        # Exactly enough output after the secret for the window to start
+        # part way through it.
+        trailing = PROCESS_OUTPUT_TAIL_BYTES - 30
+        (script_dir / "start.sh").write_text(
+            "#!/bin/bash\n"
+            'printf "%s" "$NPM_TOKEN"\n'
+            f"head -c {trailing} /dev/zero | tr '\\0' z\n"
+            "echo\n"
+            "echo after\n"
+            "exit 3\n"
+        )
+        monkeypatch.setenv("NPM_TOKEN", secret)
+        sup.hooks.log = MagicMock()
+
+        assert await sup.hooks.run_start(repo, BootMode.FRESH) is False
+
+        tail = sup.hooks.failure_tail(repo, "start")
+        assert tail == ("after",)
+        logged = json.dumps(sup.hooks.log.error.call_args.kwargs)
+        assert all(secret[i:] not in logged for i in range(1, len(secret) - 3))
 
     async def test_tail_is_empty_without_a_failure(self, tmp_path):
         sup = self._boot(tmp_path)

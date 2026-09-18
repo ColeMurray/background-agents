@@ -71,6 +71,8 @@ from .types import GitUser
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from .attachment_processor import HydratedSessionAttachment
+
 configure_logging()
 
 
@@ -851,31 +853,17 @@ class AgentBridge:
         )
 
         # One deadline for the whole prompt, set at receipt: the wait for a
-        # booting sandbox, the preflight below and the turn itself all spend
-        # it, so no prompt can outlive the configured maximum and eat the
+        # booting sandbox, the preflight and the turn itself all spend it,
+        # so no prompt can outlive the configured maximum and eat the
         # snapshot reserve.
-        turn_deadline = time.monotonic() + self.prompt_limits.prompt_max_duration_seconds
+        turn_deadline = asyncio.get_running_loop().time() + (
+            self.prompt_limits.prompt_max_duration_seconds
+        )
 
         try:
-            harness = await self._await_harness(message_id, turn_deadline)
-            prompt_author = parse_prompt_git_author(author_data)
-            await self._configure_git_identity(prompt_author)
-
-            await self._ensure_agent_session(harness)
-
-            session_attachments, rejected_attachments = parse_session_image_attachments(
-                raw_attachments
+            harness, attachments = await self._prepare_turn(
+                message_id, author_data, raw_attachments, turn_deadline
             )
-            if rejected_attachments:
-                self.log.warn(
-                    "prompt.invalid_attachments",
-                    message_id=message_id,
-                    rejected_count=rejected_attachments,
-                )
-                await self._send_media_warning(
-                    f"{rejected_attachments} invalid attachment(s) were skipped."
-                )
-            attachments = await self.attachment_processor.process(session_attachments)
 
             emitted_output = False
 
@@ -900,7 +888,9 @@ class AgentBridge:
                     reasoning_effort=reasoning_effort,
                     attachments=tuple(attachments or ()),
                     author=author_data if isinstance(author_data, dict) else {},
-                    max_duration_seconds=max(turn_deadline - time.monotonic(), 0.0),
+                    max_duration_seconds=max(
+                        turn_deadline - asyncio.get_running_loop().time(), 0.0
+                    ),
                 ),
                 emit,
             )
@@ -961,24 +951,52 @@ class AgentBridge:
             }
         )
 
-    async def _await_harness(self, message_id: str, deadline: float) -> AgentHarness:
-        """The attached harness, waited for within the prompt's deadline.
+    async def _prepare_turn(
+        self,
+        message_id: str,
+        author_data: Any,
+        raw_attachments: Any,
+        deadline: float,
+    ) -> tuple[AgentHarness, list[HydratedSessionAttachment] | None]:
+        """The harness and hydrated attachments a turn needs, within the prompt's deadline.
 
-        A sandbox that never becomes ready fails the prompt the way a turn
-        that never finishes would, and `stop` cancels the hold like any
-        running turn. What the hold spends is the prompt's own budget, so a
-        prompt received while the sandbox boots can never run for twice the
-        configured maximum.
+        Everything before the turn spends the prompt's own budget: the wait
+        for a booting sandbox, the git identity, the vendor session and the
+        attachment downloads. A prompt whose deadline passes here fails the
+        way a turn that never finishes would, and `stop` cancels it like any
+        running turn.
         """
-        if self._boot_ready.is_set():
-            return self._require_harness()
-        budget = max(deadline - time.monotonic(), 0.0)
-        self.log.info("prompt.held_until_ready", message_id=message_id, timeout_s=budget)
         try:
-            await asyncio.wait_for(self._boot_ready.wait(), budget)
+            async with asyncio.timeout_at(deadline):
+                if not self._boot_ready.is_set():
+                    self.log.info(
+                        "prompt.held_until_ready",
+                        message_id=message_id,
+                        timeout_s=max(deadline - asyncio.get_running_loop().time(), 0.0),
+                    )
+                    await self._boot_ready.wait()
+                harness = self._require_harness()
+                await self._configure_git_identity(parse_prompt_git_author(author_data))
+                await self._ensure_agent_session(harness)
+                session_attachments, rejected_attachments = parse_session_image_attachments(
+                    raw_attachments
+                )
+                if rejected_attachments:
+                    self.log.warn(
+                        "prompt.invalid_attachments",
+                        message_id=message_id,
+                        rejected_count=rejected_attachments,
+                    )
+                    await self._send_media_warning(
+                        f"{rejected_attachments} invalid attachment(s) were skipped."
+                    )
+                attachments = await self.attachment_processor.process(session_attachments)
         except TimeoutError:
-            raise RuntimeError(f"sandbox did not become ready within {int(budget)} s") from None
-        return self._require_harness()
+            budget = int(self.prompt_limits.prompt_max_duration_seconds)
+            if not self._boot_ready.is_set():
+                raise RuntimeError(f"sandbox did not become ready within {budget} s") from None
+            raise RuntimeError(f"prompt could not start within {budget} s") from None
+        return harness, attachments
 
     async def _ensure_agent_session(self, harness: AgentHarness | None = None) -> None:
         """Create the vendor session on first use and persist its id."""

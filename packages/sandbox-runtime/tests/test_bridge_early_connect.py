@@ -7,6 +7,7 @@ attaches its harness at that point, and only then sends ``ready``.
 
 import asyncio
 import json
+import time
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -475,24 +476,41 @@ class TestCommandsWhileBooting:
         bridge._send_event = AsyncMock()
         bridge.prompt_limits = replace(bridge.prompt_limits, prompt_max_duration_seconds=0.01)
 
-        seen_timeouts = []
-
-        async def expire(coro, timeout):
-            seen_timeouts.append(timeout)
-            coro.close()
-            raise TimeoutError
-
-        monkeypatch.setattr("sandbox_runtime.bridge.asyncio.wait_for", expire)
-
-        await bridge._handle_prompt({"type": "prompt", "messageId": "msg-1", "content": "hi"})
+        await asyncio.wait_for(
+            bridge._handle_prompt({"type": "prompt", "messageId": "msg-1", "content": "hi"}),
+            timeout=1,
+        )
 
         terminal = bridge._send_event.await_args.args[0]
         assert terminal["type"] == "execution_complete"
         assert terminal["success"] is False
         assert "did not become ready" in terminal["error"]
-        # What is left of the prompt's deadline when the hold starts.
-        assert len(seen_timeouts) == 1
-        assert 0.0 < seen_timeouts[0] <= 0.01
+
+    async def test_preflight_past_the_deadline_fails_before_the_harness_runs(
+        self, tmp_path, monkeypatch
+    ):
+        """The deadline is enforced on the work before the turn, not only subtracted."""
+
+        class StalledSessionHarness(ScriptedHarness):
+            async def create_session(self) -> None:
+                await asyncio.sleep(0.5)
+                self.session_id = "oc-session-new"
+
+        harness = StalledSessionHarness(session_id=None)
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness, early_connect=False)
+        bridge._send_event = AsyncMock()
+        bridge.git_signing.refresh = AsyncMock()
+        bridge.prompt_limits = replace(bridge.prompt_limits, prompt_max_duration_seconds=0.05)
+
+        started_at = time.monotonic()
+        await bridge._handle_prompt(_agent_prompt("msg-1"))
+
+        assert time.monotonic() - started_at < 0.4
+        assert harness.prompts == []
+        terminal = bridge._send_event.await_args.args[0]
+        assert terminal["type"] == "execution_complete"
+        assert terminal["success"] is False
+        assert "could not start within" in terminal["error"]
 
     async def test_stop_cancels_a_held_prompt(self, tmp_path, monkeypatch):
         bridge = _bridge(tmp_path, monkeypatch)

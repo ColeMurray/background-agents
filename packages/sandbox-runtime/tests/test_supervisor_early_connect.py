@@ -613,3 +613,41 @@ class TestRuntimeConfigFlag:
         assert early.bridge_early_connect is True
         assert legacy.bridge_early_connect is False
         assert truthy_string.bridge_early_connect is False
+
+
+class TestWatcherHandoffFailure:
+    async def test_a_respawn_failure_during_handoff_fails_the_boot(self, tmp_path):
+        """The policy raises after the watcher was cancelled; steady state must not start."""
+        events = []
+        supervisor = _supervisor(tmp_path, events)
+        bridge_exited = asyncio.Event()
+        policy_started = asyncio.Event()
+        policy_may_finish = asyncio.Event()
+        supervisor.agent_bridge.wait = AsyncMock(side_effect=bridge_exited.wait)
+
+        async def failing_respawn(_restarts):
+            policy_started.set()
+            await policy_may_finish.wait()
+            raise RuntimeError("cannot spawn bridge")
+
+        supervisor._handle_bridge_exit = AsyncMock(side_effect=failing_respawn)
+
+        async def crash_bridge_during_harness_start(_repos, _workdir):
+            events.append("harness")
+            supervisor.agent_bridge.exit_code.return_value = 1
+            bridge_exited.set()
+            await policy_started.wait()
+
+        supervisor.harness_process.start = AsyncMock(side_effect=crash_bridge_during_harness_start)
+
+        run_task = asyncio.create_task(supervisor.run())
+        await asyncio.wait_for(policy_started.wait(), timeout=1)
+        # The handoff begins (the watcher is cancelled) while the policy is in flight.
+        while supervisor._bridge_watch_task is not None:
+            await asyncio.sleep(0)
+        policy_may_finish.set()
+
+        assert await asyncio.wait_for(run_task, timeout=1) is False
+        supervisor.monitor_processes.assert_not_awaited()
+        supervisor._report_fatal_error.assert_awaited_once()
+        assert "cannot spawn bridge" in supervisor._report_fatal_error.await_args.args[0]

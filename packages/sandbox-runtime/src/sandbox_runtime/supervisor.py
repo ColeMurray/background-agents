@@ -617,8 +617,13 @@ class SandboxSupervisor:
                 outcome="success",
             )
             # One owner of the bridge's exit code at a time: the boot watcher
-            # hands over to the process monitor here.
+            # hands over to the process monitor here. A failure the watcher
+            # recorded during that handover (a bridge it could not respawn)
+            # ends the boot as a failure rather than a steady state without
+            # a bridge.
             await self._stop_bridge_watch()
+            if self._bridge_watch_failure is not None:
+                raise self._bridge_watch_failure
             await self.monitor_processes()
         except BootExecutionCancelled:
             event = (

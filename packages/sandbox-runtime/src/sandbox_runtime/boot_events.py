@@ -284,13 +284,17 @@ def secret_values(environment: Mapping[str, str]) -> tuple[str, ...]:
     """Values of credential-looking environment variables, longest first.
 
     Longest first so a secret that contains another is replaced whole rather
-    than leaving its remainder in the output.
+    than leaving its remainder in the output. A value spanning several lines
+    (a private key) also contributes each of its lines, so the part of it
+    that survives a cut in the output is still replaced.
     """
-    values = {
-        value
-        for name, value in environment.items()
-        if _SECRET_NAME_PATTERN.search(name) and len(value) >= _SECRET_MIN_LENGTH
-    }
+    values: set[str] = set()
+    for name, value in environment.items():
+        if not _SECRET_NAME_PATTERN.search(name):
+            continue
+        for candidate in (value, *value.splitlines()):
+            if len(candidate) >= _SECRET_MIN_LENGTH:
+                values.add(candidate)
     return tuple(sorted(values, key=len, reverse=True))
 
 

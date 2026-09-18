@@ -333,3 +333,16 @@ class TestOutputTail:
     def test_empty_output_is_an_empty_tail(self):
         assert bounded_output_tail("") == []
         assert bounded_output_tail("\n\n") == []
+
+
+class TestCutSecrets:
+    def test_the_surviving_lines_of_a_cut_private_key_are_still_redacted(self):
+        key = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----"
+        secrets = secret_values({"DEPLOY_PRIVATE_KEY": key})
+
+        # Output cut part way through the key, so the whole value never matches.
+        tail = bounded_output_tail(
+            "BgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\ndone", secrets=secrets
+        )
+
+        assert tail == ["BgkqhkiG9w0BAQEFAASC", "***", "done"]
