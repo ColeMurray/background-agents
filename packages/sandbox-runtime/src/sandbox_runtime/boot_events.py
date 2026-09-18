@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -36,6 +37,20 @@ BootPhaseStatus = Literal["started", "completed", "failed"]
 OUTPUT_TAIL_MAX_LINES = 60
 OUTPUT_TAIL_MAX_LINE_CHARS = 1024
 OUTPUT_TAIL_MAX_CHARS = 8 * 1024
+# Mirrored from the shared ``SANDBOX_ERROR_BODY_MAX_BYTES``: the control
+# plane's fatal-report route rejects a larger body before it reaches the
+# schema.
+FATAL_REPORT_MAX_BYTES = 32 * 1024
+# The character bounds above are not sufficient on their own: JSON escaping
+# multiplies a control character sixfold (``\u0000``) and a non-ASCII
+# character up to threefold as UTF-8. A tail is therefore also bounded by its
+# serialized size, leaving the rest of the report (message, phase,
+# repository, sequence) the remaining budget.
+OUTPUT_TAIL_MAX_SERIALIZED_BYTES = FATAL_REPORT_MAX_BYTES - 8 * 1024
+
+# Bound on a phase's free-text ``detail``, matching the cap the fatal report
+# applies to its own message.
+DETAIL_MAX_CHARS = 1000
 
 REDACTED_VALUE = "***"
 # Environment variables whose names look like credentials. User secrets are
@@ -43,7 +58,7 @@ REDACTED_VALUE = "***"
 # no marker separating them from system variables, so the name is the only
 # signal available inside the sandbox.
 _SECRET_NAME_PATTERN = re.compile(
-    r"TOKEN|SECRET|KEY|PASSWORD|PASSWD|CREDENTIAL|PRIVATE|AUTH|COOKIE", re.IGNORECASE
+    r"TOKEN|SECRET|KEY|PASS|CREDENTIAL|PRIVATE|AUTH|COOKIE|DSN", re.IGNORECASE
 )
 # Shorter values are too likely to collide with ordinary words in output.
 _SECRET_MIN_LENGTH = 8
@@ -57,6 +72,16 @@ def boot_events_cursor_path(events_path: Path) -> Path:
     replaying warnings the control plane already has.
     """
     return events_path.with_suffix(".cursor")
+
+
+class BootEventWriteError(RuntimeError):
+    """The boot-events file could not be written.
+
+    Raised for the lines the bridge acts on (a new boot's file generation and
+    every phase transition), because a bridge that cannot see them either
+    replays the previous boot or waits for a readiness report that will never
+    arrive. Warning lines stay best-effort.
+    """
 
 
 class BootPhaseError(RuntimeError):
@@ -113,19 +138,25 @@ class BootEventLog:
         self._seq = 0
 
     def reset(self) -> None:
-        """Start a new boot: truncate the file, restart the sequence, forget the relay cursor."""
-        self._seq = 0
-        # The cursor goes first: a stale one would make the new boot's bridge
-        # skip its warnings even if the truncation below fails.
-        try:
-            boot_events_cursor_path(Path(BOOT_EVENTS_FILE_PATH)).unlink(missing_ok=True)
-        except OSError as error:
-            self.log.warn("supervisor.boot_event_reset_failed", exc=error)
+        """Start a new boot: truncate the file, forget the relay cursor, restart the sequence.
+
+        The empty file generation is established before anything else: a
+        bridge that still sees the previous boot's lines acts on them, and a
+        stale ``harness completed`` has it attach a harness this boot has not
+        started yet. A truncation failure is fatal to the boot for that
+        reason. Removing the cursor stays best-effort, because a stale cursor
+        only hides this boot's warnings from the relay.
+        """
         try:
             with open(BOOT_EVENTS_FILE_PATH, "w"):
                 pass
         except OSError as error:
-            self.log.warn("supervisor.boot_event_reset_failed", exc=error)
+            raise BootEventWriteError(f"could not start the boot-events file: {error}") from error
+        try:
+            boot_events_cursor_path(Path(BOOT_EVENTS_FILE_PATH)).unlink(missing_ok=True)
+        except OSError as error:
+            self.log.warn("supervisor.boot_event_cursor_reset_failed", exc=error)
+        self._seq = 0
 
     def phase(
         self,
@@ -138,7 +169,11 @@ class BootEventLog:
         output_tail: Sequence[str] | None = None,
         detail: str | None = None,
     ) -> int:
-        """Append a phase line; returns its sequence number."""
+        """Append a phase line; returns its sequence number.
+
+        Raises ``BootEventWriteError`` if the line cannot be written: the
+        bridge reads readiness from these lines.
+        """
         entry: dict[str, Any] = {"kind": "phase", "phase": phase, "status": status}
         if warning:
             entry["warning"] = True
@@ -149,7 +184,7 @@ class BootEventLog:
         if detail:
             entry["detail"] = detail
         entry.update(_repo_fields(repo))
-        return self._append(entry)
+        return self._append(entry, required=True)
 
     def record(self, scope: str, message: str, repo: RepoEntry | None = None) -> None:
         """Append a non-fatal warning; the bridge relays it as a ``warning`` event."""
@@ -160,7 +195,10 @@ class BootEventLog:
             repo_owner=repo.owner if repo is not None else None,
             repo_name=repo.name if repo is not None else None,
         )
-        self._append({"kind": "warning", "scope": scope, "message": message, **_repo_fields(repo)})
+        self._append(
+            {"kind": "warning", "scope": scope, "message": message, **_repo_fields(repo)},
+            required=False,
+        )
 
     @contextlib.contextmanager
     def phase_scope(
@@ -174,6 +212,12 @@ class BootEventLog:
         ``BootPhaseError`` naming this phase, so the fatal report always knows
         where the boot died. Cancellation writes nothing: the boot was
         stopped, not failed.
+
+        Exception messages become the ``detail`` field, redacted and bounded
+        the way an output tail is. Unlike the transitions, the ``failed``
+        line is written best-effort: the boot is already ending, the HTTP
+        report is its reliable carrier, and a write error here would replace
+        the cause with itself.
         """
         scope = PhaseScope()
         started_at = time.monotonic()
@@ -181,26 +225,29 @@ class BootEventLog:
         try:
             yield scope
         except BootPhaseError as error:
-            error.boot_seq = self.phase(
-                phase,
-                "failed",
-                repo=repo,
-                elapsed_ms=_elapsed_ms(started_at),
-                output_tail=error.output_tail,
-                detail=str(error),
-            )
+            with contextlib.suppress(BootEventWriteError):
+                error.boot_seq = self.phase(
+                    phase,
+                    "failed",
+                    repo=repo,
+                    elapsed_ms=_elapsed_ms(started_at),
+                    output_tail=error.output_tail,
+                    detail=bounded_detail(str(error)),
+                )
             raise
         except Exception as error:
             # The control plane rejects an empty error; an exception with no
             # message is at least named.
-            message = str(error) or type(error).__name__
-            seq = self.phase(
-                phase,
-                "failed",
-                repo=repo,
-                elapsed_ms=_elapsed_ms(started_at),
-                detail=message,
-            )
+            message = bounded_detail(str(error) or type(error).__name__)
+            seq: int | None = None
+            with contextlib.suppress(BootEventWriteError):
+                seq = self.phase(
+                    phase,
+                    "failed",
+                    repo=repo,
+                    elapsed_ms=_elapsed_ms(started_at),
+                    detail=message,
+                )
             raise BootPhaseError(message, phase=phase, repo=repo, boot_seq=seq) from error
         self.phase(
             phase,
@@ -210,13 +257,15 @@ class BootEventLog:
             elapsed_ms=_elapsed_ms(started_at),
         )
 
-    def _append(self, entry: dict[str, Any]) -> int:
+    def _append(self, entry: dict[str, Any], *, required: bool) -> int:
         self._seq += 1
         line = {"seq": self._seq, **entry, "at": time.time()}
         try:
             with open(BOOT_EVENTS_FILE_PATH, "a") as events_file:
                 events_file.write(json.dumps(line) + "\n")
         except OSError as error:
+            if required:
+                raise BootEventWriteError(f"boot-events append failed: {error}") from error
             self.log.warn("supervisor.boot_event_write_failed", exc=error)
         return self._seq
 
@@ -245,25 +294,43 @@ def secret_values(environment: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(sorted(values, key=len, reverse=True))
 
 
+def bounded_detail(text: str) -> str:
+    """One phase's ``detail``: redacted like an output tail, bounded like the report's message."""
+    return _truncate_units(_redact(text, secret_values(os.environ)), DETAIL_MAX_CHARS)
+
+
 def bounded_output_tail(text: str, *, secrets: Sequence[str] = ()) -> list[str]:
     """The last lines of a script's output, redacted and bounded for the wire.
 
     Applies the shared tail contract: at most ``OUTPUT_TAIL_MAX_LINES`` lines,
     each at most ``OUTPUT_TAIL_MAX_LINE_CHARS`` characters, at most
-    ``OUTPUT_TAIL_MAX_CHARS`` in total, keeping the newest lines. Every
-    secret value is replaced before bounding so a truncated line can never
-    leak a prefix of one.
+    ``OUTPUT_TAIL_MAX_CHARS`` in total and at most
+    ``OUTPUT_TAIL_MAX_SERIALIZED_BYTES`` once serialized, keeping the newest
+    lines. Redaction runs over the whole text before it is split, so a secret
+    spanning several lines (a private key) is replaced too, and before
+    bounding, so a truncated line can never leak a prefix of one.
     """
-    lines = [line for line in text.splitlines() if line.strip()]
-    redacted = []
-    for line in lines[-OUTPUT_TAIL_MAX_LINES:]:
-        for secret in secrets:
-            line = line.replace(secret, REDACTED_VALUE)
-        redacted.append(_truncate_units(line, OUTPUT_TAIL_MAX_LINE_CHARS))
-    total = sum(_utf16_units(line) for line in redacted)
-    while redacted and total > OUTPUT_TAIL_MAX_CHARS:
-        total -= _utf16_units(redacted.pop(0))
-    return redacted
+    lines = [line for line in _redact(text, secrets).splitlines() if line.strip()]
+    kept = [
+        _truncate_units(line, OUTPUT_TAIL_MAX_LINE_CHARS) for line in lines[-OUTPUT_TAIL_MAX_LINES:]
+    ]
+    total = sum(_utf16_units(line) for line in kept)
+    while kept and total > OUTPUT_TAIL_MAX_CHARS:
+        total -= _utf16_units(kept.pop(0))
+    while kept and _serialized_bytes(kept) > OUTPUT_TAIL_MAX_SERIALIZED_BYTES:
+        kept.pop(0)
+    return kept
+
+
+def _redact(text: str, secrets: Sequence[str]) -> str:
+    for secret in secrets:
+        text = text.replace(secret, REDACTED_VALUE)
+    return text
+
+
+def _serialized_bytes(lines: Sequence[str]) -> int:
+    """Wire size of the tail, as the control plane's body cap measures it."""
+    return len(json.dumps(list(lines), ensure_ascii=False).encode("utf-8"))
 
 
 def _utf16_units(text: str) -> int:

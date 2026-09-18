@@ -86,10 +86,13 @@ def _connect_quiet(bridge, monkeypatch) -> BlockingWs:
 
 
 class ConnectionContext:
-    def __init__(self, ws):
+    def __init__(self, ws, gate: asyncio.Event | None = None):
         self.ws = ws
+        self.gate = gate
 
     async def __aenter__(self):
+        if self.gate is not None:
+            await self.gate.wait()
         return self.ws
 
     async def __aexit__(self, *_args):
@@ -100,6 +103,15 @@ def _run_complete(bridge) -> tuple[str, int]:
     """(outcome, connection_count) of the run_complete log line."""
     call = next(c for c in bridge.log.info.call_args_list if c.args == ("bridge.run_complete",))
     return call.kwargs["outcome"], call.kwargs["connection_count"]
+
+
+def _agent_prompt(message_id: str) -> dict:
+    return {
+        "type": "prompt",
+        "messageId": message_id,
+        "content": "hi",
+        "author": {"gitIdentity": {"mode": "agent-only"}},
+    }
 
 
 class OpeningHarness(ScriptedHarness):
@@ -217,6 +229,34 @@ class TestHarnessAttach:
         assert bridge.harness is None
         assert not bridge._boot_ready.is_set()
         assert _run_complete(bridge) == ("harness_start_failed", 1)
+
+    async def test_attach_failure_during_an_in_flight_handshake_ends_the_run(
+        self, tmp_path, monkeypatch
+    ):
+        """The socket arrives after the run ended; a quiet one must not be waited on."""
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.BRIDGE_FATAL_ERROR_FILE_PATH", str(tmp_path / "fatal.txt")
+        )
+        harness = OpeningHarness([], open_error=HarnessStartError("credential denied"))
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        bridge._send_event = AsyncMock()
+        ws = BlockingWs()
+        gate = asyncio.Event()
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.websockets.connect",
+            lambda *_args, **_kwargs: ConnectionContext(ws, gate),
+        )
+        _write_lines(HARNESS_COMPLETED)
+
+        run_task = asyncio.create_task(bridge.run())
+        await asyncio.wait_for(bridge.shutdown_event.wait(), timeout=1)
+        gate.set()
+
+        with pytest.raises(HarnessStartError, match="credential denied"):
+            await asyncio.wait_for(run_task, timeout=2)
+
+        assert ws.sent == []
+        assert _run_complete(bridge) == ("harness_start_failed", 0)
 
     async def test_transient_open_failure_propagates_so_the_supervisor_restarts(
         self, tmp_path, monkeypatch
@@ -378,6 +418,36 @@ class TestCommandsWhileBooting:
         assert terminal["type"] == "execution_complete"
         assert terminal["messageId"] == "msg-1"
 
+    async def test_the_hold_is_taken_off_the_turn_that_follows(self, tmp_path, monkeypatch):
+        harness = OpeningHarness([])
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        bridge._send_event = AsyncMock()
+        bridge.git_signing.refresh = AsyncMock()
+        bridge.prompt_limits = replace(bridge.prompt_limits, prompt_max_duration_seconds=10.0)
+
+        prompt = asyncio.create_task(bridge._handle_prompt(_agent_prompt("msg-1")))
+        await asyncio.sleep(0.05)
+        _write_lines(HARNESS_COMPLETED)
+        await bridge._relay_boot_events()
+        await asyncio.wait_for(prompt, timeout=1)
+
+        budget = harness.prompts[0].max_duration_seconds
+        assert budget is not None
+        assert 9.0 < budget < 10.0
+
+    async def test_an_unheld_prompt_gets_the_whole_budget(self, tmp_path, monkeypatch):
+        harness = ScriptedHarness()
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness, early_connect=False)
+        bridge._send_event = AsyncMock()
+        bridge.git_signing.refresh = AsyncMock()
+
+        await bridge._handle_prompt(_agent_prompt("msg-1"))
+
+        assert (
+            harness.prompts[0].max_duration_seconds
+            == bridge.prompt_limits.prompt_max_duration_seconds
+        )
+
     async def test_held_prompt_fails_when_the_hold_expires(self, tmp_path, monkeypatch):
         bridge = _bridge(tmp_path, monkeypatch)
         bridge._send_event = AsyncMock()
@@ -500,6 +570,65 @@ class TestBridgeRestart:
             ("ready", None),
         ]
         assert restarted.harness is harness
+
+
+class TestRelayCursor:
+    def _cursor(self):
+        from sandbox_runtime.boot_events import boot_events_cursor_path
+
+        return boot_events_cursor_path(_events_path())
+
+    async def test_a_buffered_warning_holds_the_cursor_for_the_next_bridge(
+        self, tmp_path, monkeypatch
+    ):
+        # Never connected, so the forwarder has nothing to write to and the
+        # warning exists only in this process's buffer.
+        first = _bridge(tmp_path, monkeypatch)
+        _write_lines(
+            _phase(1, "sync", "started"),
+            {"seq": 2, "kind": "warning", "scope": "sync", "message": "stale", "at": 2.0},
+        )
+
+        await first._relay_boot_events_once()
+
+        assert [event["type"] for event in first.event_forwarder._event_buffer] == ["warning"]
+        # The phase is done with; the buffered warning holds the cursor there.
+        assert self._cursor().read_text() == "1"
+
+        harness = OpeningHarness([])
+        restarted = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        restarted.event_forwarder.send = AsyncMock(return_value=True)
+        _write_lines(HARNESS_COMPLETED)
+
+        await restarted._relay_boot_events()
+
+        sent = [call.args[0] for call in restarted.event_forwarder.send.await_args_list]
+        assert ("warning", "stale") in [(e["type"], e.get("message")) for e in sent]
+        assert restarted.harness is harness
+
+    async def test_a_delivered_warning_advances_the_cursor(self, tmp_path, monkeypatch):
+        bridge = _bridge(tmp_path, monkeypatch)
+        ws = FakeWs()
+        await bridge.event_forwarder.bind(ws)
+        _write_lines(
+            _phase(1, "sync", "started"),
+            {"seq": 2, "kind": "warning", "scope": "sync", "message": "stale", "at": 2.0},
+        )
+
+        await bridge._relay_boot_events_once()
+
+        assert [event["type"] for event in ws.sent] == ["boot_progress", "warning"]
+        assert self._cursor().read_text() == "2"
+
+    async def test_a_dropped_phase_does_not_hold_the_cursor(self, tmp_path, monkeypatch):
+        """A phase is never replayed from the file: a reconnect resends the latest one."""
+        bridge = _bridge(tmp_path, monkeypatch)
+        _write_lines(_phase(1, "sync", "started"), _phase(2, "sync", "completed"))
+
+        await bridge._relay_boot_events_once()
+
+        assert bridge.event_forwarder._event_buffer == []
+        assert self._cursor().read_text() == "2"
 
 
 class TestClassicMode:

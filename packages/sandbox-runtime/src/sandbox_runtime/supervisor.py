@@ -93,6 +93,9 @@ class SandboxSupervisor:
         self._bridge_restarts = 0
         self._bridge_watch_task: asyncio.Task[None] | None = None
         self._bridge_exit_policy: asyncio.Future[int] | None = None
+        # Set when bridge supervision itself failed. The boot then ends as a
+        # failure rather than as a requested shutdown.
+        self._bridge_watch_failure: BaseException | None = None
 
     async def _report_fatal_error(
         self, message: str, failure: BootPhaseError | None = None
@@ -366,8 +369,10 @@ class SandboxSupervisor:
             raise
         except Exception as error:
             # A watcher that dies leaves the boot with no bridge supervision
-            # until it completes; end the boot rather than run it blind.
+            # until it completes; end the boot rather than run it blind. The
+            # boot ends as a failure: nobody asked for this shutdown.
             self.log.error("bridge.watch_failed", exc=error)
+            self._bridge_watch_failure = error
             self.shutdown_event.set()
 
     async def _stop_bridge_watch(self) -> None:
@@ -378,12 +383,19 @@ class SandboxSupervisor:
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        # The policy future is consumed even when it is already done: a
+        # watcher cancelled between its completion and the assignment below
+        # would otherwise drop the restart it applied, and the process
+        # monitor would inherit a stale count.
         policy = self._bridge_exit_policy
-        if policy is not None and not policy.done():
+        if policy is not None:
             try:
                 self._bridge_restarts = await policy
+            except asyncio.CancelledError:
+                self.log.warn("bridge.exit_policy_cancelled")
             except Exception as error:
                 self.log.error("bridge.watch_failed", exc=error)
+                self._bridge_watch_failure = error
         self._bridge_exit_policy = None
 
     async def monitor_processes(self) -> None:
@@ -429,21 +441,32 @@ class SandboxSupervisor:
             )
         return timeout_seconds
 
+    def _boot_interruption(self) -> BaseException:
+        """Why boot work is ending: an internal supervision failure, or a requested shutdown.
+
+        A failure is raised as itself so ``run`` reports it fatally; a
+        requested shutdown is a clean end to the boot.
+        """
+        failure = self._bridge_watch_failure
+        if failure is not None:
+            return failure
+        return BootExecutionCancelled()
+
     async def _run_until_shutdown(
         self, operation_factory: Callable[[], Awaitable[_ResultT]]
     ) -> _ResultT:
         if self.shutdown_event.is_set():
-            raise BootExecutionCancelled
+            raise self._boot_interruption()
         operation_task = asyncio.ensure_future(operation_factory())
         shutdown_task = asyncio.create_task(self.shutdown_event.wait())
         tasks = {operation_task, shutdown_task}
         try:
             done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if shutdown_task in done or self.shutdown_event.is_set():
-                raise BootExecutionCancelled
+                raise self._boot_interruption()
             if operation_task in done:
                 return operation_task.result()
-            raise BootExecutionCancelled
+            raise self._boot_interruption()
         finally:
             for task in tasks:
                 if not task.done():
@@ -463,6 +486,34 @@ class SandboxSupervisor:
             raise RuntimeError(
                 f"image build exceeded its {timeout_seconds}-second execution timeout"
             ) from error
+
+    async def _start_session_services(self, boot_result: RepositoryBootResult) -> None:
+        """Boot work after the repositories are on disk, ending with the harness.
+
+        Cancelled as a whole when the boot is interrupted, so the harness is
+        never started for a session that is already shutting down.
+        """
+        # Materialization is sandbox-boot work; OpenCode process restarts
+        # reuse this tree and must not depend on control-plane availability.
+        if self.managed_skills is not None:
+            with self.boot_events.phase_scope("skills"):
+                await self.managed_skills.materialize(boot_result.repositories, boot_result.workdir)
+
+        try:
+            await self.code_server.start(boot_result.workdir)
+        except Exception as error:
+            self.log.warn("code_server.start_failed", exc=error)
+            await self.code_server.stop()
+        try:
+            await self.web_terminal.start(boot_result.workdir)
+        except Exception as error:
+            self.log.warn("web_terminal.start_failed", exc=error)
+            await self.web_terminal.stop()
+
+        # The `harness completed` line is what tells an early-connected
+        # bridge to attach its harness and report `ready`.
+        with self.boot_events.phase_scope("harness"):
+            await self.harness_process.start(boot_result.repositories, boot_result.workdir)
 
     async def run(self, repo_image_callback: RepoImageBuildCallback | None = None) -> bool:
         startup_start = time.time()
@@ -493,11 +544,15 @@ class SandboxSupervisor:
         # Early connect is the control plane's call (SESSION_CONFIG); an image
         # build has no session to connect to and starts no bridge at all.
         early_connect = self.config.bridge_early_connect and self.boot_mode is not BootMode.BUILD
-        if self.boot_mode is not BootMode.BUILD:
-            self.boot_events.reset()
 
         harness_ready = False
         try:
+            # Inside the try: a boot-events file this boot cannot own is
+            # fatal, because a bridge reading the previous boot's lines
+            # would act on them.
+            if self.boot_mode is not BootMode.BUILD:
+                self.boot_events.reset()
+
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
@@ -539,29 +594,10 @@ class SandboxSupervisor:
             )
             self._repository_boot_result = boot_result
 
-            # Materialization is sandbox-boot work; OpenCode process restarts
-            # reuse this tree and must not depend on control-plane availability.
-            if self.managed_skills is not None:
-                with self.boot_events.phase_scope("skills"):
-                    await self.managed_skills.materialize(
-                        boot_result.repositories, boot_result.workdir
-                    )
-
-            try:
-                await self.code_server.start(boot_result.workdir)
-            except Exception as error:
-                self.log.warn("code_server.start_failed", exc=error)
-                await self.code_server.stop()
-            try:
-                await self.web_terminal.start(boot_result.workdir)
-            except Exception as error:
-                self.log.warn("web_terminal.start_failed", exc=error)
-                await self.web_terminal.stop()
-
-            # The `harness completed` line is what tells an early-connected
-            # bridge to attach its harness and report `ready`.
-            with self.boot_events.phase_scope("harness"):
-                await self.harness_process.start(boot_result.repositories, boot_result.workdir)
+            # Everything up to the harness is boot work: a bridge that exits
+            # gracefully part way through must end the boot rather than leave
+            # it starting a harness nobody is connected to.
+            await self._run_until_shutdown(lambda: self._start_session_services(boot_result))
             harness_ready = True
             if not early_connect:
                 await self.agent_bridge.start()

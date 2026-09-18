@@ -277,7 +277,7 @@ class TestBridgeWatcherDuringBoot:
 
         assert watcher_done_at_monitor == [True]
 
-    async def test_watcher_failure_is_logged_and_ends_the_boot(self, tmp_path):
+    async def test_watcher_failure_fails_the_boot_rather_than_ending_it_gracefully(self, tmp_path):
         supervisor = _supervisor(tmp_path, [])
         boot_started, boot_cancelled = self._blocked_boot(supervisor)
         bridge_exited = asyncio.Event()
@@ -289,11 +289,48 @@ class TestBridgeWatcherDuringBoot:
         supervisor.agent_bridge.exit_code.return_value = 1
         bridge_exited.set()
 
-        assert await asyncio.wait_for(run_task, timeout=1) is True
+        assert await asyncio.wait_for(run_task, timeout=1) is False
         assert boot_cancelled.is_set()
         supervisor.log.error.assert_any_call(
             "bridge.watch_failed", exc=supervisor.log.error.call_args.kwargs["exc"]
         )
+        supervisor._report_fatal_error.assert_awaited_once()
+        assert "cannot spawn bridge" in supervisor._report_fatal_error.await_args.args[0]
+
+    async def test_a_completed_exit_policy_is_consumed_even_when_the_watcher_misses_it(
+        self, tmp_path
+    ):
+        supervisor = _supervisor(tmp_path, [])
+        bridge_exited = asyncio.Event()
+        policy_started = asyncio.Event()
+        policy_may_finish = asyncio.Event()
+        supervisor.agent_bridge.wait = AsyncMock(side_effect=bridge_exited.wait)
+
+        async def slow_policy(restarts):
+            policy_started.set()
+            await policy_may_finish.wait()
+            return restarts + 1
+
+        supervisor._handle_bridge_exit = AsyncMock(side_effect=slow_policy)
+        supervisor._bridge_watch_task = asyncio.create_task(supervisor._watch_bridge_during_boot())
+        supervisor.agent_bridge.started.return_value = True
+        supervisor.agent_bridge.exit_code.return_value = 1
+        bridge_exited.set()
+        await asyncio.wait_for(policy_started.wait(), timeout=1)
+
+        # The policy finishes while the watcher is still suspended, so the
+        # handover has to read the count off the future rather than off the
+        # watcher's assignment.
+        policy_may_finish.set()
+        for _ in range(5):
+            if supervisor._bridge_exit_policy.done():
+                break
+            await asyncio.sleep(0)
+        assert supervisor._bridge_exit_policy.done()
+
+        await asyncio.wait_for(supervisor._stop_bridge_watch(), timeout=1)
+
+        assert supervisor._bridge_restarts == 1
 
     async def test_stopping_the_watcher_waits_for_an_in_flight_exit_policy(self, tmp_path):
         supervisor = _supervisor(tmp_path, [])
@@ -322,6 +359,30 @@ class TestBridgeWatcherDuringBoot:
 
         assert supervisor._bridge_restarts == 1
 
+    async def test_graceful_exit_during_skills_ends_the_boot_before_the_harness(self, tmp_path):
+        events = []
+        supervisor = _supervisor(tmp_path, events)
+        bridge_exited = asyncio.Event()
+        skills_started = asyncio.Event()
+        supervisor.agent_bridge.wait = AsyncMock(side_effect=bridge_exited.wait)
+
+        async def blocked_skills(*_args):
+            events.append("skills")
+            skills_started.set()
+            await asyncio.Event().wait()
+
+        supervisor.managed_skills.materialize = AsyncMock(side_effect=blocked_skills)
+
+        run_task = asyncio.create_task(supervisor.run())
+        await asyncio.wait_for(skills_started.wait(), timeout=1)
+        supervisor.agent_bridge.exit_code.return_value = 0
+        bridge_exited.set()
+
+        assert await asyncio.wait_for(run_task, timeout=1) is True
+        supervisor.harness_process.start.assert_not_awaited()
+        assert "harness" not in events
+        assert [(line["phase"], line["status"]) for line in _lines()] == [("skills", "started")]
+
     async def test_watcher_is_idle_when_the_bridge_was_not_started(self, tmp_path):
         supervisor = _supervisor(tmp_path, [])
         supervisor.agent_bridge.start = AsyncMock()
@@ -330,6 +391,37 @@ class TestBridgeWatcherDuringBoot:
         await supervisor.run()
 
         supervisor.agent_bridge.wait.assert_not_awaited()
+
+
+class TestBootEventsFileFailures:
+    async def test_a_boot_that_cannot_own_the_events_file_fails(self, tmp_path, monkeypatch):
+        supervisor = _supervisor(tmp_path, [])
+        monkeypatch.setattr(
+            "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
+            str(tmp_path / "missing" / "oi-boot-events.jsonl"),
+        )
+
+        assert await supervisor.run() is False
+
+        supervisor._report_fatal_error.assert_awaited_once()
+        supervisor.agent_bridge.start.assert_not_awaited()
+
+    async def test_an_unwritable_harness_completion_fails_the_boot(self, tmp_path, monkeypatch):
+        supervisor = _supervisor(tmp_path, [])
+
+        async def start_then_break_the_file(_repos, _workdir):
+            monkeypatch.setattr(
+                "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
+                str(tmp_path / "missing" / "oi-boot-events.jsonl"),
+            )
+
+        supervisor.harness_process.start = AsyncMock(side_effect=start_then_break_the_file)
+
+        assert await supervisor.run() is False
+
+        supervisor._report_fatal_error.assert_awaited_once()
+        message, _failure = supervisor._report_fatal_error.await_args.args
+        assert "boot-events append failed" in message
 
 
 class TestFatalBootReport:
@@ -374,6 +466,26 @@ class TestFatalBootReport:
         failed = _lines()[-1]
         assert (failed["phase"], failed["status"]) == ("harness", "failed")
         assert failure.boot_seq == failed["seq"]
+
+    async def test_a_maximal_report_fits_the_control_planes_body_cap(self, tmp_path):
+        # Control characters cost six bytes each once serialized; a tail that
+        # satisfies the character bounds alone would be rejected by the route
+        # before it ever reached the schema.
+        hostile = "\n".join("\x00" * 1024 for _ in range(boot_events.OUTPUT_TAIL_MAX_LINES))
+        failure = BootPhaseError(
+            "x" * 1000,
+            phase="start",
+            repo=RepoEntry(owner="acme", name="repo", branch="main", path=Path("/workspace/repo")),
+            output_tail=boot_events.bounded_output_tail(hostile),
+            boot_seq=12,
+        )
+
+        body = {"error": str(failure), "fatal": True, **failure.report_fields()}
+
+        assert failure.output_tail
+        # httpx serializes a json= body with ensure_ascii=False.
+        serialized = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        assert len(serialized) <= boot_events.FATAL_REPORT_MAX_BYTES
 
     async def test_report_body_carries_the_structured_failure(self):
         supervisor = SandboxSupervisor.__new__(SandboxSupervisor)

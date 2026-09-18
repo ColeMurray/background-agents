@@ -204,6 +204,55 @@ class TestHookFailureTail:
 
         assert sup.hooks.failure_tail(repo, "start") == ()
 
+    async def test_the_structured_log_carries_the_redacted_tail_too(self, tmp_path, monkeypatch):
+        """The runtime's stdout is the provider log an operator reads; no credentials there."""
+        sup = self._boot(tmp_path)
+        repo = sup.repositories[0]
+        script_dir = repo.path / ".openinspect"
+        script_dir.mkdir(parents=True)
+        (script_dir / "start.sh").write_text('#!/bin/bash\necho "token=$NPM_TOKEN"\nexit 3\n')
+        monkeypatch.setenv("NPM_TOKEN", "npm_secret_value_123")
+        sup.hooks.log = MagicMock()
+
+        assert await sup.hooks.run_start(repo, BootMode.FRESH) is False
+
+        failed = next(
+            call for call in sup.hooks.log.error.call_args_list if call.args == ("start.failed",)
+        )
+        assert failed.kwargs["output_tail"] == "token=***"
+        assert "npm_secret_value_123" not in json.dumps(failed.kwargs)
+
+    async def test_a_hook_that_cannot_run_does_not_report_an_earlier_tail(self, tmp_path):
+        sup = self._boot(tmp_path)
+        repo = sup.repositories[0]
+        script_dir = repo.path / ".openinspect"
+        script_dir.mkdir(parents=True)
+        script = script_dir / "start.sh"
+        script.write_text("#!/bin/bash\necho boom\nexit 1\n")
+        await sup.hooks.run_start(repo, BootMode.FRESH)
+        assert sup.hooks.failure_tail(repo, "start") == ("boom",)
+
+        # A spawn failure reports no tail of its own; it must not report the
+        # previous run's output as if it were this one's.
+        sup.hooks._collect_output = MagicMock(side_effect=RuntimeError("no output pipe"))
+        assert await sup.hooks.run_start(repo, BootMode.FRESH) is False
+
+        assert sup.hooks.failure_tail(repo, "start") == ()
+
+    async def test_a_build_mode_failure_does_not_report_an_earlier_tail(self, tmp_path):
+        sup = self._boot(tmp_path)
+        repo = sup.repositories[0]
+        script_dir = repo.path / ".openinspect"
+        script_dir.mkdir(parents=True)
+        script = script_dir / "setup.sh"
+        script.write_text("#!/bin/bash\necho boom\nexit 1\n")
+        await sup.hooks.run_setup(repo, BootMode.FRESH)
+        assert sup.hooks.failure_tail(repo, "setup") == ("boom",)
+
+        assert await sup.hooks.run_setup(repo, BootMode.BUILD) is False
+
+        assert sup.hooks.failure_tail(repo, "setup") == ()
+
     async def test_success_clears_an_earlier_failure_tail(self, tmp_path):
         sup = self._boot(tmp_path)
         repo = sup.repositories[0]

@@ -73,6 +73,10 @@ class HarnessPrompt:
     reasoning_effort: str | None = None
     attachments: Sequence[HydratedSessionAttachment] = ()
     author: Mapping[str, Any] = field(default_factory=dict)
+    # What is left of this prompt's budget, when the caller spent part of it
+    # before the turn began (holding the prompt while the sandbox booted).
+    # ``None`` means the harness's configured ``prompt_max_duration_seconds``.
+    max_duration_seconds: float | None = None
 
 
 @dataclass(frozen=True)

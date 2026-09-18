@@ -27,13 +27,21 @@ class RepositoryHooks:
         self.log = log
         self._output_collectors: set[BoundedOutputCollector] = set()
         # The bounded, redacted tail of each hook's most recent failed run,
-        # keyed by repository and hook; cleared by a later success. Read by
-        # the boot when a failure is fatal so the report can carry it.
+        # keyed by repository and hook; replaced (or cleared) by every later
+        # run of the same hook. Read by the boot when a failure is fatal so
+        # the report can carry it.
         self._failure_tails: dict[tuple[str, str, str], tuple[str, ...]] = {}
 
     def failure_tail(self, repo: RepoEntry, hook_name: str) -> tuple[str, ...]:
         """Output tail of the hook's most recent failed run, empty if it succeeded."""
         return self._failure_tails.get((repo.owner, repo.name, hook_name), ())
+
+    def _record_failure_tail(self, key: tuple[str, str, str], tail: tuple[str, ...] = ()) -> None:
+        """Replace this hook's tail, so a later run never reports an earlier one's output."""
+        if tail:
+            self._failure_tails[key] = tail
+        else:
+            self._failure_tails.pop(key, None)
 
     def _collect_output(self, process: asyncio.subprocess.Process) -> BoundedOutputCollector:
         if process.stdout is None:
@@ -54,8 +62,17 @@ class RepositoryHooks:
         hook_name: str,
         relative_script_path: str,
     ) -> bool:
+        """Run one repository hook; True when it succeeded or there was no script.
+
+        A non-BUILD failure leaves its bounded, redacted output tail behind
+        for ``failure_tail`` until the next run of the same hook.
+        """
         script_path = repo.path / relative_script_path
         start_time = time.time()
+        tail_key = (repo.owner, repo.name, hook_name)
+        # Every exit from here replaces this hook's tail, so a failure can
+        # never be reported with an earlier run's output.
+        self._record_failure_tail(tail_key)
         if not script_path.exists():
             self.log.debug(
                 f"{hook_name}.skip",
@@ -90,26 +107,29 @@ class RepositoryHooks:
             )
             output = self._collect_output(process)
             await wait_for_process_exit(process)
-            fields = {
+            fields: dict[str, Any] = {
                 "exit_code": process.returncode,
                 "script": str(script_path),
                 "duration_ms": int((time.time() - start_time) * 1000),
                 "boot_mode": boot_mode.value,
             }
-            tail_key = (repo.owner, repo.name, hook_name)
             if process.returncode == 0:
                 output.discard_tail()
-                self._failure_tails.pop(tail_key, None)
                 self.log.info(f"{hook_name}.complete", **fields)
                 return True
             await self._terminate(process)
             await output.shutdown()
             if boot_mode is not BootMode.BUILD:
-                raw_tail = output.tail_lines(OUTPUT_TAIL_MAX_LINES)
-                fields["output_tail"] = raw_tail
-                self._failure_tails[tail_key] = tuple(
-                    bounded_output_tail(raw_tail, secrets=secret_values(env))
+                # One redacted tail for both readers: the structured log goes
+                # to the sandbox provider's log, which is no place for a
+                # credential either.
+                tail = tuple(
+                    bounded_output_tail(
+                        output.tail_lines(OUTPUT_TAIL_MAX_LINES), secrets=secret_values(env)
+                    )
                 )
+                fields["output_tail"] = "\n".join(tail)
+                self._record_failure_tail(tail_key, tail)
             self.log.error(f"{hook_name}.failed", **fields)
             return False
         except asyncio.CancelledError:

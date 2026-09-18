@@ -82,6 +82,7 @@ def stream_opencode_events(
     model: str | None = None,
     reasoning_effort: str | None = None,
     attachments: list[Any] | None = None,
+    max_duration_seconds: float | None = None,
 ) -> "AsyncIterator[dict[str, Any]]":
     """The raw translated event stream of one OpenCode prompt (what run_prompt drains)."""
     assert isinstance(bridge.harness, OpencodeHarness)
@@ -92,6 +93,7 @@ def stream_opencode_events(
             model=model,
             reasoning_effort=reasoning_effort,
             attachments=tuple(attachments or ()),
+            max_duration_seconds=max_duration_seconds,
         )
     )
 

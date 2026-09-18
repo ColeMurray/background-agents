@@ -7,11 +7,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from sandbox_runtime.boot_events import (
+    DETAIL_MAX_CHARS,
     OUTPUT_TAIL_MAX_CHARS,
     OUTPUT_TAIL_MAX_LINE_CHARS,
     OUTPUT_TAIL_MAX_LINES,
+    OUTPUT_TAIL_MAX_SERIALIZED_BYTES,
     BootEventLog,
+    BootEventWriteError,
     BootPhaseError,
+    boot_events_cursor_path,
     bounded_output_tail,
     secret_values,
 )
@@ -92,29 +96,39 @@ class TestBootEventLog:
             repo_name="api",
         )
 
-    def test_reset_forgets_the_cursor_even_when_truncation_fails(self, tmp_path, monkeypatch):
-        from sandbox_runtime.boot_events import boot_events_cursor_path
+    def test_reset_forgets_the_cursor(self, events):
+        log, path = events
+        cursor = boot_events_cursor_path(path)
+        cursor.write_text("17")
 
+        log.reset()
+
+        assert not cursor.exists()
+
+    def test_reset_raises_when_the_new_boot_cannot_own_the_file(self, tmp_path, monkeypatch):
         missing = tmp_path / "missing" / "events.jsonl"
         monkeypatch.setattr("sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH", str(missing))
-        cursor = boot_events_cursor_path(missing)
-        unlinked = []
-        monkeypatch.setattr(
-            "sandbox_runtime.boot_events.Path.unlink",
-            lambda self, missing_ok=False: unlinked.append(self),
-        )
 
-        BootEventLog(MagicMock()).reset()
+        with pytest.raises(BootEventWriteError):
+            BootEventLog(MagicMock()).reset()
 
-        assert unlinked == [cursor]
-
-    def test_write_failure_is_logged_not_raised(self, tmp_path, monkeypatch):
+    def test_phase_write_failure_raises(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
             "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH", str(tmp_path / "missing" / "x")
         )
         log = BootEventLog(MagicMock())
 
-        assert log.phase("sync", "started") == 1
+        with pytest.raises(BootEventWriteError):
+            log.phase("harness", "completed")
+
+    def test_warning_write_failure_is_logged_not_raised(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH", str(tmp_path / "missing" / "x")
+        )
+        log = BootEventLog(MagicMock())
+
+        log.record("sync", "stale checkout")
+
         log.log.warn.assert_called_with(
             "supervisor.boot_event_write_failed", exc=log.log.warn.call_args.kwargs["exc"]
         )
@@ -193,6 +207,45 @@ class TestPhaseScope:
 
         assert str(raised.value) == "TimeoutError"
 
+    def test_a_phase_transition_that_cannot_be_written_fails_the_phase(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH", str(tmp_path / "missing" / "x")
+        )
+        log = BootEventLog(MagicMock())
+
+        with pytest.raises(BootEventWriteError), log.phase_scope("harness"):
+            pass
+
+    def test_an_unwritable_failed_line_keeps_the_original_cause(self, events, monkeypatch):
+        log, _path = events
+        log.reset()
+
+        def fail_after_started(*_args, **_kwargs):
+            raise OSError("no space left on device")
+
+        with pytest.raises(BootPhaseError) as raised, log.phase_scope("harness"):
+            monkeypatch.setattr(
+                "sandbox_runtime.boot_events.open", fail_after_started, raising=False
+            )
+            raise RuntimeError("OpenCode server failed to become healthy")
+
+        assert str(raised.value) == "OpenCode server failed to become healthy"
+        assert raised.value.boot_seq is None
+
+    def test_detail_is_redacted_and_bounded(self, events, monkeypatch):
+        log, path = events
+        log.reset()
+        monkeypatch.setenv("FIXTURE_API_TOKEN", "tok-abcdef123456")
+
+        with pytest.raises(BootPhaseError) as raised, log.phase_scope("harness"):
+            raise RuntimeError("login failed with tok-abcdef123456 " + "x" * DETAIL_MAX_CHARS)
+
+        detail = _lines(path)[1]["detail"]
+        assert "tok-abcdef123456" not in detail
+        assert detail.startswith("login failed with *** ")
+        assert len(detail) == DETAIL_MAX_CHARS
+        assert str(raised.value) == detail
+
     async def test_cancellation_writes_no_failed_line(self, events):
         log, path = events
         log.reset()
@@ -255,6 +308,27 @@ class TestOutputTail:
 
         assert bounded_output_tail(exact) == [exact]
         assert bounded_output_tail(over) == ["x" * 1023]
+
+    def test_redacts_a_secret_that_spans_several_lines(self):
+        key = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----"
+        secrets = secret_values({"REPO_SIGNING_PRIVATE_KEY": key})
+
+        tail = bounded_output_tail(f"ssh: using\n{key}\ndone", secrets=secrets)
+
+        assert tail == ["ssh: using", "***", "done"]
+        assert all("MIIEvQIBADANBg" not in line for line in tail)
+
+    def test_serialized_size_is_bounded_for_output_json_escapes(self):
+        # Control characters cost six bytes each once serialized, so the
+        # character bounds alone would let a tail through that the control
+        # plane's body cap rejects.
+        text = "\n".join("\x00" * OUTPUT_TAIL_MAX_LINE_CHARS for _ in range(20))
+
+        tail = bounded_output_tail(text)
+
+        assert tail
+        serialized = len(json.dumps(tail, ensure_ascii=False).encode("utf-8"))
+        assert serialized <= OUTPUT_TAIL_MAX_SERIALIZED_BYTES
 
     def test_empty_output_is_an_empty_tail(self):
         assert bounded_output_tail("") == []

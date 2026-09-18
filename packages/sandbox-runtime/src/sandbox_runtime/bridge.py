@@ -26,7 +26,6 @@ import argparse
 import asyncio
 import contextlib
 import json
-import math
 import os
 import sys
 import tempfile
@@ -46,11 +45,7 @@ from .boot_event_relay import BootEventRelay
 from .constants import (
     BOOT_EVENTS_FILE_PATH,
     BRIDGE_FATAL_ERROR_FILE_PATH,
-    DEFAULT_SANDBOX_TIMEOUT_SECONDS,
-    MAX_SNAPSHOT_RESERVE_SECONDS,
     REPO_MANIFEST_FILE_PATH,
-    SANDBOX_TIMEOUT_ENV_VAR,
-    SNAPSHOT_RESERVE_FRACTION,
 )
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
@@ -63,12 +58,12 @@ from .harness import (
     HarnessId,
     HarnessPrompt,
     HarnessStartError,
-    PromptLimits,
     TurnOutcome,
     build_agent_harness,
     parse_harness_id,
 )
 from .log_config import configure_logging, get_logger
+from .prompt_budgets import resolve_prompt_limits
 from .push_operation import PushOperation, PushRejected, PushRequest
 from .repo_config import load_repo_manifest
 from .types import GitUser
@@ -129,12 +124,6 @@ class AgentBridge:
     HEARTBEAT_INTERVAL = 30.0
     RECONNECT_BACKOFF_BASE = 2.0
     RECONNECT_MAX_DELAY = 60.0
-    # Liveness check for a harness that stopped talking, not a budget for how
-    # long the model may think. Stays under the control plane's own inactivity
-    # watchdog (SANDBOX_INACTIVITY_TIMEOUT_MS) so the bridge owns the outcome.
-    SSE_INACTIVITY_TIMEOUT = 300.0
-    SSE_INACTIVITY_TIMEOUT_MIN = 5.0
-    SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
     # How often the boot-events file is polled while the repository boots.
     BOOT_EVENTS_POLL_SECONDS = 0.25
@@ -174,31 +163,7 @@ class AgentBridge:
             warn_user=self._send_media_warning,
         )
 
-        inactivity_timeout_seconds = self._resolve_timeout_seconds(
-            name="BRIDGE_SSE_INACTIVITY_TIMEOUT",
-            default=self.SSE_INACTIVITY_TIMEOUT,
-            min_value=self.SSE_INACTIVITY_TIMEOUT_MIN,
-            max_value=self.SSE_INACTIVITY_TIMEOUT_MAX,
-        )
-        sandbox_timeout_seconds = self._resolve_positive_timeout_seconds(
-            name=SANDBOX_TIMEOUT_ENV_VAR,
-            default=DEFAULT_SANDBOX_TIMEOUT_SECONDS,
-        )
-        snapshot_reserve_seconds = min(
-            MAX_SNAPSHOT_RESERVE_SECONDS,
-            sandbox_timeout_seconds * SNAPSHOT_RESERVE_FRACTION,
-        )
-        self.prompt_limits = PromptLimits(
-            inactivity_timeout_seconds=inactivity_timeout_seconds,
-            prompt_max_duration_seconds=sandbox_timeout_seconds - snapshot_reserve_seconds,
-            prompt_cleanup_timeout_seconds=snapshot_reserve_seconds,
-        )
-        self.log.info(
-            "bridge.prompt_timeout_config",
-            timeout_ms=int(self.prompt_limits.prompt_max_duration_seconds * 1000),
-            sandbox_timeout_ms=int(sandbox_timeout_seconds * 1000),
-            snapshot_reserve_ms=int(snapshot_reserve_seconds * 1000),
-        )
+        self.prompt_limits = resolve_prompt_limits(self.log)
 
         self.ws: ClientConnection | None = None
         self.shutdown_event = asyncio.Event()
@@ -515,6 +480,14 @@ class AgentBridge:
                 ping_interval=20,
                 ping_timeout=10,
             ) as ws:
+                if self.shutdown_event.is_set():
+                    # The run ended while this handshake was in flight (a
+                    # failed harness attach, for one). The socket was never
+                    # ours to hand to the forwarder, and a quiet control
+                    # plane would leave the receive loop below waiting for a
+                    # message that never comes.
+                    self.log.info("bridge.connect_abandoned", reason="shutdown_requested")
+                    return
                 self.ws = ws
                 self._mark_connected()
                 heartbeat_task: asyncio.Task[None] | None = None
@@ -656,19 +629,35 @@ class AgentBridge:
                 await ws.close()
 
     async def _relay_boot_events_once(self) -> None:
-        """One pass over new boot-events lines (see ``_relay_boot_events``)."""
+        """One pass over new boot-events lines (see ``_relay_boot_events``).
+
+        The cursor advances only over lines this bridge is done with: one
+        sent over an open socket, one the wire has no shape for, or a phase,
+        which is never replayed from the file (a reconnect resends the latest
+        phase instead). A warning that only reached the in-memory buffer
+        holds the cursor where it is, so a bridge that is replaced before it
+        flushes leaves the warning for its successor to relay. Delivery is
+        therefore at least once: a buffer flushed just before the process
+        dies is relayed twice.
+        """
         lines = self.boot_relay.read_new_lines()
+        relayed_through: int | None = None
+        pending = False
         for line in lines:
             event = BootEventRelay.to_event(line)
             if event is None:
-                continue
-            if event["type"] == "boot_progress":
+                handed_off = True
+            elif event["type"] == "boot_progress":
                 if self.early_connect and not self._boot_ready.is_set():
                     await self.event_forwarder.send(event, buffered=False)
-                continue
-            await self._send_event(event)
-        if lines:
-            self.boot_relay.mark_relayed(lines[-1]["seq"])
+                handed_off = True
+            else:
+                handed_off = await self._send_event(event)
+            pending = pending or not handed_off
+            if not pending:
+                relayed_through = line["seq"]
+        if relayed_through is not None:
+            self.boot_relay.mark_relayed(relayed_through)
         if self.early_connect and self.boot_relay.harness_completed and self.harness is None:
             await self._attach_harness()
 
@@ -724,9 +713,12 @@ class AgentBridge:
         """Surface non-fatal media handling failures to the user timeline."""
         await self._send_event({"type": "warning", "scope": "media", "message": message})
 
-    async def _send_event(self, event: dict[str, Any]) -> None:
-        """Send event to control plane, buffering if WS is unavailable."""
-        await self.event_forwarder.send(event)
+    async def _send_event(self, event: dict[str, Any]) -> bool:
+        """Send event to control plane, buffering if WS is unavailable.
+
+        Returns whether it reached an open connection (see the forwarder).
+        """
+        return await self.event_forwarder.send(event)
 
     async def _handle_command(self, cmd: dict[str, Any]) -> asyncio.Task[None] | None:
         """Handle command from control plane.
@@ -840,7 +832,7 @@ class AgentBridge:
         )
 
         try:
-            harness = await self._await_harness(message_id)
+            harness, turn_budget_seconds = await self._await_harness(message_id)
             prompt_author = parse_prompt_git_author(author_data)
             await self._configure_git_identity(prompt_author)
 
@@ -883,6 +875,7 @@ class AgentBridge:
                     reasoning_effort=reasoning_effort,
                     attachments=tuple(attachments or ()),
                     author=author_data if isinstance(author_data, dict) else {},
+                    max_duration_seconds=turn_budget_seconds,
                 ),
                 emit,
             )
@@ -943,22 +936,27 @@ class AgentBridge:
             }
         )
 
-    async def _await_harness(self, message_id: str) -> AgentHarness:
-        """The attached harness, waiting through the boot if there is none yet.
+    async def _await_harness(self, message_id: str) -> tuple[AgentHarness, float]:
+        """The attached harness and the budget left for its turn.
 
-        The hold is bounded by the turn's own budget: a sandbox that never
-        becomes ready fails the prompt the way a turn that never finishes
-        would, and `stop` cancels it like any running turn.
+        One budget covers the whole prompt: a sandbox that never becomes
+        ready fails it the way a turn that never finishes would, `stop`
+        cancels the hold like any running turn, and whatever the hold spends
+        is taken off the turn that follows, so a prompt received while the
+        sandbox boots can never run for twice the configured maximum and eat
+        the snapshot reserve.
         """
+        budget = self.prompt_limits.prompt_max_duration_seconds
         if self._boot_ready.is_set():
-            return self._require_harness()
-        timeout = self.prompt_limits.prompt_max_duration_seconds
-        self.log.info("prompt.held_until_ready", message_id=message_id, timeout_s=timeout)
+            return self._require_harness(), budget
+        self.log.info("prompt.held_until_ready", message_id=message_id, timeout_s=budget)
+        held_from = time.monotonic()
         try:
-            await asyncio.wait_for(self._boot_ready.wait(), timeout)
+            await asyncio.wait_for(self._boot_ready.wait(), budget)
         except TimeoutError:
-            raise RuntimeError(f"sandbox did not become ready within {int(timeout)} s") from None
-        return self._require_harness()
+            raise RuntimeError(f"sandbox did not become ready within {int(budget)} s") from None
+        remaining = budget - (time.monotonic() - held_from)
+        return self._require_harness(), max(remaining, 0.0)
 
     async def _ensure_agent_session(self, harness: AgentHarness | None = None) -> None:
         """Create the vendor session on first use and persist its id."""
@@ -1095,76 +1093,6 @@ class AgentBridge:
         """Leave the deterministic-failure cause where the supervisor reports it from."""
         with contextlib.suppress(Exception):
             Path(BRIDGE_FATAL_ERROR_FILE_PATH).write_text(message)
-
-    def _resolve_timeout_seconds(
-        self,
-        name: str,
-        default: float,
-        min_value: float,
-        max_value: float,
-    ) -> float:
-        raw = os.environ.get(name)
-        if raw is None or raw == "":
-            value = default
-        else:
-            try:
-                value = float(raw)
-            except ValueError:
-                self.log.warn(
-                    "bridge.timeout_invalid",
-                    timeout_name=name,
-                    timeout_ms=int(default * 1000),
-                    detail=f"invalid value '{raw}', using default",
-                )
-                value = default
-
-        if value < min_value:
-            self.log.warn(
-                "bridge.timeout_clamped",
-                timeout_name=name,
-                timeout_ms=int(min_value * 1000),
-                detail=f"below min ({min_value}s), clamped",
-            )
-            value = min_value
-        elif value > max_value:
-            self.log.warn(
-                "bridge.timeout_clamped",
-                timeout_name=name,
-                timeout_ms=int(max_value * 1000),
-                detail=f"above max ({max_value}s), clamped",
-            )
-            value = max_value
-
-        self.log.info(
-            "bridge.timeout_config",
-            timeout_name=name,
-            timeout_ms=int(value * 1000),
-            min_ms=int(min_value * 1000),
-            max_ms=int(max_value * 1000),
-        )
-        return value
-
-    def _resolve_positive_timeout_seconds(self, name: str, default: float) -> float:
-        raw = os.environ.get(name)
-        try:
-            value = default if raw is None or raw == "" else float(raw)
-            if not math.isfinite(value) or value <= 0:
-                raise ValueError
-        except ValueError:
-            self.log.warn(
-                "bridge.timeout_invalid",
-                timeout_name=name,
-                timeout_ms=int(default * 1000),
-                detail=f"invalid value '{raw}', using default",
-            )
-            value = default
-
-        self.log.info(
-            "bridge.timeout_config",
-            timeout_name=name,
-            timeout_ms=int(value * 1000),
-        )
-        return value
 
 
 async def main() -> None:
