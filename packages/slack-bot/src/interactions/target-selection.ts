@@ -19,7 +19,9 @@ import {
   deletePendingRequest,
   getLegacyPendingRequest,
   getPendingRequest,
+  updateClaimedPendingRequestLaunchState,
   updatePendingRequestLaunchState,
+  type PendingLaunchState,
 } from "../pending-requests/pending-request-store";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
@@ -125,7 +127,41 @@ export async function handleTargetSelection(
     );
     return;
   }
+  const clientRequestId =
+    requestId ?? (await deriveClientRequestId("slack-legacy-target", [channel, threadKey]));
+  const locator = requestId ? { requestId } : { channel, threadTs: threadKey };
+  let persistedLaunchState: PendingLaunchState | undefined;
+  try {
+    const claimed = await updatePendingRequestLaunchState(
+      env,
+      locator,
+      launchState ?? { selectedValue },
+      launchState?.sessionId
+    );
+    if (!claimed) return;
+    persistedLaunchState = claimed.launchState;
+  } catch {
+    await postMessage(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      "Sorry, I couldn't save the launch state. Please try again.",
+      { thread_ts: threadKey }
+    );
+    return;
+  }
+  if (!persistedLaunchState || persistedLaunchState.selectedValue !== selectedValue) {
+    await postEphemeral(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      selectedBy,
+      "This request has already started with a different target.",
+      { thread_ts: threadKey }
+    );
+    return;
+  }
 
+  const hasPersistedAttachmentReferences =
+    persistedLaunchState.snapshot?.attachmentReferences !== undefined;
   const contextImages = threadContextSource
     ? (
         await fetchInteractiveThreadContext(
@@ -161,7 +197,7 @@ export async function handleTargetSelection(
         slack_error: lookup.error,
       });
     }
-    if (imageOnly && images.length === 0) {
+    if (imageOnly && images.length === 0 && !hasPersistedAttachmentReferences) {
       // The request had no text: without its images there is nothing to run.
       await postMessage(
         env.SLACK_BOT_TOKEN,
@@ -198,10 +234,6 @@ export async function handleTargetSelection(
   const messageText = unattributedPrompt
     ? formatAttributedRequest(actor.senderLabel, message, unattributedPrompt.forwardedMessages)
     : message;
-  const clientRequestId =
-    requestId ?? (await deriveClientRequestId("slack-legacy-target", [channel, threadKey]));
-  const locator = requestId ? { requestId } : { channel, threadTs: threadKey };
-  let persistedLaunchState = launchState;
   const sessionResult = await startSessionAndSendPrompt(env, {
     target,
     channel,
@@ -219,39 +251,41 @@ export async function handleTargetSelection(
     imageOnly,
     traceId,
     clientRequestId,
-    existingSessionId: launchState?.sessionId,
-    launchSnapshot: launchState?.snapshot,
+    existingSessionId: persistedLaunchState.sessionId,
+    launchSnapshot: persistedLaunchState.snapshot,
     onLaunchPrepared: async (snapshot, sessionId) => {
       const nextState = { selectedValue, sessionId, snapshot };
-      const updated = await updatePendingRequestLaunchState(
+      const updated = await updateClaimedPendingRequestLaunchState(
         env,
         locator,
         nextState,
         persistedLaunchState?.sessionId
       );
-      if (
-        !updated ||
-        updated.launchState?.selectedValue !== selectedValue ||
-        updated.launchState.sessionId !== sessionId
-      ) {
+      if (updated.selectedValue !== selectedValue || updated.sessionId !== sessionId) {
         throw new Error("Pending request launch snapshot could not be saved");
       }
-      persistedLaunchState = updated.launchState;
+      persistedLaunchState = updated;
+      if (!persistedLaunchState.snapshot) {
+        throw new Error("Pending request launch snapshot was not saved");
+      }
+      return persistedLaunchState.snapshot;
     },
-    onSessionCreated: async (sessionId, previousSessionId) => {
-      const nextState = { selectedValue, sessionId, snapshot: persistedLaunchState?.snapshot };
-      const updated =
-        previousSessionId === undefined
-          ? await updatePendingRequestLaunchState(env, locator, nextState)
-          : await updatePendingRequestLaunchState(env, locator, nextState, previousSessionId);
-      if (
-        !updated ||
-        updated.launchState?.selectedValue !== selectedValue ||
-        updated.launchState.sessionId !== sessionId
-      ) {
+    onSessionCreated: async (sessionId, previousSessionId, snapshot) => {
+      const nextState = { selectedValue, sessionId, snapshot };
+      const updated = await updateClaimedPendingRequestLaunchState(
+        env,
+        locator,
+        nextState,
+        previousSessionId
+      );
+      if (updated.selectedValue !== selectedValue || updated.sessionId !== sessionId) {
         throw new Error("Pending request launch state could not be saved");
       }
-      persistedLaunchState = updated.launchState;
+      persistedLaunchState = updated;
+      if (!persistedLaunchState.snapshot) {
+        throw new Error("Pending request launch snapshot was not saved");
+      }
+      return persistedLaunchState.snapshot;
     },
   });
   if (!sessionResult) return;

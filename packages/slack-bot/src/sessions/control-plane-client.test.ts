@@ -117,7 +117,7 @@ describe("control plane client timeouts", () => {
     ).resolves.toEqual({ ok: false, reason: "transient" });
   });
 
-  it("accepts the existing prompt when a concurrent idempotent request won", async () => {
+  it("treats a prompt idempotency conflict as a failed delivery", async () => {
     const fetch = vi.fn(
       async () =>
         new Response(
@@ -136,10 +136,7 @@ describe("control plane client timeouts", () => {
         authorId: "slack:U123",
         clientRequestId: "request-1",
       })
-    ).resolves.toEqual({
-      ok: true,
-      data: { messageId: "message-existing", status: "queued" },
-    });
+    ).resolves.toEqual({ ok: false, reason: "transient" });
   });
 });
 

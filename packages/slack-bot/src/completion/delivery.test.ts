@@ -21,6 +21,7 @@ vi.mock("./media-upload", async (importOriginal) => {
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     SLACK_KV: {} as KVNamespace,
+    DB: {} as D1Database,
     SLACK_COMPLETION_QUEUE: {} as Queue,
     CONTROL_PLANE: { fetch: vi.fn() } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",

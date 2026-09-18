@@ -93,7 +93,7 @@ export class PromptQueueFullError extends Error {
 }
 
 export class PromptRequestConflictError extends Error {
-  constructor(readonly existingMessageId?: string) {
+  constructor() {
     super("clientRequestId was already used for a different prompt");
     this.name = "PromptRequestConflictError";
   }
@@ -752,7 +752,7 @@ export class SessionMessageQueue {
             queue_depth_before: queueDepthBefore,
             queue_depth_after: queueDepthBefore,
           });
-          throw new PromptRequestConflictError(existing.id);
+          throw new PromptRequestConflictError();
         }
         this.log.info("prompt.enqueue", {
           event: "prompt.enqueue",

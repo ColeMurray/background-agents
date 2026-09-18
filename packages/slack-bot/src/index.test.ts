@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { Env } from "./types";
-import { makeExecutionContext as makeCtx } from "./test-helpers";
+import { createPendingLaunchStateD1, makeExecutionContext as makeCtx } from "./test-helpers";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import type * as SlackModule from "@open-inspect/shared/slack";
 
@@ -121,6 +121,7 @@ function makeEnv() {
 
   const env = {
     SLACK_KV: createMockKV() as unknown as KVNamespace,
+    DB: createPendingLaunchStateD1(),
     SLACK_COMPLETION_QUEUE: {
       send: vi.fn(),
     },

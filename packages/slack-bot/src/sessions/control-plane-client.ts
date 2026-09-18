@@ -151,18 +151,6 @@ export async function sendPrompt(
       { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
     );
     if (!response.ok) {
-      if (response.status === 409 && clientRequestId) {
-        const conflict = (await response.json().catch(() => null)) as {
-          code?: unknown;
-          existingMessageId?: unknown;
-        } | null;
-        if (
-          conflict?.code === "PROMPT_REQUEST_CONFLICT" &&
-          typeof conflict.existingMessageId === "string"
-        ) {
-          return { ok: true, data: { messageId: conflict.existingMessageId, status: "queued" } };
-        }
-      }
       log.error("control_plane.send_prompt", {
         ...base,
         outcome: "error",

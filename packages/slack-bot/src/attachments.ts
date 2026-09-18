@@ -377,8 +377,7 @@ async function uploadToSession(
   file: PreparedImageAttachments["files"][number],
   authorId: string,
   traceId?: string,
-  clientRequestId?: string,
-  index?: number
+  clientRequestId?: string
 ): Promise<
   { reference: SessionAttachmentReference } | { sessionMissing: boolean; reportDrop: boolean }
 > {
@@ -391,7 +390,7 @@ async function uploadToSession(
         "clientRequestId",
         await deriveClientRequestId("slack-attachment", [
           clientRequestId,
-          attachment.id ? `id:${attachment.id}` : `index:${index}`,
+          attachmentIdentity(attachment),
         ])
       );
     }
@@ -462,8 +461,8 @@ export async function uploadPreparedAttachments(
   clientRequestId?: string
 ): Promise<SlackAttachmentUploadResult> {
   const outcomes = await Promise.all(
-    prepared.files.map((file, index) =>
-      uploadToSession(env, sessionId, file, authorId, traceId, clientRequestId, index)
+    prepared.files.map((file) =>
+      uploadToSession(env, sessionId, file, authorId, traceId, clientRequestId)
     )
   );
   const references: SessionAttachmentReference[] = [];

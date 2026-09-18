@@ -16,6 +16,9 @@ export interface Env {
   // KV namespace
   SLACK_KV: KVNamespace;
 
+  // Strongly consistent launch-state coordination
+  DB: D1Database;
+
   // Service binding to control plane
   CONTROL_PLANE: ControlPlaneFetcher;
 

@@ -41,8 +41,15 @@ export interface StartSessionOptions {
   clientRequestId?: string;
   existingSessionId?: string;
   launchSnapshot?: SessionLaunchSnapshot;
-  onLaunchPrepared?: (snapshot: SessionLaunchSnapshot, sessionId?: string) => Promise<void>;
-  onSessionCreated?: (sessionId: string, previousSessionId?: string) => Promise<void>;
+  onLaunchPrepared?: (
+    snapshot: SessionLaunchSnapshot,
+    sessionId?: string
+  ) => Promise<SessionLaunchSnapshot>;
+  onSessionCreated?: (
+    sessionId: string,
+    previousSessionId: string | undefined,
+    snapshot: SessionLaunchSnapshot
+  ) => Promise<SessionLaunchSnapshot>;
 }
 
 export async function startSessionAndSendPrompt(
@@ -69,15 +76,20 @@ export async function startSessionAndSendPrompt(
     onLaunchPrepared,
     onSessionCreated,
   } = options;
-  // Download image bytes before creating the session: an image-only request
-  // whose images are all lost must never create a session it will not prompt.
+  const persistedAttachmentReferences = launchSnapshot?.attachmentReferences;
+  // Download before creating the session so a stale replacement can re-upload.
+  // Persisted references still let an ordinary replay proceed if Slack is unavailable.
   const preparedImages = await preparePromptImageAttachments(
     env,
     images ?? [],
     imageOnly ? [] : (contextImages ?? []),
     traceId
   );
-  if (imageOnly && preparedImages.files.length === 0) {
+  if (
+    imageOnly &&
+    persistedAttachmentReferences === undefined &&
+    preparedImages.files.length === 0
+  ) {
     await notifyDroppedAttachments(
       env,
       channel,
@@ -125,7 +137,7 @@ export async function startSessionAndSendPrompt(
     };
     if (onLaunchPrepared) {
       try {
-        await onLaunchPrepared(snapshot, existingSessionId);
+        snapshot = await onLaunchPrepared(snapshot, existingSessionId);
       } catch {
         await postMessage(
           env.SLACK_BOT_TOKEN,
@@ -168,8 +180,7 @@ export async function startSessionAndSendPrompt(
   ): Promise<boolean> => {
     if (!onSessionCreated) return true;
     try {
-      if (previousSessionId === undefined) await onSessionCreated(sessionId);
-      else await onSessionCreated(sessionId, previousSessionId);
+      deliverySnapshot = await onSessionCreated(sessionId, previousSessionId, deliverySnapshot);
       return true;
     } catch {
       await postMessage(
@@ -197,13 +208,22 @@ export async function startSessionAndSendPrompt(
       threadTs,
       traceId,
       ...(deliverySnapshot.attachmentReferences
-        ? { attachmentReferences: deliverySnapshot.attachmentReferences }
+        ? {
+            attachmentReferences: deliverySnapshot.attachmentReferences,
+            attachmentDrops: deliverySnapshot.attachmentDrops,
+          }
         : {}),
       ...(onLaunchPrepared
         ? {
-            onAttachmentsPrepared: async (attachmentReferences) => {
-              deliverySnapshot = { ...deliverySnapshot, attachmentReferences };
-              await onLaunchPrepared(deliverySnapshot, sessionId);
+            onAttachmentsPrepared: async (attachmentReferences, attachmentDrops) => {
+              deliverySnapshot = await onLaunchPrepared(
+                { ...deliverySnapshot, attachmentReferences, attachmentDrops },
+                sessionId
+              );
+              return {
+                references: deliverySnapshot.attachmentReferences ?? attachmentReferences,
+                dropped: deliverySnapshot.attachmentDrops ?? attachmentDrops,
+              };
             },
           }
         : {}),
@@ -213,13 +233,14 @@ export async function startSessionAndSendPrompt(
   if (!delivery.ok && delivery.reason === "stale" && existingSessionId && clientRequestId) {
     const replacement = await createNewSession();
     if (replacement) {
-      if (
-        replacement.sessionId !== session.sessionId &&
-        !(await persistSession(replacement.sessionId, session.sessionId))
-      ) {
-        return null;
-      }
+      const previousSessionId = session.sessionId;
       session = replacement;
+      deliverySnapshot = {
+        ...deliverySnapshot,
+        attachmentReferences: undefined,
+        attachmentDrops: undefined,
+      };
+      if (!(await persistSession(session.sessionId, previousSessionId))) return null;
       delivery = await deliver(session.sessionId);
     }
   }

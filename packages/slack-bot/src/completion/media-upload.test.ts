@@ -16,6 +16,7 @@ function mediaResponse(sizeBytes = 9, body: BodyInit = "png-bytes"): Response {
 function makeEnv(fetchMedia: () => Promise<Response> = async () => mediaResponse()): Env {
   return {
     SLACK_KV: {} as KVNamespace,
+    DB: {} as D1Database,
     SLACK_COMPLETION_QUEUE: {} as Queue,
     CONTROL_PLANE: { fetch: vi.fn(fetchMedia) } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",

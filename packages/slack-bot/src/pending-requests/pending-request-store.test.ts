@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../types";
+import { createPendingLaunchStateD1 } from "../test-helpers";
 import {
   deleteLegacyPendingRequest,
   deletePendingRequest,
@@ -29,6 +30,7 @@ function makeEnv() {
   const deleteValue = vi.fn();
   const env = {
     SLACK_KV: { get, put, delete: deleteValue } as unknown as KVNamespace,
+    DB: createPendingLaunchStateD1(),
   } as Env;
   return { env, get, put, deleteValue };
 }
@@ -89,7 +91,7 @@ describe("pending request store", () => {
     expect(mocks.deleteValue).toHaveBeenCalledWith(`pending:${REQUEST_ID}`);
   });
 
-  it("round-trips recoverable launch state with the same privacy and TTL policy", async () => {
+  it("round-trips recoverable launch state without rewriting the pending KV record", async () => {
     const pending = { ...request(), ignoredSecret: "do-not-persist" };
     mocks.get.mockResolvedValue(pending);
     const snapshot = {
@@ -106,6 +108,7 @@ describe("pending request store", () => {
         reasoningEffort: "high",
       },
       attachmentReferences: [{ attachmentId: "att-1", name: "screenshot.png" }],
+      attachmentDrops: ["upload_rejected" as const],
     };
 
     const updated = await updatePendingRequestLaunchState(
@@ -118,11 +121,9 @@ describe("pending request store", () => {
       ...request(),
       launchState: { selectedValue: "acme/app", sessionId: "session-1", snapshot },
     });
-    expect(mocks.put).toHaveBeenCalledWith(`pending:${REQUEST_ID}`, expect.any(String), {
-      expirationTtl: 3600,
-    });
-    expect(JSON.parse(mocks.put.mock.calls[0][1])).toEqual(updated);
-    expect(mocks.put.mock.calls[0][1]).not.toContain("ignoredSecret");
+    expect(mocks.put).not.toHaveBeenCalled();
+    mocks.get.mockResolvedValue(request());
+    await expect(getPendingRequest(mocks.env, REQUEST_ID)).resolves.toEqual(updated);
   });
 
   it("preserves an existing launch state when a competing update reloads it", async () => {
@@ -156,6 +157,30 @@ describe("pending request store", () => {
     ).resolves.toEqual(
       request({ launchState: { selectedValue: "acme/app", sessionId: "session-2" } })
     );
+  });
+
+  it("atomically preserves the first selected target across concurrent updates", async () => {
+    mocks.get.mockResolvedValue(request());
+
+    const [first, second] = await Promise.all([
+      updatePendingRequestLaunchState(
+        mocks.env,
+        { requestId: REQUEST_ID },
+        {
+          selectedValue: "acme/app",
+        }
+      ),
+      updatePendingRequestLaunchState(
+        mocks.env,
+        { requestId: REQUEST_ID },
+        {
+          selectedValue: "acme/api",
+        }
+      ),
+    ]);
+
+    expect(first?.launchState).toEqual({ selectedValue: "acme/app" });
+    expect(second?.launchState).toEqual({ selectedValue: "acme/app" });
   });
 
   it("rejects missing, malformed, and mismatched records", async () => {

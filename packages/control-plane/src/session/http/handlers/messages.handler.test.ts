@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import { MessagesHandler } from "./messages.handler";
 import type { MessageService } from "../../services/message.service";
-import { PromptRequestConflictError } from "../../message-queue";
 
 function createHandler() {
   const messageService = {
@@ -131,34 +130,6 @@ describe("MessagesHandler", () => {
 
     expect(response.status).toBe(400);
     expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
-  });
-
-  it("identifies the existing message for an idempotency conflict", async () => {
-    const { handler, messageService, log } = createHandler();
-    vi.mocked(messageService.enqueuePrompt).mockRejectedValue(
-      new PromptRequestConflictError("message-existing")
-    );
-
-    const response = await handler.enqueuePrompt(
-      new Request("http://internal/internal/prompt", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          content: "hello",
-          authorId: "user-1",
-          source: "slack",
-          clientRequestId: "request-1",
-        }),
-      }),
-      log
-    );
-
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual({
-      error: "clientRequestId was already used for a different prompt",
-      code: "PROMPT_REQUEST_CONFLICT",
-      existingMessageId: "message-existing",
-    });
   });
 
   it("logs and rethrows when enqueue prompt parsing fails", async () => {
