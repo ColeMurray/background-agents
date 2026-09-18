@@ -32,6 +32,8 @@ describe("pending request store", () => {
       previousMessages: ["Earlier context"],
       channelName: "engineering",
       channelDescription: "Build discussion",
+      messageTs: "222.000003",
+      threadContextSource: { threadTs: "111.222", beforeTs: "222.000003" },
     };
 
     await storePendingRequest(mocks.env, "C123", "111.222", request);
@@ -84,6 +86,8 @@ describe("pending request store", () => {
       previousMessages: ["Earlier context"],
       channelName: "engineering",
       channelDescription: "Build discussion",
+      messageTs: "222.000003",
+      threadContextSource: { threadTs: "111.222", beforeTs: "222.000003" },
     };
     mocks.get.mockResolvedValueOnce(minimal).mockResolvedValueOnce(complete);
 

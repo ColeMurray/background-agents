@@ -99,6 +99,51 @@ function isTrustedSlackFileUrl(raw: string): boolean {
   return url.hostname === "slack.com" || url.hostname.endsWith(".slack.com");
 }
 
+function isForwardableSlackImage(file: SlackMessageFile): boolean {
+  const downloadUrl = file.url_private_download || file.url_private;
+  return Boolean(
+    file.mimetype &&
+    SUPPORTED_MIME_TYPES.has(file.mimetype) &&
+    downloadUrl &&
+    file.mode !== "external" &&
+    isTrustedSlackFileUrl(downloadUrl)
+  );
+}
+
+/**
+ * Render bounded, URL-free metadata for files carried by an earlier thread
+ * message. Automation context remains byte-free; interactive context can also
+ * forward supported images through the normal attachment pipeline.
+ */
+export function slackFileAnnotations(
+  files: SlackMessageFile[] | undefined,
+  mode: "interactive" | "automation"
+): string[] {
+  if (!files?.length) return [];
+  const annotations = files.slice(0, MAX_SESSION_ATTACHMENTS_PER_MESSAGE).map((file) => {
+    const supported = isForwardableSlackImage(file);
+    const status = supported
+      ? mode === "interactive"
+        ? "supported image; eligible for secure forwarding"
+        : "supported image; not forwarded by Slack Message automations"
+      : "unsupported or unavailable file; not forwarded";
+    return `Slack file: ${JSON.stringify({
+      name: (file.name || file.title || file.id || "unnamed file").slice(
+        0,
+        ATTACHMENT_NAME_MAX_LENGTH
+      ),
+      mimetype: file.mimetype || "unknown",
+      status,
+    })}`;
+  });
+  if (files.length > MAX_SESSION_ATTACHMENTS_PER_MESSAGE) {
+    annotations.push(
+      `Slack files: ${files.length - MAX_SESSION_ATTACHMENTS_PER_MESSAGE} additional file(s) omitted from context`
+    );
+  }
+  return annotations;
+}
+
 /**
  * Normalize raw Slack file payloads into validated image attachments. Called
  * once where files enter the bot (event handlers, pending-request delivery);
@@ -135,6 +180,10 @@ export function toImageAttachments(
     });
   }
   return attachments;
+}
+
+function attachmentIdentity(attachment: SlackImageAttachment): string {
+  return attachment.id ? `id:${attachment.id}` : `url:${attachment.downloadUrl}`;
 }
 
 /**
@@ -243,6 +292,37 @@ export async function prepareImageAttachments(
     dropped.push("over_cap");
   }
   return { files, dropped };
+}
+
+/**
+ * Prepare current-message images first, then fill the remaining prompt slots
+ * with deduplicated images from earlier selected thread messages. Context-only
+ * overflow is silently omitted because it is not a dropped current-user input.
+ */
+export async function preparePromptImageAttachments(
+  env: Env,
+  current: SlackImageAttachment[],
+  context: SlackImageAttachment[],
+  traceId?: string
+): Promise<PreparedImageAttachments> {
+  const primary = await prepareImageAttachments(env, current, traceId);
+  const remaining = MAX_SESSION_ATTACHMENTS_PER_MESSAGE - primary.files.length;
+  if (remaining <= 0 || context.length === 0) return primary;
+
+  const seen = new Set(current.map(attachmentIdentity));
+  const contextual = context.filter((attachment) => {
+    const identity = attachmentIdentity(attachment);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+  const secondary = await prepareImageAttachments(env, contextual.slice(0, remaining), traceId);
+  return {
+    files: [...primary.files, ...secondary.files],
+    // Only current-message losses are user input errors. Earlier context still
+    // has a textual file annotation when its bytes cannot be forwarded.
+    dropped: primary.dropped,
+  };
 }
 
 /**

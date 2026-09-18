@@ -6,6 +6,7 @@ import { getPendingRequest, deletePendingRequest } from "../pending-requests/pen
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { resolveSlackActorIdentity } from "../user-identity";
+import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 
 vi.mock(import("@open-inspect/shared/slack"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -35,6 +36,10 @@ vi.mock("../target-clarification", () => ({
 
 vi.mock("../user-identity", () => ({
   resolveSlackActorIdentity: vi.fn(),
+}));
+
+vi.mock("../interactive-thread-context", () => ({
+  fetchInteractiveThreadContext: vi.fn(),
 }));
 
 const repositoryTarget = {
@@ -67,6 +72,7 @@ beforeEach(() => {
     senderLabel: "Ajan (U123)",
     displayName: "Ajan",
   });
+  vi.mocked(fetchInteractiveThreadContext).mockResolvedValue(undefined);
 });
 
 describe("handleTargetSelection", () => {
@@ -140,6 +146,53 @@ describe("handleTargetSelection", () => {
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ messageText: "Fix the deploy", images: [] })
+    );
+  });
+
+  it("re-fetches prior context images by coordinates and keeps the original checkpoint", async () => {
+    const contextImage = {
+      id: "F-prior",
+      name: "prior.png",
+      mimetype: "image/png",
+      downloadUrl: "https://files.slack.com/prior.png",
+    };
+    vi.mocked(getPendingRequest).mockResolvedValue({
+      message: "Inspect the image above",
+      userId: "U123",
+      messageTs: "111.000003",
+      previousMessages: ["Earlier image annotation"],
+      threadContextSource: { threadTs: "100.000001", beforeTs: "111.000003" },
+    });
+    vi.mocked(fetchInteractiveThreadContext).mockResolvedValue({
+      messages: ["Fresh annotation"],
+      images: [contextImage],
+    });
+    const env = makeEnv();
+
+    await handleTargetSelection(
+      "acme/app",
+      "C123",
+      "222.333",
+      "100.000001",
+      env,
+      "trace-1",
+      vi.fn()
+    );
+
+    expect(fetchInteractiveThreadContext).toHaveBeenCalledWith(
+      env,
+      "C123",
+      "100.000001",
+      { beforeTs: "111.000003", includeBotMessages: true },
+      "trace-1"
+    );
+    expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        messageTs: "111.000003",
+        previousMessages: ["Earlier image annotation"],
+        contextImages: [contextImage],
+      })
     );
   });
 

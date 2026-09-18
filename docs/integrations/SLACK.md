@@ -109,6 +109,12 @@ session or follow-up is sent.
 This feature requires the Slack app's `files:read` bot scope and a reinstall after adding the scope.
 Remote files hosted outside Slack and non-image attachments are not forwarded.
 
+Interactive requests also retain files from the recent Slack thread context. A supported image on an
+earlier selected message is forwarded through the same protected attachment path; file-only messages
+remain visible through a URL-free text annotation even when their file type is unsupported or the
+image cannot be retrieved. Images on the current request take priority within the six-image prompt
+limit, followed by deduplicated images from earlier context.
+
 ### With forwarded messages
 
 Forward (share) another Slack message to a DM, to a channel request that `@mentions` the bot, or to
@@ -189,9 +195,12 @@ Open-Inspect keeps the Slack thread connected to the session for about 7 days. I
 that mapping expires, or if you reply outside the thread, the bot may start repository selection
 again and create a new session.
 
-For follow-ups, Open-Inspect includes recent thread context with the new prompt. It also adds an
-eyes reaction while the follow-up is being processed, then removes it when the completion reply is
-posted.
+For follow-ups, Open-Inspect includes up to ten recent thread messages posted after the preceding
+prompt and strictly before the new request. Replies that arrive while Slack history is being fetched
+are not exposed to the earlier turn; they remain eligible for a later follow-up. Earlier file-only
+messages receive a speaker-and-timestamp annotation, and supported images are forwarded as described
+above. Open-Inspect also adds an eyes reaction while the follow-up is being processed, then removes
+it when the completion reply is posted.
 
 ---
 
@@ -292,11 +301,13 @@ in a watched channel — without `@mentioning` the bot. This is distinct from th
 `@mention` flow: it is driven by [automations](../AUTOMATIONS.md#slack-message-triggers) with
 keyword, substring, or regex conditions.
 
-Slack Message automations ingest message text only. A message that carries an attachment does start
-an automation, but on its text alone — the attachment itself is not forwarded, so an image-only
-message with no text starts nothing. Attachments on automation thread replies are likewise not
-forwarded to the session, and the body of a forwarded message is not read. Use an interactive DM or
-`@mention` when the agent needs an image or a forwarded message.
+Slack Message automations ingest triggering-message text only. A triggering message that carries an
+attachment starts an automation on its text alone — the attachment itself is not forwarded, so an
+image-only trigger starts nothing. Attachments on automation thread replies are likewise not sent as
+bytes, and the body of a forwarded message is not read. When an earlier message selected for thread
+context has files, URL-free file metadata is retained in that context so the message does not
+disappear; supported images are explicitly marked as not forwarded by automations. Use an
+interactive DM or `@mention` when the agent needs image bytes or a forwarded message.
 
 When the triggering message is a **reply**, the agent also receives the thread it was posted in, so
 it can read the reply in context rather than as an isolated sentence. The thread is read only once a
@@ -304,12 +315,13 @@ run has actually been admitted — never for messages that match no automation, 
 continue an existing session, or for firings dropped as concurrent or duplicate — and once per
 message however many automations match it. Top-level messages have no thread to read.
 
-The context contains up to 20 earlier messages total; on long threads, the opening message is
-preserved alongside the most recent replies. Each message is truncated to 1,024 characters, and its
-speaker record identifies people, apps, and the bot's own earlier turns without relying on a display
-name alone. It is passed as JSON and labelled untrusted: Slack text is written by people who may not
-be asking the agent anything, so it is presented as a record of the conversation rather than as
-instructions. If Slack cannot be read, the run starts with no thread history rather than failing.
+The context contains up to 20 messages posted strictly before the trigger; on long threads, the
+opening message is preserved alongside the most recent replies. Each message is truncated to 1,024
+characters, and its record includes the Slack timestamp plus a speaker identity for people, apps,
+and the bot's own earlier turns without relying on a display name alone. It is passed as JSON and
+labelled untrusted: Slack text is written by people who may not be asking the agent anything, so it
+is presented as a record of the conversation rather than as instructions. If Slack cannot be read,
+the run starts with no thread history rather than failing.
 
 ### Slack app setup
 

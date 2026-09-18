@@ -3,18 +3,14 @@ import {
   escapeMrkdwnText,
   getChannelInfo,
   getMessageDetails,
-  getThreadMessages,
   postMessage,
-  resolveUserNames,
-  selectThreadWindow,
-  classifyThreadSpeaker,
   updateMessage,
 } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared/slack";
 import {
   IMAGE_ONLY_PROMPT_TEXT,
-  prepareImageAttachments,
+  preparePromptImageAttachments,
   toImageAttachments,
   type SlackImageAttachment,
 } from "../attachments";
@@ -27,6 +23,7 @@ import {
   type ForwardedMessages,
 } from "../forwarded-messages";
 import { createLogger } from "../logger";
+import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import {
   buildWorkingMessageBlocks,
   scheduleStartingStatus,
@@ -52,60 +49,6 @@ import type { Env } from "../types";
 import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-identity";
 
 const log = createLogger("handler");
-const THREAD_HISTORY_MESSAGE_LIMIT = 10;
-
-interface ThreadHistoryOptions {
-  /** ts of the message currently being handled, excluded from the history. */
-  excludeTs: string;
-  /** Only include messages posted strictly after this Slack ts. */
-  sinceTs?: string;
-  includeBotMessages: boolean;
-}
-
-/**
- * Collect the last THREAD_HISTORY_MESSAGE_LIMIT relevant thread messages as
- * "[name]: text" lines. getThreadMessages paginates the full window, so the
- * newest messages survive the cap even in long threads. Returns [] when the
- * window holds no relevant messages and undefined when Slack could not be
- * queried — callers use the distinction to decide whether the window was
- * actually considered.
- */
-async function fetchThreadHistory(
-  env: Env,
-  channel: string,
-  threadTs: string,
-  options: ThreadHistoryOptions
-): Promise<string[] | undefined> {
-  const { excludeTs, sinceTs, includeBotMessages } = options;
-  try {
-    const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, threadTs, sinceTs);
-    if (!threadResult.ok || !threadResult.messages) return undefined;
-    // Window selection is shared with the channel-trigger path so the two do not
-    // drift again (`sinceTs` re-checks the boundary because conversations.replies
-    // can still return the parent message when `oldest` is set).
-    const relevant = selectThreadWindow(threadResult.messages, {
-      excludeTs,
-      sinceTs,
-      limit: THREAD_HISTORY_MESSAGE_LIMIT,
-      excludeBots: !includeBotMessages,
-    });
-    if (relevant.length === 0) return [];
-    const speakers = relevant.map((message) => classifyThreadSpeaker(message));
-    const uniqueUserIds = [
-      ...new Set(speakers.flatMap((speaker) => (speaker.kind === "user" ? [speaker.id] : []))),
-    ];
-    const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
-    return relevant.map((m, index) => {
-      const speaker = speakers[index]!;
-      if (speaker.kind === "app") return `[Bot]: ${m.text}`;
-      const name = speaker.kind === "user" ? (userNames.get(speaker.id) ?? speaker.id) : "Unknown";
-      return `[${name}]: ${m.text}`;
-    });
-  } catch {
-    // Thread context is best effort.
-    return undefined;
-  }
-}
 
 interface IncomingMessageContent {
   text: string;
@@ -190,18 +133,26 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         : "";
       // The session already has its own turns, so only forward the human
       // discussion that happened in the thread since the last prompt.
-      const [resolvedActor, interimMessages] = await Promise.all([
+      const [resolvedActor, interimHistory] = await Promise.all([
         resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user),
         existingSession.lastPromptTs
-          ? fetchThreadHistory(env, channel, threadTs, {
-              excludeTs: ts,
-              sinceTs: existingSession.lastPromptTs,
-              includeBotMessages: false,
-            })
+          ? fetchInteractiveThreadContext(
+              env,
+              channel,
+              threadTs,
+              {
+                beforeTs: ts,
+                sinceTs: existingSession.lastPromptTs,
+                includeBotMessages: false,
+              },
+              traceId
+            )
           : Promise.resolve(undefined),
       ]);
       actor = resolvedActor;
-      const interimContext = interimMessages ? formatInterimThreadContext(interimMessages) : "";
+      const interimContext = interimHistory
+        ? formatInterimThreadContext(interimHistory.messages)
+        : "";
       const promptResult = await deliverPrompt(env, {
         sessionId: existingSession.sessionId,
         content:
@@ -209,7 +160,12 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
           interimContext +
           formatAttributedRequest(actor.senderLabel, requestText, forwarded.entries),
         authorId: `slack:${user}`,
-        attachments: await prepareImageAttachments(env, images, traceId),
+        attachments: await preparePromptImageAttachments(
+          env,
+          images,
+          imageOnly ? [] : (interimHistory?.images ?? []),
+          traceId
+        ),
         imageOnly,
         callbackContext,
         channel,
@@ -221,7 +177,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         // When the interim fetch failed, keeping the old watermark lets the
         // next follow-up retry the window; at worst it re-includes this
         // message's text as interim context.
-        const interimFetchFailed = Boolean(existingSession.lastPromptTs) && !interimMessages;
+        const interimFetchFailed = Boolean(existingSession.lastPromptTs) && !interimHistory;
         if (!interimFetchFailed) {
           await advanceLastPromptTs(env, channel, threadTs, ts);
         }
@@ -259,9 +215,16 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     }
   }
 
-  const previousMessages = threadTs
-    ? await fetchThreadHistory(env, channel, threadTs, { excludeTs: ts, includeBotMessages: true })
+  const threadHistory = threadTs
+    ? await fetchInteractiveThreadContext(
+        env,
+        channel,
+        threadTs,
+        { beforeTs: ts, includeBotMessages: true },
+        traceId
+      )
     : undefined;
+  const previousMessages = threadHistory?.messages;
 
   const result = await createClassifier(env).classify(
     promptText,
@@ -287,6 +250,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       channelName,
       channelDescription,
       imageOnly: imageOnly || undefined,
+      messageTs: ts,
+      threadContextSource: threadTs ? { threadTs, beforeTs: ts } : undefined,
       // Persist where the images live, not the file objects; they are
       // re-fetched from Slack when the user resolves the clarification.
       sourceMessage: images.length > 0 ? { ts, threadTs } : undefined,
@@ -323,6 +288,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     channelName,
     channelDescription,
     images,
+    contextImages: threadHistory?.images,
     imageOnly,
     traceId,
   });

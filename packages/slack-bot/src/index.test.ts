@@ -1004,6 +1004,12 @@ describe("POST /events", () => {
         { type: "message", text: "i think we should do x", user: "U789", ts: "225.000" },
         { type: "message", text: "Working on acme/app...", bot_id: "B123", ts: "230.000" },
         { type: "message", text: "<@B123> see the above chat", user: "U123", ts: "333.444" },
+        {
+          type: "message",
+          text: "arrived after the trigger",
+          user: "U456",
+          ts: "333.444001",
+        },
       ],
     });
     const env = makeSessionEnv(order);
@@ -1057,6 +1063,7 @@ describe("POST /events", () => {
     // Bot replies and messages already forwarded stay out of the follow-up.
     expect(content).not.toContain("Working on acme/app");
     expect(content).not.toContain("do this action");
+    expect(content).not.toContain("arrived after the trigger");
     expect(content).toContain("see the above chat");
     expect(content).toContain("[Ajan Admin (U123)]: see the above chat");
     // The triggering message itself is the prompt, not interim context.
@@ -1064,6 +1071,75 @@ describe("POST /events", () => {
     await expect(kv.get("thread:C123:111.222", "json")).resolves.toEqual(
       expect.objectContaining({ sessionId: "session-1", lastPromptTs: "333.444" })
     );
+
+    slackFetch.mockRestore();
+  });
+
+  it("forwards a prior image-only thread message with its causal context", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, {
+      threadMessages: [
+        { type: "message", text: "original request", user: "U123", ts: "111.222" },
+        {
+          type: "message",
+          text: "",
+          user: "U456",
+          ts: "222.000",
+          files: [
+            {
+              id: "F-prior",
+              name: "prior-screenshot.png",
+              mimetype: "image/png",
+              url_private: "https://files.slack.com/files-pri/T1-F-prior/prior.png",
+              size: 16,
+            },
+          ],
+        },
+        {
+          type: "message",
+          text: "<@B123> inspect the screenshot above",
+          user: "U123",
+          ts: "333.444",
+        },
+      ],
+    });
+    const env = makeSessionEnv(order);
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+        lastPromptTs: "111.222",
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> inspect the screenshot above",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const [prompt] = promptFetchBodies(env.CONTROL_PLANE.fetch);
+    expect(String(prompt!.content)).toContain("[U456 at Slack ts 222.000]: (no text)");
+    expect(String(prompt!.content)).toContain('"name":"prior-screenshot.png"');
+    expect(String(prompt!.content)).not.toContain("https://files.slack.com");
+    expect(prompt!.attachments).toEqual([{ attachmentId: "att-1", name: "prior-screenshot.png" }]);
+    expect(order.indexOf("filedownload")).toBeLessThan(order.indexOf("attachment"));
+    expect(order.indexOf("attachment")).toBeLessThan(order.indexOf("prompt"));
 
     slackFetch.mockRestore();
   });

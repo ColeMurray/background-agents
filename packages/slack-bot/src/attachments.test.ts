@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   notifyDroppedAttachments,
   prepareImageAttachments,
+  preparePromptImageAttachments,
+  slackFileAnnotations,
   toImageAttachments,
   uploadPreparedAttachments,
   type SlackImageAttachment,
@@ -102,6 +104,29 @@ describe("toImageAttachments", () => {
     ]);
     expect(attachment!.downloadUrl).toBe("https://files.slack.com/download/F1");
     expect(attachment!.size).toBe(1024);
+  });
+});
+
+describe("slackFileAnnotations", () => {
+  it("describes supported and unsupported files without exposing private URLs", () => {
+    const annotations = slackFileAnnotations(
+      [
+        pngFile,
+        {
+          id: "F2",
+          name: "report.pdf",
+          mimetype: "application/pdf",
+          url_private: "https://files.slack.com/private/report.pdf",
+        },
+      ],
+      "interactive"
+    ).join("\n");
+
+    expect(annotations).toContain("screenshot.png");
+    expect(annotations).toContain("eligible for secure forwarding");
+    expect(annotations).toContain("report.pdf");
+    expect(annotations).toContain("unsupported or unavailable file");
+    expect(annotations).not.toContain("https://");
   });
 });
 
@@ -219,6 +244,26 @@ describe("prepareImageAttachments", () => {
 
     expect(prepared).toEqual({ files: [], dropped: [] });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("preparePromptImageAttachments", () => {
+  it("prioritizes current images, deduplicates context, and fills remaining slots", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("denied", { status: 403 }))
+      .mockResolvedValueOnce(imageBytesResponse())
+      .mockResolvedValueOnce(imageBytesResponse());
+    const current = [pngAttachment, { ...pngAttachment, id: "F2", name: "current-2.png" }];
+    const context = [{ ...pngAttachment }, { ...pngAttachment, id: "F3", name: "prior.png" }];
+
+    const prepared = await preparePromptImageAttachments(makeEnv(), current, context);
+
+    expect(prepared.files.map((file) => file.attachment.name)).toEqual([
+      "current-2.png",
+      "prior.png",
+    ]);
+    expect(prepared.dropped).toEqual(["download_failed"]);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
   });
 });
 

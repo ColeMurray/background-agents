@@ -477,11 +477,33 @@ export async function listChannels(
   return { ok: true, channels };
 }
 
+/**
+ * A file object as it appears on a Slack message (subset of fields we use).
+ *
+ * The schema is the source of truth: `SlackMessageFile` is inferred from it and
+ * inbound-event and thread-history validation reuse it, so adding a field here
+ * reaches the type and both trust boundaries at once.
+ */
+export const slackMessageFileSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  title: z.string().optional(),
+  mimetype: z.string().optional(),
+  url_private: z.string().optional(),
+  url_private_download: z.string().optional(),
+  size: z.number().optional(),
+  /** "external" marks remote files whose url_private is third-party-hosted. */
+  mode: z.string().optional(),
+});
+
+export type SlackMessageFile = z.infer<typeof slackMessageFileSchema>;
+
 const slackThreadMessageSchema = z.object({
   ts: z.string(),
   text: z.string(),
   user: z.string().optional(),
   bot_id: z.string().optional(),
+  files: z.array(slackMessageFileSchema).optional(),
 });
 
 export type SlackThreadMessage = z.infer<typeof slackThreadMessageSchema>;
@@ -533,27 +555,6 @@ export async function getThreadMessages(
   }
   return { ok: true, messages };
 }
-
-/**
- * A file object as it appears on a Slack message (subset of fields we use).
- *
- * The schema is the source of truth: `SlackMessageFile` is inferred from it and
- * inbound-event validation reuses it, so adding a field here reaches both the
- * type and the trust boundary at once.
- */
-export const slackMessageFileSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().optional(),
-  title: z.string().optional(),
-  mimetype: z.string().optional(),
-  url_private: z.string().optional(),
-  url_private_download: z.string().optional(),
-  size: z.number().optional(),
-  /** "external" marks remote files whose url_private is third-party-hosted. */
-  mode: z.string().optional(),
-});
-
-export type SlackMessageFile = z.infer<typeof slackMessageFileSchema>;
 
 /**
  * A secondary attachment on a Slack message (subset of fields we use).

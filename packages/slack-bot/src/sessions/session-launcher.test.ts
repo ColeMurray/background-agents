@@ -13,7 +13,7 @@ import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import { postMessage } from "@open-inspect/shared/slack";
 import {
   notifyDroppedAttachments,
-  prepareImageAttachments,
+  preparePromptImageAttachments,
   type SlackImageAttachment,
 } from "../attachments";
 
@@ -22,7 +22,7 @@ vi.mock("@open-inspect/shared/slack", () => ({
 }));
 
 vi.mock("../attachments", () => ({
-  prepareImageAttachments: vi.fn(async () => ({ files: [], dropped: [] })),
+  preparePromptImageAttachments: vi.fn(async () => ({ files: [], dropped: [] })),
   notifyDroppedAttachments: vi.fn(async () => {}),
 }));
 
@@ -122,7 +122,7 @@ describe("startSessionAndSendPrompt", () => {
     });
     vi.mocked(getUserRepoBranchPreference).mockResolvedValue("repo-override-branch");
     vi.mocked(createSession).mockResolvedValue({ sessionId: "session-1", status: "created" });
-    vi.mocked(prepareImageAttachments).mockResolvedValue({ files: [], dropped: [] });
+    vi.mocked(preparePromptImageAttachments).mockResolvedValue({ files: [], dropped: [] });
     vi.mocked(deliverPrompt).mockResolvedValue({ ok: true, data: { messageId: "message-1" } });
     vi.mocked(buildThreadSession).mockReturnValue({
       sessionId: "session-1",
@@ -316,7 +316,15 @@ describe("startSessionAndSendPrompt", () => {
       files: [{ attachment: images[0]!, bytes: new Uint8Array(4) }],
       dropped: ["download_failed" as const],
     };
-    vi.mocked(prepareImageAttachments).mockResolvedValue(prepared);
+    const contextImages: SlackImageAttachment[] = [
+      {
+        id: "F2",
+        name: "earlier.png",
+        mimetype: "image/png",
+        downloadUrl: "https://files.slack.com/earlier.png",
+      },
+    ];
+    vi.mocked(preparePromptImageAttachments).mockResolvedValue(prepared);
     const env = makeEnv();
 
     await expect(
@@ -327,12 +335,18 @@ describe("startSessionAndSendPrompt", () => {
         messageText: "What is wrong in this screenshot?",
         actor,
         images,
+        contextImages,
         traceId: "trace-1",
       })
     ).resolves.toEqual({ sessionId: "session-1" });
 
-    expect(prepareImageAttachments).toHaveBeenCalledWith(env, images, "trace-1");
-    const prepareOrder = vi.mocked(prepareImageAttachments).mock.invocationCallOrder[0]!;
+    expect(preparePromptImageAttachments).toHaveBeenCalledWith(
+      env,
+      images,
+      contextImages,
+      "trace-1"
+    );
+    const prepareOrder = vi.mocked(preparePromptImageAttachments).mock.invocationCallOrder[0]!;
     const createOrder = vi.mocked(createSession).mock.invocationCallOrder[0]!;
     expect(prepareOrder).toBeLessThan(createOrder);
     expect(deliverPrompt).toHaveBeenCalledWith(
@@ -347,7 +361,7 @@ describe("startSessionAndSendPrompt", () => {
   });
 
   it("never creates a session for an image-only request whose images were all lost", async () => {
-    vi.mocked(prepareImageAttachments).mockResolvedValue({
+    vi.mocked(preparePromptImageAttachments).mockResolvedValue({
       files: [],
       dropped: ["download_failed"],
     });
@@ -385,7 +399,7 @@ describe("startSessionAndSendPrompt", () => {
 
   it("posts no extra error when delivery already notified an image-only total loss", async () => {
     vi.mocked(deliverPrompt).mockResolvedValue({ ok: false, reason: "no_images_delivered" });
-    vi.mocked(prepareImageAttachments).mockResolvedValue({
+    vi.mocked(preparePromptImageAttachments).mockResolvedValue({
       files: [
         {
           attachment: {

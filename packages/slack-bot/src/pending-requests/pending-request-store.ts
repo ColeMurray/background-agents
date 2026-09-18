@@ -14,6 +14,11 @@ const sourceMessageSchema = z.object({
   threadTs: z.string().optional(),
 });
 
+const threadContextSourceSchema = z.object({
+  threadTs: z.string().min(1),
+  beforeTs: z.string().min(1),
+});
+
 const unattributedPromptSchema = z.object({
   forwardedMessages: z.array(z.string()),
 });
@@ -28,7 +33,11 @@ const pendingRequestSchema = z.object({
   channelDescription: z.string().optional(),
   /** True when the original message had no user text, only images. */
   imageOnly: z.boolean().optional(),
+  /** Original trigger ts, used as the eventual follow-up checkpoint. */
+  messageTs: z.string().min(1).optional(),
   sourceMessage: sourceMessageSchema.optional(),
+  /** Coordinates used to re-fetch prior images without persisting Slack URLs. */
+  threadContextSource: threadContextSourceSchema.optional(),
 });
 
 export type PendingRequest = z.infer<typeof pendingRequestSchema>;

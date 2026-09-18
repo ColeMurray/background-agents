@@ -15,6 +15,7 @@ import {
   selectThreadWindow,
 } from "@open-inspect/shared/slack";
 import type { Env } from "./types";
+import { slackFileAnnotations } from "./attachments";
 import { getBotUserId } from "./bot-identity";
 import { createLogger } from "./logger";
 
@@ -38,6 +39,7 @@ type ThreadContextSpeaker =
 
 export interface ThreadContextRecord {
   speaker: ThreadContextSpeaker;
+  ts: string;
   text: string;
 }
 
@@ -117,6 +119,12 @@ export async function buildThreadContextForTrigger(
 
   const records = window.map((message, index): ThreadContextRecord => {
     const speaker = speakers[index]!;
+    const text = [
+      message.text.trim() || "(no text)",
+      ...slackFileAnnotations(message.files, "automation"),
+    ]
+      .join("\n")
+      .slice(0, THREAD_CONTEXT_MESSAGE_MAX_LENGTH);
     return {
       speaker:
         speaker.kind === "user"
@@ -125,7 +133,8 @@ export async function buildThreadContextForTrigger(
               displayName: names.get(speaker.id) ?? speaker.id,
             }
           : speaker,
-      text: message.text.trim().slice(0, THREAD_CONTEXT_MESSAGE_MAX_LENGTH),
+      ts: message.ts,
+      text,
     };
   });
 
