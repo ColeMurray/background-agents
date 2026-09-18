@@ -53,7 +53,7 @@ describe("SessionCreationClaimStore", () => {
         now: 1000,
       })
     ).resolves.toEqual({ sessionId: "session-1", status: "claimed" });
-    expect(statements[0].query).toContain("INSERT OR IGNORE");
+    expect(statements[0].query).toContain("ON CONFLICT (user_scope, client_request_id) DO NOTHING");
     expect(statements[0].values).toEqual([
       "user-1",
       "request-1",

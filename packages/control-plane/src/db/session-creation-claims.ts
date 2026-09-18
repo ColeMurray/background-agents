@@ -34,9 +34,10 @@ export class SessionCreationClaimStore {
     const [, selected] = await this.db.batch<SessionCreationClaimRow>([
       this.db
         .prepare(
-          `INSERT OR IGNORE INTO session_creation_claims
+          `INSERT INTO session_creation_claims
            (user_scope, client_request_id, request_fingerprint, session_id, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'claimed', ?, ?)`
+           VALUES (?, ?, ?, ?, 'claimed', ?, ?)
+           ON CONFLICT (user_scope, client_request_id) DO NOTHING`
         )
         .bind(
           input.userScope,
