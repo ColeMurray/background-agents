@@ -5,6 +5,8 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { ComponentPropsWithoutRef } from "react";
+import { isRepositoryFileHref } from "@/lib/diff-file-links";
+import { useSessionFileLinks } from "@/lib/session-file-links";
 
 // Strict sanitization schema to prevent XSS
 // Based on GitHub's sanitization but even more restrictive
@@ -63,13 +65,68 @@ const DEFAULT_IMAGE_MODE = "omit";
 interface SafeMarkdownProps {
   content: string;
   className?: string;
+  /**
+   * Inside a session, open links to changed repository files in the changes panel. Only
+   * agent-authored text opts in; other markdown (e.g. pull request bodies) keeps plain links.
+   */
+  linkRepositoryFiles?: boolean;
   baseUrl?: string;
   imageMode?: "omit" | "placeholder";
+}
+
+function MarkdownLink({ href, children, ...props }: ComponentPropsWithoutRef<"a">) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer nofollow"
+      className="text-accent hover:underline"
+      {...props}
+    >
+      {children}
+    </a>
+  );
+}
+
+function RepositoryFileMarkdownLink({ href, children, ...props }: ComponentPropsWithoutRef<"a">) {
+  const fileLinks = useSessionFileLinks();
+
+  if (!fileLinks || !isRepositoryFileHref(href)) {
+    return (
+      <MarkdownLink href={href} {...props}>
+        {children}
+      </MarkdownLink>
+    );
+  }
+
+  const selection = fileLinks.resolve(href);
+  if (!selection) {
+    // The control plane can only show files in the session's diff, so a link to any
+    // other repository file has nowhere to go; plain text beats a link that 404s.
+    return (
+      <span className="text-muted-foreground" title="Not in this session's changes">
+        {children}
+      </span>
+    );
+  }
+  // An in-page action, not a destination: a button, so middle-click and "Open link" can't
+  // navigate to the session-relative href.
+  return (
+    <button
+      type="button"
+      className="text-accent hover:underline cursor-pointer bg-transparent p-0 border-0 text-left font-[inherit]"
+      title={selection.path}
+      onClick={() => fileLinks.open(selection)}
+    >
+      {children}
+    </button>
+  );
 }
 
 export function SafeMarkdown({
   content,
   className = "",
+  linkRepositoryFiles = false,
   baseUrl,
   imageMode = DEFAULT_IMAGE_MODE,
 }: SafeMarkdownProps) {
@@ -81,23 +138,26 @@ export function SafeMarkdown({
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
         components={{
-          // Custom link renderer - opens in new tab with security attributes
-          a: ({ href, children, ...props }: ComponentPropsWithoutRef<"a">) => {
-            const resolvedHref = resolveMarkdownUrl(href, baseUrl);
-            return resolvedHref ? (
-              <a
-                href={resolvedHref}
-                target="_blank"
-                rel="noopener noreferrer nofollow"
-                className="text-accent hover:underline"
-                {...props}
-              >
-                {children}
-              </a>
-            ) : (
-              <span>{children}</span>
-            );
-          },
+          // Links open in a new tab with security attributes; with linkRepositoryFiles, links
+          // to changed repository files open them in the changes panel instead
+          a: linkRepositoryFiles
+            ? RepositoryFileMarkdownLink
+            : ({ href, children, ...props }: ComponentPropsWithoutRef<"a">) => {
+                const resolvedHref = resolveMarkdownUrl(href, baseUrl);
+                return resolvedHref ? (
+                  <a
+                    href={resolvedHref}
+                    target="_blank"
+                    rel="noopener noreferrer nofollow"
+                    className="text-accent hover:underline"
+                    {...props}
+                  >
+                    {children}
+                  </a>
+                ) : (
+                  <span>{children}</span>
+                );
+              },
           img: ({ src, alt }: ComponentPropsWithoutRef<"img">) => {
             const resolvedSrc = resolveMarkdownUrl(
               typeof src === "string" ? src : undefined,
