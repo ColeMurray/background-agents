@@ -1022,6 +1022,7 @@ CLOUDFLARE_WORKER_SUBDOMAIN
 R2_MEDIA_LOCATION
 R2_MEDIA_BUCKET_NAME
 SANDBOX_INACTIVITY_TIMEOUT_MS
+SANDBOX_BOOT_TIMEOUT_MS
 ENABLE_DURABLE_OBJECT_BINDINGS
 ENABLE_SERVICE_BINDINGS
 
@@ -1115,6 +1116,7 @@ Secrets for credentials:
 | `MODAL_ENVIRONMENT_WEB_SUFFIX`     | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty |
 | `SANDBOX_PROVIDER`                 | `modal`, `daytona`, or `vercel`                                                             |
 | `SANDBOX_INACTIVITY_TIMEOUT_MS`    | Idle milliseconds before a sandbox is snapshotted and stopped (defaults to `600000`)        |
+| `SANDBOX_BOOT_TIMEOUT_MS`          | Milliseconds a connected sandbox may keep booting before it fails (defaults to `1800000`)   |
 | `DAYTONA_API_URL`                  | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_API_KEY`                  | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_BASE_SNAPSHOT`            | Daytona base snapshot name _(only if `sandbox_provider = "daytona"`)_                       |
