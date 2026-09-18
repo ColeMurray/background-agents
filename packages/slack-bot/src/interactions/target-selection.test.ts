@@ -3,11 +3,15 @@ import { getMessageDetails, postEphemeral, postMessage } from "@open-inspect/sha
 import type { Env } from "../types";
 import { handleTargetSelection } from "./target-selection";
 import {
+  getLegacyPendingRequest,
   getPendingRequest,
   deletePendingRequest,
   type PendingRequest,
 } from "../pending-requests/pending-request-store";
-import { startSessionAndSendPrompt } from "../sessions/session-launcher";
+import {
+  loadAuthoritativeSlackLaunchSettings,
+  startSessionAndSendPrompt,
+} from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { resolveSlackActorIdentity } from "../user-identity";
 
@@ -33,6 +37,7 @@ vi.mock("../pending-requests/pending-request-store", () => ({
 }));
 
 vi.mock("../sessions/session-launcher", () => ({
+  loadAuthoritativeSlackLaunchSettings: vi.fn(),
   startSessionAndSendPrompt: vi.fn(async () => ({ sessionId: "session-1" })),
 }));
 
@@ -46,6 +51,20 @@ vi.mock("../user-identity", () => ({
 
 const DEFAULT_SELECTED_VALUE = "acme/app";
 const REQUEST_ID = "00000000-0000-4000-8000-000000000001";
+const TURN_PLAN = {
+  sessionDefaults: {
+    model: "anthropic/claude-sonnet-4-6" as const,
+    reasoningEffort: "high" as const,
+  },
+  promptOverrides: {
+    model: "openai/gpt-5.6-sol" as const,
+    reasoningEffort: "high" as const,
+  },
+  effective: {
+    model: "openai/gpt-5.6-sol" as const,
+    reasoningEffort: "high" as const,
+  },
+};
 
 function pendingRequest(overrides: Partial<PendingRequest> = {}): PendingRequest {
   return {
@@ -102,12 +121,13 @@ beforeEach(() => {
 });
 
 describe("handleTargetSelection", () => {
-  it("re-fetches the source message's files and forwards them into the launch", async () => {
+  it("re-fetches files and forwards the resolved turn plan unchanged", async () => {
     vi.mocked(getPendingRequest).mockResolvedValue(
       pendingRequest({
         message: "What is wrong in this screenshot?",
         unattributedPrompt: { forwardedMessages: ["Forwarded body"] },
         sourceMessage: { ts: "111.222" },
+        turnPlan: TURN_PLAN,
       })
     );
     vi.mocked(getMessageDetails).mockResolvedValue({
@@ -148,6 +168,7 @@ describe("handleTargetSelection", () => {
             downloadUrl: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
           },
         ],
+        turnPlan: TURN_PLAN,
       })
     );
     expect(deletePendingRequest).toHaveBeenCalledWith(env, REQUEST_ID);
@@ -162,6 +183,52 @@ describe("handleTargetSelection", () => {
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ messageText: "Fix the deploy", images: [] })
+    );
+  });
+
+  it("resolves overrides preserved in a legacy thread-keyed request", async () => {
+    vi.mocked(getLegacyPendingRequest).mockResolvedValue({
+      message: "Fix the deploy",
+      userId: "U123",
+      inlinePromptOptions: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" },
+    });
+    const launchSettings = {
+      enabledModels: ["openai/gpt-5.6-sol" as const],
+      slackConfig: {},
+      userPreferences: {
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "max",
+        branch: undefined,
+      },
+    };
+    vi.mocked(loadAuthoritativeSlackLaunchSettings).mockResolvedValue(launchSettings);
+
+    await handleTargetSelection(
+      { ...selectionRequest(), requestId: undefined },
+      makeEnv(),
+      "trace-1",
+      vi.fn()
+    );
+
+    expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        turnPlan: {
+          sessionDefaults: {
+            model: "anthropic/claude-sonnet-4-6",
+            reasoningEffort: "max",
+          },
+          promptOverrides: {
+            model: "openai/gpt-5.6-sol",
+            reasoningEffort: "high",
+          },
+          effective: {
+            model: "openai/gpt-5.6-sol",
+            reasoningEffort: "high",
+          },
+        },
+        launchSettings,
+      })
     );
   });
 

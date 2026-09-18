@@ -1,6 +1,7 @@
 import { postMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
-import { getAvailableModels } from "../app-home/models";
+import { normalizeValidModels, type ValidModel } from "@open-inspect/shared/models";
+import { getAuthoritativeModels, getAvailableModels } from "../app-home/models";
 import {
   notifyDroppedAttachments,
   prepareImageAttachments,
@@ -11,11 +12,64 @@ import { formatChannelContext, formatThreadContext } from "../messages/context";
 import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../targets";
 import type { Env } from "../types";
 import type { SlackActorIdentity } from "../user-identity";
-import { getResolvedUserPreferences } from "../user-preferences";
+import { getResolvedUserPreferences, type ResolvedUserPreferences } from "../user-preferences";
 import { createSession } from "./control-plane-client";
-import { getSlackSettings } from "../slack-settings";
+import { getSlackSettings, type SlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
+import {
+  EMPTY_INLINE_PROMPT_OPTIONS,
+  resolveInlinePromptOptions,
+  type ResolvedTurnPlan,
+} from "../inline-flags";
+
+export interface SlackLaunchSettings {
+  enabledModels: ValidModel[];
+  slackConfig: SlackSettings;
+  userPreferences: ResolvedUserPreferences;
+}
+
+async function resolveSlackLaunchSettings(
+  env: Env,
+  userId: string,
+  enabledModels: ValidModel[],
+  slackConfig: SlackSettings
+): Promise<SlackLaunchSettings> {
+  const userPreferences = await getResolvedUserPreferences(env, userId, {
+    defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
+    enabledModels,
+  });
+  return { enabledModels, slackConfig, userPreferences };
+}
+
+export async function loadSlackLaunchSettings(
+  env: Env,
+  userId: string,
+  traceId?: string
+): Promise<SlackLaunchSettings> {
+  const [availableModels, slackConfig] = await Promise.all([
+    getAvailableModels(env, traceId),
+    getSlackSettings(env, traceId),
+  ]);
+  return resolveSlackLaunchSettings(
+    env,
+    userId,
+    normalizeValidModels(availableModels.map((modelOption) => modelOption.value)),
+    slackConfig
+  );
+}
+
+export async function loadAuthoritativeSlackLaunchSettings(
+  env: Env,
+  userId: string,
+  traceId?: string
+): Promise<SlackLaunchSettings | null> {
+  const [enabledModels, slackConfig] = await Promise.all([
+    getAuthoritativeModels(env, traceId),
+    getSlackSettings(env, traceId),
+  ]);
+  return enabledModels ? resolveSlackLaunchSettings(env, userId, enabledModels, slackConfig) : null;
+}
 
 export interface StartSessionOptions {
   target: SlackSessionTarget;
@@ -35,6 +89,8 @@ export interface StartSessionOptions {
   images?: SlackImageAttachment[];
   /** True when the triggering message had no user text, only images. */
   imageOnly?: boolean;
+  turnPlan?: ResolvedTurnPlan;
+  launchSettings?: SlackLaunchSettings;
   traceId?: string;
 }
 
@@ -54,6 +110,8 @@ export async function startSessionAndSendPrompt(
     channelDescription,
     images,
     imageOnly,
+    turnPlan: providedTurnPlan,
+    launchSettings: providedLaunchSettings,
     traceId,
   } = options;
   // Download image bytes before creating the session: an image-only request
@@ -69,16 +127,25 @@ export async function startSessionAndSendPrompt(
     );
     return null;
   }
-  const [availableModels, slackConfig] = await Promise.all([
-    getAvailableModels(env, traceId),
-    getSlackSettings(env, traceId),
-  ]);
-  const userPrefs = await getResolvedUserPreferences(env, actor.userId, {
-    defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
-    enabledModels: availableModels.map((modelOption) => modelOption.value),
-  });
-  const model = userPrefs.model;
-  const reasoningEffort = userPrefs.reasoningEffort;
+  const {
+    enabledModels,
+    slackConfig,
+    userPreferences: userPrefs,
+  } = providedLaunchSettings ?? (await loadSlackLaunchSettings(env, actor.userId, traceId));
+  let turnPlan = providedTurnPlan;
+  if (!turnPlan) {
+    const resolvedTurn = resolveInlinePromptOptions(
+      EMPTY_INLINE_PROMPT_OPTIONS,
+      userPrefs,
+      enabledModels
+    );
+    if (!resolvedTurn.ok) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, { thread_ts: threadTs });
+      return null;
+    }
+    turnPlan = resolvedTurn.turnPlan;
+  }
+  const { model, reasoningEffort } = turnPlan.sessionDefaults;
   const preferenceRepo = branchPreferenceRepo(target);
   let branch: string | undefined;
   if (preferenceRepo) {
@@ -111,8 +178,8 @@ export async function startSessionAndSendPrompt(
     channel,
     threadTs,
     repoFullName: targetLabel(target),
-    model,
-    reasoningEffort,
+    model: turnPlan.effective.model,
+    reasoningEffort: turnPlan.effective.reasoningEffort,
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
@@ -127,6 +194,7 @@ export async function startSessionAndSendPrompt(
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),
     callbackContext,
+    ...turnPlan.promptOverrides,
     channel,
     threadTs,
     traceId,

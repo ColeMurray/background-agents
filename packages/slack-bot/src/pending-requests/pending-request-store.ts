@@ -1,5 +1,6 @@
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { z } from "zod";
+import { resolvedTurnPlanSchema } from "../inline-flags";
 import type { Env } from "../types";
 
 const PENDING_REQUEST_TTL_MS = 60 * 60 * 1000;
@@ -16,6 +17,11 @@ const sourceMessageSchema = z.object({
 
 const unattributedPromptSchema = z.object({
   forwardedMessages: z.array(z.string()),
+});
+
+const inlinePromptOptionsSchema = z.object({
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
 });
 
 const classificationSchema = z.object({
@@ -35,6 +41,7 @@ const pendingRequestDataSchema = z.object({
   /** True when the original message had no user text, only images. */
   imageOnly: z.boolean().optional(),
   sourceMessage: sourceMessageSchema.optional(),
+  turnPlan: resolvedTurnPlanSchema.optional(),
   /** Classifier provenance retained until the user resolves clarification. */
   classification: classificationSchema.optional(),
 });
@@ -45,8 +52,12 @@ const pendingRequestSchema = pendingRequestDataSchema.extend({
   threadTs: z.string().min(1),
 });
 
+const legacyPendingRequestSchema = pendingRequestDataSchema.extend({
+  inlinePromptOptions: inlinePromptOptionsSchema.optional(),
+});
+
 export type PendingRequest = z.infer<typeof pendingRequestSchema>;
-export type LegacyPendingRequest = z.infer<typeof pendingRequestDataSchema>;
+export type LegacyPendingRequest = z.infer<typeof legacyPendingRequestSchema>;
 
 function pendingRequestKey(requestId: string): string {
   return `pending:${requestId}`;
@@ -87,7 +98,7 @@ export async function getLegacyPendingRequest(
     legacyPendingRequestKey(channel, threadTs),
     "json"
   );
-  const result = pendingRequestDataSchema.safeParse(data);
+  const result = legacyPendingRequestSchema.safeParse(data);
   return result.success ? result.data : null;
 }
 

@@ -186,12 +186,15 @@ async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): P
   await ctx.waitUntil.mock.calls[callIndex]?.[0];
 }
 
+const DEFAULT_MODEL_PREFERENCES_STATUS = 200;
+
 function makeSessionEnv(
   order: string[] = [],
   responses: {
     session?: unknown;
     prompt?: unknown | unknown[];
     promptStatus?: number | number[];
+    modelPreferencesStatus?: number;
   } = {}
 ): ReturnType<typeof makeEnv> {
   const env = makeEnv();
@@ -254,7 +257,7 @@ function makeSessionEnv(
     }
 
     return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-      status: 200,
+      status: responses.modelPreferencesStatus ?? DEFAULT_MODEL_PREFERENCES_STATUS,
       headers: { "Content-Type": "application/json" },
     });
   });
@@ -858,6 +861,44 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  it("applies combined inline overrides to a new direct-message session", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv();
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "message",
+        text: "!model anthropic/claude-haiku-4-5 !reasoning high fix the auth tests",
+        user: "U123",
+        channel: "D123",
+        ts: "444.555",
+        channel_type: "im",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
+    expect(promptBodies).toHaveLength(1);
+    expect(promptBodies[0]).toMatchObject({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+      callbackContext: {
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+      },
+    });
+    expect(String(promptBodies[0].content)).toContain("fix the auth tests");
+    expect(String(promptBodies[0].content)).not.toContain("!model");
+    expect(String(promptBodies[0].content)).not.toContain("!reasoning");
+
+    slackFetch.mockRestore();
+  });
+
   it("sets Starting status for follow-up prompts in existing threads", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order, {
@@ -930,6 +971,162 @@ describe("POST /events", () => {
         "json"
       )
     ).resolves.toEqual(expect.objectContaining({ lastPromptTs: "333.444" }));
+
+    slackFetch.mockRestore();
+  });
+
+  it("strips combined model and reasoning flags from an existing-thread follow-up", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order);
+    const kv = env.SLACK_KV as unknown as {
+      put: (key: string, value: string) => Promise<void>;
+      get: (key: string, type: string) => Promise<unknown>;
+    };
+    const mapping = {
+      sessionId: "session-1",
+      repoId: "acme/app",
+      repoFullName: "acme/app",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "max",
+      createdAt: Date.now(),
+    };
+    await kv.put("thread:C123:111.222", JSON.stringify(mapping));
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> !model:anthropic/claude-haiku-4-5 !reasoning high now add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
+    expect(promptBodies).toHaveLength(1);
+    expect(promptBodies[0]).toMatchObject({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+      callbackContext: {
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+      },
+    });
+    expect(String(promptBodies[0].content)).toContain("[U123]: now add coverage");
+    expect(String(promptBodies[0].content)).not.toContain("!model");
+    expect(String(promptBodies[0].content)).not.toContain("!reasoning");
+    await expect(kv.get("thread:C123:111.222", "json")).resolves.toEqual(
+      expect.objectContaining({
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "max",
+      })
+    );
+
+    slackFetch.mockRestore();
+  });
+
+  it("uses an enabled fallback model for a reasoning-only existing-thread override", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv();
+    const kv = env.SLACK_KV as unknown as {
+      put: (key: string, value: string) => Promise<void>;
+    };
+    await kv.put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "xhigh",
+        createdAt: Date.now(),
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> !reasoning:max add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+      expect.objectContaining({
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "max",
+        callbackContext: expect.objectContaining({
+          model: "anthropic/claude-haiku-4-5",
+          reasoningEffort: "max",
+        }),
+      }),
+    ]);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+      "https://internal/model-preferences?strict=true",
+      expect.objectContaining({ method: "GET" })
+    );
+
+    slackFetch.mockRestore();
+  });
+
+  it("does not admit model overrides from fallback preferences", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], { modelPreferencesStatus: 503 });
+    const kv = env.SLACK_KV as unknown as {
+      put: (key: string, value: string) => Promise<void>;
+    };
+    await kv.put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "max",
+        createdAt: Date.now(),
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> !model:anthropic/claude-haiku-4-5 add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(0);
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toContainEqual(
+      expect.objectContaining({
+        text: "Model preferences are temporarily unavailable. Please try again.",
+        thread_ts: "111.222",
+      })
+    );
 
     slackFetch.mockRestore();
   });

@@ -32,6 +32,7 @@ vi.mock("./prompt-delivery", () => ({
 
 vi.mock("../app-home/models", () => ({
   getAvailableModels: vi.fn(),
+  getAuthoritativeModels: vi.fn(),
 }));
 
 vi.mock("../branch-preferences", () => ({
@@ -205,6 +206,55 @@ describe("startSessionAndSendPrompt", () => {
       reasoningEffort: "high",
       createdAt: 123,
     });
+  });
+
+  it("applies combined model and reasoning flags only to the first prompt", async () => {
+    const env = makeEnv();
+
+    await startSessionAndSendPrompt(env, {
+      target: repositoryTarget,
+      channel: "C123",
+      threadTs: "111.222",
+      messageText: "Investigate the failing deploy",
+      actor,
+      turnPlan: {
+        sessionDefaults: {
+          model: "anthropic/claude-haiku-4-5",
+          reasoningEffort: "max",
+        },
+        promptOverrides: {
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "max",
+        },
+        effective: {
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "max",
+        },
+      },
+    });
+
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ model: "anthropic/claude-haiku-4-5", reasoningEffort: "max" })
+    );
+    expect(deliverPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "max",
+        callbackContext: expect.objectContaining({
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "max",
+        }),
+      })
+    );
+    expect(buildThreadSession).toHaveBeenCalledWith(
+      "session-1",
+      repositoryTarget,
+      "anthropic/claude-haiku-4-5",
+      "max",
+      undefined
+    );
   });
 
   it("appends configured session instructions to the first prompt", async () => {
