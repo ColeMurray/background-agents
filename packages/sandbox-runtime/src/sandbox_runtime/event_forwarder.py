@@ -145,6 +145,7 @@ class BufferedEventForwarder:
             # event is dropped here too — a replay would only be stale.
             if buffered:
                 self._buffer_event(event)
+                await self._drain_if_rebound(failed_ws=ws)
             else:
                 self._log.debug("bridge.event_dropped_cancelled", event_type=event_type)
             raise

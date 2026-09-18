@@ -129,3 +129,36 @@ async def test_close_cannot_strand_event_or_replacement(close_failure, rebind):
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("buffered", [True, False])
+async def test_cancelling_stale_live_send_drains_replacement_before_propagating(buffered):
+    old, replacement = connection(), connection()
+    entered = asyncio.Event()
+
+    async def stalled_send(_payload):
+        entered.set()
+        await asyncio.Event().wait()
+
+    old.send = stalled_send
+    forwarder = BufferedEventForwarder(sandbox_id="test", log=MagicMock())
+    await forwarder.bind(old)
+    task = asyncio.create_task(
+        forwarder.send({"type": "execution_complete", "messageId": "cancelled"}, buffered=buffered)
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await forwarder.bind(replacement)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert forwarder._ws is replacement
+        replacement.close.assert_not_awaited()
+        replacement.transport.abort.assert_not_called()
+        assert replacement.send.await_count == int(buffered)
+        assert forwarder._event_buffer == []
+        if buffered:
+            assert forwarder.acknowledge("execution_complete:cancelled") is True
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
