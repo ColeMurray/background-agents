@@ -32,6 +32,10 @@ describe("pending request store", () => {
       previousMessages: ["Earlier context"],
       channelName: "engineering",
       channelDescription: "Build discussion",
+      inlinePromptOptions: {
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "high",
+      },
     };
 
     await storePendingRequest(mocks.env, "C123", "111.222", request);
@@ -70,6 +74,7 @@ describe("pending request store", () => {
     { message: "Fix it", userId: "U123", unattributedPrompt: {} },
     { message: "Fix it", userId: "U123", unattributedPrompt: { forwardedMessages: [123] } },
     { message: "Fix it", userId: "U123", channelName: 123 },
+    { message: "Fix it", userId: "U123", inlinePromptOptions: { model: 123 } },
   ])("rejects malformed records: %j", async (record) => {
     mocks.get.mockResolvedValue(record);
 
@@ -84,6 +89,10 @@ describe("pending request store", () => {
       previousMessages: ["Earlier context"],
       channelName: "engineering",
       channelDescription: "Build discussion",
+      inlinePromptOptions: {
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "high",
+      },
     };
     mocks.get.mockResolvedValueOnce(minimal).mockResolvedValueOnce(complete);
 

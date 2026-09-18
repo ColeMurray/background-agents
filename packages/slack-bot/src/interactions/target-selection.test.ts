@@ -3,7 +3,7 @@ import { getMessageDetails, postMessage } from "@open-inspect/shared/slack";
 import type { Env } from "../types";
 import { handleTargetSelection } from "./target-selection";
 import { getPendingRequest, deletePendingRequest } from "../pending-requests/pending-request-store";
-import { startSessionAndSendPrompt } from "../sessions/session-launcher";
+import { loadSlackLaunchSettings, startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { resolveSlackActorIdentity } from "../user-identity";
 
@@ -27,6 +27,7 @@ vi.mock("../pending-requests/pending-request-store", () => ({
 
 vi.mock("../sessions/session-launcher", () => ({
   startSessionAndSendPrompt: vi.fn(async () => ({ sessionId: "session-1" })),
+  loadSlackLaunchSettings: vi.fn(),
 }));
 
 vi.mock("../target-clarification", () => ({
@@ -67,6 +68,18 @@ beforeEach(() => {
     senderLabel: "Ajan (U123)",
     displayName: "Ajan",
   });
+  vi.mocked(loadSlackLaunchSettings).mockResolvedValue({
+    availableModels: [
+      { label: "GPT 5.6 Sol", value: "openai/gpt-5.6-sol" },
+      { label: "Claude Sonnet", value: "anthropic/claude-sonnet-4-6" },
+    ],
+    slackConfig: {},
+    userPreferences: {
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: "high",
+      branch: undefined,
+    },
+  });
 });
 
 describe("handleTargetSelection", () => {
@@ -76,6 +89,10 @@ describe("handleTargetSelection", () => {
       userId: "U123",
       unattributedPrompt: { forwardedMessages: ["Forwarded body"] },
       sourceMessage: { ts: "111.222" },
+      inlinePromptOptions: {
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "high",
+      },
     });
     vi.mocked(getMessageDetails).mockResolvedValue({
       ok: true,
@@ -92,7 +109,16 @@ describe("handleTargetSelection", () => {
     });
     const env = makeEnv();
 
-    await handleTargetSelection("acme/app", "C123", "111.222", undefined, env, "trace-1", vi.fn());
+    await handleTargetSelection(
+      "acme/app",
+      "U123",
+      "C123",
+      "111.222",
+      undefined,
+      env,
+      "trace-1",
+      vi.fn()
+    );
 
     expect(getMessageDetails).toHaveBeenCalledWith("xoxb-test", "C123", "111.222", undefined);
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
@@ -115,6 +141,13 @@ describe("handleTargetSelection", () => {
             downloadUrl: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
           },
         ],
+        inlinePromptOptions: {
+          model: "openai/gpt-5.6-sol",
+          reasoningEffort: "high",
+        },
+        launchSettings: expect.objectContaining({
+          userPreferences: expect.objectContaining({ model: "anthropic/claude-sonnet-4-6" }),
+        }),
       })
     );
     expect(deletePendingRequest).toHaveBeenCalledWith(env, "C123", "111.222");
@@ -128,6 +161,7 @@ describe("handleTargetSelection", () => {
 
     await handleTargetSelection(
       "acme/app",
+      "U123",
       "C123",
       "111.222",
       undefined,
@@ -153,6 +187,7 @@ describe("handleTargetSelection", () => {
 
     await handleTargetSelection(
       "acme/app",
+      "U123",
       "C123",
       "111.222",
       undefined,
@@ -178,13 +213,80 @@ describe("handleTargetSelection", () => {
     vi.mocked(getMessageDetails).mockResolvedValue({ ok: false, error: "message_not_found" });
     const env = makeEnv();
 
-    await handleTargetSelection("acme/app", "C123", "111.222", undefined, env, "trace-1", vi.fn());
+    await handleTargetSelection(
+      "acme/app",
+      "U123",
+      "C123",
+      "111.222",
+      undefined,
+      env,
+      "trace-1",
+      vi.fn()
+    );
 
     expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
     expect(vi.mocked(postMessage)).toHaveBeenCalledWith(
       "xoxb-test",
       "C123",
       expect.stringContaining("couldn't retrieve the attached image(s)"),
+      { thread_ts: "111.222" }
+    );
+  });
+
+  it("rejects target selection by anyone other than the original requester", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue({
+      message: "Fix the deploy",
+      userId: "U123",
+    });
+    const env = makeEnv();
+
+    await handleTargetSelection(
+      "acme/app",
+      "U999",
+      "C123",
+      "111.222",
+      undefined,
+      env,
+      "trace-1",
+      vi.fn()
+    );
+
+    expect(resolveTargetValue).not.toHaveBeenCalled();
+    expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      "xoxb-test",
+      "C123",
+      expect.stringContaining("Only the person who made the original request"),
+      { thread_ts: "111.222" }
+    );
+  });
+
+  it("rejects stale inline overrides before posting a working acknowledgement", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue({
+      message: "Fix the deploy",
+      userId: "U123",
+      inlinePromptOptions: { model: "openai/gpt-5.5", reasoningEffort: "high" },
+    });
+    const env = makeEnv();
+
+    await handleTargetSelection(
+      "acme/app",
+      "U123",
+      "C123",
+      "111.222",
+      undefined,
+      env,
+      "trace-1",
+      vi.fn()
+    );
+
+    expect(resolveTargetValue).not.toHaveBeenCalled();
+    expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledTimes(1);
+    expect(postMessage).toHaveBeenCalledWith(
+      "xoxb-test",
+      "C123",
+      'Model "openai/gpt-5.5" is not enabled.',
       { thread_ts: "111.222" }
     );
   });

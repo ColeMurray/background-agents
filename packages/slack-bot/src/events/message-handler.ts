@@ -40,7 +40,11 @@ import {
 } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
-import { startSessionAndSendPrompt } from "../sessions/session-launcher";
+import {
+  loadSlackLaunchSettings,
+  startSessionAndSendPrompt,
+  type SlackLaunchSettings,
+} from "../sessions/session-launcher";
 import {
   advanceLastPromptTs,
   clearThreadSession,
@@ -50,6 +54,13 @@ import { buildTargetClarificationBlocks } from "../target-clarification";
 import { targetLabel } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-identity";
+import {
+  hasInlinePromptOptions,
+  parseInlinePromptFlags,
+  resolveInlinePromptOptions,
+  type InlinePromptOptions,
+} from "../inline-flags";
+import { getAvailableModels } from "../app-home/models";
 
 const log = createLogger("handler");
 const THREAD_HISTORY_MESSAGE_LIMIT = 10;
@@ -109,6 +120,8 @@ async function fetchThreadHistory(
 
 interface IncomingMessageContent {
   text: string;
+  inlinePromptOptions: InlinePromptOptions;
+  inlineFlagError?: string;
   /** Images attached to the Slack message, normalized at event ingress. */
   images: SlackImageAttachment[];
   /** Quoted bodies, provenance, and files recovered from explicit Slack shares. */
@@ -151,7 +164,13 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     traceId,
     scheduleBackground,
   } = params;
-  const { text: messageText, images, forwarded } = content;
+  const { text: messageText, images, forwarded, inlinePromptOptions, inlineFlagError } = content;
+  if (inlineFlagError) {
+    await postMessage(env.SLACK_BOT_TOKEN, channel, inlineFlagError, {
+      thread_ts: threadTs || ts,
+    });
+    return;
+  }
   if (!hasRunnableContent(content)) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
@@ -176,13 +195,37 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
     if (existingSession) {
+      const turnSettings = hasInlinePromptOptions(inlinePromptOptions)
+        ? resolveInlinePromptOptions(
+            inlinePromptOptions,
+            {
+              model: existingSession.model,
+              reasoningEffort: existingSession.reasoningEffort,
+            },
+            (await getAvailableModels(env, traceId)).map((model) => model.value)
+          )
+        : {
+            ok: true as const,
+            promptOverrides: {},
+            effectiveModel: existingSession.model,
+            effectiveReasoningEffort: existingSession.reasoningEffort,
+          };
+      if (!turnSettings.ok) {
+        await postMessage(env.SLACK_BOT_TOKEN, channel, turnSettings.error, {
+          thread_ts: threadTs,
+        });
+        return;
+      }
+      if (hasInlinePromptOptions(inlinePromptOptions)) {
+        scheduleStartingStatus(scheduleBackground, env, channel, threadTs, traceId);
+      }
       const callbackContext: CallbackContext = {
         source: "slack",
         channel,
         threadTs,
         repoFullName: existingSession.repoFullName,
-        model: existingSession.model,
-        reasoningEffort: existingSession.reasoningEffort,
+        model: turnSettings.effectiveModel,
+        reasoningEffort: turnSettings.effectiveReasoningEffort,
         reactionMessageTs: ts,
       };
       const channelContext = channelName
@@ -212,6 +255,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         attachments: await prepareImageAttachments(env, images, traceId),
         imageOnly,
         callbackContext,
+        ...turnSettings.promptOverrides,
         channel,
         threadTs,
         traceId,
@@ -259,6 +303,26 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     }
   }
 
+  let launchSettings: SlackLaunchSettings | undefined;
+  if (hasInlinePromptOptions(inlinePromptOptions)) {
+    launchSettings = await loadSlackLaunchSettings(env, user, traceId);
+    const turnSettings = resolveInlinePromptOptions(
+      inlinePromptOptions,
+      {
+        model: launchSettings.userPreferences.model,
+        reasoningEffort: launchSettings.userPreferences.reasoningEffort,
+      },
+      launchSettings.availableModels.map((model) => model.value)
+    );
+    if (!turnSettings.ok) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, turnSettings.error, {
+        thread_ts: threadTs || ts,
+      });
+      return;
+    }
+    scheduleStartingStatus(scheduleBackground, env, channel, threadTs || ts, traceId);
+  }
+
   const previousMessages = threadTs
     ? await fetchThreadHistory(env, channel, threadTs, { excludeTs: ts, includeBotMessages: true })
     : undefined;
@@ -290,6 +354,9 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       // Persist where the images live, not the file objects; they are
       // re-fetched from Slack when the user resolves the clarification.
       sourceMessage: images.length > 0 ? { ts, threadTs } : undefined,
+      inlinePromptOptions: hasInlinePromptOptions(inlinePromptOptions)
+        ? inlinePromptOptions
+        : undefined,
     });
     await postMessage(
       env.SLACK_BOT_TOKEN,
@@ -324,6 +391,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     channelDescription,
     images,
     imageOnly,
+    inlinePromptOptions,
+    launchSettings,
     traceId,
   });
   if (!sessionResult) return;
@@ -360,9 +429,10 @@ export async function handleAppMention(
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
-  const messageText = stripMentions(event.text);
+  const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
+  const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const threadKey = event.thread_ts || event.ts;
-  if (messageText)
+  if (messageText && parsedFlags.ok && !hasInlinePromptOptions(parsedFlags.options))
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
 
   // app_mention events don't carry the message's `files` array and may arrive
@@ -409,8 +479,19 @@ export async function handleAppMention(
   // A forwarded message's own images are Slack-hosted message files, so they
   // join the message's own images on the single attachment path.
   const images = toImageAttachments([...details.files, ...forwarded.files], traceId);
-  const content = { text: messageText, images, forwarded };
-  if (!messageText && hasRunnableContent(content)) {
+  const content: IncomingMessageContent = {
+    text: messageText,
+    images,
+    forwarded,
+    inlinePromptOptions: parsedFlags.ok ? parsedFlags.options : {},
+    inlineFlagError: parsedFlags.ok ? undefined : parsedFlags.error,
+  };
+  if (
+    parsedFlags.ok &&
+    !hasInlinePromptOptions(parsedFlags.options) &&
+    !messageText &&
+    hasRunnableContent(content)
+  ) {
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   }
   let channelName: string | undefined;
@@ -451,12 +532,19 @@ export async function handleDirectMessage(
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
-  const messageText = stripMentions(event.text);
+  const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
+  const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const forwarded = collectForwardedMessages(event.attachments);
   const images = toImageAttachments([...(event.files ?? []), ...forwarded.files], traceId);
-  const content = { text: messageText, images, forwarded };
+  const content: IncomingMessageContent = {
+    text: messageText,
+    images,
+    forwarded,
+    inlinePromptOptions: parsedFlags.ok ? parsedFlags.options : {},
+    inlineFlagError: parsedFlags.ok ? undefined : parsedFlags.error,
+  };
   const threadKey = event.thread_ts || event.ts;
-  if (hasRunnableContent(content))
+  if (parsedFlags.ok && !hasInlinePromptOptions(parsedFlags.options) && hasRunnableContent(content))
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   await handleIncomingMessage({
     content,

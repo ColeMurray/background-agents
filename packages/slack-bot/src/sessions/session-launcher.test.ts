@@ -205,6 +205,45 @@ describe("startSessionAndSendPrompt", () => {
     });
   });
 
+  it("applies combined model and reasoning flags only to the first prompt", async () => {
+    const env = makeEnv();
+
+    await startSessionAndSendPrompt(env, {
+      target: repositoryTarget,
+      channel: "C123",
+      threadTs: "111.222",
+      messageText: "Investigate the failing deploy",
+      actor,
+      inlinePromptOptions: {
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "max",
+      },
+    });
+
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ model: "openai/gpt-5.4", reasoningEffort: "high" })
+    );
+    expect(deliverPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "max",
+        callbackContext: expect.objectContaining({
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "max",
+        }),
+      })
+    );
+    expect(buildThreadSession).toHaveBeenCalledWith(
+      "session-1",
+      repositoryTarget,
+      "openai/gpt-5.4",
+      "high",
+      undefined
+    );
+  });
+
   it("appends configured session instructions to the first prompt", async () => {
     const env = makeEnv();
     vi.mocked(getSlackSettings).mockResolvedValue({

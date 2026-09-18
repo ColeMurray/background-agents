@@ -19,11 +19,14 @@ import { resolveTargetValue } from "../target-clarification";
 import { targetLabel } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
+import { hasInlinePromptOptions, resolveInlinePromptOptions } from "../inline-flags";
+import { loadSlackLaunchSettings } from "../sessions/session-launcher";
 
 const log = createLogger("target-selection");
 
 export async function handleTargetSelection(
   selectedValue: string,
+  selectingUserId: string,
   channel: string,
   messageTs: string,
   threadTs: string | undefined,
@@ -52,7 +55,34 @@ export async function handleTargetSelection(
     imageOnly,
     sourceMessage,
     unattributedPrompt,
+    inlinePromptOptions,
   } = pendingData;
+  if (selectingUserId !== userId) {
+    await postMessage(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      "Only the person who made the original request can choose its repository or environment.",
+      { thread_ts: threadKey }
+    );
+    return;
+  }
+  const launchSettings = hasInlinePromptOptions(inlinePromptOptions ?? {})
+    ? await loadSlackLaunchSettings(env, userId, traceId)
+    : undefined;
+  if (launchSettings && inlinePromptOptions) {
+    const turnSettings = resolveInlinePromptOptions(
+      inlinePromptOptions,
+      {
+        model: launchSettings.userPreferences.model,
+        reasoningEffort: launchSettings.userPreferences.reasoningEffort,
+      },
+      launchSettings.availableModels.map((model) => model.value)
+    );
+    if (!turnSettings.ok) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, turnSettings.error, { thread_ts: threadKey });
+      return;
+    }
+  }
   const target = await resolveTargetValue(env, selectedValue, traceId);
   if (!target) {
     await postMessage(
@@ -126,6 +156,8 @@ export async function handleTargetSelection(
     channelDescription,
     images,
     imageOnly,
+    inlinePromptOptions,
+    launchSettings,
     traceId,
   });
   if (!sessionResult) return;

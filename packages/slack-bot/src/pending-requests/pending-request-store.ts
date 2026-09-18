@@ -18,6 +18,11 @@ const unattributedPromptSchema = z.object({
   forwardedMessages: z.array(z.string()),
 });
 
+const inlinePromptOptionsSchema = z.object({
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});
+
 const pendingRequestSchema = z.object({
   message: z.string().min(1),
   userId: z.string().min(1),
@@ -29,6 +34,7 @@ const pendingRequestSchema = z.object({
   /** True when the original message had no user text, only images. */
   imageOnly: z.boolean().optional(),
   sourceMessage: sourceMessageSchema.optional(),
+  inlinePromptOptions: inlinePromptOptionsSchema.optional(),
 });
 
 export type PendingRequest = z.infer<typeof pendingRequestSchema>;

@@ -883,6 +883,64 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  it("strips combined model and reasoning flags from an existing-thread follow-up", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order);
+    const kv = env.SLACK_KV as unknown as {
+      put: (key: string, value: string) => Promise<void>;
+      get: (key: string, type: string) => Promise<unknown>;
+    };
+    const mapping = {
+      sessionId: "session-1",
+      repoId: "acme/app",
+      repoFullName: "acme/app",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "max",
+      createdAt: Date.now(),
+    };
+    await kv.put("thread:C123:111.222", JSON.stringify(mapping));
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> !model:anthropic/claude-haiku-4-5 !reasoning high now add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
+    expect(promptBodies).toHaveLength(1);
+    expect(promptBodies[0]).toMatchObject({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+      callbackContext: {
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+      },
+    });
+    expect(String(promptBodies[0].content)).toContain("[U123]: now add coverage");
+    expect(String(promptBodies[0].content)).not.toContain("!model");
+    expect(String(promptBodies[0].content)).not.toContain("!reasoning");
+    await expect(kv.get("thread:C123:111.222", "json")).resolves.toEqual(
+      expect.objectContaining({
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "max",
+      })
+    );
+
+    slackFetch.mockRestore();
+  });
+
   it("preserves an existing session mapping after a transient prompt failure", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);

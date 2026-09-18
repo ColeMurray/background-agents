@@ -11,11 +11,35 @@ import { formatChannelContext, formatThreadContext } from "../messages/context";
 import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../targets";
 import type { Env } from "../types";
 import type { SlackActorIdentity } from "../user-identity";
-import { getResolvedUserPreferences } from "../user-preferences";
+import { getResolvedUserPreferences, type ResolvedUserPreferences } from "../user-preferences";
 import { createSession } from "./control-plane-client";
-import { getSlackSettings } from "../slack-settings";
+import { getSlackSettings, type SlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
+import { resolveInlinePromptOptions, type InlinePromptOptions } from "../inline-flags";
+import type { ModelOption } from "../app-home/slack-types";
+
+export interface SlackLaunchSettings {
+  availableModels: ModelOption[];
+  slackConfig: SlackSettings;
+  userPreferences: ResolvedUserPreferences;
+}
+
+export async function loadSlackLaunchSettings(
+  env: Env,
+  userId: string,
+  traceId?: string
+): Promise<SlackLaunchSettings> {
+  const [availableModels, slackConfig] = await Promise.all([
+    getAvailableModels(env, traceId),
+    getSlackSettings(env, traceId),
+  ]);
+  const userPreferences = await getResolvedUserPreferences(env, userId, {
+    defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
+    enabledModels: availableModels.map((modelOption) => modelOption.value),
+  });
+  return { availableModels, slackConfig, userPreferences };
+}
 
 export interface StartSessionOptions {
   target: SlackSessionTarget;
@@ -35,6 +59,8 @@ export interface StartSessionOptions {
   images?: SlackImageAttachment[];
   /** True when the triggering message had no user text, only images. */
   imageOnly?: boolean;
+  inlinePromptOptions?: InlinePromptOptions;
+  launchSettings?: SlackLaunchSettings;
   traceId?: string;
 }
 
@@ -54,6 +80,8 @@ export async function startSessionAndSendPrompt(
     channelDescription,
     images,
     imageOnly,
+    inlinePromptOptions = {},
+    launchSettings: providedLaunchSettings,
     traceId,
   } = options;
   // Download image bytes before creating the session: an image-only request
@@ -69,16 +97,22 @@ export async function startSessionAndSendPrompt(
     );
     return null;
   }
-  const [availableModels, slackConfig] = await Promise.all([
-    getAvailableModels(env, traceId),
-    getSlackSettings(env, traceId),
-  ]);
-  const userPrefs = await getResolvedUserPreferences(env, actor.userId, {
-    defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
-    enabledModels: availableModels.map((modelOption) => modelOption.value),
-  });
+  const {
+    availableModels,
+    slackConfig,
+    userPreferences: userPrefs,
+  } = providedLaunchSettings ?? (await loadSlackLaunchSettings(env, actor.userId, traceId));
   const model = userPrefs.model;
   const reasoningEffort = userPrefs.reasoningEffort;
+  const turnSettings = resolveInlinePromptOptions(
+    inlinePromptOptions,
+    { model, reasoningEffort },
+    availableModels.map((modelOption) => modelOption.value)
+  );
+  if (!turnSettings.ok) {
+    await postMessage(env.SLACK_BOT_TOKEN, channel, turnSettings.error, { thread_ts: threadTs });
+    return null;
+  }
   const preferenceRepo = branchPreferenceRepo(target);
   let branch: string | undefined;
   if (preferenceRepo) {
@@ -111,8 +145,8 @@ export async function startSessionAndSendPrompt(
     channel,
     threadTs,
     repoFullName: targetLabel(target),
-    model,
-    reasoningEffort,
+    model: turnSettings.effectiveModel,
+    reasoningEffort: turnSettings.effectiveReasoningEffort,
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
@@ -127,6 +161,7 @@ export async function startSessionAndSendPrompt(
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),
     callbackContext,
+    ...turnSettings.promptOverrides,
     channel,
     threadTs,
     traceId,
