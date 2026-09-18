@@ -341,10 +341,14 @@ class AgentBridge:
                     run_outcome = "connection_closed"
                 except Exception as e:
                     error_str = str(e)
+                    if isinstance(e, GitSigningError) and not e.retryable:
+                        if self.shutdown_event.is_set():
+                            break
+                        run_outcome = "fatal_error"
+                        self._record_fatal_error(error_str)
+                        raise
                     # Check for fatal HTTP errors that shouldn't trigger retry
-                    if (
-                        isinstance(e, GitSigningError) and not e.retryable
-                    ) or self._is_fatal_connection_error(error_str):
+                    if self._is_fatal_connection_error(error_str):
                         run_outcome = "fatal_error"
                         self.shutdown_event.set()
                         break
@@ -369,7 +373,8 @@ class AgentBridge:
                     reconnect_attempt_count=self._reconnect_attempt_count,
                     delay_s=round(delay, 1),
                 )
-                await asyncio.sleep(delay)
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self.shutdown_event.wait(), timeout=delay)
 
             if self._attach_outcome is not None:
                 run_outcome = self._attach_outcome
@@ -387,9 +392,9 @@ class AgentBridge:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._current_prompt_task
             # Cleanup failures are logged, never raised: an exception here
-            # would replace the one that ended the run, and a HarnessStartError
-            # has to reach main() as itself so the supervisor sees the
-            # deterministic exit code.
+            # would replace the one that ended the run, and a deterministic
+            # startup failure has to reach main() so the supervisor sees its
+            # dedicated exit code.
             try:
                 await self.diff_refresh.close(
                     timeout_seconds=self.DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS
@@ -612,9 +617,12 @@ class AgentBridge:
             self._attach_failure = error
             await self._end_run("harness_start_failed")
         except GitSigningError as error:
-            # Non-retryable signing configuration: the same graceful exit the
-            # pre-connect path takes, so the supervisor does not restart us.
+            if self.shutdown_event.is_set():
+                await self._end_run("shutdown")
+                return
             self.log.error("bridge.signing_init_failed", exc=error)
+            self._record_fatal_error(str(error))
+            self._attach_failure = error
             await self._end_run("fatal_error")
         except Exception as error:
             self.log.error("bridge.harness_attach_failed", exc=error)
@@ -1031,7 +1039,7 @@ class AgentBridge:
         self.log.info("bridge.shutdown_requested")
         if self._current_prompt_task and not self._current_prompt_task.done():
             self._current_prompt_task.cancel()
-        self.shutdown_event.set()
+        await self._end_run("shutdown")
 
     async def _refuse_push_while_booting(self, cmd: dict[str, Any]) -> None:
         """Answer a push that arrived before the repositories exist.
@@ -1168,7 +1176,7 @@ async def main() -> None:
 
     try:
         await bridge.run()
-    except HarnessStartError:
+    except (HarnessStartError, GitSigningError):
         # The cause is already recorded for the supervisor; this exit code
         # tells it not to spend its restart budget.
         sys.exit(DETERMINISTIC_FAILURE_EXIT_CODE)
