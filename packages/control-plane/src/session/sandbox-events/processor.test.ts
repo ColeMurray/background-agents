@@ -37,6 +37,9 @@ function createProcessor() {
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
     recordReportedSandboxRuntimeVersion: vi.fn(),
+    getSandbox: vi.fn(() => ({ modal_sandbox_id: "sb-1", created_at: 4000 })),
+    markSandboxReady: vi.fn(() => true),
+    recordBootProgress: vi.fn(() => true),
     getSession: vi.fn(() => null),
     getProcessingMessage,
     getMessageContent: vi.fn(() => null as string | null),
@@ -70,6 +73,7 @@ function createProcessor() {
 
   const wsManager = {
     getSandboxSocket: vi.fn(() => null as WebSocket | null),
+    getReadySandboxSocket: vi.fn(() => null as WebSocket | null),
     send: vi.fn(() => true),
   };
 
@@ -151,6 +155,9 @@ function createProcessor() {
       applySessionTitleUpdate,
       updateLastActivity,
       refreshSlackActivity,
+      scheduleInactivityCheck,
+      backgroundTasks,
+      { processMessageQueue },
       log
     ),
     pushService
@@ -674,6 +681,7 @@ describe("SessionSandboxEventProcessor", () => {
     const h = createProcessor();
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.wsManager.getReadySandboxSocket.mockReturnValue(sandboxWs);
 
     const pushPromise = h.pushService.pushBranchToRemote(
       createPushSpec("acme", "web", "feature/test")

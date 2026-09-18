@@ -60,14 +60,11 @@ export interface SessionInitInput {
   /** Canonical platform user ID for D1 analytics attribution. Null when unresolved. */
   platformUserId: string | null;
 
-  // SCM credentials
+  // SCM identity
   scmLogin?: string | null;
   scmName?: string | null;
   scmEmail?: string | null;
   scmUserId?: string | null;
-  scmTokenEncrypted: string | null;
-  scmRefreshTokenEncrypted: string | null;
-  scmTokenExpiresAt?: number | null;
 
   // Lineage
   parentSessionId?: string | null;
@@ -198,9 +195,6 @@ export async function initializeSession(
           scmLogin: input.scmLogin,
           scmName: input.scmName,
           scmEmail: input.scmEmail,
-          scmTokenEncrypted: input.scmTokenEncrypted,
-          scmRefreshTokenEncrypted: input.scmRefreshTokenEncrypted,
-          scmTokenExpiresAt: input.scmTokenExpiresAt,
           scmUserId: input.scmUserId,
           codeServerEnabled: input.codeServerEnabled,
           vncEnabled: input.vncEnabled,

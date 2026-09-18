@@ -106,8 +106,18 @@ class BufferedEventForwarder:
         """Detach the connection; subsequent sends buffer until the next bind."""
         self._ws = None
 
-    async def send(self, event: dict[str, Any]) -> None:
-        """Send event to control plane, buffering if WS is unavailable."""
+    async def send(self, event: dict[str, Any], *, buffered: bool = True) -> bool:
+        """Send event to control plane, buffering if WS is unavailable.
+
+        ``buffered=False`` sends only over an open connection and otherwise
+        drops the event: for reports whose value is being current (a boot
+        phase), a replay after reconnect would only be stale.
+
+        Returns whether the event reached an open connection. A caller that
+        keeps its own durable record of what it has delivered (the boot-event
+        relay's cursor) must not advance it on a buffered event: the buffer
+        lives only as long as this process.
+        """
         event_type = event.get("type", "unknown")
         event["sandboxId"] = self._sandbox_id
         event["timestamp"] = event.get("timestamp", time.time())
@@ -118,8 +128,11 @@ class BufferedEventForwarder:
 
         ws = self._ws
         if not ws or ws.state != State.OPEN:
-            self._buffer_event(event)
-            return
+            if buffered:
+                self._buffer_event(event)
+            else:
+                self._log.debug("bridge.event_dropped_unbound", event_type=event_type)
+            return False
 
         try:
             await ws.send(json.dumps(event))
@@ -127,13 +140,22 @@ class BufferedEventForwarder:
                 self._pending_acks[event["ackId"]] = event
         except asyncio.CancelledError:
             # A prompt task cancelled mid-send must not strand its event:
-            # re-buffer it, then let the cancellation proceed.
-            self._buffer_event(event)
+            # re-buffer it, then let the cancellation proceed. An unbuffered
+            # event is dropped here too — a replay would only be stale.
+            if buffered:
+                self._buffer_event(event)
+            else:
+                self._log.debug("bridge.event_dropped_cancelled", event_type=event_type)
             raise
         except Exception as e:
             self._log.warn("bridge.send_error", event_type=event_type, exc=e)
+            if not buffered:
+                self._log.debug("bridge.event_dropped_send_failed", event_type=event_type)
+                return False
             self._buffer_event(event)
             await self._drain_if_rebound(failed_ws=ws)
+            return False
+        return True
 
     def acknowledge(self, ack_id: str) -> bool:
         """Drop a pending critical event the control plane confirmed.

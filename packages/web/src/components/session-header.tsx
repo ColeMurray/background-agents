@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type RefObject } from "react";
+import type { BootPhaseName, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/types/sessions";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
@@ -10,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
+import { bootPhaseLabel, bootPhaseRepoLabel } from "@/lib/session-socket/boot-phase";
 import { getSafeExternalUrl } from "@/lib/urls";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 
@@ -79,10 +81,48 @@ const SANDBOX_STATUS_PRESENTATION: Record<
   },
 };
 
+/** Statuses during which the runtime reports boot phases. */
+const BOOTING_STATUSES: ReadonlySet<SandboxStatusValue> = new Set(["spawning", "connecting"]);
+
+/**
+ * What a phase report means for the popover, by the report's status. Copy
+ * omits the trailing period so a repository can follow. A `started` report
+ * also relabels the pill; a `completed` one keeps the sandbox status label,
+ * since the runtime is between steps, and says what just finished.
+ */
+const BOOT_PHASE_DETAILS: Record<BootPhaseName, { started: string; completed: string }> = {
+  starting: {
+    started: "The sandbox runtime is up and the boot is starting",
+    completed: "The sandbox runtime is up",
+  },
+  sync: { started: "Cloning the repository", completed: "Cloned the repository" },
+  setup: { started: "Running setup.sh", completed: "Finished setup.sh" },
+  start: { started: "Running start.sh", completed: "Finished start.sh" },
+  skills: { started: "Installing skills", completed: "Installed skills" },
+  harness: { started: "Starting the agent", completed: "Started the agent" },
+};
+
+const BOOT_WARNING_DETAIL = "This step exited with an error and the boot continued.";
+
+function describeBootPhase(
+  bootPhase: SandboxBootPhase,
+  repositoryCount: number
+): { label?: string; detail: string } | null {
+  if (bootPhase.status === "failed") return null;
+  const repo = bootPhaseRepoLabel(bootPhase, repositoryCount);
+  const detail = `${BOOT_PHASE_DETAILS[bootPhase.phase][bootPhase.status]}${repo ? ` for ${repo}` : ""}.`;
+  return {
+    ...(bootPhase.status === "started" ? { label: bootPhaseLabel(bootPhase.phase) } : {}),
+    detail: bootPhase.warning ? `${detail} ${BOOT_WARNING_DETAIL}` : detail,
+  };
+}
+
 export type SessionHeaderProps = {
   sessionState: SessionSocketState["sessionState"];
   /** Why the sandbox last failed; shown in the status popover. */
   sandboxError?: SessionSocketState["sandboxError"];
+  /** The boot phase a booting or failed sandbox last reported. */
+  bootPhase?: SandboxBootPhase | null;
   fallbackSessionInfo: {
     repoOwner: string | null;
     repoName: string | null;
@@ -109,6 +149,7 @@ export type SessionHeaderProps = {
 export function SessionHeader({
   sessionState,
   sandboxError,
+  bootPhase,
   fallbackSessionInfo,
   connected,
   connecting,
@@ -247,6 +288,8 @@ export function SessionHeader({
                 capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined
               }
               error={sandboxError}
+              bootPhase={bootPhase}
+              repositoryCount={sessionState?.repositories?.length ?? 0}
             />
           </div>
           {showDesktopDetailsToggle && (
@@ -318,6 +361,8 @@ function SandboxStatusIcon({
   status,
   dashboardUrl,
   error,
+  bootPhase,
+  repositoryCount,
 }: {
   status?: SandboxStatusValue;
   dashboardUrl?: string | null;
@@ -328,10 +373,28 @@ function SandboxStatusIcon({
    * that tells someone what to actually change.
    */
   error?: string | null;
+  /**
+   * The runtime's last boot phase. While the sandbox boots it names the step
+   * in progress instead of a generic "Starting..."; after a failure it names
+   * the step that broke and carries the failing script's output tail.
+   */
+  bootPhase?: SandboxBootPhase | null;
+  /** Members of the session; phases name their repository only when there are several. */
+  repositoryCount: number;
 }) {
   if (!status) return null;
 
-  const presentation = SANDBOX_STATUS_PRESENTATION[status];
+  const booting =
+    bootPhase && BOOTING_STATUSES.has(status)
+      ? describeBootPhase(bootPhase, repositoryCount)
+      : null;
+  const failedPhase = status === "failed" && bootPhase?.status === "failed" ? bootPhase : null;
+  const failedPhaseRepo = failedPhase ? bootPhaseRepoLabel(failedPhase, repositoryCount) : null;
+  const presentation = booting
+    ? { ...SANDBOX_STATUS_PRESENTATION[status], ...booting }
+    : SANDBOX_STATUS_PRESENTATION[status];
+  const reason = error ?? failedPhase?.detail;
+  const outputTail = failedPhase?.outputTail;
   const safeDashboardUrl = getSafeExternalUrl(dashboardUrl);
 
   return (
@@ -359,10 +422,26 @@ function SandboxStatusIcon({
             Sandbox {presentation.label}
           </div>
           <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{presentation.detail}</p>
-          {error && (
-            <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-destructive">
-              {error}
+          {failedPhase && (
+            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+              Failed while {bootPhaseLabel(failedPhase.phase).toLowerCase()}
+              {failedPhaseRepo ? ` for ${failedPhaseRepo}` : ""}.
             </p>
+          )}
+          {reason && (
+            <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-destructive">
+              {reason}
+            </p>
+          )}
+          {outputTail && outputTail.length > 0 && (
+            <pre
+              role="region"
+              aria-label="Boot output"
+              tabIndex={0}
+              className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              {outputTail.join("\n")}
+            </pre>
           )}
         </div>
         {safeDashboardUrl && (

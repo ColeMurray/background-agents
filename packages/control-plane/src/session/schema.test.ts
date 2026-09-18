@@ -62,7 +62,7 @@ it("upgrades existing sessions with a persisted status revision and preserves it
     db.exec(
       "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
     );
-    for (const migration of MIGRATIONS.filter(({ id }) => id < 51)) {
+    for (const migration of MIGRATIONS.filter(({ id }) => id !== 51)) {
       db.prepare("INSERT INTO _schema_migrations VALUES (?, 0)").run(migration.id);
     }
     applyMigrations(createDatabaseSql(db));
@@ -299,6 +299,39 @@ describe("applyMigrations", () => {
     expect(migration?.run).toBe("ALTER TABLE sandbox ADD COLUMN active_socket_id TEXT");
   });
 
+  it("adds sandbox boot phase and fencing columns for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("boot_phase TEXT");
+    expect(SCHEMA_SQL).toContain("boot_seq INTEGER");
+    expect(SCHEMA_SQL).toContain("fenced INTEGER NOT NULL DEFAULT 0");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 52);
+    expect(typeof migration?.run).toBe("function");
+
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec("CREATE TABLE sandbox (id TEXT PRIMARY KEY)");
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+
+      expect(db.prepare("PRAGMA table_info(sandbox)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "boot_phase", type: "TEXT", notnull: 0 }),
+          expect.objectContaining({ name: "boot_seq", type: "INTEGER", notnull: 0 }),
+          expect.objectContaining({
+            name: "fenced",
+            type: "INTEGER",
+            notnull: 1,
+            dflt_value: "0",
+          }),
+        ])
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   it("keeps repository context consistent at the session table boundary", () => {
     expect(SCHEMA_SQL).toContain("(repo_owner IS NULL) = (repo_name IS NULL)");
     expect(SCHEMA_SQL).toContain("repo_owner IS NOT NULL");
@@ -477,10 +510,15 @@ describe("applyMigrations", () => {
         expect.arrayContaining([
           "idx_messages_status",
           "idx_messages_author",
+          "idx_messages_created_at_id",
           "idx_messages_client_request_id",
           "idx_messages_one_processing",
         ])
       );
+      expect(db.prepare("PRAGMA index_info(idx_messages_created_at_id)").all()).toEqual([
+        expect.objectContaining({ name: "created_at" }),
+        expect.objectContaining({ name: "id" }),
+      ]);
       expectClientRequestIdIndex(db);
     } finally {
       db.close();

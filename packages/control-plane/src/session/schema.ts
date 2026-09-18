@@ -195,6 +195,9 @@ CREATE TABLE IF NOT EXISTS sandbox (
   ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
   active_socket_id TEXT,                            -- Bridge socket the session dispatches to (socket:<id> tag)
+  boot_phase TEXT,                                  -- JSON SandboxBootPhase the runtime last reported; NULL once ready
+  boot_seq INTEGER,                                 -- Sequence of that report, for de-duplicating resends
+  fenced INTEGER NOT NULL DEFAULT 0,                -- 1 once the generation's credentials were revoked for good (boot budget)
   created_at INTEGER NOT NULL
 );
 
@@ -233,6 +236,7 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
 const INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_author ON messages(author_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created_at_id ON messages(created_at DESC, id DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id
 ON messages(client_request_id) WHERE client_request_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing
@@ -693,6 +697,15 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 51,
     description: "Fence session status projections independently of activity",
     run: `ALTER TABLE session ADD COLUMN status_revision INTEGER NOT NULL DEFAULT 1`,
+  },
+  {
+    id: 52,
+    description: "Add sandbox boot phase, boot sequence and generation fence",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN boot_phase TEXT`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN boot_seq INTEGER`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN fenced INTEGER NOT NULL DEFAULT 0`);
+    },
   },
 ];
 

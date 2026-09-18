@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import type { SessionSnapshot } from "@open-inspect/shared/types/server-messages";
 import { beforeEach, describe, expect, it } from "vitest";
 import { encryptToken } from "../../src/auth/crypto";
 import { cleanD1Tables } from "./cleanup";
@@ -47,7 +48,7 @@ describe("session snapshot synchronization", () => {
     const response = await stub.fetch("http://internal/internal/snapshot");
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    const snapshot = await response.json<Record<string, any>>();
+    const snapshot = await response.json<SessionSnapshot>();
 
     expect(snapshot.session).toMatchObject({
       id: name,

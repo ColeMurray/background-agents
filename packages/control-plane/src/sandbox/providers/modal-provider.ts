@@ -10,6 +10,7 @@ import type { ModalClient } from "../client";
 import type { CorrelationContext } from "../../logger";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   createVncAccess,
   type ImageBuildProviderTriggerConfig,
@@ -138,6 +139,9 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
+      if (config.prebuiltImageId && error instanceof ModalApiError && error.status === 410) {
+        throw new PrebuiltImageUnavailableError("Modal prebuilt image is unavailable", error);
+      }
       throw this.classifyError("Failed to create sandbox", error);
     }
   }

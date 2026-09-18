@@ -145,9 +145,6 @@ describe("ChildSessionsHandler", () => {
           login: null,
           name: null,
           email: null,
-          accessTokenEncrypted: null,
-          refreshTokenEncrypted: null,
-          tokenExpiresAt: null,
         },
       });
     });
@@ -299,15 +296,16 @@ describe("ChildSessionsHandler", () => {
     const response = handler.getSpawnContext();
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    const body = await response.json<{ promptAuthor: Record<string, unknown> }>();
+    expect(body).toMatchObject({
       promptAuthor: {
         userId: "slack:U2",
         canonicalUserId: "canonical-2",
         scmUserId: "222",
         scmLogin: "second-user",
-        scmAccessTokenEncrypted: "second-access",
       },
     });
+    expect(body.promptAuthor).not.toHaveProperty("scmAccessTokenEncrypted");
   });
 
   it("returns a narrow active prompt author without encrypted credentials", async () => {
@@ -379,9 +377,6 @@ describe("ChildSessionsHandler", () => {
         scmLogin: "octocat",
         scmName: "The Octocat",
         scmEmail: "octocat@example.com",
-        scmAccessTokenEncrypted: "enc-access",
-        scmRefreshTokenEncrypted: "enc-refresh",
-        scmTokenExpiresAt: 1234,
       },
     });
   });

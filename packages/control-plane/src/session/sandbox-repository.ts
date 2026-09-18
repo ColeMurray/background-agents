@@ -1,4 +1,4 @@
-import type { GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
+import type { GitSyncStatus, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { SandboxAccessKind, SandboxRow } from "./types";
@@ -23,6 +23,8 @@ const ACCESS_ARTIFACT_COLUMNS: Record<
 export interface SandboxCircuitBreakerState {
   status: SandboxStatus;
   created_at: number;
+  /** Null until this generation's bridge first connected (cleared per generation). */
+  last_heartbeat: number | null;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
   snapshot_runtime_version: string | null;
@@ -91,7 +93,7 @@ export class SandboxRepository {
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
     const result = this.sql.exec(
-      `SELECT status, created_at, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
+      `SELECT status, created_at, last_heartbeat, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
     const rows = this.rows<Omit<SandboxCircuitBreakerState, "status"> & { status: string }>(result);
     const row = rows[0];
@@ -144,11 +146,77 @@ export class SandboxRepository {
   }
 
   /**
+   * Move the row to `ready` if it is booting or self-healing, and report
+   * whether it moved. `ready` is excluded so a reconnecting bridge's repeat
+   * `ready` event changes nothing; `stopped` and `stale` are terminal and
+   * reconnect-blocked, and a cancel writes `stopped` without detaching the
+   * socket, so a late `ready` must not revive them; a fenced `failed` row had
+   * its credentials revoked for good, while an unfenced one is a watchdog
+   * failure whose boot may still arrive. Only the generation that emitted
+   * the event may move the row: a replacement reserved in the meantime is
+   * readied by its own runtime, not by the old one's late report. Clears the
+   * boot phase in the same write: the phase describes a boot that is over.
+   */
+  markSandboxReady(generation: { sandboxId: string | null; createdAt: number }): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET status = 'ready', boot_phase = NULL, boot_seq = NULL
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?
+         AND status NOT IN ('ready', 'stopped', 'stale')
+         AND fenced = 0`,
+      generation.sandboxId,
+      generation.createdAt
+    );
+    // Consume the result before reading rowsWritten so the count is final.
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  /**
+   * Record the boot phase the runtime reported under `bootSeq`, unless an
+   * equal or later report already landed or the boot is over; reports
+   * whether it was recorded. The bridge resends its latest phase on every
+   * reconnect, so this is what keeps that resend from being observed twice,
+   * and what keeps a resend after `ready` (which cleared the sequence) from
+   * describing a boot that has finished. A `failed` row still records: an
+   * unfenced one may be a boot that outlived the watchdog and is still going.
+   */
+  recordBootProgress(phase: SandboxBootPhase, bootSeq: number): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET boot_phase = ?, boot_seq = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND status NOT IN ('ready', 'snapshotting', 'stopped', 'stale')
+         AND (boot_seq IS NULL OR boot_seq < ?)`,
+      JSON.stringify(phase),
+      bootSeq,
+      bootSeq
+    );
+    // Consume the result before reading rowsWritten so the count is final.
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  /**
+   * Revoke this generation's credentials and socket authority for good. A
+   * fenced runtime's next sandbox-authenticated call or reconnect is refused,
+   * which is what stops a sandbox on a provider with no explicit stop, and
+   * `markSandboxReady` refuses the row so nothing can revive it. Only the
+   * next reservation (`updateSandboxForSpawn`) lifts the fence.
+   */
+  fenceSandboxGeneration(): void {
+    this.sql.exec(
+      `UPDATE sandbox SET auth_token_hash = '', auth_token = NULL, active_socket_id = '', fenced = 1
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+    );
+  }
+
+  /**
    * Phase 1 of the two-phase spawn write (#1589): the reservation itself
    * invalidates credentials — no token can match the emptied hash — until
    * `updateSandboxAuthTokenHash` publishes the new one.
-   * A replacement has not sent a heartbeat yet; retaining the predecessor's
-   * timestamp lets an alarm declare the new generation stale during startup.
+   * `last_heartbeat` is cleared with the rest of the generation identity: it
+   * is the mark that this generation's bridge has connected, so a replacement
+   * must not inherit the predecessor's.
    */
   updateSandboxForSpawn(data: SpawnSandboxData): void {
     this.sql.exec(
@@ -168,7 +236,10 @@ export class SandboxRepository {
          ttyd_url = NULL,
          ttyd_token = NULL,
          runtime_version = NULL,
-         active_socket_id = ''
+         active_socket_id = '',
+         boot_phase = NULL,
+         boot_seq = NULL,
+         fenced = 0
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
@@ -220,7 +291,10 @@ export class SandboxRepository {
       `UPDATE sandbox SET
          status = ?,
          created_at = ?,
-         last_heartbeat = NULL
+         last_heartbeat = NULL,
+         boot_phase = NULL,
+         boot_seq = NULL,
+         fenced = 0
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt

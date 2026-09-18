@@ -1695,6 +1695,31 @@ class TestPromptMaxDuration:
         assert any(url.endswith("/abort") for url in http_client.post_urls)
 
     @pytest.mark.asyncio
+    async def test_a_prompts_own_budget_overrides_the_configured_maximum(self):
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.harness.session_id = "oc-session-123"
+        set_prompt_limits(bridge, prompt_max_duration_seconds=30.0)
+
+        sse_response = DelayedMockSSEResponse([(create_sse_event("server.heartbeat", {}), 1.0)])
+        http_client = DelayedMockHttpClient(sse_response)
+        http_client.get_responses = [MockResponse(200, [])]
+        wire_opencode_transport(bridge, http_client)
+
+        started_at = time.monotonic()
+        with pytest.raises(RuntimeError, match=r"Prompt exceeded max duration of 0s\."):
+            async for _event in stream_opencode_events(
+                bridge, "msg-1", "test", max_duration_seconds=0.1
+            ):
+                pass
+
+        assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
+
+    @pytest.mark.asyncio
     async def test_prompt_timeout_does_not_wait_for_next_sse_event(self):
         bridge = AgentBridge(
             sandbox_id="test-sandbox",

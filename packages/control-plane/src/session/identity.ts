@@ -3,17 +3,13 @@ import {
   githubLoginSchema,
 } from "@open-inspect/shared/types/github-identity";
 import { z } from "zod";
-import { encryptToken } from "../auth/crypto";
-import { requireTokenEncryptionKey } from "../env-validation";
 import type {
-  GitHubAccountSelection,
   GitHubCredentialAuthority,
+  ProviderAccountSelection,
+  ProviderAccountClient,
 } from "../source-control/github-credential-authority";
-import { UserScmTokenStore } from "../db/user-scm-tokens";
 import type { UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
-import type { Env } from "../types";
-import type { SqlDatabase } from "../db/sql-database";
 
 const FALLBACK_GIT_AUTHOR = {
   name: "OpenInspect",
@@ -57,17 +53,16 @@ export interface GitHubEnrichment {
   scmLogin?: string;
   displayName?: string;
   email?: string;
-  accessTokenEncrypted?: string;
-  refreshTokenEncrypted?: string;
-  tokenExpiresAt?: number;
 }
 
-const browserAccessTokenSchema = z.object({
-  accessToken: z.string().min(1),
+const GITHUB_ACCESS_TOKEN_EXPIRY_BUFFER_MS = 60_000;
+
+const betterAuthAccessTokenSchema = z.object({
+  accessToken: z.string(),
   accessTokenExpiresAt: z.coerce.date().optional(),
 });
 
-const browserGitHubAccountInfoSchema = z.object({
+const betterAuthGitHubAccountInfoSchema = z.object({
   user: z.object({
     id: z.string().min(1),
   }),
@@ -82,62 +77,75 @@ const browserGitHubAccountInfoSchema = z.object({
   }),
 });
 
-export interface BrowserGitHubEnrichmentDependencies {
-  readonly getAccessToken: (selection: {
-    providerId: "github";
-    accountId: string;
-    userId: string;
-  }) => Promise<unknown>;
-  readonly getAccountInfo: (selection: {
-    providerId: "github";
-    accountId: string;
-    userId: string;
-  }) => Promise<unknown>;
-  readonly encryptAccessToken: (accessToken: string) => Promise<string>;
+export class BetterAuthGitHubTokenUnavailableError extends Error {
+  constructor(readonly retrievalError: unknown) {
+    super("Better Auth GitHub token is unavailable", { cause: retrievalError });
+    this.name = "BetterAuthGitHubTokenUnavailableError";
+  }
 }
 
-/**
- * Resolve GitHub attribution and a current provider token from Better Auth.
- *
- * Better Auth owns refresh-token storage and rotation. Session state receives
- * only a re-encrypted, currently valid access token; it never copies the
- * long-lived refresh credential into a second store.
- */
-export async function resolveBrowserGitHubEnrichment(
-  userId: string,
-  account: GitHubAccountSelection,
-  dependencies: BrowserGitHubEnrichmentDependencies
-): Promise<GitHubEnrichment> {
-  const selection = {
-    providerId: "github" as const,
-    accountId: account.subject,
-    userId,
-  };
-  const token = browserAccessTokenSchema.parse(await dependencies.getAccessToken(selection));
-  const profile = browserGitHubAccountInfoSchema.parse(
-    await dependencies.getAccountInfo(selection)
+function expiresWithinGitHubSafetyWindow(token: { accessTokenExpiresAt?: Date }): boolean {
+  return Boolean(
+    token.accessTokenExpiresAt &&
+    token.accessTokenExpiresAt.getTime() <= Date.now() + GITHUB_ACCESS_TOKEN_EXPIRY_BUFFER_MS
   );
-  if (profile.user.id !== account.subject || profile.data.subject !== account.subject) {
+}
+
+function parseBetterAuthGitHubProfile(response: unknown, expectedScmUserId: string) {
+  const profile = betterAuthGitHubAccountInfoSchema.parse(response);
+  if (profile.user.id !== expectedScmUserId || profile.data.subject !== expectedScmUserId) {
     throw new Error("Better Auth returned a mismatched GitHub account");
   }
+  return profile.data;
+}
 
-  const accessTokenEncrypted = await dependencies.encryptAccessToken(token.accessToken);
-  const author = resolveGitAuthorIdentity({
-    scmProvider: "github",
-    scmUserId: profile.data.subject,
-    scmLogin: profile.data.login,
-    scmName: profile.data.displayName,
-    scmEmail: profile.data.primaryEmail,
-  });
+/** Resolve current PR credentials without copying Better Auth tokens into session state. */
+export async function resolveCurrentGitHubAccessToken(
+  userStore: UserStore,
+  getAccountClient: () => ProviderAccountClient,
+  canonicalUserId: string,
+  expectedScmUserId: string
+): Promise<string | null> {
+  const enrichment = await resolveGitHubEnrichment(userStore, canonicalUserId);
+  if (!enrichment) return null;
+  if (enrichment.scmUserId !== expectedScmUserId) {
+    throw new Error("Session GitHub account no longer matches the canonical user");
+  }
 
-  return {
-    scmUserId: profile.data.subject,
-    scmLogin: profile.data.login,
-    displayName: profile.data.displayName ?? profile.data.login,
-    email: author?.email,
-    accessTokenEncrypted,
-    ...(token.accessTokenExpiresAt ? { tokenExpiresAt: token.accessTokenExpiresAt.getTime() } : {}),
+  const selection: ProviderAccountSelection = {
+    providerId: "github",
+    accountId: expectedScmUserId,
+    userId: canonicalUserId,
   };
+  const accountClient = getAccountClient();
+  let tokenResponse: unknown;
+  try {
+    tokenResponse = await accountClient.getAccessToken({ body: selection });
+  } catch (error) {
+    throw new BetterAuthGitHubTokenUnavailableError(error);
+  }
+  let token = betterAuthAccessTokenSchema.parse(tokenResponse);
+  if (token.accessToken === "") return null;
+
+  if (expiresWithinGitHubSafetyWindow(token)) {
+    let refreshResponse: unknown;
+    try {
+      refreshResponse = await accountClient.refreshToken({ body: selection });
+    } catch (error) {
+      throw new BetterAuthGitHubTokenUnavailableError(error);
+    }
+    token = betterAuthAccessTokenSchema.parse(refreshResponse);
+    if (token.accessToken === "") {
+      throw new Error("Better Auth returned an empty refreshed GitHub access token");
+    }
+    if (expiresWithinGitHubSafetyWindow(token)) return null;
+  }
+
+  parseBetterAuthGitHubProfile(
+    await accountClient.accountInfo({ query: selection }),
+    expectedScmUserId
+  );
+  return token.accessToken;
 }
 
 /**
@@ -153,26 +161,22 @@ export function parseAuthorId(
 }
 
 /**
- * Given a resolved D1 user, find their linked GitHub identity and return
- * enrichment data (display name, email, OAuth tokens). Returns null if no
- * GitHub identity is linked. Parallelizes independent D1 lookups.
+ * Given a resolved D1 user, return attribution for their one linked GitHub
+ * identity. Better Auth remains the sole credential authority.
  */
 export async function resolveGitHubEnrichment(
-  env: Env,
-  db: SqlDatabase,
   userStore: UserStore,
   userId: string
 ): Promise<GitHubEnrichment | null> {
   const identities = await userStore.getIdentitiesForUser(userId);
-  const githubIdentity = identities.find((i) => i.provider === "github");
+  const githubIdentities = identities.filter((identity) => identity.provider === "github");
+  if (githubIdentities.length > 1) {
+    throw new Error("User resolves to multiple GitHub provider accounts");
+  }
+  const githubIdentity = githubIdentities[0];
   if (!githubIdentity) return null;
 
-  const [user, tokens] = await Promise.all([
-    userStore.getUserById(userId),
-    new UserScmTokenStore(db, requireTokenEncryptionKey(env)).getEncryptedTokens(
-      githubIdentity.providerUserId
-    ),
-  ]);
+  const user = await userStore.getUserById(userId);
 
   const authorIdentity = resolveGitAuthorIdentity({
     scmProvider: "github",
@@ -187,38 +191,47 @@ export async function resolveGitHubEnrichment(
     scmLogin: githubIdentity.providerLogin ?? undefined,
     displayName: user?.displayName ?? githubIdentity.providerLogin ?? undefined,
     email: authorIdentity?.email ?? undefined,
-    accessTokenEncrypted: tokens?.accessTokenEncrypted,
-    refreshTokenEncrypted: tokens?.refreshTokenEncrypted,
-    tokenExpiresAt: tokens?.expiresAt,
   };
 }
 
 /**
  * Select the credential authority associated with the authenticated request.
  *
- * Browser sessions read/refresh through Better Auth. Bot identities retain
- * their existing actor identity/token-store lookup.
+ * Browser sessions prove account ownership through their session. Service
+ * principals use the canonical user established by route admission. Tokens
+ * remain in Better Auth and are resolved only at the final provider boundary.
  */
 export async function resolveGitHubEnrichmentForRequest(
-  env: Env,
-  db: SqlDatabase,
   userStore: UserStore,
   userId: string,
   authority: GitHubCredentialAuthority
 ): Promise<GitHubEnrichment | null> {
-  // One invariant for the whole boundary: both authorities encrypt with
-  // validated AES-256 material, regardless of which branch runs.
-  const tokenEncryptionKey = requireTokenEncryptionKey(env);
-  if (authority.kind === "legacy") {
-    return resolveGitHubEnrichment(env, db, userStore, userId);
-  }
+  const enrichment = await resolveGitHubEnrichment(userStore, userId);
+  if (authority.kind === "service_principal") return enrichment;
 
-  const accountClient = authority.accountClient;
-  const githubAccount = authority.githubAccount;
-  if (!githubAccount) return null;
-  return resolveBrowserGitHubEnrichment(userId, githubAccount, {
-    getAccessToken: (selection) => accountClient.getAccessToken({ body: selection }),
-    getAccountInfo: (selection) => accountClient.accountInfo({ query: selection }),
-    encryptAccessToken: (accessToken) => encryptToken(accessToken, tokenEncryptionKey),
+  if (!authority.githubAccount) {
+    if (enrichment) throw new Error("GitHub account authority is corrupt");
+    return null;
+  }
+  if (!enrichment || enrichment.scmUserId !== authority.githubAccount.subject) {
+    throw new Error("GitHub account authority is corrupt");
+  }
+  if (enrichment.scmLogin) return enrichment;
+
+  const profileResponse = await authority.githubAccount.resolveProfile();
+  if (profileResponse === null) return enrichment;
+  const profile = parseBetterAuthGitHubProfile(profileResponse, authority.githubAccount.subject);
+  const displayName = enrichment.displayName ?? profile.displayName ?? profile.login;
+  const authorIdentity = resolveGitAuthorIdentity({
+    scmProvider: "github",
+    scmUserId: enrichment.scmUserId,
+    scmLogin: profile.login,
+    scmName: displayName,
   });
+  return {
+    ...enrichment,
+    scmLogin: profile.login,
+    displayName,
+    email: authorIdentity?.email,
+  };
 }

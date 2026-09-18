@@ -7,6 +7,7 @@ import { PullRequestHandler } from "./pull-request.handler";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { ParticipantService } from "../../participant-service";
+import type { CreatePullRequestInput } from "../../pull-request-service";
 
 function createRepositoryRow(
   position: number,
@@ -232,13 +233,25 @@ describe("PullRequestHandler", () => {
   });
 
   it("returns auth resolution error payload", async () => {
-    const { handler, getSession, getPromptingParticipantForPR, resolveAuthForPR } = createHandler();
+    const {
+      handler,
+      getSession,
+      getPromptingParticipantForPR,
+      resolveAuthForPR,
+      createPullRequest,
+    } = createHandler();
     const participant = createParticipant();
     getSession.mockReturnValue(createSession());
     getPromptingParticipantForPR.mockResolvedValue({ participant });
     resolveAuthForPR.mockResolvedValue({
       error: "Token expired",
       status: 401,
+    });
+    createPullRequest.mockImplementation(async (input: CreatePullRequestInput) => {
+      const resolution = await input.resolvePromptingAuth();
+      return "error" in resolution
+        ? { kind: "error", status: resolution.status, error: resolution.error }
+        : { kind: "error", status: 500, error: "Expected auth failure" };
     });
 
     const response = await handler.createPr(
@@ -296,7 +309,7 @@ describe("PullRequestHandler", () => {
         repoOwner: "acme",
         repoName: "repo",
         promptingUserId: "user-123",
-        promptingAuth: { authType: "oauth", token: "token" },
+        resolvePromptingAuth: expect.any(Function),
         sessionUrl: "https://app.example.com/session/public-session-1",
         draft: undefined,
       },
@@ -343,7 +356,7 @@ describe("PullRequestHandler", () => {
         repoOwner: "acme",
         repoName: "repo",
         promptingUserId: "user-123",
-        promptingAuth: null,
+        resolvePromptingAuth: expect.any(Function),
         sessionUrl: "https://app.example.com/session/public-session-1",
         draft: undefined,
       },
@@ -409,7 +422,7 @@ describe("PullRequestHandler", () => {
         repoOwner: "acme",
         repoName: "repo",
         promptingUserId: "user-1",
-        promptingAuth: null,
+        resolvePromptingAuth: expect.any(Function),
         sessionUrl: "https://app.example.com/session/public-session-1",
         draft: true,
       },

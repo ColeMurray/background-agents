@@ -204,29 +204,57 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
   }
 
   /**
-   * Prepare, then commit. The inactivity alarm is the one fallible step, so
-   * it runs first: a failure leaves the previous bridge in place and nothing
-   * published. Everything after the await is synchronous, so the new socket,
-   * the ready status, and the broadcasts land together.
+   * Prepare, revalidate, commit. The boot-liveness alarm is the one fallible
+   * step, so it runs first: a failure leaves the previous bridge in place and
+   * nothing written, not even the heartbeat. The row is then read again: the
+   * await is a window in which a cancel or a replacement spawn can rotate the
+   * generation, and a socket admitted for the old one must not be adopted by
+   * the new. Everything after that check is synchronous, so the heartbeat,
+   * the socket and the row's move to `connecting` land together.
+   *
+   * Attach is not readiness. The bridge connects ahead of the repository
+   * boot and the harness, so this neither writes `ready`, stamps activity
+   * nor arms the inactivity reaper; the runtime's `ready` event does all of
+   * that (`SandboxRuntimeEventHandler.handleReady`). The one exception is a
+   * bridge reconnecting to a sandbox that is already ready (a bridge restart,
+   * a hibernation wake): the queue is pumped so a prompt that arrived while
+   * the socket was down does not wait for the user. The heartbeat stamp
+   * doubles as the "this generation has connected" mark the spawn decision
+   * and the connect watchdog read.
    */
   private async attachSandbox(
     ws: SessionWebSocket,
     sandboxId: string | null,
     log: Logger
   ): Promise<void> {
-    const {
-      wsManager,
-      sandboxRepository,
-      lifecycleManager,
-      messenger,
-      backgroundTasks,
-      messageQueue,
-    } = this.deps;
+    const { wsManager, sandboxRepository, lifecycleManager, messenger, backgroundTasks } =
+      this.deps;
 
     const now = Date.now();
-    lifecycleManager.updateLastActivity(now);
+    const readGeneration = () => {
+      const row = sandboxRepository.getSandbox();
+      return row ? { sandboxId: row.modal_sandbox_id, createdAt: row.created_at } : null;
+    };
+    const generation = readGeneration();
+    await lifecycleManager.scheduleDisconnectCheck();
+
+    const current = readGeneration();
+    if (
+      current?.sandboxId !== generation?.sandboxId ||
+      current?.createdAt !== generation?.createdAt
+    ) {
+      log.warn("ws.connect", {
+        event: "ws.connect",
+        ws_type: "sandbox",
+        outcome: "generation_replaced",
+        sandbox_id: sandboxId,
+        admitted_sandbox_id: generation?.sandboxId ?? null,
+        current_sandbox_id: current?.sandboxId ?? null,
+      });
+      wsManager.close(ws, 4003, "Sandbox generation replaced");
+      return;
+    }
     sandboxRepository.updateSandboxHeartbeat(now);
-    await lifecycleManager.scheduleInactivityCheck();
 
     // The lifecycle manager publishes access after any pending provider
     // startup has persisted its URLs and credentials.
@@ -234,8 +262,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     const { replaced } = wsManager.acceptAndSetSandboxSocket(ws, sandboxId ?? undefined);
     // Notify manager that sandbox connected so it can reset the spawning flag
     lifecycleManager.onSandboxConnected();
-    sandboxRepository.updateSandboxStatus("ready");
-    messenger.broadcast({ type: "sandbox_status", status: "ready" });
+    if (generation) lifecycleManager.onSandboxSocketAttached(generation);
     if (accessIsPersisted) {
       messenger.broadcast({ type: "sandbox_access_changed" });
     }
@@ -249,10 +276,11 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       duration_ms: Date.now() - now,
     });
 
-    // Process any pending messages now that sandbox is connected
-    backgroundTasks.submit(() => messageQueue.processMessageQueue(), {
-      name: "message_queue.process",
-    });
+    if (wsManager.getReadySandboxSocket()) {
+      backgroundTasks.submit(() => this.deps.messageQueue.processMessageQueue(), {
+        name: "message_queue.process",
+      });
+    }
   }
 
   /** Validate the client token and current permission before granting an authorization lease. */

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import type { ExecutionContext as HonoExecutionContext } from "hono";
 import type { Env } from "../src/types";
 
 vi.mock("../src/github-auth", () => ({
@@ -64,9 +65,9 @@ function makeEnv() {
 function makeCtx() {
   return {
     props: {},
-    waitUntil: vi.fn(),
-    passThroughOnException: vi.fn(),
-  } as any;
+    waitUntil: vi.fn<HonoExecutionContext["waitUntil"]>(),
+    passThroughOnException: vi.fn<HonoExecutionContext["passThroughOnException"]>(),
+  } satisfies HonoExecutionContext;
 }
 
 async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): Promise<void> {
@@ -317,7 +318,7 @@ describe("POST /webhooks/github", () => {
     const signature = await sign(SECRET, body);
     const env = makeEnv();
     const ctx = makeCtx();
-    env.AUTOFIX_QUEUE.send.mockRejectedValueOnce(new Error("queue unavailable"));
+    vi.mocked(env.AUTOFIX_QUEUE.send).mockRejectedValueOnce(new Error("queue unavailable"));
 
     const res = await app.fetch(
       new Request("http://localhost/webhooks/github", {

@@ -10,7 +10,7 @@ import signal
 from typing import TYPE_CHECKING, Any
 
 from .agent_bridge_process import AgentBridgeProcess
-from .boot_warnings import BootWarningSink
+from .boot_events import BootEventLog
 from .browser_desktop import BrowserDesktop
 from .claude_stager import ClaudeStager, isolated_claude_config_dir, resolve_claude_config_dir
 from .code_server import CodeServer
@@ -42,7 +42,7 @@ def build_harness_process(
     config: RuntimeConfig,
     shutdown_event: asyncio.Event,
     log: Any,
-    warnings: BootWarningSink,
+    warnings: BootEventLog,
     claude_config_dir: Path | None,
 ) -> HarnessProcessOwner:
     """The supervisor-half registry: pick the process owner for the session's harness."""
@@ -99,7 +99,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         sandbox_id=config.sandbox_id,
         session_id=str(config.session_config.get("session_id", "")),
     )
-    warnings = BootWarningSink(log)
+    warnings = BootEventLog(log)
     repository_boot = RepositoryBoot(
         config.repository_config(),
         log,
@@ -139,6 +139,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         managed_skills,
         shutdown_event,
         log,
+        boot_events=warnings,
     )
 
 

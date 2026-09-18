@@ -39,6 +39,7 @@ export function SessionDetailsOverlay({
   participants,
   presenceSynced,
   events,
+  bootPhases,
   artifacts,
   terminalOpen,
   onToggleTerminal,
@@ -169,6 +170,7 @@ export function SessionDetailsOverlay({
       participants={participants}
       presenceSynced={presenceSynced}
       events={events}
+      bootPhases={bootPhases}
       artifacts={artifacts}
       terminalOpen={terminalOpen}
       onToggleTerminal={onToggleTerminal}

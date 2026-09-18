@@ -22,7 +22,8 @@ This handles npm dependencies, builds the shared package, configures git hooks (
 lint-staged), and optionally sets up a Python virtualenv for `packages/modal-infra`.
 
 See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for full deployment instructions. See
-[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) for local setup and day-to-day development paths.
+[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) for local setup and day-to-day development paths. To run
+OpenCode itself on a checkout of this repo, see [docs/OPENCODE_LOCAL.md](docs/OPENCODE_LOCAL.md).
 
 For manual setup or individual steps:
 

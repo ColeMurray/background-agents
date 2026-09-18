@@ -330,7 +330,34 @@ describe("ModalClient", () => {
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4-5",
       mcp_servers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
+      bridge_early_connect: true,
     });
+  });
+
+  it("asks Modal's create handler for early bridge connect by SessionConfig field name", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await client.createSandbox({
+      sessionId: "session-123",
+      sandboxId: "sandbox-456",
+      repoOwner: "testowner",
+      repoName: "testrepo",
+      controlPlaneUrl: "https://control-plane.test",
+      sandboxAuthToken: "auth-token",
+      harness: "opencode",
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body.bridge_early_connect).toBe(true);
   });
 
   it("sends multi-repo members as flat snake_case create fields", async () => {

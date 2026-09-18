@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbacksRouter } from "./callbacks";
+import { makeExecutionContext as makeCtx } from "./test-helpers";
 import type { Env } from "./types";
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
@@ -21,14 +22,6 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     LOG_LEVEL: "error",
     ...overrides,
   };
-}
-
-function makeCtx() {
-  return {
-    props: {},
-    waitUntil: vi.fn(),
-    passThroughOnException: vi.fn(),
-  } as any;
 }
 
 function makeApp() {
