@@ -34,7 +34,7 @@ def main() -> None:
         print(
             pack_bundle(
                 args.root, args.provider, args.output or args.root / ".cache/sandbox-images"
-            )
+            ).directory
         )
     else:
         result = build_image(args.root.resolve(), args.provider)

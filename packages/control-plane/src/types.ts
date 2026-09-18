@@ -93,7 +93,8 @@ export interface EnvConfig {
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)
-  EXECUTION_TIMEOUT_MS?: string; // Max processing time before auto-fail; sessions fall back to DEFAULT_SANDBOX_TIMEOUT_SECONDS, the scheduler's recovery sweep to its DEFAULT_EXECUTION_TIMEOUT_MS
+  SANDBOX_BOOT_TIMEOUT_MS?: string; // Longest a connected sandbox may boot before it is failed, in ms; defaults to DEFAULT_BOOT_BUDGET_CONFIG
+  EXECUTION_TIMEOUT_MS?: string; // Max processing time for one message before auto-fail, for sessions and for the automation runs watching them; overridden per session by sandboxTimeoutMs, and falls back to DEFAULT_SANDBOX_TIMEOUT_SECONDS
   SECRETS_CAP_ENFORCEMENT?: string; // "enforce" (default) fails spawn/build on oversized secret payloads; set "warn" to only log
 
   // Logging
@@ -122,8 +123,8 @@ export interface Platform {
   /** GitHub Autofix queues, read for health metrics only. */
   AUTOFIX_QUEUE?: QueueMetricsSource;
   AUTOFIX_DLQ?: QueueMetricsSource;
-  /** Durable background work; null when the host cannot deliver jobs yet (see `jobs.ts`). */
-  JOBS: Jobs | null;
+  /** Durable background work supplied by every host. */
+  JOBS: Jobs;
 }
 
 /** What the application runs against: its configuration and the platform ports. */

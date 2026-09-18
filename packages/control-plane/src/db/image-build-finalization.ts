@@ -1,23 +1,32 @@
-import type {
-  ImageBuildScopeKind,
-  ImageBuildStatus,
-  RepositoryShaEntry,
+import {
+  imageBuildScopeKindSchema,
+  imageBuildStatusSchema,
+  type ImageBuildStatus,
+  type RepositoryShaEntry,
 } from "@open-inspect/shared/types/image-builds";
 import { timingSafeEqual } from "@open-inspect/shared/auth";
-import type { ImageBuildCallbackBuild, ImageBuildProvider } from "../image-builds/model";
+import { z } from "zod";
+import {
+  imageBuildProviderSchema,
+  type ImageBuildCallbackBuild,
+  type ImageBuildProvider,
+} from "../image-builds/model";
 import type { SqlDatabase } from "./sql-database";
 
-interface CallbackTokenRow {
-  id: string;
-  scope_kind: ImageBuildScopeKind;
-  scope_id: string;
-  provider: ImageBuildProvider;
-  provider_session_id: string | null;
-  status: ImageBuildStatus;
-  callback_token_hash: string | null;
-  callback_token_expires_at: number | null;
-  callback_token_used_at: number | null;
-}
+const callbackTokenRowSchema = z.object({
+  id: z.string(),
+  scope_kind: imageBuildScopeKindSchema,
+  scope_id: z.string(),
+  provider: imageBuildProviderSchema,
+  provider_session_id: z.string().nullable(),
+  status: imageBuildStatusSchema,
+  callback_token_hash: z.string().nullable(),
+  callback_token_expires_at: z.number().nullable(),
+  callback_token_used_at: z.number().nullable(),
+  completion_hash: z.string().nullable(),
+});
+
+type CallbackTokenRow = z.infer<typeof callbackTokenRowSchema>;
 
 /** Result of atomically consuming or replaying a callback completion. */
 export type ImageBuildCompletionAcceptance = "accepted" | "replayed" | "rejected";
@@ -199,10 +208,8 @@ export class ImageBuildFinalizationStore {
     return null;
   }
 
-  private async readCallbackTokenRowByBuildId(
-    buildId: string
-  ): Promise<(CallbackTokenRow & { completion_hash: string | null }) | null> {
-    return this.db
+  private async readCallbackTokenRowByBuildId(buildId: string): Promise<CallbackTokenRow | null> {
+    const row = await this.db
       .prepare(
         `SELECT id, scope_kind, scope_id, provider, provider_session_id, status,
                 callback_token_hash, callback_token_expires_at, callback_token_used_at,
@@ -210,7 +217,9 @@ export class ImageBuildFinalizationStore {
          FROM image_builds WHERE id = ?`
       )
       .bind(buildId)
-      .first<CallbackTokenRow & { completion_hash: string | null }>();
+      .first();
+    const parsed = callbackTokenRowSchema.safeParse(row);
+    return parsed.success ? parsed.data : null;
   }
 
   /** Reads the durable state used by a Queue delivery or cleanup retry. */

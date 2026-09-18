@@ -73,6 +73,7 @@ function makeChild(automationId: string, overrides?: Partial<AutomationRunRow>):
     failure_reason: null,
     scheduled_at: now,
     started_at: null,
+    execution_deadline_at: null,
     completed_at: null,
     created_at: now,
     repo_owner: null,
@@ -668,7 +669,9 @@ describe("automation invocations (D1 integration)", () => {
 
       const [staleOrphan] = await store.getOrphanedStartingRuns(0, 10);
       expect(staleOrphan?.id).toBe(child.id);
-      await expect(store.claimRunSession(child.id, "session-1", 500)).resolves.toBe(true);
+      await expect(store.claimRunSession(child.id, "session-1", 500, 500 + 1000)).resolves.toBe(
+        true
+      );
       await store.bulkFailStartingRuns([staleOrphan!.id], "session_creation_timeout", 999);
 
       const row = await env.DB.prepare(

@@ -46,6 +46,7 @@ import type { E2BRestClient, E2BSandboxCreated, E2BSandboxDetail } from "../e2b-
 import { E2BApiError, E2BConflictError, E2BNotFoundError } from "../e2b-rest-client";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   createVncAccess,
   type CreateSandboxConfig,
@@ -218,21 +219,29 @@ export class E2BSandboxProvider implements SandboxProvider {
         extraEnv
       );
 
-      const sandbox = await this.client.createSandbox({
-        templateID: config.prebuiltImageId || this.client.config.templateId,
-        envVars,
-        metadata: this.buildMetadata(config),
-        timeoutSeconds,
-        autoPause: this.providerConfig.autoPause,
-        // Require secure envd access: the entrypoint exec must not be possible
-        // anonymously over the public sandbox host, so envd must reject calls
-        // lacking the returned access token.
-        secure: true,
-        // Deliberately NOT auto-resume: resume is control-plane-driven (resumeSandbox →
-        // connectSandbox). Provider-side auto-resume would wake a paused sandbox from
-        // stray inbound traffic, outside the DO state machine.
-        autoResume: false,
-      });
+      let sandbox: E2BSandboxCreated;
+      try {
+        sandbox = await this.client.createSandbox({
+          templateID: config.prebuiltImageId || this.client.config.templateId,
+          envVars,
+          metadata: this.buildMetadata(config),
+          timeoutSeconds,
+          autoPause: this.providerConfig.autoPause,
+          // Require secure envd access: the entrypoint exec must not be possible
+          // anonymously over the public sandbox host, so envd must reject calls
+          // lacking the returned access token.
+          secure: true,
+          // Deliberately NOT auto-resume: resume is control-plane-driven (resumeSandbox →
+          // connectSandbox). Provider-side auto-resume would wake a paused sandbox from
+          // stray inbound traffic, outside the DO state machine.
+          autoResume: false,
+        });
+      } catch (error) {
+        if (config.prebuiltImageId && error instanceof E2BNotFoundError) {
+          throw new PrebuiltImageUnavailableError("E2B prebuilt template is unavailable", error);
+        }
+        throw error;
+      }
 
       try {
         await this.startEntrypoint(sandbox);

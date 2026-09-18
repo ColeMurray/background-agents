@@ -258,12 +258,6 @@ function reduceServerMessage(
       );
     }
 
-    case "sandbox_ready":
-      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
-        ...prev,
-        sandboxStatus: "ready",
-      }));
-
     case "sandbox_error":
       return updateSessionState({ ...state, sandboxError: message.error }, (prev) => ({
         ...prev,

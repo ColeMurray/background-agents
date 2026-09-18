@@ -7,8 +7,8 @@
  *
  * On Cloudflare each kind is a Queue (`cloudflare/job-queue.ts`) whose
  * consumer Terraform declares with the retry settings below; a unit test
- * holds the two equal. A future Node jobs table and poller can deliver the
- * same registry; until then that host exposes JOBS as null.
+ * holds the two equal. On Node, one persisted jobs table and poller deliver
+ * the same registry (`node/job-queue.ts`).
  *
  * Retry taxonomy. Delivery is at-least-once on every host, so a handler
  * must tolerate a duplicate: image-build finalization is fenced by a store

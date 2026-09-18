@@ -1043,6 +1043,8 @@ describe("getPullRequestFeedback", () => {
             path: "src/input.ts",
             line: 12,
             start_line: null,
+            original_line: 11,
+            original_start_line: null,
             side: "RIGHT",
             start_side: null,
             diff_hunk: "@@ -10,2 +10,3 @@",
@@ -1083,6 +1085,8 @@ describe("getPullRequestFeedback", () => {
           body: "Handle null here.",
           path: "src/input.ts",
           line: 12,
+          originalLine: 11,
+          originalStartLine: null,
         },
         {
           id: "9002",

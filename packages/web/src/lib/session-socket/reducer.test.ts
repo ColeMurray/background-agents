@@ -260,7 +260,6 @@ describe("sessionSocketReducer", () => {
       // linger next to a spawning or ready sandbox.
       expect(reduce(failed, serverMessage({ type: "sandbox_spawning" })).sandboxError).toBeNull();
       expect(reduce(failed, serverMessage({ type: "sandbox_warming" })).sandboxError).toBeNull();
-      expect(reduce(failed, serverMessage({ type: "sandbox_ready" })).sandboxError).toBeNull();
       expect(
         reduce(failed, serverMessage({ type: "sandbox_status", status: "ready" })).sandboxError
       ).toBeNull();
@@ -671,7 +670,7 @@ describe("sessionSocketReducer", () => {
       expect(state.sessionState?.sandboxStatus).toBe("warming");
       state = reduce(state, serverMessage({ type: "sandbox_spawning" }));
       expect(state.sessionState?.sandboxStatus).toBe("spawning");
-      state = reduce(state, serverMessage({ type: "sandbox_ready" }));
+      state = reduce(state, serverMessage({ type: "sandbox_status", status: "ready" }));
       expect(state.sessionState?.sandboxStatus).toBe("ready");
     });
   });
@@ -802,7 +801,10 @@ describe("sessionSocketReducer", () => {
     });
 
     it("leaves a null sessionState untouched for state-dependent messages", () => {
-      const state = reduce(initialSessionSocketState, serverMessage({ type: "sandbox_ready" }));
+      const state = reduce(
+        initialSessionSocketState,
+        serverMessage({ type: "sandbox_status", status: "ready" })
+      );
       expect(state.sessionState).toBeNull();
     });
   });

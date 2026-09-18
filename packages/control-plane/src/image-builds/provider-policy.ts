@@ -1,6 +1,10 @@
 import { resolveSandboxBackendName, type SandboxBackendName } from "../sandbox/provider-name";
 import type { Env } from "../types";
-import type { ImageBuildProvider } from "./model";
+import {
+  IMAGE_BUILD_PROVIDER_IDS,
+  imageBuildProviderSchema,
+  type ImageBuildProvider,
+} from "./model";
 
 /**
  * Central provider policy for image-build support.
@@ -9,19 +13,12 @@ import type { ImageBuildProvider } from "./model";
  * from provider-neutral lifecycle terms instead of open-coded provider checks.
  */
 
-const IMAGE_BUILD_PROVIDERS = {
-  modal: true,
-  vercel: true,
-  opencomputer: true,
-  e2b: true,
-} satisfies Record<ImageBuildProvider, true>;
-
 export function getImageBuildsUnsupportedMessage(env: Env): string | null {
   if (resolveImageBuildProvider(env.SANDBOX_PROVIDER)) {
     return null;
   }
 
-  return "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, opencomputer, or e2b";
+  return `Image builds are only available when SANDBOX_PROVIDER=${IMAGE_BUILD_PROVIDER_IDS.join(", ")}`;
 }
 
 export function resolveImageBuildProvider(value: string | undefined): ImageBuildProvider | null {
@@ -30,5 +27,5 @@ export function resolveImageBuildProvider(value: string | undefined): ImageBuild
 }
 
 function isImageBuildProvider(provider: SandboxBackendName): provider is ImageBuildProvider {
-  return provider in IMAGE_BUILD_PROVIDERS;
+  return imageBuildProviderSchema.safeParse(provider).success;
 }

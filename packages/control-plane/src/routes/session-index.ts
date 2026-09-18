@@ -8,12 +8,15 @@ import {
   SESSION_LIST_CURRENT_USER,
 } from "@open-inspect/shared/session-list-query";
 import {
+  SESSION_INBOX_CATEGORIES,
   sessionInboxCategorySchema,
-  type SessionInboxCategory,
-  type SessionInboxPage,
-  type SessionInboxSnapshot,
+  sessionInboxPageSchema,
+  sessionInboxSnapshotSchema,
 } from "@open-inspect/shared/types/session-inbox";
-import { sessionReadActionSchema } from "@open-inspect/shared/types/sessions";
+import {
+  sessionListResponseSchema,
+  sessionReadActionSchema,
+} from "@open-inspect/shared/types/sessions";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {
@@ -118,10 +121,12 @@ export async function handleListSessions(
     });
   }
 
-  const response = json({
-    sessions: result.sessions,
-    hasMore: result.hasMore,
-  });
+  const response = json(
+    sessionListResponseSchema.parse({
+      sessions: result.sessions,
+      hasMore: result.hasMore,
+    })
+  );
   if (viewerUserId) {
     response.headers.set("Cache-Control", "private, no-store");
   }
@@ -154,13 +159,14 @@ export async function handleListSessionInbox(
 
   if (category === null) {
     const snapshot = await store.listInboxSnapshot(commonOptions);
-    const categories = Object.fromEntries(
-      (Object.keys(snapshot) as SessionInboxCategory[]).map((inboxCategory) => [
-        inboxCategory,
-        encodeInboxPage(snapshot[inboxCategory]),
-      ])
-    ) as Record<SessionInboxCategory, SessionInboxPage>;
-    const body: SessionInboxSnapshot = { categories };
+    const body = sessionInboxSnapshotSchema.parse({
+      categories: Object.fromEntries(
+        SESSION_INBOX_CATEGORIES.map((inboxCategory) => [
+          inboxCategory,
+          encodeInboxPage(snapshot[inboxCategory]),
+        ])
+      ),
+    });
     const response = json(body);
     response.headers.set("Cache-Control", "private, no-store");
     return response;
@@ -172,11 +178,13 @@ export async function handleListSessionInbox(
     cursor: parsedCursor.cursor,
   });
   const nextCursor = result.nextCursor ? encodeSessionInboxCursor(result.nextCursor) : null;
-  const response = json({
-    items: result.items,
-    hasMore: result.hasMore,
-    nextCursor,
-  });
+  const response = json(
+    sessionInboxPageSchema.parse({
+      items: result.items,
+      hasMore: result.hasMore,
+      nextCursor,
+    })
+  );
   response.headers.set("Cache-Control", "private, no-store");
   log.info("session_inbox.listed", {
     event: "session_inbox.listed",
@@ -193,9 +201,7 @@ export async function handleListSessionInbox(
   return response;
 }
 
-function encodeInboxPage(
-  result: Awaited<ReturnType<SessionIndexStore["listInbox"]>>
-): SessionInboxPage {
+function encodeInboxPage(result: Awaited<ReturnType<SessionIndexStore["listInbox"]>>) {
   return {
     items: result.items,
     hasMore: result.hasMore,

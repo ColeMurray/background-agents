@@ -165,7 +165,6 @@ describe("automation lifecycle routes", () => {
       const enrichment = {
         scmUserId: "123",
         scmLogin: "requester",
-        accessTokenEncrypted: "encrypted-access",
       };
       mockResolveGitHubEnrichmentForRequest.mockResolvedValue(enrichment);
 
@@ -176,6 +175,18 @@ describe("automation lifecycle routes", () => {
         runs: [{ id: "run-1" }],
       });
       expect(mockSchedulerTrigger).toHaveBeenCalledWith("auto-1", "user-1", enrichment);
+    });
+
+    it("does not trigger automation when GitHub credential integrity fails", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockResolveGitHubEnrichmentForRequest.mockRejectedValue(
+        new Error("GitHub credential authority is corrupt")
+      );
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger");
+
+      expect(res.status).toBe(500);
+      expect(mockSchedulerTrigger).not.toHaveBeenCalled();
     });
 
     it("returns 404 when automation not found", async () => {

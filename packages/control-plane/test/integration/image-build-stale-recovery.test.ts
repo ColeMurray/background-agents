@@ -55,8 +55,7 @@ function createTriggerWorkflow(scope: ImageBuildScope): ImageBuildWorkflow {
     createCloudflareEnv({ ...env, WORKER_URL: "https://worker.test" }),
     new ImageBuildStore(env.DB),
     factory,
-    { provider: "modal", planner },
-    { send: async () => undefined }
+    { provider: "modal", planner }
   );
 }
 

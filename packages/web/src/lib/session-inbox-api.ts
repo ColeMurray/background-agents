@@ -1,13 +1,38 @@
-import type {
-  SessionInboxCategory,
-  SessionInboxItem,
-  SessionInboxPage,
-  SessionInboxSnapshot,
-  SessionListItem,
+import {
+  sessionInboxCategorySchema,
+  sessionInboxItemSchema,
+  sessionInboxPageSchema,
+  sessionInboxSessionSchema,
+  sessionInboxSnapshotSchema,
+  type SessionInboxCategory,
+  type SessionInboxItem,
+  type SessionInboxPage,
+  type SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionReadState } from "@open-inspect/shared/types/sessions";
+import { z } from "zod";
 import type { BrowserApiPath } from "./browser-api-fetch";
-import { applySessionReadStateToItem } from "./session-read-state";
+import { applySessionReadStateToItem, sessionReadStateClientSchema } from "./session-read-state";
+
+const sessionInboxSessionClientSchema = sessionInboxSessionSchema.extend({
+  readState: sessionReadStateClientSchema,
+});
+const sessionInboxItemClientSchema = sessionInboxItemSchema.extend({
+  rootSession: sessionInboxSessionClientSchema,
+  descendantSessions: z.array(sessionInboxSessionClientSchema),
+});
+const sessionInboxPageClientSchema = z
+  .object({
+    items: z.array(sessionInboxItemClientSchema),
+  })
+  .passthrough()
+  .pipe(sessionInboxPageSchema);
+const sessionInboxSnapshotClientSchema = z
+  .object({
+    categories: z.record(sessionInboxCategorySchema, sessionInboxPageClientSchema),
+  })
+  .passthrough()
+  .pipe(sessionInboxSnapshotSchema);
 
 const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 
@@ -39,24 +64,12 @@ export function isSessionInboxPaginationKey(key: unknown): boolean {
   return Array.isArray(key) && isSessionInboxKey(key[0]);
 }
 
-function applyTitleToSession(session: SessionListItem, sessionId: string, title: string | null) {
-  return session.id === sessionId ? { ...session, title } : session;
+export function parseSessionInboxPage(data: unknown): SessionInboxPage {
+  return sessionInboxPageClientSchema.parse(data);
 }
 
-function applyTitleToPage(
-  page: SessionInboxPage,
-  sessionId: string,
-  title: string | null
-): SessionInboxPage {
-  return {
-    ...page,
-    items: page.items.map((item) => ({
-      rootSession: applyTitleToSession(item.rootSession, sessionId, title),
-      descendantSessions: item.descendantSessions.map((session) =>
-        applyTitleToSession(session, sessionId, title)
-      ),
-    })),
-  };
+export function parseSessionInboxSnapshot(data: unknown): SessionInboxSnapshot {
+  return sessionInboxSnapshotClientSchema.parse(data);
 }
 
 function applyReadStateToPage(
@@ -106,31 +119,6 @@ export function applySessionInboxItemReadState(
       applySessionReadStateToItem(session, sessionId, readState)
     ),
   };
-}
-
-/**
- * Applies a rename to a cached inbox payload. Inbox keys cache two shapes —
- * the category snapshot and a single paginated page — so the transform
- * dispatches on the presence of `categories`.
- */
-export function applySessionInboxTitleUpdate<T extends SessionInboxSnapshot | SessionInboxPage>(
-  data: T | undefined,
-  sessionId: string,
-  title: string | null
-): T | undefined {
-  if (!data) return data;
-  if ("categories" in data) {
-    return {
-      ...data,
-      categories: Object.fromEntries(
-        Object.entries(data.categories).map(([category, page]) => [
-          category,
-          applyTitleToPage(page, sessionId, title),
-        ])
-      ) as Record<SessionInboxCategory, SessionInboxPage>,
-    };
-  }
-  return applyTitleToPage(data, sessionId, title) as T;
 }
 
 export function applySessionInboxReadStateUpdate<T extends SessionInboxSnapshot | SessionInboxPage>(

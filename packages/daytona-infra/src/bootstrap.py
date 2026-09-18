@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import time
 
@@ -15,22 +16,26 @@ from .toolchain import create_base_snapshot
 def main() -> None:
     config = load_config()
     sys.path.insert(0, str(config.repo_root / "packages/sandbox-images/src"))
-    from sandbox_images.bundle import plan_image
+    from sandbox_images.bundle import pack_bundle
     from sandbox_images.native import write_build_result
 
-    plan = plan_image(config.repo_root, "daytona")
-    name = (
-        os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
-        or f"{config.base_snapshot}-{plan['buildHash'][:12]}-{time.time_ns()}"
-    )
-    client = Daytona(
-        DaytonaConfig(api_key=config.api_key, api_url=config.api_url, target=config.target)
-    )
-    # No delete/recreate of the selected snapshot, even on a failed build.
+    bundle = pack_bundle(config.repo_root, "daytona", config.repo_root / ".cache/sandbox-images")
     try:
-        client.snapshot.get(name)
-    except DaytonaNotFoundError:
-        create_base_snapshot(client, config.repo_root, name)
+        plan = bundle.plan
+        name = (
+            os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
+            or f"{config.base_snapshot}-{plan['buildHash'][:12]}-{time.time_ns()}"
+        )
+        client = Daytona(
+            DaytonaConfig(api_key=config.api_key, api_url=config.api_url, target=config.target)
+        )
+        # No delete/recreate of the selected snapshot, even on a failed build.
+        try:
+            client.snapshot.get(name)
+        except DaytonaNotFoundError:
+            create_base_snapshot(client, bundle, name)
+    finally:
+        shutil.rmtree(bundle.directory)
     # Retry a retained build by restoring it and checking required services.
 
     sandbox = client.create(

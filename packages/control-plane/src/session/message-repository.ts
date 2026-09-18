@@ -1,11 +1,16 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
-import type { MessageSource, MessageStatus } from "@open-inspect/shared/types/sessions";
+import {
+  messageStatusSchema,
+  type MessageSource,
+  type MessageStatus,
+} from "@open-inspect/shared/types/sessions";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import type { MessageRow } from "./types";
+import type { MessageListCursor } from "./message-cursor";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 
@@ -32,12 +37,8 @@ function readRequiredNumberColumn(result: SqlResult, column: string): number {
 }
 
 function parseMessageStatus(value: unknown): MessageStatus | null {
-  return value === "pending" ||
-    value === "processing" ||
-    value === "completed" ||
-    value === "failed"
-    ? value
-    : null;
+  const parsed = messageStatusSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /** Data for creating a message. */
@@ -79,7 +80,7 @@ export type AutofixMessageAdmission =
 
 /** Options for listing messages. */
 export interface ListMessagesOptions {
-  cursor?: string | null;
+  cursor?: MessageListCursor | null;
   limit: number;
   status?: string | null;
 }
@@ -190,6 +191,11 @@ export class MessageRepository {
     );
     const rows = this.rows<MessageRow>(result);
     return rows[0] ?? null;
+  }
+
+  getMessageById(messageId: string): MessageRow | null {
+    const result = this.sql.exec(`SELECT * FROM messages WHERE id = ? LIMIT 1`, messageId);
+    return this.rows<MessageRow>(result)[0] ?? null;
   }
 
   getMessageByClientRequestId(clientRequestId: string): MessageRow | null {
@@ -476,11 +482,16 @@ export class MessageRepository {
     }
 
     if (options.cursor) {
-      query += ` AND created_at < ?`;
-      params.push(parseInt(options.cursor));
+      if (options.cursor.id === undefined) {
+        query += ` AND created_at < ?`;
+        params.push(options.cursor.createdAt);
+      } else {
+        query += ` AND ((created_at < ?) OR (created_at = ? AND id < ?))`;
+        params.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
+      }
     }
 
-    query += ` ORDER BY created_at DESC LIMIT ?`;
+    query += ` ORDER BY created_at DESC, id DESC LIMIT ?`;
     params.push(options.limit + 1);
 
     const result = this.sql.exec(query, ...params);

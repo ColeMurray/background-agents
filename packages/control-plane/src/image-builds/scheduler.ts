@@ -135,14 +135,12 @@ export class ImageBuildScheduler {
   }
 
   private async republishRecoverableFinalizations(): Promise<number> {
-    const jobs = this.env.JOBS;
-    if (!jobs) return 0;
     const rows = await this.store.listRecoverableFinalizations(Date.now());
 
     let published = 0;
     for (const row of rows) {
       try {
-        await jobs.send({
+        await this.env.JOBS.send({
           kind: "image_build.finalize",
           payload: imageBuildFinalizationJob(row.id, row.completion_hash),
         });

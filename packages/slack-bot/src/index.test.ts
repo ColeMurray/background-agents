@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { Env } from "./types";
+import { makeExecutionContext as makeCtx } from "./test-helpers";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import type * as SlackModule from "@open-inspect/shared/slack";
 
@@ -127,14 +128,6 @@ function makeEnv() {
   };
   env satisfies Env;
   return env;
-}
-
-function makeCtx() {
-  return {
-    props: {},
-    waitUntil: vi.fn(),
-    passThroughOnException: vi.fn(),
-  } as any;
 }
 
 /** Build N numbered repos (acme/repo-001 …) for picker/suggestion tests. */

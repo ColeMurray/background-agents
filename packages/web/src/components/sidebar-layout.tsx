@@ -8,7 +8,11 @@ import { GlobalCommandMenu } from "./global-command-menu";
 import { useSidebar } from "@/hooks/use-sidebar";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
-import { COMMAND_MENU_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
+import {
+  COMMAND_MENU_SESSIONS_KEY,
+  fetchSessionListPage,
+  type SessionListResponse,
+} from "@/lib/session-list";
 import { Button } from "@/components/ui/button";
 import { SidebarIcon } from "@/components/ui/icons";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
@@ -95,7 +99,8 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   });
 
   const { data: sessionsResponse } = useSWR<SessionListResponse>(
-    isCommandMenuOpen ? COMMAND_MENU_SESSIONS_KEY : null
+    isCommandMenuOpen ? COMMAND_MENU_SESSIONS_KEY : null,
+    fetchSessionListPage
   );
 
   const handleNewSession = useCallback(() => {

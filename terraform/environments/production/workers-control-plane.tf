@@ -34,194 +34,186 @@ module "control_plane_worker" {
   worker_subdomain = var.cloudflare_worker_subdomain
   script_path      = local.control_plane_script_path
 
-  kv_namespaces = [
-    {
-      binding_name = "REPOS_CACHE"
+  kv_namespaces = {
+    REPOS_CACHE = {
       namespace_id = module.session_index_kv.namespace_id
     }
-  ]
+  }
 
-  d1_databases = [
-    {
-      binding_name = "DB"
-      database_id  = cloudflare_d1_database.main.id
+  d1_databases = {
+    DB = {
+      database_id = cloudflare_d1_database.main.id
     }
-  ]
+  }
 
-  r2_buckets = [
-    {
-      binding_name = "MEDIA_BUCKET"
-      bucket_name  = cloudflare_r2_bucket.media.name
+  r2_buckets = {
+    MEDIA_BUCKET = {
+      bucket_name = cloudflare_r2_bucket.media.name
     }
-  ]
+  }
 
   # One producer binding per job kind (packages/control-plane/src/jobs.ts;
   # the mapping lives in src/cloudflare/job-queue.ts). The autofix bindings
   # also feed the operator health check its read-only queue metrics; autofix
   # production itself remains with the GitHub bot.
-  queue_bindings = concat(
-    [
-      {
-        binding_name = "IMAGE_BUILD_FINALIZATION_QUEUE"
-        queue_name   = cloudflare_queue.image_build_finalization.queue_name
+  queue_bindings = merge(
+    {
+      IMAGE_BUILD_FINALIZATION_QUEUE = {
+        queue_name = cloudflare_queue.image_build_finalization.queue_name
       }
-    ],
-    var.enable_github_bot ? [
-      {
-        binding_name = "AUTOFIX_QUEUE"
-        queue_name   = cloudflare_queue.github_autofix[0].queue_name
-      },
-      {
-        binding_name = "AUTOFIX_DLQ"
-        queue_name   = cloudflare_queue.github_autofix_dlq[0].queue_name
+    },
+    var.enable_github_bot ? {
+      AUTOFIX_QUEUE = {
+        queue_name = cloudflare_queue.github_autofix[0].queue_name
       }
-    ] : []
+      AUTOFIX_DLQ = {
+        queue_name = cloudflare_queue.github_autofix_dlq[0].queue_name
+      }
+    } : {}
   )
 
-  service_bindings = concat(
-    var.enable_slack_bot ? [
-      {
-        binding_name = "SLACK_BOT"
+  service_bindings = merge(
+    var.enable_slack_bot ? {
+      SLACK_BOT = {
         service_name = "open-inspect-slack-bot-${local.name_suffix}"
       }
-    ] : [],
-    var.enable_linear_bot ? [
-      {
-        binding_name = "LINEAR_BOT"
+    } : {},
+    var.enable_linear_bot ? {
+      LINEAR_BOT = {
         service_name = "open-inspect-linear-bot-${local.name_suffix}"
       }
-    ] : []
+    } : {}
   )
 
   enable_service_bindings = var.enable_service_bindings
 
-  plain_text_bindings = concat(
-    [
-      { name = "WEB_APP_URL", value = local.web_app_url },
-      { name = "ALLOWED_USERS", value = var.allowed_users },
-      { name = "ALLOWED_EMAIL_DOMAINS", value = var.allowed_email_domains },
-      { name = "ALLOWED_EMAILS", value = var.allowed_emails },
-      { name = "ALLOWED_GITHUB_ORGS", value = var.allowed_github_orgs },
-      { name = "UNSAFE_ALLOW_ALL_USERS", value = tostring(var.unsafe_allow_all_users) },
-      { name = "WORKER_URL", value = local.control_plane_url },
-      { name = "DEPLOYMENT_NAME", value = var.deployment_name },
-      { name = "APP_NAME", value = var.app_name },
-      { name = "GITHUB_BOT_USERNAME", value = var.github_bot_username },
-      { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
-      { name = "SANDBOX_INACTIVITY_TIMEOUT_MS", value = tostring(var.sandbox_inactivity_timeout_ms) },
-    ],
-    local.github_oauth_enabled ? [
-      { name = "GITHUB_CLIENT_ID", value = trimspace(var.github_client_id) },
-    ] : [],
-    local.google_enabled ? [
-      { name = "GOOGLE_CLIENT_ID", value = trimspace(var.google_client_id) },
-    ] : [],
-    trimspace(var.modal_workspace) != "" ? [
-      { name = "MODAL_WORKSPACE", value = var.modal_workspace },
-      { name = "MODAL_ENVIRONMENT", value = var.modal_environment },
-      { name = "MODAL_ENVIRONMENT_WEB_SUFFIX", value = var.modal_environment_web_suffix },
-    ] : [],
-    local.use_daytona_backend ? [
-      { name = "DAYTONA_API_URL", value = var.daytona_api_url },
-      { name = "DAYTONA_BASE_SNAPSHOT", value = module.daytona_infra[0].snapshot_name },
-    ] : [],
-    local.use_daytona_backend && var.daytona_target != "" ? [
-      { name = "DAYTONA_TARGET", value = var.daytona_target },
-    ] : [],
-    trimspace(var.opencomputer_api_url) != "" ? [
-      { name = "OPENCOMPUTER_API_URL", value = var.opencomputer_api_url },
-    ] : [],
-    local.use_opencomputer_backend || trimspace(var.opencomputer_template) != "" ? [
+  plain_text_bindings = merge(
+    {
+      WEB_APP_URL                   = { value = local.web_app_url }
+      ALLOWED_USERS                 = { value = var.allowed_users }
+      ALLOWED_EMAIL_DOMAINS         = { value = var.allowed_email_domains }
+      ALLOWED_EMAILS                = { value = var.allowed_emails }
+      ALLOWED_GITHUB_ORGS           = { value = var.allowed_github_orgs }
+      UNSAFE_ALLOW_ALL_USERS        = { value = tostring(var.unsafe_allow_all_users) }
+      WORKER_URL                    = { value = local.control_plane_url }
+      DEPLOYMENT_NAME               = { value = var.deployment_name }
+      APP_NAME                      = { value = var.app_name }
+      GITHUB_BOT_USERNAME           = { value = var.github_bot_username }
+      SANDBOX_PROVIDER              = { value = var.sandbox_provider }
+      SANDBOX_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_inactivity_timeout_ms) }
+      SANDBOX_BOOT_TIMEOUT_MS       = { value = tostring(var.sandbox_boot_timeout_ms) }
+    },
+    local.github_oauth_enabled ? {
+      GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }
+    } : {},
+    local.google_enabled ? {
+      GOOGLE_CLIENT_ID = { value = trimspace(var.google_client_id) }
+    } : {},
+    trimspace(var.modal_workspace) != "" ? {
+      MODAL_WORKSPACE              = { value = var.modal_workspace }
+      MODAL_ENVIRONMENT            = { value = var.modal_environment }
+      MODAL_ENVIRONMENT_WEB_SUFFIX = { value = var.modal_environment_web_suffix }
+    } : {},
+    local.use_daytona_backend ? {
+      DAYTONA_API_URL       = { value = var.daytona_api_url }
+      DAYTONA_BASE_SNAPSHOT = { value = module.daytona_infra[0].snapshot_name }
+    } : {},
+    local.use_daytona_backend && var.daytona_target != "" ? {
+      DAYTONA_TARGET = { value = var.daytona_target }
+    } : {},
+    trimspace(var.opencomputer_api_url) != "" ? {
+      OPENCOMPUTER_API_URL = { value = var.opencomputer_api_url }
+    } : {},
+    local.use_opencomputer_backend || trimspace(var.opencomputer_template) != "" ? {
       # Active deployments use the managed template when no manual pin exists.
-      {
-        name  = "OPENCOMPUTER_TEMPLATE",
-        value = var.opencomputer_template != "" ? var.opencomputer_template : module.opencomputer_infra[0].snapshot_name,
-      },
-    ] : [],
-    trimspace(var.vercel_sandbox_project_id) != "" ? [
-      { name = "VERCEL_PROJECT_ID", value = var.vercel_sandbox_project_id },
-      { name = "VERCEL_RUNTIME", value = var.vercel_sandbox_runtime },
-      { name = "VERCEL_SNAPSHOT_EXPIRATION_MS", value = tostring(var.vercel_snapshot_expiration_ms) },
-    ] : [],
-    var.vercel_sandbox_team_id != "" ? [
-      { name = "VERCEL_TEAM_ID", value = var.vercel_sandbox_team_id },
-    ] : [],
-    var.vercel_sandbox_api_base_url != "" ? [
-      { name = "VERCEL_SANDBOX_API_BASE_URL", value = var.vercel_sandbox_api_base_url },
-    ] : [],
-    local.use_vercel_backend && var.vercel_base_snapshot_id != "" ? [
-      { name = "VERCEL_BASE_SNAPSHOT_ID", value = var.vercel_base_snapshot_id },
-    ] : [],
-    local.use_vercel_backend && var.vercel_base_snapshot_id == "" ? [
-      { name = "VERCEL_BASE_SNAPSHOT_NAME", value = module.vercel_sandbox_infra[0].snapshot_name },
-    ] : [],
-    local.use_e2b_backend ? [
-      { name = "E2B_API_URL", value = var.e2b_api_url },
-      { name = "E2B_TEMPLATE_ID", value = module.e2b_infra[0].template_id },
-      { name = "E2B_SANDBOX_TIMEOUT_SECONDS", value = tostring(var.e2b_sandbox_timeout_seconds) },
-      { name = "E2B_AUTO_PAUSE", value = tostring(var.e2b_auto_pause) },
-    ] : []
+      OPENCOMPUTER_TEMPLATE = {
+        value = var.opencomputer_template != "" ? var.opencomputer_template : module.opencomputer_infra[0].snapshot_name
+      }
+    } : {},
+    trimspace(var.vercel_sandbox_project_id) != "" ? {
+      VERCEL_PROJECT_ID             = { value = var.vercel_sandbox_project_id }
+      VERCEL_RUNTIME                = { value = var.vercel_sandbox_runtime }
+      VERCEL_SNAPSHOT_EXPIRATION_MS = { value = tostring(var.vercel_snapshot_expiration_ms) }
+    } : {},
+    var.vercel_sandbox_team_id != "" ? {
+      VERCEL_TEAM_ID = { value = var.vercel_sandbox_team_id }
+    } : {},
+    var.vercel_sandbox_api_base_url != "" ? {
+      VERCEL_SANDBOX_API_BASE_URL = { value = var.vercel_sandbox_api_base_url }
+    } : {},
+    local.use_vercel_backend && var.vercel_base_snapshot_id != "" ? {
+      VERCEL_BASE_SNAPSHOT_ID = { value = var.vercel_base_snapshot_id }
+    } : {},
+    local.use_vercel_backend && var.vercel_base_snapshot_id == "" ? {
+      VERCEL_BASE_SNAPSHOT_NAME = { value = module.vercel_sandbox_infra[0].snapshot_name }
+    } : {},
+    local.use_e2b_backend ? {
+      E2B_API_URL                 = { value = var.e2b_api_url }
+      E2B_TEMPLATE_ID             = { value = module.e2b_infra[0].template_id }
+      E2B_SANDBOX_TIMEOUT_SECONDS = { value = tostring(var.e2b_sandbox_timeout_seconds) }
+      E2B_AUTO_PAUSE              = { value = tostring(var.e2b_auto_pause) }
+    } : {}
   )
 
-  secrets = concat(
-    [
+  secrets = merge(
+    {
       # The existing operator-managed auth secret now signs Better Auth state
       # and cookies in the control plane. Keeping the Terraform input stable
       # avoids coupling secret rotation to the browser-auth cutover.
-      { name = "BROWSER_AUTH_SECRET", value = var.nextauth_secret },
-      { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
-      { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
-      { name = "PROVIDER_ACCOUNTS_ENCRYPTION_KEY", value = local.effective_provider_accounts_encryption_key },
+      BROWSER_AUTH_SECRET              = { value = var.nextauth_secret }
+      TOKEN_ENCRYPTION_KEY             = { value = var.token_encryption_key }
+      REPO_SECRETS_ENCRYPTION_KEY      = { value = var.repo_secrets_encryption_key }
+      PROVIDER_ACCOUNTS_ENCRYPTION_KEY = { value = local.effective_provider_accounts_encryption_key }
       # Pepper for image-build callback token hashes (see service-auth.tf)
-      { name = "IMAGE_CALLBACK_TOKEN_PEPPER", value = random_password.image_callback_token_pepper.result },
+      IMAGE_CALLBACK_TOKEN_PEPPER = { value = random_password.image_callback_token_pepper.result }
       # Per-service sig1 verification keys
-      { name = "SERVICE_AUTH_SECRET_WEB", value = random_password.service_auth_secret_web.result },
-      { name = "SERVICE_AUTH_SECRET_SLACK_BOT", value = random_password.service_auth_secret_slack_bot.result },
-      { name = "SERVICE_AUTH_SECRET_GITHUB_BOT", value = random_password.service_auth_secret_github_bot.result },
-      { name = "SERVICE_AUTH_SECRET_LINEAR_BOT", value = random_password.service_auth_secret_linear_bot.result },
+      SERVICE_AUTH_SECRET_WEB        = { value = random_password.service_auth_secret_web.result }
+      SERVICE_AUTH_SECRET_SLACK_BOT  = { value = random_password.service_auth_secret_slack_bot.result }
+      SERVICE_AUTH_SECRET_GITHUB_BOT = { value = random_password.service_auth_secret_github_bot.result }
+      SERVICE_AUTH_SECRET_LINEAR_BOT = { value = random_password.service_auth_secret_linear_bot.result }
       # GitHub App credentials for /repos endpoint (listInstallationRepositories)
-      { name = "GITHUB_APP_ID", value = var.github_app_id },
-      { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
-      { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
-    ],
-    local.github_oauth_enabled ? [
-      { name = "GITHUB_CLIENT_SECRET", value = trimspace(var.github_client_secret) },
-    ] : [],
-    local.google_enabled ? [
-      { name = "GOOGLE_CLIENT_SECRET", value = trimspace(var.google_client_secret) },
-    ] : [],
-    var.modal_api_secret != "" && trimspace(var.modal_workspace) != "" ? [
-      { name = "MODAL_API_SECRET", value = var.modal_api_secret },
-    ] : [],
-    local.use_daytona_backend ? [
-      { name = "DAYTONA_API_KEY", value = var.daytona_api_key },
-    ] : [],
-    local.opencomputer_enabled ? [
-      { name = "OPENCOMPUTER_API_KEY", value = var.opencomputer_api_key },
-    ] : [],
+      GITHUB_APP_ID              = { value = var.github_app_id }
+      GITHUB_APP_PRIVATE_KEY     = { value = var.github_app_private_key }
+      GITHUB_APP_INSTALLATION_ID = { value = var.github_app_installation_id }
+    },
+    local.github_oauth_enabled ? {
+      GITHUB_CLIENT_SECRET = { value = trimspace(var.github_client_secret) }
+    } : {},
+    local.google_enabled ? {
+      GOOGLE_CLIENT_SECRET = { value = trimspace(var.google_client_secret) }
+    } : {},
+    var.modal_api_secret != "" && trimspace(var.modal_workspace) != "" ? {
+      MODAL_API_SECRET = { value = var.modal_api_secret }
+    } : {},
+    local.use_daytona_backend ? {
+      DAYTONA_API_KEY = { value = var.daytona_api_key }
+    } : {},
+    local.opencomputer_enabled ? {
+      OPENCOMPUTER_API_KEY = { value = var.opencomputer_api_key }
+    } : {},
     # OpenComputer sandboxes take the deployment-wide Anthropic key from the
     # control plane. It is optional, and an unset one must not shadow the key a
     # repository supplies through the secret store.
-    local.opencomputer_enabled && trimspace(var.anthropic_api_key) != "" ? [
-      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-    ] : [],
-    var.vercel_sandbox_token != "" && trimspace(var.vercel_sandbox_project_id) != "" ? [
-      { name = "VERCEL_TOKEN", value = var.vercel_sandbox_token },
-    ] : [],
-    local.use_e2b_backend ? [
-      { name = "E2B_API_KEY", value = var.e2b_api_key },
-    ] : [],
+    local.opencomputer_enabled && trimspace(var.anthropic_api_key) != "" ? {
+      ANTHROPIC_API_KEY = { value = var.anthropic_api_key }
+    } : {},
+    var.vercel_sandbox_token != "" && trimspace(var.vercel_sandbox_project_id) != "" ? {
+      VERCEL_TOKEN = { value = var.vercel_sandbox_token }
+    } : {},
+    local.use_e2b_backend ? {
+      E2B_API_KEY = { value = var.e2b_api_key }
+    } : {},
     # Slack bot token enables the agent-initiated `slack-notify` endpoint.
     # Shares the variable with the slack-bot worker; bound here so the same
     # token can authorize chat.postMessage from agent tool calls.
-    length(var.slack_bot_token) > 0 ? [
-      { name = "SLACK_BOT_TOKEN", value = var.slack_bot_token },
-    ] : []
+    length(var.slack_bot_token) > 0 ? {
+      SLACK_BOT_TOKEN = { value = var.slack_bot_token }
+    } : {}
   )
 
-  durable_objects = [
-    { binding_name = "SESSION", class_name = "SessionDO" },
-  ]
+  durable_objects = {
+    SESSION = { class_name = "SessionDO" }
+  }
 
   enable_durable_object_bindings = var.enable_durable_object_bindings
 

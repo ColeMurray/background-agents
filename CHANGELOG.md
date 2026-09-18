@@ -2,6 +2,12 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 14, 2026
+
+**OpenCode Go models.** Adds 27 opt-in `opencode-go/*` models to Settings > Models for OpenCode
+sessions. Configure `OPENCODE_API_KEY` in Settings > Secrets with an active Go subscription. See
+[Available models](docs/AVAILABLE_MODELS.md#opencode-go).
+
 ## September 9, 2026
 
 **Claude Fable 5.1.** Adds `claude-fable-5-1` to the model picker and integrations, with adaptive

@@ -13,7 +13,7 @@ from e2b import Sandbox, Template, default_build_logger
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "packages/sandbox-images/src"))
 
-from sandbox_images.bundle import pack_bundle, plan_image  # noqa: E402
+from sandbox_images.bundle import pack_bundle  # noqa: E402
 from sandbox_images.native import write_build_result  # noqa: E402
 
 START_CMD = "sleep infinity"
@@ -29,20 +29,20 @@ def main() -> None:
     memory_mb = int(os.environ.get("E2B_TEMPLATE_MEMORY_MB", "4096"))
     if cpu < 1 or memory_mb < 2 or memory_mb % 2:
         raise ValueError("E2B template CPU must be positive and memory a positive even number")
-    plan = plan_image(ROOT, "e2b")
+    bundle = pack_bundle(ROOT, "e2b", ROOT / ".cache/sandbox-images")
+    plan = bundle.plan
     name = (
         os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
         or f"{name}-{plan['buildHash'][:12]}-{time.time_ns()}"
     )
-    bundle = pack_bundle(ROOT, "e2b", ROOT / ".cache/sandbox-images")
     template = (
-        Template(file_context_path=bundle)
+        Template(file_context_path=bundle.directory)
         .from_dockerfile("FROM " + plan["target"]["base"])
         .copy(".", "/tmp/openinspect-image", user="root")
         .run_cmd(
             "bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh", user="root"
         )
-        .set_user("user")
+        .set_user(plan["target"]["user"])
         .set_workdir("/workspace")
         .set_start_cmd(START_CMD, READY_CMD)
     )

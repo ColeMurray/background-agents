@@ -54,7 +54,7 @@ function terraformControlPlaneConsumers(): TerraformConsumer[] {
   const bindings = new Map(
     [
       ...controlPlaneModule.matchAll(
-        /binding_name\s*=\s*"(\w+)"\s*\n\s*queue_name\s*=\s*cloudflare_queue\.(\w+)(?:\[0\])?\.queue_name/g
+        /^\s*(\w+)\s*=\s*\{\s*\n\s*queue_name\s*=\s*cloudflare_queue\.(\w+)(?:\[0\])?\.queue_name/gm
       ),
     ].map((match) => [match[2]!, match[1]!])
   );

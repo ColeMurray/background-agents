@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { SessionListItem } from "@open-inspect/shared/types/session-inbox";
+import type { SessionInboxSession } from "@open-inspect/shared/types/session-inbox";
 import {
   applySessionInboxReadStateUpdate,
   buildSessionInboxKey,
   isSessionInboxKey,
   isSessionInboxPaginationKey,
+  parseSessionInboxPage,
+  parseSessionInboxSnapshot,
   type SessionInboxPage,
   type SessionInboxSnapshot,
 } from "./session-inbox-api";
 
-function session(id: string, parentSessionId: string | null = null): SessionListItem {
+function session(id: string, parentSessionId: string | null = null): SessionInboxSession {
   return {
     id,
     title: id,
@@ -79,6 +81,35 @@ describe("session inbox API keys", () => {
       ])
     ).toBe(true);
     expect(isSessionInboxPaginationKey(["/api/sessions?status=active", "filter"])).toBe(false);
+  });
+});
+
+describe("session inbox response parsing", () => {
+  it("applies read-state compatibility defaults at the web boundary", () => {
+    const response = page("root");
+    const { version: _version, ...legacyReadState } = response.items[0].rootSession.readState;
+    const legacyResponse = {
+      ...response,
+      items: [
+        {
+          ...response.items[0],
+          rootSession: { ...response.items[0].rootSession, readState: legacyReadState },
+        },
+      ],
+    };
+
+    expect(parseSessionInboxPage(legacyResponse).items[0].rootSession.readState.version).toBe(0);
+  });
+
+  it("rejects snapshots that omit a canonical category", () => {
+    expect(() =>
+      parseSessionInboxSnapshot({
+        categories: {
+          needs_attention: page("attention"),
+          in_progress: page("progress"),
+        },
+      })
+    ).toThrow();
   });
 });
 

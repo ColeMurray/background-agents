@@ -20,7 +20,7 @@ import type { SessionWebSocketManager } from "./websocket-manager";
  */
 type DeliverySockets = Pick<
   SessionWebSocketManager,
-  "forEachClientSocket" | "getSandboxSocket" | "send"
+  "forEachClientSocket" | "getReadySandboxSocket" | "send"
 >;
 
 export class SandboxDeliveryUnavailableError extends Error {
@@ -34,7 +34,10 @@ export interface SessionMessenger {
   /** Broadcast a message to all authenticated client sockets. */
   broadcast(message: ServerMessage): void;
 
-  /** Send a command to the active sandbox; rejects when delivery is unavailable. */
+  /**
+   * Send a command to the ready sandbox; rejects when delivery is unavailable,
+   * which includes a bridge that is attached but still booting.
+   */
   sendToSandbox(command: SandboxCommand): Promise<void>;
 }
 
@@ -49,7 +52,7 @@ export class SessionMessengerImpl implements SessionMessenger {
   }
 
   sendToSandbox(command: SandboxCommand): Promise<void> {
-    const ws = this.wsManager.getSandboxSocket();
+    const ws = this.wsManager.getReadySandboxSocket();
     if (!ws) return Promise.reject(new SandboxDeliveryUnavailableError());
     return this.wsManager.send(ws, command)
       ? Promise.resolve()

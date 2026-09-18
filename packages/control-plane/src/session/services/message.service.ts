@@ -1,5 +1,6 @@
 import type { ArtifactRow } from "../types";
 import type { SessionMessage } from "@open-inspect/shared/types/sessions";
+import { encodeCreatedAtCursor } from "../../created-at-cursor";
 import type { ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
 import type { NormalizedArtifactResponse } from "../artifacts";
 import type { MessageRepository } from "../message-repository";
@@ -9,11 +10,13 @@ import type { SessionMessageQueue } from "../message-queue";
 import type { EnqueuePromptRequest } from "../enqueue-prompt-contract";
 import { SessionEventStream, type SessionEventListRequest } from "../event-stream";
 import { parseStoredSessionAttachments } from "../session-attachment-resolver";
+import type { MessageListCursor } from "../message-cursor";
+import type { SessionMessagePage } from "../contracts";
 
 export type ListEventsRequest = SessionEventListRequest;
 
 export interface ListMessagesRequest {
-  cursor: string | null;
+  cursor: MessageListCursor | null;
   limit: number;
   status: string | null;
 }
@@ -81,11 +84,7 @@ export class MessageService {
     };
   }
 
-  listMessages(request: ListMessagesRequest): {
-    messages: SessionMessage[];
-    cursor: string | undefined;
-    hasMore: boolean;
-  } {
+  listMessages(request: ListMessagesRequest): SessionMessagePage {
     const messages = this.deps.repository.listMessages({
       cursor: request.cursor,
       limit: request.limit,
@@ -94,20 +93,26 @@ export class MessageService {
     const hasMore = messages.length > request.limit;
     if (hasMore) messages.pop();
 
-    return {
-      messages: messages.map((message) => ({
-        id: message.id,
-        authorId: message.author_id,
-        content: message.content,
-        source: message.source,
-        attachments: parseStoredSessionAttachments(message.attachments) ?? null,
-        status: message.status,
-        createdAt: message.created_at,
-        startedAt: message.started_at,
-        completedAt: message.completed_at,
-      })),
-      cursor: messages.length > 0 ? messages[messages.length - 1].created_at.toString() : undefined,
-      hasMore,
-    };
+    const responseMessages: SessionMessage[] = messages.map((message) => ({
+      id: message.id,
+      authorId: message.author_id,
+      content: message.content,
+      source: message.source,
+      attachments: parseStoredSessionAttachments(message.attachments) ?? null,
+      status: message.status,
+      createdAt: message.created_at,
+      startedAt: message.started_at,
+      completedAt: message.completed_at,
+    }));
+    const last = messages.at(-1);
+    const cursor = last
+      ? encodeCreatedAtCursor({ createdAt: last.created_at, id: last.id })
+      : undefined;
+
+    if (hasMore) {
+      if (!cursor) throw new Error("A non-terminal message page must contain a cursor");
+      return { messages: responseMessages, cursor, hasMore: true };
+    }
+    return { messages: responseMessages, cursor, hasMore: false };
   }
 }

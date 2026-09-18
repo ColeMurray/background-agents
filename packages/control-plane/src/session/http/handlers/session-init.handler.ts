@@ -137,6 +137,8 @@ export class SessionInitHandler {
       return Response.json({ sessionId, status: "created" });
     }
 
+    // Current SessionInitInput never sends token fields. Accept them here only
+    // so already-running pre-cutover producers remain readable.
     let encryptedToken = body.scmTokenEncrypted ?? null;
     if (body.scmToken) {
       try {

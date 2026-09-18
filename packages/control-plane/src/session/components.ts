@@ -24,9 +24,10 @@
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken } from "../auth/crypto";
+import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
-import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "../sandbox/provider";
+import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildProvider } from "../image-builds/provider-policy";
 import { createLogger, parseLogLevel } from "../logger";
@@ -41,10 +42,13 @@ import {
   type McpServerLookup,
   type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
+import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
 import { McpServerStore } from "../db/mcp-servers";
+import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
 import type { Env, ClientInfo } from "../types";
@@ -76,7 +80,7 @@ import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { XaiTokenRefreshService } from "./xai-token-refresh-service";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService } from "./participant-service";
-import { UserScmTokenStore } from "../db/user-scm-tokens";
+import { resolveCurrentGitHubAccessToken } from "./identity";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
@@ -202,17 +206,17 @@ function resolveExecutionTimeoutMs(
   env: Env,
   log: Logger
 ): number {
+  let sandboxSettings: SandboxSettings = {};
   try {
-    const sandboxTimeoutMs = parsePersistedSandboxSettings(
-      sessionCoreRepository.getSession()?.sandbox_settings ?? null
-    ).sandboxTimeoutMs;
     // This watchdog starts before bridge setup, so it must not race the
     // bridge's earlier snapshot-reserved prompt deadline.
-    if (sandboxTimeoutMs !== undefined) return sandboxTimeoutMs;
+    sandboxSettings = parsePersistedSandboxSettings(
+      sessionCoreRepository.getSession()?.sandbox_settings ?? null
+    );
   } catch {
     log.warn("Failed to parse sandbox_settings for execution timeout, using fallback");
   }
-  return parseInt(env.EXECUTION_TIMEOUT_MS || String(DEFAULT_SANDBOX_TIMEOUT_SECONDS * 1000), 10);
+  return resolveExecutionBudgetMs(sandboxSettings, env);
 }
 
 /** Build the session runtime, including authorization verification and lease expiry handling. */
@@ -343,14 +347,24 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       terminalMessageCompletedAt: completedAt,
     });
 
-  const userScmTokenStore = new UserScmTokenStore(db, tokenEncryptionKey);
   const participantService = new ParticipantService({
     repository: participantRepository,
     getProcessingMessageAuthor: () => messageRepository.getProcessingMessageAuthor(),
     env,
     log,
     generateId: () => generateId(),
-    userScmTokenStore,
+    resolveCurrentGitHubAccessToken:
+      scmProviderName === "github"
+        ? async (canonicalUserId, scmUserId) => {
+            if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) return null;
+            return resolveCurrentGitHubAccessToken(
+              new UserStore(db),
+              () => getUserAuth(env, db).api,
+              canonicalUserId,
+              scmUserId
+            );
+          }
+        : undefined,
   });
 
   const scheduler = new Scheduler(db, env, backgroundTasks);
@@ -533,6 +547,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         name: "callback.refresh_slack_activity",
         context: { message_id: messageId },
       }),
+    () => lifecycleManager.scheduleInactivityCheck(),
+    backgroundTasks,
+    messageQueue,
     log
   );
   const pushService = new SandboxPushService(log, wsManager);
@@ -781,7 +798,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     autofix: (request, _url, requestLog) => autofixHandler.handle(request, requestLog),
     stop: () => messagesHandler.stop(),
     sandboxEvent: (request) => sandboxHandler.sandboxEvent(request),
-    sandboxError: (request) => sandboxHandler.sandboxError(request),
+    sandboxError: (request, _url, requestLog) => sandboxHandler.sandboxError(request, requestLog),
     createMediaArtifact: (request) => sandboxHandler.createMediaArtifact(request),
     recordAttachment: (request) => {
       const session = sessionCoreRepository.getSession();
@@ -999,6 +1016,23 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
           resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId)
       : undefined;
 
+  // A malformed budget must not take every session down at construction the
+  // way a missing provider does; it falls back to the default and says so.
+  const bootBudget = resolveBootBudgetTimeoutMs(env.SANDBOX_BOOT_TIMEOUT_MS, {
+    connectingTimeoutMs: DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs,
+    defaultTimeoutMs: DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs,
+  });
+  if (bootBudget.rejectedValue !== null) {
+    createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL)).warn(
+      "Ignoring SANDBOX_BOOT_TIMEOUT_MS; using the default boot budget",
+      {
+        event: "config.invalid",
+        rejected_value: bootBudget.rejectedValue,
+        must_exceed_ms: DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs,
+        timeout_ms: bootBudget.timeoutMs,
+      }
+    );
+  }
   const config = {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl,
@@ -1012,6 +1046,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
       ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
       timeoutMs: parseInt(env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
     },
+    bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
     sandboxDashboardUrlBuilder,

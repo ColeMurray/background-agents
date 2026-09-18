@@ -23,8 +23,7 @@ def local_image_plan() -> tuple[Path, dict[str, Any]]:
     from sandbox_images.bundle import pack_bundle
 
     bundle = pack_bundle(root, "modal", root / ".cache/sandbox-images")
-    plan = json.loads((bundle / "build-config.json").read_text())
-    return bundle, plan
+    return bundle.directory, bundle.plan
 
 
 def image_reference_path() -> Path:
@@ -51,20 +50,21 @@ def deployed_image_environment() -> dict[str, str]:
     return {IMAGE_ID_ENV: image_id}
 
 
-def _define_image() -> modal.Image:
+def _define_image() -> tuple[modal.Image, dict[str, Any] | None]:
     if not modal.is_local():
         image_id = os.environ.get(IMAGE_ID_ENV)
         if not image_id:
             raise RuntimeError("Deployed Modal function is missing its verified sandbox image ID")
-        return modal.Image.from_id(image_id)
+        return modal.Image.from_id(image_id), None
     bundle, plan = local_image_plan()
-    return (
+    image = (
         modal.Image.from_registry(plan["target"]["base"])
         .add_local_dir(str(bundle), "/tmp/openinspect-image", copy=True)
         .run_commands("bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh")
-        .env(plan["runtimeEnv"] | {"SANDBOX_VERSION": RUNTIME_VERSION})
+        .env(plan["runtimeEnv"] | {"SANDBOX_VERSION": plan["runtimeVersion"]})
         .workdir("/workspace")
     )
+    return image, plan
 
 
-base_image = _define_image()
+base_image, base_image_plan = _define_image()

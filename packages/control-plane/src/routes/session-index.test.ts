@@ -72,6 +72,49 @@ async function listSessions(query = "", principal?: Principal): Promise<Response
 
 const USER_PRINCIPAL: Principal = { kind: "user", userId: "user-1" };
 
+const listSession = {
+  id: "session-1",
+  title: "Session 1",
+  repoOwner: "open-inspect",
+  repoName: "background-agents",
+  harness: "opencode" as const,
+  model: "anthropic/claude-sonnet-4-6",
+  reasoningEffort: null,
+  baseBranch: "main",
+  status: "active" as const,
+  parentSessionId: null,
+  spawnSource: "user" as const,
+  spawnDepth: 0,
+  automationId: null,
+  automationRunId: null,
+  scmLogin: "octocat",
+  userId: "user-1",
+  totalCost: 0,
+  activeDurationMs: 0,
+  messageCount: 1,
+  prCount: 0,
+  environmentId: null,
+  createdAt: 100,
+  updatedAt: 200,
+};
+
+const inboxSession = {
+  id: listSession.id,
+  title: listSession.title,
+  repoOwner: listSession.repoOwner,
+  repoName: listSession.repoName,
+  baseBranch: listSession.baseBranch,
+  status: listSession.status,
+  parentSessionId: listSession.parentSessionId,
+  spawnSource: listSession.spawnSource,
+  environmentId: listSession.environmentId,
+  createdAt: listSession.createdAt,
+  updatedAt: listSession.updatedAt,
+  readState: { latestMessageId: "message-1", unread: true, version: 200 },
+};
+
+const emptyInboxResult = { items: [], hasMore: false, nextCursor: null };
+
 async function listInbox(query = ""): Promise<Response> {
   return handleListSessionInbox(
     new Request(`https://test.local/sessions/inbox${query}`),
@@ -99,6 +142,12 @@ describe("session index routes", () => {
     mockSessionIndexStore.list.mockResolvedValue({
       sessions: [],
       hasMore: false,
+    });
+    mockSessionIndexStore.listInbox.mockResolvedValue(emptyInboxResult);
+    mockSessionIndexStore.listInboxSnapshot.mockResolvedValue({
+      needs_attention: emptyInboxResult,
+      in_progress: emptyInboxResult,
+      finished: emptyInboxResult,
     });
     mockSessionIndexStore.updateReadState.mockResolvedValue({
       sessionId: "session-1",
@@ -204,6 +253,68 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
       expect.not.objectContaining({ viewerUserId: expect.anything() })
     );
+  });
+
+  it("preserves viewer read state on authenticated session lists", async () => {
+    const readState = { latestMessageId: "message-1", unread: true, version: 200 };
+    mockSessionIndexStore.list.mockResolvedValue({
+      sessions: [{ ...listSession, readState }],
+      hasMore: false,
+    });
+
+    const response = await listSessions("", USER_PRINCIPAL);
+
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    await expect(response.json()).resolves.toEqual({
+      sessions: [{ ...listSession, readState }],
+      hasMore: false,
+    });
+  });
+
+  it("projects flat session list responses through the shared schema", async () => {
+    mockSessionIndexStore.list.mockResolvedValue({
+      sessions: [{ ...listSession, providerAuth: [{ secret: "internal" }] }],
+      hasMore: true,
+    });
+
+    const response = await listSessions();
+    await expect(response.json()).resolves.toEqual({
+      sessions: [listSession],
+      hasMore: true,
+    });
+  });
+
+  it("projects inbox page and snapshot responses through their shared schemas", async () => {
+    const item = { rootSession: inboxSession, descendantSessions: [] };
+    const storedItem = {
+      rootSession: { ...inboxSession, providerAuth: [{ secret: "internal" }] },
+      descendantSessions: [],
+    };
+    mockSessionIndexStore.listInbox.mockResolvedValue({
+      items: [storedItem],
+      hasMore: true,
+      nextCursor: { latestUpdatedAt: 200, rootSessionId: "session-1" },
+    });
+    mockSessionIndexStore.listInboxSnapshot.mockResolvedValue({
+      needs_attention: { items: [storedItem], hasMore: false, nextCursor: null },
+      in_progress: emptyInboxResult,
+      finished: emptyInboxResult,
+    });
+
+    const pageResponse = await listInbox("?category=needs_attention");
+    const snapshotResponse = await listInbox();
+    await expect(pageResponse.json()).resolves.toEqual({
+      items: [item],
+      hasMore: true,
+      nextCursor: "200:session-1",
+    });
+    await expect(snapshotResponse.json()).resolves.toEqual({
+      categories: {
+        needs_attention: { items: [item], hasMore: false, nextCursor: null },
+        in_progress: emptyInboxResult,
+        finished: emptyInboxResult,
+      },
+    });
   });
 
   it("passes the automation-lineage exclusion through to the store", async () => {

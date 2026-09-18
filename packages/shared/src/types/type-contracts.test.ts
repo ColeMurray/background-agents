@@ -16,14 +16,24 @@ import type {
   CreateAutomationRequest,
   CreateEnvironmentInput,
   ListAutomationsResponse,
+  ChildSessionListResponse,
   ModelProviderSelections,
   RepositoryInput,
   ServerMessage,
+  SessionListRepository,
+  SessionListResponse,
+  SessionListSummary,
+  SessionSummaryBase,
   UpdateAutomationRequest,
   UpdateEnvironmentInput,
   createEnvironmentInputSchema,
+  childSessionListResponseSchema,
   createAutomationRequestSchema,
   repositoryInputSchema,
+  sessionListRepositorySchema,
+  sessionListResponseSchema,
+  sessionListSummarySchema,
+  sessionSummaryBaseSchema,
   serverMessageSchema,
   updateEnvironmentInputSchema,
   updateAutomationRequestSchema,
@@ -31,6 +41,17 @@ import type {
   modelProviderSelectionsSchema,
 } from ".";
 import type { SandboxEvent, sandboxEventSchema } from "./sandbox-events";
+import type {
+  SessionInboxItem,
+  SessionInboxPage,
+  SessionInboxSession,
+  SessionInboxSnapshot,
+  SessionListItem,
+  sessionInboxItemSchema,
+  sessionInboxPageSchema,
+  sessionInboxSessionSchema,
+  sessionInboxSnapshotSchema,
+} from "./session-inbox";
 import type {
   CreateSessionInput,
   CreateSessionRequest,
@@ -64,6 +85,20 @@ it("preserves public Zod input and output relationships", () => {
   expectTypeOf<ListAutomationsResponse>().toEqualTypeOf<
     z.output<typeof listAutomationsResponseSchema>
   >();
+  expectTypeOf<SessionListRepository>().toEqualTypeOf<
+    z.output<typeof sessionListRepositorySchema>
+  >();
+  expectTypeOf<SessionSummaryBase>().toEqualTypeOf<z.output<typeof sessionSummaryBaseSchema>>();
+  expectTypeOf<SessionListSummary>().toEqualTypeOf<z.output<typeof sessionListSummarySchema>>();
+  expectTypeOf<SessionListResponse>().toEqualTypeOf<z.output<typeof sessionListResponseSchema>>();
+  expectTypeOf<ChildSessionListResponse>().toEqualTypeOf<
+    z.output<typeof childSessionListResponseSchema>
+  >();
+  expectTypeOf<SessionInboxSession>().toEqualTypeOf<z.output<typeof sessionInboxSessionSchema>>();
+  expectTypeOf<SessionListItem>().toEqualTypeOf<SessionInboxSession>();
+  expectTypeOf<SessionInboxItem>().toEqualTypeOf<z.output<typeof sessionInboxItemSchema>>();
+  expectTypeOf<SessionInboxPage>().toEqualTypeOf<z.output<typeof sessionInboxPageSchema>>();
+  expectTypeOf<SessionInboxSnapshot>().toEqualTypeOf<z.output<typeof sessionInboxSnapshotSchema>>();
 });
 
 it("preserves the repository transform boundary", () => {

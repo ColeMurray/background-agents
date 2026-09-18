@@ -9,6 +9,7 @@ import {
   type CancelChildSessionRequest,
 } from "@open-inspect/shared/types/session-api";
 import { DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS } from "@open-inspect/shared/types/integrations";
+import { childSessionListResponseSchema } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore, type ChildAdmissionLease } from "../db/session-index";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
@@ -39,7 +40,7 @@ export async function handleListChildren(
   const sessionStore = new SessionIndexStore(ctx.db);
   const children = await sessionStore.listByParent(parentId);
 
-  return json({ children });
+  return json(childSessionListResponseSchema.parse({ children }));
 }
 
 export async function handleGetChild(

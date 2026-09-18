@@ -110,18 +110,19 @@ def test_runtime_assets_are_packed_without_per_file_manifest(checkout, tmp_path)
     skill = "packages/sandbox-runtime/src/sandbox_runtime/skills/agent-browser/SKILL.md"
     (checkout / skill).write_text("updated skill")
     packed = pack_bundle(checkout, "e2b", tmp_path / "bundles")
-    assert (packed / skill).read_text() == "updated skill"
-    config = json.loads((packed / "build-config.json").read_text())
+    assert (packed.directory / skill).read_text() == "updated skill"
+    config = json.loads((packed.directory / "build-config.json").read_text())
+    assert config == packed.plan
     assert set(config) == {"provider", "target", "runtimeVersion", "runtimeEnv", "buildHash"}
-    assert not (packed / "packages/e2b-infra").exists()
+    assert not (packed.directory / "packages/e2b-infra").exists()
 
 
 def test_each_caller_gets_a_fresh_context_without_reusing_extra_files(tmp_path):
     first = pack_bundle(REPO_ROOT, "e2b", tmp_path)
-    (first / ".env").write_text("must not leak")
+    (first.directory / ".env").write_text("must not leak")
     second = pack_bundle(REPO_ROOT, "e2b", tmp_path)
-    assert first != second
-    assert not (second / ".env").exists()
+    assert first.directory != second.directory
+    assert not (second.directory / ".env").exists()
 
 
 def test_missing_payload_fails_closed(checkout):
@@ -137,7 +138,7 @@ def test_symlinks_and_executable_modes(checkout, tmp_path):
     (directory / "probe-link.sh").symlink_to("probe.sh")
     before = plan_image(checkout, "e2b")["buildHash"]
     packed = pack_bundle(checkout, "e2b", tmp_path / "bundles")
-    copied = packed / "packages/sandbox-runtime/src/sandbox_runtime"
+    copied = packed.directory / "packages/sandbox-runtime/src/sandbox_runtime"
     assert (copied / "probe-link.sh").is_symlink()
     assert (copied / "probe.sh").stat().st_mode & 0o111
     (directory / "probe.sh").chmod(0o644)

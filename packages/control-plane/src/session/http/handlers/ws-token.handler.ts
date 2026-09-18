@@ -17,9 +17,9 @@ const generateWsTokenRequestSchema = sessionScmDisplayFieldsSchema.extend({
 type GenerateWsTokenRequest = z.infer<typeof generateWsTokenRequestSchema>;
 
 /**
- * HTTP boundary for WS-token minting: upserts the requesting participant
- * (coalescing SCM tokens against server-side refreshes) and rotates their
- * WebSocket token.
+ * HTTP boundary for WS-token minting: upserts the requesting participant and
+ * rotates their WebSocket token. Token inputs remain only for pre-cutover
+ * internal callers; current router requests send identity/display fields.
  */
 export class WsTokenHandler {
   constructor(

@@ -7,7 +7,10 @@ import { SessionDetailsOverlay } from "./session-details-overlay";
 import { SessionRightSidebar } from "./session-right-sidebar";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 
-vi.mock("swr", () => ({ default: () => ({ data: undefined }) }));
+vi.mock("swr", () => ({
+  default: () => ({ data: undefined }),
+  useSWRConfig: () => ({ fetcher: undefined }),
+}));
 
 afterEach(cleanup);
 

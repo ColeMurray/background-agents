@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { ModalSandboxProvider } from "./modal-provider";
-import { SandboxProviderError } from "../provider";
+import { PrebuiltImageUnavailableError, SandboxProviderError } from "../provider";
 import { ModalApiError } from "../client";
 import { RequestDeadlineError } from "../request-deadline";
 import type {
@@ -49,20 +49,17 @@ function createMockModalClient(
     ),
     restoreSandbox: vi.fn(
       async (): Promise<RestoreSandboxResponse> => ({
-        success: true,
         sandboxId: "sandbox-123",
         modalObjectId: "modal-obj-123",
       })
     ),
     snapshotSandbox: vi.fn(
       async (): Promise<SnapshotSandboxResponse> => ({
-        success: true,
         imageId: "image-123",
       })
     ),
     snapshotBuildSandbox: vi.fn(
       async (): Promise<SnapshotSandboxResponse> => ({
-        success: true,
         imageId: "build-image-123",
       })
     ),
@@ -495,6 +492,43 @@ describe("ModalSandboxProvider", () => {
         undefined
       );
     });
+
+    it("reports a missing prebuilt image explicitly", async () => {
+      const error = new ModalApiError("Repository image unavailable", 410);
+      const client = createMockModalClient({
+        createSandbox: vi.fn(async () => {
+          throw error;
+        }),
+      });
+
+      await expect(
+        new ModalSandboxProvider(client).createSandbox({
+          ...testConfig,
+          prebuiltImageId: "im-missing",
+        })
+      ).rejects.toEqual(
+        expect.objectContaining({
+          name: "PrebuiltImageUnavailableError",
+          errorType: "permanent",
+          cause: error,
+        })
+      );
+    });
+
+    it("keeps unrelated prebuilt spawn failures as generic provider errors", async () => {
+      const client = createMockModalClient({
+        createSandbox: vi.fn(async () => {
+          throw new ModalApiError("Quota exceeded", 429);
+        }),
+      });
+
+      const error = await new ModalSandboxProvider(client)
+        .createSandbox({ ...testConfig, prebuiltImageId: "im-valid" })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      expect(error).not.toBeInstanceOf(PrebuiltImageUnavailableError);
+    });
   });
 
   describe("image builds", () => {
@@ -637,31 +671,8 @@ describe("ModalSandboxProvider", () => {
       }
     });
 
-    it("does not infer artifact absence from an explicit snapshot failure", async () => {
-      const provider = new ModalSandboxProvider(
-        createMockModalClient({
-          snapshotSandbox: vi.fn(async () => ({
-            success: false,
-            error: "snapshot rejected",
-          })),
-        })
-      );
-
-      await expect(
-        provider.takeSnapshot({
-          providerObjectId: "obj-123",
-          sessionId: "session-123",
-          reason: "test",
-        })
-      ).resolves.toEqual({
-        success: false,
-        error: "snapshot rejected",
-      });
-    });
-
     it("uses the identity-bound snapshot operation for image builds", async () => {
       const snapshotBuildSandbox = vi.fn(async () => ({
-        success: true,
         imageId: "build-image-123",
       }));
       const provider = new ModalSandboxProvider(createMockModalClient({ snapshotBuildSandbox }));
@@ -704,7 +715,6 @@ describe("ModalSandboxProvider", () => {
     it("returns providerObjectId from restoreFromSnapshot", async () => {
       const client = createMockModalClient({
         restoreSandbox: vi.fn(async () => ({
-          success: true,
           sandboxId: "restored-sandbox-123",
           modalObjectId: "new-modal-obj-456",
           vncUrl: "https://vnc.test",

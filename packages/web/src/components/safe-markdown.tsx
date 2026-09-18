@@ -40,12 +40,14 @@ const sanitizeSchema = {
     "em",
     "del",
     "a",
+    "img",
     "span",
   ],
   attributes: {
     ...defaultSchema.attributes,
     // Only allow href on links, and only http/https protocols
     a: ["href"],
+    img: ["src", "alt", "title"],
     // Allow className for syntax highlighting
     code: ["className"],
     span: ["className"],
@@ -53,10 +55,12 @@ const sanitizeSchema = {
   },
   protocols: {
     href: ["http", "https"],
+    src: ["http", "https"],
   },
   // Strip all other attributes
   strip: ["script", "style", "iframe", "object", "embed", "form", "input", "button"],
 };
+const DEFAULT_IMAGE_MODE = "omit";
 
 interface SafeMarkdownProps {
   content: string;
@@ -66,6 +70,8 @@ interface SafeMarkdownProps {
    * agent-authored text opts in; other markdown (e.g. pull request bodies) keeps plain links.
    */
   linkRepositoryFiles?: boolean;
+  baseUrl?: string;
+  imageMode?: "omit" | "placeholder";
 }
 
 function MarkdownLink({ href, children, ...props }: ComponentPropsWithoutRef<"a">) {
@@ -121,6 +127,8 @@ export function SafeMarkdown({
   content,
   className = "",
   linkRepositoryFiles = false,
+  baseUrl,
+  imageMode = DEFAULT_IMAGE_MODE,
 }: SafeMarkdownProps) {
   return (
     <div
@@ -132,7 +140,32 @@ export function SafeMarkdown({
         components={{
           // Links open in a new tab with security attributes; with linkRepositoryFiles, links
           // to changed repository files open them in the changes panel instead
-          a: linkRepositoryFiles ? RepositoryFileMarkdownLink : MarkdownLink,
+          a: linkRepositoryFiles
+            ? RepositoryFileMarkdownLink
+            : ({ href, children, ...props }: ComponentPropsWithoutRef<"a">) => {
+                const resolvedHref = resolveMarkdownUrl(href, baseUrl);
+                return resolvedHref ? (
+                  <a
+                    href={resolvedHref}
+                    target="_blank"
+                    rel="noopener noreferrer nofollow"
+                    className="text-accent hover:underline"
+                    {...props}
+                  >
+                    {children}
+                  </a>
+                ) : (
+                  <span>{children}</span>
+                );
+              },
+          img: ({ src, alt }: ComponentPropsWithoutRef<"img">) => {
+            const resolvedSrc = resolveMarkdownUrl(
+              typeof src === "string" ? src : undefined,
+              baseUrl
+            );
+            if (imageMode !== "placeholder") return null;
+            return <span>{resolvedSrc ? `${alt?.trim() || "Image"}: ${resolvedSrc}` : alt}</span>;
+          },
           // Code blocks with styling
           pre: ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
             <pre
@@ -211,4 +244,15 @@ export function SafeMarkdown({
       </ReactMarkdown>
     </div>
   );
+}
+
+function resolveMarkdownUrl(value: string | undefined, baseUrl: string | undefined): string | null {
+  if (!value) return null;
+  if (!baseUrl) return value;
+  try {
+    const resolved = new URL(value, baseUrl);
+    return resolved.protocol === "http:" || resolved.protocol === "https:" ? resolved.href : null;
+  } catch {
+    return null;
+  }
 }
