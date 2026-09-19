@@ -1,5 +1,11 @@
-import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
+import {
+  createDaytonaRestClientFromEnv,
+  createSandboxProviderFromEnv,
+} from "../sandbox/provider-factory";
+import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
+import { DaytonaImageBuildAdapter } from "./daytona-adapter";
+import { DaytonaImageBuildResources } from "./daytona-build-resources";
 import { E2BImageBuildAdapter } from "./e2b-adapter";
 import { ModalImageBuildAdapter } from "./modal-adapter";
 import type { ImageBuildProvider } from "./model";
@@ -42,6 +48,15 @@ class EnvImageBuildAdapterFactory implements ImageBuildAdapterFactory {
         );
       case "e2b":
         return new E2BImageBuildAdapter(createSandboxProviderFromEnv(this.env, "e2b"));
+      case "daytona":
+        return new DaytonaImageBuildAdapter(
+          new DaytonaImageBuildResources(
+            createDaytonaRestClientFromEnv(this.env, {
+              requireBaseSnapshot: operation === "start",
+            }),
+            { scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER) }
+          )
+        );
     }
   }
 }

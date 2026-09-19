@@ -175,6 +175,21 @@ describe("createQueueJobs", () => {
     expect(autofix.send).not.toHaveBeenCalled();
   });
 
+  it("defers a delayed send in the whole seconds a Queue accepts", async () => {
+    const finalization = { send: vi.fn(async () => undefined) };
+    const jobs = createQueueJobs({
+      IMAGE_BUILD_FINALIZATION_QUEUE: finalization as unknown as Queue<unknown>,
+    });
+
+    await jobs.send(
+      { kind: "image_build.finalize", payload: FINALIZE_PAYLOAD },
+      { delayMs: 30_500 }
+    );
+
+    // Rounded up: a delay must never come back sooner than asked.
+    expect(finalization.send).toHaveBeenCalledWith(FINALIZE_PAYLOAD, { delaySeconds: 31 });
+  });
+
   it("rejects a kind whose queue this deployment does not bind", async () => {
     const jobs = createQueueJobs({
       IMAGE_BUILD_FINALIZATION_QUEUE: { send: vi.fn() } as unknown as Queue<unknown>,
