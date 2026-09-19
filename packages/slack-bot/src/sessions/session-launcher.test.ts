@@ -285,8 +285,8 @@ describe("startSessionAndSendPrompt", () => {
 
   it("passes stable create and prompt ids and saves a new session before delivery", async () => {
     const env = makeEnv();
-    const onLaunchPrepared = vi.fn(async (snapshot) => snapshot);
-    const onSessionCreated = vi.fn(async (_sessionId, _previousSessionId, snapshot) => snapshot);
+    const onLaunchPrepared = vi.fn(async () => {});
+    const onSessionCreated = vi.fn(async () => {});
 
     await startSessionAndSendPrompt(env, {
       target: repositoryTarget,
@@ -303,11 +303,7 @@ describe("startSessionAndSendPrompt", () => {
       env,
       expect.objectContaining({ clientRequestId: "request-1" })
     );
-    expect(onSessionCreated).toHaveBeenCalledWith(
-      "session-1",
-      undefined,
-      expect.objectContaining({ model: "openai/gpt-5.4", content: "Fix it" })
-    );
+    expect(onSessionCreated).toHaveBeenCalledWith("session-1");
     expect(onLaunchPrepared).toHaveBeenCalledWith(
       expect.objectContaining({ model: "openai/gpt-5.4", content: "Fix it" }),
       undefined
@@ -353,10 +349,8 @@ describe("startSessionAndSendPrompt", () => {
       actor,
       clientRequestId: "request-1",
       launchSnapshot,
-      imageOnly: true,
     });
 
-    expect(preparePromptImageAttachments).toHaveBeenCalled();
     expect(getAvailableModels).not.toHaveBeenCalled();
     expect(getSlackSettings).not.toHaveBeenCalled();
     expect(getResolvedUserPreferences).not.toHaveBeenCalled();
@@ -381,7 +375,7 @@ describe("startSessionAndSendPrompt", () => {
 
   it("reuses an existing session without creating or persisting it again", async () => {
     const env = makeEnv();
-    const onSessionCreated = vi.fn(async (_sessionId, _previousSessionId, snapshot) => snapshot);
+    const onSessionCreated = vi.fn(async () => {});
 
     await expect(
       startSessionAndSendPrompt(env, {
@@ -406,7 +400,7 @@ describe("startSessionAndSendPrompt", () => {
 
   it("replaces a persisted session that disappeared before prompt delivery", async () => {
     const env = makeEnv();
-    const onSessionCreated = vi.fn(async (_sessionId, _previousSessionId, snapshot) => snapshot);
+    const onSessionCreated = vi.fn(async () => {});
     vi.mocked(deliverPrompt)
       .mockResolvedValueOnce({ ok: false, reason: "stale" })
       .mockResolvedValueOnce({ ok: true, data: { messageId: "message-2" } });
@@ -429,11 +423,7 @@ describe("startSessionAndSendPrompt", () => {
       env,
       expect.objectContaining({ clientRequestId: "request-1" })
     );
-    expect(onSessionCreated).toHaveBeenCalledWith(
-      "session-2",
-      "session-missing",
-      expect.objectContaining({ attachmentReferences: undefined })
-    );
+    expect(onSessionCreated).toHaveBeenCalledWith("session-2", "session-missing");
     expect(deliverPrompt).toHaveBeenNthCalledWith(
       1,
       env,
@@ -448,34 +438,7 @@ describe("startSessionAndSendPrompt", () => {
 
   it("reinitializes and retries a stale persisted session with the same id", async () => {
     const env = makeEnv();
-    const onSessionCreated = vi.fn(async (_sessionId, _previousSessionId, snapshot) => snapshot);
-    const preparedImages = {
-      files: [
-        {
-          attachment: {
-            id: "F1",
-            name: "stale.png",
-            mimetype: "image/png",
-            downloadUrl: "https://files.slack.com/stale.png",
-          },
-          bytes: new Uint8Array([1]),
-        },
-      ],
-      dropped: [],
-    };
-    vi.mocked(preparePromptImageAttachments).mockResolvedValue(preparedImages);
-    const launchSnapshot = {
-      model: "openai/gpt-5.4",
-      content: "Fix it",
-      callbackContext: {
-        source: "slack" as const,
-        channel: "C123",
-        threadTs: "111.222",
-        repoFullName: "acme/app",
-        model: "openai/gpt-5.4",
-      },
-      attachmentReferences: [{ attachmentId: "att-stale", name: "stale.png" }],
-    };
+    const onSessionCreated = vi.fn(async () => {});
     vi.mocked(deliverPrompt)
       .mockResolvedValueOnce({ ok: false, reason: "stale" })
       .mockResolvedValueOnce({ ok: true, data: { messageId: "message-2" } });
@@ -493,7 +456,6 @@ describe("startSessionAndSendPrompt", () => {
         actor,
         clientRequestId: "request-1",
         existingSessionId: "session-existing",
-        launchSnapshot,
         onSessionCreated,
       })
     ).resolves.toEqual({ sessionId: "session-existing" });
@@ -502,19 +464,8 @@ describe("startSessionAndSendPrompt", () => {
       env,
       expect.objectContaining({ clientRequestId: "request-1" })
     );
-    expect(onSessionCreated).toHaveBeenCalledWith(
-      "session-existing",
-      "session-existing",
-      expect.objectContaining({ attachmentReferences: undefined })
-    );
+    expect(onSessionCreated).not.toHaveBeenCalled();
     expect(deliverPrompt).toHaveBeenCalledTimes(2);
-    expect(deliverPrompt).toHaveBeenNthCalledWith(
-      1,
-      env,
-      expect.objectContaining({ attachmentReferences: launchSnapshot.attachmentReferences })
-    );
-    expect(vi.mocked(deliverPrompt).mock.calls[1]![1]).not.toHaveProperty("attachmentReferences");
-    expect(vi.mocked(deliverPrompt).mock.calls[1]![1].attachments).toBe(preparedImages);
   });
 
   it("returns failure without delivering when launch-state persistence fails", async () => {

@@ -13,7 +13,6 @@ vi.mock("./delivery", async (importOriginal) => {
 function makeEnv(): Env {
   return {
     SLACK_KV: {} as KVNamespace,
-    DB: {} as D1Database,
     SLACK_COMPLETION_QUEUE: {} as Queue,
     CONTROL_PLANE: {} as Fetcher,
     DEPLOYMENT_NAME: "test",

@@ -6,7 +6,6 @@ import {
   getLegacyPendingRequest,
   getPendingRequest,
   deletePendingRequest,
-  updateClaimedPendingRequestLaunchState,
   updatePendingRequestLaunchState,
   type PendingRequest,
 } from "../pending-requests/pending-request-store";
@@ -37,7 +36,6 @@ vi.mock("../pending-requests/pending-request-store", () => ({
   deletePendingRequest: vi.fn(async () => {}),
   getLegacyPendingRequest: vi.fn(),
   deleteLegacyPendingRequest: vi.fn(async () => {}),
-  updateClaimedPendingRequestLaunchState: vi.fn(),
   updatePendingRequestLaunchState: vi.fn(),
 }));
 
@@ -131,9 +129,6 @@ beforeEach(() => {
   vi.mocked(fetchInteractiveThreadContext).mockResolvedValue(undefined);
   vi.mocked(updatePendingRequestLaunchState).mockImplementation(async (_env, _locator, state) =>
     pendingRequest({ launchState: state })
-  );
-  vi.mocked(updateClaimedPendingRequestLaunchState).mockImplementation(
-    async (_env, _locator, state) => state
   );
 });
 
@@ -356,42 +351,6 @@ describe("handleTargetSelection", () => {
     );
   });
 
-  it("replays persisted image references when the Slack file re-fetch fails", async () => {
-    const snapshot = {
-      model: "openai/gpt-5.4",
-      content: "See the attached image(s).",
-      callbackContext: {
-        source: "slack" as const,
-        channel: "C123",
-        threadTs: "111.222",
-        repoFullName: "acme/app",
-        model: "openai/gpt-5.4",
-      },
-      attachmentReferences: [{ attachmentId: "att-1", name: "screenshot.png" }],
-    };
-    vi.mocked(getPendingRequest).mockResolvedValue(
-      pendingRequest({
-        message: "See the attached image(s).",
-        imageOnly: true,
-        sourceMessage: { ts: "111.222" },
-        launchState: {
-          selectedValue: DEFAULT_SELECTED_VALUE,
-          sessionId: "session-existing",
-          snapshot,
-        },
-      })
-    );
-    vi.mocked(getMessageDetails).mockResolvedValue({ ok: false, error: "message_not_found" });
-
-    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
-
-    expect(getMessageDetails).toHaveBeenCalled();
-    expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ launchSnapshot: snapshot, images: [] })
-    );
-  });
-
   it("rejects a selection from someone other than the original requester", async () => {
     vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
 
@@ -530,8 +489,8 @@ describe("handleTargetSelection", () => {
     };
     vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
     vi.mocked(startSessionAndSendPrompt).mockImplementation(async (_env, options) => {
-      const persistedSnapshot = (await options.onLaunchPrepared?.(snapshot)) ?? snapshot;
-      await options.onSessionCreated?.("session-created", undefined, persistedSnapshot);
+      await options.onLaunchPrepared?.(snapshot);
+      await options.onSessionCreated?.("session-created");
       return { sessionId: "session-created" };
     });
 
@@ -541,22 +500,14 @@ describe("handleTargetSelection", () => {
       1,
       env,
       { requestId: REQUEST_ID },
-      { selectedValue: DEFAULT_SELECTED_VALUE },
-      undefined
-    );
-    expect(updateClaimedPendingRequestLaunchState).toHaveBeenNthCalledWith(
-      1,
-      env,
-      { requestId: REQUEST_ID },
       { selectedValue: DEFAULT_SELECTED_VALUE, sessionId: undefined, snapshot },
       undefined
     );
-    expect(updateClaimedPendingRequestLaunchState).toHaveBeenNthCalledWith(
+    expect(updatePendingRequestLaunchState).toHaveBeenNthCalledWith(
       2,
       env,
       { requestId: REQUEST_ID },
-      { selectedValue: DEFAULT_SELECTED_VALUE, sessionId: "session-created", snapshot },
-      undefined
+      { selectedValue: DEFAULT_SELECTED_VALUE, sessionId: "session-created", snapshot }
     );
     expect(deletePendingRequest).toHaveBeenCalledWith(env, REQUEST_ID);
   });
@@ -576,17 +527,7 @@ describe("handleTargetSelection", () => {
     vi.mocked(startSessionAndSendPrompt).mockImplementation(async (_env, options) => {
       const sessionId = sessionsByRequest.get(options.clientRequestId!) ?? "session-shared";
       sessionsByRequest.set(options.clientRequestId!, sessionId);
-      await options.onSessionCreated?.(sessionId, undefined, {
-        model: "openai/gpt-5.4",
-        content: "Fix the deploy",
-        callbackContext: {
-          source: "slack",
-          channel: "C123",
-          threadTs: "111.222",
-          repoFullName: "acme/app",
-          model: "openai/gpt-5.4",
-        },
-      });
+      await options.onSessionCreated?.(sessionId);
       return { sessionId };
     });
 
@@ -600,18 +541,11 @@ describe("handleTargetSelection", () => {
       vi.mocked(startSessionAndSendPrompt).mock.calls.map(([, options]) => options.clientRequestId)
     ).toEqual([REQUEST_ID, REQUEST_ID]);
     expect(updatePendingRequestLaunchState).toHaveBeenCalledTimes(2);
-    expect(updateClaimedPendingRequestLaunchState).toHaveBeenCalledTimes(2);
     expect(
-      vi.mocked(updateClaimedPendingRequestLaunchState).mock.calls.map(([, , state]) => state)
+      vi.mocked(updatePendingRequestLaunchState).mock.calls.map(([, , state]) => state)
     ).toEqual([
-      expect.objectContaining({
-        selectedValue: DEFAULT_SELECTED_VALUE,
-        sessionId: "session-shared",
-      }),
-      expect.objectContaining({
-        selectedValue: DEFAULT_SELECTED_VALUE,
-        sessionId: "session-shared",
-      }),
+      { selectedValue: DEFAULT_SELECTED_VALUE, sessionId: "session-shared" },
+      { selectedValue: DEFAULT_SELECTED_VALUE, sessionId: "session-shared" },
     ]);
   });
 });

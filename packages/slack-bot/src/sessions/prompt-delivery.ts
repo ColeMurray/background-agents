@@ -12,7 +12,6 @@ import {
   notifyDroppedAttachments,
   uploadPreparedAttachments,
   type PreparedImageAttachments,
-  type SlackAttachmentDropReason,
 } from "../attachments";
 import type { Env } from "../types";
 import { sendPrompt } from "./control-plane-client";
@@ -38,14 +37,7 @@ export interface DeliverPromptOptions {
   traceId?: string;
   clientRequestId?: string;
   attachmentReferences?: SessionAttachmentReference[];
-  attachmentDrops?: SlackAttachmentDropReason[];
-  onAttachmentsPrepared?: (
-    references: SessionAttachmentReference[],
-    dropped: SlackAttachmentDropReason[]
-  ) => Promise<{
-    references: SessionAttachmentReference[];
-    dropped: SlackAttachmentDropReason[];
-  }>;
+  onAttachmentsPrepared?: (references: SessionAttachmentReference[]) => Promise<void>;
 }
 
 export type DeliverPromptResult =
@@ -77,20 +69,18 @@ export async function deliverPrompt(
     traceId,
     clientRequestId,
     attachmentReferences,
-    attachmentDrops,
     onAttachmentsPrepared,
   } = options;
-  const upload = attachmentReferences
-    ? { references: attachmentReferences, dropped: attachmentDrops ?? [], sessionMissing: false }
-    : await uploadPreparedAttachments(
-        env,
-        sessionId,
-        attachments,
-        authorId,
-        traceId,
-        clientRequestId
-      );
-  let { references, dropped } = upload;
+  const upload = await uploadPreparedAttachments(
+    env,
+    sessionId,
+    attachments,
+    authorId,
+    traceId,
+    clientRequestId
+  );
+
+  const references = attachmentReferences ?? upload.references;
   if (imageOnly && references.length === 0) {
     // The placeholder prompt would launch a meaningless run with nothing
     // attached. When the uploads failed only because the session is gone,
@@ -105,7 +95,7 @@ export async function deliverPrompt(
 
   if (attachmentReferences === undefined && onAttachmentsPrepared) {
     try {
-      ({ references, dropped } = await onAttachmentsPrepared(references, dropped));
+      await onAttachmentsPrepared(references);
     } catch {
       return { ok: false, reason: "transient" };
     }
@@ -126,8 +116,6 @@ export async function deliverPrompt(
   // Notify about dropped images only now that the session proved live —
   // uploads against a stale session fail spuriously and are retried against
   // the replacement session.
-  if (dropped.length > 0) {
-    await notifyDroppedAttachments(env, channel, threadTs, { references, dropped }, { traceId });
-  }
+  await notifyDroppedAttachments(env, channel, threadTs, upload, { traceId });
   return promptResult;
 }

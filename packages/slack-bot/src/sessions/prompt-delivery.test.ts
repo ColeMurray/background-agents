@@ -87,10 +87,7 @@ describe("deliverPrompt", () => {
 
   it("persists uploaded references before sending an idempotent prompt", async () => {
     const references = [{ attachmentId: "att-1", name: "screenshot.png" }];
-    const onAttachmentsPrepared = vi.fn(async (_references, dropped) => ({
-      references,
-      dropped,
-    }));
+    const onAttachmentsPrepared = vi.fn(async () => {});
     vi.mocked(uploadPreparedAttachments).mockResolvedValue({
       references,
       dropped: [],
@@ -99,7 +96,7 @@ describe("deliverPrompt", () => {
 
     await deliverPrompt(env, options({ onAttachmentsPrepared }));
 
-    expect(onAttachmentsPrepared).toHaveBeenCalledWith(references, []);
+    expect(onAttachmentsPrepared).toHaveBeenCalledWith(references);
     expect(onAttachmentsPrepared.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(sendPrompt).mock.invocationCallOrder[0]!
     );
@@ -107,37 +104,19 @@ describe("deliverPrompt", () => {
 
   it("replays persisted attachment references when upload outcomes change", async () => {
     const references = [{ attachmentId: "att-original", name: "screenshot.png" }];
-    const onAttachmentsPrepared = vi.fn(async (_references, dropped) => ({
-      references,
-      dropped,
-    }));
+    const onAttachmentsPrepared = vi.fn(async () => {});
     vi.mocked(uploadPreparedAttachments).mockResolvedValue({
       references: [{ attachmentId: "att-new", name: "screenshot.png" }],
       dropped: [],
       sessionMissing: false,
     });
 
-    await deliverPrompt(
-      env,
-      options({
-        attachmentReferences: references,
-        attachmentDrops: ["upload_rejected"],
-        onAttachmentsPrepared,
-      })
-    );
+    await deliverPrompt(env, options({ attachmentReferences: references, onAttachmentsPrepared }));
 
-    expect(uploadPreparedAttachments).not.toHaveBeenCalled();
     expect(onAttachmentsPrepared).not.toHaveBeenCalled();
     expect(sendPrompt).toHaveBeenCalledWith(
       env,
       expect.objectContaining({ attachments: references })
-    );
-    expect(notifyDroppedAttachments).toHaveBeenCalledWith(
-      env,
-      "C123",
-      "111.222",
-      { references, dropped: ["upload_rejected"] },
-      { traceId: "trace-1" }
     );
   });
 
