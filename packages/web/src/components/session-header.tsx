@@ -489,32 +489,42 @@ function MobileStatusStrip({
   ...statusProps
 }: SandboxStatusProps & { connection: ConnectionState }) {
   const { status } = statusProps;
+  const connectionPresentation =
+    connection === "connected" ? null : CONNECTION_PRESENTATION[connection];
+  const resolved =
+    !connectionPresentation && status && status !== STEADY_SANDBOX_STATUS
+      ? resolveSandboxStatus({ ...statusProps, status })
+      : null;
 
-  if (connection !== "connected") {
-    const { label, dot, pulse } = CONNECTION_PRESENTATION[connection];
-    return (
-      <p
-        role="status"
-        className={`flex items-center gap-2 border-t border-border-muted px-3 py-2 text-xs md:hidden ${
-          connection === "disconnected" ? "text-destructive" : "text-warning"
-        }`}
-      >
-        <span
-          aria-hidden="true"
-          className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${dot}${pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}
-        />
-        {label}
-      </p>
-    );
-  }
+  // The live region stays mounted even with nothing to report. A region
+  // inserted in the same commit as its first text is commonly not announced,
+  // so it has to already exist when the text arrives — which is the whole
+  // point of it on a header that is silent most of the time.
+  return (
+    <div role="status" className="md:hidden">
+      {connectionPresentation && (
+        <p
+          className={`flex items-center gap-2 border-t border-border-muted px-3 py-2 text-xs ${
+            connection === "disconnected" ? "text-destructive" : "text-warning"
+          }`}
+        >
+          <span
+            aria-hidden="true"
+            className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${connectionPresentation.dot}${connectionPresentation.pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}
+          />
+          {connectionPresentation.label}
+        </p>
+      )}
+      {resolved && <MobileSandboxStatus resolved={resolved} />}
+    </div>
+  );
+}
 
-  if (!status || status === STEADY_SANDBOX_STATUS) return null;
-
-  const resolved = resolveSandboxStatus({ ...statusProps, status });
+function MobileSandboxStatus({ resolved }: { resolved: ResolvedSandboxStatus }) {
   const { presentation } = resolved;
 
   return (
-    <div role="status" className="md:hidden">
+    <>
       <Popover>
         <PopoverTrigger asChild>
           <button
@@ -538,6 +548,6 @@ function MobileStatusStrip({
           <SandboxStatusDetail {...resolved} />
         </PopoverContent>
       </Popover>
-    </div>
+    </>
   );
 }

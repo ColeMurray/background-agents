@@ -766,6 +766,45 @@ describe("SessionHeader mobile presentation", () => {
     }
   );
 
+  it("keeps the live region mounted with nothing to report", () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "ready" }));
+
+    // A region inserted in the same commit as its first text is commonly not
+    // announced, so it has to outlive the quiet state. The desktop connection
+    // dot is also role=status but carries an aria-label; this one does not.
+    const regions = screen.getAllByRole("status").filter((el) => !el.getAttribute("aria-label"));
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBeEmptyDOMElement();
+  });
+
+  it("fills the same live region when a status arrives", () => {
+    const { rerender } = renderMobileHeader(createSessionState({ sandboxStatus: "ready" }));
+    const before = screen.getAllByRole("status").filter((el) => !el.getAttribute("aria-label"))[0];
+
+    rerender(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "spawning" })}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Mobile header" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen={false}
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    const after = screen.getAllByRole("status").filter((el) => !el.getAttribute("aria-label"))[0];
+    expect(after).toBe(before);
+    expect(after).toHaveTextContent("Sandbox Starting...");
+  });
+
   it("reaches the status detail and dashboard link for a healthy sandbox", async () => {
     renderMobileHeader(
       createSessionState({
