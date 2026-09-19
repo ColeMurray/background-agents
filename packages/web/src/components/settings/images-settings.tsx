@@ -10,7 +10,12 @@ import { Switch } from "@/components/ui/switch";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import { IMAGE_BUILDS_KEY, formatReadyDetails, parsePrimaryBuildSha } from "@/lib/image-builds";
+import {
+  DEFAULT_IMAGE_BUILD_ADMISSION_OPEN,
+  IMAGE_BUILDS_KEY,
+  formatReadyDetails,
+  parsePrimaryBuildSha,
+} from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { ImageBuildStatus } from "./image-build-status";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -42,8 +47,7 @@ export function ImagesSettings() {
   }
 
   const loading = reposLoading || imagesLoading;
-  // Absent admission means a control plane that predates the control: open.
-  const admissionOpen = data?.admission?.open ?? true;
+  const admissionOpen = data?.admission?.open ?? DEFAULT_IMAGE_BUILD_ADMISSION_OPEN;
 
   // Toggle state reads the persisted flags, not `units` — the units feed
   // resolves scopes through source control and can transiently drop a repo.

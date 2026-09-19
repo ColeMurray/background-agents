@@ -71,6 +71,12 @@ const imageBuildAdmissionSchema = z.object({
 
 type ImageBuildAdmissionView = z.infer<typeof imageBuildAdmissionSchema>;
 
+/**
+ * What admission means when the control plane reports none: a control plane
+ * that predates the control admits everything.
+ */
+export const DEFAULT_IMAGE_BUILD_ADMISSION_OPEN = true;
+
 export const imageBuildsEnabledResponseSchema = z.object({
   units: z.array(imageBuildUnitViewSchema),
   // Optional so a web build can run against a control plane that predates it.
