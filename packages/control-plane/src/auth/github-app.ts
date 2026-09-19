@@ -698,3 +698,27 @@ export function getGitHubAppConfig(env: {
     installationId: env.GITHUB_APP_INSTALLATION_ID!,
   };
 }
+
+/**
+ * The optional second GitHub App whose installation token submits code
+ * reviews, so a review of a pull request the main App itself opened can
+ * approve rather than only comment.
+ *
+ * Null when the deployment runs no separate reviewer App. The review-token
+ * route then 404s, and github-bot treats the main App as the reviewing
+ * identity, so a review of that App's own pull request stays a comment.
+ */
+export function getGitHubReviewerAppConfig(env: {
+  GITHUB_REVIEWER_APP_ID?: string;
+  GITHUB_REVIEWER_APP_PRIVATE_KEY?: string;
+  GITHUB_REVIEWER_APP_INSTALLATION_ID?: string;
+}): GitHubAppConfig | null {
+  const appId = env.GITHUB_REVIEWER_APP_ID;
+  const privateKey = env.GITHUB_REVIEWER_APP_PRIVATE_KEY;
+  const installationId = env.GITHUB_REVIEWER_APP_INSTALLATION_ID;
+  if (!appId || !privateKey || !installationId) {
+    return null;
+  }
+
+  return { appId, privateKey, installationId };
+}

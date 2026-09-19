@@ -244,6 +244,9 @@ jobs:
           TF_VAR_github_app_id: ${{ vars.GH_APP_ID || secrets.GH_APP_ID }}
           TF_VAR_github_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           TF_VAR_github_app_installation_id: ${{ vars.GH_APP_INSTALLATION_ID || secrets.GH_APP_INSTALLATION_ID }}
+          TF_VAR_github_reviewer_app_id: ${{ vars.GH_REVIEWER_APP_ID || secrets.GH_REVIEWER_APP_ID }}
+          TF_VAR_github_reviewer_app_private_key: ${{ secrets.GH_REVIEWER_APP_PRIVATE_KEY }}
+          TF_VAR_github_reviewer_app_installation_id: ${{ vars.GH_REVIEWER_APP_INSTALLATION_ID || secrets.GH_REVIEWER_APP_INSTALLATION_ID }}
           TF_VAR_enable_slack_bot: "${{ vars.ENABLE_SLACK_BOT || secrets.ENABLE_SLACK_BOT || 'true' }}"
           TF_VAR_slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_slack_signing_secret: ${{ secrets.SLACK_SIGNING_SECRET }}
@@ -265,6 +268,7 @@ jobs:
           TF_VAR_enable_github_bot: "${{ vars.ENABLE_GITHUB_BOT || secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
           TF_VAR_github_bot_username: ${{ vars.GH_BOT_USERNAME || secrets.GH_BOT_USERNAME }}
+          TF_VAR_github_reviewer_username: ${{ vars.GH_REVIEWER_USERNAME || secrets.GH_REVIEWER_USERNAME }}
           TF_VAR_github_bot_default_model: "${{ vars.GH_BOT_DEFAULT_MODEL || secrets.GH_BOT_DEFAULT_MODEL || 'anthropic/claude-haiku-4-5' }}"
           TF_VAR_app_name: "${{ vars.APP_NAME || secrets.APP_NAME || 'Open-Inspect' }}"
           TF_VAR_app_icon_url: ${{ vars.APP_ICON_URL || secrets.APP_ICON_URL }}
@@ -431,6 +435,9 @@ jobs:
           TF_VAR_github_app_id: ${{ vars.GH_APP_ID || secrets.GH_APP_ID }}
           TF_VAR_github_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           TF_VAR_github_app_installation_id: ${{ vars.GH_APP_INSTALLATION_ID || secrets.GH_APP_INSTALLATION_ID }}
+          TF_VAR_github_reviewer_app_id: ${{ vars.GH_REVIEWER_APP_ID || secrets.GH_REVIEWER_APP_ID }}
+          TF_VAR_github_reviewer_app_private_key: ${{ secrets.GH_REVIEWER_APP_PRIVATE_KEY }}
+          TF_VAR_github_reviewer_app_installation_id: ${{ vars.GH_REVIEWER_APP_INSTALLATION_ID || secrets.GH_REVIEWER_APP_INSTALLATION_ID }}
           TF_VAR_enable_slack_bot: "${{ vars.ENABLE_SLACK_BOT || secrets.ENABLE_SLACK_BOT || 'true' }}"
           TF_VAR_slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_slack_signing_secret: ${{ secrets.SLACK_SIGNING_SECRET }}
@@ -452,6 +459,7 @@ jobs:
           TF_VAR_enable_github_bot: "${{ vars.ENABLE_GITHUB_BOT || secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
           TF_VAR_github_bot_username: ${{ vars.GH_BOT_USERNAME || secrets.GH_BOT_USERNAME }}
+          TF_VAR_github_reviewer_username: ${{ vars.GH_REVIEWER_USERNAME || secrets.GH_REVIEWER_USERNAME }}
           TF_VAR_github_bot_default_model: "${{ vars.GH_BOT_DEFAULT_MODEL || secrets.GH_BOT_DEFAULT_MODEL || 'anthropic/claude-haiku-4-5' }}"
           TF_VAR_app_name: "${{ vars.APP_NAME || secrets.APP_NAME || 'Open-Inspect' }}"
           TF_VAR_app_icon_url: ${{ vars.APP_ICON_URL || secrets.APP_ICON_URL }}

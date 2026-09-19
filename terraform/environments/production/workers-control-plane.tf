@@ -175,6 +175,10 @@ module "control_plane_worker" {
       GITHUB_APP_ID              = { value = var.github_app_id }
       GITHUB_APP_PRIVATE_KEY     = { value = var.github_app_private_key }
       GITHUB_APP_INSTALLATION_ID = { value = var.github_app_installation_id }
+      # Reviewer App token is brokered only to authenticated sandboxes.
+      GITHUB_REVIEWER_APP_ID              = { value = var.github_reviewer_app_id }
+      GITHUB_REVIEWER_APP_PRIVATE_KEY     = { value = var.github_reviewer_app_private_key }
+      GITHUB_REVIEWER_APP_INSTALLATION_ID = { value = var.github_reviewer_app_installation_id }
     },
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_SECRET = { value = trimspace(var.github_client_secret) }
