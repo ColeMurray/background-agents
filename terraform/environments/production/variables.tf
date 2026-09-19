@@ -643,13 +643,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'"
+  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', 'opencomputer', 'e2b', or 'sandbox0'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "daytona", "vercel", "opencomputer", "e2b"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'."
+    condition     = contains(["modal", "daytona", "vercel", "opencomputer", "e2b", "sandbox0"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', 'opencomputer', 'e2b', or 'sandbox0'."
   }
 }
 

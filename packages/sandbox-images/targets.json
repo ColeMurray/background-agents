@@ -1,4 +1,11 @@
 {
+  "sandbox0": {
+    "os": "debian",
+    "base": "default",
+    "node": "22",
+    "user": "root",
+    "home": "/root"
+  },
   "modal": {
     "os": "debian",
     "base": "python:3.12-slim-bookworm",

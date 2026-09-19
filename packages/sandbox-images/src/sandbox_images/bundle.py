@@ -15,7 +15,7 @@ from typing import Any, NamedTuple, TypedDict
 from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json, runtime_environment
 from .locks import update_locks
 
-PROVIDERS = ("modal", "daytona", "e2b", "vercel", "opencomputer")
+PROVIDERS = ("modal", "daytona", "e2b", "vercel", "opencomputer", "sandbox0")
 EXCLUDED = {
     ".terraform",
     ".git",
@@ -142,8 +142,10 @@ def plan_image(root: Path, provider: str) -> ImagePlan:
         IMAGE_PACKAGE / "uv.lock",
         IMAGE_PACKAGE / "targets.json",
         Path(f"packages/{provider}-infra"),
-        Path(f"terraform/modules/{INFRA_MODULES[provider]}"),
     )
+    # Sandbox0 templates are built explicitly, without a Terraform build module.
+    if provider in INFRA_MODULES:
+        paths += (Path(f"terraform/modules/{INFRA_MODULES[provider]}"),)
     if provider in ("vercel", "opencomputer"):
         paths += (Path("package-lock.json"),)
     if provider == "vercel":
@@ -161,13 +163,17 @@ def plan_image(root: Path, provider: str) -> ImagePlan:
         digest.update(path.relative_to(root).as_posix().encode() + b"\0")
         digest.update(str(stat.S_IMODE(path.lstat().st_mode)).encode() + b"\0")
         digest.update(hashlib.sha256(content).digest())
+    runtime_env = runtime_environment(target)
+    if provider == "sandbox0":
+        # Credential caches must not enter durable RootFS checkpoints.
+        runtime_env["OI_SCM_CRED_CACHE_DIR"] = "/tmp/oi-scm"
     return {
         "provider": provider,
         "target": target,
         "runtimeVersion": read_json(
             root / RUNTIME_PACKAGE / "src/sandbox_runtime/runtime_manifest.json"
         )["runtimeVersion"],
-        "runtimeEnv": runtime_environment(target),
+        "runtimeEnv": runtime_env,
         "buildHash": digest.hexdigest(),
     }
 

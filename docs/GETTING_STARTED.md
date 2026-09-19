@@ -224,6 +224,17 @@ for the full runtime, snapshot, and resource configuration model.
 For the full template build and runtime details, see
 [OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md).
 
+### Sandbox0
+
+> Only required when `sandbox_provider = "sandbox0"`.
+
+Build and verify a runtime template using the
+[Sandbox0 setup guide](../packages/sandbox0-infra/README.md), then set `sandbox0_api_key`,
+`sandbox0_api_url` (defaults to `https://api.sandbox0.ai`), and `sandbox0_template_id` in Terraform.
+Template construction is explicit, before deployment. Sandbox0 preserves each session's filesystem
+across pause/resume; repository prebuilds and the standalone web terminal are not enabled in this
+provider.
+
 ### E2B
 
 > Only required when `sandbox_provider = "e2b"`.

@@ -131,6 +131,7 @@ ownership, bots, and member suspension.
 | [modal-infra](packages/modal-infra)               | Modal sandbox infrastructure                |
 | [daytona-infra](packages/daytona-infra)           | Daytona snapshot infrastructure             |
 | [e2b-infra](packages/e2b-infra)                   | E2B sandbox template infrastructure         |
+| [sandbox0-infra](packages/sandbox0-infra)         | Sandbox0 durable workspace infrastructure   |
 | [opencomputer-infra](packages/opencomputer-infra) | OpenComputer template infrastructure        |
 | [slack-bot](packages/slack-bot)                   | Slack integration (sessions from messages)  |
 | [github-bot](packages/github-bot)                 | GitHub integration (auto-review, @mention)  |
