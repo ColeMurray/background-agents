@@ -388,12 +388,17 @@ function resolveSandboxStatus({
       ? describeBootPhase(bootPhase, repositoryCount)
       : null;
   const failedPhase = status === "failed" && bootPhase?.status === "failed" ? bootPhase : null;
+  const failedPhaseRepo = failedPhase ? bootPhaseRepoLabel(failedPhase, repositoryCount) : null;
   return {
     presentation: booting
       ? { ...SANDBOX_STATUS_PRESENTATION[status], ...booting }
       : SANDBOX_STATUS_PRESENTATION[status],
-    failedPhase,
-    failedPhaseRepo: failedPhase ? bootPhaseRepoLabel(failedPhase, repositoryCount) : null,
+    // Built once: the popover and the mobile actions menu both say which step
+    // broke, and a failure reachable from only one of them is no better than
+    // one reachable from neither.
+    failedPhaseSummary: failedPhase
+      ? `Failed while ${bootPhaseLabel(failedPhase.phase).toLowerCase()}${failedPhaseRepo ? ` for ${failedPhaseRepo}` : ""}.`
+      : null,
     reason: error ?? failedPhase?.detail,
     safeDashboardUrl: getSafeExternalUrl(dashboardUrl),
   };
@@ -403,8 +408,7 @@ export type ResolvedSandboxStatus = ReturnType<typeof resolveSandboxStatus>;
 
 function SandboxStatusDetail({
   presentation,
-  failedPhase,
-  failedPhaseRepo,
+  failedPhaseSummary,
   reason,
   safeDashboardUrl,
 }: ResolvedSandboxStatus) {
@@ -419,11 +423,8 @@ function SandboxStatusDetail({
           Sandbox {presentation.label}
         </div>
         <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{presentation.detail}</p>
-        {failedPhase && (
-          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
-            Failed while {bootPhaseLabel(failedPhase.phase).toLowerCase()}
-            {failedPhaseRepo ? ` for ${failedPhaseRepo}` : ""}.
-          </p>
+        {failedPhaseSummary && (
+          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{failedPhaseSummary}</p>
         )}
         {reason && (
           <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-destructive">

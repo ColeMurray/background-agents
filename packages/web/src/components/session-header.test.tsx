@@ -5,6 +5,7 @@ import { createRef, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import type { SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
 import type { SessionState } from "@open-inspect/shared/types/server-messages";
 import { SessionHeader as SessionHeaderComponent } from "./session-header";
 import type { SessionActionProps } from "./session-actions";
@@ -659,13 +660,15 @@ describe("SessionHeader mobile presentation", () => {
     sessionState: SessionState,
     connection: Partial<ConnectionProps> = {},
     sandboxError?: string,
-    capabilities?: SessionCapabilities
+    capabilities?: SessionCapabilities,
+    bootPhase?: SandboxBootPhase
   ) {
     return render(
       <SessionHeader
         sessionState={sessionState}
         sandboxError={sandboxError}
         capabilities={capabilities}
+        bootPhase={bootPhase}
         fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Mobile header" }}
         connected
         connecting={false}
@@ -826,6 +829,27 @@ describe("SessionHeader mobile presentation", () => {
       "href",
       "https://modal.com/apps/acme/main/sandbox"
     );
+  });
+
+  it("names the step that broke in the actions menu", async () => {
+    // The strip yields to the connection line here, so the menu is the only
+    // place left that can say which boot step failed.
+    renderMobileHeader(
+      createSessionState({ sandboxStatus: "failed" }),
+      { connected: false, connecting: false, reconnecting: false },
+      undefined,
+      undefined,
+      { phase: "sync", status: "failed" }
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    expect(
+      within(await screen.findByRole("menu")).getByText("Failed while cloning repository.")
+    ).toBeInTheDocument();
   });
 
   it("puts the provider's failure reason in the actions menu", async () => {

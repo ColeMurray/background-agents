@@ -86,6 +86,11 @@ export function MobileSessionActions({
                   <span className="mt-1 block max-w-64 text-xs font-normal leading-5 text-muted-foreground">
                     {sandbox.presentation.detail}
                   </span>
+                  {sandbox.failedPhaseSummary && (
+                    <span className="mt-1 block max-w-64 text-xs font-normal leading-5 text-muted-foreground">
+                      {sandbox.failedPhaseSummary}
+                    </span>
+                  )}
                   {sandbox.reason && (
                     <span className="mt-1.5 block max-h-24 max-w-64 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-destructive">
                       {sandbox.reason}
