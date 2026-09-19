@@ -28,6 +28,8 @@ const log = createLogger("sandbox0-provider");
 const RUNTIME_NAME = "openinspect-runtime";
 const ENTRYPOINT = ["/opt/openinspect/start-runtime"];
 
+export const SANDBOX0_PAUSE_TIMEOUT_MS = 120_000;
+
 interface RuntimeSpec {
   name: string;
   command: string[];
@@ -68,6 +70,7 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
     readonly config: Sandbox0ProviderConfig
   ) {}
 
+  /** Claim a workspace and launch its runtime, deleting known allocations on startup failure. */
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
     let providerObjectId: string | undefined;
     try {
@@ -130,6 +133,7 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
     }
   }
 
+  /** Restart a stopped attempt in restore mode without rotating workspace identity or credentials. */
   async resumeSandbox(config: ResumeConfig): Promise<ResumeResult> {
     const path = sandbox0Path(config.providerObjectId);
     try {
@@ -196,6 +200,7 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
     }
   }
 
+  /** Preserve idle workspaces with a checkpoint; discard failed or explicitly replaced ones. */
   async stopSandbox(config: StopConfig): Promise<StopResult> {
     try {
       if (["inactivity_timeout", "heartbeat_timeout"].includes(config.reason)) {
@@ -210,12 +215,13 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
     }
   }
 
+  /** Wait for durable pause commitment rather than treating transaction acceptance as success. */
   private async pauseSandbox(id: string, callerSignal?: AbortSignal): Promise<void> {
     const path = sandbox0Path(id);
     await withRequestDeadline(
       "Sandbox0",
       `${path}/pause`,
-      120_000,
+      SANDBOX0_PAUSE_TIMEOUT_MS,
       callerSignal,
       async (signal) => {
         const result = await this.client.request<{ paused: boolean }>(
@@ -255,6 +261,7 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
     );
   }
 
+  /** Request deletion idempotently; an already absent workspace needs no further action. */
   async deleteSandbox(id: string, signal?: AbortSignal): Promise<void> {
     try {
       await this.client.request("DELETE", sandbox0Path(id), undefined, { signal });
@@ -263,6 +270,7 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
     }
   }
 
+  /** Attempt teardown without masking the original startup error. */
   private async cleanup(id: string): Promise<void> {
     try {
       await this.deleteSandbox(id);
@@ -271,6 +279,7 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
     }
   }
 
+  /** Derive access credentials for initial creation only; resume reuses the stored credentials. */
   private async passwords(
     config: Pick<CreateSandboxConfig, "sandboxId" | "codeServerEnabled" | "vncEnabled">
   ) {
@@ -284,6 +293,7 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
     };
   }
 
+  /** Expose runtime-managed ports without allowing incoming traffic to auto-resume the workspace. */
   private services(
     config: Pick<CreateSandboxConfig, "sandboxSettings" | "codeServerEnabled" | "vncEnabled">
   ) {
@@ -299,6 +309,7 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
     }));
   }
 
+  /** Separate editor/desktop access from development tunnels using provider-returned URLs. */
   private async access(
     id: string,
     config: { codeServerEnabled?: boolean; vncEnabled?: boolean; sandboxSettings?: SandboxSettings }
@@ -326,6 +337,7 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
     };
   }
 
+  /** Map retryable provider failures without losing existing provider-neutral error semantics. */
   private classify(error: unknown): SandboxProviderError {
     if (error instanceof SandboxProviderError) return error;
     if (error instanceof Sandbox0ApiError) {

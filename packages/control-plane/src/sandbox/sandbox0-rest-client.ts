@@ -1,11 +1,14 @@
 import { withRequestDeadline } from "./request-deadline";
 
+export const DEFAULT_SANDBOX0_REQUEST_TIMEOUT_MS = 120_000;
+
 export interface Sandbox0ClientConfig {
   apiKey: string;
   apiUrl?: string;
 }
 
 export class Sandbox0ApiError extends Error {
+  /** Retain retry-relevant status without including provider response bodies. */
   constructor(
     public readonly status: number,
     public readonly code: string,
@@ -21,6 +24,7 @@ export class Sandbox0ApiError extends Error {
 export class Sandbox0RestClient {
   private readonly apiUrl: string;
 
+  /** Reject endpoints that could expose bearer credentials over insecure transport. */
   constructor(private readonly config: Sandbox0ClientConfig) {
     const url = new URL(config.apiUrl || "https://api.sandbox0.ai");
     if (
@@ -36,6 +40,7 @@ export class Sandbox0RestClient {
     this.apiUrl = url.href.replace(/\/$/, "");
   }
 
+  /** Unwrap an authenticated response under a deadline; never follow redirects or replay writes. */
   async request<T>(
     method: string,
     path: string,
@@ -45,7 +50,7 @@ export class Sandbox0RestClient {
     return withRequestDeadline(
       "Sandbox0",
       path,
-      options.timeoutMs ?? 120_000,
+      options.timeoutMs ?? DEFAULT_SANDBOX0_REQUEST_TIMEOUT_MS,
       options.signal,
       async (signal) => {
         const response = await fetch(`${this.apiUrl}${path}`, {
@@ -69,6 +74,7 @@ export class Sandbox0RestClient {
   }
 }
 
+/** Treat the provider ID as a single path segment, not caller-supplied routing. */
 export function sandbox0Path(sandboxId: string): string {
   return `/api/v1/sandboxes/${encodeURIComponent(sandboxId)}`;
 }

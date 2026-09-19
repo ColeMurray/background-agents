@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { Sandbox0SandboxProvider } from "./sandbox0-provider";
+import { SANDBOX0_PAUSE_TIMEOUT_MS, Sandbox0SandboxProvider } from "./sandbox0-provider";
 import { Sandbox0ApiError, Sandbox0RestClient } from "../sandbox0-rest-client";
 import { PrebuiltImageUnavailableError } from "../provider";
 import { createSandboxProviderFromEnv } from "../provider-factory";
@@ -223,7 +223,7 @@ describe("Sandbox0SandboxProvider", () => {
       const assertion = expect(
         provider.stopSandbox({ ...resume, reason: "inactivity_timeout" })
       ).rejects.toMatchObject({ errorType: "transient" });
-      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.advanceTimersByTimeAsync(SANDBOX0_PAUSE_TIMEOUT_MS);
       await assertion;
     } finally {
       vi.useRealTimers();

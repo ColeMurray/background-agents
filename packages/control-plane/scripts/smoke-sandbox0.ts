@@ -1,5 +1,6 @@
 /** Opt-in, billable live test. Uses only newly allocated Sandbox0 resources.
- * Build: npx esbuild packages/control-plane/scripts/smoke-sandbox0.ts --bundle
+ * Build shared first: npm run build -w @open-inspect/shared
+ * Then bundle: npx esbuild packages/control-plane/scripts/smoke-sandbox0.ts --bundle
  *   --platform=node --format=esm --outfile=/tmp/oi-sandbox0-smoke.mjs
  * Run with SANDBOX0_API_KEY and SANDBOX0_TEMPLATE_ID in the environment.
  */

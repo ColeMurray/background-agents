@@ -29,11 +29,13 @@ from sandbox_images.native import write_build_result  # noqa: E402
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Prevent authenticated requests from being forwarded to a redirect destination."""
         raise RuntimeError("Sandbox0 API redirects are not allowed")
 
 
 class Client:
     def __init__(self):
+        """Load host-side credentials and validate the API transport before allocation."""
         self.key = os.environ["SANDBOX0_API_KEY"]
         self.url = os.environ.get("SANDBOX0_API_URL", "https://api.sandbox0.ai").rstrip("/")
         url = urllib.parse.urlparse(self.url)
@@ -51,6 +53,7 @@ class Client:
         self.http = urllib.request.build_opener(NoRedirect())
 
     def request(self, method, path, body=None):
+        """Unwrap API data, retrying only safe reads/deletes and sanitizing HTTP errors."""
         binary = isinstance(body, bytes)
         data = body if binary else json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(
@@ -79,6 +82,7 @@ class Client:
                 raise RuntimeError(f"Sandbox0 {method} {path}: HTTP {error.code}") from None
 
     def create(self, template):
+        """Allocate a disposable build/probe sandbox with bounded resource retention."""
         return self.request(
             "POST",
             "/api/v1/sandboxes",
@@ -94,6 +98,7 @@ class Client:
         )["sandbox_id"]
 
     def command(self, sandbox, command, timeout=1800):
+        """Run a bounded asynchronous command and require an observed successful exit."""
         path = f"/api/v1/sandboxes/{sandbox}/contexts"
         context = self.request(
             "POST",
@@ -115,9 +120,11 @@ class Client:
             raise RuntimeError(f"Sandbox0 build command failed: {context.get('exit_code')}")
 
     def delete(self, sandbox):
+        """Request cleanup of a sandbox owned by this build invocation."""
         self.request("DELETE", f"/api/v1/sandboxes/{sandbox}")
 
     def pause(self, sandbox):
+        """Wait for a committed checkpoint before capturing the completed build."""
         path = f"/api/v1/sandboxes/{sandbox}"
         result = self.request("POST", f"{path}/pause")
         deadline = time.monotonic() + 180
@@ -129,6 +136,7 @@ class Client:
 
 
 def main():
+    """Publish only freshly verified templates, retaining sources of unresolved captures."""
     client = Client()
     resources = []
     with tempfile.TemporaryDirectory(prefix="openinspect-sandbox0-") as directory:
