@@ -171,6 +171,19 @@ export async function startSessionAndSendPrompt(
     sessionDefaults,
     normalizeModelSelection(userPrefs)
   );
+  // Overrides were resolved against the models enabled when the follow-up
+  // arrived, and against session defaults that may since have fallen back to
+  // a different model, so they are checked again against what will actually
+  // run. Done before the session exists so a rejection leaves nothing behind.
+  const firstPrompt = resolveInlinePromptOptions(
+    launchPlan?.promptOverrides ?? EMPTY_INLINE_PROMPT_OPTIONS,
+    sessionDefaults,
+    enabledModels
+  );
+  if (!firstPrompt.ok) {
+    await postMessage(env.SLACK_BOT_TOKEN, channel, firstPrompt.error, { thread_ts: threadTs });
+    return null;
+  }
   const preferenceRepo = branchPreferenceRepo(target);
   let branch: string | undefined;
   if (preferenceRepo) {
@@ -203,8 +216,8 @@ export async function startSessionAndSendPrompt(
     channel,
     threadTs,
     repoFullName: targetLabel(target),
-    model: launchPlan?.promptOverrides?.model ?? model,
-    reasoningEffort: launchPlan?.promptOverrides?.reasoningEffort ?? reasoningEffort,
+    model: firstPrompt.turnPlan.effective.model,
+    reasoningEffort: firstPrompt.turnPlan.effective.reasoningEffort,
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
@@ -222,7 +235,7 @@ export async function startSessionAndSendPrompt(
     // Normally empty — the session was just created with these settings. It is
     // set only when recovering a stale thread, where the replacement keeps the
     // thread's defaults and the follow-up's own flags stay a one-turn override.
-    ...launchPlan?.promptOverrides,
+    ...firstPrompt.turnPlan.promptOverrides,
     channel,
     threadTs,
     traceId,

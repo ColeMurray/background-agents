@@ -264,7 +264,7 @@ describe("startSessionAndSendPrompt", () => {
       actor,
       launchPlan: {
         sessionDefaults: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" },
-        promptOverrides: { model: "anthropic/claude-haiku-4-5", reasoningEffort: "max" },
+        promptOverrides: { model: "openai/gpt-5.4" },
       },
     });
 
@@ -272,19 +272,56 @@ describe("startSessionAndSendPrompt", () => {
       env,
       expect.objectContaining({ model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" })
     );
-    expect(deliverPrompt).toHaveBeenCalledWith(
-      env,
+    // "max" is not an effort gpt-5.4 supports, so the session's effort is not
+    // carried onto a prompt running a different model.
+    const [, delivered] = vi.mocked(deliverPrompt).mock.calls[0]!;
+    expect(delivered).toEqual(
       expect.objectContaining({
-        model: "anthropic/claude-haiku-4-5",
-        callbackContext: expect.objectContaining({ model: "anthropic/claude-haiku-4-5" }),
+        model: "openai/gpt-5.4",
+        callbackContext: expect.objectContaining({
+          model: "openai/gpt-5.4",
+          reasoningEffort: undefined,
+        }),
       })
     );
+    expect(delivered).not.toHaveProperty("reasoningEffort");
     expect(buildThreadSession).toHaveBeenCalledWith(
       "session-1",
       repositoryTarget,
       "anthropic/claude-sonnet-4-6",
       "max",
       undefined
+    );
+  });
+
+  it("rejects a prompt override whose model is no longer enabled", async () => {
+    const env = makeEnv();
+    vi.mocked(getAvailableModels).mockResolvedValue([
+      { label: "GPT 5.4", value: "openai/gpt-5.4" },
+    ]);
+
+    await expect(
+      startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "now add coverage",
+        actor,
+        launchPlan: {
+          sessionDefaults: { model: "openai/gpt-5.4" },
+          promptOverrides: { model: "anthropic/claude-sonnet-4-6" },
+        },
+      })
+    ).resolves.toBeNull();
+
+    // Rejected before anything exists, so no session is left without a prompt.
+    expect(createSession).not.toHaveBeenCalled();
+    expect(deliverPrompt).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      env.SLACK_BOT_TOKEN,
+      "C123",
+      expect.stringContaining("is not enabled"),
+      { thread_ts: "111.222" }
     );
   });
 
