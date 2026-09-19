@@ -66,6 +66,7 @@ function automation(id: string, userId: string): AutomationRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
+    max_concurrent_runs: 1,
     next_run_at: null,
     consecutive_failures: 0,
     created_by: userId,

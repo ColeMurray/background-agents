@@ -18,6 +18,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
+    max_concurrent_runs: 1,
     next_run_at: now + 86400000,
     consecutive_failures: 0,
     created_by: "user-1",

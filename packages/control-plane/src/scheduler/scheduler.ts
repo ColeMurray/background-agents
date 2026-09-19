@@ -137,8 +137,16 @@ export const EXECUTION_DEADLINE_GRACE_MS =
  */
 const DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS: SandboxSettings = {};
 
-/** Consecutive failure threshold for auto-pause. */
-const AUTO_PAUSE_THRESHOLD = 3;
+/**
+ * Consecutive failure threshold for auto-pause.
+ *
+ * Sized against concurrency rather than against a serialized automation: at a
+ * `max_concurrent_runs` above one, several firings can be in flight when a
+ * shared cause (a bad base branch, an expired credential) fails them, and they
+ * strike in a row with no success interleaved to reset the streak. Three
+ * strikes is one such round; five needs the failures to outlast it.
+ */
+const AUTO_PAUSE_THRESHOLD = 5;
 
 /** Max runs to recover per sweep type per tick (backpressure). */
 const RECOVERY_SWEEP_LIMIT = 50;
@@ -195,6 +203,18 @@ function appendSlackSessionInstructions(prompt: string, instructions: string | u
 const slackThreadContextResponseSchema = z.object({
   threadContext: z.string(),
 });
+
+/**
+ * The automation's concurrency bound. Anything that is not a positive integer
+ * reads as the serialized default rather than as an unbounded one: the
+ * predicate compares a count against this, and a comparison against NaN is
+ * false — which would admit every firing instead of refusing them. The column
+ * is NOT NULL DEFAULT 1, so this only guards rows assembled outside SQL.
+ */
+function automationConcurrencyLimit(automation: AutomationRow): number {
+  const limit = automation.max_concurrent_runs;
+  return Number.isInteger(limit) && limit >= 1 ? limit : 1;
+}
 
 export interface AutomationRunCompletion {
   automationId: string;
@@ -403,21 +423,30 @@ export class Scheduler {
     const now = Date.now();
     const concurrencyKey = params.concurrencyKey ?? null;
 
-    // Schedule/manual firings block on any active run of the automation; event
-    // firings block per concurrency key (an automation-wide guard would
-    // serialize unrelated events, e.g. PR #42 against PR #43).
+    // Schedule/manual firings block once the automation is at its concurrency
+    // limit; event firings block per concurrency key (an automation-wide guard
+    // would serialize unrelated events, e.g. PR #42 against PR #43).
+    //
+    // The limit is read off the automation row rather than passed in, so an
+    // operator raising it takes effect on the next firing and an automation
+    // that predates the column keeps the serialized behaviour its default
+    // encodes.
     const overlapScope: InvocationOverlapScope =
       source === "event" && concurrencyKey !== null
         ? { kind: "concurrencyKey", concurrencyKey }
         : { kind: "automation" };
 
-    // Cheap pre-check; the conditional insert below re-applies the same predicate
-    // atomically, so a race here only costs a wasted child build.
-    const activeRun =
+    // Cheap pre-check; the conditional insert below re-applies the same
+    // predicate atomically, so a race here only costs a wasted child build.
+    // This half compares against the snapshot the firing was read with, while
+    // the insert re-reads the bound from the row — deliberately, since the
+    // authoritative answer is the one the database orders against a PATCH.
+    const blocked =
       overlapScope.kind === "concurrencyKey"
-        ? await store.getActiveRunForKey(automation.id, concurrencyKey)
-        : await store.getActiveRunForAutomation(automation.id);
-    if (activeRun) {
+        ? (await store.getActiveRunForKey(automation.id, concurrencyKey)) !== null
+        : (await store.countActiveInvocations(automation.id)) >=
+          automationConcurrencyLimit(automation);
+    if (blocked) {
       return this.recordOverlapSkip(store, params, { advanceSchedule: true });
     }
 
