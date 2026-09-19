@@ -15,6 +15,23 @@ const VALID_CALLBACK_ROW = {
   completion_hash: null,
 };
 
+const VALID_FINALIZATION_ROW = {
+  id: "build-1",
+  provider: "vercel",
+  status: "building",
+  provider_image_id: null,
+  provider_session_id: "session-1",
+  completion_hash: "completion-1",
+  repository_shas: "[]",
+  runtime_version: "v53",
+  build_duration_seconds: null,
+  error_message: null,
+  finalization_lease_token: null,
+  finalization_lease_expires_at: null,
+  provider_session_cleanup_pending: 1,
+  callback_token_used_at: 1_500,
+};
+
 function database(row: Record<string, unknown> | null): SqlDatabase {
   return {
     prepare(): SqlStatement {
@@ -80,5 +97,32 @@ describe("ImageBuildFinalizationStore callback rows", () => {
         now: 1_000,
       })
     ).resolves.toBeNull();
+  });
+});
+
+describe("ImageBuildFinalizationStore finalization rows", () => {
+  it("returns a valid finalization row with nullable fields", async () => {
+    const store = new ImageBuildFinalizationStore(database(VALID_FINALIZATION_ROW));
+
+    await expect(store.getBuild("build-1")).resolves.toEqual(VALID_FINALIZATION_ROW);
+  });
+
+  it.each([
+    ["provider", { provider: "daytona" }],
+    ["status", { status: "queued" }],
+  ])("rejects a finalization row with invalid %s", async (_field, override) => {
+    const store = new ImageBuildFinalizationStore(
+      database({ ...VALID_FINALIZATION_ROW, ...override })
+    );
+
+    await expect(store.getBuild("build-1")).resolves.toBeNull();
+  });
+
+  it("rejects a partial finalization row", async () => {
+    const partialRow: Record<string, unknown> = { ...VALID_FINALIZATION_ROW };
+    delete partialRow.runtime_version;
+    const store = new ImageBuildFinalizationStore(database(partialRow));
+
+    await expect(store.getBuild("build-1")).resolves.toBeNull();
   });
 });

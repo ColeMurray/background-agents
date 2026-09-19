@@ -28,6 +28,23 @@ const callbackTokenRowSchema = z.object({
 
 type CallbackTokenRow = z.infer<typeof callbackTokenRowSchema>;
 
+const imageBuildFinalizationRowSchema = z.object({
+  id: z.string(),
+  provider: imageBuildProviderSchema,
+  status: imageBuildStatusSchema,
+  provider_image_id: z.string().nullable(),
+  provider_session_id: z.string().nullable(),
+  completion_hash: z.string().nullable(),
+  repository_shas: z.string(),
+  runtime_version: z.string(),
+  build_duration_seconds: z.number().nullable(),
+  error_message: z.string().nullable(),
+  finalization_lease_token: z.string().nullable(),
+  finalization_lease_expires_at: z.number().nullable(),
+  provider_session_cleanup_pending: z.number().nullable(),
+  callback_token_used_at: z.number().nullable(),
+});
+
 /** Result of atomically consuming or replaying a callback completion. */
 export type ImageBuildCompletionAcceptance = "accepted" | "replayed" | "rejected";
 
@@ -224,7 +241,7 @@ export class ImageBuildFinalizationStore {
 
   /** Reads the durable state used by a Queue delivery or cleanup retry. */
   async getBuild(buildId: string): Promise<ImageBuildFinalizationRow | null> {
-    return this.db
+    const row = await this.db
       .prepare(
         `SELECT id, provider, status, provider_image_id, provider_session_id,
                 completion_hash, repository_shas, runtime_version, build_duration_seconds,
@@ -233,7 +250,9 @@ export class ImageBuildFinalizationStore {
          FROM image_builds WHERE id = ?`
       )
       .bind(buildId)
-      .first<ImageBuildFinalizationRow>();
+      .first();
+    const parsed = imageBuildFinalizationRowSchema.safeParse(row);
+    return parsed.success ? parsed.data : null;
   }
 
   /**
