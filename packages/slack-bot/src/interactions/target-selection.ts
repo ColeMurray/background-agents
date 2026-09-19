@@ -26,8 +26,12 @@ import {
   startSessionAndSendPrompt,
   type SlackLaunchSettings,
 } from "../sessions/session-launcher";
-import { resolveTargetValue } from "../target-clarification";
-import { targetId } from "../targets";
+import {
+  buildTargetSelectedBlocks,
+  resolveTargetValue,
+  targetSelectedText,
+} from "../target-clarification";
+import { targetId, type SlackSessionTarget } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
 import { hasInlinePromptOptions, resolveInlinePromptOptions } from "../inline-flags";
@@ -42,6 +46,35 @@ interface TargetSelectionRequest {
   threadTs?: string;
   selectedBy: string;
   selectionSource: "picker" | "quick_pick";
+}
+
+/**
+ * Replace the clarification message with a record of the chosen target so its
+ * picker and quick-pick buttons stop inviting a second selection. Best effort:
+ * a failed update leaves a stale picker, which must not stop the launch.
+ */
+async function retireTargetClarificationPrompt(
+  env: Env,
+  channel: string,
+  messageTs: string,
+  target: SlackSessionTarget,
+  traceId: string | undefined
+): Promise<void> {
+  const result = await updateMessage(
+    env.SLACK_BOT_TOKEN,
+    channel,
+    messageTs,
+    targetSelectedText(target),
+    { blocks: buildTargetSelectedBlocks(target) }
+  );
+  if (!result.ok) {
+    log.warn("slack.target_clarification.retire_failed", {
+      trace_id: traceId,
+      channel,
+      message_ts: messageTs,
+      slack_error: result.error,
+    });
+  }
 }
 
 export async function handleTargetSelection(
@@ -217,6 +250,9 @@ export async function handleTargetSelection(
     target_kind: target.kind,
     target_id: targetId(target),
   });
+  // Past every early return: the selection is final, so retire the picker
+  // before announcing the launch.
+  await retireTargetClarificationPrompt(env, channel, messageTs, target, traceId);
   scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, "Starting work...", {
     thread_ts: threadKey,

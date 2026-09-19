@@ -8,6 +8,7 @@
  * the user types, the quick-pick buttons, and the message blocks themselves.
  */
 
+import { escapeMrkdwnText } from "@open-inspect/shared/slack";
 import { getAvailableRepos, filterReposByQuery } from "./classifier/repos";
 import { getEnvironmentById } from "./classifier/environments";
 import type { Environment } from "@open-inspect/shared/types/environments";
@@ -19,6 +20,7 @@ import {
   NO_REPOSITORY_TARGET_LABEL,
   NO_REPOSITORY_TARGET_VALUE,
   parseTargetValue,
+  targetLabel,
   targetValue,
   type SlackSessionTarget,
 } from "./targets";
@@ -385,4 +387,27 @@ export function buildTargetClarificationBlocks(
   });
 
   return blocks;
+}
+
+/** Plain-text fallback (notifications, clients without block support) for {@link buildTargetSelectedBlocks}. */
+export function targetSelectedText(target: SlackSessionTarget): string {
+  return `Using ${escapeMrkdwnText(targetLabel(target))}`;
+}
+
+/**
+ * Blocks that replace the clarification message once a target is picked. Slack
+ * leaves the picker and quick-pick buttons interactive forever, so a resolved
+ * clarification still reads as an open question the user can answer again;
+ * collapsing the message to a record of the choice makes the selection final.
+ */
+export function buildTargetSelectedBlocks(target: SlackSessionTarget): SlackSectionBlock[] {
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `Using *${escapeMrkdwnText(targetLabel(target))}*`,
+      },
+    },
+  ];
 }
