@@ -472,13 +472,24 @@ variable "daytona_api_key" {
 }
 
 variable "daytona_base_snapshot" {
-  description = "Named Daytona snapshot used for fresh sandbox creation"
+  description = "Name prefix for the Terraform-managed Daytona base snapshot"
   type        = string
   default     = ""
 
   validation {
     condition     = var.sandbox_provider != "daytona" || length(var.daytona_base_snapshot) > 0
     error_message = "daytona_base_snapshot must be set when sandbox_provider = 'daytona'."
+  }
+}
+
+variable "daytona_base_snapshot_memory_gib" {
+  description = "Memory in GiB reserved by sandboxes created from the Daytona base snapshot"
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.daytona_base_snapshot_memory_gib >= 1 && var.daytona_base_snapshot_memory_gib == floor(var.daytona_base_snapshot_memory_gib)
+    error_message = "daytona_base_snapshot_memory_gib must be a positive integer."
   }
 }
 

@@ -17,7 +17,8 @@ module "daytona_infra" {
   api_key       = var.daytona_api_key
   api_url       = var.daytona_api_url
   target        = var.daytona_target
-  snapshot_name = "${var.daytona_base_snapshot}-${substr(data.external.daytona_source_hash[0].result.hash, 0, 16)}"
+  snapshot_name = "${var.daytona_base_snapshot}-m${var.daytona_base_snapshot_memory_gib}-${substr(data.external.daytona_source_hash[0].result.hash, 0, 16)}"
+  memory_gib    = var.daytona_base_snapshot_memory_gib
   deploy_path   = "${var.project_root}/packages/daytona-infra"
   source_hash   = data.external.daytona_source_hash[0].result.hash
 }

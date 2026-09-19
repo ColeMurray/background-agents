@@ -20,6 +20,16 @@ variable "snapshot_name" {
   type        = string
 }
 
+variable "memory_gib" {
+  description = "Memory in GiB reserved by sandboxes created from the snapshot"
+  type        = number
+
+  validation {
+    condition     = var.memory_gib >= 1 && var.memory_gib == floor(var.memory_gib)
+    error_message = "memory_gib must be a positive integer."
+  }
+}
+
 variable "deploy_path" {
   description = "Path to packages/daytona-infra"
   type        = string

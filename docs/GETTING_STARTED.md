@@ -173,7 +173,9 @@ Create an R2 API Token:
    [sandbox image workflow](../packages/sandbox-images/README.md) for dependency updates and manual
    builds.
 4. Set `sandbox_provider = "daytona"` in `terraform.tfvars`
-5. Set `daytona_api_url`, `daytona_api_key`, and `daytona_base_snapshot` in `terraform.tfvars`
+5. Set `daytona_api_url`, `daytona_api_key`, and `daytona_base_snapshot` in `terraform.tfvars`.
+   `daytona_base_snapshot_memory_gib` controls the memory inherited by sandboxes created from the
+   snapshot and defaults to `2`.
 
 The control plane calls the Daytona REST API directly — no shim service to deploy.
 
@@ -542,6 +544,7 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # daytona_api_url           = "https://app.daytona.io/api"
 # daytona_api_key           = "your-daytona-api-key"
 # daytona_base_snapshot     = "your-snapshot-name"
+# daytona_base_snapshot_memory_gib = 2
 
 # Vercel Sandboxes (only required when sandbox_provider = "vercel")
 # vercel_sandbox_token      = "your-vercel-token"
