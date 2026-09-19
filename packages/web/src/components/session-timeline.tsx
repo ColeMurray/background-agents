@@ -92,8 +92,6 @@ export function SessionTimeline({
     Map<string, ReadonlySet<string>>
   >(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const topSentinelRef = useRef<HTMLDivElement>(null);
-  const hasScrolledRef = useRef(false);
   const isNearBottomRef = useRef(true);
   const virtualRows = useMemo(
     () =>
@@ -121,46 +119,15 @@ export function SessionTimeline({
   const totalSize = rowVirtualizer.getTotalSize();
 
   const handleScroll = useCallback(() => {
-    hasScrolledRef.current = true;
     const el = scrollContainerRef.current;
     if (el) {
       isNearBottomRef.current =
         el.scrollHeight - el.scrollTop - el.clientHeight <
         TIMELINE_VIRTUALIZER_DEFAULTS.scrollEndThreshold;
+      if (el.scrollTop <= el.clientHeight && el.scrollHeight > el.clientHeight) {
+        onLoadOlder();
+      }
     }
-  }, []);
-
-  useEffect(() => {
-    const sentinel = topSentinelRef.current;
-    const container = scrollContainerRef.current;
-    if (!sentinel || !container) return;
-
-    let observer: IntersectionObserver;
-    const observeSentinel = () => {
-      observer?.disconnect();
-      observer = new IntersectionObserver(
-        ([entry]) => {
-          if (
-            entry.isIntersecting &&
-            hasScrolledRef.current &&
-            container.scrollHeight > container.clientHeight
-          ) {
-            onLoadOlder();
-          }
-        },
-        { root: container, rootMargin: `${container.clientHeight}px 0px 0px`, threshold: 0.1 }
-      );
-      observer.observe(sentinel);
-    };
-
-    observeSentinel();
-    const resizeObserver =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(observeSentinel);
-    resizeObserver?.observe(container);
-    return () => {
-      observer.disconnect();
-      resizeObserver?.disconnect();
-    };
   }, [onLoadOlder]);
 
   useLayoutEffect(() => {
@@ -314,7 +281,6 @@ export function SessionTimeline({
       className="relative h-full overflow-y-auto overflow-x-hidden p-3 [overflow-anchor:none] sm:p-4"
     >
       <div className="relative w-full min-w-0 max-w-3xl mx-auto">
-        <div ref={topSentinelRef} className="absolute left-0 top-0 h-1 w-full" />
         {showSkeleton ? (
           <TimelineSkeleton />
         ) : (

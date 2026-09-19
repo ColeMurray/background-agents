@@ -19,13 +19,6 @@ const baseTimelineProps = {
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(800);
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(800);
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      observe() {}
-      disconnect() {}
-    }
-  );
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
     configurable: true,
     value: vi.fn(),
@@ -293,70 +286,28 @@ describe("timeline auto-scrolling", () => {
     expect(viewportOffsetAfter).toBe(viewportOffsetBefore);
   });
 
-  it("prefetches history one viewport before the top and keeps observing after loading", () => {
-    const notifyResize = mockResizeObservers();
-    const metrics = { clientHeight: 400, scrollHeight: 800, scrollTop: 0 };
+  it("prefetches history within one viewport of the top only while scrolling", () => {
+    const metrics = { clientHeight: 400, scrollHeight: 2_000, scrollTop: 401 };
     mockTimelineScrollMetrics(metrics);
-    const observedElements: Element[] = [];
-    const observerOptions: IntersectionObserverInit[] = [];
-    let notifyIntersection = (_isIntersecting: boolean) => {};
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
-          if (options) observerOptions.push(options);
-          notifyIntersection = (isIntersecting) => {
-            callback(
-              [{ isIntersecting } as IntersectionObserverEntry],
-              this as unknown as IntersectionObserver
-            );
-          };
-        }
-        observe(element: Element) {
-          observedElements.push(element);
-        }
-        disconnect() {}
-      }
-    );
     const onLoadOlder = vi.fn();
     const { container, rerender } = render(
-      <SessionTimeline {...baseTimelineProps} events={[]} showSkeleton onLoadOlder={onLoadOlder} />
+      <SessionTimeline {...baseTimelineProps} events={[]} onLoadOlder={onLoadOlder} />
     );
     const timeline = container.firstElementChild as HTMLDivElement;
-    const sentinel = observedElements[0];
-
-    notifyIntersection(true);
+    fireEvent.scroll(timeline);
     expect(onLoadOlder).not.toHaveBeenCalled();
 
-    rerender(
-      <SessionTimeline
-        {...baseTimelineProps}
-        events={[]}
-        showSkeleton={false}
-        onLoadOlder={onLoadOlder}
-      />
-    );
+    metrics.scrollTop = 400;
     fireEvent.scroll(timeline);
-    notifyIntersection(true);
-
-    expect(observedElements).toEqual([sentinel]);
-    expect(sentinel.isConnected).toBe(true);
-    expect(observerOptions[0]).toMatchObject({
-      root: timeline,
-      rootMargin: "400px 0px 0px",
-      threshold: 0.1,
-    });
     expect(onLoadOlder).toHaveBeenCalledOnce();
 
-    metrics.clientHeight = 600;
-    act(() => notifyResize(timeline, metrics.clientHeight));
+    const nextOnLoadOlder = vi.fn();
+    rerender(<SessionTimeline {...baseTimelineProps} events={[]} onLoadOlder={nextOnLoadOlder} />);
+    expect(nextOnLoadOlder).not.toHaveBeenCalled();
 
-    expect(observedElements).toEqual([sentinel, sentinel]);
-    expect(observerOptions[1]).toMatchObject({
-      root: timeline,
-      rootMargin: "600px 0px 0px",
-      threshold: 0.1,
-    });
+    metrics.scrollTop = 399;
+    fireEvent.scroll(timeline);
+    expect(nextOnLoadOlder).toHaveBeenCalledOnce();
   });
 
   it("does not scroll the timeline when the pending prompt stack changes", () => {
