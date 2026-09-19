@@ -3,17 +3,21 @@
 from unittest.mock import MagicMock
 
 from sandbox_runtime.constants import (
-    CLAUDE_BASH_MAX_TIMEOUT_SECONDS,
     DEFAULT_SANDBOX_TIMEOUT_SECONDS,
     MAX_SNAPSHOT_RESERVE_SECONDS,
     SANDBOX_TIMEOUT_ENV_VAR,
     SNAPSHOT_RESERVE_FRACTION,
 )
 from sandbox_runtime.harness import HarnessId
+from sandbox_runtime.harness.claude_env import (
+    BASH_MAX_TIMEOUT_ENV_VAR,
+    bash_timeout_ceiling_seconds,
+    stream_silence_budget_seconds,
+)
 from sandbox_runtime.prompt_budgets import (
     INACTIVITY_TIMEOUT_MAX_SECONDS,
     INACTIVITY_TIMEOUT_MIN_SECONDS,
-    INACTIVITY_TIMEOUT_SECONDS,
+    OPENCODE_INACTIVITY_TIMEOUT_SECONDS,
     SSE_INACTIVITY_TIMEOUT_ENV_VAR,
     resolve_prompt_limits,
 )
@@ -35,23 +39,62 @@ class TestInactivityTimeout:
     def test_the_default_is_the_one_the_harness_stream_needs(self, monkeypatch):
         monkeypatch.delenv(SSE_INACTIVITY_TIMEOUT_ENV_VAR, raising=False)
 
-        for harness in HarnessId:
-            limits = resolve_prompt_limits(MagicMock(), harness)
-            assert limits.inactivity_timeout_seconds == INACTIVITY_TIMEOUT_SECONDS[harness]
+        opencode = resolve_prompt_limits(MagicMock(), HarnessId.OPENCODE)
+        claude = resolve_prompt_limits(MagicMock(), HarnessId.CLAUDE)
 
         # OpenCode renews the budget on any SSE traffic; the Claude SDK says
         # nothing for the length of a tool call, which has to fit inside it.
-        assert (
-            INACTIVITY_TIMEOUT_SECONDS[HarnessId.CLAUDE]
-            > INACTIVITY_TIMEOUT_SECONDS[HarnessId.OPENCODE]
+        assert opencode.inactivity_timeout_seconds == OPENCODE_INACTIVITY_TIMEOUT_SECONDS
+        assert claude.inactivity_timeout_seconds == stream_silence_budget_seconds()
+        assert claude.inactivity_timeout_seconds > bash_timeout_ceiling_seconds()
+
+    def test_the_claude_budget_follows_the_ceiling_its_own_child_enforces(self, monkeypatch):
+        """The regression this guards is the one that prompted it: a budget
+        under the child's own Bash ceiling fails turns whose only sin is
+        running a long command, because the stream is silent for the whole
+        tool call. The environment that raises the child's ceiling is the
+        environment this budget is resolved from, so the two cannot drift.
+        """
+        monkeypatch.delenv(SSE_INACTIVITY_TIMEOUT_ENV_VAR, raising=False)
+        monkeypatch.setenv(BASH_MAX_TIMEOUT_ENV_VAR, "1200000")
+
+        limits = resolve_prompt_limits(MagicMock(), HarnessId.CLAUDE)
+
+        assert bash_timeout_ceiling_seconds() == 1200.0
+        assert limits.inactivity_timeout_seconds > 1200.0
+
+    def test_the_claude_budget_is_not_overridden_below_that_ceiling(self, monkeypatch):
+        """The old default is still a supported override; for Claude it would
+        undercut the child's own ceiling, so it is clamped up and warned on.
+        """
+        monkeypatch.setenv(SSE_INACTIVITY_TIMEOUT_ENV_VAR, "300")
+        log = MagicMock()
+
+        limits = resolve_prompt_limits(log, HarnessId.CLAUDE)
+
+        assert limits.inactivity_timeout_seconds == stream_silence_budget_seconds()
+        assert any(call.args == ("bridge.timeout_clamped",) for call in log.warn.call_args_list)
+
+    def test_a_raised_claude_budget_is_not_capped_below_its_ceiling(self, monkeypatch):
+        """A child configured for very long tool calls carries the ceiling up
+        with it, past the bound that applies to an ordinary override.
+        """
+        monkeypatch.delenv(SSE_INACTIVITY_TIMEOUT_ENV_VAR, raising=False)
+        monkeypatch.setenv(
+            BASH_MAX_TIMEOUT_ENV_VAR, str(int(INACTIVITY_TIMEOUT_MAX_SECONDS * 1000))
         )
 
-    def test_the_claude_budget_outlasts_the_longest_tool_call_the_cli_allows(self):
-        """The regression this guards is the one that prompted it: a budget
-        under the CLI's own Bash ceiling fails turns whose only sin is running
-        a long command, because the stream is silent for the whole tool call.
-        """
-        assert INACTIVITY_TIMEOUT_SECONDS[HarnessId.CLAUDE] > CLAUDE_BASH_MAX_TIMEOUT_SECONDS
+        limits = resolve_prompt_limits(MagicMock(), HarnessId.CLAUDE)
+
+        assert limits.inactivity_timeout_seconds > INACTIVITY_TIMEOUT_MAX_SECONDS
+
+    def test_the_opencode_budget_ignores_the_claude_child_ceiling(self, monkeypatch):
+        monkeypatch.delenv(SSE_INACTIVITY_TIMEOUT_ENV_VAR, raising=False)
+        monkeypatch.setenv(BASH_MAX_TIMEOUT_ENV_VAR, "1200000")
+
+        limits = resolve_prompt_limits(MagicMock(), HarnessId.OPENCODE)
+
+        assert limits.inactivity_timeout_seconds == OPENCODE_INACTIVITY_TIMEOUT_SECONDS
 
     def test_a_value_in_range_is_taken_as_given(self, monkeypatch):
         monkeypatch.setenv(SSE_INACTIVITY_TIMEOUT_ENV_VAR, "120")
@@ -77,7 +120,7 @@ class TestInactivityTimeout:
 
         limits = resolve_prompt_limits(log, HARNESS)
 
-        assert limits.inactivity_timeout_seconds == INACTIVITY_TIMEOUT_SECONDS[HARNESS]
+        assert limits.inactivity_timeout_seconds == OPENCODE_INACTIVITY_TIMEOUT_SECONDS
         assert _invalid_details(log) == ["invalid value 'soon', using default"]
 
     def test_a_not_a_number_value_falls_back_to_the_default(self, monkeypatch):
@@ -87,7 +130,7 @@ class TestInactivityTimeout:
 
         limits = resolve_prompt_limits(log, HARNESS)
 
-        assert limits.inactivity_timeout_seconds == INACTIVITY_TIMEOUT_SECONDS[HARNESS]
+        assert limits.inactivity_timeout_seconds == OPENCODE_INACTIVITY_TIMEOUT_SECONDS
         assert _invalid_details(log) == ["invalid value 'nan', using default"]
 
     def test_an_infinite_value_falls_back_to_the_default(self, monkeypatch):
@@ -96,7 +139,7 @@ class TestInactivityTimeout:
 
         limits = resolve_prompt_limits(log, HARNESS)
 
-        assert limits.inactivity_timeout_seconds == INACTIVITY_TIMEOUT_SECONDS[HARNESS]
+        assert limits.inactivity_timeout_seconds == OPENCODE_INACTIVITY_TIMEOUT_SECONDS
         assert _invalid_details(log) == ["invalid value 'inf', using default"]
 
 
