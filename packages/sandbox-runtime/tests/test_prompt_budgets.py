@@ -88,6 +88,22 @@ class TestInactivityTimeout:
 
         assert limits.inactivity_timeout_seconds > INACTIVITY_TIMEOUT_MAX_SECONDS
 
+    def test_the_claude_budget_can_still_be_raised_above_what_it_derived(self, monkeypatch):
+        """Raising it has no ceiling of its own. A fixed cap would pin the
+        budget to its floor once the child's own tool calls outlast that cap,
+        leaving the override no room to move at all.
+        """
+        monkeypatch.setenv(BASH_MAX_TIMEOUT_ENV_VAR, "4000000")
+        derived = stream_silence_budget_seconds()
+        monkeypatch.setenv(SSE_INACTIVITY_TIMEOUT_ENV_VAR, str(int(derived + 700)))
+        log = MagicMock()
+
+        limits = resolve_prompt_limits(log, HarnessId.CLAUDE)
+
+        assert derived > INACTIVITY_TIMEOUT_MAX_SECONDS
+        assert limits.inactivity_timeout_seconds == derived + 700
+        assert not any(call.args == ("bridge.timeout_clamped",) for call in log.warn.call_args_list)
+
     def test_the_opencode_budget_ignores_the_claude_child_ceiling(self, monkeypatch):
         monkeypatch.delenv(SSE_INACTIVITY_TIMEOUT_ENV_VAR, raising=False)
         monkeypatch.setenv(BASH_MAX_TIMEOUT_ENV_VAR, "1200000")

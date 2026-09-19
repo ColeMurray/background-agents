@@ -39,7 +39,7 @@ INACTIVITY_TIMEOUT_MIN_SECONDS = 5.0
 INACTIVITY_TIMEOUT_MAX_SECONDS = 3600.0
 
 
-def _inactivity_bounds(harness: HarnessId) -> tuple[float, float, float]:
+def _inactivity_bounds(harness: HarnessId) -> tuple[float, float, float | None]:
     """Default, floor and ceiling for this harness's silence budget.
 
     The Claude SDK has no heartbeat and renews the budget only on a message,
@@ -48,6 +48,10 @@ def _inactivity_bounds(harness: HarnessId) -> tuple[float, float, float]:
     reads, so the two cannot disagree: a child configured for longer tool
     calls carries the budget up with it. A session may raise that budget, but
     not cut it below what its own child can legitimately take.
+
+    Raising it has no ceiling of its own: the prompt deadline already bounds
+    any silence, and a fixed cap here would pin the budget to its floor for a
+    child whose tool calls can outlast that cap.
     """
     if harness is not HarnessId.CLAUDE:
         return (
@@ -56,7 +60,7 @@ def _inactivity_bounds(harness: HarnessId) -> tuple[float, float, float]:
             INACTIVITY_TIMEOUT_MAX_SECONDS,
         )
     budget = stream_silence_budget_seconds()
-    return budget, budget, max(INACTIVITY_TIMEOUT_MAX_SECONDS, budget)
+    return budget, budget, None
 
 
 def resolve_prompt_limits(log: StructuredLogger, harness: HarnessId) -> PromptLimits:
@@ -96,8 +100,9 @@ def _resolve_bounded_seconds(
     name: str,
     default: float,
     min_value: float,
-    max_value: float,
+    max_value: float | None,
 ) -> float:
+    """Resolve ``name`` within its bounds; ``max_value`` of ``None`` is unbounded."""
     raw = os.environ.get(name)
     if raw is None or raw == "":
         value = default
@@ -125,7 +130,7 @@ def _resolve_bounded_seconds(
             detail=f"below min ({min_value}s), clamped",
         )
         value = min_value
-    elif value > max_value:
+    elif max_value is not None and value > max_value:
         log.warn(
             "bridge.timeout_clamped",
             timeout_name=name,
@@ -139,7 +144,7 @@ def _resolve_bounded_seconds(
         timeout_name=name,
         timeout_ms=int(value * 1000),
         min_ms=int(min_value * 1000),
-        max_ms=int(max_value * 1000),
+        max_ms=int(max_value * 1000) if max_value is not None else None,
     )
     return value
 
