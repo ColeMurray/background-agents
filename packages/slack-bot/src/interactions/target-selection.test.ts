@@ -49,8 +49,7 @@ vi.mock("../sessions/session-launcher", () => ({
 
 vi.mock("../target-clarification", () => ({
   resolveTargetValue: vi.fn(),
-  targetSelectedText: vi.fn((target) => `Using ${target.repo?.fullName ?? "no repository"}`),
-  buildTargetSelectedBlocks: vi.fn(() => [{ type: "section" }]),
+  targetSelectedText: vi.fn((target) => `Using *${target.repo?.fullName ?? "no repository"}*`),
 }));
 
 vi.mock("../user-identity", () => ({
@@ -361,16 +360,21 @@ describe("handleTargetSelection", () => {
 
     await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
 
+    // No blocks argument: that is what makes Slack drop the picker.
     expect(updateMessage).toHaveBeenCalledWith(
       "xoxb-test",
       "C123",
       CLARIFICATION_MESSAGE_TS,
-      "Using acme/app",
-      { blocks: [{ type: "section" }] }
+      "Using *acme/app*"
     );
-    // The picker is retired only once the launch has committed.
+    // The picker is retired only once the launch has committed...
     expect(vi.mocked(updateMessage).mock.invocationCallOrder[0]).toBeGreaterThan(
       vi.mocked(startSessionAndSendPrompt).mock.invocationCallOrder[0]
+    );
+    // ...and never holds the pending request open while it runs, which would
+    // let a concurrent click launch a second session.
+    expect(vi.mocked(deletePendingRequest).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(updateMessage).mock.invocationCallOrder[0]
     );
   });
 

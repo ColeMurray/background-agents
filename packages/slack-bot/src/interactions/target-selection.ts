@@ -26,11 +26,7 @@ import {
   startSessionAndSendPrompt,
   type SlackLaunchSettings,
 } from "../sessions/session-launcher";
-import {
-  buildTargetSelectedBlocks,
-  resolveTargetValue,
-  targetSelectedText,
-} from "../target-clarification";
+import { resolveTargetValue, targetSelectedText } from "../target-clarification";
 import { targetId, type SlackSessionTarget } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
@@ -50,8 +46,9 @@ interface TargetSelectionRequest {
 
 /**
  * Replace the clarification message with a record of the chosen target so its
- * picker and quick-pick buttons stop inviting a second selection. Best effort:
- * a failed update leaves a stale picker, which must not fail a launched session.
+ * picker and quick-pick buttons stop inviting a second selection. Passing no
+ * `blocks` is load-bearing — that is what removes them. Best effort: a failed
+ * update leaves a stale picker, which must not fail a launched session.
  */
 async function retireTargetClarificationPrompt(
   env: Env,
@@ -64,8 +61,7 @@ async function retireTargetClarificationPrompt(
     env.SLACK_BOT_TOKEN,
     channel,
     messageTs,
-    targetSelectedText(target),
-    { blocks: buildTargetSelectedBlocks(target) }
+    targetSelectedText(target)
   );
   if (!result.ok) {
     log.warn("slack.target_clarification.retire_failed", {
@@ -285,12 +281,15 @@ export async function handleTargetSelection(
   // launch has committed.
   if (!sessionResult) return;
 
-  await retireTargetClarificationPrompt(env, channel, messageTs, target, traceId);
+  // Retire the authoritative state first. The Slack call below can burn the
+  // client's full request timeout, and a concurrent click that reads a
+  // still-live pending request would launch a second session.
   if (requestId) {
     await deletePendingRequest(env, requestId);
   } else {
     await deleteLegacyPendingRequest(env, channel, threadKey);
   }
+  await retireTargetClarificationPrompt(env, channel, messageTs, target, traceId);
   if (ackTs) {
     await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, "Starting work...", {
       blocks: buildWorkingMessageBlocks({

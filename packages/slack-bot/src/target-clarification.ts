@@ -389,25 +389,16 @@ export function buildTargetClarificationBlocks(
   return blocks;
 }
 
-/** Plain-text fallback (notifications, clients without block support) for {@link buildTargetSelectedBlocks}. */
-export function targetSelectedText(target: SlackSessionTarget): string {
-  return `Using ${escapeMrkdwnText(targetLabel(target))}`;
-}
-
 /**
- * Blocks that replace the clarification message once a target is picked. Slack
- * leaves the picker and quick-pick buttons interactive forever, so a resolved
+ * The clarification message's text once a target is picked. Slack leaves the
+ * picker and quick-pick buttons interactive forever, so a resolved
  * clarification still reads as an open question the user can answer again;
  * collapsing the message to a record of the choice makes the selection final.
+ *
+ * Passed to `chat.update` as `text` with no `blocks`, which is what drops the
+ * picker: Slack removes a message's existing blocks when `text` is supplied
+ * without them.
  */
-export function buildTargetSelectedBlocks(target: SlackSessionTarget): SlackSectionBlock[] {
-  return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `Using *${escapeMrkdwnText(targetLabel(target))}*`,
-      },
-    },
-  ];
+export function targetSelectedText(target: SlackSessionTarget): string {
+  return `Using *${escapeMrkdwnText(targetLabel(target))}*`;
 }

@@ -2012,13 +2012,9 @@ describe("POST /interactions", () => {
 
     const updateBodies = slackApiBodies(slackFetch, "chat.update");
     expect(updateBodies).toEqual([
-      // The clarification message loses its picker before the launch is announced.
-      expect.objectContaining({
-        channel: "C123",
-        ts: "111.222",
-        text: "Using acme/app",
-        blocks: [{ type: "section", text: { type: "mrkdwn", text: "Using *acme/app*" } }],
-      }),
+      // The clarification message collapses to text with no blocks, which is
+      // what makes Slack drop its picker.
+      { channel: "C123", ts: "111.222", text: "Using *acme/app*" },
       expect.objectContaining({
         channel: "C123",
         ts: "222.333",

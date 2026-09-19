@@ -31,7 +31,6 @@ import {
   buildTargetClarificationBlocks,
   buildTargetQuickPickButtons,
   baseActionId,
-  buildTargetSelectedBlocks,
   countClarificationOptions,
   getTargetClarificationOptions,
   parseTargetInteractionRequestId,
@@ -533,23 +532,18 @@ describe("buildTargetClarificationBlocks", () => {
   });
 });
 
-describe("buildTargetSelectedBlocks", () => {
-  it("leaves no interactive element behind", () => {
-    const blocks = buildTargetSelectedBlocks(repoTarget("acme/web"));
-
-    expect(blocks).toEqual([
-      { type: "section", text: { type: "mrkdwn", text: "Using *acme/web*" } },
-    ]);
-    expect(JSON.stringify(blocks)).not.toContain("action_id");
+describe("targetSelectedText", () => {
+  it("names the chosen repository", () => {
+    expect(targetSelectedText(repoTarget("acme/web"))).toBe("Using *acme/web*");
   });
 
   it("names the no-repository choice", () => {
-    expect(targetSelectedText(noRepositoryTarget)).toBe("Using No repository");
+    expect(targetSelectedText(noRepositoryTarget)).toBe("Using *No repository*");
   });
 
   it("escapes an environment name so it cannot render as a mention", () => {
-    const blocks = buildTargetSelectedBlocks(environmentTarget("env_1", "<!channel> staging"));
-
-    expect(blocks[0].text.text).toBe("Using *&lt;!channel&gt; staging*");
+    expect(targetSelectedText(environmentTarget("env_1", "<!channel> staging"))).toBe(
+      "Using *&lt;!channel&gt; staging*"
+    );
   });
 });
