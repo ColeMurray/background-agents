@@ -26,7 +26,7 @@ vi.mock(import("@open-inspect/shared/slack"), async (importOriginal) => ({
 }));
 
 vi.mock("../messages/blocks", () => ({
-  buildWorkingMessageBlocks: vi.fn(() => []),
+  buildWorkingMessage: vi.fn(() => ({ text: "Starting work...", blocks: [] })),
   formatSessionDefaultsNotice: vi.fn(() => undefined),
   scheduleStartingStatus: vi.fn(),
 }));
@@ -42,11 +42,8 @@ vi.mock("../sessions/session-launcher", () => ({
   loadAuthoritativeSlackLaunchSettings: vi.fn(),
   startSessionAndSendPrompt: vi.fn(async () => ({
     sessionId: "session-1",
-    turnPlan: {
-      sessionDefaults: { model: "openai/gpt-5.4", reasoningEffort: "high" },
-      promptOverrides: {},
-      effective: { model: "openai/gpt-5.4", reasoningEffort: "high" },
-    },
+    sessionDefaults: { model: "openai/gpt-5.4", reasoningEffort: "high" },
+    differsFromUserDefaults: false,
   })),
 }));
 
@@ -182,7 +179,9 @@ describe("handleTargetSelection", () => {
             downloadUrl: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
           },
         ],
-        turnPlan: TURN_PLAN,
+        // A record stored before `launchPlan` existed still launches on the
+        // model it resolved to.
+        launchPlan: { sessionDefaults: TURN_PLAN.effective },
       })
     );
     expect(deletePendingRequest).toHaveBeenCalledWith(env, REQUEST_ID);
@@ -267,16 +266,8 @@ describe("handleTargetSelection", () => {
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        turnPlan: {
+        launchPlan: {
           sessionDefaults: {
-            model: "anthropic/claude-sonnet-4-6",
-            reasoningEffort: "max",
-          },
-          promptOverrides: {
-            model: "openai/gpt-5.6-sol",
-            reasoningEffort: "high",
-          },
-          effective: {
             model: "openai/gpt-5.6-sol",
             reasoningEffort: "high",
           },

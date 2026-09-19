@@ -61,6 +61,25 @@ export const resolvedTurnPlanSchema = z
 
 export type ResolvedTurnPlan = z.infer<typeof resolvedTurnPlanSchema>;
 
+/**
+ * What a session launch does with model settings, which is not the same
+ * question a single turn answers: `sessionDefaults` is persisted and inherited
+ * by every later follow-up, while `promptOverrides` applies to the opening
+ * prompt alone. Callers express intent here; the launcher is the authority
+ * that checks it against the models enabled at launch time.
+ */
+export const sessionLaunchPlanSchema = z.object({
+  sessionDefaults: modelSelectionSchema,
+  promptOverrides: z
+    .object({
+      model: validModelSchema.optional(),
+      reasoningEffort: reasoningEffortSchema.optional(),
+    })
+    .optional(),
+});
+
+export type SessionLaunchPlan = z.infer<typeof sessionLaunchPlanSchema>;
+
 export type ParseInlinePromptFlagsResult =
   | { ok: true; text: string; options: InlinePromptOptions }
   | { ok: false; error: string };
@@ -122,16 +141,31 @@ export function hasInlinePromptOptions(options: InlinePromptOptions): boolean {
   return options.model !== undefined || options.reasoningEffort !== undefined;
 }
 
+/** A model paired with the reasoning effort it runs at. */
+export interface ModelSelection {
+  model: ValidModel;
+  reasoningEffort?: ReasoningEffort;
+}
+
 /**
- * True when the resolved turn runs on something other than the user's App Home
- * defaults — either because inline flags asked for it, or because the stored
- * preference is no longer an enabled model.
+ * Coerce stored preferences — which are plain strings from KV, D1, or a Slack
+ * thread mapping — into a valid model and a reasoning effort that model
+ * supports. Does not consider which models are currently enabled.
  */
-export function divergesFromUserDefaults(plan: ResolvedTurnPlan): boolean {
-  return (
-    plan.effective.model !== plan.sessionDefaults.model ||
-    plan.effective.reasoningEffort !== plan.sessionDefaults.reasoningEffort
-  );
+export function normalizeModelSelection(defaults: {
+  model: string;
+  reasoningEffort?: string;
+}): ModelSelection {
+  const model = getValidModelOrDefault(defaults.model);
+  const reasoningEffort =
+    defaults.reasoningEffort && isValidReasoningEffort(model, defaults.reasoningEffort)
+      ? (defaults.reasoningEffort as ReasoningEffort)
+      : getDefaultReasoningEffort(model);
+  return { model, reasoningEffort };
+}
+
+export function sameModelSelection(a: ModelSelection, b: ModelSelection): boolean {
+  return a.model === b.model && a.reasoningEffort === b.reasoningEffort;
 }
 
 /** Resolve one-turn overrides against the session defaults and enabled model list. */
@@ -140,11 +174,8 @@ export function resolveInlinePromptOptions(
   defaults: { model: string; reasoningEffort?: string },
   enabledModels: readonly ValidModel[]
 ): ResolveInlinePromptOptionsResult {
-  const sessionModel = getValidModelOrDefault(defaults.model);
-  const sessionReasoningEffort =
-    defaults.reasoningEffort && isValidReasoningEffort(sessionModel, defaults.reasoningEffort)
-      ? (defaults.reasoningEffort as ReasoningEffort)
-      : getDefaultReasoningEffort(sessionModel);
+  const { model: sessionModel, reasoningEffort: sessionReasoningEffort } =
+    normalizeModelSelection(defaults);
   let modelOverride: ValidModel | undefined;
   if (options.model) {
     if (!isValidModel(options.model)) {

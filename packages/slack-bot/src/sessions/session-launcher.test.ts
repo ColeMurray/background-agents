@@ -217,16 +217,8 @@ describe("startSessionAndSendPrompt", () => {
       threadTs: "111.222",
       messageText: "Investigate the failing deploy",
       actor,
-      turnPlan: {
+      launchPlan: {
         sessionDefaults: {
-          model: "anthropic/claude-haiku-4-5",
-          reasoningEffort: "max",
-        },
-        promptOverrides: {
-          model: "anthropic/claude-sonnet-4-6",
-          reasoningEffort: "max",
-        },
-        effective: {
           model: "anthropic/claude-sonnet-4-6",
           reasoningEffort: "max",
         },
@@ -257,6 +249,90 @@ describe("startSessionAndSendPrompt", () => {
       "max",
       undefined
     );
+  });
+
+  it("keeps a launch plan's prompt overrides off the session's stored defaults", async () => {
+    const env = makeEnv();
+
+    // How a stale-thread recovery launches: the replacement inherits the
+    // thread's defaults while the follow-up's own flags stay one-turn.
+    await startSessionAndSendPrompt(env, {
+      target: repositoryTarget,
+      channel: "C123",
+      threadTs: "111.222",
+      messageText: "now add coverage",
+      actor,
+      launchPlan: {
+        sessionDefaults: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" },
+        promptOverrides: { model: "anthropic/claude-haiku-4-5", reasoningEffort: "max" },
+      },
+    });
+
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" })
+    );
+    expect(deliverPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        model: "anthropic/claude-haiku-4-5",
+        callbackContext: expect.objectContaining({ model: "anthropic/claude-haiku-4-5" }),
+      })
+    );
+    expect(buildThreadSession).toHaveBeenCalledWith(
+      "session-1",
+      repositoryTarget,
+      "anthropic/claude-sonnet-4-6",
+      "max",
+      undefined
+    );
+  });
+
+  it("revalidates a launch plan's model against the models enabled now", async () => {
+    const env = makeEnv();
+    // A deferred target selection can carry a plan resolved much earlier; the
+    // model it names may have been disabled since.
+    vi.mocked(getAvailableModels).mockResolvedValue([
+      { label: "GPT 5.4", value: "openai/gpt-5.4" },
+    ]);
+
+    const result = await startSessionAndSendPrompt(env, {
+      target: repositoryTarget,
+      channel: "C123",
+      threadTs: "111.222",
+      messageText: "Investigate the failing deploy",
+      actor,
+      launchPlan: { sessionDefaults: { model: "anthropic/claude-sonnet-4-6" } },
+    });
+
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ model: "openai/gpt-5.4" })
+    );
+    expect(result).toEqual(
+      expect.objectContaining({ differsFromUserDefaults: false, sessionId: "session-1" })
+    );
+  });
+
+  it("reports when the session's defaults are not the user's App Home defaults", async () => {
+    const env = makeEnv();
+
+    await expect(
+      startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "Investigate the failing deploy",
+        actor,
+        launchPlan: {
+          sessionDefaults: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" },
+        },
+      })
+    ).resolves.toEqual({
+      sessionId: "session-1",
+      sessionDefaults: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" },
+      differsFromUserDefaults: true,
+    });
   });
 
   it("appends configured session instructions to the first prompt", async () => {

@@ -1,7 +1,9 @@
 import { getModelDisplayName } from "@open-inspect/shared/models";
 import { setAssistantThreadStatusBestEffort } from "../activity-status";
-import { divergesFromUserDefaults, type ResolvedTurnPlan } from "../inline-flags";
+import type { ModelSelection } from "../inline-flags";
 import type { Env } from "../types";
+
+const WORKING_MESSAGE_TEXT = "Starting work...";
 
 export type BackgroundTaskScheduler = (promise: Promise<void>) => void;
 
@@ -21,26 +23,41 @@ export function scheduleStartingStatus(
 }
 
 /**
- * Describe a new session's model and reasoning when they differ from the
- * user's App Home defaults. Returns undefined for the common case so the
- * acknowledgement stays bare unless there is something to report.
+ * Describe a session's model and reasoning when they are not the user's App
+ * Home defaults. Returns undefined for the common case so the acknowledgement
+ * stays bare unless there is something to report.
  */
-export function formatSessionDefaultsNotice(plan: ResolvedTurnPlan): string | undefined {
-  if (!divergesFromUserDefaults(plan)) return undefined;
-  const parts = [getModelDisplayName(plan.effective.model)];
-  if (plan.effective.reasoningEffort) parts.push(`${plan.effective.reasoningEffort} reasoning`);
+export function formatSessionDefaultsNotice(launch: {
+  sessionDefaults: ModelSelection;
+  differsFromUserDefaults: boolean;
+}): string | undefined {
+  if (!launch.differsFromUserDefaults) return undefined;
+  const parts = [getModelDisplayName(launch.sessionDefaults.model)];
+  const { reasoningEffort } = launch.sessionDefaults;
+  if (reasoningEffort) parts.push(`${reasoningEffort} reasoning`);
   return `Session defaults: ${parts.join(" · ")}`;
 }
 
-export function buildWorkingMessageBlocks(
+export interface WorkingMessage {
+  /** Also the notification preview and the screen-reader fallback. */
+  text: string;
+  blocks: Array<Record<string, unknown>>;
+}
+
+/**
+ * The whole acknowledgement, so `text` and `blocks` cannot drift apart. Slack
+ * falls back to `text` wherever Block Kit is not rendered, so anything the
+ * blocks say has to be said there too.
+ */
+export function buildWorkingMessage(
   options: { sessionId?: string; webAppUrl?: string; sessionDefaultsNotice?: string } = {}
-): Array<Record<string, unknown>> {
+): WorkingMessage {
   const blocks: Array<Record<string, unknown>> = [
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "Starting work...",
+        text: WORKING_MESSAGE_TEXT,
       },
     },
   ];
@@ -65,5 +82,8 @@ export function buildWorkingMessageBlocks(
       ],
     });
   }
-  return blocks;
+  const text = options.sessionDefaultsNotice
+    ? `${WORKING_MESSAGE_TEXT}\n${options.sessionDefaultsNotice}`
+    : WORKING_MESSAGE_TEXT;
+  return { text, blocks };
 }

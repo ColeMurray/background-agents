@@ -19,8 +19,11 @@ import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import {
   EMPTY_INLINE_PROMPT_OPTIONS,
+  normalizeModelSelection,
   resolveInlinePromptOptions,
-  type ResolvedTurnPlan,
+  sameModelSelection,
+  type ModelSelection,
+  type SessionLaunchPlan,
 } from "../inline-flags";
 
 export interface SlackLaunchSettings {
@@ -91,17 +94,18 @@ export interface StartSessionOptions {
   contextImages?: SlackImageAttachment[];
   /** True when the triggering message had no user text, only images. */
   imageOnly?: boolean;
-  turnPlan?: ResolvedTurnPlan;
+  launchPlan?: SessionLaunchPlan;
   launchSettings?: SlackLaunchSettings;
   traceId?: string;
 }
 
-/**
- * The launch outcome. `turnPlan` is the plan the session was actually created
- * with, which the caller needs because the launcher resolves it when none was
- * supplied.
- */
-export type StartSessionResult = { sessionId: string; turnPlan: ResolvedTurnPlan };
+/** What the session was actually created with, for the acknowledgement. */
+export interface StartSessionResult {
+  sessionId: string;
+  sessionDefaults: ModelSelection;
+  /** True when those are not the user's App Home preferences. */
+  differsFromUserDefaults: boolean;
+}
 
 export async function startSessionAndSendPrompt(
   env: Env,
@@ -120,7 +124,7 @@ export async function startSessionAndSendPrompt(
     images,
     contextImages,
     imageOnly,
-    turnPlan: providedTurnPlan,
+    launchPlan,
     launchSettings: providedLaunchSettings,
     traceId,
   } = options;
@@ -147,23 +151,26 @@ export async function startSessionAndSendPrompt(
     slackConfig,
     userPreferences: userPrefs,
   } = providedLaunchSettings ?? (await loadSlackLaunchSettings(env, actor.userId, traceId));
-  let turnPlan = providedTurnPlan;
-  if (!turnPlan) {
-    const resolvedTurn = resolveInlinePromptOptions(
-      EMPTY_INLINE_PROMPT_OPTIONS,
-      userPrefs,
-      enabledModels
-    );
-    if (!resolvedTurn.ok) {
-      await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, { thread_ts: threadTs });
-      return null;
-    }
-    turnPlan = resolvedTurn.turnPlan;
+  // Whatever the caller asked for is only intent: a plan can be minutes or
+  // hours old by the time a deferred target selection reaches this point, so
+  // the enabled-model set is applied here, against the list just loaded.
+  const requestedDefaults = resolveInlinePromptOptions(
+    EMPTY_INLINE_PROMPT_OPTIONS,
+    launchPlan?.sessionDefaults ?? userPrefs,
+    enabledModels
+  );
+  if (!requestedDefaults.ok) {
+    await postMessage(env.SLACK_BOT_TOKEN, channel, requestedDefaults.error, {
+      thread_ts: threadTs,
+    });
+    return null;
   }
-  // Flags on the message that opens a session pick the tool for the whole job,
-  // so they become the session's defaults rather than a one-prompt override.
-  // Follow-ups in the thread still override a single turn.
-  const { model, reasoningEffort } = turnPlan.effective;
+  const sessionDefaults = requestedDefaults.turnPlan.effective;
+  const { model, reasoningEffort } = sessionDefaults;
+  const differsFromUserDefaults = !sameModelSelection(
+    sessionDefaults,
+    normalizeModelSelection(userPrefs)
+  );
   const preferenceRepo = branchPreferenceRepo(target);
   let branch: string | undefined;
   if (preferenceRepo) {
@@ -196,8 +203,8 @@ export async function startSessionAndSendPrompt(
     channel,
     threadTs,
     repoFullName: targetLabel(target),
-    model: turnPlan.effective.model,
-    reasoningEffort: turnPlan.effective.reasoningEffort,
+    model: launchPlan?.promptOverrides?.model ?? model,
+    reasoningEffort: launchPlan?.promptOverrides?.reasoningEffort ?? reasoningEffort,
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
@@ -212,7 +219,10 @@ export async function startSessionAndSendPrompt(
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),
     callbackContext,
-    // No per-prompt override: the session was just created with this plan.
+    // Normally empty — the session was just created with these settings. It is
+    // set only when recovering a stale thread, where the replacement keeps the
+    // thread's defaults and the follow-up's own flags stay a one-turn override.
+    ...launchPlan?.promptOverrides,
     channel,
     threadTs,
     traceId,
@@ -236,5 +246,5 @@ export async function startSessionAndSendPrompt(
     threadTs,
     buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs)
   );
-  return { sessionId: session.sessionId, turnPlan };
+  return { sessionId: session.sessionId, sessionDefaults, differsFromUserDefaults };
 }

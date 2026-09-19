@@ -24,7 +24,7 @@ import {
 import { createLogger } from "../logger";
 import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import {
-  buildWorkingMessageBlocks,
+  buildWorkingMessage,
   formatSessionDefaultsNotice,
   scheduleStartingStatus,
   type BackgroundTaskScheduler,
@@ -54,10 +54,12 @@ import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-iden
 import {
   EMPTY_INLINE_PROMPT_OPTIONS,
   hasInlinePromptOptions,
+  normalizeModelSelection,
   parseInlinePromptFlags,
   resolveInlinePromptOptions,
   type InlinePromptOptions,
   type ResolvedTurnPlan,
+  type SessionLaunchPlan,
 } from "../inline-flags";
 import { getAuthoritativeModels, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 
@@ -137,6 +139,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   const forwardedContext = formatForwardedContext(forwarded.entries);
   const promptText = forwardedContext + requestText;
   let actor: SlackActorIdentity | undefined;
+
+  let recoveredLaunchPlan: SessionLaunchPlan | undefined;
 
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
@@ -263,12 +267,22 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         thread_ts: threadTs,
       });
       await clearThreadSession(env, channel, threadTs);
+      // The replacement session stands in for the one the thread was already
+      // using, so it inherits that session's model rather than resetting to
+      // App Home preferences, and this message's own flags stay the one-turn
+      // override they would have been had the session still been alive.
+      recoveredLaunchPlan = {
+        sessionDefaults: turnPlan?.sessionDefaults ?? normalizeModelSelection(existingSession),
+        promptOverrides: turnPlan?.promptOverrides,
+      };
     }
   }
 
   let launchSettings: SlackLaunchSettings | undefined;
-  let turnPlan: ResolvedTurnPlan | undefined;
-  if (hasInlineOverrides) {
+  // A recovery keeps the defaults the thread was already running; otherwise
+  // flags on a session-opening message become that session's defaults.
+  let launchPlan: SessionLaunchPlan | undefined = recoveredLaunchPlan;
+  if (!recoveredLaunchPlan && hasInlineOverrides) {
     const authoritativeLaunchSettings = await loadAuthoritativeSlackLaunchSettings(
       env,
       user,
@@ -295,7 +309,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       });
       return;
     }
-    turnPlan = resolvedTurn.turnPlan;
+    launchPlan = { sessionDefaults: resolvedTurn.turnPlan.effective };
     scheduleStartingStatus(scheduleBackground, env, channel, threadTs || ts, traceId);
   }
 
@@ -335,7 +349,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       // Persist where the images live, not the file objects; they are
       // re-fetched from Slack when the user resolves the clarification.
       sourceMessage: images.length > 0 ? { ts, threadTs } : undefined,
-      turnPlan,
+      launchPlan,
       classification: {
         targetId: result.target ? targetId(result.target) : undefined,
         confidence: result.confidence,
@@ -372,9 +386,10 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     target_kind: result.target.kind,
     target_id: targetId(result.target),
   });
-  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, "Starting work...", {
+  const ack = buildWorkingMessage();
+  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, ack.text, {
     thread_ts: threadKey,
-    blocks: buildWorkingMessageBlocks(),
+    blocks: ack.blocks,
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
   scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
@@ -392,18 +407,19 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     images,
     contextImages: threadHistory?.images,
     imageOnly,
-    turnPlan,
+    launchPlan,
     launchSettings,
     traceId,
   });
   if (!sessionResult) return;
   if (ackTs) {
-    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, "Starting work...", {
-      blocks: buildWorkingMessageBlocks({
-        sessionId: sessionResult.sessionId,
-        webAppUrl: env.WEB_APP_URL,
-        sessionDefaultsNotice: formatSessionDefaultsNotice(sessionResult.turnPlan),
-      }),
+    const launched = buildWorkingMessage({
+      sessionId: sessionResult.sessionId,
+      webAppUrl: env.WEB_APP_URL,
+      sessionDefaultsNotice: formatSessionDefaultsNotice(sessionResult),
+    });
+    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, launched.text, {
+      blocks: launched.blocks,
     });
     scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   }

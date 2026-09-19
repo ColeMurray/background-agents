@@ -1284,6 +1284,61 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  it("keeps the thread's session defaults when replacing a stale session", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], {
+      prompt: [{ error: "Session not found" }, { messageId: "msg-2" }],
+      promptStatus: [404, 200],
+    });
+    // "high" is not this model's default effort, so an App Home reset would
+    // show up as "max" on the replacement session.
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "stale-session",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+        createdAt: Date.now(),
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> now add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+      expect.objectContaining({
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+      }),
+    ]);
+    await expect(
+      (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
+        "thread:C123:111.222",
+        "json"
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({ sessionId: "session-1", reasoningEffort: "high" })
+    );
+
+    slackFetch.mockRestore();
+  });
+
   it("forwards interim human messages on follow-ups to an existing session", async () => {
     const order: string[] = [];
     mockGetUserInfo.mockResolvedValue({
