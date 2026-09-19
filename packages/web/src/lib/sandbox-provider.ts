@@ -12,7 +12,7 @@ export type PublicSandboxProvider = (typeof SANDBOX_PROVIDERS)[number];
  * IMAGE_BUILD_PROVIDERS in the control plane's image-builds/provider-policy.ts —
  * a provider gains image-build support in both places or neither.
  */
-const REPO_IMAGE_PROVIDERS = ["modal", "vercel", "opencomputer", "e2b"] as const;
+const REPO_IMAGE_PROVIDERS = ["modal", "vercel", "opencomputer", "e2b", "daytona"] as const;
 
 /**
  * The single 501 body every image-build route answers with when the deployment's

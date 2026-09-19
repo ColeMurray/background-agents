@@ -177,6 +177,14 @@ Create an R2 API Token:
 
 The control plane calls the Daytona REST API directly — no shim service to deploy.
 
+Two optional settings:
+
+- `daytona_toolbox_api_url` overrides the per-sandbox toolbox proxy. Leave it empty on a deployment
+  whose sandboxes report their own.
+- `daytona_prebuilds_enabled` admits new Daytona prebuilt-image builds and lets fresh sessions boot
+  from one. It defaults to `false`; see [Daytona prebuilds](IMAGE_PREBUILD.md#daytona-prebuilds) for
+  the gates an operator should clear against their own organization and target before turning it on.
+
 > **Important**: the Daytona provider has no fleet-wide key of its own. Add the key for the models
 > you plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets
 > after deploying. See [Secrets Management](SECRETS.md) for details.
@@ -1059,6 +1067,8 @@ APP_ICON_URL
 DAYTONA_API_URL
 DAYTONA_BASE_SNAPSHOT
 DAYTONA_TARGET
+DAYTONA_TOOLBOX_API_URL
+DAYTONA_PREBUILDS_ENABLED
 
 # Vercel Sandbox
 VERCEL_SANDBOX_PROJECT_ID
@@ -1121,6 +1131,8 @@ Secrets for credentials:
 | `DAYTONA_API_KEY`                  | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_BASE_SNAPSHOT`            | Daytona base snapshot name _(only if `sandbox_provider = "daytona"`)_                       |
 | `DAYTONA_TARGET`                   | Optional Daytona target name                                                                |
+| `DAYTONA_TOOLBOX_API_URL`          | Optional Daytona toolbox proxy override; empty uses the proxy each sandbox reports          |
+| `DAYTONA_PREBUILDS_ENABLED`        | `true` to admit new Daytona prebuilt-image builds and boot from them (default: `false`)     |
 | `VERCEL_SANDBOX_TOKEN`             | Vercel API token _(only if `sandbox_provider = "vercel"`)_                                  |
 | `VERCEL_SANDBOX_PROJECT_ID`        | Vercel project ID for sandbox sessions _(only if `sandbox_provider = "vercel"`)_            |
 | `VERCEL_SANDBOX_TEAM_ID`           | Optional Vercel team/account ID for sandbox sessions                                        |

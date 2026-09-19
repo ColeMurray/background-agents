@@ -3,21 +3,44 @@
  *
  * Ports env-var assembly, label construction, tunnel-URL generation, and
  * code-server password derivation that previously lived in the Python shim.
+ *
+ * Prebuilt images (snapshots): a spawn creates from the snapshot the control
+ * plane selected for it in place of the base one, once this provider has made
+ * that snapshot usable or said why it cannot be. A Daytona capture preserves
+ * the image's environment, so the boot markers below are set explicitly on
+ * every create: a value baked into an image can never decide how a session
+ * boots.
  */
 
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
+import {
+  classifyDaytonaError,
+  getDaytonaSnapshot,
+  LIFECYCLE_POLL_INTERVAL_MS,
+} from "../daytona-lifecycle";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
-import { DaytonaApiError, DaytonaNotFoundError } from "../daytona-rest-client";
+import {
+  DaytonaApiError,
+  DaytonaCancelledError,
+  DaytonaNotFoundError,
+  delayUnlessCancelled,
+  parseDaytonaSnapshotState,
+} from "../daytona-rest-client";
 import {
   buildSandboxEnvVars,
+  DEFERRED_START_ENV_VAR,
   deriveCodeServerPassword,
   deriveVncPassword,
+  IMAGE_BUILD_MODE_ENV_VAR,
   scmCloneIdentity,
+  type ScmCloneIdentity,
 } from "../sandbox-env";
 import {
+  PrebuiltImageActivationPendingError,
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -37,6 +60,9 @@ const log = createLogger("daytona-provider");
 // ---------------------------------------------------------------------------
 
 const DEFAULT_PREVIEW_EXPIRY_SECONDS = 3900;
+
+/** How long a spawn waits for a cold prebuilt image before falling back to base. */
+const PREBUILT_ACTIVATION_TIMEOUT_MS = 45_000;
 
 // ---------------------------------------------------------------------------
 // Provider config
@@ -75,12 +101,20 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
     try {
+      // A prebuilt image id is a Daytona snapshot; spawn from it in place of
+      // the base image. Selection is the control plane's (image-selection.ts);
+      // this only has to make the chosen snapshot usable or say why not.
+      const snapshot = config.prebuiltImageId || this.client.requireBaseSnapshot();
+      if (config.prebuiltImageId) {
+        await this.ensurePrebuiltImageUsable(config.prebuiltImageId);
+      }
+
       const envVars = await this.buildEnvVars(config);
       const labels = this.buildLabels(config);
 
       const params: DaytonaCreateSandboxParams = {
         name: config.sandboxId,
-        snapshot: this.client.config.baseSnapshot,
+        snapshot,
         env: envVars,
         labels,
         autoStopInterval: this.client.config.autoStopIntervalMinutes,
@@ -93,8 +127,17 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
       const sandbox = await this.client.createSandbox(params);
 
-      const { codeServerUrl, codeServerPassword, vncAccess, tunnelUrls } =
-        await this.buildTunnelUrls(
+      // Preview URLs are user-facing extras, not how a session runs: the
+      // runtime dials the control plane itself. Failing the create here would
+      // throw away the only handle to a live sandbox that has no hard TTL, so
+      // the create reports the id it was given and the access fields stay
+      // empty until the next resume issues them.
+      let codeServerUrl: string | undefined;
+      let codeServerPassword: string | undefined;
+      let vncAccess: VncAccess | undefined;
+      let tunnelUrls: Record<string, string> | undefined;
+      try {
+        const tunnels = await this.buildTunnelUrls(
           sandbox.id,
           config.sandboxId,
           config.timeoutSeconds,
@@ -102,6 +145,16 @@ export class DaytonaSandboxProvider implements SandboxProvider {
           config.vncEnabled,
           config.sandboxSettings
         );
+        codeServerUrl = tunnels.codeServerUrl;
+        codeServerPassword = tunnels.codeServerPassword;
+        vncAccess = tunnels.vncAccess;
+        tunnelUrls = tunnels.tunnelUrls;
+      } catch (tunnelError) {
+        log.warn("daytona.create_tunnel_urls_failed", {
+          sandbox_id: config.sandboxId,
+          error: tunnelError instanceof Error ? tunnelError.message : String(tunnelError),
+        });
+      }
 
       return {
         sandboxId: config.sandboxId,
@@ -113,7 +166,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         tunnelUrls,
       };
     } catch (error) {
-      throw this.classifyError("Failed to create Daytona sandbox", error);
+      // Already classified (the prebuilt-image guards) — rethrow so the
+      // manager can tell a cold image from a broken one.
+      if (error instanceof SandboxProviderError) throw error;
+      throw classifyDaytonaError("Failed to create Daytona sandbox", error);
     }
   }
 
@@ -178,7 +234,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
-      throw this.classifyError("Failed to resume Daytona sandbox", error);
+      throw classifyDaytonaError("Failed to resume Daytona sandbox", error);
     }
   }
 
@@ -202,7 +258,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       return { success: true };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
-      throw this.classifyError(
+      throw classifyDaytonaError(
         `Failed to ${config.reason === "respawn" ? "delete" : "stop"} Daytona sandbox`,
         error
       );
@@ -214,8 +270,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   // -----------------------------------------------------------------------
 
   private async buildEnvVars(config: CreateSandboxConfig): Promise<Record<string, string>> {
-    return buildSandboxEnvVars(config, {
-      scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
+    const envVars = buildSandboxEnvVars(config, {
+      scmIdentity: this.cloneIdentity(),
       codeServerPassword: config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,
@@ -226,6 +282,29 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         ? await deriveVncPassword(config.sandboxId, this.providerConfig.sandboxAccessPasswordSecret)
         : undefined,
     });
+
+    // Every boot marker is stated, never merely omitted: a container capture
+    // preserves the image's environment, so an absent key would leave a value
+    // the image was built with in force. The runtime reads each as
+    // `=== "true"`, so "false" is an explicit no.
+    //
+    // The callback-contract keys (OI_REPO_IMAGE_*) are deliberately NOT set,
+    // not even to "": the runtime treats the PRESENCE of any of them as a
+    // build-callback context and aborts the boot on a partial one.
+    Object.assign(envVars, {
+      [DEFERRED_START_ENV_VAR]: "false",
+      [IMAGE_BUILD_MODE_ENV_VAR]: "false",
+      RESTORED_FROM_SNAPSHOT: "false",
+      FROM_REPO_IMAGE: config.prebuiltImageId ? "true" : "false",
+    });
+    if (config.prebuiltImageId) {
+      envVars.REPO_IMAGE_SHA = config.prebuiltImageSha ?? "";
+    }
+    return envVars;
+  }
+
+  private cloneIdentity(): ScmCloneIdentity {
+    return scmCloneIdentity(this.providerConfig.scmProvider);
   }
 
   // -----------------------------------------------------------------------
@@ -314,18 +393,103 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   }
 
   // -----------------------------------------------------------------------
-  // Error classification
+  // Prebuilt images
   // -----------------------------------------------------------------------
 
-  private classifyError(message: string, error: unknown): SandboxProviderError {
-    if (error instanceof DaytonaApiError) {
-      return SandboxProviderError.fromFetchError(
-        `${message}: ${error.message}`,
-        error,
-        error.status
-      );
+  /**
+   * Make a selected prebuilt snapshot usable, or say why it cannot be.
+   *
+   * `PREBUILT_ACTIVATION_TIMEOUT_MS` is the budget for the whole flow, not
+   * for one of its requests: the deadline is fixed before the first call, and
+   * the read, the activation, every poll and every wait run under the signal
+   * that expires with it. A spawn therefore waits the advertised time for a
+   * cold image, whatever each individual request costs.
+   *
+   * An inactive snapshot is cold storage, not corruption: it is activated and
+   * waited for. An activation that outlasts the budget is reported as pending,
+   * which fails this spawn WITHOUT retiring the image — unlike a missing or
+   * terminal snapshot, which is reported as unavailable so the row is failed
+   * and the next reconciliation rebuilds it.
+   */
+  private async ensurePrebuiltImageUsable(prebuiltImageId: string): Promise<void> {
+    const deadline = Date.now() + PREBUILT_ACTIVATION_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PREBUILT_ACTIVATION_TIMEOUT_MS);
+    const signal = controller.signal;
+    try {
+      const snapshot = await getDaytonaSnapshot(this.client, prebuiltImageId, signal);
+      if (!snapshot) {
+        throw new PrebuiltImageUnavailableError("Daytona prebuilt snapshot no longer exists");
+      }
+      const state = parseDaytonaSnapshotState(snapshot.state);
+      if (state === "active") return;
+      if (state === "error" || state === "build_failed" || state === "removing") {
+        throw new PrebuiltImageUnavailableError(
+          `Daytona prebuilt snapshot is ${state} and cannot be used`
+        );
+      }
+
+      if (state === "inactive") {
+        await this.client.activateSnapshot(snapshot.id, signal);
+      }
+      for (;;) {
+        const current = await getDaytonaSnapshot(this.client, snapshot.id, signal);
+        // A snapshot that is gone, or on its way out, is gone for the same
+        // reason the pre-activation read gives: waiting it out would spend
+        // the budget and then report an artifact worth keeping.
+        if (!current) {
+          throw new PrebuiltImageUnavailableError("Daytona prebuilt snapshot no longer exists");
+        }
+        const currentState = parseDaytonaSnapshotState(current.state);
+        if (currentState === "active") return;
+        if (
+          currentState === "error" ||
+          currentState === "build_failed" ||
+          currentState === "removing"
+        ) {
+          throw new PrebuiltImageUnavailableError(
+            `Daytona prebuilt snapshot is ${currentState} and cannot be used`
+          );
+        }
+        if (Date.now() >= deadline) {
+          throw new PrebuiltImageActivationPendingError(
+            `Daytona prebuilt snapshot is still ${currentState}`
+          );
+        }
+        await delayUnlessCancelled(LIFECYCLE_POLL_INTERVAL_MS, signal);
+      }
+    } catch (error) {
+      // Only an answer about this artifact may retire it. A classification
+      // already made inside the flow stands; a budget that ran out and a
+      // provider that could not be reached are facts about the transport, so
+      // the spawn fails transiently and the image stays in rotation. An auth
+      // or request error still fails hard as a permanent error that leaves
+      // the image alone: it says the call was wrong, and softening it would
+      // hide a broken deployment behind slow spawns.
+      if (error instanceof SandboxProviderError) throw error;
+      if (signal.aborted) {
+        throw new PrebuiltImageActivationPendingError(
+          "Daytona prebuilt snapshot did not become usable within the activation budget",
+          error instanceof Error ? error : undefined
+        );
+      }
+      if (error instanceof DaytonaNotFoundError) {
+        throw new PrebuiltImageUnavailableError(
+          "Daytona prebuilt snapshot no longer exists",
+          error
+        );
+      }
+      const unreachable = daytonaUnreachableReason(error);
+      if (unreachable) {
+        throw new PrebuiltImageActivationPendingError(
+          `Daytona could not confirm the prebuilt snapshot (${unreachable})`,
+          error instanceof Error ? error : undefined
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-    return SandboxProviderError.fromFetchError(message, error);
   }
 }
 
@@ -336,6 +500,27 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 function resolvePreviewExpirySeconds(timeoutSeconds: number | undefined): number {
   if (!timeoutSeconds) return DEFAULT_PREVIEW_EXPIRY_SECONDS;
   return Math.min(86400, Math.max(900, timeoutSeconds + 300));
+}
+
+/**
+ * Why Daytona could not answer for an artifact right now, or null when the
+ * failure is an answer.
+ *
+ * A rate-limited or unavailable API, and a request that never completed, say
+ * nothing about the snapshot they were asked about; a rejected or malformed
+ * request does. Only the second kind may retire an image, so only the first
+ * is named here. The reason carries the status and nothing else: response
+ * bodies never travel in it.
+ */
+function daytonaUnreachableReason(error: unknown): string | null {
+  if (error instanceof DaytonaApiError) {
+    return error.status === 429 || error.status >= 500 ? `HTTP ${error.status}` : null;
+  }
+  if (error instanceof DaytonaCancelledError) return "the request was cancelled";
+  if (error instanceof Error && error.name === "AbortError") return "the request timed out";
+  return SandboxProviderError.isTransientNetworkError(error)
+    ? "the request did not complete"
+    : null;
 }
 
 // ---------------------------------------------------------------------------

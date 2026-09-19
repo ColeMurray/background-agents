@@ -7,6 +7,7 @@ import { hashImageBuildCallbackToken, type ImageBuildCallbackAuthFailure } from 
 import { createImageBuildFinalizationJob } from "./finalization-job";
 import {
   errorMessage,
+  ImageBuildAdmissionClosedError,
   ImageBuildCallbackAuthRejectedError,
   ImageBuildCallbackAuthUnavailableError,
   ImageBuildCompletionNotAcceptedError,
@@ -25,7 +26,7 @@ import {
   type PlannedCallbackAuth,
   type ResolvedImageBuildTarget,
 } from "./planner";
-import { resolveImageBuildProvider } from "./provider-policy";
+import { resolveImageBuildAdmission, resolveImageBuildProvider } from "./provider-policy";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
 import type {
   ImageBuildAdapter,
@@ -165,6 +166,15 @@ export class ImageBuildWorkflow {
     if (!this.env.WORKER_URL) {
       throw new ImageBuildWorkflowUnavailableError("WORKER_URL not configured");
     }
+    // Every trigger source converges here, so the deployment's admission
+    // control is enforced here too — manual rebuild, save hook and cron alike.
+    const admission = resolveImageBuildAdmission(this.env);
+    if (!admission.admitted) {
+      throw new ImageBuildAdmissionClosedError(
+        "Image builds are paused for this deployment",
+        admission.reason
+      );
+    }
     const { provider, planner } = this.providerDeps;
 
     // Validate provider configuration before any database work. This keeps a
@@ -262,6 +272,18 @@ export class ImageBuildWorkflow {
         target,
         callbackAuth,
       });
+
+      // Record the cleanup obligation BEFORE the provider can create
+      // anything, for adapters that can find a source again by its reserved
+      // name. A create whose response is lost leaves a sandbox no row names,
+      // and an unrecorded source is an untracked one — so a failed intent
+      // write aborts the trigger rather than creating regardless.
+      if (adapter.recoverUnboundSource) {
+        const intentRecorded = await this.store.markSourceCreateIntent(buildId, provider);
+        if (!intentRecorded) {
+          throw new Error(`Failed to record ${provider} build source cleanup intent`);
+        }
+      }
 
       await adapter.startBuild(plan, {
         bindProviderSession: async (providerSessionId) => {

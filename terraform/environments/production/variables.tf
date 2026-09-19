@@ -488,6 +488,18 @@ variable "daytona_target" {
   default     = ""
 }
 
+variable "daytona_toolbox_api_url" {
+  description = "Optional explicit Daytona toolbox proxy base URL. Leave empty to use the proxy each sandbox reports."
+  type        = string
+  default     = ""
+}
+
+variable "daytona_prebuilds_enabled" {
+  description = "Admit new Daytona image builds and let fresh sessions boot from one. Off by default: callbacks, finalization, status and cleanup keep working while it is, so closing it is the rollback control."
+  type        = bool
+  default     = false
+}
+
 variable "opencomputer_api_url" {
   description = "Base URL for the OpenComputer REST API (e.g. https://api.opencomputer.dev)"
   type        = string
