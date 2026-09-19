@@ -27,8 +27,8 @@ import {
   startSessionAndSendPrompt,
   type SlackLaunchSettings,
 } from "../sessions/session-launcher";
-import { resolveTargetValue } from "../target-clarification";
-import { targetId } from "../targets";
+import { resolveTargetValue, targetSelectedText } from "../target-clarification";
+import { targetId, type SlackSessionTarget } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
 import { hasInlinePromptOptions, resolveInlinePromptOptions } from "../inline-flags";
@@ -43,6 +43,35 @@ interface TargetSelectionRequest {
   threadTs?: string;
   selectedBy: string;
   selectionSource: "picker" | "quick_pick";
+}
+
+/**
+ * Replace the clarification message with a record of the chosen target so its
+ * picker and quick-pick buttons stop inviting a second selection. Passing no
+ * `blocks` is load-bearing — that is what removes them. Best effort: a failed
+ * update leaves a stale picker, which must not fail a launched session.
+ */
+async function retireTargetClarificationPrompt(
+  env: Env,
+  channel: string,
+  messageTs: string,
+  target: SlackSessionTarget,
+  traceId: string | undefined
+): Promise<void> {
+  const result = await updateMessage(
+    env.SLACK_BOT_TOKEN,
+    channel,
+    messageTs,
+    targetSelectedText(target)
+  );
+  if (!result.ok) {
+    log.warn("slack.target_clarification.retire_failed", {
+      trace_id: traceId,
+      channel,
+      message_ts: messageTs,
+      slack_error: result.error,
+    });
+  }
 }
 
 export async function handleTargetSelection(
@@ -253,13 +282,20 @@ export async function handleTargetSelection(
     launchSettings,
     traceId,
   });
+  // A failed launch leaves the pending request in place and tells the user to
+  // try again, so the picker is their retry control: only retire it once the
+  // launch has committed.
   if (!sessionResult) return;
 
+  // Retire the authoritative state first. The Slack call below can burn the
+  // client's full request timeout, and a concurrent click that reads a
+  // still-live pending request would launch a second session.
   if (requestId) {
     await deletePendingRequest(env, requestId);
   } else {
     await deleteLegacyPendingRequest(env, channel, threadKey);
   }
+  await retireTargetClarificationPrompt(env, channel, messageTs, target, traceId);
   if (ackTs) {
     const launched = buildWorkingMessage({
       sessionId: sessionResult.sessionId,

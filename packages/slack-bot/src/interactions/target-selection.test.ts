@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getMessageDetails, postEphemeral, postMessage } from "@open-inspect/shared/slack";
+import {
+  getMessageDetails,
+  postEphemeral,
+  postMessage,
+  updateMessage,
+} from "@open-inspect/shared/slack";
 import type { Env } from "../types";
 import { handleTargetSelection } from "./target-selection";
 import {
@@ -49,6 +54,7 @@ vi.mock("../sessions/session-launcher", () => ({
 
 vi.mock("../target-clarification", () => ({
   resolveTargetValue: vi.fn(),
+  targetSelectedText: vi.fn((target) => `Using *${target.repo?.fullName ?? "no repository"}*`),
 }));
 
 vi.mock("../user-identity", () => ({
@@ -61,6 +67,7 @@ vi.mock("../interactive-thread-context", () => ({
 
 const DEFAULT_SELECTED_VALUE = "acme/app";
 const REQUEST_ID = "00000000-0000-4000-8000-000000000001";
+const CLARIFICATION_MESSAGE_TS = "333.444";
 const TURN_PLAN = {
   sessionDefaults: {
     model: "anthropic/claude-sonnet-4-6" as const,
@@ -114,7 +121,10 @@ function selectionRequest(selectedValue = DEFAULT_SELECTED_VALUE) {
     requestId: REQUEST_ID,
     selectedValue,
     channel: "C123",
-    messageTs: "111.222",
+    // The clarification message the picker lives on, posted as a reply to the
+    // request's thread.
+    messageTs: CLARIFICATION_MESSAGE_TS,
+    threadTs: "111.222",
     selectedBy: "U123",
     selectionSource: "picker" as const,
   };
@@ -344,6 +354,62 @@ describe("handleTargetSelection", () => {
     );
   });
 
+  it("collapses the clarification message so its picker can't be used again", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
+
+    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
+
+    // No blocks argument: that is what makes Slack drop the picker.
+    expect(updateMessage).toHaveBeenCalledWith(
+      "xoxb-test",
+      "C123",
+      CLARIFICATION_MESSAGE_TS,
+      "Using *acme/app*"
+    );
+    // The picker is retired only once the launch has committed...
+    expect(vi.mocked(updateMessage).mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(startSessionAndSendPrompt).mock.invocationCallOrder[0]
+    );
+    // ...and never holds the pending request open while it runs, which would
+    // let a concurrent click launch a second session.
+    expect(vi.mocked(deletePendingRequest).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(updateMessage).mock.invocationCallOrder[0]
+    );
+  });
+
+  it("keeps the picker as a retry control when the launch fails", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
+    // Once: clearAllMocks keeps implementations, so a persistent override would
+    // leak into later tests.
+    vi.mocked(startSessionAndSendPrompt).mockResolvedValueOnce(null);
+
+    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
+
+    expect(updateMessage).not.toHaveBeenCalled();
+    // The pending request survives too, so a retry can still resolve.
+    expect(deletePendingRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps the session when the clarification message can no longer be updated", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
+    vi.mocked(updateMessage).mockResolvedValueOnce({ ok: false, error: "message_not_found" });
+
+    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
+
+    expect(startSessionAndSendPrompt).toHaveBeenCalled();
+    expect(deletePendingRequest).toHaveBeenCalledWith(expect.anything(), REQUEST_ID);
+  });
+
+  it("leaves the picker in place when the selected target is gone", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
+    vi.mocked(resolveTargetValue).mockResolvedValue(null);
+
+    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
+
+    expect(updateMessage).not.toHaveBeenCalled();
+    expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
+  });
+
   it("rejects a selection from someone other than the original requester", async () => {
     vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
 
@@ -364,6 +430,7 @@ describe("handleTargetSelection", () => {
       { thread_ts: "111.222" }
     );
     expect(postMessage).not.toHaveBeenCalled();
+    expect(updateMessage).not.toHaveBeenCalled();
   });
 
   it("rejects a request whose stored channel or thread does not match the interaction", async () => {

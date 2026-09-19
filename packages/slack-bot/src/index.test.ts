@@ -2088,6 +2088,9 @@ describe("POST /interactions", () => {
 
     const updateBodies = slackApiBodies(slackFetch, "chat.update");
     expect(updateBodies).toEqual([
+      // The clarification message collapses to text with no blocks, which is
+      // what makes Slack drop its picker.
+      { channel: "C123", ts: "111.222", text: "Using *acme/app*" },
       expect.objectContaining({
         channel: "C123",
         ts: "222.333",
