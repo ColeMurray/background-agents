@@ -47,6 +47,7 @@ function createStore() {
     acceptFailedCompletion,
     authorizeCompletionCallback,
     finalization: {
+      getBuild: vi.fn().mockResolvedValue(null),
       acceptSuccessfulCompletion,
       acceptFailedCompletion,
       authorizeCompletionCallback,
@@ -535,6 +536,64 @@ describe("ImageBuildWorkflow", () => {
         })
       );
       expect(store.markBuildFailed).toHaveBeenCalled();
+      expect(store.markBuildFailed.mock.invocationCallOrder[0]).toBeLessThan(
+        adapter.cleanupFailedBuild.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("leaves an accepted callback's source to finalization after a late trigger error", async () => {
+      const adapter = createAdapter();
+      adapter.startBuild.mockImplementation(async (_plan, callbacks) => {
+        await callbacks.bindProviderSession("session-1");
+        throw new Error("launch response lost");
+      });
+      const { workflow, store } = createWorkflow({ adapter });
+      store.markBuildFailed.mockResolvedValue(false);
+      store.finalization.getBuild.mockResolvedValue({
+        status: "building",
+        callback_token_used_at: 1,
+      });
+
+      await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).resolves.toMatchObject({
+        type: "triggered",
+      });
+      expect(adapter.cleanupFailedBuild).not.toHaveBeenCalled();
+    });
+
+    it("does not delete a source when the trigger-failure fence cannot be confirmed", async () => {
+      const adapter = createAdapter();
+      adapter.startBuild.mockImplementation(async (_plan, callbacks) => {
+        await callbacks.bindProviderSession("session-1");
+        throw new Error("launch response lost");
+      });
+      const { workflow, store } = createWorkflow({ adapter });
+      store.markBuildFailed.mockRejectedValue(new Error("D1 unavailable"));
+
+      await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toBeInstanceOf(
+        ImageBuildTriggerFailedError
+      );
+      expect(adapter.cleanupFailedBuild).not.toHaveBeenCalled();
+    });
+
+    it("cleans up a rejected bind after a concurrent supersede fenced callbacks", async () => {
+      const adapter = createAdapter();
+      adapter.startBuild.mockImplementation(async (_plan, callbacks) => {
+        await callbacks.bindProviderSession("session-1");
+      });
+      const { workflow, store } = createWorkflow({ adapter });
+      store.bindProviderSession.mockResolvedValue(false);
+      store.markBuildFailed.mockResolvedValue(false);
+      store.finalization.getBuild.mockResolvedValue({
+        status: "superseded",
+        callback_token_used_at: null,
+      });
+
+      await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toBeInstanceOf(
+        ImageBuildTriggerFailedError
+      );
+      expect(adapter.cleanupFailedBuild).toHaveBeenCalledWith(
+        expect.objectContaining({ providerSessionId: "session-1" })
+      );
     });
 
     it("tears down the created sandbox when provider-session binding is rejected", async () => {

@@ -37,6 +37,8 @@ import type {
 } from "./types";
 
 const logger = createLogger("image-builds:workflow");
+/** Request-path compensation is best-effort; maintenance owns slow deletes. */
+const TRIGGER_CLEANUP_TIMEOUT_MS = 5_000;
 
 export interface AcceptBuildCompleteCommand {
   completion: CompleteImageBuildCallback;
@@ -306,13 +308,42 @@ export class ImageBuildWorkflow {
 
       return { type: "triggered", buildId };
     } catch (e) {
-      if (providerSessionIdForCleanup) {
+      // Failure and callback acceptance compete on the same building row.
+      // Only the winner may tear down the source: a launch response/probe can
+      // fail after a fast build has already handed it to the finalizer.
+      let cleanupAllowed = false;
+      try {
+        cleanupAllowed = await this.store.markBuildFailed(buildId, provider, errorMessage(e));
+        if (!cleanupAllowed) {
+          const current = await this.store.finalization.getBuild(buildId);
+          if (current && current.callback_token_used_at !== null) {
+            return { type: "triggered", buildId };
+          }
+          // A concurrent supersede/failure also fences out late callbacks.
+          // In particular, a rejected bind may leave an id only this request knows.
+          cleanupAllowed = current?.status === "failed" || current?.status === "superseded";
+        }
+      } catch (markFailedError) {
+        // Without a confirmed fence, leave the durable cleanup obligation to
+        // maintenance rather than risk deleting an accepted build's source.
+        logger.warn("image_build.trigger_mark_failed_error", {
+          error: errorMessage(markFailedError),
+          build_id: buildId,
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+        });
+      }
+
+      if (cleanupAllowed && providerSessionIdForCleanup) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), TRIGGER_CLEANUP_TIMEOUT_MS);
         await adapter
           .cleanupFailedBuild({
             buildId,
             providerSessionId: providerSessionIdForCleanup,
             errorMessage: errorMessage(e),
             correlation: ctx,
+            signal: controller.signal,
           })
           .catch((cleanupError) => {
             logger.warn(`image_build.${provider}_trigger_cleanup_failed`, {
@@ -322,18 +353,8 @@ export class ImageBuildWorkflow {
               request_id: ctx.request_id,
               trace_id: ctx.trace_id,
             });
-          });
-      }
-
-      try {
-        await this.store.markBuildFailed(buildId, provider, errorMessage(e));
-      } catch (markFailedError) {
-        logger.warn("image_build.trigger_mark_failed_error", {
-          error: errorMessage(markFailedError),
-          build_id: buildId,
-          request_id: ctx.request_id,
-          trace_id: ctx.trace_id,
-        });
+          })
+          .finally(() => clearTimeout(timeoutId));
       }
 
       logger.error("image_build.trigger_error", {

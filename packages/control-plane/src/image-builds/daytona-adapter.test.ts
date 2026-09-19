@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  DaytonaSandboxResponse,
-  DaytonaSnapshotResponse,
+import {
+  DaytonaApiError,
+  type DaytonaSandboxResponse,
+  type DaytonaSnapshotResponse,
 } from "../sandbox/daytona-rest-client";
 import type { ImageBuildProviderTriggerConfig } from "../sandbox/provider";
 import type { DaytonaImageBuildResources } from "./daytona-build-resources";
@@ -214,6 +215,46 @@ describe("DaytonaImageBuildAdapter capture", () => {
     expect(resources.getBuildSnapshot).toHaveBeenCalledWith("oi-image-abc", undefined);
   });
 
+  it.each([
+    ["HTTP 503", () => new DaytonaApiError("service unavailable", 503)],
+    ["a request timeout", () => new DOMException("The operation was aborted", "AbortError")],
+    ["a network failure", () => new TypeError("fetch failed")],
+  ])("reconciles its reserved name after capture submission hits %s", async (_name, failure) => {
+    const resources = createResources({
+      captureBuildSnapshot: vi.fn(async () => {
+        throw failure();
+      }),
+    });
+    const reserveOperation = vi.fn(async (_ref: string, _deadlineAt: number) => true);
+
+    await expect(
+      createAdapter(resources).finalizeSuccessfulBuild(finalizeInput({ reserveOperation }))
+    ).resolves.toEqual({ providerImageId: "snapshot-1", providerSessionId: SOURCE_ID });
+
+    expect(reserveOperation).toHaveBeenCalledOnce();
+    expect(resources.captureBuildSnapshot).toHaveBeenCalledOnce();
+    expect(resources.getBuildSnapshot).toHaveBeenCalledWith(
+      reserveOperation.mock.calls[0][0],
+      undefined
+    );
+  });
+
+  it.each([400, 429])(
+    "fails a provider-confirmed capture-submission rejection (%s) without adopting an artifact",
+    async (status) => {
+      const resources = createResources({
+        captureBuildSnapshot: vi.fn(async () => {
+          throw new DaytonaApiError("capture request rejected", status);
+        }),
+      });
+
+      await expect(
+        createAdapter(resources).finalizeSuccessfulBuild(finalizeInput())
+      ).rejects.toMatchObject({ status });
+      expect(resources.getBuildSnapshot).not.toHaveBeenCalled();
+    }
+  );
+
   // Both completed states settle the build. An inactive snapshot is cold
   // storage the spawn path activates under its own budget, so finalization
   // records it rather than polling it to the operation's deadline.
@@ -297,6 +338,79 @@ describe("DaytonaImageBuildAdapter capture", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each([
+    ["HTTP 429", () => new DaytonaApiError("rate limited", 429)],
+    ["HTTP 503", () => new DaytonaApiError("service unavailable", 503)],
+    ["a request timeout", () => new DOMException("The operation was aborted", "AbortError")],
+    ["a network failure", () => new TypeError("fetch failed")],
+  ])("keeps reconciling after a snapshot read hits %s", async (_name, failure) => {
+    vi.useFakeTimers();
+    try {
+      const resources = createResources();
+      resources.getBuildSnapshot.mockRejectedValueOnce(failure()).mockResolvedValue({
+        id: "snapshot-1",
+        name: "oi-image-abc",
+        state: "active",
+        sourceSandboxId: SOURCE_ID,
+      });
+
+      const finalizing = createAdapter(resources).finalizeSuccessfulBuild(
+        finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(finalizing).resolves.toEqual({
+        providerImageId: "snapshot-1",
+        providerSessionId: SOURCE_ID,
+      });
+      expect(resources.getBuildSnapshot).toHaveBeenCalledTimes(2);
+      expect(resources.captureBuildSnapshot).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the fixed operation deadline across repeated transient read failures", async () => {
+    vi.useFakeTimers();
+    try {
+      const resources = createResources({
+        getBuildSnapshot: vi.fn(async () => {
+          throw new DaytonaApiError("service unavailable", 503);
+        }),
+      });
+      const deadlineAt = Date.now() + 6_000;
+
+      const outcome = createAdapter(resources)
+        .finalizeSuccessfulBuild(finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt } }))
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(await outcome).toMatchObject({
+        name: "ImageBuildFinalizationAttemptError",
+        outcome: "ambiguous",
+      });
+      expect(Date.now()).toBeGreaterThanOrEqual(deadlineAt);
+      expect(resources.captureBuildSnapshot).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails a permanent snapshot-read error instead of waiting it out", async () => {
+    const resources = createResources({
+      getBuildSnapshot: vi.fn(async () => {
+        throw new DaytonaApiError("unauthorized", 401);
+      }),
+    });
+
+    await expect(
+      createAdapter(resources).finalizeSuccessfulBuild(
+        finalizeInput({ operation: { ref: "oi-image-abc", deadlineAt: Date.now() + 600_000 } })
+      )
+    ).rejects.toMatchObject({ status: 401 });
+    expect(resources.getBuildSnapshot).toHaveBeenCalledOnce();
   });
 
   it("reports a still-unpublished capture as pending when the attempt runs out", async () => {

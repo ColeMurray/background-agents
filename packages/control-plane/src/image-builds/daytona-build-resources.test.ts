@@ -248,7 +248,7 @@ describe("DaytonaImageBuildResources", () => {
     ["the bind", "onProviderSessionCreated"],
     ["the launch", "executeSessionCommand"],
     ["the context write", "sendSessionCommandInput"],
-  ])("deletes the source when %s fails", async (_name, failing) => {
+  ])("leaves failure cleanup to the workflow when %s fails", async (_name, failing) => {
     const client = createBuildClient();
     const config = buildTriggerConfig();
     const failure = new Error("provider refused");
@@ -262,7 +262,7 @@ describe("DaytonaImageBuildResources", () => {
 
     await expect(complete(buildResources(client).triggerImageBuild(config))).rejects.toThrow();
 
-    expect(client.deleteSandbox).toHaveBeenCalledWith("daytona-build-1", expect.any(AbortSignal));
+    expect(client.deleteSandbox).not.toHaveBeenCalled();
   });
 
   it("fails the trigger when the launcher has already refused its context", async () => {
@@ -273,7 +273,7 @@ describe("DaytonaImageBuildResources", () => {
     await expect(
       complete(buildResources(client).triggerImageBuild(buildTriggerConfig()))
     ).rejects.toThrow(/exited 1/);
-    expect(client.deleteSandbox).toHaveBeenCalled();
+    expect(client.deleteSandbox).not.toHaveBeenCalled();
   });
 
   it("refuses to bind a provider id it would not address safely", async () => {

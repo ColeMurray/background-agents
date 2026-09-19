@@ -1,9 +1,12 @@
 import { BUILD_EXPIRES_AT_LABEL, type DaytonaImageBuildResources } from "./daytona-build-resources";
 import {
+  DaytonaApiError,
+  DaytonaCancelledError,
   daytonaBuildResourceName,
   delayUnlessCancelled,
   parseDaytonaSnapshotState,
   type DaytonaSandboxResponse,
+  type DaytonaSnapshotResponse,
   type DaytonaSnapshotState,
 } from "../sandbox/daytona-rest-client";
 import type { ImageBuildProviderImageRef } from "./model";
@@ -25,6 +28,7 @@ import {
   resolveImageBuildProviderSessionTimeoutSeconds,
 } from "./timeouts";
 import { ImageBuildFinalizationAttemptError } from "./finalization-error";
+import { SandboxProviderError } from "../sandbox/provider";
 
 const MS_PER_SECOND = 1000;
 
@@ -211,7 +215,19 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
       );
     }
 
-    await this.resources.captureBuildSnapshot(input.providerSessionId, operation.ref, input.signal);
+    try {
+      await this.resources.captureBuildSnapshot(
+        input.providerSessionId,
+        operation.ref,
+        input.signal
+      );
+    } catch (error) {
+      // Once the name is reserved, a request that may have reached Daytona
+      // must be reconciled under that name. Reissuing it could create a
+      // second capture, while failing the build would delete the source of a
+      // capture that may still be running.
+      if (!isDaytonaAmbiguousTransportFailure(error)) throw error;
+    }
     return await this.awaitCapturedSnapshot(input, operation);
   }
 
@@ -241,7 +257,15 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
   ): Promise<ImageBuildProviderImageRef> {
     const attemptDeadline = Date.now() + CAPTURE_OBSERVATION_MS;
     for (;;) {
-      const snapshot = await this.resources.getBuildSnapshot(operation.ref, input.signal);
+      let snapshot: DaytonaSnapshotResponse | null;
+      try {
+        snapshot = await this.resources.getBuildSnapshot(operation.ref, input.signal);
+      } catch (error) {
+        // An unreachable provider says nothing about the reserved artifact.
+        // Keep the fixed operation deadline and let a later read decide.
+        if (!isDaytonaUnavailable(error)) throw error;
+        snapshot = null;
+      }
       const state = snapshot ? parseDaytonaSnapshotState(snapshot.state) : null;
       if (snapshot) {
         const ownership = captureOwnership(snapshot.sourceSandboxId, input.providerSessionId);
@@ -330,4 +354,18 @@ function captureOwnership(
 ): CaptureOwnership {
   if (!sourceSandboxId || !providerSessionId) return "unknown";
   return sourceSandboxId === providerSessionId ? "ours" : "another";
+}
+
+/** A failed Daytona call that did not establish the requested operation's outcome. */
+function isDaytonaUnavailable(error: unknown): boolean {
+  if (error instanceof DaytonaApiError && error.status === 429) return true;
+  return isDaytonaAmbiguousTransportFailure(error);
+}
+
+/** A failed mutation whose response cannot prove whether Daytona applied it. */
+function isDaytonaAmbiguousTransportFailure(error: unknown): boolean {
+  if (error instanceof DaytonaApiError) return error.status >= 500;
+  if (error instanceof DaytonaCancelledError) return true;
+  if (error instanceof Error && error.name === "AbortError") return true;
+  return SandboxProviderError.isTransientNetworkError(error);
 }

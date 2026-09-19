@@ -84,8 +84,6 @@ const BUILD_LAUNCH_SETTLE_MS = 3_000;
 const BUILD_STOP_TIMEOUT_MS = 60_000;
 /** Deletion is asynchronous; this is how long one cleanup attempt watches it. */
 const CLEANUP_POLL_TIMEOUT_MS = 30_000;
-/** How long the trigger path's own compensating delete may take. */
-const BUILD_COMPENSATION_DELETE_MS = 5_000;
 
 /** States a sandbox never leaves for a state anything can be done from. */
 const TERMINAL_SANDBOX_STATES = new Set<DaytonaSandboxState>([
@@ -133,7 +131,6 @@ export class DaytonaImageBuildResources {
     const ttlMinutes = Math.ceil(config.providerSessionTimeoutSeconds / SECONDS_PER_MINUTE);
     const expiresAt = Date.now() + ttlMinutes * MS_PER_MINUTE;
 
-    let sandboxId: string | undefined;
     try {
       const params: DaytonaCreateSandboxParams = {
         name: sourceName,
@@ -156,7 +153,6 @@ export class DaytonaImageBuildResources {
       }
 
       const created = await this.client.createSandbox(params);
-      sandboxId = created.id;
       // Reject a hostile or empty id BEFORE binding it: the id is persisted
       // as the build's provider session and addressed in toolbox paths.
       assertSafeProviderSessionId(created.id);
@@ -206,12 +202,10 @@ export class DaytonaImageBuildResources {
         trace_id: config.correlation.trace_id,
       });
     } catch (error) {
-      // Anything after create leaves a sandbox that can never build; delete it
-      // rather than leak it until its TTL. A failed compensation is logged and
-      // left to maintenance, which finds the source by the same reserved name.
-      if (sandboxId) {
-        await this.deleteBuildSandboxBestEffort(sandboxId, config.buildId);
-      }
+      // The workflow must arbitrate trigger failure against callback acceptance
+      // before deleting the source. A fast build may already be finalizing when
+      // this probe fails, or when a delivered stdin request loses its response.
+      // Unbound creates remain recoverable through the durable create intent.
       if (error instanceof SandboxProviderError) throw error;
       throw classifyDaytonaError("Failed to trigger Daytona image build", error);
     }
@@ -404,28 +398,6 @@ export class DaytonaImageBuildResources {
 
   private cloneIdentity(): ScmCloneIdentity {
     return scmCloneIdentity(this.providerConfig.scmProvider);
-  }
-
-  private async deleteBuildSandboxBestEffort(
-    providerSessionId: string,
-    buildId: string
-  ): Promise<void> {
-    // Bounded well under the request that runs it: whether or not this
-    // confirms the deletion, the build's cleanup obligation is already
-    // recorded, and maintenance owns whatever is left.
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), BUILD_COMPENSATION_DELETE_MS);
-    try {
-      await this.deleteBuildSandbox(providerSessionId, buildId, controller.signal);
-    } catch (error) {
-      log.warn("daytona.build_cleanup_delete_failed", {
-        build_id: buildId,
-        sandbox_id: providerSessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
   }
 
   /** Wait for one expected state, failing fast on a terminal one. */

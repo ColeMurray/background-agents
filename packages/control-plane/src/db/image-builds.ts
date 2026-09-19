@@ -716,6 +716,7 @@ export class ImageBuildStore {
     return (deleted.meta?.changes ?? 0) > 0;
   }
 
+  /** Fail a trigger only before a callback hands the build to finalization. */
   async markBuildFailed(
     buildId: string,
     provider: ImageBuildProvider,
@@ -723,7 +724,9 @@ export class ImageBuildStore {
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        "UPDATE image_builds SET status = 'failed', error_message = ? WHERE id = ? AND provider = ? AND status = 'building'"
+        `UPDATE image_builds SET status = 'failed', error_message = ?
+         WHERE id = ? AND provider = ? AND status = 'building'
+           AND callback_token_used_at IS NULL`
       )
       .bind(error, buildId, provider)
       .run();
