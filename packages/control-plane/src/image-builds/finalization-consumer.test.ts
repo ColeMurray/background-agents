@@ -55,22 +55,26 @@ describe("handleImageBuildFinalization", () => {
 
     expect(outcome).toEqual({ retry: true, delayMs: 365_000 });
   });
-  it("keeps the host's retry budget for a pending operation until its last delivery", async () => {
-    process.mockResolvedValueOnce({
-      type: "retry",
-      delayMs: 30_000,
-      reason: "pending_operation",
-    });
+  it.each([5, 12])(
+    "keeps the host's retry budget for a pending operation on delivery %i of 13",
+    async (attempts) => {
+      send.mockClear();
+      process.mockResolvedValueOnce({
+        type: "retry",
+        delayMs: 30_000,
+        reason: "pending_operation",
+      });
 
-    const outcome = await handleImageBuildFinalization(
-      JOB,
-      { attempts: 5, maxAttempts: 13 },
-      deps()
-    );
+      const outcome = await handleImageBuildFinalization(
+        JOB,
+        { attempts, maxAttempts: 13 },
+        deps()
+      );
 
-    expect(outcome).toEqual({ retry: true, delayMs: 30_000 });
-    expect(send).not.toHaveBeenCalled();
-  });
+      expect(outcome).toEqual({ retry: true, delayMs: 30_000 });
+      expect(send).not.toHaveBeenCalled();
+    }
+  );
 
   it("republishes a pending operation on the last delivery instead of dead-lettering it", async () => {
     send.mockClear();
@@ -80,9 +84,11 @@ describe("handleImageBuildFinalization", () => {
       reason: "pending_operation",
     });
 
+    // `attempts` is 1-based and `maxAttempts` counts the first delivery, so
+    // this is the delivery a retry would dead-letter.
     const outcome = await handleImageBuildFinalization(
       JOB,
-      { attempts: 12, maxAttempts: 13 },
+      { attempts: 13, maxAttempts: 13 },
       deps()
     );
 

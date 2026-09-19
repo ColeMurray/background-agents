@@ -159,8 +159,16 @@ export class ImageBuildFinalizer {
         if (error instanceof ImageBuildFinalizationAttemptError && error.outcome === "pending") {
           // The operation is the provider's to finish; release the lease so the
           // next delivery reconciles it instead of racing this one.
+          //
+          // Only a reserved operation earns the fresh delivery budget that
+          // `pending_operation` asks for: the reservation's fixed deadline is
+          // what ends that wait. An attempt that reported pending before
+          // reserving anything — a source that has not finished stopping —
+          // has no such bound, so it spends the host's ordinary budget and
+          // dead-letters if it never settles.
+          const current = await this.store.finalization.getBuild(build.id);
           await this.store.finalization.clearLease(build.id, leaseToken);
-          return retryPendingOperation();
+          return current?.provider_operation_ref ? retryPendingOperation() : retrySoon();
         }
         const message =
           error instanceof ImageBuildFinalizationAttemptError && error.outcome === "ambiguous"

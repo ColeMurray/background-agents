@@ -29,7 +29,7 @@ export async function handleImageBuildFinalization(
   const result = await finalizer.process(job, deps.correlation);
   if (result.type !== "retry") return "ack";
 
-  if (result.reason === "pending_operation" && delivery.attempts >= delivery.maxAttempts - 1) {
+  if (result.reason === "pending_operation" && delivery.attempts >= delivery.maxAttempts) {
     await deps.env.JOBS.send(
       { kind: "image_build.finalize", payload: job },
       { delayMs: result.delayMs }

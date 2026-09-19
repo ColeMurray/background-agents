@@ -5,6 +5,7 @@ import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { FinalizeImageBuildInput } from "./types";
 import { ImageBuildFinalizationAttemptError } from "./finalization-error";
 import {
+  IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS,
   IMAGE_BUILD_PENDING_OPERATION_RETRY_DELAY_MS,
   IMAGE_BUILD_PROVIDER_ATTEMPT_MS,
   ImageBuildFinalizer,
@@ -309,6 +310,22 @@ describe("ImageBuildFinalizer asynchronous provider operations", () => {
     expect(finalization.clearLease).toHaveBeenCalledOnce();
     expect(finalization.markFailed).not.toHaveBeenCalled();
     expect(adapter.cleanupFailedBuild).not.toHaveBeenCalled();
+  });
+
+  it("spends the host's ordinary budget on a pending attempt that reserved nothing", async () => {
+    const { finalizer, finalization, adapter } = harness();
+    adapter.finalizeSuccessfulBuild.mockRejectedValue(
+      new ImageBuildFinalizationAttemptError("build sandbox is still stopping", "pending")
+    );
+
+    // No reservation means no fixed deadline, so this retry must not be the
+    // one the consumer republishes with a fresh delivery budget.
+    await expect(finalizer.process(job, correlation)).resolves.toEqual({
+      type: "retry",
+      delayMs: IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS,
+    });
+    expect(finalization.clearLease).toHaveBeenCalledOnce();
+    expect(finalization.markFailed).not.toHaveBeenCalled();
   });
 
   it("hands the adapter the operation a previous delivery reserved", async () => {
