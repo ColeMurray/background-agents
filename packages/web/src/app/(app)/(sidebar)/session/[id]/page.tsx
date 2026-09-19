@@ -94,7 +94,6 @@ export default function SessionPage() {
     canManageBudget,
     isProcessing,
     promptQueue,
-    loadingHistory,
     sendPrompt,
     cancelPrompt,
     stopExecution,
@@ -328,7 +327,6 @@ export default function SessionPage() {
               participantProfiles={profiles}
               isProcessing={isProcessing}
               promptQueue={promptQueue}
-              loadingHistory={loadingHistory}
               showSkeleton={false}
               onLoadOlder={loadOlderEvents}
               onOpenMedia={setSelectedMediaArtifactId}

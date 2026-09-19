@@ -11,7 +11,6 @@ const baseTimelineProps = {
   currentParticipantId: null,
   participantProfiles: {},
   isProcessing: false,
-  loadingHistory: false,
   showSkeleton: false,
   onLoadOlder: () => {},
   onOpenMedia: () => {},
@@ -294,13 +293,15 @@ describe("timeline auto-scrolling", () => {
     expect(viewportOffsetAfter).toBe(viewportOffsetBefore);
   });
 
-  it("keeps observing the history sentinel after the skeleton clears", () => {
+  it("prefetches history one viewport before the top and keeps observing after loading", () => {
     const observedElements: Element[] = [];
+    let observerOptions: IntersectionObserverInit | undefined;
     let notifyIntersection = (_isIntersecting: boolean) => {};
     vi.stubGlobal(
       "IntersectionObserver",
       class {
-        constructor(callback: IntersectionObserverCallback) {
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          observerOptions = options;
           notifyIntersection = (isIntersecting) => {
             callback(
               [{ isIntersecting } as IntersectionObserverEntry],
@@ -325,6 +326,9 @@ describe("timeline auto-scrolling", () => {
     });
     const sentinel = observedElements[0];
 
+    notifyIntersection(true);
+    expect(onLoadOlder).not.toHaveBeenCalled();
+
     rerender(
       <SessionTimeline
         {...baseTimelineProps}
@@ -338,6 +342,11 @@ describe("timeline auto-scrolling", () => {
 
     expect(observedElements).toEqual([sentinel]);
     expect(sentinel.isConnected).toBe(true);
+    expect(observerOptions).toMatchObject({
+      root: timeline,
+      rootMargin: "100% 0px 0px",
+      threshold: 0.1,
+    });
     expect(onLoadOlder).toHaveBeenCalledOnce();
   });
 
