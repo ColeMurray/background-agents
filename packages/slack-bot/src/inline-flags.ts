@@ -122,6 +122,18 @@ export function hasInlinePromptOptions(options: InlinePromptOptions): boolean {
   return options.model !== undefined || options.reasoningEffort !== undefined;
 }
 
+/**
+ * True when the resolved turn runs on something other than the user's App Home
+ * defaults — either because inline flags asked for it, or because the stored
+ * preference is no longer an enabled model.
+ */
+export function divergesFromUserDefaults(plan: ResolvedTurnPlan): boolean {
+  return (
+    plan.effective.model !== plan.sessionDefaults.model ||
+    plan.effective.reasoningEffort !== plan.sessionDefaults.reasoningEffort
+  );
+}
+
 /** Resolve one-turn overrides against the session defaults and enabled model list. */
 export function resolveInlinePromptOptions(
   options: InlinePromptOptions,

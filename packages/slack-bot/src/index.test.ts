@@ -885,7 +885,7 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("applies combined inline overrides to a new direct-message session", async () => {
+  it("adopts combined inline overrides as a new direct-message session's defaults", async () => {
     const slackFetch = mockSlackFetch();
     const env = makeSessionEnv();
     const ctx = makeCtx();
@@ -906,19 +906,40 @@ describe("POST /events", () => {
     expect(response.status).toBe(200);
     await flushWaitUntil(ctx);
 
+    // The flags configure the session itself, so later turns in the thread
+    // inherit them instead of reverting to the App Home default.
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+      expect.objectContaining({
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+      }),
+    ]);
     const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
     expect(promptBodies).toHaveLength(1);
     expect(promptBodies[0]).toMatchObject({
-      model: "anthropic/claude-haiku-4-5",
-      reasoningEffort: "high",
       callbackContext: {
         model: "anthropic/claude-haiku-4-5",
         reasoningEffort: "high",
       },
     });
+    expect(promptBodies[0]).not.toHaveProperty("model");
+    expect(promptBodies[0]).not.toHaveProperty("reasoningEffort");
     expect(String(promptBodies[0].content)).toContain("fix the auth tests");
     expect(String(promptBodies[0].content)).not.toContain("!model");
     expect(String(promptBodies[0].content)).not.toContain("!reasoning");
+    // The thread mapping is what later follow-ups resolve against, so the
+    // flagged model has to land there for the defaults to actually stick.
+    await expect(
+      (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
+        "thread:D123:444.555",
+        "json"
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+      })
+    );
 
     slackFetch.mockRestore();
   });

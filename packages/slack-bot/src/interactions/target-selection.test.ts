@@ -27,6 +27,7 @@ vi.mock(import("@open-inspect/shared/slack"), async (importOriginal) => ({
 
 vi.mock("../messages/blocks", () => ({
   buildWorkingMessageBlocks: vi.fn(() => []),
+  formatSessionDefaultsNotice: vi.fn(() => undefined),
   scheduleStartingStatus: vi.fn(),
 }));
 
@@ -39,7 +40,14 @@ vi.mock("../pending-requests/pending-request-store", () => ({
 
 vi.mock("../sessions/session-launcher", () => ({
   loadAuthoritativeSlackLaunchSettings: vi.fn(),
-  startSessionAndSendPrompt: vi.fn(async () => ({ sessionId: "session-1" })),
+  startSessionAndSendPrompt: vi.fn(async () => ({
+    sessionId: "session-1",
+    turnPlan: {
+      sessionDefaults: { model: "openai/gpt-5.4", reasoningEffort: "high" },
+      promptOverrides: {},
+      effective: { model: "openai/gpt-5.4", reasoningEffort: "high" },
+    },
+  })),
 }));
 
 vi.mock("../target-clarification", () => ({

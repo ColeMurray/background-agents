@@ -11,6 +11,7 @@ import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import { createLogger } from "../logger";
 import {
   buildWorkingMessageBlocks,
+  formatSessionDefaultsNotice,
   scheduleStartingStatus,
   type BackgroundTaskScheduler,
 } from "../messages/blocks";
@@ -259,6 +260,7 @@ export async function handleTargetSelection(
       blocks: buildWorkingMessageBlocks({
         sessionId: sessionResult.sessionId,
         webAppUrl: env.WEB_APP_URL,
+        sessionDefaultsNotice: formatSessionDefaultsNotice(sessionResult.turnPlan),
       }),
     });
     scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);

@@ -90,15 +90,25 @@ Can you investigate the flaky login test in acme/web?
 DMs do not need an `@mention`. If you include one anyway, Open-Inspect strips it before sending the
 request to the agent.
 
-### One-turn model and reasoning overrides
+### Model and reasoning overrides
 
-Start a DM or `@mention` request with `!model` or `!reasoning` to override your App Home defaults
-for that request only. The same flags work on follow-ups in an existing session thread without
-changing the session's defaults for later replies:
+Start a DM or `@mention` request with `!model` or `!reasoning` to override your App Home defaults:
 
 ```text
 @Open-Inspect !model anthropic/claude-sonnet-4-6 !reasoning max investigate the flaky test
 ```
+
+Where you use the flags decides how long they last:
+
+- **On a request that starts a session**, they become that session's defaults. Every follow-up in
+  the thread keeps running on them until the thread ends, so you only have to pick the model once
+  per task. The "Starting work..." acknowledgement names the model when it is not your App Home
+  default.
+- **On a follow-up in an existing session thread**, they apply to that one request and leave the
+  session's defaults alone.
+
+To put a session back on your App Home default, name it explicitly on a follow-up (that still lasts
+one turn), or start a new thread.
 
 Both flags accept a space or colon before their value, such as `!model:openai/gpt-5.6-sol` and
 `!reasoning:high`. Any flags must appear together at the start of the request. Models must be
@@ -263,7 +273,8 @@ Branch preference priority is:
 
 These preferences are per Slack user. They affect new Slack sessions; follow-ups in an existing
 Slack thread continue the existing session. A leading `!model` or `!reasoning` flag overrides the
-corresponding setting for one request without changing these preferences.
+corresponding setting for the session it starts, or for a single follow-up request, without changing
+these preferences.
 
 ---
 

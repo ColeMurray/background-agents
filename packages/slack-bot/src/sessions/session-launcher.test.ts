@@ -153,7 +153,7 @@ describe("startSessionAndSendPrompt", () => {
         channelDescription: "Build and deploy discussion",
         traceId: "trace-1",
       })
-    ).resolves.toEqual({ sessionId: "session-1" });
+    ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
 
     expect(getResolvedUserPreferences).toHaveBeenCalledWith(env, "U123", {
       defaultModel: "anthropic/claude-sonnet-4-6",
@@ -208,7 +208,7 @@ describe("startSessionAndSendPrompt", () => {
     });
   });
 
-  it("applies combined model and reasoning flags only to the first prompt", async () => {
+  it("adopts combined model and reasoning flags as the new session's defaults", async () => {
     const env = makeEnv();
 
     await startSessionAndSendPrompt(env, {
@@ -235,23 +235,25 @@ describe("startSessionAndSendPrompt", () => {
 
     expect(createSession).toHaveBeenCalledWith(
       env,
-      expect.objectContaining({ model: "anthropic/claude-haiku-4-5", reasoningEffort: "max" })
+      expect.objectContaining({ model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" })
     );
-    expect(deliverPrompt).toHaveBeenCalledWith(
-      env,
+    // The session already runs the flagged model, so the prompt carries no
+    // per-turn override of its own.
+    const [, delivered] = vi.mocked(deliverPrompt).mock.calls[0]!;
+    expect(delivered).not.toHaveProperty("model");
+    expect(delivered).not.toHaveProperty("reasoningEffort");
+    expect(delivered.callbackContext).toEqual(
       expect.objectContaining({
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: "max",
-        callbackContext: expect.objectContaining({
-          model: "anthropic/claude-sonnet-4-6",
-          reasoningEffort: "max",
-        }),
       })
     );
+    // Follow-ups in the thread resolve against the flagged model, not the
+    // App Home default the flags replaced.
     expect(buildThreadSession).toHaveBeenCalledWith(
       "session-1",
       repositoryTarget,
-      "anthropic/claude-haiku-4-5",
+      "anthropic/claude-sonnet-4-6",
       "max",
       undefined
     );
@@ -421,7 +423,7 @@ describe("startSessionAndSendPrompt", () => {
         contextImages,
         traceId: "trace-1",
       })
-    ).resolves.toEqual({ sessionId: "session-1" });
+    ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
 
     expect(preparePromptImageAttachments).toHaveBeenCalledWith(
       env,

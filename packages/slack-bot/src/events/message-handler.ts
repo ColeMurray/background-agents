@@ -25,6 +25,7 @@ import { createLogger } from "../logger";
 import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import {
   buildWorkingMessageBlocks,
+  formatSessionDefaultsNotice,
   scheduleStartingStatus,
   type BackgroundTaskScheduler,
 } from "../messages/blocks";
@@ -401,6 +402,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       blocks: buildWorkingMessageBlocks({
         sessionId: sessionResult.sessionId,
         webAppUrl: env.WEB_APP_URL,
+        sessionDefaultsNotice: formatSessionDefaultsNotice(sessionResult.turnPlan),
       }),
     });
     scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);

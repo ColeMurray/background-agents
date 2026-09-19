@@ -96,10 +96,17 @@ export interface StartSessionOptions {
   traceId?: string;
 }
 
+/**
+ * The launch outcome. `turnPlan` is the plan the session was actually created
+ * with, which the caller needs because the launcher resolves it when none was
+ * supplied.
+ */
+export type StartSessionResult = { sessionId: string; turnPlan: ResolvedTurnPlan };
+
 export async function startSessionAndSendPrompt(
   env: Env,
   options: StartSessionOptions
-): Promise<{ sessionId: string } | null> {
+): Promise<StartSessionResult | null> {
   const {
     target,
     channel,
@@ -153,7 +160,10 @@ export async function startSessionAndSendPrompt(
     }
     turnPlan = resolvedTurn.turnPlan;
   }
-  const { model, reasoningEffort } = turnPlan.sessionDefaults;
+  // Flags on the message that opens a session pick the tool for the whole job,
+  // so they become the session's defaults rather than a one-prompt override.
+  // Follow-ups in the thread still override a single turn.
+  const { model, reasoningEffort } = turnPlan.effective;
   const preferenceRepo = branchPreferenceRepo(target);
   let branch: string | undefined;
   if (preferenceRepo) {
@@ -202,7 +212,7 @@ export async function startSessionAndSendPrompt(
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),
     callbackContext,
-    ...turnPlan.promptOverrides,
+    // No per-prompt override: the session was just created with this plan.
     channel,
     threadTs,
     traceId,
@@ -226,5 +236,5 @@ export async function startSessionAndSendPrompt(
     threadTs,
     buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs)
   );
-  return { sessionId: session.sessionId };
+  return { sessionId: session.sessionId, turnPlan };
 }
