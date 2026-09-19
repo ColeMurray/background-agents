@@ -1,4 +1,6 @@
 import { createModalClient } from "./client";
+import { Sandbox0RestClient } from "./sandbox0-rest-client";
+import { Sandbox0SandboxProvider } from "./providers/sandbox0-provider";
 import { createDaytonaRestClient } from "./daytona-rest-client";
 import { createE2BRestClient } from "./e2b-rest-client";
 import { createOpenComputerRestClient } from "./opencomputer-rest-client";
@@ -151,6 +153,10 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
 
 export function createSandboxProviderFromEnv(env: Env, backend: "daytona"): DaytonaSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "e2b"): E2BSandboxProvider;
+export function createSandboxProviderFromEnv(
+  env: Env,
+  backend: "sandbox0"
+): Sandbox0SandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "modal"): ModalSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "vercel"): VercelSandboxProvider;
 export function createSandboxProviderFromEnv(
@@ -169,6 +175,20 @@ export function createSandboxProviderFromEnv(
   options: { requireOpenComputerTemplate?: boolean } = {}
 ): SandboxProvider {
   switch (backend) {
+    case "sandbox0":
+      if (!env.SANDBOX0_API_KEY || !env.SANDBOX0_TEMPLATE_ID) {
+        throw new Error(
+          "SANDBOX0_API_KEY and SANDBOX0_TEMPLATE_ID are required when SANDBOX_PROVIDER=sandbox0"
+        );
+      }
+      return new Sandbox0SandboxProvider(
+        new Sandbox0RestClient({ apiKey: env.SANDBOX0_API_KEY, apiUrl: env.SANDBOX0_API_URL }),
+        {
+          templateId: env.SANDBOX0_TEMPLATE_ID,
+          scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
+          sandboxAccessPasswordSecret: env.SANDBOX0_API_KEY,
+        }
+      );
     case "daytona":
       return createDaytonaProviderFromEnv(env);
     case "vercel":

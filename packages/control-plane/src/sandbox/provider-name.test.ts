@@ -1,17 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { resolveSandboxBackendName } from "./provider-name";
+import { DEFAULT_SANDBOX_BACKEND_NAME, resolveSandboxBackendName } from "./provider-name";
 
 describe("resolveSandboxBackendName", () => {
-  it("defaults to modal when undefined", () => {
-    expect(resolveSandboxBackendName(undefined)).toBe("modal");
+  it("uses the default backend when undefined", () => {
+    expect(resolveSandboxBackendName(undefined)).toBe(DEFAULT_SANDBOX_BACKEND_NAME);
   });
 
-  it("defaults to modal when empty string", () => {
-    expect(resolveSandboxBackendName("")).toBe("modal");
+  it("uses the default backend when empty string", () => {
+    expect(resolveSandboxBackendName("")).toBe(DEFAULT_SANDBOX_BACKEND_NAME);
   });
 
-  it("defaults to modal when whitespace-only", () => {
-    expect(resolveSandboxBackendName("   ")).toBe("modal");
+  it("uses the default backend when whitespace-only", () => {
+    expect(resolveSandboxBackendName("   ")).toBe(DEFAULT_SANDBOX_BACKEND_NAME);
   });
 
   it('returns "modal" for "modal"', () => {

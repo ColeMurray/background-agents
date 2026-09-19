@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,10 @@ def build_image(root: Path, provider: str) -> dict[str, Any]:
     update_locks(root, check=True)
     environment = dict(os.environ)
     commands = {
+        "sandbox0": (
+            root,
+            [sys.executable, "packages/sandbox0-infra/build-template.py"],
+        ),
         "modal": (
             root / "packages/modal-infra",
             ["uv", "run", "--frozen", "python", "deploy.py", "--build-sandbox-image"],
