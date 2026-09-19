@@ -115,8 +115,9 @@ MAX_RECONNECTS_PER_SESSION: Final = 3
 # ceiling from that budget rather than pick a round number: the SDK's 1MiB
 # default breaks on an ordinary screenshot, and any fixed value silently
 # falls behind when the attachment limits move.
-_ATTACHMENT_BASE64_BYTES: Final = (
-    (MAX_SESSION_ATTACHMENTS_PER_MESSAGE * AttachmentProcessor.MAX_IMAGE_BYTES + 2) // 3 * 4
+# Each attachment is encoded on its own, so the padding is per attachment too.
+_ATTACHMENT_BASE64_BYTES: Final = MAX_SESSION_ATTACHMENTS_PER_MESSAGE * (
+    (AttachmentProcessor.MAX_IMAGE_BYTES + 2) // 3 * 4
 )
 # Room for the JSON envelope, the prompt text beside the image blocks, and
 # tool-result lines that carry images the runtime never sized.

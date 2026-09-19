@@ -380,8 +380,10 @@ class TestOptions:
         envelope_bytes = len(json.dumps(messages[0])) - sum(
             len(attachment["content"]) for attachment in attachments
         )
-        budget = MAX_SESSION_ATTACHMENTS_PER_MESSAGE * AttachmentProcessor.MAX_IMAGE_BYTES
-        base64_bytes = ((budget + 2) // 3) * 4
+        # Encoded one attachment at a time, as the processor does, so the
+        # base64 padding lands once per image rather than once per batch.
+        per_attachment = ((AttachmentProcessor.MAX_IMAGE_BYTES + 2) // 3) * 4
+        base64_bytes = MAX_SESSION_ATTACHMENTS_PER_MESSAGE * per_attachment
         assert base64_bytes + envelope_bytes < MAX_STDOUT_MESSAGE_BYTES
 
     def test_reasoning_controls_are_per_model(self) -> None:
