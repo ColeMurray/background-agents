@@ -316,11 +316,13 @@ project_root = "../../../"
 #          "https://cdn.example.com/logo.svg".
 # app_icon_url = ""
 
-# Override the R2 media bucket name (optional)
+# Name of the R2 media bucket Terraform creates and manages (optional)
 # Defaults to "open-inspect-media-<deployment_name>" when left empty.
-# Set this when the bucket must be pre-created out-of-band — for example, when
-# the Cloudflare API token used by Terraform doesn't have permission to create
-# R2 buckets and an admin had to provision one with a specific name.
+# This selects the name of that managed bucket — cloudflare_r2_bucket.media is
+# always a create, so a bucket that already exists (for example one an admin had to
+# provision because the Cloudflare API token used by Terraform cannot create R2
+# buckets) must be imported into state first, and changing the name of a bucket
+# Terraform already manages replaces it, as described below.
 #
 # Manual setup requirements (when an admin pre-creates the bucket):
 #   - Must live in the same Cloudflare account as the Workers (cloudflare_account_id).
