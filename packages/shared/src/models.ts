@@ -372,6 +372,21 @@ export const MODEL_OPTIONS: ModelCategory[] = [
   })),
 ];
 
+const MODEL_DISPLAY_NAMES = new Map<string, string>(
+  MODEL_CATALOG.flatMap((group) => group.models.map((model) => [model.id, model.name]))
+);
+
+/**
+ * Catalog display name for a model ID, falling back to the ID itself for
+ * models that are no longer in the catalog.
+ *
+ * @example
+ * getModelDisplayName("anthropic/claude-sonnet-4-5") // "Claude Sonnet 4.5"
+ */
+export function getModelDisplayName(modelId: string): string {
+  return MODEL_DISPLAY_NAMES.get(normalizeModelId(modelId)) ?? modelId;
+}
+
 /**
  * Models enabled by default when no preferences are stored.
  * Excludes opt-in providers which must be enabled via settings.

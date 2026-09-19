@@ -10,7 +10,8 @@ import { collectForwardedMessages } from "../forwarded-messages";
 import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import { createLogger } from "../logger";
 import {
-  buildWorkingMessageBlocks,
+  buildWorkingMessage,
+  formatSessionDefaultsNotice,
   scheduleStartingStatus,
   type BackgroundTaskScheduler,
 } from "../messages/blocks";
@@ -97,6 +98,7 @@ export async function handleTargetSelection(
     threadContextSource,
     unattributedPrompt,
     turnPlan,
+    launchPlan,
     classification,
   } = pendingData;
   if (selectedBy !== userId) {
@@ -113,10 +115,13 @@ export async function handleTargetSelection(
     !requestId && "inlinePromptOptions" in pendingData
       ? pendingData.inlinePromptOptions
       : undefined;
-  let resolvedTurnPlan = turnPlan;
+  // `turnPlan` is the pre-`launchPlan` field, still read so a clarification
+  // stored before this deploy keeps its model choice.
+  let resolvedLaunchPlan =
+    launchPlan ?? (turnPlan ? { sessionDefaults: turnPlan.effective } : undefined);
   let launchSettings: SlackLaunchSettings | undefined;
   if (
-    !resolvedTurnPlan &&
+    !resolvedLaunchPlan &&
     legacyInlinePromptOptions &&
     hasInlinePromptOptions(legacyInlinePromptOptions)
   ) {
@@ -143,7 +148,7 @@ export async function handleTargetSelection(
       });
       return;
     }
-    resolvedTurnPlan = resolvedTurn.turnPlan;
+    resolvedLaunchPlan = { sessionDefaults: resolvedTurn.turnPlan.effective };
   }
   const target = await resolveTargetValue(env, selectedValue, traceId);
   if (!target) {
@@ -218,9 +223,10 @@ export async function handleTargetSelection(
     target_id: targetId(target),
   });
   scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
-  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, "Starting work...", {
+  const ack = buildWorkingMessage();
+  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, ack.text, {
     thread_ts: threadKey,
-    blocks: buildWorkingMessageBlocks(),
+    blocks: ack.blocks,
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
   const actor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, userId);
@@ -243,7 +249,7 @@ export async function handleTargetSelection(
     images,
     contextImages,
     imageOnly,
-    turnPlan: resolvedTurnPlan,
+    launchPlan: resolvedLaunchPlan,
     launchSettings,
     traceId,
   });
@@ -255,11 +261,13 @@ export async function handleTargetSelection(
     await deleteLegacyPendingRequest(env, channel, threadKey);
   }
   if (ackTs) {
-    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, "Starting work...", {
-      blocks: buildWorkingMessageBlocks({
-        sessionId: sessionResult.sessionId,
-        webAppUrl: env.WEB_APP_URL,
-      }),
+    const launched = buildWorkingMessage({
+      sessionId: sessionResult.sessionId,
+      webAppUrl: env.WEB_APP_URL,
+      sessionDefaultsNotice: formatSessionDefaultsNotice(sessionResult),
+    });
+    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, launched.text, {
+      blocks: launched.blocks,
     });
     scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   }
