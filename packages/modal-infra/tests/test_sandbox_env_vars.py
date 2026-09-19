@@ -1,4 +1,6 @@
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -531,6 +533,7 @@ async def test_repo_image_boot_omits_fallback_tokens(monkeypatch):
 
     class FakeImage:
         object_id = "repo-img-1"
+        build = SimpleNamespace(aio=AsyncMock())
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
@@ -560,6 +563,7 @@ async def test_repo_image_boot_preserves_user_github_cli_token(monkeypatch, toke
 
     class FakeImage:
         object_id = "repo-img-1"
+        build = SimpleNamespace(aio=AsyncMock())
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
