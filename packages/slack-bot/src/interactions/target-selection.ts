@@ -51,7 +51,7 @@ interface TargetSelectionRequest {
 /**
  * Replace the clarification message with a record of the chosen target so its
  * picker and quick-pick buttons stop inviting a second selection. Best effort:
- * a failed update leaves a stale picker, which must not stop the launch.
+ * a failed update leaves a stale picker, which must not fail a launched session.
  */
 async function retireTargetClarificationPrompt(
   env: Env,
@@ -250,9 +250,6 @@ export async function handleTargetSelection(
     target_kind: target.kind,
     target_id: targetId(target),
   });
-  // Past every early return: the selection is final, so retire the picker
-  // before announcing the launch.
-  await retireTargetClarificationPrompt(env, channel, messageTs, target, traceId);
   scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, "Starting work...", {
     thread_ts: threadKey,
@@ -283,8 +280,12 @@ export async function handleTargetSelection(
     launchSettings,
     traceId,
   });
+  // A failed launch leaves the pending request in place and tells the user to
+  // try again, so the picker is their retry control: only retire it once the
+  // launch has committed.
   if (!sessionResult) return;
 
+  await retireTargetClarificationPrompt(env, channel, messageTs, target, traceId);
   if (requestId) {
     await deletePendingRequest(env, requestId);
   } else {

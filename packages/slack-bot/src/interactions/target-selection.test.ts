@@ -368,19 +368,33 @@ describe("handleTargetSelection", () => {
       "Using acme/app",
       { blocks: [{ type: "section" }] }
     );
-    // The picker is retired before the launch is announced.
-    expect(vi.mocked(updateMessage).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(postMessage).mock.invocationCallOrder[0]
+    // The picker is retired only once the launch has committed.
+    expect(vi.mocked(updateMessage).mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(startSessionAndSendPrompt).mock.invocationCallOrder[0]
     );
   });
 
-  it("still launches when the clarification message can no longer be updated", async () => {
+  it("keeps the picker as a retry control when the launch fails", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
+    // Once: clearAllMocks keeps implementations, so a persistent override would
+    // leak into later tests.
+    vi.mocked(startSessionAndSendPrompt).mockResolvedValueOnce(null);
+
+    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
+
+    expect(updateMessage).not.toHaveBeenCalled();
+    // The pending request survives too, so a retry can still resolve.
+    expect(deletePendingRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps the session when the clarification message can no longer be updated", async () => {
     vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
     vi.mocked(updateMessage).mockResolvedValueOnce({ ok: false, error: "message_not_found" });
 
     await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
 
     expect(startSessionAndSendPrompt).toHaveBeenCalled();
+    expect(deletePendingRequest).toHaveBeenCalledWith(expect.anything(), REQUEST_ID);
   });
 
   it("leaves the picker in place when the selected target is gone", async () => {
