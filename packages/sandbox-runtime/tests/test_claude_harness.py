@@ -354,17 +354,35 @@ class TestOptions:
         assert "mcp__local__*" in options["allowed_tools"]
         assert "Bash" in options["allowed_tools"]
 
-    def test_stdout_ceiling_clears_the_whole_attachment_budget(self) -> None:
+    async def test_stdout_ceiling_clears_the_whole_attachment_budget(self, tmp_path: Path) -> None:
         """One NDJSON line carries every attachment the runtime accepts.
 
         ``_user_messages`` inlines them all into a single message the CLI
         echoes back, so a prompt at the top of the budget -- not just one
-        large image -- has to fit under the ceiling, with room left over for
-        the JSON envelope and the prompt text.
+        large image -- has to fit under the ceiling. Measure the JSON
+        envelope from the real message instead of trusting the headroom, and
+        stand small payloads in for the images so the check stays cheap.
         """
+        h = Harness(tmp_path)
+        await h.harness.open()
+        await h.harness.create_session()
+        attachments = [
+            {"name": f"shot-{index}.png", "mimeType": "image/png", "content": "AAAA"}
+            for index in range(MAX_SESSION_ATTACHMENTS_PER_MESSAGE)
+        ]
+        messages = [
+            message
+            async for message in h.harness._user_messages(
+                HarnessPrompt(message_id="m1", text="hi", attachments=attachments)
+            )
+        ]
+        assert len(messages) == 1
+        envelope_bytes = len(json.dumps(messages[0])) - sum(
+            len(attachment["content"]) for attachment in attachments
+        )
         budget = MAX_SESSION_ATTACHMENTS_PER_MESSAGE * AttachmentProcessor.MAX_IMAGE_BYTES
         base64_bytes = ((budget + 2) // 3) * 4
-        assert base64_bytes < MAX_STDOUT_MESSAGE_BYTES
+        assert base64_bytes + envelope_bytes < MAX_STDOUT_MESSAGE_BYTES
 
     def test_reasoning_controls_are_per_model(self) -> None:
         assert reasoning_options("claude-sonnet-4-5", "max") == {
