@@ -344,9 +344,11 @@ describe("SessionHeader", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Running setup.sh" }));
 
-    expect(await screen.findByText("Sandbox Running setup.sh")).toBeInTheDocument();
+    // Scoped to the popover: the mobile strip reports the same status too.
+    const popover = within(await screen.findByRole("dialog"));
+    expect(popover.getByText("Sandbox Running setup.sh")).toBeInTheDocument();
     // One repository: naming it adds nothing.
-    expect(screen.getByText("Running setup.sh.")).toBeInTheDocument();
+    expect(popover.getByText("Running setup.sh.")).toBeInTheDocument();
     expect(screen.queryByText("Sandbox status: Connecting...")).not.toBeInTheDocument();
   });
 
@@ -414,9 +416,11 @@ describe("SessionHeader", () => {
     // Nothing is running between steps, so the pill does not claim it is.
     fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Connecting..." }));
 
-    expect(await screen.findByText("Sandbox Connecting...")).toBeInTheDocument();
+    // Scoped to the popover: the mobile strip reports the same status too.
+    const popover = within(await screen.findByRole("dialog"));
+    expect(popover.getByText("Sandbox Connecting...")).toBeInTheDocument();
     expect(
-      screen.getByText(
+      popover.getByText(
         "Finished setup.sh for acme/api. This step exited with an error and the boot continued."
       )
     ).toBeInTheDocument();
@@ -653,11 +657,15 @@ describe("SessionHeader", () => {
 describe("SessionHeader mobile presentation", () => {
   function renderMobileHeader(
     sessionState: SessionState,
-    connection: Partial<ConnectionProps> = {}
+    connection: Partial<ConnectionProps> = {},
+    sandboxError?: string,
+    capabilities?: SessionCapabilities
   ) {
     return render(
       <SessionHeader
         sessionState={sessionState}
+        sandboxError={sandboxError}
+        capabilities={capabilities}
         fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Mobile header" }}
         connected
         connecting={false}
@@ -695,7 +703,15 @@ describe("SessionHeader mobile presentation", () => {
     expect(screen.getByRole("button", { name: "Show sandbox status: Failed" })).toBeInTheDocument();
   });
 
-  it.each(["stopped", "stale"] as const)("raises a strip for a %s sandbox", (sandboxStatus) => {
+  it.each([
+    "pending",
+    "warming",
+    "spawning",
+    "connecting",
+    "snapshotting",
+    "stopped",
+    "stale",
+  ] as const)("raises a strip for a %s sandbox", (sandboxStatus) => {
     renderMobileHeader(createSessionState({ sandboxStatus }));
 
     expect(screen.getByRole("button", { name: /^Show sandbox status/ })).toBeInTheDocument();
@@ -732,13 +748,80 @@ describe("SessionHeader mobile presentation", () => {
     expect(screen.queryByRole("button", { name: /^Show sandbox status/ })).not.toBeInTheDocument();
   });
 
-  it("stays quiet while a reconnect is pending", () => {
-    renderMobileHeader(createSessionState({ sandboxStatus: "ready" }), {
-      connected: false,
-      connecting: false,
-      reconnecting: true,
+  it.each([
+    ["connecting", { connected: false, connecting: true, reconnecting: false }, "Connecting..."],
+    [
+      "reconnecting",
+      { connected: false, connecting: false, reconnecting: true },
+      "Reconnecting...",
+    ],
+  ] as const)(
+    "reports an in-progress %s socket rather than going silent",
+    (_name, connection, label) => {
+      renderMobileHeader(createSessionState({ sandboxStatus: "ready" }), connection);
+
+      // A retry budget that spans minutes must not read as a frozen app.
+      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.queryByText("Disconnected")).not.toBeInTheDocument();
+    }
+  );
+
+  it("reaches the status detail and dashboard link for a healthy sandbox", async () => {
+    renderMobileHeader(
+      createSessionState({
+        sandboxStatus: "ready",
+        sandboxDashboardUrl: "https://modal.com/apps/acme/main/sandbox",
+      })
+    );
+
+    // Nothing is on the bar in this state, so the actions menu has to carry it.
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
     });
 
-    expect(screen.queryByText("Disconnected")).not.toBeInTheDocument();
+    const menu = within(await screen.findByRole("menu"));
+    expect(menu.getByText("Sandbox Ready")).toBeInTheDocument();
+    expect(menu.getByText("The sandbox is available.")).toBeInTheDocument();
+    expect(menu.getByRole("menuitem", { name: /Open provider dashboard/ })).toHaveAttribute(
+      "href",
+      "https://modal.com/apps/acme/main/sandbox"
+    );
+  });
+
+  it("puts the provider's failure reason in the actions menu", async () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "failed" }), {}, "Quota exceeded.");
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    expect(
+      within(await screen.findByRole("menu")).getByText("Quota exceeded.")
+    ).toBeInTheDocument();
+  });
+
+  it("withholds the dashboard link from a session without sandbox access", async () => {
+    renderMobileHeader(
+      createSessionState({
+        sandboxStatus: "ready",
+        sandboxDashboardUrl: "https://modal.com/apps/acme/main/sandbox",
+      }),
+      {},
+      undefined,
+      { read: true, collaborate: false, lifecycle: false, sandboxAccess: false }
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    const menu = within(await screen.findByRole("menu"));
+    expect(menu.getByText("Sandbox Ready")).toBeInTheDocument();
+    expect(
+      menu.queryByRole("menuitem", { name: /Open provider dashboard/ })
+    ).not.toBeInTheDocument();
   });
 });

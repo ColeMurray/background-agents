@@ -27,11 +27,40 @@ type SessionSocketState = ReturnType<typeof useSessionSocket>;
 const BOOTING_STATUSES: ReadonlySet<SandboxStatusValue> = new Set(["spawning", "connecting"]);
 
 /**
- * Statuses that interrupt on mobile. The mobile header is the title and
- * nothing else while the sandbox is healthy, so a status has to be something
- * you would act on to earn a line of its own.
+ * The one sandbox state that needs no explaining. Anything else — booting,
+ * saving, stopped, broken — gets a line of its own on mobile, so the only
+ * state the phone stays silent about is the one where there is nothing to
+ * say. Full detail is always in the actions menu regardless.
  */
-const ATTENTION_STATUSES: ReadonlySet<SandboxStatusValue> = new Set(["stopped", "stale", "failed"]);
+const STEADY_SANDBOX_STATUS: SandboxStatusValue = "ready";
+
+type ConnectionState = "connected" | "connecting" | "reconnecting" | "disconnected";
+
+/**
+ * A pending reconnect is a wait, not a dead connection: say so rather than
+ * showing "Disconnected" while the backoff timer runs. That backoff spans
+ * minutes (MAX_RECONNECT_ATTEMPTS in use-session-transport), which is far too
+ * long for the interface to say nothing.
+ */
+const CONNECTION_PRESENTATION: Record<
+  ConnectionState,
+  { label: string; dot: string; pulse?: boolean }
+> = {
+  connected: { label: "Connected", dot: "bg-success" },
+  connecting: { label: "Connecting...", dot: "bg-warning", pulse: true },
+  reconnecting: { label: "Reconnecting...", dot: "bg-warning", pulse: true },
+  disconnected: { label: "Disconnected", dot: "bg-destructive" },
+};
+
+function connectionState(
+  connected: boolean,
+  connecting: boolean,
+  reconnecting: boolean
+): ConnectionState {
+  if (reconnecting) return "reconnecting";
+  if (connecting) return "connecting";
+  return connected ? "connected" : "disconnected";
+}
 
 /**
  * What a phase report means for the popover, by the report's status. Copy
@@ -165,14 +194,18 @@ export function SessionHeader({
   }, [fallbackSessionInfo.title, sessionState?.title, isRenaming]);
 
   // Mobile shows the title and nothing else: no repository, no status pill.
-  // A booting sandbox gets a single dot beside the title, and anything that
-  // needs acting on gets the strip below. Everything else is one tap away in
-  // the actions menu. Desktop keeps the full header.
-  const bootingDot =
-    sessionState?.sandboxStatus &&
-    SANDBOX_STATUS_PRESENTATION[sessionState.sandboxStatus].pulse === true
-      ? SANDBOX_STATUS_PRESENTATION[sessionState.sandboxStatus]
-      : null;
+  // Anything worth reporting goes in the strip below, as text rather than a
+  // decorative dot, and the full detail is always in the actions menu.
+  // Desktop keeps the full header.
+  const sandbox = sessionState?.sandboxStatus
+    ? resolveSandboxStatus({
+        status: sessionState.sandboxStatus,
+        dashboardUrl: capabilities.sandboxAccess ? sessionState.sandboxDashboardUrl : undefined,
+        error: sandboxError,
+        bootPhase,
+        repositoryCount: sessionState.repositories?.length ?? 0,
+      })
+    : null;
 
   return (
     <header className="border-b border-border-muted flex-shrink-0">
@@ -200,13 +233,7 @@ export function SessionHeader({
                 className="w-full truncate bg-transparent text-center text-sm font-medium text-foreground outline-none focus:ring-inset focus:ring-ring md:max-w-40 md:text-left"
               />
             ) : (
-              <h1 className="flex min-w-0 items-center justify-center gap-1.5 text-sm font-medium text-foreground md:max-w-40 md:justify-start">
-                {bootingDot && (
-                  <span
-                    aria-hidden="true"
-                    className={`h-1.5 w-1.5 flex-shrink-0 rounded-full md:hidden ${bootingDot.dot} animate-pulse motion-reduce:animate-none`}
-                  />
-                )}
+              <h1 className="flex min-w-0 items-center justify-center text-sm font-medium text-foreground md:max-w-40 md:justify-start">
                 <button
                   type="button"
                   className={`min-w-0 truncate ${capabilities.lifecycle ? "cursor-text" : "cursor-default"}`}
@@ -235,6 +262,7 @@ export function SessionHeader({
           </button>
           <MobileSessionActions
             {...actions}
+            sandbox={sandbox}
             triggerRef={actionsButtonRef}
             onOpenDetails={onOpenMobileDetails}
             onOpenMedia={onOpenMobileDetails}
@@ -276,7 +304,9 @@ export function SessionHeader({
         </div>
       </div>
       <MobileStatusStrip
-        disconnected={capabilities.read && !connected && !connecting && !reconnecting}
+        connection={
+          capabilities.read ? connectionState(connected, connecting, reconnecting) : "connected"
+        }
         status={sessionState?.sandboxStatus}
         dashboardUrl={capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined}
         error={sandboxError}
@@ -296,17 +326,8 @@ function ConnectionStatusIcon({
   connecting: boolean;
   reconnecting: boolean;
 }) {
-  // A pending reconnect is a wait, not a dead connection: say so rather than
-  // showing "Disconnected" while the backoff timer runs.
-  const pending = connecting || reconnecting;
-  const label = reconnecting
-    ? "Reconnecting..."
-    : connecting
-      ? "Connecting..."
-      : connected
-        ? "Connected"
-        : "Disconnected";
-  const color = pending ? "bg-warning" : connected ? "bg-success" : "bg-destructive";
+  const { label, dot, pulse } =
+    CONNECTION_PRESENTATION[connectionState(connected, connecting, reconnecting)];
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -320,7 +341,7 @@ function ConnectionStatusIcon({
           >
             <span
               aria-hidden="true"
-              className={`h-2.5 w-2.5 rounded-full ${color}${pending ? " animate-pulse motion-reduce:animate-none" : ""}`}
+              className={`h-2.5 w-2.5 rounded-full ${dot}${pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}
             />
           </span>
         </TooltipTrigger>
@@ -378,13 +399,15 @@ function resolveSandboxStatus({
   };
 }
 
+export type ResolvedSandboxStatus = ReturnType<typeof resolveSandboxStatus>;
+
 function SandboxStatusDetail({
   presentation,
   failedPhase,
   failedPhaseRepo,
   reason,
   safeDashboardUrl,
-}: ReturnType<typeof resolveSandboxStatus>) {
+}: ResolvedSandboxStatus) {
   return (
     <>
       <div className="border-b border-border-muted p-3">
@@ -453,39 +476,45 @@ function SandboxStatusIcon(props: SandboxStatusProps) {
 }
 
 /**
- * The mobile header's only status surface: a line that appears below the title
- * when the sandbox needs attention, and stays out of the way otherwise. A lost
- * connection wins over the sandbox, because a stale socket means the sandbox
- * status on screen may no longer be true.
+ * The mobile header's glanceable status line. It appears below the title
+ * whenever there is something to report and stays out of the way when there
+ * is not, so the common case keeps the bare title bar.
+ *
+ * The socket wins over the sandbox: a connection that is down or retrying
+ * means the sandbox status on screen may no longer be true, and a silent
+ * header during a reconnect that can run for minutes reads as a frozen app.
  */
 function MobileStatusStrip({
-  disconnected,
+  connection,
   ...statusProps
-}: SandboxStatusProps & { disconnected: boolean }) {
+}: SandboxStatusProps & { connection: ConnectionState }) {
   const { status } = statusProps;
 
-  if (disconnected) {
+  if (connection !== "connected") {
+    const { label, dot, pulse } = CONNECTION_PRESENTATION[connection];
     return (
       <p
         role="status"
-        className="flex items-center gap-2 border-t border-border-muted px-3 py-2 text-xs text-destructive md:hidden"
+        className={`flex items-center gap-2 border-t border-border-muted px-3 py-2 text-xs md:hidden ${
+          connection === "disconnected" ? "text-destructive" : "text-warning"
+        }`}
       >
         <span
           aria-hidden="true"
-          className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-destructive"
+          className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${dot}${pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}
         />
-        Disconnected
+        {label}
       </p>
     );
   }
 
-  if (!status || !ATTENTION_STATUSES.has(status)) return null;
+  if (!status || status === STEADY_SANDBOX_STATUS) return null;
 
   const resolved = resolveSandboxStatus({ ...statusProps, status });
   const { presentation } = resolved;
 
   return (
-    <div className="md:hidden">
+    <div role="status" className="md:hidden">
       <Popover>
         <PopoverTrigger asChild>
           <button
