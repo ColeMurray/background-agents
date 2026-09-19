@@ -2,12 +2,17 @@ import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
+  excludeOtherProviderBuilds,
   excludeSupersededBuilds,
   imageBuildsEnabledReposResponseSchema,
   imageBuildsEnabledResponseSchema,
   imageBuildsStatusResponseSchema,
 } from "@/lib/image-builds";
-import { REPO_IMAGES_UNSUPPORTED_MESSAGE, supportsRepoImages } from "@/lib/sandbox-provider";
+import {
+  REPO_IMAGES_UNSUPPORTED_MESSAGE,
+  getPublicSandboxProvider,
+  supportsRepoImages,
+} from "@/lib/sandbox-provider";
 
 /**
  * Unified image-build feed: every prebuild-enabled scope plus the cross-scope
@@ -57,7 +62,10 @@ export async function GET() {
     // Persisted repo flags, unlike units, never drop a scope on a transient
     // resolution failure — the settings toggles read these.
     const enabledRepos = parsedEnabledRepos.data.repos;
-    const images = excludeSupersededBuilds(parsedStatus.data.images);
+    const images = excludeOtherProviderBuilds(
+      excludeSupersededBuilds(parsedStatus.data.images),
+      getPublicSandboxProvider()
+    );
 
     return NextResponse.json({ units, enabledRepos, images });
   } catch (error) {
