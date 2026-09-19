@@ -1,9 +1,6 @@
 import { postMessage } from "@open-inspect/shared/slack";
-import {
-  normalizeValidModels,
-  type ReasoningEffort,
-  type ValidModel,
-} from "@open-inspect/shared/models";
+import type { CallbackContext } from "@open-inspect/shared/types/session-api";
+import { normalizeValidModels, type ValidModel } from "@open-inspect/shared/models";
 import { getAuthoritativeModels, getAvailableModels } from "../app-home/models";
 import {
   notifyDroppedAttachments,
@@ -20,7 +17,6 @@ import { createSession } from "./control-plane-client";
 import { getSlackSettings, type SlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
-import type { SessionLaunchSnapshot } from "../pending-requests/pending-request-store";
 import {
   EMPTY_INLINE_PROMPT_OPTIONS,
   resolveInlinePromptOptions,
@@ -98,11 +94,6 @@ export interface StartSessionOptions {
   turnPlan?: ResolvedTurnPlan;
   launchSettings?: SlackLaunchSettings;
   traceId?: string;
-  clientRequestId?: string;
-  existingSessionId?: string;
-  launchSnapshot?: SessionLaunchSnapshot;
-  onLaunchPrepared?: (snapshot: SessionLaunchSnapshot, sessionId?: string) => Promise<void>;
-  onSessionCreated?: (sessionId: string, previousSessionId?: string) => Promise<void>;
 }
 
 export async function startSessionAndSendPrompt(
@@ -125,11 +116,6 @@ export async function startSessionAndSendPrompt(
     turnPlan: providedTurnPlan,
     launchSettings: providedLaunchSettings,
     traceId,
-    clientRequestId,
-    existingSessionId,
-    launchSnapshot,
-    onLaunchPrepared,
-    onSessionCreated,
   } = options;
   // Download image bytes before creating the session: an image-only request
   // whose images are all lost must never create a session it will not prompt.
@@ -149,93 +135,42 @@ export async function startSessionAndSendPrompt(
     );
     return null;
   }
-  let snapshot = launchSnapshot;
-  if (!snapshot) {
-    const {
-      enabledModels,
-      slackConfig,
-      userPreferences: userPrefs,
-    } = providedLaunchSettings ?? (await loadSlackLaunchSettings(env, actor.userId, traceId));
-    let turnPlan = providedTurnPlan;
-    if (!turnPlan) {
-      const resolvedTurn = resolveInlinePromptOptions(
-        EMPTY_INLINE_PROMPT_OPTIONS,
-        userPrefs,
-        enabledModels
-      );
-      if (!resolvedTurn.ok) {
-        await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, {
-          thread_ts: threadTs,
-        });
-        return null;
-      }
-      turnPlan = resolvedTurn.turnPlan;
+  const {
+    enabledModels,
+    slackConfig,
+    userPreferences: userPrefs,
+  } = providedLaunchSettings ?? (await loadSlackLaunchSettings(env, actor.userId, traceId));
+  let turnPlan = providedTurnPlan;
+  if (!turnPlan) {
+    const resolvedTurn = resolveInlinePromptOptions(
+      EMPTY_INLINE_PROMPT_OPTIONS,
+      userPrefs,
+      enabledModels
+    );
+    if (!resolvedTurn.ok) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, { thread_ts: threadTs });
+      return null;
     }
-    const { model, reasoningEffort } = turnPlan.sessionDefaults;
-    let branch: string | undefined;
-    const preferenceRepo = branchPreferenceRepo(target);
-    if (preferenceRepo) {
-      const repoBranch = await getUserRepoBranchPreference(env, actor.userId, preferenceRepo.id);
-      branch = repoBranch ?? userPrefs.branch;
-    }
-    const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
-    const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
-    let content = channelContext + threadContext + messageText;
-    if (slackConfig.sessionInstructions) {
-      content += `\n\n## Additional Instructions\n\n${slackConfig.sessionInstructions}`;
-    }
-    snapshot = {
-      model,
-      reasoningEffort,
-      promptOverrides: turnPlan.promptOverrides,
-      branch,
-      content,
-      callbackContext: {
-        source: "slack",
-        channel,
-        threadTs,
-        repoFullName: targetLabel(target),
-        model: turnPlan.effective.model,
-        reasoningEffort: turnPlan.effective.reasoningEffort,
-      },
-    };
-    if (onLaunchPrepared) {
-      try {
-        await onLaunchPrepared(snapshot, existingSessionId);
-      } catch {
-        await postMessage(
-          env.SLACK_BOT_TOKEN,
-          channel,
-          "Failed to save launch state. Please try again.",
-          { thread_ts: threadTs }
-        );
-        return null;
-      }
-    }
+    turnPlan = resolvedTurn.turnPlan;
   }
-  let deliverySnapshot: SessionLaunchSnapshot = snapshot;
-  const { model, reasoningEffort, branch, content, callbackContext } = deliverySnapshot;
-  const promptOverrides: ResolvedTurnPlan["promptOverrides"] = deliverySnapshot.promptOverrides ?? {
-    ...(callbackContext.model !== model ? { model: callbackContext.model as ValidModel } : {}),
-    ...(callbackContext.reasoningEffort &&
-    (callbackContext.model !== model || callbackContext.reasoningEffort !== reasoningEffort)
-      ? { reasoningEffort: callbackContext.reasoningEffort as ReasoningEffort }
-      : {}),
-  };
+  const { model, reasoningEffort } = turnPlan.sessionDefaults;
+  const preferenceRepo = branchPreferenceRepo(target);
+  let branch: string | undefined;
+  if (preferenceRepo) {
+    const repoBranch = await getUserRepoBranchPreference(env, actor.userId, preferenceRepo.id);
+    branch = repoBranch ?? userPrefs.branch;
+  }
 
-  const createNewSession = () =>
-    createSession(env, {
-      target,
-      model,
-      reasoningEffort,
-      branch,
-      traceId,
-      slackUserId: actor.userId,
-      actorDisplayName: actor.displayName,
-      actorEmail: actor.email,
-      ...(clientRequestId ? { clientRequestId } : {}),
-    });
-  let session = existingSessionId ? { sessionId: existingSessionId } : await createNewSession();
+  const session = await createSession(env, {
+    target,
+    model,
+    reasoningEffort,
+    branch,
+    traceId,
+    slackUserId: actor.userId,
+    actorDisplayName: actor.displayName,
+    actorEmail: actor.email,
+  });
   if (!session) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
@@ -245,68 +180,33 @@ export async function startSessionAndSendPrompt(
     );
     return null;
   }
-  const persistSession = async (
-    sessionId: string,
-    previousSessionId?: string
-  ): Promise<boolean> => {
-    if (!onSessionCreated) return true;
-    try {
-      if (previousSessionId === undefined) await onSessionCreated(sessionId);
-      else await onSessionCreated(sessionId, previousSessionId);
-      return true;
-    } catch {
-      await postMessage(
-        env.SLACK_BOT_TOKEN,
-        channel,
-        "Session created but failed to save its launch state. Please try again.",
-        { thread_ts: threadTs }
-      );
-      return false;
-    }
-  };
-  if (!existingSessionId && !(await persistSession(session.sessionId))) {
-    return null;
-  }
 
-  const deliver = (sessionId: string) =>
-    deliverPrompt(env, {
-      sessionId,
-      content,
-      authorId: `slack:${actor.userId}`,
-      attachments: preparedImages,
-      imageOnly: Boolean(imageOnly),
-      callbackContext,
-      ...promptOverrides,
-      channel,
-      threadTs,
-      traceId,
-      ...(deliverySnapshot.attachmentReferences
-        ? { attachmentReferences: deliverySnapshot.attachmentReferences }
-        : {}),
-      ...(onLaunchPrepared
-        ? {
-            onAttachmentsPrepared: async (attachmentReferences) => {
-              deliverySnapshot = { ...deliverySnapshot, attachmentReferences };
-              await onLaunchPrepared(deliverySnapshot, sessionId);
-            },
-          }
-        : {}),
-      ...(clientRequestId ? { clientRequestId } : {}),
-    });
-  let delivery = await deliver(session.sessionId);
-  if (!delivery.ok && delivery.reason === "stale" && existingSessionId && clientRequestId) {
-    const replacement = await createNewSession();
-    if (replacement) {
-      if (
-        replacement.sessionId !== session.sessionId &&
-        !(await persistSession(replacement.sessionId, session.sessionId))
-      ) {
-        return null;
-      }
-      session = replacement;
-      delivery = await deliver(session.sessionId);
-    }
+  const callbackContext: CallbackContext = {
+    source: "slack",
+    channel,
+    threadTs,
+    repoFullName: targetLabel(target),
+    model: turnPlan.effective.model,
+    reasoningEffort: turnPlan.effective.reasoningEffort,
+  };
+  const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
+  const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
+  let content = channelContext + threadContext + messageText;
+  if (slackConfig.sessionInstructions) {
+    content += `\n\n## Additional Instructions\n\n${slackConfig.sessionInstructions}`;
   }
+  const delivery = await deliverPrompt(env, {
+    sessionId: session.sessionId,
+    content,
+    authorId: `slack:${actor.userId}`,
+    attachments: preparedImages,
+    imageOnly: Boolean(imageOnly),
+    callbackContext,
+    ...turnPlan.promptOverrides,
+    channel,
+    threadTs,
+    traceId,
+  });
   if (!delivery.ok) {
     // "no_images_delivered" already told the user nothing ran; the other
     // failures deserve an explicit retry hint against the created session.

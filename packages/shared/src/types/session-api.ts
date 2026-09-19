@@ -4,7 +4,7 @@ import { sessionSkillSelectionSchema } from "./skills";
 import type { AgentResponse } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
-import { clientRequestIdSchema, MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
+import { MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
 import { modelProviderSelectionsSchema } from "./provider-accounts";
 import {
   messageSourceSchema,
@@ -148,7 +148,6 @@ export const sendPromptRequestSchema = z
     source: messageSourceSchema.optional(),
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
-    clientRequestId: clientRequestIdSchema.optional(),
     attachments: z.unknown().optional(),
     callbackContext: z.unknown().optional(),
   })
@@ -252,7 +251,6 @@ const createSessionRequestBaseSchema = z.object({
   skillSelection: sessionSkillSelectionSchema.optional(),
   /** Explicit account/API-key choices. Omission resolves provider policy. */
   providerSelections: modelProviderSelectionsSchema.optional(),
-  clientRequestId: clientRequestIdSchema.optional(),
 });
 
 export const createSessionRequestSchema = createSessionRequestBaseSchema

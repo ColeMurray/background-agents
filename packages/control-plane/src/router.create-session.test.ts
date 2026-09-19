@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateEncryptionKey } from "./auth/crypto";
 import { SessionIndexStore } from "./db/session-index";
-import {
-  SessionCreationClaimStore,
-  SessionCreationRequestConflictError,
-} from "./db/session-creation-claims";
 import { UserStore } from "./db/user-store";
 import {
   fakeSessionRuntimeDispatch,
@@ -13,7 +9,7 @@ import {
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "./router.test-support";
-import { fingerprintCreateSessionRequest, handleCreateSession } from "./routes/session-create";
+import { handleCreateSession } from "./routes/session-create";
 import { HttpError, resolveRepoOrError } from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
 import { resolveManagedSkills } from "./session/skill-resolution";
@@ -53,11 +49,6 @@ vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
 }));
 
-vi.mock("./db/session-creation-claims", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return { ...actual, SessionCreationClaimStore: vi.fn() };
-});
-
 vi.mock("./db/user-store", () => ({
   UserStore: vi.fn(),
 }));
@@ -93,10 +84,6 @@ vi.mock("./repos/resolve", async (importOriginal) => {
 });
 
 describe("handleCreateSession D1 ordering", () => {
-  const claim = vi.fn();
-  const markCreated = vi.fn();
-  const markSessionFailedIfClaimed = vi.fn();
-
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(resolveManagedSkills).mockResolvedValue({
@@ -110,12 +97,6 @@ describe("handleCreateSession D1 ordering", () => {
       { provider: "openai", authMode: "api_key", selectionSource: "fallback_api_key" },
       { provider: "xai", authMode: "api_key", selectionSource: "fallback_api_key" },
     ]);
-    claim.mockResolvedValue({ sessionId: "claimed-session", status: "claimed" });
-    markCreated.mockResolvedValue(undefined);
-    markSessionFailedIfClaimed.mockResolvedValue(undefined);
-    vi.mocked(SessionCreationClaimStore).mockImplementation(function () {
-      return { claim, markCreated, markSessionFailedIfClaimed } as never;
-    });
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       defaultBranch: "main",
@@ -332,126 +313,6 @@ describe("handleCreateSession D1 ordering", () => {
     expect(response.headers.get("x-trace-id")).toBeTruthy();
     expect(create).toHaveBeenCalledOnce();
     expect(initFetch).not.toHaveBeenCalled();
-  });
-
-  it("uses the globally claimed session id for keyed creation", async () => {
-    const create = vi.fn().mockResolvedValue(undefined);
-    const exists = vi.fn().mockResolvedValue(false);
-    const updateStatus = vi.fn().mockResolvedValue(true);
-    vi.mocked(SessionIndexStore).mockImplementation(function () {
-      return { create, exists, updateStatus } as never;
-    });
-    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
-
-    const response = await createSessionRequestWithBody(createEnv(initFetch), {
-      repoOwner: "Acme",
-      repoName: "Web-App",
-      title: "Keyed session",
-      clientRequestId: "slack-target-1",
-    });
-
-    expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toEqual({
-      sessionId: "claimed-session",
-      status: "created",
-    });
-    expect(claim).toHaveBeenCalledWith({
-      userScope: "user-1",
-      clientRequestId: "slack-target-1",
-      requestFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
-      sessionId: expect.stringMatching(/^[0-9a-f]{32}$/),
-      now: expect.any(Number),
-    });
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ id: "claimed-session" }));
-    expect(markCreated).toHaveBeenCalledWith("user-1", "slack-target-1", "claimed-session");
-  });
-
-  it("reinitializes the runtime for an already-created claim", async () => {
-    claim.mockResolvedValue({ sessionId: "claimed-session", status: "created" });
-    const create = vi.fn().mockResolvedValue(undefined);
-    const exists = vi.fn().mockResolvedValue(true);
-    vi.mocked(SessionIndexStore).mockImplementation(function () {
-      return { create, exists } as never;
-    });
-    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
-
-    const response = await createSessionRequestWithBody(createEnv(initFetch), {
-      repoOwner: "Acme",
-      repoName: "Web-App",
-      clientRequestId: "slack-target-1",
-    });
-
-    expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toEqual({
-      sessionId: "claimed-session",
-      status: "created",
-    });
-    expect(create).not.toHaveBeenCalled();
-    expect(initFetch).toHaveBeenCalledOnce();
-    expect(markCreated).toHaveBeenCalledWith("user-1", "slack-target-1", "claimed-session");
-  });
-
-  it("recreates a missing D1 index with the claimed session id", async () => {
-    claim.mockResolvedValue({ sessionId: "session-missing", status: "created" });
-    const create = vi.fn().mockResolvedValue(undefined);
-    const exists = vi.fn().mockResolvedValue(false);
-    vi.mocked(SessionIndexStore).mockImplementation(function () {
-      return { create, exists } as never;
-    });
-    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
-
-    const response = await createSessionRequestWithBody(createEnv(initFetch), {
-      repoOwner: "Acme",
-      repoName: "Web-App",
-      clientRequestId: "slack-target-1",
-    });
-
-    expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toMatchObject({ sessionId: "session-missing" });
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ id: "session-missing" }));
-    expect(initFetch).toHaveBeenCalledOnce();
-    expect(markCreated).toHaveBeenCalledWith("user-1", "slack-target-1", "session-missing");
-  });
-
-  it("maps changed-payload clientRequestId reuse to conflict", async () => {
-    claim.mockRejectedValue(new SessionCreationRequestConflictError());
-    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
-
-    const response = await createSessionRequestWithBody(createEnv(initFetch), {
-      title: "Changed session",
-      clientRequestId: "slack-target-1",
-    });
-
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual({
-      error: "clientRequestId was already used for a different session request",
-    });
-    expect(initFetch).not.toHaveBeenCalled();
-  });
-
-  it("excludes mutable actor profile fields from create fingerprints", async () => {
-    const request = {
-      repoOwner: "acme",
-      repoName: "web-app",
-      title: "Session",
-      actorDisplayName: "Before",
-      actorAvatarUrl: "https://example.com/before.png",
-      scmName: "Before",
-    };
-
-    const [before, after] = await Promise.all([
-      fingerprintCreateSessionRequest(request, { repoOwner: "acme", repoName: "web-app" }),
-      fingerprintCreateSessionRequest(
-        {
-          ...request,
-          actorDisplayName: "After",
-          actorAvatarUrl: "https://example.com/after.png",
-          scmName: "After",
-        },
-        { repoOwner: "acme", repoName: "web-app" }
-      ),
-    ]);
-    expect(after).toBe(before);
   });
 
   it("does not initialize a session when GitHub credential integrity fails", async () => {

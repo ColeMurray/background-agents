@@ -355,40 +355,6 @@ describe("uploadPreparedAttachments", () => {
     expect(verified).toMatchObject({ ok: true });
   });
 
-  it("includes stable, distinct attachment request ids across retries", async () => {
-    const controlPlaneFetch = vi.fn(async () => uploadCreatedResponse());
-    const env = makeEnv(controlPlaneFetch);
-    const prepared = {
-      files: [
-        { attachment: pngAttachment, bytes: new Uint8Array(4) },
-        {
-          attachment: { ...pngAttachment, id: "F2", name: "second.png" },
-          bytes: new Uint8Array(4),
-        },
-      ],
-      dropped: [],
-    };
-
-    await uploadPreparedAttachments(env, "sess-1", prepared, "slack:U1", undefined, "request-1");
-    await uploadPreparedAttachments(env, "sess-1", prepared, "slack:U1", undefined, "request-1");
-
-    const requestIds = await Promise.all(
-      controlPlaneFetch.mock.calls.map(async (call) => {
-        const [, init] = call as unknown as [RequestInfo | URL, RequestInit];
-        const headers = new Headers(init.headers);
-        const form = await new Request("https://internal/", {
-          method: "POST",
-          headers: { "Content-Type": headers.get("Content-Type")! },
-          body: init.body,
-        }).formData();
-        return form.get("clientRequestId");
-      })
-    );
-    expect(requestIds[0]).toMatch(/^slack-attachment:[a-f0-9]{64}$/);
-    expect(requestIds[1]).not.toBe(requestIds[0]);
-    expect(requestIds.slice(2).sort()).toEqual(requestIds.slice(0, 2).sort());
-  });
-
   it("counts rejected uploads as dropped and carries prepare-stage drops forward", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response("denied", { status: 403 }))

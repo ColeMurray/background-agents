@@ -18,7 +18,6 @@ function buildHandler(options?: {
 }) {
   const repository = {
     create: vi.fn(),
-    getById: vi.fn((): SessionAttachmentRow | null => null),
     getTotals: vi.fn(() => options?.totals ?? { count: 0, totalBytes: 0 }),
     claimStale: vi.fn(() => options?.stale ?? []),
     acknowledgeCleanup: vi.fn(),
@@ -155,71 +154,6 @@ describe("AttachmentsHandler", () => {
       createdAt: NOW,
     });
     expect(await response.json()).toEqual({ status: "ok" });
-  });
-
-  it("accepts an identical attachment replay before cleanup or quota accounting", async () => {
-    const { handler, repository, sessionId } = buildHandler();
-    repository.getById.mockReturnValue({
-      id: "up-1",
-      mime_type: "image/png",
-      size_bytes: 1024,
-      object_key: "sessions/sess-1/attachments/up-1",
-      message_id: null,
-      cleanup_claimed_at: null,
-      created_at: NOW - 1,
-    });
-
-    const response = await handler.recordAttachment(uploadRequest(VALID_BODY), sessionId);
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "ok" });
-    expect(repository.claimStale).not.toHaveBeenCalled();
-    expect(repository.getTotals).not.toHaveBeenCalled();
-    expect(repository.create).not.toHaveBeenCalled();
-  });
-
-  it("rejects replay while the existing attachment is claimed for cleanup", async () => {
-    const { handler, repository, sessionId } = buildHandler();
-    repository.getById.mockReturnValue({
-      id: "up-1",
-      mime_type: "image/png",
-      size_bytes: 1024,
-      object_key: "sessions/sess-1/attachments/up-1",
-      message_id: null,
-      cleanup_claimed_at: NOW,
-      created_at: NOW - 1,
-    });
-
-    const response = await handler.recordAttachment(uploadRequest(VALID_BODY), sessionId);
-
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual({ error: "Attachment cleanup is in progress" });
-    expect(repository.create).not.toHaveBeenCalled();
-  });
-
-  it("reclaims an expired cleanup claim before replaying an attachment", async () => {
-    const staleAttachment: SessionAttachmentRow = {
-      id: "up-1",
-      mime_type: "image/png",
-      size_bytes: 1024,
-      object_key: "sessions/sess-1/attachments/up-1",
-      message_id: null,
-      cleanup_claimed_at: NOW - SESSION_ATTACHMENT_CLEANUP_CLAIM_TTL_MS - 1,
-      created_at: NOW - SESSION_ATTACHMENT_UNREFERENCED_TTL_MS - 1,
-    };
-    const { handler, repository, sessionId } = buildHandler({ stale: [staleAttachment] });
-    repository.getById.mockReturnValue(staleAttachment);
-
-    const response = await handler.recordAttachment(uploadRequest(VALID_BODY), sessionId);
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      status: "cleanup_required",
-      cleanupClaimedAt: NOW,
-      staleAttachments: [{ attachmentId: "up-1", objectKey: "sessions/sess-1/attachments/up-1" }],
-    });
-    expect(repository.claimStale).toHaveBeenCalledOnce();
-    expect(repository.create).not.toHaveBeenCalled();
   });
 
   it("acknowledges successful cleanup and releases failed claims", async () => {

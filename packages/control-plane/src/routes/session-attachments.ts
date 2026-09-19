@@ -24,8 +24,7 @@ import {
   sessionAttachmentIdSchema,
   type SessionAttachmentUploadResponse,
 } from "@open-inspect/shared/types/session-attachments";
-import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
-import { generateId, hashToken } from "../auth/crypto";
+import { generateId } from "../auth/crypto";
 import { createLogger } from "../logger";
 import {
   buildSessionAttachmentObjectKey,
@@ -58,19 +57,6 @@ import {
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const logger = createLogger("router:session-attachments");
-
-async function digestBytes(bytes: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-export async function deriveAttachmentId(
-  sessionId: string,
-  clientRequestId: string,
-  bytes: Uint8Array
-): Promise<string> {
-  return hashToken(`${sessionId}\0${clientRequestId}\0${await digestBytes(bytes)}`);
-}
 
 function getStoredContentType(metadata: ObjectStorageMetadata): string | null {
   const headers = new Headers();
@@ -123,15 +109,6 @@ export async function handleAttachmentPost(
     return error("file is required", 400);
   }
 
-  const rawClientRequestId = formData.get("clientRequestId");
-  const clientRequestIdResult = clientRequestIdSchema
-    .optional()
-    .safeParse(rawClientRequestId ?? undefined);
-  if (!clientRequestIdResult.success) {
-    return error("Invalid clientRequestId", 400);
-  }
-  const clientRequestId = clientRequestIdResult.data;
-
   if (fileEntry.size <= 0) {
     return error("Uploaded file is empty", 400);
   }
@@ -158,9 +135,7 @@ export async function handleAttachmentPost(
     return error("Uploaded file MIME type does not match file contents", 400);
   }
 
-  const attachmentId = clientRequestId
-    ? await deriveAttachmentId(sessionId, clientRequestId, bytes)
-    : generateId();
+  const attachmentId = generateId();
   const objectKey = buildSessionAttachmentObjectKey(sessionId, attachmentId);
   const storage = env.MEDIA_BUCKET;
   const attachmentStorage = new SessionAttachmentStorageService(

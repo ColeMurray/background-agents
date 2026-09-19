@@ -130,7 +130,6 @@ export async function handleSessionPrompt(
     source: body.source || "web",
     model: body.model,
     reasoningEffort: body.reasoningEffort,
-    clientRequestId: body.clientRequestId,
     attachments,
     callbackContext,
     scmEnrichment: enrichment

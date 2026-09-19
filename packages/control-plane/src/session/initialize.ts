@@ -4,7 +4,7 @@ import type { RequestContext } from "../routes/shared";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
-import { SessionIndexStore, type SessionEntry } from "../db/session-index";
+import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "./contracts";
 import { createSessionRuntimeClient } from "./runtime-client";
 import { createLogger } from "../logger";
@@ -76,8 +76,6 @@ export interface SessionInitInput {
   managedSkillsSourceSessionId?: string;
   /** Complete, immutable provider routing snapshot resolved by the caller. */
   providerAuth: SessionModelProviderAuthInput[];
-  /** Permit replay only when a global D1 idempotency claim owns this session id. */
-  resumeClaimedCreation?: boolean;
 }
 
 /**
@@ -144,7 +142,7 @@ export async function initializeSession(
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(ctx.db);
-  const sessionEntry: SessionEntry = {
+  await sessionStore.create({
     id: input.sessionId,
     title: input.title || null,
     repoOwner: input.repoOwner,
@@ -168,17 +166,7 @@ export async function initializeSession(
     skillManifest: input.managedSkillsManifest,
     skillManifestSourceSessionId: input.managedSkillsSourceSessionId,
     providerAuth: input.providerAuth,
-  };
-  const sessionExists = input.resumeClaimedCreation && (await sessionStore.exists(input.sessionId));
-  if (!sessionExists) {
-    try {
-      await sessionStore.create(sessionEntry);
-    } catch (cause) {
-      if (!input.resumeClaimedCreation || !(await sessionStore.exists(input.sessionId)))
-        throw cause;
-      // A concurrent retry inserted the same globally claimed id first.
-    }
-  }
+  });
 
   // Step 2: runtime init
   let initResponse: Response;
@@ -218,16 +206,12 @@ export async function initializeSession(
       }
     );
   } catch (transportError) {
-    if (!input.resumeClaimedCreation) {
-      await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
-    }
+    await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
     throw transportError;
   }
 
   if (!initResponse.ok) {
-    if (!input.resumeClaimedCreation) {
-      await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
-    }
+    await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
     const errorText = await initResponse.text().catch(() => "unknown");
     logger.error("DO init failed", {
       session_id: input.sessionId,

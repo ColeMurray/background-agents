@@ -22,7 +22,6 @@ interface CreateSessionOptions {
   slackUserId?: string;
   actorDisplayName?: string;
   actorEmail?: string;
-  clientRequestId?: string;
 }
 
 export type SendPromptResult =
@@ -42,7 +41,6 @@ export async function createSession(
     slackUserId,
     actorDisplayName,
     actorEmail,
-    clientRequestId,
   } = options;
   const startTime = Date.now();
   const base = {
@@ -61,7 +59,6 @@ export async function createSession(
       reasoningEffort,
       actorDisplayName,
       actorEmail,
-      clientRequestId,
     });
     const response = await signedControlPlaneFetch(
       env,
@@ -121,7 +118,6 @@ export interface SendPromptOptions {
   callbackContext?: CallbackContext;
   attachments?: SessionAttachmentReference[];
   traceId?: string;
-  clientRequestId?: string;
 }
 
 export async function sendPrompt(
@@ -137,7 +133,6 @@ export async function sendPrompt(
     callbackContext,
     attachments,
     traceId,
-    clientRequestId,
   } = options;
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
@@ -149,7 +144,6 @@ export async function sendPrompt(
       model,
       reasoningEffort,
       callbackContext,
-      clientRequestId,
       ...(attachments?.length ? { attachments } : {}),
     });
     const response = await signedControlPlaneFetch(
@@ -164,18 +158,6 @@ export async function sendPrompt(
       { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
     );
     if (!response.ok) {
-      if (response.status === 409 && clientRequestId) {
-        const conflict = (await response.json().catch(() => null)) as {
-          code?: unknown;
-          existingMessageId?: unknown;
-        } | null;
-        if (
-          conflict?.code === "PROMPT_REQUEST_CONFLICT" &&
-          typeof conflict.existingMessageId === "string"
-        ) {
-          return { ok: true, data: { messageId: conflict.existingMessageId, status: "queued" } };
-        }
-      }
       log.error("control_plane.send_prompt", {
         ...base,
         outcome: "error",

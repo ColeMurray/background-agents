@@ -7,11 +7,8 @@ import {
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
-import type {
-  CreateSessionInput,
-  CreateSessionResponse,
-} from "@open-inspect/shared/types/session-api";
-import { generateId, hashToken } from "../auth/crypto";
+import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
+import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import {
   applyIdentityEnforcement,
@@ -30,10 +27,6 @@ import { resolveManagedSkills, SkillResolutionError } from "../session/skill-res
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
-import {
-  SessionCreationClaimStore,
-  SessionCreationRequestConflictError,
-} from "../db/session-creation-claims";
 import { authorizeSessionTarget } from "./session-target-authorization";
 import {
   normalizeOptionalRepositoryPair,
@@ -54,27 +47,6 @@ const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
 
 // Defense in depth on top of schema validation — matches git ref charsets.
 const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
-
-export function fingerprintCreateSessionRequest(
-  body: CreateSessionInput,
-  repositoryContext: RepositoryPair | null
-): Promise<string> {
-  return hashToken(
-    JSON.stringify({
-      repoOwner: repositoryContext?.repoOwner ?? null,
-      repoName: repositoryContext?.repoName ?? null,
-      title: body.title ?? null,
-      harness: body.harness ?? null,
-      model: body.model ?? null,
-      reasoningEffort: body.reasoningEffort ?? null,
-      branch: body.branch ?? null,
-      repositories: body.repositories ?? null,
-      environmentId: body.environmentId ?? null,
-      skillSelection: body.skillSelection ?? null,
-      providerSelections: body.providerSelections ?? null,
-    })
-  );
-}
 
 async function extractSessionActorProfileClaims(
   request: Request,
@@ -237,32 +209,7 @@ export async function handleCreateSession(
     environmentId
   );
 
-  let sessionId = generateId();
-  let creationClaim:
-    | { store: SessionCreationClaimStore; userScope: string; clientRequestId: string }
-    | undefined;
-  if (body.clientRequestId) {
-    const store = new SessionCreationClaimStore(ctx.db);
-    try {
-      const requestFingerprint = await fingerprintCreateSessionRequest(body, repositoryContext);
-      const claim = await store.claim({
-        userScope: resolvedUserId,
-        clientRequestId: body.clientRequestId,
-        requestFingerprint,
-        sessionId,
-        now: Date.now(),
-      });
-      sessionId = claim.sessionId;
-      creationClaim = {
-        store,
-        userScope: resolvedUserId,
-        clientRequestId: body.clientRequestId,
-      };
-    } catch (e) {
-      if (e instanceof SessionCreationRequestConflictError) return error(e.message, 409);
-      throw e;
-    }
-  }
+  const sessionId = generateId();
   let providerAuth;
   try {
     providerAuth = await resolveSessionProviderAuth(ctx.db, {
@@ -322,24 +269,11 @@ export async function handleCreateSession(
     spawnSource,
     managedSkillsManifest,
     providerAuth,
-    resumeClaimedCreation: creationClaim !== undefined,
   };
 
   try {
     await initializeSession(env, input, ctx);
-    await creationClaim?.store.markCreated(
-      creationClaim.userScope,
-      creationClaim.clientRequestId,
-      sessionId
-    );
   } catch (e) {
-    if (creationClaim) {
-      await creationClaim.store.markSessionFailedIfClaimed(
-        creationClaim.userScope,
-        creationClaim.clientRequestId,
-        sessionId
-      );
-    }
     logger.error("Failed to initialize session", {
       error: e instanceof Error ? e.message : String(e),
       session_id: sessionId,

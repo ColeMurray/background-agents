@@ -121,7 +121,6 @@ const EXECUTION_TIMEOUT_MS = 60_000;
 it("creates a canonical SHA-256 web prompt fingerprint", async () => {
   const fingerprint = await fingerprintWebPrompt("part-1", {
     content: "hello",
-    source: "web",
     model: "anthropic/claude-haiku-4-5",
     attachments: [{ name: "ignored-name.png", attachmentId: "up-1" }],
   });
@@ -130,20 +129,10 @@ it("creates a canonical SHA-256 web prompt fingerprint", async () => {
   await expect(
     fingerprintWebPrompt("part-1", {
       content: "hello",
-      source: "web",
       model: "anthropic/claude-haiku-4-5",
       attachments: [{ name: "different-name.png", attachmentId: "up-1" }],
     })
   ).resolves.toBe(fingerprint);
-  await expect(
-    fingerprintWebPrompt("part-1", {
-      content: "hello",
-      source: "slack",
-      model: "anthropic/claude-haiku-4-5",
-      attachments: [{ name: "ignored-name.png", attachmentId: "up-1" }],
-      callbackContext: { source: "slack", channel: "C1", threadTs: "1.0" },
-    })
-  ).resolves.not.toBe(fingerprint);
 });
 
 function buildQueue() {
@@ -817,7 +806,6 @@ describe("SessionMessageQueue", () => {
         client_request_id: "request-1",
         request_fingerprint: await fingerprintWebPrompt("part-1", {
           content: "same",
-          source: "web",
           model: "anthropic/claude-haiku-4-5",
           reasoningEffort: "high",
           attachments: [{ name: "shot.png", attachmentId: "up-1" }],
@@ -896,10 +884,7 @@ describe("SessionMessageQueue", () => {
         id: "msg-complete",
         status: "completed",
         client_request_id: "request-complete",
-        request_fingerprint: await fingerprintWebPrompt("part-1", {
-          content: "same",
-          source: "web",
-        }),
+        request_fingerprint: await fingerprintWebPrompt("part-1", { content: "same" }),
       })
     );
     h.repository.getUnfinishedMessagePosition.mockReturnValue(null);
@@ -2083,33 +2068,6 @@ describe("SessionMessageQueue", () => {
   });
 
   describe("enqueuePromptFromApi", () => {
-    it("deduplicates a keyed API retry before budget and capacity rejection", async () => {
-      const h = buildQueue();
-      h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
-      h.repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
-      h.repository.getMessageByClientRequestId.mockReturnValue(
-        createMessage({
-          id: "msg-existing",
-          client_request_id: "request-1",
-          request_fingerprint: await fingerprintWebPrompt("part-1", {
-            content: "same",
-            source: "slack",
-          }),
-        })
-      );
-
-      await expect(
-        h.queue.enqueuePromptFromApi({
-          content: "same",
-          authorId: "user-1",
-          source: "slack",
-          clientRequestId: "request-1",
-        })
-      ).resolves.toEqual({ messageId: "msg-existing", status: "queued" });
-
-      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
-    });
-
     it("rejects exhaustion before capacity checks or participant mutations", async () => {
       const h = buildQueue();
       h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));

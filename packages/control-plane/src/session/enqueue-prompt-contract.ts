@@ -2,7 +2,6 @@ import { messageSourceSchema } from "@open-inspect/shared/types/sessions";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
 import {
   BLANK_PROMPT_MESSAGE,
-  clientRequestIdSchema,
   isBlankPrompt,
   promptContentSchema,
 } from "@open-inspect/shared/types/prompts";
@@ -16,7 +15,6 @@ export const enqueuePromptRequestSchema = z
     source: messageSourceSchema,
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
-    clientRequestId: clientRequestIdSchema.optional(),
     attachments: sessionAttachmentReferencesSchema.optional(),
     callbackContext: z.record(z.string(), z.unknown()).optional(),
     // Trusted SCM enrichment resolved by the router at prompt time.

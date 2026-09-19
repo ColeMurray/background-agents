@@ -20,7 +20,6 @@ import {
   deletePendingRequest,
   getLegacyPendingRequest,
   getPendingRequest,
-  updatePendingRequestLaunchState,
 } from "../pending-requests/pending-request-store";
 import {
   loadAuthoritativeSlackLaunchSettings,
@@ -31,7 +30,6 @@ import { resolveTargetValue } from "../target-clarification";
 import { targetId } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
-import { deriveClientRequestId } from "../client-request-id";
 import { hasInlinePromptOptions, resolveInlinePromptOptions } from "../inline-flags";
 
 const log = createLogger("target-selection");
@@ -100,7 +98,6 @@ export async function handleTargetSelection(
     unattributedPrompt,
     turnPlan,
     classification,
-    launchState,
   } = pendingData;
   if (selectedBy !== userId) {
     await postEphemeral(
@@ -108,16 +105,6 @@ export async function handleTargetSelection(
       channel,
       selectedBy,
       "Only the person who made the original request can choose its target.",
-      { thread_ts: threadKey }
-    );
-    return;
-  }
-  if (launchState && launchState.selectedValue !== selectedValue) {
-    await postEphemeral(
-      env.SLACK_BOT_TOKEN,
-      channel,
-      selectedBy,
-      "This request has already started with a different target.",
       { thread_ts: threadKey }
     );
     return;
@@ -241,10 +228,6 @@ export async function handleTargetSelection(
   const messageText = unattributedPrompt
     ? formatAttributedRequest(actor.senderLabel, message, unattributedPrompt.forwardedMessages)
     : message;
-  const clientRequestId =
-    requestId ?? (await deriveClientRequestId("slack-legacy-target", [channel, threadKey]));
-  const locator = requestId ? { requestId } : { channel, threadTs: threadKey };
-  let persistedLaunchState = launchState;
   const sessionResult = await startSessionAndSendPrompt(env, {
     target,
     channel,
@@ -263,41 +246,6 @@ export async function handleTargetSelection(
     turnPlan: resolvedTurnPlan,
     launchSettings,
     traceId,
-    clientRequestId,
-    existingSessionId: launchState?.sessionId,
-    launchSnapshot: launchState?.snapshot,
-    onLaunchPrepared: async (snapshot, sessionId) => {
-      const nextState = { selectedValue, sessionId, snapshot };
-      const updated = await updatePendingRequestLaunchState(
-        env,
-        locator,
-        nextState,
-        persistedLaunchState?.sessionId
-      );
-      if (
-        !updated ||
-        updated.launchState?.selectedValue !== selectedValue ||
-        updated.launchState.sessionId !== sessionId
-      ) {
-        throw new Error("Pending request launch snapshot could not be saved");
-      }
-      persistedLaunchState = updated.launchState;
-    },
-    onSessionCreated: async (sessionId, previousSessionId) => {
-      const nextState = { selectedValue, sessionId, snapshot: persistedLaunchState?.snapshot };
-      const updated =
-        previousSessionId === undefined
-          ? await updatePendingRequestLaunchState(env, locator, nextState)
-          : await updatePendingRequestLaunchState(env, locator, nextState, previousSessionId);
-      if (
-        !updated ||
-        updated.launchState?.selectedValue !== selectedValue ||
-        updated.launchState.sessionId !== sessionId
-      ) {
-        throw new Error("Pending request launch state could not be saved");
-      }
-      persistedLaunchState = updated.launchState;
-    },
   });
   if (!sessionResult) return;
 
