@@ -2,6 +2,7 @@
 
 import type { RefObject } from "react";
 import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
+import type { ResolvedSandboxStatus } from "@/components/session-header";
 import {
   resolveSessionActions,
   useSessionActionControls,
@@ -14,11 +15,13 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
   ArchiveIcon,
+  BoxIcon,
   FolderIcon,
   GitPrIcon,
   GlobeIcon,
@@ -31,12 +34,19 @@ interface MobileSessionActionsProps extends SessionActionProps {
   triggerRef: RefObject<HTMLButtonElement | null>;
   onOpenDetails: () => void;
   onOpenMedia: () => void;
+  /**
+   * The sandbox status, spelled out. The mobile header has no status icon, so
+   * this menu is where the status, the provider's failure reason and the
+   * dashboard link stay reachable — in every state, not only the loud ones.
+   */
+  sandbox?: ResolvedSandboxStatus | null;
 }
 
 export function MobileSessionActions({
   triggerRef,
   onOpenDetails,
   onOpenMedia,
+  sandbox,
   ...actions
 }: MobileSessionActionsProps) {
   const { previewArtifact, previewUrl, prLinks, mediaCount } = resolveSessionActions(
@@ -61,6 +71,43 @@ export function MobileSessionActions({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" side="bottom">
+            {sandbox && (
+              <>
+                <DropdownMenuLabel className="font-normal">
+                  <span
+                    className={`flex items-center gap-2 text-sm font-medium ${sandbox.presentation.color}`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`h-2 w-2 flex-shrink-0 rounded-full ${sandbox.presentation.dot}${sandbox.presentation.pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}
+                    />
+                    Sandbox {sandbox.presentation.label}
+                  </span>
+                  <span className="mt-1 block max-w-64 text-xs font-normal leading-5 text-muted-foreground">
+                    {sandbox.presentation.detail}
+                  </span>
+                  {sandbox.failedPhaseSummary && (
+                    <span className="mt-1 block max-w-64 text-xs font-normal leading-5 text-muted-foreground">
+                      {sandbox.failedPhaseSummary}
+                    </span>
+                  )}
+                  {sandbox.reason && (
+                    <span className="mt-1.5 block max-h-24 max-w-64 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-destructive">
+                      {sandbox.reason}
+                    </span>
+                  )}
+                </DropdownMenuLabel>
+                {sandbox.safeDashboardUrl && (
+                  <DropdownMenuItem asChild>
+                    <a href={sandbox.safeDashboardUrl} target="_blank" rel="noopener noreferrer">
+                      <BoxIcon className="w-4 h-4" />
+                      Open provider dashboard
+                    </a>
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+              </>
+            )}
             <DropdownMenuItem onClick={onOpenDetails}>
               <SidebarIcon className="w-4 h-4" />
               Details

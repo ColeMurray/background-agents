@@ -73,8 +73,12 @@ export function CollapsedSidebarControls() {
   return (
     <div className="flex items-center gap-2">
       <SidebarToggleButton />
-      <SearchSessionsButton onClick={actions.searchSessions} />
-      {hasPermission("sessions.create") && <NewSessionButton onClick={actions.newSession} />}
+      {/* Search and new session are in the drawer this toggle opens, so on a
+          phone they only crowd the title out of the header. */}
+      <span className="hidden md:contents">
+        <SearchSessionsButton onClick={actions.searchSessions} />
+        {hasPermission("sessions.create") && <NewSessionButton onClick={actions.newSession} />}
+      </span>
     </div>
   );
 }
