@@ -63,6 +63,11 @@ BOOT_EVENTS_FILE_PATH = "/tmp/oi-boot-events.jsonl"
 BRIDGE_FATAL_ERROR_FILE_PATH = "/tmp/oi-bridge-fatal-error.txt"
 # Supervisor → bridge handoff for the Claude harness (workdir, config dir, MCP servers).
 CLAUDE_HARNESS_FILE_PATH = "/tmp/oi-claude-harness.json"
+# The Claude CLI's own ceiling on one Bash call (its BASH_MAX_TIMEOUT_MS floor,
+# which is the value that applies while the sandbox leaves it unset). The
+# harness sends nothing between a tool call and its result, so the bridge's
+# inactivity budget is derived from this: see INACTIVITY_TIMEOUT_SECONDS.
+CLAUDE_BASH_MAX_TIMEOUT_SECONDS = 600.0
 
 # Canonical repository manifest written by the supervisor before any child
 # process starts, rewritten on every boot. Consumed by the bridge (push

@@ -532,10 +532,16 @@ class ClaudeHarness:
             self._needs_reconnect = True
             return TurnOutcome.failed(f"Prompt exceeded max duration of {max_duration:.0f}s.")
         except _InactivityTimeout:
+            timeout_seconds = self.limits.inactivity_timeout_seconds
+            self.log.error(
+                "claude.inactivity_timeout",
+                message_id=prompt.message_id,
+                timeout_s=timeout_seconds,
+            )
             await self._interrupt_within_budget()
             self._needs_reconnect = True
             return TurnOutcome.failed(
-                f"Claude agent produced no output for {self.limits.inactivity_timeout_seconds:.0f}s."
+                f"Claude agent produced no output for {timeout_seconds:.0f}s."
             )
         except Exception as error:
             self.log.error("claude.turn_error", exc=error, message_id=prompt.message_id)

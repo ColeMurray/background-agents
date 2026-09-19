@@ -2,9 +2,9 @@
 
 The sandbox has a wall-clock lifetime (``SANDBOX_TIMEOUT_SECONDS``). A share
 of it is reserved so a snapshot can still be taken after the last turn; what
-is left is the most one prompt may spend. The SSE inactivity budget is a
-separate liveness check on a harness that stopped talking, overridable within
-bounds for a session that needs a longer or shorter one.
+is left is the most one prompt may spend. The inactivity budget is a separate
+liveness check on a harness that stopped talking, overridable within bounds
+for a session that needs a longer or shorter one.
 """
 
 from __future__ import annotations
@@ -14,33 +14,52 @@ import os
 from typing import TYPE_CHECKING
 
 from .constants import (
+    CLAUDE_BASH_MAX_TIMEOUT_SECONDS,
     DEFAULT_SANDBOX_TIMEOUT_SECONDS,
     MAX_SNAPSHOT_RESERVE_SECONDS,
     SANDBOX_TIMEOUT_ENV_VAR,
     SNAPSHOT_RESERVE_FRACTION,
 )
-from .harness import PromptLimits
+from .harness import HarnessId, PromptLimits
 
 if TYPE_CHECKING:
     from .log_config import StructuredLogger
 
 SSE_INACTIVITY_TIMEOUT_ENV_VAR = "BRIDGE_SSE_INACTIVITY_TIMEOUT"
-# Liveness check for a harness that stopped talking, not a budget for how
-# long the model may think. Stays under the control plane's own inactivity
-# watchdog (SANDBOX_INACTIVITY_TIMEOUT_MS) so the bridge owns the outcome.
-SSE_INACTIVITY_TIMEOUT = 300.0
-SSE_INACTIVITY_TIMEOUT_MIN = 5.0
-SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
+# Liveness check for a harness that stopped talking, not a budget for how long
+# the model may think. Stays under the control plane's own inactivity watchdog
+# (SANDBOX_INACTIVITY_TIMEOUT_MS) so the bridge owns the outcome.
+#
+# What counts as talking is the harness's, so the default is too. OpenCode
+# merges a periodic ``server.heartbeat`` into the same SSE stream and the
+# budget renews on any traffic, so silence there means the transport died and
+# no tool call, however long, can trip it. The Claude SDK has no heartbeat and
+# renews the budget only on a message, of which it sends none between a tool
+# call and its result. Its budget is therefore derived from the longest tool
+# call the CLI permits, because anything less fails a turn for doing nothing
+# worse than running a long command. Claude's other tools stay well inside
+# that ceiling: MCP calls carry their own wall-clock limit, and a sub-agent's
+# own tool calls keep arriving on this stream while it works.
+#
+# Slack over the ceiling, for delivering a large tool result and re-entering
+# the model once the tool returns.
+INACTIVITY_MARGIN_SECONDS = 300.0
+INACTIVITY_TIMEOUT_SECONDS: dict[HarnessId, float] = {
+    HarnessId.OPENCODE: 300.0,
+    HarnessId.CLAUDE: CLAUDE_BASH_MAX_TIMEOUT_SECONDS + INACTIVITY_MARGIN_SECONDS,
+}
+INACTIVITY_TIMEOUT_MIN_SECONDS = 5.0
+INACTIVITY_TIMEOUT_MAX_SECONDS = 3600.0
 
 
-def resolve_prompt_limits(log: StructuredLogger) -> PromptLimits:
+def resolve_prompt_limits(log: StructuredLogger, harness: HarnessId) -> PromptLimits:
     """The budgets one prompt runs under, with every resolution step logged."""
     inactivity_timeout_seconds = _resolve_bounded_seconds(
         log,
         name=SSE_INACTIVITY_TIMEOUT_ENV_VAR,
-        default=SSE_INACTIVITY_TIMEOUT,
-        min_value=SSE_INACTIVITY_TIMEOUT_MIN,
-        max_value=SSE_INACTIVITY_TIMEOUT_MAX,
+        default=INACTIVITY_TIMEOUT_SECONDS[harness],
+        min_value=INACTIVITY_TIMEOUT_MIN_SECONDS,
+        max_value=INACTIVITY_TIMEOUT_MAX_SECONDS,
     )
     sandbox_timeout_seconds = _resolve_positive_seconds(
         log, name=SANDBOX_TIMEOUT_ENV_VAR, default=DEFAULT_SANDBOX_TIMEOUT_SECONDS

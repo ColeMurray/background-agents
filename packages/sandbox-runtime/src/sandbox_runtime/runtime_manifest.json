@@ -1,6 +1,6 @@
 {
-  "runtimeVersion": "v69-discard-hook-output",
-  "generation": 69,
+  "runtimeVersion": "v70-claude-inactivity-budget",
+  "generation": 70,
   "minimumCompatibleGeneration": 62,
   "minimumRebuildGeneration": 67,
   "harnessMinimumGeneration": {
