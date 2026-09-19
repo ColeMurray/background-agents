@@ -294,14 +294,17 @@ describe("timeline auto-scrolling", () => {
   });
 
   it("prefetches history one viewport before the top and keeps observing after loading", () => {
+    const notifyResize = mockResizeObservers();
+    const metrics = { clientHeight: 400, scrollHeight: 800, scrollTop: 0 };
+    mockTimelineScrollMetrics(metrics);
     const observedElements: Element[] = [];
-    let observerOptions: IntersectionObserverInit | undefined;
+    const observerOptions: IntersectionObserverInit[] = [];
     let notifyIntersection = (_isIntersecting: boolean) => {};
     vi.stubGlobal(
       "IntersectionObserver",
       class {
         constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
-          observerOptions = options;
+          if (options) observerOptions.push(options);
           notifyIntersection = (isIntersecting) => {
             callback(
               [{ isIntersecting } as IntersectionObserverEntry],
@@ -320,10 +323,6 @@ describe("timeline auto-scrolling", () => {
       <SessionTimeline {...baseTimelineProps} events={[]} showSkeleton onLoadOlder={onLoadOlder} />
     );
     const timeline = container.firstElementChild as HTMLDivElement;
-    Object.defineProperties(timeline, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 800 },
-    });
     const sentinel = observedElements[0];
 
     notifyIntersection(true);
@@ -342,12 +341,22 @@ describe("timeline auto-scrolling", () => {
 
     expect(observedElements).toEqual([sentinel]);
     expect(sentinel.isConnected).toBe(true);
-    expect(observerOptions).toMatchObject({
+    expect(observerOptions[0]).toMatchObject({
       root: timeline,
-      rootMargin: "100% 0px 0px",
+      rootMargin: "400px 0px 0px",
       threshold: 0.1,
     });
     expect(onLoadOlder).toHaveBeenCalledOnce();
+
+    metrics.clientHeight = 600;
+    act(() => notifyResize(timeline, metrics.clientHeight));
+
+    expect(observedElements).toEqual([sentinel, sentinel]);
+    expect(observerOptions[1]).toMatchObject({
+      root: timeline,
+      rootMargin: "600px 0px 0px",
+      threshold: 0.1,
+    });
   });
 
   it("does not scroll the timeline when the pending prompt stack changes", () => {

@@ -135,21 +135,32 @@ export function SessionTimeline({
     const container = scrollContainerRef.current;
     if (!sentinel || !container) return;
 
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (
-          entry.isIntersecting &&
-          hasScrolledRef.current &&
-          container.scrollHeight > container.clientHeight
-        ) {
-          onLoadOlder();
-        }
-      },
-      { root: container, rootMargin: "100% 0px 0px", threshold: 0.1 }
-    );
+    let observer: IntersectionObserver;
+    const observeSentinel = () => {
+      observer?.disconnect();
+      observer = new IntersectionObserver(
+        ([entry]) => {
+          if (
+            entry.isIntersecting &&
+            hasScrolledRef.current &&
+            container.scrollHeight > container.clientHeight
+          ) {
+            onLoadOlder();
+          }
+        },
+        { root: container, rootMargin: `${container.clientHeight}px 0px 0px`, threshold: 0.1 }
+      );
+      observer.observe(sentinel);
+    };
 
-    observer.observe(sentinel);
-    return () => observer.disconnect();
+    observeSentinel();
+    const resizeObserver =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(observeSentinel);
+    resizeObserver?.observe(container);
+    return () => {
+      observer.disconnect();
+      resizeObserver?.disconnect();
+    };
   }, [onLoadOlder]);
 
   useLayoutEffect(() => {
