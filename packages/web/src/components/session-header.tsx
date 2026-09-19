@@ -6,83 +6,32 @@ import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/t
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
 import type { SessionActionProps } from "@/components/session-actions";
-import { BoxIcon, RightSidebarIcon, RightSidebarOpenIcon } from "@/components/ui/icons";
+import {
+  BoxIcon,
+  ChevronRightIcon,
+  RightSidebarIcon,
+  RightSidebarOpenIcon,
+} from "@/components/ui/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
+import { SANDBOX_STATUS_PRESENTATION } from "@/lib/sandbox-status-presentation";
 import { bootPhaseLabel, bootPhaseRepoLabel } from "@/lib/session-socket/boot-phase";
 import { getSafeExternalUrl } from "@/lib/urls";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
 
-const SANDBOX_STATUS_PRESENTATION: Record<
-  SandboxStatusValue,
-  { label: string; detail: string; color: string; dot: string; pulse?: boolean }
-> = {
-  pending: {
-    label: "Pending",
-    detail: "Waiting for the sandbox to start.",
-    color: "text-muted-foreground",
-    dot: "bg-muted-foreground",
-  },
-  warming: {
-    label: "Warming...",
-    detail: "Preparing sandbox capacity.",
-    color: "text-warning",
-    dot: "bg-warning",
-    pulse: true,
-  },
-  spawning: {
-    label: "Starting...",
-    detail: "Creating or restoring the sandbox.",
-    color: "text-warning",
-    dot: "bg-warning",
-    pulse: true,
-  },
-  connecting: {
-    label: "Connecting...",
-    detail: "Waiting for the sandbox runtime to connect.",
-    color: "text-warning",
-    dot: "bg-warning",
-    pulse: true,
-  },
-  ready: {
-    label: "Ready",
-    detail: "The sandbox is available.",
-    color: "text-success",
-    dot: "bg-success",
-  },
-  snapshotting: {
-    label: "Saving...",
-    detail: "Saving a sandbox snapshot.",
-    color: "text-accent",
-    dot: "bg-accent",
-    pulse: true,
-  },
-  stopped: {
-    label: "Stopped",
-    detail: "The sandbox stopped after inactivity and can restart with the next prompt.",
-    color: "text-muted-foreground",
-    dot: "bg-muted-foreground",
-  },
-  stale: {
-    label: "Unresponsive",
-    detail: "The sandbox runtime stopped responding.",
-    color: "text-destructive",
-    dot: "bg-destructive",
-  },
-  failed: {
-    label: "Failed",
-    detail: "The sandbox could not start or recover.",
-    color: "text-destructive",
-    dot: "bg-destructive",
-  },
-};
-
 /** Statuses during which the runtime reports boot phases. */
 const BOOTING_STATUSES: ReadonlySet<SandboxStatusValue> = new Set(["spawning", "connecting"]);
+
+/**
+ * Statuses that interrupt on mobile. The mobile header is the title and
+ * nothing else while the sandbox is healthy, so a status has to be something
+ * you would act on to earn a line of its own.
+ */
+const ATTENTION_STATUSES: ReadonlySet<SandboxStatusValue> = new Set(["stopped", "stale", "failed"]);
 
 /**
  * What a phase report means for the popover, by the report's status. Copy
@@ -215,12 +164,22 @@ export function SessionHeader({
     if (!isRenaming) setTitle(sessionState?.title ?? fallbackSessionInfo.title ?? "");
   }, [fallbackSessionInfo.title, sessionState?.title, isRenaming]);
 
+  // Mobile shows the title and nothing else: no repository, no status pill.
+  // A booting sandbox gets a single dot beside the title, and anything that
+  // needs acting on gets the strip below. Everything else is one tap away in
+  // the actions menu. Desktop keeps the full header.
+  const bootingDot =
+    sessionState?.sandboxStatus &&
+    SANDBOX_STATUS_PRESENTATION[sessionState.sandboxStatus].pulse === true
+      ? SANDBOX_STATUS_PRESENTATION[sessionState.sandboxStatus]
+      : null;
+
   return (
     <header className="border-b border-border-muted flex-shrink-0">
-      <div className="px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <div className="flex h-12 items-center justify-between gap-1 px-2 md:h-auto md:gap-0 md:px-4 md:py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3 md:flex-initial">
           {!isOpen && <CollapsedSidebarControls />}
-          <div>
+          <div className="min-w-0 flex-1 md:flex-initial">
             {isRenaming ? (
               <input
                 autoFocus
@@ -238,13 +197,19 @@ export function SessionHeader({
                     setIsRenaming(false);
                   }
                 }}
-                className="text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium max-w-40 truncate"
+                className="w-full truncate bg-transparent text-center text-sm font-medium text-foreground outline-none focus:ring-inset focus:ring-ring md:max-w-40 md:text-left"
               />
             ) : (
-              <h1 className="max-w-40 truncate text-sm font-medium text-foreground">
+              <h1 className="flex min-w-0 items-center justify-center gap-1.5 text-sm font-medium text-foreground md:max-w-40 md:justify-start">
+                {bootingDot && (
+                  <span
+                    aria-hidden="true"
+                    className={`h-1.5 w-1.5 flex-shrink-0 rounded-full md:hidden ${bootingDot.dot} animate-pulse motion-reduce:animate-none`}
+                  />
+                )}
                 <button
                   type="button"
-                  className={`max-w-full truncate text-left ${capabilities.lifecycle ? "cursor-text" : "cursor-default"}`}
+                  className={`min-w-0 truncate ${capabilities.lifecycle ? "cursor-text" : "cursor-default"}`}
                   onClick={handleStartRename}
                   title={capabilities.lifecycle ? "Click to rename" : undefined}
                   disabled={!capabilities.lifecycle}
@@ -253,10 +218,10 @@ export function SessionHeader({
                 </button>
               </h1>
             )}
-            <p className="text-sm text-muted-foreground">{repoLabel}</p>
+            <p className="hidden text-sm text-muted-foreground md:block">{repoLabel}</p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-1 md:gap-4">
           <button
             ref={detailsButtonRef}
             type="button"
@@ -274,7 +239,7 @@ export function SessionHeader({
             onOpenDetails={onOpenMobileDetails}
             onOpenMedia={onOpenMobileDetails}
           />
-          <div className="flex items-center gap-1">
+          <div className="hidden items-center gap-1 md:flex">
             {capabilities.read && (
               <ConnectionStatusIcon
                 connected={connected}
@@ -310,6 +275,14 @@ export function SessionHeader({
           )}
         </div>
       </div>
+      <MobileStatusStrip
+        disconnected={capabilities.read && !connected && !connecting && !reconnecting}
+        status={sessionState?.sandboxStatus}
+        dashboardUrl={capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined}
+        error={sandboxError}
+        bootPhase={bootPhase}
+        repositoryCount={sessionState?.repositories?.length ?? 0}
+      />
     </header>
   );
 }
@@ -357,13 +330,7 @@ function ConnectionStatusIcon({
   );
 }
 
-function SandboxStatusIcon({
-  status,
-  dashboardUrl,
-  error,
-  bootPhase,
-  repositoryCount,
-}: {
+type SandboxStatusProps = {
   status?: SandboxStatusValue;
   dashboardUrl?: string | null;
   /**
@@ -381,20 +348,87 @@ function SandboxStatusIcon({
   bootPhase?: SandboxBootPhase | null;
   /** Members of the session; phases name their repository only when there are several. */
   repositoryCount: number;
-}) {
-  if (!status) return null;
+};
 
+/**
+ * Everything the status surfaces need to say, resolved once. The desktop icon
+ * and the mobile strip are different shapes around this same answer, so the
+ * two cannot drift apart.
+ */
+function resolveSandboxStatus({
+  status,
+  dashboardUrl,
+  error,
+  bootPhase,
+  repositoryCount,
+}: SandboxStatusProps & { status: SandboxStatusValue }) {
   const booting =
     bootPhase && BOOTING_STATUSES.has(status)
       ? describeBootPhase(bootPhase, repositoryCount)
       : null;
   const failedPhase = status === "failed" && bootPhase?.status === "failed" ? bootPhase : null;
-  const failedPhaseRepo = failedPhase ? bootPhaseRepoLabel(failedPhase, repositoryCount) : null;
-  const presentation = booting
-    ? { ...SANDBOX_STATUS_PRESENTATION[status], ...booting }
-    : SANDBOX_STATUS_PRESENTATION[status];
-  const reason = error ?? failedPhase?.detail;
-  const safeDashboardUrl = getSafeExternalUrl(dashboardUrl);
+  return {
+    presentation: booting
+      ? { ...SANDBOX_STATUS_PRESENTATION[status], ...booting }
+      : SANDBOX_STATUS_PRESENTATION[status],
+    failedPhase,
+    failedPhaseRepo: failedPhase ? bootPhaseRepoLabel(failedPhase, repositoryCount) : null,
+    reason: error ?? failedPhase?.detail,
+    safeDashboardUrl: getSafeExternalUrl(dashboardUrl),
+  };
+}
+
+function SandboxStatusDetail({
+  presentation,
+  failedPhase,
+  failedPhaseRepo,
+  reason,
+  safeDashboardUrl,
+}: ReturnType<typeof resolveSandboxStatus>) {
+  return (
+    <>
+      <div className="border-b border-border-muted p-3">
+        <div className={`flex items-center gap-2 text-sm font-medium ${presentation.color}`}>
+          <span
+            aria-hidden="true"
+            className={`h-2 w-2 rounded-full ${presentation.dot}${presentation.pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}
+          />
+          Sandbox {presentation.label}
+        </div>
+        <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{presentation.detail}</p>
+        {failedPhase && (
+          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+            Failed while {bootPhaseLabel(failedPhase.phase).toLowerCase()}
+            {failedPhaseRepo ? ` for ${failedPhaseRepo}` : ""}.
+          </p>
+        )}
+        {reason && (
+          <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-destructive">
+            {reason}
+          </p>
+        )}
+      </div>
+      {safeDashboardUrl && (
+        <a
+          href={safeDashboardUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center justify-between p-3 text-xs font-medium text-accent hover:bg-muted"
+        >
+          Open provider dashboard
+          <span aria-hidden="true">{"\u2197"}</span>
+        </a>
+      )}
+    </>
+  );
+}
+
+function SandboxStatusIcon(props: SandboxStatusProps) {
+  const { status } = props;
+  if (!status) return null;
+
+  const resolved = resolveSandboxStatus({ ...props, status });
+  const { presentation } = resolved;
 
   return (
     <Popover>
@@ -412,39 +446,69 @@ function SandboxStatusIcon({
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" side="bottom" className="w-[min(20rem,calc(100vw-2rem))] p-0">
-        <div className="border-b border-border-muted p-3">
-          <div className={`flex items-center gap-2 text-sm font-medium ${presentation.color}`}>
-            <span
-              aria-hidden="true"
-              className={`h-2 w-2 rounded-full ${presentation.dot}${presentation.pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}
-            />
-            Sandbox {presentation.label}
-          </div>
-          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{presentation.detail}</p>
-          {failedPhase && (
-            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
-              Failed while {bootPhaseLabel(failedPhase.phase).toLowerCase()}
-              {failedPhaseRepo ? ` for ${failedPhaseRepo}` : ""}.
-            </p>
-          )}
-          {reason && (
-            <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-destructive">
-              {reason}
-            </p>
-          )}
-        </div>
-        {safeDashboardUrl && (
-          <a
-            href={safeDashboardUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-between p-3 text-xs font-medium text-accent hover:bg-muted"
-          >
-            Open provider dashboard
-            <span aria-hidden="true">{"\u2197"}</span>
-          </a>
-        )}
+        <SandboxStatusDetail {...resolved} />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The mobile header's only status surface: a line that appears below the title
+ * when the sandbox needs attention, and stays out of the way otherwise. A lost
+ * connection wins over the sandbox, because a stale socket means the sandbox
+ * status on screen may no longer be true.
+ */
+function MobileStatusStrip({
+  disconnected,
+  ...statusProps
+}: SandboxStatusProps & { disconnected: boolean }) {
+  const { status } = statusProps;
+
+  if (disconnected) {
+    return (
+      <p
+        role="status"
+        className="flex items-center gap-2 border-t border-border-muted px-3 py-2 text-xs text-destructive md:hidden"
+      >
+        <span
+          aria-hidden="true"
+          className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-destructive"
+        />
+        Disconnected
+      </p>
+    );
+  }
+
+  if (!status || !ATTENTION_STATUSES.has(status)) return null;
+
+  const resolved = resolveSandboxStatus({ ...statusProps, status });
+  const { presentation } = resolved;
+
+  return (
+    <div className="md:hidden">
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Show sandbox status: ${presentation.label}`}
+            className={`flex w-full items-center gap-2 border-t border-border-muted px-3 py-2 text-left text-xs ${presentation.color} transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring`}
+          >
+            <span
+              aria-hidden="true"
+              className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${presentation.dot}`}
+            />
+            <span className="min-w-0 flex-1 truncate">Sandbox {presentation.label}</span>
+            <ChevronRightIcon className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="center"
+          side="bottom"
+          className="w-[min(20rem,calc(100vw-2rem))] p-0"
+        >
+          <SandboxStatusDetail {...resolved} />
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }

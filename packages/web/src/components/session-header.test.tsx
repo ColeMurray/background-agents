@@ -3,12 +3,17 @@
 
 import { createRef, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { SessionState } from "@open-inspect/shared/types/server-messages";
 import { SessionHeader as SessionHeaderComponent } from "./session-header";
 import type { SessionActionProps } from "./session-actions";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
+
+type ConnectionProps = Pick<
+  ComponentProps<typeof SessionHeaderComponent>,
+  "connected" | "connecting" | "reconnecting"
+>;
 
 expect.extend(matchers);
 
@@ -634,10 +639,106 @@ describe("SessionHeader", () => {
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     fireEvent.click(trigger);
 
-    expect(screen.getByText("Sandbox Failed")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open provider dashboard/ })).toHaveAttribute(
+    // Scoped to the popover: the mobile attention strip names the same status,
+    // and only this popover carries the dashboard link.
+    const popover = within(screen.getByRole("dialog"));
+    expect(popover.getByText("Sandbox Failed")).toBeInTheDocument();
+    expect(popover.getByRole("link", { name: /Open provider dashboard/ })).toHaveAttribute(
       "href",
       "https://modal.com/apps/acme/main/sandbox"
     );
+  });
+});
+
+describe("SessionHeader mobile presentation", () => {
+  function renderMobileHeader(
+    sessionState: SessionState,
+    connection: Partial<ConnectionProps> = {}
+  ) {
+    return render(
+      <SessionHeader
+        sessionState={sessionState}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Mobile header" }}
+        connected
+        connecting={false}
+        {...connection}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen={false}
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+  }
+
+  it("keeps the repository out of the mobile bar", () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "ready" }));
+
+    // The desktop header still carries it; the mobile bar hides that element.
+    expect(screen.getByText("acme/web")).toHaveClass("hidden");
+  });
+
+  it("says nothing about a healthy sandbox", () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "ready" }));
+
+    expect(screen.queryByRole("button", { name: /^Show sandbox status/ })).not.toBeInTheDocument();
+  });
+
+  it("raises a strip for a sandbox that needs attention", () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "failed" }));
+
+    expect(screen.getByRole("button", { name: "Show sandbox status: Failed" })).toBeInTheDocument();
+  });
+
+  it.each(["stopped", "stale"] as const)("raises a strip for a %s sandbox", (sandboxStatus) => {
+    renderMobileHeader(createSessionState({ sandboxStatus }));
+
+    expect(screen.getByRole("button", { name: /^Show sandbox status/ })).toBeInTheDocument();
+  });
+
+  it("opens the same status detail from the strip as the desktop icon", () => {
+    renderMobileHeader(
+      createSessionState({
+        sandboxStatus: "failed",
+        sandboxDashboardUrl: "https://modal.com/apps/acme/main/sandbox",
+      })
+    );
+
+    const strip = screen.getByRole("button", { name: "Show sandbox status: Failed" });
+    fireEvent.pointerDown(strip, { button: 0, ctrlKey: false });
+    fireEvent.click(strip);
+
+    const popover = within(screen.getByRole("dialog"));
+    expect(popover.getByText("Sandbox Failed")).toBeInTheDocument();
+    expect(popover.getByRole("link", { name: /Open provider dashboard/ })).toHaveAttribute(
+      "href",
+      "https://modal.com/apps/acme/main/sandbox"
+    );
+  });
+
+  it("reports a dropped connection ahead of the sandbox", () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "failed" }), {
+      connected: false,
+      connecting: false,
+      reconnecting: false,
+    });
+
+    expect(screen.getByText("Disconnected")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Show sandbox status/ })).not.toBeInTheDocument();
+  });
+
+  it("stays quiet while a reconnect is pending", () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "ready" }), {
+      connected: false,
+      connecting: false,
+      reconnecting: true,
+    });
+
+    expect(screen.queryByText("Disconnected")).not.toBeInTheDocument();
   });
 });
