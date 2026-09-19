@@ -226,11 +226,9 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
    */
   private isAuthoritative(parsed: ConnectionClassification, sandbox: SandboxRow | null): boolean {
     if (parsed.kind !== "sandbox" || !sandbox) return false;
+    if (sandbox.modal_sandbox_id && parsed.sandboxId !== sandbox.modal_sandbox_id) return false;
     if (sandbox.active_socket_id === null) {
-      return (
-        parsed.socketId === undefined &&
-        (!sandbox.modal_sandbox_id || parsed.sandboxId === sandbox.modal_sandbox_id)
-      );
+      return parsed.socketId === undefined;
     }
     return parsed.socketId !== undefined && parsed.socketId === sandbox.active_socket_id;
   }

@@ -384,6 +384,51 @@ describe("UpgradeDecision.attach", () => {
     expect(h.submitted).toEqual([]);
   });
 
+  it("rejects a replacement installed after authorization but before attachment", async () => {
+    const original = await sandboxRow({ status: "spawning" });
+    const h = createHarness({ sandbox: original });
+    const decision = await accepted(h, sandboxUpgrade());
+    h.sandboxRepository.getSandbox.mockReturnValue({
+      ...original,
+      modal_sandbox_id: "sb-replacement",
+      auth_token_hash: "replacement-token-hash",
+      created_at: 9000,
+    });
+
+    await decision.attach(socket);
+
+    expect(h.wsManager.close).toHaveBeenCalledWith(socket, 4003, "Sandbox generation replaced");
+    expect(h.lifecycleManager.scheduleDisconnectCheck).not.toHaveBeenCalled();
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+    expect(h.sandboxRepository.updateSandboxHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("rejects a generation timestamp changed after authorization", async () => {
+    const original = await sandboxRow({ status: "spawning" });
+    const h = createHarness({ sandbox: original });
+    const decision = await accepted(h, sandboxUpgrade());
+    h.sandboxRepository.getSandbox.mockReturnValue({ ...original, created_at: 9000 });
+
+    await decision.attach(socket);
+
+    expect(h.wsManager.close).toHaveBeenCalledWith(socket, 4003, "Sandbox generation replaced");
+    expect(h.lifecycleManager.scheduleDisconnectCheck).not.toHaveBeenCalled();
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+  });
+
+  it("rejects credentials changed after authorization", async () => {
+    const original = await sandboxRow({ status: "spawning" });
+    const h = createHarness({ sandbox: original });
+    const decision = await accepted(h, sandboxUpgrade());
+    h.sandboxRepository.getSandbox.mockReturnValue({ ...original, auth_token_hash: "" });
+
+    await decision.attach(socket);
+
+    expect(h.wsManager.close).toHaveBeenCalledWith(socket, 4003, "Sandbox generation replaced");
+    expect(h.lifecycleManager.scheduleDisconnectCheck).not.toHaveBeenCalled();
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+  });
+
   it("closes the socket and commits nothing when the generation rotated while the liveness check was arming", async () => {
     // A cancel or a replacement spawn can rewrite the row while the alarm
     // write is pending. The socket that was admitted belongs to the old
@@ -440,11 +485,11 @@ describe("UpgradeDecision.attach", () => {
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
-  it("passes the presented sandbox id through, or undefined when the bridge sent none", async () => {
+  it("passes the authenticated sandbox id through, or undefined when the row has none", async () => {
     const h = createHarness({ sandbox: await sandboxRow({ modal_sandbox_id: null }) });
 
     await (
-      await accepted(h, upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: null }))
+      await accepted(h, upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: "untrusted-id" }))
     ).attach(socket);
 
     expect(h.wsManager.acceptAndSetSandboxSocket).toHaveBeenCalledWith(socket, undefined);
