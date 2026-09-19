@@ -34,6 +34,10 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from ..attachment_processor import (
+    MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+    AttachmentProcessor,
+)
 from ..credentials.provider_credential_client import (
     RuntimeCredentialClient,
     RuntimeCredentialDenied,
@@ -104,11 +108,21 @@ TASK_TOOL_NAME: Final = "task"
 OI_TOOL_PREFIX: Final = f"mcp__{OI_TOOL_SERVER_NAME}__"
 MAX_RECONNECTS_PER_SESSION: Final = 3
 # The CLI writes one NDJSON message per stdout line, and the SDK transport
-# fails the turn when a single line outgrows its buffer. Lines carry base64
-# image payloads -- attachments the CLI echoes back with the user message, and
-# tool results that read images -- so the SDK's 1MiB default breaks on an
-# ordinary screenshot. This ceiling bounds one line; it is not preallocated.
-MAX_STDOUT_MESSAGE_BYTES: Final = 50 * 1024 * 1024
+# fails the turn when a single line outgrows its buffer, so the ceiling has to
+# cover the largest line the runtime can produce. ``_user_messages`` inlines
+# every attachment on a prompt as base64 and the CLI echoes that message back,
+# which makes the whole per-message attachment budget one line. Derive the
+# ceiling from that budget rather than pick a round number: the SDK's 1MiB
+# default breaks on an ordinary screenshot, and any fixed value silently
+# falls behind when the attachment limits move.
+_ATTACHMENT_BASE64_BYTES: Final = (
+    (MAX_SESSION_ATTACHMENTS_PER_MESSAGE * AttachmentProcessor.MAX_IMAGE_BYTES + 2) // 3 * 4
+)
+# Room for the JSON envelope, the prompt text beside the image blocks, and
+# tool-result lines that carry images the runtime never sized.
+_STDOUT_MESSAGE_HEADROOM_BYTES: Final = 16 * 1024 * 1024
+# Bounds one line; the transport only buffers what actually arrives.
+MAX_STDOUT_MESSAGE_BYTES: Final = _ATTACHMENT_BASE64_BYTES + _STDOUT_MESSAGE_HEADROOM_BYTES
 AUTHENTICATION_FAILED_MESSAGE: Final = (
     "Anthropic rejected this session's credential. Reconnect the Claude account in "
     "Settings (or check ANTHROPIC_API_KEY) and start a new session."

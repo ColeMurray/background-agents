@@ -29,7 +29,10 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from sandbox_runtime.attachment_processor import AttachmentProcessor
+from sandbox_runtime.attachment_processor import (
+    MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+    AttachmentProcessor,
+)
 from sandbox_runtime.credentials.provider_credential_client import (
     RuntimeCredentialDenied,
     RuntimeCredentialUnavailable,
@@ -351,14 +354,16 @@ class TestOptions:
         assert "mcp__local__*" in options["allowed_tools"]
         assert "Bash" in options["allowed_tools"]
 
-    def test_stdout_ceiling_clears_a_max_size_attachment(self) -> None:
-        """One NDJSON line carries the base64 of an image the CLI echoes back.
+    def test_stdout_ceiling_clears_the_whole_attachment_budget(self) -> None:
+        """One NDJSON line carries every attachment the runtime accepts.
 
-        The SDK's 1MiB default failed the turn on any attachment past ~786KB,
-        so the ceiling has to clear the largest image the runtime hydrates.
+        ``_user_messages`` inlines them all into a single message the CLI
+        echoes back, so a prompt at the top of the budget -- not just one
+        large image -- has to fit under the ceiling, with room left over for
+        the JSON envelope and the prompt text.
         """
-        largest = AttachmentProcessor.MAX_IMAGE_BYTES
-        base64_bytes = ((largest + 2) // 3) * 4
+        budget = MAX_SESSION_ATTACHMENTS_PER_MESSAGE * AttachmentProcessor.MAX_IMAGE_BYTES
+        base64_bytes = ((budget + 2) // 3) * 4
         assert base64_bytes < MAX_STDOUT_MESSAGE_BYTES
 
     def test_reasoning_controls_are_per_model(self) -> None:
