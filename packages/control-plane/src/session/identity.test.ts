@@ -353,6 +353,62 @@ describe("resolveCurrentGitHubAccessToken", () => {
     expect(accountInfo).toHaveBeenCalledOnce();
   });
 
+  it("treats an empty refreshed token as an integrity failure", async () => {
+    // An empty access token from the initial lookup means "no grant" and maps
+    // to null. The same value from a refresh is different: Better Auth just
+    // agreed to refresh a grant it then reports as absent, so it must fail
+    // rather than be mistaken for a clean unlink.
+    const accountInfo = vi.fn(async () => GITHUB_ACCOUNT_INFO);
+    const emptyRefreshClient = {
+      ...accountClient,
+      accountInfo,
+      refreshToken: vi.fn(async () => ({ accessToken: "" })),
+      getAccessToken: vi.fn(async () => ({
+        accessToken: "expiring-token",
+        accessTokenExpiresAt: new Date(Date.now() + 30_000),
+      })),
+    };
+
+    await expect(
+      resolveCurrentGitHubAccessToken(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        () => emptyRefreshClient,
+        "user-1",
+        "42"
+      )
+    ).rejects.toThrow("Better Auth returned an empty refreshed GitHub access token");
+    expect(accountInfo).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the refreshed token still expires inside the safety window", async () => {
+    // A refresh that lands back inside the window cannot be handed to a PR
+    // operation that may outlive it. That is a usable-credential miss, not an
+    // integrity failure, so it is null and the profile is never consulted.
+    const accountInfo = vi.fn(async () => GITHUB_ACCOUNT_INFO);
+    const stillExpiringClient = {
+      ...accountClient,
+      accountInfo,
+      refreshToken: vi.fn(async () => ({
+        accessToken: "refreshed-but-short-lived",
+        accessTokenExpiresAt: new Date(Date.now() + 30_000),
+      })),
+      getAccessToken: vi.fn(async () => ({
+        accessToken: "expiring-token",
+        accessTokenExpiresAt: new Date(Date.now() + 30_000),
+      })),
+    };
+
+    await expect(
+      resolveCurrentGitHubAccessToken(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        () => stillExpiringClient,
+        "user-1",
+        "42"
+      )
+    ).resolves.toBeNull();
+    expect(accountInfo).not.toHaveBeenCalled();
+  });
+
   it("returns null for a linked identity without an OAuth grant", async () => {
     const accountInfo = vi.fn(async () => GITHUB_ACCOUNT_INFO);
     const grantlessClient = {
