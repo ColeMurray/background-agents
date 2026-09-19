@@ -17,6 +17,7 @@ import {
   SessionDraftExpiryClient,
 } from "./session/abandoned-draft-sweep";
 import type { SessionRuntimeClient } from "./session/runtime-client";
+import { reapSupersededReviewSessions } from "./routes/github-reviews";
 import {
   SCHEDULED_JOBS,
   SCHEDULER_TICK_CRON,
@@ -28,6 +29,7 @@ import type { Env } from "./types";
 // The job bodies are mocked; the cron constants stay the production values so
 // the Terraform parity check below reads what the Worker really registers.
 vi.mock("./autofix/queue-health", () => ({ checkAutofixQueueHealth: vi.fn(async () => {}) }));
+vi.mock("./routes/github-reviews", () => ({ reapSupersededReviewSessions: vi.fn(async () => {}) }));
 vi.mock("./image-builds/scheduler", async (importOriginal) => ({
   ...(await importOriginal<typeof ImageBuildScheduler>()),
   runImageBuildScheduler: vi.fn(async () => ({})),
@@ -106,10 +108,24 @@ describe("SCHEDULED_JOBS", () => {
 
     expect(Scheduler).toHaveBeenCalledWith(deps.db, deps.env, deps.backgroundTasks);
     expect(schedulerTick).toHaveBeenCalledTimes(1);
+    expect(reapSupersededReviewSessions).toHaveBeenCalledWith(deps.db, deps.sessions);
     expect(deps.submitted.map((entry) => entry.name)).toEqual(["autofix_queue_health"]);
     expect(checkAutofixQueueHealth).not.toHaveBeenCalled();
     await deps.submitted[0]!.task();
     expect(checkAutofixQueueHealth).toHaveBeenCalledWith(deps.env, deps.log);
+  });
+
+  it("still runs the scheduler tick when the review reaper throws", async () => {
+    const deps = fakeDeps();
+    vi.mocked(reapSupersededReviewSessions).mockRejectedValueOnce(new Error("d1 unavailable"));
+
+    await findScheduledJob(SCHEDULER_TICK_CRON)!.run(deps, 1_000);
+
+    expect(schedulerTick).toHaveBeenCalledTimes(1);
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      "Review reaper tick failed",
+      expect.objectContaining({ event: "review_reaper.tick_failed" })
+    );
   });
 
   it("runs the image-build scheduler with the run's correlation", async () => {
