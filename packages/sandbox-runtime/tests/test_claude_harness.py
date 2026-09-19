@@ -29,6 +29,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from sandbox_runtime.attachment_processor import AttachmentProcessor
 from sandbox_runtime.credentials.provider_credential_client import (
     RuntimeCredentialDenied,
     RuntimeCredentialUnavailable,
@@ -36,6 +37,7 @@ from sandbox_runtime.credentials.provider_credential_client import (
 from sandbox_runtime.harness import AgentHarness, HarnessPrompt, HarnessStartError, PromptLimits
 from sandbox_runtime.harness.claude import (
     AUTHENTICATION_FAILED_MESSAGE,
+    MAX_STDOUT_MESSAGE_BYTES,
     ClaudeHarness,
     ClaudeHarnessConfig,
     bare_model_id,
@@ -333,6 +335,7 @@ class TestOptions:
         assert options["setting_sources"] == ["user", "project"]
         assert options["include_partial_messages"] is True
         assert options["forward_subagent_text"] is False
+        assert options["max_buffer_size"] == MAX_STDOUT_MESSAGE_BYTES
         assert options["system_prompt"] == {
             "type": "preset",
             "preset": "claude_code",
@@ -347,6 +350,16 @@ class TestOptions:
         assert "mcp__linear__*" in options["allowed_tools"]
         assert "mcp__local__*" in options["allowed_tools"]
         assert "Bash" in options["allowed_tools"]
+
+    def test_stdout_ceiling_clears_a_max_size_attachment(self) -> None:
+        """One NDJSON line carries the base64 of an image the CLI echoes back.
+
+        The SDK's 1MiB default failed the turn on any attachment past ~786KB,
+        so the ceiling has to clear the largest image the runtime hydrates.
+        """
+        largest = AttachmentProcessor.MAX_IMAGE_BYTES
+        base64_bytes = ((largest + 2) // 3) * 4
+        assert base64_bytes < MAX_STDOUT_MESSAGE_BYTES
 
     def test_reasoning_controls_are_per_model(self) -> None:
         assert reasoning_options("claude-sonnet-4-5", "max") == {

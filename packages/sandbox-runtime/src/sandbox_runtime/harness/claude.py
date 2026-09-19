@@ -103,6 +103,12 @@ TASK_TOOL_NAME: Final = "task"
 # emits; external servers keep theirs so the timeline can name the server.
 OI_TOOL_PREFIX: Final = f"mcp__{OI_TOOL_SERVER_NAME}__"
 MAX_RECONNECTS_PER_SESSION: Final = 3
+# The CLI writes one NDJSON message per stdout line, and the SDK transport
+# fails the turn when a single line outgrows its buffer. Lines carry base64
+# image payloads -- attachments the CLI echoes back with the user message, and
+# tool results that read images -- so the SDK's 1MiB default breaks on an
+# ordinary screenshot. This ceiling bounds one line; it is not preallocated.
+MAX_STDOUT_MESSAGE_BYTES: Final = 50 * 1024 * 1024
 AUTHENTICATION_FAILED_MESSAGE: Final = (
     "Anthropic rejected this session's credential. Reconnect the Claude account in "
     "Settings (or check ANTHROPIC_API_KEY) and start a new session."
@@ -405,6 +411,7 @@ class ClaudeHarness:
             "setting_sources": ["user", "project"],
             "include_partial_messages": True,
             "forward_subagent_text": False,
+            "max_buffer_size": MAX_STDOUT_MESSAGE_BYTES,
             **reasoning_options(model, reasoning_effort),
         }
         if self._resume_on_connect:
