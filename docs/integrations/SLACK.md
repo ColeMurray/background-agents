@@ -107,8 +107,9 @@ Where you use the flags decides how long they last:
 - **On a follow-up in an existing session thread**, they apply to that one request and leave the
   session's defaults alone.
 
-To put a session back on your App Home default, name it explicitly on a follow-up (that still lasts
-one turn), or start a new thread.
+A running session's defaults cannot be changed. Naming your App Home model on a follow-up runs that
+one request on it and leaves the session where it is; to go back to your defaults for good, start a
+new session in a new thread.
 
 Both flags accept a space or colon before their value, such as `!model:openai/gpt-5.6-sol` and
 `!reasoning:high`. Any flags must appear together at the start of the request. Models must be
