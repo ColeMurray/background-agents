@@ -65,8 +65,6 @@ interface UseSessionSocketReturn {
   canManageBudget: boolean;
   isProcessing: boolean;
   promptQueue: PromptQueueItem[];
-  hasMoreHistory: boolean;
-  loadingHistory: boolean;
   sendPrompt: (
     content: string,
     model?: string,
@@ -439,8 +437,6 @@ export function useSessionSocket(
     canManageBudget: state.canManageBudget,
     isProcessing,
     promptQueue: state.promptQueue,
-    hasMoreHistory,
-    loadingHistory,
     sendPrompt,
     cancelPrompt,
     stopExecution,
