@@ -40,7 +40,10 @@ snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot.
 
 Daytona additionally requires an operator to open admission (`daytona_prebuilds_enabled`, default
 off) — see [Daytona prebuilds](#daytona-prebuilds) below. While admission is closed the settings
-controls stay visible and say so, and nothing starts a build.
+controls stay visible and say so, and nothing starts a build. Read every "triggers a build"
+statement below as conditional on admission when the deployment is on Daytona: enabling a
+repository, saving an environment, the manual rebuild button and the 30-minute scheduler all record
+intent but start nothing until an operator opens it. On every other provider they are unconditional.
 
 ### Enable for a Repository
 
@@ -125,7 +128,9 @@ Builds also trigger immediately, outside the schedule, when:
 - You click the **manual rebuild** button — next to the repository in Settings > Images, or on the
   environment row in Settings > Environments
 
-Only one build runs per scope at a time; a trigger while a build is in flight is a no-op.
+Only one build runs per scope at a time; a trigger while a build is in flight is a no-op. On a
+Daytona deployment every trigger above — the scheduler included — starts a build only while
+admission is open (see [Daytona prebuilds](#daytona-prebuilds)).
 
 ### What Happens During a Build
 
