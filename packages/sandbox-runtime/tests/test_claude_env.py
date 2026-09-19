@@ -8,13 +8,19 @@ from pathlib import Path
 
 from sandbox_runtime.harness.claude_env import (
     API_KEY_CREDENTIAL_VARS,
+    BASH_DEFAULT_TIMEOUT_ENV_VAR,
+    BASH_MAX_TIMEOUT_ENV_VAR,
     CLAUDE_POLICY_SETTINGS,
+    CLI_BASH_MAX_TIMEOUT_SECONDS,
     OAUTH_CREDENTIAL_VARS,
+    STREAM_SILENCE_MARGIN_SECONDS,
     ClaudeAuthMode,
     ClaudeCredential,
+    bash_timeout_ceiling_seconds,
     clean_child_env,
     denylist_for,
     harness_env,
+    stream_silence_budget_seconds,
     write_clean_env_wrapper,
 )
 
@@ -173,3 +179,47 @@ class TestDenylist:
             "feedbackDrafts": "off",
             "feedbackSurveyRate": 0,
         }
+
+
+class TestBashTimeoutCeiling:
+    """The ceiling the child enforces, which is how long the stream may be silent."""
+
+    def test_the_cli_builtin_applies_when_the_environment_says_nothing(self) -> None:
+        assert bash_timeout_ceiling_seconds({}) == CLI_BASH_MAX_TIMEOUT_SECONDS
+
+    def test_the_environment_raises_it(self) -> None:
+        assert bash_timeout_ceiling_seconds({BASH_MAX_TIMEOUT_ENV_VAR: "1200000"}) == 1200.0
+
+    def test_a_default_above_the_max_wins_as_the_cli_does(self) -> None:
+        """The CLI takes the larger of the two, so a raised default is a ceiling too."""
+        environ = {BASH_MAX_TIMEOUT_ENV_VAR: "60000", BASH_DEFAULT_TIMEOUT_ENV_VAR: "900000"}
+        assert bash_timeout_ceiling_seconds(environ) == 900.0
+
+    def test_the_environment_can_lower_it(self) -> None:
+        assert bash_timeout_ceiling_seconds({BASH_MAX_TIMEOUT_ENV_VAR: "60000"}) == 120.0
+
+    def test_values_the_cli_ignores_are_ignored_here_too(self) -> None:
+        for raw in ("", "soon", "0", "-1", "nan", "inf"):
+            environ = {BASH_MAX_TIMEOUT_ENV_VAR: raw}
+            assert bash_timeout_ceiling_seconds(environ) == CLI_BASH_MAX_TIMEOUT_SECONDS
+
+    def test_the_budget_clears_the_ceiling_by_the_margin(self) -> None:
+        environ = {BASH_MAX_TIMEOUT_ENV_VAR: "1200000"}
+        assert stream_silence_budget_seconds(environ) == 1200.0 + STREAM_SILENCE_MARGIN_SECONDS
+
+    def test_the_child_really_receives_the_ceiling_the_budget_was_resolved_from(
+        self, tmp_path: Path
+    ) -> None:
+        """The two layers agree only because the wrapper forwards the variable:
+        the bridge resolves the ceiling from its own environment, and this is
+        the environment the child is launched with.
+        """
+        parent = _polluted_parent_env(**{BASH_MAX_TIMEOUT_ENV_VAR: "1200000"})
+        wrapper = write_clean_env_wrapper(
+            tmp_path / "bin", mode=ClaudeAuthMode.API_KEY, binary=_fake_binary(tmp_path)
+        )
+
+        child_env = _run_wrapper(wrapper, parent)["env"]
+
+        assert child_env[BASH_MAX_TIMEOUT_ENV_VAR] == "1200000"
+        assert bash_timeout_ceiling_seconds(child_env) == bash_timeout_ceiling_seconds(parent)

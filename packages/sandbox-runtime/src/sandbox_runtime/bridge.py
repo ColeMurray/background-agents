@@ -165,7 +165,7 @@ class AgentBridge:
             warn_user=self._send_media_warning,
         )
 
-        self.prompt_limits = resolve_prompt_limits(self.log)
+        self.prompt_limits = resolve_prompt_limits(self.log, harness_id)
 
         self.ws: ClientConnection | None = None
         self.shutdown_event = asyncio.Event()
