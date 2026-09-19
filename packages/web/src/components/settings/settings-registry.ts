@@ -81,6 +81,19 @@ export const SETTINGS_GROUPS = [
           )
         ),
       },
+      {
+        id: "access-tokens",
+        label: "Access Tokens",
+        description: "Create and revoke personal API credentials",
+        keywords: "personal api token mcp authentication",
+        icon: KeyIcon,
+        visibility: publicSettings,
+        panel: lazyPanel(() =>
+          import("./access-tokens-settings").then(
+            ({ AccessTokensSettings }) => AccessTokensSettings
+          )
+        ),
+      },
     ],
   },
   {
