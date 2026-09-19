@@ -4,7 +4,7 @@ import { normalizeValidModels, type ValidModel } from "@open-inspect/shared/mode
 import { getAuthoritativeModels, getAvailableModels } from "../app-home/models";
 import {
   notifyDroppedAttachments,
-  prepareImageAttachments,
+  preparePromptImageAttachments,
   type SlackImageAttachment,
 } from "../attachments";
 import { getUserRepoBranchPreference } from "../branch-preferences";
@@ -87,6 +87,8 @@ export interface StartSessionOptions {
   channelDescription?: string;
   /** Images attached to the triggering Slack message, normalized at ingress. */
   images?: SlackImageAttachment[];
+  /** Supported images from earlier messages in the selected causal window. */
+  contextImages?: SlackImageAttachment[];
   /** True when the triggering message had no user text, only images. */
   imageOnly?: boolean;
   turnPlan?: ResolvedTurnPlan;
@@ -109,6 +111,7 @@ export async function startSessionAndSendPrompt(
     channelName,
     channelDescription,
     images,
+    contextImages,
     imageOnly,
     turnPlan: providedTurnPlan,
     launchSettings: providedLaunchSettings,
@@ -116,7 +119,12 @@ export async function startSessionAndSendPrompt(
   } = options;
   // Download image bytes before creating the session: an image-only request
   // whose images are all lost must never create a session it will not prompt.
-  const preparedImages = await prepareImageAttachments(env, images ?? [], traceId);
+  const preparedImages = await preparePromptImageAttachments(
+    env,
+    images ?? [],
+    imageOnly ? [] : (contextImages ?? []),
+    traceId
+  );
   if (imageOnly && preparedImages.files.length === 0) {
     await notifyDroppedAttachments(
       env,

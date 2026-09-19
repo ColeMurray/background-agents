@@ -477,11 +477,73 @@ export async function listChannels(
   return { ok: true, channels };
 }
 
+/**
+ * A file object as it appears on a Slack message (subset of fields we use).
+ *
+ * The schema is the source of truth: `SlackMessageFile` is inferred from it and
+ * inbound-event and thread-history validation reuse it, so adding a field here
+ * reaches the type and both trust boundaries at once.
+ */
+export const slackMessageFileSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  title: z.string().optional(),
+  mimetype: z.string().optional(),
+  url_private: z.string().optional(),
+  url_private_download: z.string().optional(),
+  size: z.number().optional(),
+  /** "external" marks remote files whose url_private is third-party-hosted. */
+  mode: z.string().optional(),
+});
+
+export type SlackMessageFile = z.infer<typeof slackMessageFileSchema>;
+
+/**
+ * A secondary attachment on a Slack message (subset of fields we use).
+ *
+ * Two very different things arrive in this array. Sharing or forwarding a
+ * message produces a *message* attachment flagged `is_share` (and may also set
+ * `is_msg_unfurl`), carrying the shared message's author and body — which is the
+ * only place that body exists on the new message. A pasted Slack message link
+ * produces an attachment with `is_msg_unfurl` but not `is_share`. Callers that
+ * read message bodies must use `is_share` as the positive discriminator.
+ */
+export const slackMessageAttachmentSchema = z.object({
+  /** Set when the attachment is a shared/forwarded Slack message. */
+  is_share: z.boolean().optional(),
+  /** Set when the attachment unfurls a Slack message permalink. */
+  is_msg_unfurl: z.boolean().optional(),
+  /** Body of the shared message, in mrkdwn. */
+  text: z.string().optional(),
+  /** Plain-text rendering Slack always provides, e.g. "[date] user: body". */
+  fallback: z.string().optional(),
+  /** Display name of the shared message's author. */
+  author_name: z.string().optional(),
+  /** Channel the shared message came from; absent when Slack omits it. */
+  channel_name: z.string().optional(),
+  /** Id of the channel the shared message came from. */
+  channel_id: z.string().optional(),
+  /** Slack ts of the shared message, i.e. its identity within the channel. */
+  ts: z.string().optional(),
+  /** Permalink of the shared message. */
+  from_url: z.string().optional(),
+  /** Files the shared message carried, Slack-hosted like any message file. */
+  files: z.array(slackMessageFileSchema).optional(),
+});
+
+export type SlackMessageAttachment = z.infer<typeof slackMessageAttachmentSchema>;
+
+const slackMessageContentSchema = z.object({
+  files: z.array(slackMessageFileSchema).optional(),
+  attachments: z.array(slackMessageAttachmentSchema).optional(),
+});
+
 const slackThreadMessageSchema = z.object({
   ts: z.string(),
   text: z.string(),
   user: z.string().optional(),
   bot_id: z.string().optional(),
+  ...slackMessageContentSchema.shape,
 });
 
 export type SlackThreadMessage = z.infer<typeof slackThreadMessageSchema>;
@@ -535,62 +597,6 @@ export async function getThreadMessages(
 }
 
 /**
- * A file object as it appears on a Slack message (subset of fields we use).
- *
- * The schema is the source of truth: `SlackMessageFile` is inferred from it and
- * inbound-event validation reuses it, so adding a field here reaches both the
- * type and the trust boundary at once.
- */
-export const slackMessageFileSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().optional(),
-  title: z.string().optional(),
-  mimetype: z.string().optional(),
-  url_private: z.string().optional(),
-  url_private_download: z.string().optional(),
-  size: z.number().optional(),
-  /** "external" marks remote files whose url_private is third-party-hosted. */
-  mode: z.string().optional(),
-});
-
-export type SlackMessageFile = z.infer<typeof slackMessageFileSchema>;
-
-/**
- * A secondary attachment on a Slack message (subset of fields we use).
- *
- * Two very different things arrive in this array. Sharing or forwarding a
- * message produces a *message* attachment flagged `is_share` (and may also set
- * `is_msg_unfurl`), carrying the shared message's author and body — which is the
- * only place that body exists on the new message. A pasted Slack message link
- * produces an attachment with `is_msg_unfurl` but not `is_share`. Callers that
- * read message bodies must use `is_share` as the positive discriminator.
- */
-export const slackMessageAttachmentSchema = z.object({
-  /** Set when the attachment is a shared/forwarded Slack message. */
-  is_share: z.boolean().optional(),
-  /** Set when the attachment unfurls a Slack message permalink. */
-  is_msg_unfurl: z.boolean().optional(),
-  /** Body of the shared message, in mrkdwn. */
-  text: z.string().optional(),
-  /** Plain-text rendering Slack always provides, e.g. "[date] user: body". */
-  fallback: z.string().optional(),
-  /** Display name of the shared message's author. */
-  author_name: z.string().optional(),
-  /** Channel the shared message came from; absent when Slack omits it. */
-  channel_name: z.string().optional(),
-  /** Id of the channel the shared message came from. */
-  channel_id: z.string().optional(),
-  /** Slack ts of the shared message, i.e. its identity within the channel. */
-  ts: z.string().optional(),
-  /** Permalink of the shared message. */
-  from_url: z.string().optional(),
-  /** Files the shared message carried, Slack-hosted like any message file. */
-  files: z.array(slackMessageFileSchema).optional(),
-});
-
-export type SlackMessageAttachment = z.infer<typeof slackMessageAttachmentSchema>;
-
-/**
  * A one-message window from `conversations.history` / `conversations.replies`.
  *
  * Only `ts` is needed to pick the target out of the window; `files` and
@@ -600,8 +606,7 @@ const messageWindowPayloadSchema = z.object({
   messages: z.array(
     z.object({
       ts: z.string(),
-      files: z.array(slackMessageFileSchema).optional(),
-      attachments: z.array(slackMessageAttachmentSchema).optional(),
+      ...slackMessageContentSchema.shape,
     })
   ),
 });

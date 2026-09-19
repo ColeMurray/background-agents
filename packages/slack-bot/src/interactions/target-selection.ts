@@ -7,6 +7,7 @@ import {
 import { toImageAttachments, type SlackImageAttachment } from "../attachments";
 import { MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import { collectForwardedMessages } from "../forwarded-messages";
+import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import { createLogger } from "../logger";
 import {
   buildWorkingMessageBlocks,
@@ -91,7 +92,9 @@ export async function handleTargetSelection(
     channelName,
     channelDescription,
     imageOnly,
+    messageTs: sourceMessageTs,
     sourceMessage,
+    threadContextSource,
     unattributedPrompt,
     turnPlan,
     classification,
@@ -152,6 +155,18 @@ export async function handleTargetSelection(
     );
     return;
   }
+
+  const contextImages = threadContextSource
+    ? (
+        await fetchInteractiveThreadContext(
+          env,
+          channel,
+          threadContextSource.threadTs,
+          { beforeTs: threadContextSource.beforeTs, includeBotMessages: true },
+          traceId
+        )
+      )?.images
+    : undefined;
 
   // Pending requests persist only the source-message locator; re-fetch the
   // files from Slack now that the target is known.
@@ -219,14 +234,14 @@ export async function handleTargetSelection(
     threadTs: threadKey,
     messageText,
     actor,
-    // The original message ts isn't persisted with the pending request, so
-    // the "Working on..." ack — or the interaction message when the ack post
-    // fails — marks where interim thread context resumes.
-    messageTs: ackTs ?? messageTs,
+    // New records preserve the original causal checkpoint. The fallback keeps
+    // pending requests written by older deployments deliverable.
+    messageTs: sourceMessageTs ?? ackTs ?? messageTs,
     previousMessages,
     channelName,
     channelDescription,
     images,
+    contextImages,
     imageOnly,
     turnPlan: resolvedTurnPlan,
     launchSettings,

@@ -222,6 +222,17 @@ describe("thread session store", () => {
       expect(mocks.put).not.toHaveBeenCalled();
     });
 
+    it("keeps the checkpoint monotonic across exact microsecond fractions", async () => {
+      mocks.get.mockResolvedValue({
+        ...stored,
+        lastPromptTs: "9999999999999999.000002",
+      });
+
+      await advanceLastPromptTs(mocks.env, "C123", "111.222", "9999999999999999.000001");
+
+      expect(mocks.put).not.toHaveBeenCalled();
+    });
+
     it("does not resurrect a cleared mapping", async () => {
       mocks.get.mockResolvedValue(null);
 

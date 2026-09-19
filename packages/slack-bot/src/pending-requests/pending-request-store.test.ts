@@ -59,6 +59,8 @@ describe("pending request store", () => {
       previousMessages: ["Earlier context"],
       channelName: "engineering",
       channelDescription: "Build discussion",
+      messageTs: "222.000003",
+      threadContextSource: { threadTs: "111.222", beforeTs: "222.000003" },
       turnPlan: TURN_PLAN,
     });
 
@@ -145,6 +147,8 @@ describe("pending request store", () => {
     const legacy = {
       message: "Fix it",
       userId: "U123",
+      messageTs: "222.000003",
+      threadContextSource: { threadTs: "111.222", beforeTs: "222.000003" },
       inlinePromptOptions: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" },
     };
     mocks.get.mockResolvedValue(legacy);
