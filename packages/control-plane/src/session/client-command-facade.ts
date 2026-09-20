@@ -57,7 +57,10 @@ export class SessionClientCommandFacade implements SessionClientCommands<
   }
 
   recoverPreservation(action: "retry" | "restore_saved"): Promise<void> {
-    return this.recover?.(action) ?? Promise.resolve();
+    if (!this.recover) {
+      return Promise.reject(new Error("Preservation recovery is not configured"));
+    }
+    return this.recover(action);
   }
 
   notifyTyping(): Promise<void> {
