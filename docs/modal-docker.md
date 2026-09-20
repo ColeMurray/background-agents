@@ -56,7 +56,7 @@ without the original workspace or volumes, and leaves the old reference intact.
 1. Apply additive D1 and Session-storage migrations, keeping admission off.
 2. Set Terraform `provision_modal_vm_sandboxes=true` to build and verify both native images and
    deploy profile-aware Modal endpoints. For manual Modal builds, use `BUILD_MODAL_VM_IMAGE=true` or
-   `python deploy.py --build-sandbox-image --with-docker` in `packages/modal-infra`.
+   `uv run python deploy.py --build-sandbox-image --with-docker` in `packages/modal-infra`.
 3. Deploy the profile-aware control plane and web application. Qualify an isolated canary before
    setting Terraform `enable_modal_vm_sandboxes=true` (control-plane environment variable
    `ENABLE_MODAL_VM_SANDBOXES=true`). Keep the global user default off unless intentionally changed.
