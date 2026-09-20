@@ -399,6 +399,94 @@ describe("DaytonaSandboxProvider", () => {
     });
   });
 
+  describe("web terminal", () => {
+    it("injects the default proxy port, returns its URL, and excludes it from tunnels", async () => {
+      const getSignedPreviewUrl = vi.fn(async (_id: string, port: number) => ({
+        url: `https://preview.test/${port}`,
+      }));
+      const client = createMockClient({
+        getSignedPreviewUrl,
+      });
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      const result = await provider.createSandbox({
+        ...baseCreateConfig,
+        sandboxSettings: {
+          terminalEnabled: true,
+          tunnelPorts: [7680, 3000, 3000],
+        },
+      });
+      const envVars = vi.mocked(client.createSandbox).mock.calls[0][0].env!;
+
+      expect(envVars).toMatchObject({ TERMINAL_ENABLED: "true", TTYD_PROXY_PORT: "7680" });
+      expect(result.ttydUrl).toBe("https://preview.test/7680");
+      expect(result.tunnelUrls).toEqual({ "3000": "https://preview.test/3000" });
+      expect(getSignedPreviewUrl).toHaveBeenNthCalledWith(1, "daytona-sandbox-id", 7680, 3900);
+      expect(getSignedPreviewUrl).toHaveBeenNthCalledWith(2, "daytona-sandbox-id", 3000, 3900);
+      expect(getSignedPreviewUrl).toHaveBeenCalledTimes(2);
+    });
+
+    it("uses a custom terminal proxy port", async () => {
+      const getSignedPreviewUrl = vi.fn(async (_id: string, port: number) => ({
+        url: `https://preview.test/${port}`,
+      }));
+      const client = createMockClient({
+        getSignedPreviewUrl,
+      });
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      const result = await provider.createSandbox({
+        ...baseCreateConfig,
+        sandboxSettings: { terminalEnabled: true, terminalPort: 7000 },
+      });
+      const envVars = vi.mocked(client.createSandbox).mock.calls[0][0].env!;
+
+      expect(envVars.TTYD_PROXY_PORT).toBe("7000");
+      expect(result.ttydUrl).toBe("https://preview.test/7000");
+      expect(getSignedPreviewUrl).toHaveBeenCalledWith("daytona-sandbox-id", 7000, 3900);
+    });
+
+    it("does not start or expose the terminal when disabled", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      const result = await provider.createSandbox({
+        ...baseCreateConfig,
+        userEnvVars: { TERMINAL_ENABLED: "true", TTYD_PROXY_PORT: "7000" },
+        sandboxSettings: { terminalEnabled: false },
+      });
+      const envVars = vi.mocked(client.createSandbox).mock.calls[0][0].env!;
+
+      expect(envVars.TERMINAL_ENABLED).toBe("");
+      expect(envVars.TTYD_PROXY_PORT).toBeUndefined();
+      expect(result.ttydUrl).toBeUndefined();
+      expect(client.getSignedPreviewUrl).not.toHaveBeenCalled();
+    });
+
+    it("keeps the sandbox and other tunnels when terminal preview URL creation fails", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const client = createMockClient({
+        getSignedPreviewUrl: async (_id, port) => {
+          if (port === 7680) throw new DaytonaApiError("preview unavailable", 500);
+          return { url: `https://preview.test/${port}` };
+        },
+      });
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      const result = await provider.createSandbox({
+        ...baseCreateConfig,
+        sandboxSettings: { terminalEnabled: true, tunnelPorts: [3000] },
+      });
+
+      expect(result.providerObjectId).toBe("daytona-sandbox-id");
+      expect(result.ttydUrl).toBeUndefined();
+      expect(result.tunnelUrls).toEqual({ "3000": "https://preview.test/3000" });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("daytona.terminal_preview_url_failed")
+      );
+    });
+  });
+
   describe("code-server password derivation", () => {
     it("derives deterministic password via HMAC", async () => {
       const client = createMockClient();
@@ -459,6 +547,7 @@ describe("DaytonaSandboxProvider", () => {
       expect(result.success).toBe(true);
       expect(result.providerObjectId).toBe("daytona-sandbox-id");
       expect(client.startSandbox).toHaveBeenCalledWith("daytona-sandbox-id");
+      expect(client.getSignedPreviewUrl).not.toHaveBeenCalled();
     });
 
     it("returns shouldSpawnFresh when sandbox not found", async () => {
@@ -545,6 +634,29 @@ describe("DaytonaSandboxProvider", () => {
 
       expect(result.vncAccess?.url).toBe("https://preview.test/6080");
       expect(result.vncAccess?.password).toMatch(/^[A-Za-z0-9]{8}$/);
+    });
+
+    it("returns terminal access after resume using the custom proxy port", async () => {
+      const getSignedPreviewUrl = vi.fn(async (_id: string, port: number) => ({
+        url: `https://preview.test/${port}`,
+      }));
+      const client = createMockClient({
+        getSignedPreviewUrl,
+      });
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      const result = await provider.resumeSandbox({
+        ...baseResumeConfig,
+        sandboxSettings: {
+          terminalEnabled: true,
+          terminalPort: 7002,
+          tunnelPorts: [7002, 3000],
+        },
+      });
+
+      expect(result.ttydUrl).toBe("https://preview.test/7002");
+      expect(result.tunnelUrls).toEqual({ "3000": "https://preview.test/3000" });
+      expect(getSignedPreviewUrl).toHaveBeenCalledWith("daytona-sandbox-id", 7002, 3900);
     });
 
     it("tunnel URL failure does not fail the resume", async () => {
@@ -727,7 +839,10 @@ describe("DaytonaSandboxProvider prebuilt images", () => {
       url: "https://preview.test/signed",
     }));
 
-    await prebuiltProvider(client).createSandbox(prebuiltConfig);
+    const result = await prebuiltProvider(client).createSandbox({
+      ...prebuiltConfig,
+      sandboxSettings: { terminalEnabled: true },
+    });
 
     const params = client.createSandbox.mock.calls[0][0];
     expect(params.snapshot).toBe("snapshot-1");
@@ -737,7 +852,10 @@ describe("DaytonaSandboxProvider prebuilt images", () => {
       IMAGE_BUILD_MODE: "false",
       RESTORED_FROM_SNAPSHOT: "false",
       OI_DEFERRED_START: "false",
+      TERMINAL_ENABLED: "true",
+      TTYD_PROXY_PORT: "7680",
     });
+    expect(result.ttydUrl).toBe("https://preview.test/signed");
     // Presence of any callback key is what the runtime reads as a build
     // context, so a session create must set none of them.
     for (const key of Object.keys(params.env ?? {})) {

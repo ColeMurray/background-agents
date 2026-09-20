@@ -277,6 +277,10 @@ function createMockStorage(
         sandbox[ACCESS_FIELDS[kind].secret] = secret;
       }
     }),
+    updateSandboxAccessUrl: vi.fn((kind: SandboxAccessKind, url: string) => {
+      calls.push(`updateSandboxAccessUrl:${kind}:${url}`);
+      if (sandbox) sandbox[ACCESS_FIELDS[kind].url] = url;
+    }),
     clearSandboxAccess: vi.fn((kind: SandboxAccessKind) => {
       calls.push(`clearSandboxAccess:${kind}`);
       if (sandbox) {
@@ -1493,6 +1497,43 @@ describe("SandboxLifecycleManager", () => {
           (m) => (m as { type: string }).type === "sandbox_access_changed"
         )
       ).toContainEqual({ type: "sandbox_access_changed" });
+    });
+
+    it("refreshes terminal URL after resume without replacing its token", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        modal_object_id: "same-provider-obj",
+        snapshot_image_id: null,
+        ttyd_url: null,
+        ttyd_token: "encrypted-terminal-token",
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider({
+        capabilities: { supportsPersistentResume: true },
+        resumeSandbox: vi.fn(async () => ({
+          success: true,
+          providerObjectId: "same-provider-obj",
+          ttydUrl: "https://terminal.test/refreshed",
+        })),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(sandbox.ttyd_url).toBe("https://terminal.test/refreshed");
+      expect(sandbox.ttyd_token).toBe("encrypted-terminal-token");
+      expect(storage.calls).toContain(
+        "updateSandboxAccessUrl:ttyd:https://terminal.test/refreshed"
+      );
     });
 
     it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {
@@ -2829,6 +2870,8 @@ describe("SandboxLifecycleManager", () => {
         code_server_password: "encrypted-password",
         vnc_url: "https://vnc.test",
         vnc_password: "encrypted-vnc-password",
+        ttyd_url: "https://terminal.test",
+        ttyd_token: "encrypted-terminal-token",
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const stopSandbox = vi.fn(async () => ({ success: true }));
@@ -2861,7 +2904,10 @@ describe("SandboxLifecycleManager", () => {
       expect(storage.calls).not.toContain("clearSandboxAccess:codeServer");
       expect(storage.calls).toContain("clearSandboxAccessUrl:vnc");
       expect(storage.calls).not.toContain("clearSandboxAccess:vnc");
+      expect(storage.calls).toContain("clearSandboxAccessUrl:ttyd");
+      expect(storage.calls).not.toContain("clearSandboxAccess:ttyd");
       expect(sandbox.vnc_password).toBe("encrypted-vnc-password");
+      expect(sandbox.ttyd_token).toBe("encrypted-terminal-token");
     });
 
     it("clears complete access when URL-only clearing is unavailable", async () => {

@@ -345,6 +345,14 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("SET vnc_url = NULL");
       expect(mock.calls[0].query).not.toContain("vnc_password");
     });
+
+    it("can update only the URL", () => {
+      repository.updateSandboxAccessUrl("ttyd", "https://ttyd.test/refreshed");
+
+      expect(mock.calls[0].query).toContain("SET ttyd_url = ?");
+      expect(mock.calls[0].query).not.toContain("ttyd_token");
+      expect(mock.calls[0].params).toEqual(["https://ttyd.test/refreshed"]);
+    });
   });
 
   describe("resetCircuitBreaker", () => {

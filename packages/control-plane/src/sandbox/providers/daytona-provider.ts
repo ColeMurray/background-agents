@@ -134,6 +134,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       // empty until the next resume issues them.
       let codeServerUrl: string | undefined;
       let codeServerPassword: string | undefined;
+      let ttydUrl: string | undefined;
       let vncAccess: VncAccess | undefined;
       let tunnelUrls: Record<string, string> | undefined;
       try {
@@ -147,6 +148,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         );
         codeServerUrl = tunnels.codeServerUrl;
         codeServerPassword = tunnels.codeServerPassword;
+        ttydUrl = tunnels.ttydUrl;
         vncAccess = tunnels.vncAccess;
         tunnelUrls = tunnels.tunnelUrls;
       } catch (tunnelError) {
@@ -162,6 +164,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         createdAt: Date.now(),
         codeServerUrl,
         codeServerPassword,
+        ttydUrl,
         vncAccess,
         tunnelUrls,
       };
@@ -202,6 +205,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       // doesn't mask a successful resume.
       let codeServerUrl: string | undefined;
       let codeServerPassword: string | undefined;
+      let ttydUrl: string | undefined;
       let vncAccess: VncAccess | undefined;
       let tunnelUrls: Record<string, string> | undefined;
       try {
@@ -215,6 +219,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         );
         codeServerUrl = tunnels.codeServerUrl;
         codeServerPassword = tunnels.codeServerPassword;
+        ttydUrl = tunnels.ttydUrl;
         vncAccess = tunnels.vncAccess;
         tunnelUrls = tunnels.tunnelUrls;
       } catch (tunnelError) {
@@ -229,6 +234,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         providerObjectId: sandbox.id,
         codeServerUrl,
         codeServerPassword,
+        ttydUrl,
         vncAccess,
         tunnelUrls,
       };
@@ -297,6 +303,13 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       RESTORED_FROM_SNAPSHOT: "false",
       FROM_REPO_IMAGE: config.prebuiltImageId ? "true" : "false",
     });
+    delete envVars.TTYD_PROXY_PORT;
+    // An empty value disables the runtime's truthiness check and overrides captured image env.
+    envVars.TERMINAL_ENABLED = "";
+    if (config.sandboxSettings?.terminalEnabled) {
+      envVars.TERMINAL_ENABLED = "true";
+      envVars.TTYD_PROXY_PORT = String(resolveServicePorts(config.sandboxSettings).terminalPort);
+    }
     if (config.prebuiltImageId) {
       envVars.REPO_IMAGE_SHA = config.prebuiltImageSha ?? "";
     }
@@ -336,14 +349,16 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   ): Promise<{
     codeServerUrl?: string;
     codeServerPassword?: string;
+    ttydUrl?: string;
     vncAccess?: VncAccess;
     tunnelUrls?: Record<string, string>;
   }> {
     const expirySeconds = resolvePreviewExpirySeconds(timeoutSeconds);
-    const { codeServerPort, vncPort } = resolveServicePorts(sandboxSettings);
-    let tunnelPorts = resolveTunnelPorts(sandboxSettings?.tunnelPorts);
+    const { codeServerPort, terminalPort, vncPort } = resolveServicePorts(sandboxSettings);
+    let tunnelPorts = [...new Set(resolveTunnelPorts(sandboxSettings?.tunnelPorts))];
     let codeServerUrl: string | undefined;
     let codeServerPassword: string | undefined;
+    let ttydUrl: string | undefined;
     let vncAccess: VncAccess | undefined;
 
     if (codeServerEnabled) {
@@ -374,6 +389,23 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       tunnelPorts = tunnelPorts.filter((p) => p !== vncPort);
     }
 
+    if (sandboxSettings?.terminalEnabled) {
+      tunnelPorts = tunnelPorts.filter((p) => p !== terminalPort);
+      try {
+        const preview = await this.client.getSignedPreviewUrl(
+          daytonaSandboxId,
+          terminalPort,
+          expirySeconds
+        );
+        ttydUrl = preview.url;
+      } catch (error) {
+        log.warn("daytona.terminal_preview_url_failed", {
+          sandbox_id: logicalSandboxId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     let tunnelUrls: Record<string, string> | undefined;
     if (tunnelPorts.length > 0) {
       const entries = await Promise.all(
@@ -389,7 +421,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       tunnelUrls = Object.fromEntries(entries);
     }
 
-    return { codeServerUrl, codeServerPassword, vncAccess, tunnelUrls };
+    return { codeServerUrl, codeServerPassword, ttydUrl, vncAccess, tunnelUrls };
   }
 
   // -----------------------------------------------------------------------
